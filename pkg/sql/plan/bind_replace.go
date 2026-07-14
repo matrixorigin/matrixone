@@ -937,7 +937,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}, bindCtx)
 
 	var err error
-	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, colName2Idx)
+	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, colName2Idx, false)
 	if err != nil {
 		return 0, err
 	}

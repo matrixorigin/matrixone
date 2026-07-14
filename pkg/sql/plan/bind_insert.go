@@ -2514,7 +2514,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx)
+	// INSERT IGNORE drops rows that violate a CHECK (and warns) instead of
+	// aborting the whole statement; other modes assert and fail on violation.
+	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, onDupAction == plan.Node_IGNORE)
 	if err != nil {
 		return 0, err
 	}

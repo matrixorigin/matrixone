@@ -302,29 +302,29 @@ create table replace_fk_c(id int primary key, pid int, foreign key(pid) referenc
 insert into replace_fk_p values (1);
 replace into replace_fk_c values (10,1);
 select * from replace_fk_c order by id;
-id    pid
-10    1
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  1
 replace into replace_fk_c values (10,2);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from replace_fk_c order by id;
-id    pid
-10    1
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  1
 replace into replace_fk_c values (11,99);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from replace_fk_c order by id;
-id    pid
-10    1
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  1
 replace into replace_fk_c values (12,null);
 select * from replace_fk_c order by id;
-id    pid
-10    1
-12    null
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  1  𝄀
+12  ¦  null
 insert into replace_fk_p values (2);
 replace into replace_fk_c values (10,2);
 select * from replace_fk_c order by id;
-id    pid
-10    2
-12    null
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  2  𝄀
+12  ¦  null
 drop table replace_fk_c;
 drop table replace_fk_p;
 drop table if exists t_set_default;
@@ -332,40 +332,40 @@ create table t_set_default(id int primary key, v int default 5, note varchar(20)
 insert into t_set_default values (1, 10, 'old');
 replace into t_set_default set id = 1, v = v + 1;
 select * from t_set_default order by id;
-id    v    note
-1    6    d
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  6  ¦  d
 replace into t_set_default set id = 2, v = v * 2;
 select * from t_set_default order by id;
-id    v    note
-1    6    d
-2    10    d
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  6  ¦  d  𝄀
+2  ¦  10  ¦  d
 drop table t_set_default;
 drop table if exists t_set_default2;
 create table t_set_default2(id int primary key, a int default 3, b int default 7);
 insert into t_set_default2 values (1, 100, 200);
 replace into t_set_default2 set id = 1, a = b + 1;
 select * from t_set_default2 order by id;
-id    a    b
-1    8    7
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  8  ¦  7
 drop table t_set_default2;
 drop table if exists t_set_func;
 create table t_set_func(id int primary key, dname varchar(50) default 'hello', suffix varchar(20) default '_mo');
 insert into t_set_func values (1, 'world', '_x');
 replace into t_set_func set id = 1, dname = upper(dname);
 select * from t_set_func order by id;
-id    dname    suffix
-1    HELLO    _mo
+➤ id[4,32,0]  ¦  dname[12,-1,0]  ¦  suffix[12,-1,0]  𝄀
+1  ¦  HELLO  ¦  _mo
 replace into t_set_func set id = 2, dname = concat(dname, '_mo');
 select * from t_set_func order by id;
-id    dname    suffix
-1    HELLO    _mo
-2    hello_mo    _mo
+➤ id[4,32,0]  ¦  dname[12,-1,0]  ¦  suffix[12,-1,0]  𝄀
+1  ¦  HELLO  ¦  _mo  𝄀
+2  ¦  hello_mo  ¦  _mo
 replace into t_set_func set id = 3, dname = concat(upper(dname), suffix);
 select * from t_set_func order by id;
-id    dname    suffix
-1    HELLO    _mo
-2    hello_mo    _mo
-3    HELLO_mo    _mo
+➤ id[4,32,0]  ¦  dname[12,-1,0]  ¦  suffix[12,-1,0]  𝄀
+1  ¦  HELLO  ¦  _mo  𝄀
+2  ¦  hello_mo  ¦  _mo  𝄀
+3  ¦  HELLO_mo  ¦  _mo
 drop table t_set_func;
 drop table if exists t_replace_src;
 drop table if exists t_replace_dst;
@@ -555,3 +555,49 @@ null  ¦  1  ¦  null-a-2  𝄀
 1  ¦  1  ¦  one-replaced  𝄀
 2  ¦  2  ¦  two
 drop table t_replace_fakepk_comp_null;
+drop table if exists t_chk_showcreate;
+create table t_chk_showcreate(id int primary key, v int, constraint chk_v check (v > 0));
+show create table t_chk_showcreate;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_chk_showcreate  ¦  CREATE TABLE `t_chk_showcreate` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `chk_v` CHECK (v > 0)
+)
+drop table t_chk_showcreate;
+drop table if exists t_ctas_chk;
+create table t_ctas_chk(a int check (a > 0)) as select -1 as a;
+constraint violation: Check constraint '__mo_chk_1' is violated
+drop table if exists t_ctas_chk;
+create table t_ctas_chk(a int check (a > 0)) as select 1 as a;
+insert into t_ctas_chk values (-5);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_ctas_chk order by a;
+➤ a[4,32,0]  𝄀
+1
+drop table t_ctas_chk;
+drop table if exists t_chk_ignore;
+create table t_chk_ignore(a int check (a > 0));
+insert ignore into t_chk_ignore values (-1), (1), (-2), (2);
+select * from t_chk_ignore order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+drop table t_chk_ignore;
+drop table if exists t_chk_addcol;
+create table t_chk_addcol(id int primary key);
+alter table t_chk_addcol add column b int check (b > 0);
+insert into t_chk_addcol values (1, 5);
+insert into t_chk_addcol values (2, -5);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_chk_addcol order by id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  5
+drop table t_chk_addcol;
+drop table if exists t_chk_rename;
+create table t_chk_rename(a int, b int, check (a > 0));
+alter table t_chk_rename rename column a to a2;
+invalid input: Cannot drop, modify, or rename column 'a': check constraint '__mo_chk_1' depends on it
+alter table t_chk_rename rename column b to b2;
+drop table t_chk_rename;

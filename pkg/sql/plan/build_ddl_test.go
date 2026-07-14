@@ -895,6 +895,22 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectKeepsSameNameColumnCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// An explicit column whose name matches an AS SELECT output column takes the
+	// overwrite branch; its column-level CHECK must still be collected, otherwise
+	// e.g. CREATE TABLE t (a INT CHECK (a > 0)) AS SELECT -1 AS a would silently
+	// drop the constraint and let -1 through.
+	logicPlan, err := runOneStmt(mock, t,
+		"CREATE TABLE t_ctas_chk (a INT CHECK (a > 0)) AS SELECT 1 AS a")
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Len(t, createTable.GetTableDef().GetChecks(), 1)
+	assert.True(t, exprContainsFuncName(createTable.GetTableDef().GetChecks()[0].GetCheck(), ">"))
+}
+
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
 	got := restoreIntervalSyntaxForCTAS(
 		"select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",

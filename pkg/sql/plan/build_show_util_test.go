@@ -268,6 +268,43 @@ func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
 	}
 }
 
+// Test_ShowCreateTableChecksSurviveDeepCopy guards the regression where
+// DeepCopyTableDef dropped CheckDef.OriginSql. The production Resolve path runs
+// every table through CopyTableDef -> DeepCopyTableDef, so a lost OriginSql
+// makes SHOW CREATE (which renders CHECK from OriginSql) silently omit every
+// constraint on ordinary tables. The other SHOW CREATE tests build the TableDef
+// directly and never exercise the deep copy, so this one does.
+func Test_ShowCreateTableChecksSurviveDeepCopy(t *testing.T) {
+	const sql = `CREATE TABLE t_deepcopy_chk (
+		id INT NOT NULL,
+		v INT NULL,
+		PRIMARY KEY (id),
+		CONSTRAINT chk_v CHECK (v > 0)
+	) ENGINE=InnoDB`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	if err != nil {
+		t.Fatalf("build create table failed: %+v", err)
+	}
+	if len(tableDef.Checks) == 0 || tableDef.Checks[0].OriginSql == "" {
+		t.Fatalf("precondition: built TableDef must carry a check with OriginSql: %#v", tableDef.Checks)
+	}
+
+	copied := DeepCopyTableDef(tableDef, true)
+	if len(copied.Checks) == 0 || copied.Checks[0].OriginSql == "" {
+		t.Fatalf("DeepCopyTableDef must preserve CheckDef.OriginSql, got: %#v", copied.Checks)
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, copied, nil, false, nil)
+	if err != nil {
+		t.Fatalf("construct show create failed: %+v", err)
+	}
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_v` CHECK (v > 0)") {
+		t.Fatalf("check constraint must survive deep copy into show create output: %s", showSQL)
+	}
+}
+
 func Test_extractTopLevelCheckDefs(t *testing.T) {
 	tableDef := &plan.TableDef{
 		TableType: catalog.SystemOrdinaryRel,

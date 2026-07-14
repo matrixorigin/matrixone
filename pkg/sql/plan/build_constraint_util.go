@@ -93,7 +93,7 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 	}
 }
 
-func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, inputTag int32, colName2Idx map[string]int32) (int32, error) {
+func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, inputTag int32, colName2Idx map[string]int32, ignoreMode bool) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -119,7 +119,7 @@ func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tabl
 		}
 	}
 
-	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList)
+	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList, ignoreMode)
 }
 
 func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32) (int32, error) {
@@ -142,10 +142,10 @@ func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindC
 		tableColProjList[i] = projection[i]
 	}
 
-	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList)
+	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList, false)
 }
 
-func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr) (int32, error) {
+func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr, ignoreMode bool) (int32, error) {
 	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
 	for _, check := range tableDef.Checks {
 		if colName, ok := checkConstraintReferencesSyntheticCol(check.Check, tableDef); ok {
@@ -161,6 +161,14 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)})
 		if err != nil {
 			return 0, err
+		}
+
+		if ignoreMode {
+			// INSERT IGNORE: violating rows are dropped (and the statement keeps
+			// going) rather than aborting. A plain FILTER on passExpr keeps only
+			// the rows that satisfy the check.
+			filterList = append(filterList, passExpr)
+			continue
 		}
 
 		checkName := check.Name

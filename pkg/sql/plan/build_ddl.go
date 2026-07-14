@@ -1302,24 +1302,29 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				Comment:      comment,
 				GeneratedCol: generatedCol,
 			}
+			// Collect column-level CHECK regardless of whether this explicit
+			// column overwrites an AS SELECT column. Binding happens later (after
+			// asSelectCols are merged into TableDef.Cols), so a same-name column
+			// must not silently drop its CHECK.
+			for _, attr := range def.Attributes {
+				checkAttr, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				pendingChecks = append(pendingChecks, pendingCheckDef{
+					name:           checkAttr.Name,
+					expr:           checkAttr.Expr,
+					enforced:       checkAttr.Enforced,
+					enforcementSet: checkAttr.EnforcementSet,
+				})
+			}
+
 			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
 			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {
 				asSelectCols[idx] = col
 			} else {
 				colMap[colName] = col
 				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
-				for _, attr := range def.Attributes {
-					checkAttr, ok := attr.(*tree.AttributeCheckConstraint)
-					if !ok {
-						continue
-					}
-					pendingChecks = append(pendingChecks, pendingCheckDef{
-						name:           checkAttr.Name,
-						expr:           checkAttr.Expr,
-						enforced:       checkAttr.Enforced,
-						enforcementSet: checkAttr.EnforcementSet,
-					})
-				}
 
 				// get default val from ast node
 				attrIdx := slices.IndexFunc(def.Attributes, func(a tree.ColumnAttribute) bool {

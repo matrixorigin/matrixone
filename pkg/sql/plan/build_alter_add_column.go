@@ -68,6 +68,16 @@ func AddColumn(
 		return false, err
 	}
 
+	// Bind column-level CHECK constraints now that the new column is present in
+	// tableDef.Cols, so a check may reference the new column itself.
+	for _, attr := range specNewColumn.Attributes {
+		if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
+			if err = appendCheckDef(ctx, tableDef, ca.Name, ca.Expr); err != nil {
+				return false, err
+			}
+		}
+	}
+
 	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
 		alterCtx.alterColMap[newCol.Name] = selectExpr{
 			sexprType: exprConstValue,
@@ -193,9 +203,9 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			}
 			newCol.GeneratedCol = generatedCol
 		case *tree.AttributeCheckConstraint:
-			if err := appendCheckDef(ctx, alterPlan.CopyTableDef, attribute.Name, attribute.Expr); err != nil {
-				return nil, err
-			}
+			// Column-level CHECK is bound later in AddColumn, after the new
+			// column has been inserted into TableDef.Cols, so the predicate may
+			// reference the new column itself (e.g. ADD COLUMN b INT CHECK (b > 0)).
 
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
@@ -670,7 +680,7 @@ func checkColumnWithCheckDependency(ctx context.Context, tableDef *TableDef, col
 		if chk.Check != nil {
 			if exprReferencesColumn(chk.Check, colName, tableDef.Cols) {
 				return moerr.NewInvalidInputf(ctx,
-					"Cannot drop or modify column '%s': check constraint '%s' depends on it", colName, chk.Name)
+					"Cannot drop, modify, or rename column '%s': check constraint '%s' depends on it", colName, chk.Name)
 			}
 		}
 	}

@@ -1059,7 +1059,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 
-		lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, checkColName2Idx)
+		lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, checkColName2Idx, false)
 		if err != nil {
 			return 0, err
 		}

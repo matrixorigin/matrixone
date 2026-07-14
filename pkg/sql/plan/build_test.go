@@ -2342,6 +2342,42 @@ func TestInsertPlanChecksTableCheckConstraints(t *testing.T) {
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "INSERT")
 }
 
+func TestInsertIgnoreFiltersCheckViolatingRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// INSERT IGNORE must skip check-violating rows, not abort the statement, so
+	// the plan must not contain a check_constraint_assert.
+	for _, node := range query.Nodes {
+		for _, expr := range node.FilterList {
+			if exprContainsFuncName(expr, "check_constraint_assert") {
+				t.Fatalf("INSERT IGNORE must not assert table CHECK constraints")
+			}
+		}
+	}
+
+	// The check is instead enforced as a plain FILTER on coalesce(check, true),
+	// which drops the violating rows.
+	hasCheckFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if exprContainsFuncName(expr, "coalesce") {
+				hasCheckFilter = true
+			}
+		}
+	}
+	assert.True(t, hasCheckFilter, "INSERT IGNORE should filter check-violating rows out")
+}
+
 func TestLegacyInsertFallbackChecksTableCheckConstraints(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addFakePkTPositiveCheckWithoutUniqueKey(t, mock)

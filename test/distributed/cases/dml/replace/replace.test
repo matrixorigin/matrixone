@@ -434,3 +434,44 @@ select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
 select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 drop table t_replace_fakepk_comp_null;
+
+-- SHOW CREATE TABLE must still render CHECK after the table round-trips through
+-- the engine (the deep copy of TableDef must preserve each check's OriginSql).
+drop table if exists t_chk_showcreate;
+create table t_chk_showcreate(id int primary key, v int, constraint chk_v check (v > 0));
+show create table t_chk_showcreate;
+drop table t_chk_showcreate;
+
+-- CREATE TABLE ... AS SELECT: an explicit column that shares its name with a
+-- SELECT output column must still carry its column-level CHECK.
+drop table if exists t_ctas_chk;
+create table t_ctas_chk(a int check (a > 0)) as select -1 as a;
+drop table if exists t_ctas_chk;
+create table t_ctas_chk(a int check (a > 0)) as select 1 as a;
+insert into t_ctas_chk values (-5);
+select * from t_ctas_chk order by a;
+drop table t_ctas_chk;
+
+-- INSERT IGNORE must skip check-violating rows and insert the rest, not abort.
+drop table if exists t_chk_ignore;
+create table t_chk_ignore(a int check (a > 0));
+insert ignore into t_chk_ignore values (-1), (1), (-2), (2);
+select * from t_chk_ignore order by a;
+drop table t_chk_ignore;
+
+-- ALTER TABLE ADD COLUMN with a column-level CHECK that references the new column.
+drop table if exists t_chk_addcol;
+create table t_chk_addcol(id int primary key);
+alter table t_chk_addcol add column b int check (b > 0);
+insert into t_chk_addcol values (1, 5);
+insert into t_chk_addcol values (2, -5);
+select * from t_chk_addcol order by id;
+drop table t_chk_addcol;
+
+-- Renaming a column that a CHECK depends on must be rejected; renaming an
+-- unrelated column is still allowed.
+drop table if exists t_chk_rename;
+create table t_chk_rename(a int, b int, check (a > 0));
+alter table t_chk_rename rename column a to a2;
+alter table t_chk_rename rename column b to b2;
+drop table t_chk_rename;
