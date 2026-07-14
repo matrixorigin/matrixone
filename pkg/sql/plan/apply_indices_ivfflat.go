@@ -1057,8 +1057,6 @@ func buildIvfScanToTableFuncMap(tableFuncTag int32, tableFuncIncludeColumns []st
 	return projMap
 }
 
-const maxSafeIvfSearchRoundLimit = uint64(1<<63 - 1)
-
 func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 	if limit == nil || limit.GetLit() == nil {
 		return 0
@@ -1071,13 +1069,6 @@ func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 
 	overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 	return max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
-}
-
-func firstIvfIncludeSearchRoundLimit(limit *plan.Expr, hasPushdownFilters bool, hasResidualFilters bool) uint64 {
-	if hasResidualFilters {
-		return maxSafeIvfSearchRoundLimit
-	}
-	return firstIvfSearchRoundLimit(limit, hasPushdownFilters)
 }
 
 func ensureIvfIncludeSearchRoundLimitAtLeastK(searchRoundLimit uint64, outerResultNeed *plan.Expr) uint64 {
@@ -1316,6 +1307,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		remainingFilters = append(remainingFilters, expr)
 	}
+	// Multi-round search may stop on a candidate count only when ivf_search has
+	// observed every filter. Keep residual predicates on the exact membership
+	// pre-filter path and use the legacy single-round IVF search.
+	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
+	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
 	canIndexOnly := canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {
@@ -1363,8 +1359,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 	firstRoundLimit := uint64(0)
 	bucketExpandStep := uint64(0)
-	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" {
-		firstRoundLimit = firstIvfIncludeSearchRoundLimit(outerResultNeedExpr, len(serializedPushdownFilters) > 0, len(remainingFilters) > 0)
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && !includeModeFallbackToPre {
+		firstRoundLimit = firstIvfSearchRoundLimit(outerResultNeedExpr, len(serializedPushdownFilters) > 0)
 		firstRoundLimit = ensureIvfIncludeSearchRoundLimitAtLeastK(firstRoundLimit, outerResultNeedExpr)
 		if firstRoundLimit == 0 && outerResultNeedExpr != nil {
 			firstRoundLimit = 1
@@ -1406,12 +1402,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// push down the candidate limit to the table function.
 	limitExpr := DeepCopyExpr(outerResultNeedExpr)
 
-	includeModeHasResidualFilters := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
-	if includeModeHasResidualFilters {
-		// Residual filters are applied outside ivf_search, so the table function
-		// must not stop after the usual over-fetch budget rejects all candidates.
-		limitExpr = makePlan2Uint64ConstExprWithType(maxSafeIvfSearchRoundLimit)
-	} else if len(remainingFilters) > 0 && !ivfCtx.pushdownEnabled {
+	if len(remainingFilters) > 0 && !usePreFilter {
 		// When there are filters, over-fetch to get more candidates.
 		// This ensures we have enough candidates after filtering.
 		// Over-fetch strategy: dynamically adjust factor based on limit size
@@ -1462,12 +1453,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	tableFuncNode.Limit = DeepCopyExpr(limitExpr)
 
-	// Determine join structure based on rankOption.mode:
-	//   mode != "pre": JOIN( scanNode, ivf_search )
-	//   mode == "pre": JOIN( scanNode, JOIN(ivf_search, secondScan) )
+	// Determine join structure based on the effective filtering strategy:
+	//   no pre-filter: JOIN(scanNode, ivf_search)
+	//   pre-filter:    JOIN(scanNode, JOIN(ivf_search, secondScan))
 	var joinRootID int32
 
-	pushdownEnabled := ivfCtx.pushdownEnabled && len(remainingFilters) > 0
+	pushdownEnabled := usePreFilter && len(remainingFilters) > 0
 	scanNode.FilterList = remainingFilters
 
 	if canIndexOnly {
