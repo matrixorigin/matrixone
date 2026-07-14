@@ -443,6 +443,29 @@ const (
 	// never re-merged, so a MERGE over a pure-insert tail never rewrites the full base.
 	Bm25Index_TblCol_Metadata_Nrow = "nrow"
 
+	/************ 3c. FULLTEXT v2 (VERSION=2) Index **************/
+
+	// Fulltext v2 (CREATE FULLTEXT INDEX ... VERSION=2, the WAND positional engine)
+	// uses the same chunked storage + metadata layout as bm25 — segments are built
+	// and CDC-maintained, no postings table — as opposed to classic v1's single
+	// (word,doc_id,pos) postings table. The index stays algo="fulltext"; the version
+	// param selects the engine and these hidden tables. Values are <= 11 chars
+	// (IndexAlgoTableType varchar(11) limit), so "ftv2_*" not "fulltext2_*".
+	FullText2Index_TblType_Metadata = "ftv2_meta"
+	FullText2Index_TblType_Storage  = "ftv2_index"
+
+	FullText2Index_TblCol_Storage_Index_Id = "index_id"
+	FullText2Index_TblCol_Storage_Chunk_Id = "chunk_id"
+	FullText2Index_TblCol_Storage_Data     = "data"
+	FullText2Index_TblCol_Storage_Tag      = "tag"
+
+	FullText2Index_TblCol_Metadata_Index_Id  = "index_id"
+	FullText2Index_TblCol_Metadata_Timestamp = "timestamp"
+	FullText2Index_TblCol_Metadata_Checksum  = "checksum"
+	FullText2Index_TblCol_Metadata_Filesize  = "filesize"
+	FullText2Index_TblCol_Metadata_Recency   = "recency"
+	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types

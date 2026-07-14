@@ -126,6 +126,12 @@ func (Hooks) BuildFullTextIndexDefs(
 		}
 	}
 
+	// VERSION=2 (the WAND positional engine): build the chunked segment store +
+	// metadata hidden tables (like bm25) instead of the classic v1 postings table.
+	if indexInfo.IndexOption != nil && indexInfo.IndexOption.Version >= 2 {
+		return buildFullText2IndexDefs(ctx, indexInfo)
+	}
+
 	// 4. Build the IndexDef.
 	indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 	if err != nil {
@@ -235,4 +241,109 @@ func (Hooks) BuildFullTextIndexDefs(
 	})
 
 	return []*plan.IndexDef{indexDef}, []*plan.TableDef{tableDef}, nil
+}
+
+// buildFullText2IndexDefs constructs the VERSION=2 (WAND) hidden tables — a
+// chunked segment store + a metadata table, the same layout bm25 uses (§2) — for
+// a fulltext index. The index stays algo="fulltext"; the two defs are told apart
+// by IndexAlgoTableType (ftv2_index / ftv2_meta), and both carry the version
+// param so the compile/search hooks route to the v2 engine. No postings table:
+// v2 builds positional segments from the source rows and CDC-maintains them.
+func buildFullText2IndexDefs(
+	ctx planplugin.CompilerContext,
+	indexInfo *tree.FullTextIndex,
+) ([]*plan.IndexDef, []*plan.TableDef, error) {
+	params, err := buildFullTextParams(indexInfo)
+	if err != nil {
+		return nil, nil, err
+	}
+	indexParts := make([]string, 0, len(indexInfo.KeyParts))
+	for _, keyPart := range indexInfo.KeyParts {
+		indexParts = append(indexParts, keyPart.ColName.ColName())
+	}
+	var option *plan.IndexOption
+	var comment string
+	if indexInfo.IndexOption != nil {
+		if indexInfo.IndexOption.ParserName != "" {
+			option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
+		}
+		comment = indexInfo.IndexOption.Comment
+	}
+	mkIdx := func(tblName, tblType string) *plan.IndexDef {
+		return &plan.IndexDef{
+			Unique:             false,
+			IndexName:          indexInfo.Name,
+			IndexTableName:     tblName,
+			IndexAlgo:          tree.INDEX_TYPE_FULLTEXT.ToString(),
+			IndexAlgoTableType: tblType,
+			IndexAlgoParams:    params,
+			Parts:              indexParts,
+			TableExist:         true,
+			Option:             option,
+			Comment:            comment,
+		}
+	}
+
+	// 1. storage (chunk) table: (index_id VARCHAR, chunk_id INT64, data BLOB,
+	//    tag INT64, PRIMARY KEY (index_id, chunk_id)).
+	storeName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	storeTbl := &plan.TableDef{
+		Name:      storeName,
+		TableType: catalog.FullText2Index_TblType_Storage,
+		Cols: []*plan.ColDef{
+			{Name: catalog.FullText2Index_TblCol_Storage_Index_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: 128}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Storage_Chunk_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Storage_Data, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_blob), Width: 65536}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Storage_Tag, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+		},
+	}
+	storePk := planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+	storePk.Alg = plan.CompressType_Lz4
+	storePk.Primary = true
+	storeTbl.Cols = append(storeTbl.Cols, storePk)
+	storeTbl.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.FullText2Index_TblCol_Storage_Index_Id, catalog.FullText2Index_TblCol_Storage_Chunk_Id},
+		PkeyColName: catalog.CPrimaryKeyColName,
+		CompPkeyCol: storeTbl.Cols[3], // tag col, mirrors bm25/HNSW storage layout
+	}
+	storeTbl.Defs = append(storeTbl.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.FullText2Index_TblType_Storage},
+		}}},
+	})
+
+	// 2. metadata table: one row per sub-index.
+	metaName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	metaTbl := &plan.TableDef{
+		Name:      metaName,
+		TableType: catalog.FullText2Index_TblType_Metadata,
+		Cols: []*plan.ColDef{
+			{Name: catalog.FullText2Index_TblCol_Metadata_Index_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: 128}, Primary: true, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Timestamp, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Checksum, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Filesize, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Recency, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullText2Index_TblCol_Metadata_Nrow, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+		},
+	}
+	metaTbl.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.FullText2Index_TblCol_Metadata_Index_Id},
+		PkeyColName: catalog.FullText2Index_TblCol_Metadata_Index_Id,
+	}
+	metaTbl.Defs = append(metaTbl.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.FullText2Index_TblType_Metadata},
+		}}},
+	})
+
+	return []*plan.IndexDef{
+		mkIdx(storeName, catalog.FullText2Index_TblType_Storage),
+		mkIdx(metaName, catalog.FullText2Index_TblType_Metadata),
+	}, []*plan.TableDef{storeTbl, metaTbl}, nil
 }
