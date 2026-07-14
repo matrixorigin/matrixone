@@ -46,19 +46,65 @@ type CRoaringFilter struct {
 // vecFixedArgs extracts the (data ptr, byte len, elemsz, nitem, nullmap ptr,
 // nullmap len) that the C *_fixed entry points expect, mirroring
 // cbloomfilter's fixed-vector path.
+// vecFixedArgs returns the C args for the PHYSICAL elements of v. A CONSTANT vector stores a
+// single physical value (or none, for const-null) but reports a logical Length() equal to the
+// row count; feeding the logical length over the 1-element (or empty) buffer causes
+// out-of-range reads (#25621). nitem is therefore the physical element count: 1 for a non-null
+// constant, 0 for a const-null, v.Length() otherwise. Callers broadcast the single result to
+// all logical rows.
 func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elemsz C.size_t, nitem C.size_t, nullPtr unsafe.Pointer, nullLen C.size_t) {
 	fixed := v.GetData()
-	nitem = C.size_t(v.Length())
 	elemsz = C.size_t(v.GetType().TypeSize())
-	if len(fixed) > 0 {
+	isConst := v.IsConst()
+	if isConst {
+		if v.IsConstNull() {
+			nitem = 0
+		} else {
+			nitem = 1
+		}
+	} else {
+		nitem = C.size_t(v.Length())
+	}
+	if len(fixed) > 0 && nitem > 0 {
 		data = unsafe.Pointer(&fixed[0])
 		dataLen = C.size_t(len(fixed))
 	}
-	if nb := v.GetNulls().GetBitmap(); nb != nil {
+	// A non-null constant has no per-row nulls; a const-null produces no physical element.
+	if nb := v.GetNulls().GetBitmap(); nb != nil && !isConst {
 		nullPtr = unsafe.Pointer(nb.Ptr())
 		nullLen = C.size_t(nb.Size())
 	}
 	return
+}
+
+// finalizeVecResults expands a TestVector result to all logical rows and invokes cb per row.
+// For a CONSTANT vector only res[0] was filled by C (one physical element), so it is broadcast
+// to every row (const-null stays all-zero, every row NULL). For a regular vector res is already
+// per-row (#25621).
+func finalizeVecResults(v *vector.Vector, res []uint8, cb func(bool, bool, int)) {
+	length := v.Length()
+	if v.IsConst() {
+		r := uint8(0)
+		if !v.IsConstNull() {
+			r = res[0]
+		}
+		for i := 0; i < length; i++ {
+			res[i] = r
+		}
+		if cb != nil {
+			isNull := v.IsConstNull()
+			for i := 0; i < length; i++ {
+				cb(res[i] != 0, isNull, i)
+			}
+		}
+		return
+	}
+	if cb != nil {
+		nulls := v.GetNulls()
+		for i := 0; i < length; i++ {
+			cb(res[i] != 0, nulls.Contains(uint64(i)), i)
+		}
+	}
 }
 
 // BuildCRoaringBytes builds a roaring64 bitset from an integer doc_id vector
@@ -131,12 +177,7 @@ func (f *CRoaringFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) 
 	if data != nil {
 		C.mo_croaring_test_fixed(f.ptr, data, dataLen, elemsz, nitem, nullPtr, nullLen, unsafe.Pointer(&res[0]))
 	}
-	if cb != nil {
-		nulls := v.GetNulls()
-		for i := 0; i < length; i++ {
-			cb(res[i] != 0, nulls.Contains(uint64(i)), i)
-		}
-	}
+	finalizeVecResults(v, res, cb)
 	return res
 }
 

@@ -684,3 +684,90 @@ func TestCBloomFilter_Merge(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error code: 1")
 }
+
+// TestCBloomFilterConstVector covers #25621: constant vectors must test/add the single physical
+// value and broadcast the result to all logical rows; const-null must return all-zero and never
+// panic. Pre-fix: non-null constants returned [1,0,0] (false negatives) and const-null panicked.
+func TestCBloomFilterConstVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	int64Typ := types.New(types.T_int64, 0, 0)
+	varTyp := types.New(types.T_varchar, 64, 0)
+
+	// TestVector, also capturing per-row isNull via the callback.
+	testVec := func(bf *CBloomFilter, v *vector.Vector) (res []uint8, nulls []bool) {
+		nulls = make([]bool, v.Length())
+		res = bf.TestVector(v, func(exist bool, isNull bool, row int) { nulls[row] = isNull })
+		return
+	}
+
+	t.Run("const_int64_nonnull", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v, err := vector.NewConstFixed[int64](int64Typ, 42, 3, mp)
+		require.NoError(t, err)
+		defer v.Free(mp)
+
+		bf.AddVector(v)
+		res, nulls := testVec(bf, v)
+		require.Equal(t, []uint8{1, 1, 1}, res)
+		require.Equal(t, []bool{false, false, false}, nulls)
+	})
+
+	t.Run("const_varchar_nonnull", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v, err := vector.NewConstBytes(varTyp, []byte("key"), 3, mp)
+		require.NoError(t, err)
+		defer v.Free(mp)
+
+		bf.AddVector(v)
+		res, nulls := testVec(bf, v)
+		require.Equal(t, []uint8{1, 1, 1}, res)
+		require.Equal(t, []bool{false, false, false}, nulls)
+	})
+
+	t.Run("const_null_int64", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v := vector.NewConstNull(int64Typ, 3, mp)
+		defer v.Free(mp)
+
+		require.NotPanics(t, func() { bf.AddVector(v) })
+		var res []uint8
+		var nulls []bool
+		require.NotPanics(t, func() { res, nulls = testVec(bf, v) })
+		require.Equal(t, []uint8{0, 0, 0}, res)
+		require.Equal(t, []bool{true, true, true}, nulls)
+	})
+
+	t.Run("const_null_varchar", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v := vector.NewConstNull(varTyp, 3, mp)
+		defer v.Free(mp)
+
+		require.NotPanics(t, func() { bf.AddVector(v) })
+		var res []uint8
+		var nulls []bool
+		require.NotPanics(t, func() { res, nulls = testVec(bf, v) })
+		require.Equal(t, []uint8{0, 0, 0}, res)
+		require.Equal(t, []bool{true, true, true}, nulls)
+	})
+
+	t.Run("testAndAdd_const_int64", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v, err := vector.NewConstFixed[int64](int64Typ, 99, 3, mp)
+		require.NoError(t, err)
+		defer v.Free(mp)
+
+		// not present yet: all rows report false, then the value is added.
+		first := make([]bool, 3)
+		bf.TestAndAddVector(v, func(exist bool, isNull bool, row int) { first[row] = exist })
+		require.Equal(t, []bool{false, false, false}, first)
+
+		// now present in every logical row (no false negatives).
+		res, _ := testVec(bf, v)
+		require.Equal(t, []uint8{1, 1, 1}, res)
+	})
+}

@@ -265,145 +265,213 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 	}
 }
 
+// A CONSTANT vector stores a single physical value (or none, for const-null) but reports a
+// logical Length() equal to the row count. Passing the logical length to C over the 1-element
+// (or empty) physical buffer causes out-of-range reads — false negatives — or a panic on the
+// empty const-null buffer (#25621). These helpers make every method process only the physical
+// element(s) and broadcast the single result across all logical rows.
+
+// vecPhysCount returns the number of PHYSICAL elements to feed to C (1 for a non-null constant,
+// 0 for a const-null, v.Length() otherwise) and whether v is a constant vector.
+func vecPhysCount(v *vector.Vector) (nitem int, isConst bool) {
+	if v.IsConst() {
+		if v.IsConstNull() {
+			return 0, true
+		}
+		return 1, true
+	}
+	return v.Length(), false
+}
+
+// emitConstNull reports every logical row of a const-null vector as NULL with a not-present (0)
+// result and returns the all-zero logical-length result slice.
+func emitConstNull(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
+	n := v.Length()
+	if callBack != nil {
+		for j := 0; j < n; j++ {
+			callBack(false, true, j)
+		}
+	}
+	return make([]uint8, n)
+}
+
+// broadcastResults expands physResults to a logical-length result slice and invokes callBack
+// once per logical row. For a constant every row shares physResults[0] and is never NULL;
+// otherwise row j uses physResults[j] and its own null bit.
+func broadcastResults(v *vector.Vector, physResults []uint8, isConst bool, callBack func(bool, bool, int)) []uint8 {
+	n := v.Length()
+	if !isConst {
+		if callBack != nil {
+			nulls := v.GetNulls()
+			for j := 0; j < n; j++ {
+				callBack(physResults[j] != 0, nulls.Contains(uint64(j)), j)
+			}
+		}
+		return physResults
+	}
+	out := make([]uint8, n)
+	r := physResults[0]
+	for j := 0; j < n; j++ {
+		out[j] = r
+	}
+	if callBack != nil {
+		for j := 0; j < n; j++ {
+			callBack(r != 0, false, j)
+		}
+	}
+	return out
+}
+
 func (bf *CBloomFilter) testAndAddFixedVector(v *vector.Vector, callBack func(bool, bool, int)) {
+	if v.IsConstNull() {
+		emitConstNull(v, callBack)
+		return
+	}
+	nitem, isConst := vecPhysCount(v)
+	if nitem == 0 {
+		return
+	}
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
-	length := v.Length()
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
 	var nullptr unsafe.Pointer
 	var nulllen C.size_t
-	if nullbm != nil {
+	if !isConst && nullbm != nil {
 		nullptr = unsafe.Pointer(nullbm.Ptr())
 		nulllen = C.size_t(nullbm.Size())
 	}
 
-	results := make([]uint8, length)
-	C.bloomfilter_test_and_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(length), nullptr, nulllen, unsafe.Pointer(&results[0]))
+	physResults := make([]uint8, nitem)
+	C.bloomfilter_test_and_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(nitem), nullptr, nulllen, unsafe.Pointer(&physResults[0]))
 	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
 
-	if callBack != nil {
-		for j := 0; j < length; j++ {
-			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
-		}
-	}
+	broadcastResults(v, physResults, isConst, callBack)
 }
 
 func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) {
-	if v.Length() == 0 {
+	if v.IsConstNull() {
+		emitConstNull(v, callBack)
+		return
+	}
+	nitem, isConst := vecPhysCount(v)
+	if nitem == 0 {
 		return
 	}
 	varlenData := vector.MustFixedColWithTypeCheck[types.Varlena](v)
 	typeSize := v.GetType().TypeSize()
 	area := v.GetArea()
-	length := v.Length()
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
 	var nullptr *uint64
 	var nulllen int
-	if nullbm != nil {
+	if !isConst && nullbm != nil {
 		nullptr = nullbm.Ptr()
 		nulllen = nullbm.Size()
 	}
 
-	results := make([]uint8, length)
-	C.bloomfilter_test_and_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(length), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&results[0]))
+	physResults := make([]uint8, nitem)
+	C.bloomfilter_test_and_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(nitem), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&physResults[0]))
 
-	if callBack != nil {
-		for j := 0; j < length; j++ {
-			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
-		}
-	}
+	broadcastResults(v, physResults, isConst, callBack)
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
 }
 
 func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
+	if v.IsConstNull() {
+		return emitConstNull(v, callBack)
+	}
+	nitem, isConst := vecPhysCount(v)
+	if nitem == 0 {
+		return make([]uint8, v.Length())
+	}
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
-	length := v.Length()
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
 	var nullptr unsafe.Pointer
 	var nulllen C.size_t
-	if nullbm != nil {
+	if !isConst && nullbm != nil {
 		nullptr = unsafe.Pointer(nullbm.Ptr())
 		nulllen = C.size_t(nullbm.Size())
 	}
 
-	results := make([]uint8, length)
-	C.bloomfilter_test_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(length), nullptr, nulllen, unsafe.Pointer(&results[0]))
+	physResults := make([]uint8, nitem)
+	C.bloomfilter_test_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(nitem), nullptr, nulllen, unsafe.Pointer(&physResults[0]))
 	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
 
-	if callBack != nil {
-		for j := 0; j < length; j++ {
-			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
-		}
-	}
-
-	return results
+	return broadcastResults(v, physResults, isConst, callBack)
 }
 
 func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
-	if v.Length() == 0 {
-		return []uint8{}
+	if v.IsConstNull() {
+		return emitConstNull(v, callBack)
+	}
+	nitem, isConst := vecPhysCount(v)
+	if nitem == 0 {
+		return make([]uint8, v.Length())
 	}
 	varlenData := vector.MustFixedColWithTypeCheck[types.Varlena](v)
 	typeSize := v.GetType().TypeSize()
 	area := v.GetArea()
-	length := v.Length()
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
 	var nullptr *uint64
 	var nulllen int
-	if nullbm != nil {
+	if !isConst && nullbm != nil {
 		nullptr = nullbm.Ptr()
 		nulllen = nullbm.Size()
 	}
 
-	results := make([]uint8, length)
-	C.bloomfilter_test_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(length), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&results[0]))
+	physResults := make([]uint8, nitem)
+	C.bloomfilter_test_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(nitem), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&physResults[0]))
 
-	if callBack != nil {
-		for j := 0; j < length; j++ {
-			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
-		}
-	}
-
+	out := broadcastResults(v, physResults, isConst, callBack)
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
 
-	return results
+	return out
 }
 
 func (bf *CBloomFilter) addFixedVector(v *vector.Vector) {
+	if v.IsConstNull() {
+		return
+	}
+	nitem, isConst := vecPhysCount(v)
+	if nitem == 0 {
+		return
+	}
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
-	length := v.Length()
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
 	var nullptr unsafe.Pointer
 	var nulllen C.size_t
-	if nullbm != nil {
+	if !isConst && nullbm != nil {
 		nullptr = unsafe.Pointer(nullbm.Ptr())
 		nulllen = C.size_t(nullbm.Size())
 	}
 
-	C.bloomfilter_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(length), nullptr, nulllen)
+	C.bloomfilter_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(nitem), nullptr, nulllen)
 	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
 }
 func (bf *CBloomFilter) addVarlenaVector(v *vector.Vector) {
-	if v.Length() == 0 {
+	if v.IsConstNull() {
+		return
+	}
+	nitem, isConst := vecPhysCount(v)
+	if nitem == 0 {
 		return
 	}
 	varlenData := vector.MustFixedColWithTypeCheck[types.Varlena](v)
@@ -414,12 +482,12 @@ func (bf *CBloomFilter) addVarlenaVector(v *vector.Vector) {
 
 	var nullptr *uint64
 	var nulllen int
-	if nullbm != nil {
+	if !isConst && nullbm != nil {
 		nullptr = nullbm.Ptr()
 		nulllen = nullbm.Size()
 	}
 
-	C.bloomfilter_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(v.Length()), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen))
+	C.bloomfilter_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(nitem), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen))
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
