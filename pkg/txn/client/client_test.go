@@ -301,16 +301,19 @@ func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
 		require.NoError(t, op.Rollback(ctx))
 
 		registrationErr := make(chan error, 1)
+		terminalErr := make(chan error, 1)
 		client.txnOpenedCallbacks = []func(TxnOperator){func(opened TxnOperator) {
 			_, sqlCancel := context.WithCancel(context.Background())
 			token, err := opened.EnterRunSqlWithTokenAndSQL(sqlCancel, "late old-generation sql")
 			require.Zero(t, token)
 			registrationErr <- err
+			terminalErr <- opened.Commit(ctx)
 		}}
 
 		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.True(t, moerr.IsMoErrCode(<-registrationErr, moerr.ErrTxnClosed))
+		require.True(t, moerr.IsMoErrCode(<-terminalErr, moerr.ErrTxnClosed))
 
 		_, sqlCancel := context.WithCancel(context.Background())
 		token, err := restarted.EnterRunSqlWithTokenAndSQL(sqlCancel, "new-generation sql")

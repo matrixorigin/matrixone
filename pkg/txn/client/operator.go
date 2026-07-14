@@ -271,6 +271,7 @@ type txnOperator struct {
 	clock           clock.Clock
 	lockService     lockservice.LockService
 	timestampWaiter TimestampWaiter
+	terminalCall    atomic.Uint32
 
 	mu struct {
 		sync.RWMutex
@@ -346,6 +347,14 @@ type txnTerminalAction uint8
 const (
 	txnTerminalActionNone txnTerminalAction = iota
 	txnTerminalActionRollbackAfterRunningSQL
+)
+
+type txnTerminalCallState uint32
+
+const (
+	txnTerminalCallIdle txnTerminalCallState = iota
+	txnTerminalCallActive
+	txnTerminalCallSealed
 )
 
 type runSQLInfo struct {
@@ -647,7 +656,7 @@ func (tc *txnOperator) initWithRunSQLGate(
 	defer tc.mu.Unlock()
 
 	tc.initReset(sealRunSQL)
-	tc.initProtectedFields()
+	tc.initProtectedFields(sealRunSQL)
 
 	tc.mu.txn = txnMeta
 	tc.reset.txnID = txnMeta.ID
@@ -690,10 +699,15 @@ func (tc *txnOperator) initReset(sealRunSQL bool) {
 	tc.reset.cache = sync.Map{}
 }
 
-func (tc *txnOperator) initProtectedFields() {
+func (tc *txnOperator) initProtectedFields(sealTerminalCall bool) {
 	tc.mu.waitActive = false
 	tc.mu.closed = false
 	tc.mu.restarting = false
+	terminalState := txnTerminalCallIdle
+	if sealTerminalCall {
+		terminalState = txnTerminalCallSealed
+	}
+	tc.terminalCall.Store(uint32(terminalState))
 	tc.mu.terminalAction = txnTerminalActionNone
 	tc.mu.terminalCleanupDone = false
 	tc.mu.retry = false
@@ -999,6 +1013,11 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 }
 
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	if err := tc.claimTerminalCall(); err != nil {
+		return nil, err
+	}
+	defer tc.releaseTerminalCall()
+
 	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<write-and-commit>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return nil, err
@@ -1009,6 +1028,11 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
+	if err := tc.claimTerminalCall(); err != nil {
+		return err
+	}
+	defer tc.releaseTerminalCall()
+
 	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<commit>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
@@ -1061,11 +1085,23 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
+	if err := tc.claimTerminalCall(); err != nil {
+		return err
+	}
+	defer tc.releaseTerminalCall()
+
 	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<rollback>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
 	}
+	return tc.rollback(ctx)
+}
 
+// rollback is the cleanup implementation for a terminal-call owner. It is
+// intentionally private: deferred running-SQL cleanup and commit-failure
+// cleanup already own the terminal transition and must not re-enter the public
+// ownership gate.
+func (tc *txnOperator) rollback(ctx context.Context) (err error) {
 	tc.reset.rollbackCounter.addEnter()
 	defer tc.reset.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
@@ -1295,7 +1331,7 @@ func (tc *txnOperator) doWrite(
 			var reqs []txn.TxnRequest
 			reqs, err = tc.reset.workspace.Commit(ctx)
 			if err != nil {
-				return nil, errors.Join(err, tc.Rollback(ctx))
+				return nil, errors.Join(err, tc.rollback(ctx))
 			}
 			payload = reqs
 			workspacePrepared = true
@@ -1859,6 +1895,7 @@ func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 	tc.mu.terminalAction = txnTerminalActionRollbackAfterRunningSQL
 	tc.mu.terminalCleanupDone = false
 	tc.reset.commitErr = waitErr
+	tc.terminalCall.Store(uint32(txnTerminalCallSealed))
 	tc.mu.Unlock()
 
 	tc.reset.runSQLTracker.sealAndRunWhenDrained(func() {
@@ -1869,7 +1906,7 @@ func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), runningSQLWaitTimeout)
 		defer cancel()
-		if err := tc.Rollback(ctx); err != nil {
+		if err := tc.rollback(ctx); err != nil {
 			tc.logger.Error("rollback after running SQL wait failed",
 				util.TxnIDField(tc.getTxnMeta(false)),
 				zap.Error(waitErr),
@@ -2087,11 +2124,58 @@ func (tc *txnOperator) claimRestart() error {
 	if !tc.mu.closed || tc.mu.restarting || pendingTerminalCleanup {
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
+	terminalState := txnTerminalCallState(tc.terminalCall.Load())
+	if terminalState == txnTerminalCallActive {
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+	}
+	claimedTerminalGate := false
+	if terminalState == txnTerminalCallIdle {
+		if !tc.terminalCall.CompareAndSwap(
+			uint32(txnTerminalCallIdle),
+			uint32(txnTerminalCallSealed),
+		) {
+			return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+		}
+		claimedTerminalGate = true
+	}
 	if !tc.reset.runSQLTracker.sealForRestart() {
+		if claimedTerminalGate {
+			tc.terminalCall.CompareAndSwap(
+				uint32(txnTerminalCallSealed),
+				uint32(txnTerminalCallIdle),
+			)
+		}
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
 	tc.mu.restarting = true
 	return nil
+}
+
+// claimTerminalCall gives exactly one public Commit, Rollback, or
+// WriteAndCommit call ownership of the terminal transition. The ownership state
+// is independent of tc.mu because commit holds tc.mu across downstream RPCs;
+// competing calls must still fail fast while that RPC is blocked. Internal
+// cleanup owners bypass this gate through rollback.
+func (tc *txnOperator) claimTerminalCall() error {
+	if !tc.terminalCall.CompareAndSwap(
+		uint32(txnTerminalCallIdle),
+		uint32(txnTerminalCallActive),
+	) {
+		// The gate can reject while restart is replacing reset.txnID. The error
+		// code is the public contract; avoid racing that diagnostic-only byte
+		// slice on this lock-free path.
+		return moerr.NewTxnClosedNoCtx(nil)
+	}
+	return nil
+}
+
+func (tc *txnOperator) releaseTerminalCall() {
+	// A timeout owner changes active to sealed before scheduling deferred
+	// rollback. Do not reopen that terminal boundary when the public call exits.
+	tc.terminalCall.CompareAndSwap(
+		uint32(txnTerminalCallActive),
+		uint32(txnTerminalCallIdle),
+	)
 }
 
 // openRunSQLAfterRestart completes restart admission without racing a
@@ -2104,6 +2188,9 @@ func (tc *txnOperator) openRunSQLAfterRestart() error {
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
 	tc.reset.runSQLTracker.open()
+	// Restart admission deliberately keeps both gates sealed. Publish the new
+	// generation to terminal callers only after SQL registration is open.
+	tc.terminalCall.Store(uint32(txnTerminalCallIdle))
 	return nil
 }
 

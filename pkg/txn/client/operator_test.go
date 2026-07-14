@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -1607,9 +1608,20 @@ func TestConcurrentRunningSQLTimeoutSchedulesOneRollback(t *testing.T) {
 				errC <- action(timeoutCtx)
 			}(action)
 		}
+		var canceled, closed int
 		for range 2 {
-			require.ErrorIs(t, <-errC, context.Canceled)
+			err := <-errC
+			switch {
+			case errors.Is(err, context.Canceled):
+				canceled++
+			case moerr.IsMoErrCode(err, moerr.ErrTxnClosed):
+				closed++
+			default:
+				t.Fatalf("unexpected concurrent terminal-call error: %v", err)
+			}
 		}
+		require.Equal(t, 1, canceled)
+		require.Equal(t, 1, closed)
 
 		tc.ExitRunSqlWithToken(runningToken)
 		select {
@@ -1622,6 +1634,134 @@ func TestConcurrentRunningSQLTimeoutSchedulesOneRollback(t *testing.T) {
 		requests := ts.getLastRequests()
 		require.Len(t, requests, 1)
 		require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+	})
+}
+
+func TestDeferredRollbackRejectsLaterPublicTerminalCalls(t *testing.T) {
+	actions := []struct {
+		name string
+		run  func(*txnOperator, context.Context) error
+	}{
+		{name: "commit", run: (*txnOperator).Commit},
+		{name: "rollback", run: (*txnOperator).Rollback},
+		{name: "write-and-commit", run: func(tc *txnOperator, ctx context.Context) error {
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			if result != nil {
+				result.Release()
+			}
+			return err
+		}},
+	}
+
+	for _, owner := range actions {
+		t.Run(owner.name, func(t *testing.T) {
+			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				closedC := make(chan struct{})
+				tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+					close(closedC)
+					return nil
+				}})
+				workspace := &blockingRollbackWorkspace{
+					started: make(chan struct{}, 1),
+					release: make(chan struct{}),
+				}
+				lockService := &trackingUnlockLockService{}
+				tc.AddWorkspace(workspace)
+				tc.lockService = lockService
+				tc.mu.Lock()
+				tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				tc.mu.Unlock()
+
+				_, runningCancel := context.WithCancel(context.Background())
+				runningToken := mustEnterRunSQL(t, tc, runningCancel, "stuck sql")
+				ownerCtx, cancelOwner := context.WithCancel(ctx)
+				cancelOwner()
+				require.ErrorIs(t, owner.run(tc, ownerCtx), context.Canceled)
+
+				assertRejected := func(phase string) {
+					t.Helper()
+					for _, action := range actions {
+						t.Run(phase+"/"+action.name, func(t *testing.T) {
+							callCtx, cancelCall := context.WithTimeout(context.Background(), 100*time.Millisecond)
+							defer cancelCall()
+							err := action.run(tc, callCtx)
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+							require.NoError(t, callCtx.Err(), "terminal call did not fail fast")
+						})
+					}
+				}
+
+				assertRejected("before-drain")
+				tc.ExitRunSqlWithToken(runningToken)
+				select {
+				case <-workspace.started:
+				case <-time.After(time.Second):
+					t.Fatal("deferred rollback did not start")
+				}
+				assertRejected("after-drain")
+
+				close(workspace.release)
+				select {
+				case <-closedC:
+				case <-time.After(time.Second):
+					t.Fatal("deferred rollback did not finish")
+				}
+				require.Equal(t, 1, workspace.rollbackCount)
+				require.Equal(t, 1, lockService.unlockCount)
+				requests := ts.getLastRequests()
+				require.Len(t, requests, 1)
+				require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+			})
+		})
+	}
+}
+
+func TestTerminalCallOwnerRejectsConcurrentPublicTerminalCalls(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		tc.mu.Unlock()
+
+		sendStarted := make(chan struct{}, 1)
+		releaseSend := make(chan struct{})
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			sendStarted <- struct{}{}
+			<-releaseSend
+			return result, err
+		})
+
+		commitErr := make(chan error, 1)
+		go func() {
+			commitErr <- tc.Commit(ctx)
+		}()
+		select {
+		case <-sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("commit did not reach the blocking sender")
+		}
+
+		concurrentCalls := []func(context.Context) error{
+			tc.Commit,
+			tc.Rollback,
+			func(ctx context.Context) error {
+				result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+				if result != nil {
+					result.Release()
+				}
+				return err
+			},
+		}
+		for _, call := range concurrentCalls {
+			callCtx, cancelCall := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			err := call(callCtx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+			require.NoError(t, callCtx.Err(), "terminal call did not fail fast")
+			cancelCall()
+		}
+
+		close(releaseSend)
+		require.NoError(t, <-commitErr)
 	})
 }
 
