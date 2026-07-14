@@ -283,6 +283,98 @@ func TestQuerySimpleContainPath(t *testing.T) {
 	}
 }
 
+func TestPathExists(t *testing.T) {
+	kases := []struct {
+		name    string
+		jsonStr string
+		pathStr string
+		exists  bool
+	}{
+		{
+			name:    "json null is an existing path",
+			jsonStr: `{"a":null}`,
+			pathStr: `$.a`,
+			exists:  true,
+		},
+		{
+			name:    "missing key is not an existing path",
+			jsonStr: `{}`,
+			pathStr: `$.a`,
+			exists:  false,
+		},
+		{
+			name:    "scalar index zero autowraps",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.a[0]`,
+			exists:  true,
+		},
+		{
+			name:    "scalar nonzero index misses",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.a[1]`,
+			exists:  false,
+		},
+		{
+			name:    "object wildcard finds a value",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.*`,
+			exists:  true,
+		},
+		{
+			name:    "array wildcard on an empty array misses",
+			jsonStr: `[]`,
+			pathStr: `$[*]`,
+			exists:  false,
+		},
+		{
+			name:    "array wildcard finds an element",
+			jsonStr: `[1,2,3]`,
+			pathStr: `$[*]`,
+			exists:  true,
+		},
+		{
+			name:    "recursive descent finds a json null",
+			jsonStr: `{"a":{"b":null}}`,
+			pathStr: `$**.b`,
+			exists:  true,
+		},
+		{
+			name:    "recursive descent finds an array index",
+			jsonStr: `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`,
+			pathStr: `$**[4]`,
+			exists:  true,
+		},
+		{
+			name:    "recursive descent reports a missing array index",
+			jsonStr: `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`,
+			pathStr: `$**.c[3]`,
+			exists:  false,
+		},
+		{
+			name:    "recursive descent and wildcard find an array value",
+			jsonStr: `[1,2,3]`,
+			pathStr: `$**[*]`,
+			exists:  true,
+		},
+		{
+			name:    "array range with no elements misses",
+			jsonStr: `[1]`,
+			pathStr: `$[1 to 2]`,
+			exists:  false,
+		},
+	}
+
+	for _, kase := range kases {
+		t.Run(kase.name, func(t *testing.T) {
+			bj, err := ParseFromString(kase.jsonStr)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(kase.pathStr)
+			require.NoError(t, err)
+			require.Equal(t, kase.exists, bj.PathExists(&path))
+		})
+	}
+}
+
 func TestUnnest(t *testing.T) {
 	kases := []struct {
 		jsonStr   string
