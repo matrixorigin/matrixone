@@ -25,12 +25,16 @@ import (
 // MatrixOne/MySQL boolean semantics, mapped onto the positional segment:
 //   - +clause  → MUST   (AND): the doc must contain it.
 //   - -clause  → MUST NOT (the doc must not contain it).
-//   - clause   → SHOULD (OR): contributes to the score; at least one SHOULD must
-//     match when there is no MUST.
+//   - >clause  → SHOULD, impact ×1.1 (boost).
+//   - <clause  → SHOULD, impact ×0.9 (demote).
+//   - ~clause  → ADJUST, impact ×−1.0: present ⇒ LOWERS the score but does NOT
+//     by itself include the doc (a noise-word penalty).
+//   - clause   → SHOULD (OR): contributes to the score; at least one SHOULD (or
+//     MUST) must match.
 //
-// A clause is one of: a single TERM, a contiguous "PHRASE", or a word* PREFIX.
-// (The `> < ~` weight operators and nested ( ) groups map onto the same clause
-// machinery and land in a later slice; this slice covers + - " " * and bare OR.)
+// A clause is a single TERM, a contiguous "PHRASE", a word* PREFIX, or a ( )
+// GROUP whose score is the MAX of its child sub-scorers (§6) and whose presence
+// is the union of its children (OR). Groups nest and may carry any prefix.
 //
 // This engine owns EXECUTION; the query front-end (fulltext.ParsePattern →
 // operator tree) is reused at plugin-integration time and translated into these
@@ -44,25 +48,37 @@ const (
 	clauseTerm   clauseKind = iota // a single term
 	clausePhrase                   // a contiguous phrase of terms
 	clausePrefix                   // a word* prefix (terms[0] is the prefix)
+	clauseGroup                    // ( ) — OR of children, score = max child
+)
+
+// Impact multipliers for the > < ~ weight operators (§6).
+const (
+	weightGreater = 1.1
+	weightLess    = 0.9
+	weightTilde   = -1.0
 )
 
 type clause struct {
-	kind  clauseKind
-	terms []string
+	kind     clauseKind
+	terms    []string // leaf (term / phrase / prefix)
+	children []clause // group
+	weight   float64  // impact multiplier (1.0 default; > < ~ change it)
 }
 
-// BoolQuery is a parsed boolean-mode query.
+// BoolQuery is a parsed boolean-mode query. adjust holds the ~ clauses, which
+// adjust score without driving inclusion.
 type BoolQuery struct {
 	must    []clause // +
 	mustNot []clause // -
-	should  []clause // bare
+	should  []clause // bare / > / <
+	adjust  []clause // ~
 }
 
-// SearchBoolean evaluates a boolean query over the segment and returns up to k
-// hits, score desc (ties by ascending doc ord). A doc matches when every MUST
-// clause is present, no MUST-NOT clause is present, and — if there is no MUST —
-// at least one SHOULD clause is present. Score sums the MUST and SHOULD
-// contributions.
+// SearchBoolean evaluates a boolean query and returns up to k hits, score desc
+// (ties by ascending doc ord). A doc matches when every MUST clause is present,
+// no MUST-NOT clause is present, and — with no MUST — at least one SHOULD clause
+// is present. Score sums the MUST + SHOULD contributions, then applies ~ ADJUST
+// penalties to the matched docs.
 func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
 	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0) {
 		return nil, nil
@@ -77,12 +93,15 @@ func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, e
 	if err != nil {
 		return nil, err
 	}
-	// MUST-NOT contributes presence only.
-	mustNot := make(map[int64]struct{})
+	adjustMaps, err := s.evalClauses(q.adjust, algo, avgDocLen)
+	if err != nil {
+		return nil, err
+	}
 	notMaps, err := s.evalClauses(q.mustNot, algo, avgDocLen)
 	if err != nil {
 		return nil, err
 	}
+	mustNot := make(map[int64]struct{})
 	for _, m := range notMaps {
 		for ord := range m {
 			mustNot[ord] = struct{}{}
@@ -115,16 +134,22 @@ func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, e
 			}
 		}
 	}
-	// Add SHOULD scores (optional when MUST is present).
+	// SHOULD scores (optional when MUST present), then ~ ADJUST penalties — both
+	// only on docs already in the candidate set.
 	for ord := range cand {
 		for _, m := range shouldMaps {
 			if v, present := m[ord]; present {
 				cand[ord] += v
 			}
 		}
+		for _, m := range adjustMaps {
+			if v, present := m[ord]; present {
+				cand[ord] += v
+			}
+		}
 	}
 
-	// Drop MUST-NOT docs; emit in ascending ord so the score-desc sort keeps an
+	// Drop MUST-NOT docs; emit ascending ord so the score-desc sort keeps an
 	// ascending-ord tiebreak.
 	ords := make([]int64, 0, len(cand))
 	for ord := range cand {
@@ -158,34 +183,31 @@ func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64) ([
 	return out, nil
 }
 
-// evalClause returns the (doc ord → score) contribution of one clause. A present
-// doc is always a key (even with score 0, so MUST/presence is exact); an absent
-// term yields an empty map.
+// evalClause returns the weighted (doc ord → score) contribution of one clause.
+// A present doc is always a key (even at score 0, so MUST/presence is exact); an
+// absent term yields an empty map. The clause weight (> < ~) scales the result.
 func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[int64]float64, error) {
-	out := make(map[int64]float64)
+	raw := make(map[int64]float64)
 	switch c.kind {
 	case clauseTerm:
-		pl, ok := s.lookup(c.terms[0])
-		if !ok {
-			return out, nil
-		}
-		idf2 := idfSquared(s.N, pl.df())
-		for i, ord := range pl.docIDs {
-			out[ord] = s.scoreTerm(algo, float64(pl.tfs[i]), idf2, ord, avgDocLen)
+		if pl, ok := s.lookup(c.terms[0]); ok {
+			idf2 := idfSquared(s.N, pl.df())
+			for i, ord := range pl.docIDs {
+				raw[ord] = s.scoreTerm(algo, float64(pl.tfs[i]), idf2, ord, avgDocLen)
+			}
 		}
 	case clausePhrase:
 		hits := s.matchPhrase(c.terms)
 		idf2 := idfSquared(s.N, len(hits))
 		for _, h := range hits {
-			out[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
+			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
 		}
 	case clausePrefix:
 		terms, err := s.prefixTerms(c.terms[0])
 		if err != nil {
 			return nil, err
 		}
-		// Combined impact = MAX over the expanded terms (§6).
-		for _, t := range terms {
+		for _, t := range terms { // combined impact = MAX over expanded terms (§6)
 			pl, ok := s.lookup(t)
 			if !ok {
 				continue
@@ -193,13 +215,30 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[i
 			idf2 := idfSquared(s.N, pl.df())
 			for i, ord := range pl.docIDs {
 				sc := s.scoreTerm(algo, float64(pl.tfs[i]), idf2, ord, avgDocLen)
-				if cur, seen := out[ord]; !seen || sc > cur {
-					out[ord] = sc
+				if cur, seen := raw[ord]; !seen || sc > cur {
+					raw[ord] = sc
+				}
+			}
+		}
+	case clauseGroup:
+		for _, ch := range c.children { // OR of children, score = MAX (§6)
+			m, err := s.evalClause(ch, algo, avgDocLen)
+			if err != nil {
+				return nil, err
+			}
+			for ord, sc := range m {
+				if cur, seen := raw[ord]; !seen || sc > cur {
+					raw[ord] = sc
 				}
 			}
 		}
 	}
-	return out, nil
+	if c.weight != 1.0 {
+		for ord := range raw {
+			raw[ord] *= c.weight
+		}
+	}
+	return raw, nil
 }
 
 // prefixTerms expands a word* prefix to its matching terms, over the loaded FST
@@ -222,36 +261,65 @@ func (s *Segment) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 	return s.SearchBoolean(q, algo, k)
 }
 
+// ---- parser ----
+
+// bucket classifies a clause by its prefix operator.
+type bucket int
+
+const (
+	bShould bucket = iota
+	bMust
+	bMustNot
+	bAdjust
+)
+
+func bucketOf(prefix byte) bucket {
+	switch prefix {
+	case '+':
+		return bMust
+	case '-':
+		return bMustNot
+	case '~':
+		return bAdjust
+	default: // '>' '<' 0
+		return bShould
+	}
+}
+
+func weightOf(prefix byte) float64 {
+	switch prefix {
+	case '>':
+		return weightGreater
+	case '<':
+		return weightLess
+	case '~':
+		return weightTilde
+	default:
+		return 1.0
+	}
+}
+
 // ParseBoolean parses a boolean-mode query string into clauses, tokenizing each
-// clause's text with tok. Supported surface: leading +/- (MUST / MUST-NOT),
-// "quoted phrases", and a trailing * (prefix). A bareword that tokenizes to
+// leaf's text with tok. Surface: leading +/-/>/</~ operators, "quoted phrases",
+// trailing * (prefix), and ( ) groups (nestable). A bareword that tokenizes to
 // several terms (e.g. a CJK compound) becomes a contiguous phrase.
 func ParseBoolean(query []byte, tok tokenizer.Tokenizer) (BoolQuery, error) {
 	var q BoolQuery
 	for _, rc := range scanBoolean(string(query)) {
-		terms, err := tokenizeToTerms([]byte(rc.text), tok)
+		c, ok, err := rawToClause(rc, tok)
 		if err != nil {
 			return q, err
 		}
-		if len(terms) == 0 {
+		if !ok {
 			continue
 		}
-		var c clause
-		switch {
-		case rc.quoted:
-			c = clause{kind: clausePhrase, terms: terms}
-		case rc.star:
-			c = clause{kind: clausePrefix, terms: terms[:1]}
-		case len(terms) == 1:
-			c = clause{kind: clauseTerm, terms: terms}
-		default:
-			c = clause{kind: clausePhrase, terms: terms}
-		}
-		switch rc.prefix {
-		case '+':
+		switch bucketOf(rc.prefix) {
+		case bMust:
 			q.must = append(q.must, c)
-		case '-':
+		case bMustNot:
 			q.mustNot = append(q.mustNot, c)
+		case bAdjust:
+			q.adjust = append(q.adjust, c)
 		default:
 			q.should = append(q.should, c)
 		}
@@ -259,19 +327,69 @@ func ParseBoolean(query []byte, tok tokenizer.Tokenizer) (BoolQuery, error) {
 	return q, nil
 }
 
-type rawClause struct {
-	prefix byte // '+', '-', or 0
-	quoted bool
-	star   bool
-	text   string
+// rawToClause builds a clause (with its impact weight) from a raw scanned clause,
+// recursing into groups. ok=false when it tokenizes to nothing.
+func rawToClause(rc rawClause, tok tokenizer.Tokenizer) (clause, bool, error) {
+	w := weightOf(rc.prefix)
+	if rc.group {
+		var children []clause
+		for _, ch := range rc.children { // group members are OR'd; their prefix only sets their own weight
+			cc, ok, err := rawToClause(ch, tok)
+			if err != nil {
+				return clause{}, false, err
+			}
+			if ok {
+				children = append(children, cc)
+			}
+		}
+		if len(children) == 0 {
+			return clause{}, false, nil
+		}
+		return clause{kind: clauseGroup, children: children, weight: w}, true, nil
+	}
+	terms, err := tokenizeToTerms([]byte(rc.text), tok)
+	if err != nil {
+		return clause{}, false, err
+	}
+	if len(terms) == 0 {
+		return clause{}, false, nil
+	}
+	switch {
+	case rc.quoted:
+		return clause{kind: clausePhrase, terms: terms, weight: w}, true, nil
+	case rc.star:
+		return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
+	case len(terms) == 1:
+		return clause{kind: clauseTerm, terms: terms, weight: w}, true, nil
+	default:
+		return clause{kind: clausePhrase, terms: terms, weight: w}, true, nil
+	}
 }
 
-// scanBoolean splits a boolean query into raw clauses at the top level: an
-// optional +/- prefix, then either a "quoted phrase" or a whitespace-delimited
-// bareword (a trailing * marks a prefix). Term tokenization happens later.
+type rawClause struct {
+	prefix   byte // + - > < ~ or 0
+	quoted   bool
+	star     bool
+	group    bool
+	text     string
+	children []rawClause
+}
+
+func isPrefixChar(c byte) bool {
+	return c == '+' || c == '-' || c == '>' || c == '<' || c == '~'
+}
+
+// scanBoolean splits a boolean query into raw clauses at the top level.
 func scanBoolean(q string) []rawClause {
+	cs, _ := scanRange(q, 0)
+	return cs
+}
+
+// scanRange scans clauses from index i until end-of-string or an unmatched ')'
+// (a group close), returning the clauses and the index just past the stop point.
+func scanRange(q string, i int) ([]rawClause, int) {
 	var out []rawClause
-	i, n := 0, len(q)
+	n := len(q)
 	for i < n {
 		for i < n && q[i] == ' ' {
 			i++
@@ -279,12 +397,20 @@ func scanBoolean(q string) []rawClause {
 		if i >= n {
 			break
 		}
+		if q[i] == ')' {
+			return out, i + 1 // end of this group
+		}
 		var rc rawClause
-		if q[i] == '+' || q[i] == '-' {
+		if isPrefixChar(q[i]) {
 			rc.prefix = q[i]
 			i++
 		}
-		if i < n && q[i] == '"' {
+		switch {
+		case i < n && q[i] == '(':
+			rc.group = true
+			i++
+			rc.children, i = scanRange(q, i)
+		case i < n && q[i] == '"':
 			rc.quoted = true
 			i++
 			start := i
@@ -295,9 +421,9 @@ func scanBoolean(q string) []rawClause {
 			if i < n {
 				i++ // closing quote
 			}
-		} else {
+		default:
 			start := i
-			for i < n && q[i] != ' ' {
+			for i < n && q[i] != ' ' && q[i] != ')' {
 				i++
 			}
 			word := q[start:i]
@@ -307,9 +433,9 @@ func scanBoolean(q string) []rawClause {
 			}
 			rc.text = word
 		}
-		if rc.text != "" || rc.quoted {
+		if rc.group || rc.text != "" {
 			out = append(out, rc)
 		}
 	}
-	return out
+	return out, i
 }

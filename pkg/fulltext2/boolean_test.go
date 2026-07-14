@@ -78,6 +78,60 @@ func TestBooleanOnLoadedSegment(t *testing.T) {
 	require.ElementsMatch(t, []any{int64(1), int64(5)}, bquery(t, loaded, "+d* +fox"))
 }
 
+// bqueryOrdered runs a boolean query and returns pks in ranked order.
+func bqueryOrdered(t *testing.T, s *Segment, q string) []any {
+	t.Helper()
+	rs, err := s.SearchBooleanText([]byte(q), tokenizer.NewSimpleTokenizer(), TfIdf, 10)
+	require.NoError(t, err)
+	return pkslice(rs)
+}
+
+// TestBooleanGroups: ( ) groups — OR of children (max sub-scorer), combinable
+// with + and nestable.
+func TestBooleanGroups(t *testing.T) {
+	s := fulltextCorpus(t)
+	// (quick OR sleeps) AND fox
+	require.ElementsMatch(t, []any{int64(1), int64(2), int64(4)}, bquery(t, s, "+(quick sleeps) +fox"))
+	// (lazy OR high) AND fox
+	require.ElementsMatch(t, []any{int64(1), int64(4)}, bquery(t, s, "+(lazy high) +fox"))
+	// bare group = OR
+	require.ElementsMatch(t, []any{int64(3), int64(4)}, bquery(t, s, "(sleeps high)"))
+	// nested group
+	require.ElementsMatch(t, []any{int64(1), int64(2), int64(4), int64(5)}, bquery(t, s, "+((quick) fox)"))
+}
+
+// TestBooleanWeights: > boosts and < demotes a SHOULD clause's rank without
+// changing membership.
+func TestBooleanWeights(t *testing.T) {
+	s := fulltextCorpus(t)
+	// membership is unchanged by a weight operator
+	require.ElementsMatch(t, []any{int64(1), int64(2), int64(4)}, bquery(t, s, ">quick"))
+
+	// sleeps(doc3) and high(doc4) score equally → tie broken by ord: [3,4].
+	require.Equal(t, []any{int64(3), int64(4)}, bqueryOrdered(t, s, "sleeps high"))
+	// boosting high flips the order: [4,3].
+	require.Equal(t, []any{int64(4), int64(3)}, bqueryOrdered(t, s, "sleeps >high"))
+}
+
+// TestBooleanTilde: ~ penalizes but does not exclude — jumps-bearing docs (1,4)
+// sink below the others (2,5), all still present.
+func TestBooleanTilde(t *testing.T) {
+	s := fulltextCorpus(t)
+	require.Equal(t, []any{int64(2), int64(5), int64(1), int64(4)}, bqueryOrdered(t, s, "fox ~jumps"))
+}
+
+// TestBooleanGroupsLoaded exercises groups/weights on the loaded (FST) path.
+func TestBooleanGroupsLoaded(t *testing.T) {
+	data, err := fulltextCorpus(t).Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("seg", bytes.NewReader(data))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+
+	require.ElementsMatch(t, []any{int64(1), int64(4)}, bquery(t, loaded, "+(lazy high) +fox"))
+	require.Equal(t, []any{int64(2), int64(5), int64(1), int64(4)}, bqueryOrdered(t, loaded, "fox ~jumps"))
+}
+
 // TestScanBoolean checks the top-level clause scanner directly.
 func TestScanBoolean(t *testing.T) {
 	got := scanBoolean(`+quick -"lazy dog" fox*`)
@@ -85,4 +139,19 @@ func TestScanBoolean(t *testing.T) {
 	require.Equal(t, rawClause{prefix: '+', text: "quick"}, got[0])
 	require.Equal(t, rawClause{prefix: '-', quoted: true, text: "lazy dog"}, got[1])
 	require.Equal(t, rawClause{star: true, text: "fox"}, got[2])
+}
+
+// TestScanBooleanGroups: nested groups and weight prefixes scan correctly.
+func TestScanBooleanGroups(t *testing.T) {
+	got := scanBoolean(`>quick +(lazy dog) ~jumps`)
+	require.Len(t, got, 3)
+	require.Equal(t, byte('>'), got[0].prefix)
+	require.Equal(t, "quick", got[0].text)
+	require.Equal(t, byte('+'), got[1].prefix)
+	require.True(t, got[1].group)
+	require.Len(t, got[1].children, 2)
+	require.Equal(t, "lazy", got[1].children[0].text)
+	require.Equal(t, "dog", got[1].children[1].text)
+	require.Equal(t, byte('~'), got[2].prefix)
+	require.Equal(t, "jumps", got[2].text)
 }
