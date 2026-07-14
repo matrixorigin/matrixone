@@ -15,12 +15,70 @@
 package publication
 
 import (
+	"context"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWorkerStopImmediatelyAfterConstruction(t *testing.T) {
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+
+	w := NewWorker("", nil, nil, nil, nil)
+	w.Stop()
+	runtime.Gosched()
+}
+
+func TestWorkerStopIsConcurrentAndIdempotent(t *testing.T) {
+	w := NewWorker("", nil, nil, nil, nil)
+	var stops sync.WaitGroup
+	for range 8 {
+		stops.Add(1)
+		go func() {
+			defer stops.Done()
+			w.Stop()
+		}()
+	}
+	stops.Wait()
+	require.Error(t, w.Submit("task-after-stop", 1, 0))
+}
+
+func TestWorkerPoolsStopIdempotently(t *testing.T) {
+	workers := []interface{ Stop() }{
+		NewFilterObjectWorker(),
+		NewGetChunkWorker(),
+		NewWriteObjectWorker(),
+	}
+	for _, w := range workers {
+		w.Stop()
+		w.Stop()
+	}
+}
+
+func TestSimpleWorkerCancellationUnblocksSubmitAndRollsBackPending(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	jobs := make(chan Job, 1)
+	jobs <- &mockJob{}
+	var pending atomic.Int64
+	w := &simpleJobWorker{
+		name:              "test worker",
+		jobChan:           jobs,
+		ctx:               ctx,
+		cancel:            cancel,
+		onPending:         func() { pending.Add(1) },
+		onPendingCanceled: func() { pending.Add(-1) },
+	}
+
+	cancel()
+	require.Error(t, w.submit(&mockJob{}))
+	require.Zero(t, pending.Load())
+}
 
 func TestGetJobStats(t *testing.T) {
 	stats := GetJobStats()

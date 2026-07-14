@@ -121,19 +121,22 @@ func PublicationTaskExecutorFactory(
 		if err != nil {
 			return
 		}
-		attachToTask(ctx, task.GetID(), exec)
+		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
+			return
+		}
 
 		exec.runningMu.Lock()
 		if exec.running {
 			exec.runningMu.Unlock()
 			return
 		}
-		err = exec.initStateLocked()
+		err = exec.initStateLocked(ctx)
 		exec.runningMu.Unlock()
 		if err != nil {
 			return
 		}
-		exec.run(ctx)
+		exec.run(exec.ctx, exec.worker)
+		exec.Stop()
 		return
 	}
 }
@@ -272,19 +275,19 @@ func (exec *PublicationTaskExecutor) Start() error {
 	if exec.running {
 		return nil
 	}
-	err := exec.initStateLocked()
+	err := exec.initStateLocked(context.Background())
 	if err != nil {
 		return err
 	}
-	go exec.run(exec.ctx)
+	go exec.run(exec.ctx, exec.worker)
 	return nil
 }
 
-func (exec *PublicationTaskExecutor) initStateLocked() error {
+func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) error {
 	logutil.Info(
 		"Publication-Task Start",
 	)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp, exec.upstreamSQLHelperFactory)
 	err := retryPublication(
 		ctx,
@@ -325,8 +328,8 @@ func (exec *PublicationTaskExecutor) Stop() {
 	logutil.Info(
 		"Publication-Task Stop",
 	)
-	exec.worker.Stop()
 	exec.cancel()
+	exec.worker.Stop()
 	exec.wg.Wait()
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
@@ -338,7 +341,7 @@ func (exec *PublicationTaskExecutor) IsRunning() bool {
 	return exec.running
 }
 
-func (exec *PublicationTaskExecutor) run(ctx context.Context) {
+func (exec *PublicationTaskExecutor) run(ctx context.Context, worker Worker) {
 	logutil.Info(
 		"Publication-Task Run",
 	)
@@ -360,12 +363,12 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			// apply mo_ccpr_log
 			from := exec.ccprLogWm.Next()
 			to := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
-			err := exec.applyCcprLog(exec.ctx, from, to)
+			err := exec.applyCcprLog(ctx, from, to)
 			if err == nil {
 				exec.ccprLogWm = to
 			}
 			if err != nil && moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				err = exec.replay(exec.ctx)
+				err = exec.replay(ctx)
 			}
 			if err != nil {
 				logutil.Error(
@@ -382,7 +385,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 				continue
 			}
 			// check lease before submitting tasks
-			ok, err := CheckLeaseWithRetry(exec.ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
+			ok, err := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
 			if err != nil {
 				logutil.Error(
 					"Publication-Task check lease failed",
@@ -392,16 +395,9 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			}
 			if !ok {
 				logutil.Error("Publication-Task lease check failed, stopping executor")
-				exec.cancel()
+				go exec.Stop()
 				return
 			}
-			exec.runningMu.Lock()
-			if !exec.running || exec.worker == nil {
-				exec.runningMu.Unlock()
-				return
-			}
-			worker := exec.worker
-			exec.runningMu.Unlock()
 			for _, task := range candidateTasks {
 				task.State = IterationStatePending
 				exec.setTask(task)
@@ -419,7 +415,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 				}
 			}
 		case <-gcTrigger.C:
-			err := GC(exec.ctx, exec.txnEngine, exec.cnTxnClient, exec.cnUUID, exec.upstreamSQLHelperFactory, exec.option.GCTTL)
+			err := GC(ctx, exec.txnEngine, exec.cnTxnClient, exec.cnUUID, exec.upstreamSQLHelperFactory, exec.option.GCTTL)
 			if err != nil {
 				logutil.Error(
 					"Publication-Task gc failed",

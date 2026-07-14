@@ -90,6 +90,7 @@ func ISCPTaskExecutorFactory(
 			logutil.Error("ISCPTaskExecutor is already running")
 			return moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
 		}
+		defer running.Store(false)
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		exec, err = NewISCPTaskExecutor(
@@ -103,19 +104,22 @@ func ISCPTaskExecutorFactory(
 		if err != nil {
 			return
 		}
-		attachToTask(ctx, task.GetID(), exec)
-
-		exec.runningMu.Lock()
-		defer exec.runningMu.Unlock()
-		if exec.running {
+		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
 			return
 		}
-		err = exec.initStateLocked()
+
+		exec.runningMu.Lock()
+		if exec.running {
+			exec.runningMu.Unlock()
+			return
+		}
+		err = exec.initStateLocked(ctx)
+		exec.runningMu.Unlock()
 		if err != nil {
 			return
 		}
-		exec.run(ctx)
-		<-ctx.Done()
+		exec.run(exec.ctx, exec.worker)
+		exec.Stop()
 		return
 	}
 }
@@ -252,28 +256,29 @@ func (exec *ISCPTaskExecutor) Start() error {
 	if exec.running {
 		return nil
 	}
-	err := exec.initStateLocked()
+	err := exec.initStateLocked(context.Background())
 	if err != nil {
 		return err
 	}
-	go exec.run(context.Background())
+	go exec.run(exec.ctx, exec.worker)
 	return nil
 }
 
-func (exec *ISCPTaskExecutor) initStateLocked() error {
-	exec.running = true
-	logutil.Info(
-		"ISCP-Task Start",
-	)
-	ctx, cancel := context.WithCancel(context.Background())
-	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
-	exec.worker = worker
+func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error) {
+	ctx, cancel := context.WithCancel(parent)
 	exec.ctx = ctx
 	exec.cancel = cancel
-	err := retry(
+	defer func() {
+		if err != nil {
+			cancel()
+			exec.ctx, exec.cancel = nil, nil
+		}
+	}()
+
+	err = retry(
 		ctx,
 		func() error {
-			return exec.replay(exec.ctx)
+			return exec.replay(ctx)
 		},
 		exec.option.RetryTimes,
 		DefaultRetryInterval,
@@ -285,7 +290,7 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	err = retry(
 		ctx,
 		func() error {
-			return exec.initState()
+			return exec.initState(ctx)
 		},
 		exec.option.RetryTimes,
 		DefaultRetryInterval,
@@ -294,7 +299,15 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	if err != nil {
 		return err
 	}
+
+	// Publish a fully initialized generation only after replay and state repair
+	// have both succeeded. NewWorker seals all worker goroutines before return.
+	exec.worker = NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
 	exec.wg.Add(1)
+	exec.running = true
+	logutil.Info(
+		"ISCP-Task Start",
+	)
 	return nil
 }
 
@@ -308,15 +321,15 @@ func (exec *ISCPTaskExecutor) Stop() {
 	logutil.Info(
 		"ISCP-Task Stop",
 	)
-	exec.worker.Stop()
 	exec.cancel()
+	exec.worker.Stop()
 	exec.wg.Wait()
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
 }
 
-func (exec *ISCPTaskExecutor) initState() (err error) {
-	ctxWithTimeout, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+func (exec *ISCPTaskExecutor) initState(ctx context.Context) (err error) {
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	sql := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_iscp_log
@@ -358,7 +371,7 @@ func (exec *ISCPTaskExecutor) IsRunning() bool {
 	return exec.running
 }
 
-func (exec *ISCPTaskExecutor) run(ctx context.Context) {
+func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 	logutil.Info(
 		"ISCP-Task Run",
 	)
@@ -369,24 +382,25 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	}()
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
+	defer syncTaskTrigger.Stop()
 	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
+	defer flushWatermarkTrigger.Stop()
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
+	defer gcTrigger.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-exec.ctx.Done():
 			return
 		case <-syncTaskTrigger.C:
 			// apply iscp log
 			from := exec.iscpLogWm.Next()
 			to := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
-			err := exec.applyISCPLog(exec.ctx, from, to)
+			err := exec.applyISCPLog(ctx, from, to)
 			if err == nil {
 				exec.iscpLogWm = to
 			}
 			if err != nil && moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				err = exec.replay(exec.ctx)
+				err = exec.replay(ctx)
 			}
 			if err != nil {
 				logutil.Error(
@@ -403,7 +417,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				continue
 			}
 			// check if there are any dirty tables
-			tables, toTS, minTS, err := exec.getDirtyTables(exec.ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
+			tables, toTS, minTS, err := exec.getDirtyTables(ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
@@ -460,7 +474,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 							zap.Error(err),
 						)
 					}
-					ok, err := CheckLeaseWithRetry(exec.ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
+					ok, err := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
 					if err != nil {
 						onErrorFn(err)
 						continue
@@ -469,7 +483,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 						go exec.Stop()
 						break
 					}
-					err = exec.worker.Submit(iter)
+					err = worker.Submit(iter)
 					if err != nil {
 						onErrorFn(err)
 						continue

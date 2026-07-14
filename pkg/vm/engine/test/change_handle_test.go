@@ -4768,9 +4768,11 @@ func TestISCPExecutorStartError(t *testing.T) {
 	assert.NoError(t, err)
 	err = cdcExecutor.Resume()
 	require.Error(t, err)
+	require.False(t, cdcExecutor.IsRunning())
 	rmFn()
 	err = cdcExecutor.Resume()
 	require.NoError(t, err)
+	require.True(t, cdcExecutor.IsRunning())
 }
 
 func TestStaleRead(t *testing.T) {

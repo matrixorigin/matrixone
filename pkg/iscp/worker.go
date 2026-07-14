@@ -61,13 +61,15 @@ func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClie
 		mp:          mp,
 	}
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
-	go worker.Run()
+	worker.start()
 	return worker
 }
 
-func (w *worker) Run() {
+// start seals the worker generation before NewWorker publishes it. Stop must
+// never observe a zero WaitGroup while worker goroutines can still be created.
+func (w *worker) start() {
+	w.wg.Add(ISCPWorkerThread)
 	for i := 0; i < ISCPWorkerThread; i++ {
-		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
 			for {
@@ -75,6 +77,13 @@ func (w *worker) Run() {
 				case <-w.ctx.Done():
 					return
 				case task := <-w.taskChan:
+					// Cancellation wins over queued work. This keeps Stop bounded
+					// and prevents a stopped generation from starting new tasks.
+					select {
+					case <-w.ctx.Done():
+						return
+					default:
+					}
 					w.onItem(task)
 				}
 			}
@@ -83,15 +92,18 @@ func (w *worker) Run() {
 }
 
 func (w *worker) Submit(iteration *IterationContext) error {
-	status := make([]*JobStatus, len(iteration.jobNames))
-	for i := range status {
-		status[i] = &JobStatus{}
+	if iteration == nil {
+		return moerr.NewInternalErrorNoCtx("cannot submit a nil ISCP iteration")
 	}
 	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "ISCP-Worker is closed")
+		return moerr.NewInternalErrorNoCtx("ISCP-Worker is closed")
 	}
-	w.taskChan <- iteration
-	return nil
+	select {
+	case w.taskChan <- iteration:
+		return nil
+	case <-w.ctx.Done():
+		return moerr.NewInternalErrorNoCtx("ISCP-Worker is closed")
+	}
 }
 
 func (w *worker) onItem(iterCtx *IterationContext) {
@@ -164,8 +176,9 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 }
 
 func (w *worker) Stop() {
-	w.closed.Store(true)
+	if !w.closed.CompareAndSwap(false, true) {
+		return
+	}
 	w.cancel()
 	w.wg.Wait()
-	close(w.taskChan)
 }
