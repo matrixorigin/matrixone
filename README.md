@@ -307,7 +307,7 @@ One-command deployment and lifecycle management with the official [mo_ctl](https
 
 ### ⚙️ Building from Source
 
-Build MatrixOne from source for development, customization, or contributing. Requires Go 1.22, GCC/Clang, Git, and Make.
+Build MatrixOne from source for development, customization, or contributing. Requires Go 1.26.4 or later, GCC/Clang, Git, and Make.
 
 📖 **[Complete Build from Source Guide →](BUILD.md)**
 

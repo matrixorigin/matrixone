@@ -550,7 +550,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 
-		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
+		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok && shouldCachePrepareCompile(preparePlan.Plan) {
 			// Prepare-time compiles are cached and must not retain a statement-owned trace.
 			// The execution path attaches the current wrapper trace after cache retrieval.
 			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
@@ -600,6 +600,17 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func shouldCachePrepareCompile(p *plan.Plan) bool {
+	if p == nil {
+		return true
+	}
+	query := p.GetQuery()
+	if query == nil {
+		return true
+	}
+	return !query.GetHasForeignKeyAction()
 }
 
 func createCompile(

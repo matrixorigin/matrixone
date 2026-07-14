@@ -140,7 +140,7 @@ func MakePointEventsSortedMap(
 
 	scale, typ := GetScaleAndType(statsList)
 	if typ == types.T_any {
-		return nil, 0, 0, moerr.NewInternalError(ctx, "no valid intervals with initialized zonemaps")
+		return nil, 0, len(statsList), nil
 	}
 
 	events := btree.NewBTreeG(func(a *pointEvent, b *pointEvent) bool {
@@ -284,6 +284,12 @@ func CalculateOverlapStats(
 	if err != nil {
 		return nil, err
 	}
+	if events == nil {
+		ret.ConstantObj = constantObjCnt
+		ret.UniniteddObj = uninitialized
+		ret.ScanObj = len(statsList)
+		return ret, nil
+	}
 	ret.ConstantObj = constantObjCnt
 	ret.UniniteddObj = uninitialized
 	ret.ScanObj = len(statsList)
@@ -389,6 +395,9 @@ func CalculateOverlapStats(
 	}
 
 	processed := ret.ScanObj - ret.ConstantObj - ret.UniniteddObj
+	if processed <= 0 {
+		return
+	}
 	totalOverlap := 0
 	totalPointDepth := 0
 	for _, record := range ret.StatsRecords {
@@ -499,6 +508,9 @@ func GatherOverlapMergeTasks(
 	overlapStats, err := CalculateOverlapStats(ctx, statsList, opts)
 	if err != nil {
 		return nil, err
+	}
+	if overlapStats.PointEvents == nil {
+		return nil, nil
 	}
 	events := overlapStats.PointEvents
 	openingObjs := make(map[int]*objectio.ObjectStats)

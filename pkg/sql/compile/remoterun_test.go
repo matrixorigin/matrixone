@@ -1026,6 +1026,53 @@ func TestRegisterLocalDispatchReceiversRegistersRetainedRemoteRootOnly(t *testin
 	require.Nil(t, notifyCh)
 }
 
+func TestRegisterLocalDispatchReceiversTraversesRemoteAncestorForNestedLocalReturn(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	for _, tc := range []struct {
+		name string
+		root vm.Operator
+	}{
+		{name: "remote non-dispatch root", root: merge.NewArgument()},
+		{name: "retained remote dispatch root", root: dispatch.NewArgument()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, err := uuid.NewV7()
+			require.NoError(t, err)
+			rootProc := testutil.NewProcess(t)
+			outerProc := rootProc.NewNoContextChildProc(0)
+			localProc := rootProc.NewNoContextChildProc(0)
+			localDispatch := dispatch.NewArgument()
+			localDispatch.FuncId = dispatch.SendToAllFunc
+			localDispatch.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+			localReturn := &Scope{
+				Magic:    Remote,
+				Proc:     localProc,
+				RootOp:   localDispatch,
+				NodeInfo: engine.Node{Addr: "local-cn:6002"},
+			}
+			outerRemote := &Scope{
+				Magic:     Remote,
+				Proc:      outerProc,
+				RootOp:    tc.root,
+				NodeInfo:  engine.Node{Addr: "remote-cn:6002"},
+				PreScopes: []*Scope{localReturn},
+			}
+			// The remote tree is valid to execute on remote-cn. When it does, its child
+			// RemoteRun comes back to local-cn and needs this dispatch receiver before
+			// the remote sender can notify it.
+			require.True(t, checkPipelineStandaloneExecutableAtRemote(outerRemote))
+
+			registrations, err := registerLocalDispatchReceivers([]*Scope{outerRemote}, "local-cn:6002")
+			require.NoError(t, err)
+			defer registrations.cleanup()
+			registeredProc, _, ok := colexec.Get().GetProcByUuid(uid, false)
+			require.True(t, ok)
+			require.Same(t, localProc, registeredProc)
+		})
+	}
+}
+
 func TestRegisterLocalDispatchReceiversSkipsGuaranteedRemoteRunFailures(t *testing.T) {
 	_ = colexec.NewServer(nil)
 
@@ -1259,6 +1306,141 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 
 	wg.Wait()
 	require.Equal(t, 2, attempts)
+}
+
+func TestRemoteNotifyRetryAttachesToEmptyDispatchBeforeCompletion(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(ctx)
+	scopeProc := proc.NewContextChildProc(1)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	s := &Scope{
+		Proc: scopeProc,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{
+			{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+		},
+	}
+
+	firstLookupDone := make(chan struct{})
+	allowFirstResponse := make(chan struct{})
+	var attempts atomic.Int32
+	factory := func(
+		ctx context.Context,
+		sid string,
+		toAddr string,
+		mp *mpool.MPool,
+		analyzeModule *AnalyzeModule,
+	) (*messageSenderOnClient, error) {
+		receiveCh := make(chan morpc.Message, 1)
+		receiver := &messageReceiverOnServer{
+			connectionCtx: ctx,
+			messageCtx:    ctx,
+		}
+		if attempts.Add(1) == 1 {
+			_, _, lookupErr := receiver.TryGetProcByUuid(uid)
+			close(firstLookupDone)
+			if lookupErr == nil {
+				unexpected := errors.New("first remote notify unexpectedly found the registration")
+				cancel()
+				return nil, unexpected
+			}
+			select {
+			case <-allowFirstResponse:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+			msg.SetMoError(ctx, lookupErr)
+			receiveCh <- msg
+		} else {
+			dispatchProc, notifyCh, lookupErr := receiver.TryGetProcByUuid(uid)
+			if lookupErr != nil {
+				cancel()
+				return nil, lookupErr
+			}
+			if dispatchProc == nil {
+				unexpected := errors.New("registered remote dispatch returned a nil process")
+				cancel()
+				return nil, unexpected
+			}
+			wrap := &process.WrapCs{Uid: uid, Err: make(chan error, 1)}
+			go func() {
+				select {
+				case notifyCh <- wrap:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case terminalErr := <-wrap.Err:
+					msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+					if terminalErr != nil {
+						msg.SetMoError(ctx, terminalErr)
+					}
+					receiveCh <- msg
+				case <-ctx.Done():
+				}
+			}()
+		}
+		return &messageSenderOnClient{
+			ctx:          ctx,
+			mp:           mp,
+			streamSender: &fakeStreamSender{},
+			receiveCh:    receiveCh,
+			safeToClose:  true,
+		}, nil
+	}
+
+	var wg sync.WaitGroup
+	resultCh := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+	select {
+	case <-firstLookupDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first remote notify did not observe the absent registration")
+	}
+
+	child := value_scan.NewArgument()
+	defer child.Release()
+	require.NoError(t, child.Prepare(proc))
+	dispatchOp := dispatch.NewArgument()
+	defer dispatchOp.Release()
+	dispatchOp.FuncId = dispatch.SendToAllFunc
+	dispatchOp.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	dispatchOp.AppendChild(child)
+	registration, err := dispatchOp.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
+	require.NoError(t, dispatchOp.Prepare(proc))
+	close(allowFirstResponse)
+
+	callResult, err := dispatchOp.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, callResult.Status)
+	dispatchOp.Reset(proc, false, nil)
+
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		require.NoError(t, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote notify did not complete after the empty dispatch registered")
+	}
+	select {
+	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+		bat, signalErr := signal.Action()
+		require.NoError(t, signalErr)
+		require.Nil(t, bat)
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote receiver did not observe the empty dispatch terminal signal")
+	}
+	wg.Wait()
+	require.Equal(t, int32(2), attempts.Load())
 }
 
 func TestSendNotifyMessageWrapperWithNoRemoteReceivers(t *testing.T) {

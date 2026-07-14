@@ -399,7 +399,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 
 		if item.Ts.Greater(qry.Ts) {
-			if item.deleted || item.Id != qry.TableId || item.Version < qry.Version {
+			if item.deleted || item.Id != qry.TableId || item.Version > qry.Version {
 				find = true
 			}
 		}
