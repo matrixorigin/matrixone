@@ -188,7 +188,9 @@ create table greatest_least_supported_oid (id int primary key, v32 vecf32(3), v6
 insert into greatest_least_supported_oid values (1, '[1,2,3]', '[1,2,3]');
 select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), cast('00000000-0000-0000-0000-000000000002' as uuid)) as greatest_uuid_same_oid;
 select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
-select greatest(__mo_rowid, __mo_rowid) as greatest_rowid_same_oid from greatest_least_supported_oid;
+-- __mo_rowid is regenerated for every table creation, so its raw value cannot
+-- be asserted in a static BVT result file.
+-- select greatest(__mo_rowid, __mo_rowid) as greatest_rowid_same_oid from greatest_least_supported_oid;
 select greatest(__mo_rowid, 1) from greatest_least_supported_oid;
 select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
 select greatest(v32, v64) from greatest_least_supported_oid;

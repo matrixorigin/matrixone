@@ -1047,6 +1047,42 @@ func TestLeastGreatestPackedDateRejectsTimeFallback(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLeastGreatestPackedDateFallsBackToLocalTimezone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = nil
+
+	date, err := types.ParseDateCast("2020-01-01")
+	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.Local, "2020-01-02 12:34:56", 0)
+	require.NoError(t, err)
+
+	t.Run("stored timestamp", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil),
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, nil),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{timestamp.ToDatetime(time.Local)}, nil),
+			greatestTemporalFn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("timestamp string peer", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2020-01-03 00:00:00"}, nil),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"2020-01-03 00:00:00"}, nil),
+			greatestTemporalFn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func TestLeastGreatestPackedDateUsesStatementStartForTime(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	loc := time.FixedZone("UTC+8", 8*60*60)

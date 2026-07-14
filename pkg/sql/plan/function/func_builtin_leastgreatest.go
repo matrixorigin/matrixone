@@ -966,7 +966,7 @@ func leastGreatestFnPackedDateResolved(
 	}
 
 	loc := time.Local
-	if proc != nil && proc.GetSessionInfo() != nil {
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
 	}
 

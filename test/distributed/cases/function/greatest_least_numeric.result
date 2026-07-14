@@ -340,9 +340,6 @@ select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), cast('0000
 00000000-0000-0000-0000-000000000002
 select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
 invalid argument function greatest, bad value [UUID VARCHAR]
-select greatest(__mo_rowid, __mo_rowid) as greatest_rowid_same_oid from greatest_least_supported_oid;
-➤ greatest_rowid_same_oid[12,0,0]  𝄀
-019f5f74-bf5b-79d6-94d0-0b64a15606a6-0-0-0
 select greatest(__mo_rowid, 1) from greatest_least_supported_oid;
 invalid argument function greatest, bad value [ROWID BIGINT]
 select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
