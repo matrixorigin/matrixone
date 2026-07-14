@@ -771,3 +771,25 @@ func TestCBloomFilterConstVector(t *testing.T) {
 		require.Equal(t, []uint8{1, 1, 1}, res)
 	})
 }
+
+// TestCBloomFilterEmptyFixedVector covers #25618: the fixed-width vector APIs (Test/Add/
+// TestAndAdd) must not panic on a zero-length vector — they used to unconditionally index
+// &fixedData[0]/&results[0]. This is fixed by the same nitem==0 guards as the constant-vector
+// work (#25621): an empty vector has physical count 0. TestVector returns empty; AddVector and
+// TestAndAddVector are no-ops that never invoke the callback.
+func TestCBloomFilterEmptyFixedVector(t *testing.T) {
+	bf := NewCBloomFilterWithProbability(1, 0.01)
+	defer bf.Free()
+
+	// fixed-width (the issue's repro) plus variable-length, for completeness.
+	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()} {
+		vec := vector.NewVec(typ)
+		called := false
+		cb := func(bool, bool, int) { called = true }
+
+		require.NotPanics(t, func() { require.Empty(t, bf.TestVector(vec, cb)) })
+		require.NotPanics(t, func() { bf.AddVector(vec) })
+		require.NotPanics(t, func() { bf.TestAndAddVector(vec, cb) })
+		require.False(t, called, "callback must not fire for an empty vector (%s)", typ.String())
+	}
+}
