@@ -1521,9 +1521,10 @@ func (f *plannerFixture) planner() LocalScanPlanner {
 }
 
 type plannerMetadataFacade struct {
-	manifests []api.ManifestFile
-	entries   map[string][]api.ManifestEntry
-	native    NativeFacade
+	manifests     []api.ManifestFile
+	manifestLists map[string][]api.ManifestFile
+	entries       map[string][]api.ManifestEntry
+	native        NativeFacade
 }
 
 func (f *plannerMetadataFacade) AdapterName() string {
@@ -1535,6 +1536,9 @@ func (f *plannerMetadataFacade) ParseTableMetadata(ctx context.Context, data []b
 }
 
 func (f *plannerMetadataFacade) ReadManifestList(ctx context.Context, data []byte) ([]api.ManifestFile, error) {
+	if f.manifestLists != nil {
+		return append([]api.ManifestFile(nil), f.manifestLists[string(data)]...), nil
+	}
 	return append([]api.ManifestFile(nil), f.manifests...), nil
 }
 

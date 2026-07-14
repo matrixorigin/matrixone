@@ -211,6 +211,110 @@ func TestRuntimeScanPlannerRewritesNessieNamedRefToCatalogPrefix(t *testing.T) {
 	require.Equal(t, "tag:release", plan.Snapshot.RefName)
 }
 
+func TestRuntimeScanPlannerCacheSeparatesNessieRefsByEffectivePrefix(t *testing.T) {
+	const (
+		manifestListPath = "s3://warehouse/sales/orders/metadata/snap-22.avro"
+		manifestPath     = "s3://warehouse/sales/orders/metadata/shared.avro"
+	)
+	fixture := newPlannerFixture(t, 0)
+	fixture.facade.manifestLists = map[string][]api.ManifestFile{
+		"release-list": {{Path: manifestPath, Content: api.ManifestContentData}},
+		"hotfix-list":  {{Path: manifestPath, Content: api.ManifestContentData}},
+	}
+	fixture.facade.entries = map[string][]api.ManifestEntry{
+		"release-manifest": {{
+			Status:     api.ManifestEntryAdded,
+			SnapshotID: 22,
+			DataFile: api.DataFile{
+				Content:         api.DataFileContentData,
+				FilePath:        "s3://warehouse/sales/orders/data/release.parquet",
+				FileFormat:      "parquet",
+				RecordCount:     1,
+				FileSizeInBytes: 10,
+			},
+		}},
+		"hotfix-manifest": {{
+			Status:     api.ManifestEntryAdded,
+			SnapshotID: 22,
+			DataFile: api.DataFile{
+				Content:         api.DataFileContentData,
+				FilePath:        "s3://warehouse/sales/orders/data/hotfix.parquet",
+				FileFormat:      "parquet",
+				RecordCount:     1,
+				FileSizeInBytes: 10,
+			},
+		}},
+	}
+	fixture.client.GetConfigFunc = func(context.Context, api.GetConfigRequest) (*api.ConfigResponse, error) {
+		return &api.ConfigResponse{
+			Prefix:    "main|s3://warehouse",
+			Overrides: map[string]string{"nessie.is-nessie-catalog": "true"},
+		}, nil
+	}
+	var loadPrefixes []string
+	fixture.client.LoadTableFunc = func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		fixture.catalogLoads++
+		loadPrefixes = append(loadPrefixes, req.Prefix)
+		return &api.LoadTableResponse{
+			MetadataLocation: "s3://warehouse/sales/orders/metadata/v2.metadata.json",
+			MetadataJSON:     []byte(sampleMetadataJSON),
+			ETag:             "shared-etag",
+		}, nil
+	}
+	readers := map[string]*plannerObjectReader{
+		"release|s3://warehouse": {data: map[string][]byte{
+			manifestListPath: []byte("release-list"),
+			manifestPath:     []byte("release-manifest"),
+		}},
+		"hotfix|s3://warehouse": {data: map[string][]byte{
+			manifestListPath: []byte("hotfix-list"),
+			manifestPath:     []byte("hotfix-manifest"),
+		}},
+	}
+	planner := RuntimeScanPlanner{
+		CatalogFactory: &recordingCatalogFactory{client: fixture.client},
+		Metadata:       fixture.facade,
+		ObjectReader: func(ctx context.Context, catalogClient api.CatalogClient, req api.ScanPlanRequest) (api.ObjectReader, ObjectReaderContext, error) {
+			return readers[req.Prefix], ObjectReaderContext{CredentialHash: "shared-credential"}, nil
+		},
+		Cache: fixture.cache,
+		Config: api.Config{Scan: api.ScanPlanningConfig{
+			ManifestReadParallelism: 1,
+			MaxManifestFiles:        100,
+			MaxDataFiles:            100,
+		}},
+	}
+	request := func(ref string) api.ScanPlanRequest {
+		return api.ScanPlanRequest{
+			CatalogRequest: api.CatalogRequest{Catalog: model.Catalog{
+				AccountID: 42,
+				CatalogID: 7,
+				URI:       "https://catalog.example.com/iceberg",
+				Warehouse: "s3://warehouse",
+			}},
+			Namespace: api.Namespace{"sales"},
+			Table:     "orders",
+			Ref:       "tag:" + ref,
+			Snapshot:  api.SnapshotSelector{RefName: "tag:" + ref},
+		}
+	}
+
+	release, err := planner.PlanScan(context.Background(), request("release"))
+	require.NoError(t, err)
+	require.Len(t, release.DataTasks, 1)
+	require.Equal(t, "s3://warehouse/sales/orders/data/release.parquet", release.DataTasks[0].DataFile.FilePath)
+
+	hotfix, err := planner.PlanScan(context.Background(), request("hotfix"))
+	require.NoError(t, err)
+	require.Len(t, hotfix.DataTasks, 1)
+	require.Equal(t, "s3://warehouse/sales/orders/data/hotfix.parquet", hotfix.DataTasks[0].DataFile.FilePath)
+	require.Equal(t, []string{"release|s3://warehouse", "hotfix|s3://warehouse"}, loadPrefixes)
+	require.Equal(t, 2, fixture.catalogLoads)
+	require.Equal(t, 2, readers["release|s3://warehouse"].calls)
+	require.Equal(t, 2, readers["hotfix|s3://warehouse"].calls)
+	require.Zero(t, hotfix.Profile.PlanningCacheHits)
+}
+
 func TestRuntimeScanPlannerRewritesNessieNamedRefForPlainMainPrefix(t *testing.T) {
 	fixture := newPlannerFixture(t, 1)
 	fixture.client.GetConfigFunc = func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {

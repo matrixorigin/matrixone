@@ -42,6 +42,7 @@ type CacheKey struct {
 	ExternalPrincipal      string
 	SnapshotID             int64
 	TimestampMS            int64
+	CatalogPrefixHash      string
 	MetadataLocationHash   string
 	ManifestPathHash       string
 	CredentialIdentityHash string

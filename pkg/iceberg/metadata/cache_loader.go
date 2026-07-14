@@ -238,6 +238,7 @@ func (l CachedTableMetadataLoader) baseKey(req api.LoadTableRequest) CacheKey {
 		ExternalPrincipal:      req.ExternalPrincipal,
 		SnapshotID:             snapshotID(l.SnapshotSelector),
 		TimestampMS:            timestampMS(l.SnapshotSelector),
+		CatalogPrefixHash:      api.PathHash(req.Prefix),
 		CredentialIdentityHash: l.CredentialHash,
 	}
 }
