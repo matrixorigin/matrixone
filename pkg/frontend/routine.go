@@ -439,7 +439,6 @@ func (rt *Routine) cleanup() {
 		rt.mc.waitAndClose()
 
 		var txnMeta string
-		curRtId := GetRoutineId()
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
@@ -462,9 +461,9 @@ func (rt *Routine) cleanup() {
 				txnOp := txnHandler.GetTxn()
 				txnMeta = txnOp.Txn().DebugString()
 			}
-			ses.Info(tempExecCtx.reqCtx, "routine cleanup", zap.Uint64("current go id", curRtId), zap.Uint64("record go id", rt.goroutineID), zap.String("last txnMeta", txnMeta))
+			ses.Info(tempExecCtx.reqCtx, "routine cleanup", zap.Uint64("routine go id", rt.goroutineID), zap.String("last txnMeta", txnMeta))
 		} else {
-			logutil.Info("routine cleanup without session", zap.Uint64("current go id", curRtId), zap.Uint64("record go id", rt.goroutineID))
+			logutil.Info("routine cleanup without session", zap.Uint64("routine go id", rt.goroutineID))
 		}
 
 		//step B: cancel the query

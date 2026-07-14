@@ -66,6 +66,35 @@ func TestZeroValueClientShardedMaps(t *testing.T) {
 	assert.Equal(t, int64(0), c.atomic.activeTxnCount.Load())
 }
 
+func TestIterTxnIDs(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+
+	activeOp := &txnOperator{}
+	activeOp.reset.txnID = []byte("active")
+	c.addActiveTxn(activeOp)
+
+	waitOp := &txnOperator{}
+	waitOp.reset.txnID = []byte("waiting")
+	c.mu.Lock()
+	c.mu.waitActiveTxns = append(c.mu.waitActiveTxns, waitOp)
+	c.mu.Unlock()
+
+	got := make(map[string]bool)
+	c.IterTxnIDs(func(txnID []byte) bool {
+		got[string(txnID)] = true
+		txnID[0] = 'x'
+		return true
+	})
+
+	require.True(t, got["active"])
+	require.True(t, got["waiting"])
+	require.Equal(t, []byte("waiting"), waitOp.reset.txnID)
+	_, ok := c.getActiveTxn("active")
+	require.True(t, ok)
+}
+
 func TestNewTxnAndReset(t *testing.T) {
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),

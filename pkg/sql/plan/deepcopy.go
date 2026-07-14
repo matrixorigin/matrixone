@@ -75,13 +75,14 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:             DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:           DeepCopyTableDef(ctx.TableDef, true),
-			InsertCols:         slices.Clone(ctx.InsertCols),
-			DeleteCols:         slices.Clone(ctx.DeleteCols),
-			PartitionCols:      slices.Clone(ctx.PartitionCols),
-			SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-			InsertPkColIdx:     ctx.InsertPkColIdx,
+			ObjRef:                DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:              DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols:            slices.Clone(ctx.InsertCols),
+			DeleteCols:            slices.Clone(ctx.DeleteCols),
+			PartitionCols:         slices.Clone(ctx.PartitionCols),
+			SkipInsertOnNullPk:    ctx.SkipInsertOnNullPk,
+			InsertPkColIdx:        ctx.InsertPkColIdx,
+			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 		}
 	}
 
@@ -684,6 +685,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
+			if action == nil {
+				continue
+			}
 			switch act := action.Action.(type) {
 			case *plan.AlterTable_Action_Drop:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{

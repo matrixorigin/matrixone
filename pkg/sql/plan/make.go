@@ -553,6 +553,17 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	}
 }
 
+func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2StringConstExpr(v, false),
+		Typ: plan.Type{
+			Id:          int32(types.T_varbinary),
+			NotNullable: true,
+			Width:       int32(len(v)),
+		},
+	}
+}
+
 func makePlan2NullTextConstExpr(v string) *plan.Expr_Lit {
 	c := &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: true,

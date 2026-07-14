@@ -123,6 +123,8 @@ enum Method {
   AbortRemoteDeadlockTxn = 17;
   // GetLockHolder get current holder on a special lock
   GetLockHolder      = 18;
+  // CheckActiveTxn checks whether a txn is still active on the lock service
+  CheckActiveTxn     = 19;
 }
 
 enum Status {
@@ -157,6 +159,7 @@ message Request {
   ResumeInvalidCNRequest     ResumeInvalidCN     = 18 [(gogoproto.nullable) = false];
   GetLockHolderRequest       GetLockHolder       = 19 [(gogoproto.nullable) = false];
   AbortRemoteDeadlockTxnRequest    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
+  CheckActiveTxnRequest      CheckActiveTxn      = 21 [(gogoproto.nullable) = false];
 }
 
 
@@ -187,6 +190,7 @@ message Response {
     ResumeInvalidCNResponse    ResumeInvalidCN      = 19 [(gogoproto.nullable) = false];
     AbortRemoteDeadlockTxnResponse    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
     GetLockHolderResponse      GetLockHolder       = 21 [(gogoproto.nullable) = false];
+    CheckActiveTxnResponse     CheckActiveTxn      = 22 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -358,6 +362,7 @@ message CannotCommitRequest {
 // CannotCommitResponse cannot commit response. TN -> CN
 message CannotCommitResponse {
   repeated bytes CommittingTxn = 1;
+  timestamp.Timestamp FenceTS = 2 [(gogoproto.nullable) = false];
 }
 
 message GetActiveTxnRequest {
@@ -420,4 +425,14 @@ message ResumeInvalidCNRequest {
 
 message ResumeInvalidCNResponse {
  
+}
+
+message CheckActiveTxnRequest {
+  string ServiceID = 1;
+  bytes  Txn       = 2;
+}
+
+message CheckActiveTxnResponse {
+  bool Valid  = 1;
+  bool Active = 2;
 }
