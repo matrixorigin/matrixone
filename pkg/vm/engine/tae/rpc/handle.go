@@ -122,8 +122,6 @@ func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, o
 		client: client,
 	}
 
-	RegisterManifestHTTP(tae)
-
 	return h, nil
 }
 
@@ -631,12 +629,6 @@ func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//if h.GCJob != nil {
 	//	h.GCJob.Stop()
 	//}
-	if h.client != nil {
-		err = h.client.Close()
-		if err != nil {
-			return err
-		}
-	}
 	return h.db.Close()
 }
 

@@ -29,6 +29,7 @@ import (
 	rpc2 "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -39,6 +40,7 @@ import (
 type taeStorage struct {
 	shard         metadata.TNShard
 	taeHandler    rpchandle.Handler
+	manifestDB    *db.DB
 	logtailServer *service.LogtailServer
 }
 
@@ -108,6 +110,7 @@ func newTAEStorage(
 	if err != nil {
 		return nil, err
 	}
+	rpc.RegisterManifestHTTP(tae)
 
 	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
 	if ok {
@@ -117,6 +120,7 @@ func newTAEStorage(
 	return &taeStorage{
 		shard:         shard,
 		taeHandler:    taeHandler,
+		manifestDB:    tae,
 		logtailServer: server,
 	}, nil
 }
@@ -128,6 +132,7 @@ func (s *taeStorage) Start() error {
 
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
+	rpc.UnregisterManifestHTTP(s.manifestDB)
 	return errors.Join(s.logtailServer.Close(), s.taeHandler.HandleClose(ctx))
 }
 

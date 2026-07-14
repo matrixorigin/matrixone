@@ -839,7 +839,10 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
 	}
 
-	txn, _ := db.StartTxn(nil)
+	txn, err := db.StartTxn(nil)
+	if err != nil {
+		return nil, err
+	}
 	committed := false
 	defer func() {
 		if !committed {
