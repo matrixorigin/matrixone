@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
-	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -281,11 +280,7 @@ func (h *HDFS) Read(ctx context.Context, key string, min *int64, max *int64) (r 
 		}
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, f.Close())
-		}
-	}()
+	defer closeOnError(&err, f)
 
 	var reader io.Reader
 	reader = f

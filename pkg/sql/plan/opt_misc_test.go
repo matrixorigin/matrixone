@@ -283,6 +283,78 @@ func TestRemapWindowClause(t *testing.T) {
 	})
 }
 
+func TestRemapHavingClause(t *testing.T) {
+	b := &QueryBuilder{
+		compCtx: &MockCompilerContext{ctx: context.Background()},
+		nameByColRef: map[[2]int32]string{
+			{1, 0}: "group_key",
+			{2, 2}: "kept_aggregate",
+		},
+	}
+
+	t.Run("remaps compacted aggregate inside list", func(t *testing.T) {
+		expr := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0),
+			GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 2),
+		}}}}
+
+		err := b.remapHavingClause(expr, 1, 2, 1, 3, []int32{-1, -1, 0})
+		require.NoError(t, err)
+		require.Equal(t, int32(-1), expr.GetList().List[0].GetCol().RelPos)
+		require.Equal(t, int32(0), expr.GetList().List[0].GetCol().ColPos)
+		require.Equal(t, int32(-2), expr.GetList().List[1].GetCol().RelPos)
+		require.Equal(t, int32(1), expr.GetList().List[1].GetCol().ColPos)
+	})
+
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{
+			name: "rejects out of range aggregate slot",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 3),
+		},
+		{
+			name: "rejects pruned aggregate slot",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 0),
+		},
+		{
+			name: "rejects invalid group slot",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 1),
+		},
+		{
+			name: "rejects unknown relation tag",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 3, 0),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := b.remapHavingClause(tc.expr, 1, 2, 1, 3, []int32{-1, -1, 0})
+			require.Error(t, err)
+		})
+	}
+
+	t.Run("rejects inconsistent aggregate position map", func(t *testing.T) {
+		expr := GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 2)
+		err := b.remapHavingClause(expr, 1, 2, 1, 3, []int32{0})
+		require.Error(t, err)
+	})
+}
+
+func TestAggregateDependsOnInputOrder(t *testing.T) {
+	makeAgg := func(name string) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}}}}
+	}
+
+	for _, name := range []string{"group_concat", "json_arrayagg", "json_objectagg"} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, aggregateDependsOnInputOrder(makeAgg(name)))
+		})
+	}
+	require.False(t, aggregateDependsOnInputOrder(makeAgg("sum")))
+	require.False(t, aggregateDependsOnInputOrder(GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)))
+	require.False(t, aggregateDependsOnInputOrder(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}))
+}
+
 func TestBuildWindowFilterOnNonProjectedColumns(t *testing.T) {
 	mock := NewMockOptimizer(false)
 

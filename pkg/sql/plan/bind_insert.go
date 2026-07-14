@@ -77,7 +77,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
 	if err != nil {
 		return 0, err
 	}
@@ -1278,6 +1278,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
 		onDupAction = plan.Node_FAIL
@@ -1346,6 +1347,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 
 				updateExprs[col.Name] = newDefExpr
+				autoUpdateCols[col.Name] = true
 			}
 		}
 
@@ -2000,6 +2002,119 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	// ODKU no-op guard: drop rows where every column the update actually writes
+	// is NULL-safe-equal between the old image (scanTag) and the final written
+	// value the dedup-update join materialized into the new image (selectTag).
+	// MySQL returns affected-rows=0 for such rows.
+	// Placed before the final PROJECT so scanTag columns survive column remapping.
+	if onDupAction == plan.Node_UPDATE {
+		// Columns excluded from the no-op equality chain: implicit ON UPDATE
+		// columns (whose new value always advances) plus any generated column
+		// that transitively derives from such a column — otherwise the recomputed
+		// generated value would defeat the no-op guard even when the user's
+		// explicit update changed nothing. A generated column whose source is a
+		// user-updated column is still caught by that source column's own <=>.
+		noopSkipCols := make(map[string]bool, len(autoUpdateCols))
+		for name := range autoUpdateCols {
+			noopSkipCols[name] = true
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, col := range tableDef.Cols {
+				if col.GeneratedCol == nil || noopSkipCols[col.Name] {
+					continue
+				}
+				for _, pos := range collectRefColPos(col.GeneratedCol.Expr) {
+					if int(pos) < len(tableDef.Cols) && noopSkipCols[tableDef.Cols[pos].Name] {
+						noopSkipCols[col.Name] = true
+						changed = true
+						break
+					}
+				}
+			}
+		}
+		var allColsEqual *plan.Expr
+		for i, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID || col.Hidden {
+				continue
+			}
+			if noopSkipCols[col.Name] {
+				continue
+			}
+			// Only compare columns the update actually writes. A column absent from
+			// updateExprs keeps its old value and is trivially unchanged, so it must
+			// be excluded — otherwise an immutable key column resolved through a
+			// secondary UNIQUE conflict (where the incoming PK differs from the
+			// existing row's PK) would spuriously fail the equality chain and turn a
+			// no-op update into a counted one.
+			if _, written := updateExprs[col.Name]; !written {
+				continue
+			}
+			// Compare the old value against the FINAL written value already
+			// materialized by the dedup-update join, not a fresh evaluation of the
+			// assignment expression. The join evaluates each update expression once
+			// and writes the result back into the new-image (selectTag) column at
+			// colName2Idx; re-executing it here would double-evaluate non-
+			// deterministic assignments (e.g. v = floor(rand()*2)), so the no-op
+			// check could disagree with the value actually stored.
+			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+			if !ok {
+				continue
+			}
+			oldColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: int32(i),
+					},
+				},
+			}
+			newColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: newColPos,
+					},
+				},
+			}
+			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
+			if allColsEqual == nil {
+				allColsEqual = eqExpr
+			} else {
+				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
+			}
+		}
+		if allColsEqual != nil {
+			// The dedup-join output also carries non-conflicting rows, whose old
+			// image is all-NULL. Such a row must always be inserted, yet every
+			// NULL <=> NULL comparison above yields true (e.g. an all-NULL row
+			// into a nullable UNIQUE key never conflicts but would match the
+			// equality chain). Gate the no-op check on the old row actually
+			// existing: keep the row when old __mo_rowid IS NULL (fresh insert)
+			// or when any compared column differs (real update).
+			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
+			oldRowIDExpr := &plan.Expr{
+				Typ: tableDef.Cols[rowIDIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: rowIDIdx,
+					},
+				},
+			}
+			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
+			notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
+			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{lastNodeID},
+				FilterList: []*plan.Expr{keepExpr},
+			}, bindCtx)
+		}
+	}
+
 	newProjLen := len(selectNode.ProjectList) + len(appendedUniqueProjs)
 	for _, idxDef := range tableDef.Indexes {
 		if !idxDef.Unique {
@@ -2350,6 +2465,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	if onDupAction == plan.Node_UPDATE {
+		updateCtx.CountDeleteAffectRows = true
+
 		deleteCols := make([]plan.ColRef, 2)
 		updateCtx.DeleteCols = deleteCols
 
@@ -2519,7 +2636,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	return newCols, nil
 }
 
-func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
+func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -2572,7 +2689,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if isAllDefault && astCols != nil {
 			return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		lastNodeID, err = builder.buildValueScan(isAllDefault, bindCtx, tableDef, selectImpl, insertColumns)
+		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -2876,6 +2993,7 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
+	colRefAsDefault bool,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
@@ -2925,19 +3043,33 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-			binder.builder = builder
-			// A function-call value expression must be bound without the
-			// destination column type. The DefaultBinder pushes its type down to
-			// nested literals, so binding st_point(116.3975, 39.9087) against a
-			// GEOMETRY column would type the float arguments as GEOMETRY and break
-			// the function's overload resolution. A function's arguments bind by
-			// their own types, and the result is cast to the column type below
-			// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
-			// negative literal like -1.5, a cast, etc.) still bind against the
-			// column type, which a literal value legitimately adopts.
-			funcBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
-			funcBinder.builder = builder
+			var binder, funcBinder Binder
+			if colRefAsDefault {
+				// REPLACE ... SET col = expr: an RHS reference to a target-table
+				// column is evaluated as DEFAULT(col), including inside functions.
+				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, col.Typ, tableDef)
+				binder = replaceBinder
+
+				funcReplaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, plan.Type{}, tableDef)
+				funcBinder = funcReplaceBinder
+			} else {
+				defaultBinder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+				defaultBinder.builder = builder
+				binder = defaultBinder
+
+				// A function-call value expression must be bound without the
+				// destination column type. The DefaultBinder pushes its type down to
+				// nested literals, so binding st_point(116.3975, 39.9087) against a
+				// GEOMETRY column would type the float arguments as GEOMETRY and break
+				// the function's overload resolution. A function's arguments bind by
+				// their own types, and the result is cast to the column type below
+				// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
+				// negative literal like -1.5, a cast, etc.) still bind against the
+				// column type, which a literal value legitimately adopts.
+				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+				defaultFuncBinder.builder = builder
+				funcBinder = defaultFuncBinder
+			}
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +41,25 @@ import (
 type fulltextTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
+}
+
+func TestFulltextTopKLimitBounds(t *testing.T) {
+	maxLimit := ^uint64(0)
+	require.Equal(t, maxLimit, fulltextTopKLimit(maxLimit, true))
+	require.Equal(t, uint64(30), fulltextTopKLimit(10, true))
+	require.Equal(t, 1<<20, vectorindex.SearchResultPreallocate(maxLimit))
+
+	proc := testutil.NewProc(t)
+	state := &fulltextState{
+		batch:  batch.NewWithSize(1),
+		resbuf: []*vectorindex.SearchResultAnyKey{{Id: int64(7)}},
+	}
+	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	result, err := state.returnResultFromBuffer(proc, maxLimit)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Empty(t, state.resbuf)
+	result.Batch.Clean(proc.Mp())
 }
 
 var (
@@ -580,11 +600,83 @@ func TestSortTopKRankingReleasesFilteredDocs(t *testing.T) {
 	require.Empty(t, st.docIDMap)
 }
 
-func TestFullTextCallWithLimitUsesSingleKeywordTopK(t *testing.T) {
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
+func TestFullTextCallWithLimitSingleKeywordFallsBackToStreaming(t *testing.T) {
+	tests := []struct {
+		name string
+		algo fulltext.FullTextScoreAlgo
+		mode int64
+	}{
+		{"tfidf-natural-language", fulltext.ALGO_TFIDF, int64(tree.FULLTEXT_NL)},
+		{"tfidf-default", fulltext.ALGO_TFIDF, int64(tree.FULLTEXT_DEFAULT)},
+		{"bm25-natural-language", fulltext.ALGO_BM25, int64(tree.FULLTEXT_NL)},
+		{"bm25-default", fulltext.ALGO_BM25, int64(tree.FULLTEXT_DEFAULT)},
+	}
 
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, tc.algo, uint64(2))
+			inbat := makeBatchFT(ut.proc)
+			ut.arg.Args = makeConstInputExprsFTWithPattern("Matrix", tc.mode)
+
+			err := ut.arg.Prepare(ut.proc)
+			require.NoError(t, err)
+			for i := range ut.arg.ctr.executorsForArgs {
+				ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+				require.NoError(t, err)
+			}
+
+			prevRunSQL := ft_runSql
+			prevRunStreaming := ft_runSql_streaming
+			defer func() {
+				ft_runSql = prevRunSQL
+				ft_runSql_streaming = prevRunStreaming
+			}()
+
+			var streamingSQL string
+			ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				if strings.Contains(sql, "COUNT(*) OVER()") {
+					return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "single-keyword top-k SQL must not use a window function")
+				}
+				if strings.Contains(sql, "word = '__DocLen'") {
+					return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(sqlproc.Proc)}}, nil
+				}
+				return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
+			}
+			ft_runSql_streaming = func(
+				ctx context.Context,
+				sqlproc *sqlexec.SqlProcess,
+				sql string,
+				ch chan executor.Result,
+				errChan chan error,
+			) (executor.Result, error) {
+				streamingSQL = sql
+				ch <- executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeSmallTextBatchFT(sqlproc.Proc)}}
+				return executor.Result{}, nil
+			}
+
+			err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, streamingSQL)
+			require.NotContains(t, streamingSQL, "COUNT(*) OVER()")
+
+			result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecNext, result.Status)
+			require.Equal(t, 2, result.Batch.RowCount())
+
+			result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, result.Status)
+
+			requireStateFreeReturns(t, ut.arg.ctr.state, ut.arg, ut.proc)
+		})
+	}
+}
+
+func TestFullTextCallWithLimitZeroMatchStreams(t *testing.T) {
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
 	inbat := makeBatchFT(ut.proc)
-	ut.arg.Args = makeConstInputExprsFT()
+	ut.arg.Args = makeConstInputExprsFTWithPattern("Matrix", int64(tree.FULLTEXT_NL))
 
 	err := ut.arg.Prepare(ut.proc)
 	require.NoError(t, err)
@@ -600,15 +692,15 @@ func TestFullTextCallWithLimitUsesSingleKeywordTopK(t *testing.T) {
 		ft_runSql_streaming = prevRunStreaming
 	}()
 
+	streamingCalled := false
 	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBatchFT(sqlproc.Proc)}}, nil
-		default:
-			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
+		if strings.Contains(sql, "COUNT(*) OVER()") {
+			return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "zero-match LIMIT SQL must not use a window function")
 		}
+		if strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'") {
+			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
+		}
+		return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 	}
 	ft_runSql_streaming = func(
 		ctx context.Context,
@@ -617,27 +709,23 @@ func TestFullTextCallWithLimitUsesSingleKeywordTopK(t *testing.T) {
 		ch chan executor.Result,
 		errChan chan error,
 	) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "streaming SQL should not be used in single-keyword top-k path")
+		streamingCalled = true
+		return executor.Result{}, nil
 	}
 
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 	require.NoError(t, err)
+	require.True(t, streamingCalled)
 
 	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
 	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, 2, result.Batch.RowCount())
-	require.Equal(t, int32(11), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 0))
-	require.Equal(t, int32(12), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 1))
-
-	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
-	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, result.Status)
+	require.Nil(t, result.Batch)
 
 	requireStateFreeReturns(t, ut.arg.ctr.state, ut.arg, ut.proc)
 }
 
-func TestFullTextCallWithLimitPropagatesMembershipFilterToFastPathSQL(t *testing.T) {
+func TestFullTextCallWithLimitPropagatesMembershipFilterToStreamingSQL(t *testing.T) {
 	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
 
 	inbat := makeBatchFT(ut.proc)
@@ -661,14 +749,13 @@ func TestFullTextCallWithLimitPropagatesMembershipFilterToFastPathSQL(t *testing
 		ft_runSql_streaming = prevRunStreaming
 	}()
 
-	var topKBF []byte
+	var streamingMembershipFilter []byte
 	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
+		case strings.Contains(sql, "COUNT(*) OVER()"):
+			return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "single-keyword top-k SQL must not use a window function")
 		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2"):
-			topKBF = append([]byte(nil), sqlproc.FulltextMembershipFilter...)
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBatchFT(sqlproc.Proc)}}, nil
 		default:
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 		}
@@ -680,133 +767,19 @@ func TestFullTextCallWithLimitPropagatesMembershipFilterToFastPathSQL(t *testing
 		ch chan executor.Result,
 		errChan chan error,
 	) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "streaming SQL should not be used in single-keyword top-k path")
+		streamingMembershipFilter = append([]byte(nil), sqlproc.FulltextMembershipFilter...)
+		ch <- executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeSmallTextBatchFT(sqlproc.Proc)}}
+		return executor.Result{}, nil
 	}
 
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 	require.NoError(t, err)
-	require.Equal(t, wantMembershipFilter, topKBF)
+	require.Equal(t, wantMembershipFilter, streamingMembershipFilter)
 
 	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecNext, result.Status)
 	require.Equal(t, 2, result.Batch.RowCount())
-
-	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecStop, result.Status)
-
-	requireStateFreeReturns(t, ut.arg.ctr.state, ut.arg, ut.proc)
-}
-
-func TestFullTextCallWithLimitZeroMatchShortCircuits(t *testing.T) {
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
-
-	inbat := makeBatchFT(ut.proc)
-	ut.arg.Args = makeConstInputExprsFT()
-
-	err := ut.arg.Prepare(ut.proc)
-	require.NoError(t, err)
-	for i := range ut.arg.ctr.executorsForArgs {
-		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-		require.NoError(t, err)
-	}
-
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
-	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
-	}()
-
-	topKCalled := false
-	streamingCalled := false
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2"):
-			topKCalled = true
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeEmptyTopKBatchFT(sqlproc.Proc)}}, nil
-		default:
-			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
-		}
-	}
-	ft_runSql_streaming = func(
-		ctx context.Context,
-		sqlproc *sqlexec.SqlProcess,
-		sql string,
-		ch chan executor.Result,
-		errChan chan error,
-	) (executor.Result, error) {
-		streamingCalled = true
-		return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "streaming SQL should not run when count is zero")
-	}
-
-	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-	require.NoError(t, err)
-	require.True(t, topKCalled)
-	require.False(t, streamingCalled)
-
-	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecStop, result.Status)
-	require.Nil(t, result.Batch)
-
-	requireStateFreeReturns(t, ut.arg.ctr.state, ut.arg, ut.proc)
-}
-
-func TestFullTextCallWithLimitUsesSingleKeywordTopKBM25(t *testing.T) {
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_BM25, uint64(2))
-
-	inbat := makeBatchFT(ut.proc)
-	ut.arg.Args = makeConstInputExprsFT()
-
-	err := ut.arg.Prepare(ut.proc)
-	require.NoError(t, err)
-	for i := range ut.arg.ctr.executorsForArgs {
-		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-		require.NoError(t, err)
-	}
-
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
-	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
-	}()
-
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "COUNT(*), AVG(pos)"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(sqlproc.Proc)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY score DESC LIMIT 2"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBM25BatchFT(sqlproc.Proc)}}, nil
-		default:
-			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
-		}
-	}
-	ft_runSql_streaming = func(
-		ctx context.Context,
-		sqlproc *sqlexec.SqlProcess,
-		sql string,
-		ch chan executor.Result,
-		errChan chan error,
-	) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "streaming SQL should not be used in single-keyword BM25 top-k path")
-	}
-
-	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-	require.NoError(t, err)
-
-	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, 2, result.Batch.RowCount())
-	require.Equal(t, int32(21), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 0))
-	require.Equal(t, int32(22), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 1))
-	require.InDelta(t, 2.75, vector.GetFixedAtWithTypeCheck[float32](result.Batch.Vecs[1], 0), 1e-6)
-	require.InDelta(t, 1.5, vector.GetFixedAtWithTypeCheck[float32](result.Batch.Vecs[1], 1), 1e-6)
 
 	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
 	require.NoError(t, err)
@@ -984,119 +957,6 @@ func TestFullTextCallWithQuotedPhraseFallsBackToStreaming(t *testing.T) {
 	require.Equal(t, vm.ExecStop, result.Status)
 
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
-}
-
-func TestFullTextFastPathFreeReturnsWithoutStreaming(t *testing.T) {
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
-
-	inbat := makeBatchFT(ut.proc)
-	ut.arg.Args = makeConstInputExprsFT()
-
-	err := ut.arg.Prepare(ut.proc)
-	require.NoError(t, err)
-	for i := range ut.arg.ctr.executorsForArgs {
-		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-		require.NoError(t, err)
-	}
-
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
-	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
-	}()
-
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBatchFT(sqlproc.Proc)}}, nil
-		default:
-			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
-		}
-	}
-	ft_runSql_streaming = func(
-		ctx context.Context,
-		sqlproc *sqlexec.SqlProcess,
-		sql string,
-		ch chan executor.Result,
-		errChan chan error,
-	) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "streaming SQL should not be used in single-keyword top-k path")
-	}
-
-	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-	require.NoError(t, err)
-
-	requireStateFreeReturns(t, ut.arg.ctr.state, ut.arg, ut.proc)
-}
-
-func TestFullTextStartResetsStateForLaterRowsFastPath(t *testing.T) {
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
-	err := ut.arg.Prepare(ut.proc)
-	require.NoError(t, err)
-
-	tf := ut.arg
-	tf.ctr.argVecs = makeMultiRowArgVecsFT(ut.proc,
-		fulltextInputRow{source: "src0", index: "idx0", pattern: "Matrix", mode: int64(tree.FULLTEXT_NL)},
-		fulltextInputRow{source: "src1", index: "idx1", pattern: "Apple", mode: int64(tree.FULLTEXT_NL)},
-	)
-	st := tf.ctr.state.(*fulltextState)
-
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
-	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
-	}()
-
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "COUNT(*) from idx0 where word = '__DocLen'"),
-			strings.Contains(sql, "COUNT(*) from idx1 where word = '__DocLen'"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2") && strings.Contains(sql, "idx0"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBatchFTWithDocs(sqlproc.Proc, 11, 12)}}, nil
-		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2") && strings.Contains(sql, "idx1"):
-			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBatchFTWithDocs(sqlproc.Proc, 31, 32)}}, nil
-		default:
-			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
-		}
-	}
-	ft_runSql_streaming = func(
-		ctx context.Context,
-		sqlproc *sqlexec.SqlProcess,
-		sql string,
-		ch chan executor.Result,
-		errChan chan error,
-	) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "streaming SQL should not be used in fast-path multi-row test")
-	}
-
-	err = st.start(tf, ut.proc, 0, nil)
-	require.NoError(t, err)
-	result, err := st.call(tf, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, int32(11), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 0))
-	require.Equal(t, int32(12), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 1))
-	result, err = st.call(tf, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecStop, result.Status)
-
-	err = st.start(tf, ut.proc, 1, nil)
-	require.NoError(t, err)
-	result, err = st.call(tf, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, int32(31), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 0))
-	require.Equal(t, int32(32), vector.GetFixedAtWithTypeCheck[int32](result.Batch.Vecs[0], 1))
-	result, err = st.call(tf, ut.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecStop, result.Status)
-
-	requireStateFreeReturns(t, st, tf, ut.proc)
 }
 
 func TestFullTextStartResetsStateForLaterRowsStreaming(t *testing.T) {
@@ -1288,53 +1148,6 @@ func makeCountOnlyBatchFT(proc *process.Process) *batch.Batch {
 	vector.AppendFixed[int64](bat.Vecs[0], int64(100), false, proc.Mp())
 
 	bat.SetRowCount(1)
-	return bat
-}
-
-func makeTopKBatchFT(proc *process.Process) *batch.Batch {
-	return makeTopKBatchFTWithDocs(proc, 11, 12)
-}
-
-func makeTopKBatchFTWithDocs(proc *process.Process, doc1, doc2 int32) *batch.Batch {
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))
-
-	vector.AppendFixed[int32](bat.Vecs[0], doc1, false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[1], int64(5), false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[2], int64(3), false, proc.Mp())
-	vector.AppendFixed[int32](bat.Vecs[0], doc2, false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[1], int64(3), false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[2], int64(3), false, proc.Mp())
-
-	bat.SetRowCount(2)
-	return bat
-}
-
-func makeTopKBM25BatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_float64, 8, 0))
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))
-
-	vector.AppendFixed[int32](bat.Vecs[0], int32(21), false, proc.Mp())
-	vector.AppendFixed[float64](bat.Vecs[1], float64(1.185774326891547), false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[2], int64(3), false, proc.Mp())
-	vector.AppendFixed[int32](bat.Vecs[0], int32(22), false, proc.Mp())
-	vector.AppendFixed[float64](bat.Vecs[1], float64(0.6467859964862983), false, proc.Mp())
-	vector.AppendFixed[int64](bat.Vecs[2], int64(3), false, proc.Mp())
-
-	bat.SetRowCount(2)
-	return bat
-}
-
-func makeEmptyTopKBatchFT(proc *process.Process) *batch.Batch {
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.SetRowCount(0)
 	return bat
 }
 

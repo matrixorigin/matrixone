@@ -65,6 +65,8 @@ func (s *HnswSearch[T]) lock() {
 
 // release a lock from a usearch threads
 func (s *HnswSearch[T]) unlock() {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
 	s.Concurrency.Add(-1)
 	s.Cond.Signal()
 }
@@ -82,13 +84,33 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	if len(s.Indexes) == 0 {
 		return []int64{}, []float64{}, nil
 	}
+	if limit == 0 {
+		return []int64{}, []float64{}, nil
+	}
 
 	s.lock()
 	defer s.unlock()
 
+	indexCounts := make([]uint, len(s.Indexes))
+	for i, idx := range s.Indexes {
+		if idx.Index == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
+		}
+		// Use the index's authoritative cardinality. The atomic Len is updated
+		// before some add/remove operations complete, so using it to cap K can
+		// transiently undercount after a failed remove and lose valid results.
+		indexCounts[i], err = idx.Index.Len()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	indexLimits, limit, heapCapacity := boundedHnswSearchLimits(indexCounts, limit)
+	if limit == 0 {
+		return []int64{}, []float64{}, nil
+	}
+
 	// search
-	size := len(s.Indexes) * int(limit)
-	heap := vectorindex.NewSearchResultSafeHeap(size)
+	heap := vectorindex.NewSearchResultSafeHeap(heapCapacity)
 
 	nthread := int(vectorindex.GetConcurrency(0))
 	if nthread > len(s.Indexes) {
@@ -105,7 +127,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 					return ctx.Err()
 				}
 
-				keys, distances, err2 := subindex[j].Search(query, limit)
+				keys, distances, err2 := subindex[j].Search(query, indexLimits[start+j])
 				if err2 != nil {
 					return err2
 				}
@@ -120,11 +142,11 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		return nil, nil, err
 	}
 
-	reskeys := make([]int64, 0, limit)
-	resdistances := make([]float64, 0, limit)
-
 	n := heap.Len()
-	for i := 0; i < int(limit) && i < n; i++ {
+	resultCount := min(limit, uint(n))
+	reskeys := make([]int64, 0, int(resultCount))
+	resdistances := make([]float64, 0, int(resultCount))
+	for i := 0; i < int(resultCount); i++ {
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
@@ -136,6 +158,29 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	}
 
 	return reskeys, resdistances, nil
+}
+
+// boundedHnswSearchLimits prevents a very large LIMIT from being multiplied by
+// the number of index files. Each file can return at most its own cardinality,
+// and the final result cannot contain more rows than all files combined.
+func boundedHnswSearchLimits(indexCounts []uint, requested uint) ([]uint, uint, int) {
+	const maxHeapPreallocate = uint(1 << 20)
+	perIndex := make([]uint, len(indexCounts))
+	var total, capacity uint
+	for i, count := range indexCounts {
+		perIndex[i] = min(requested, count)
+		if total > ^uint(0)-count {
+			total = ^uint(0)
+		} else {
+			total += count
+		}
+		if perIndex[i] >= maxHeapPreallocate || capacity > maxHeapPreallocate-perIndex[i] {
+			capacity = maxHeapPreallocate
+		} else {
+			capacity += perIndex[i]
+		}
+	}
+	return perIndex, min(requested, total), int(capacity)
 }
 
 func (s *HnswSearch[T]) Contains(key int64) (bool, error) {

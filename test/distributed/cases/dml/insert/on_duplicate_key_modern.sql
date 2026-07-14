@@ -293,3 +293,80 @@ select cid, a, b from t_odku_mfk_child order by cid;
 drop table if exists t_odku_mfk_child;
 drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
+
+-- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
+-- the auto-update column must not defeat no-op detection (affected rows = 0),
+-- and it must not advance when nothing else changes.
+drop table if exists t_odku_onupdate;
+create table t_odku_onupdate (
+  id int primary key,
+  v int,
+  updated_at timestamp default current_timestamp on update current_timestamp
+);
+insert into t_odku_onupdate(id, v) values (1, 10);
+set @ts0 = (select updated_at from t_odku_onupdate where id = 1);
+select sleep(2);
+insert into t_odku_onupdate(id, v) values (1, 10) on duplicate key update v = v;
+select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
+-- a real change must count as delete+insert (2) and advance the timestamp
+insert into t_odku_onupdate(id, v) values (1, 99) on duplicate key update v = values(v);
+select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
+drop table if exists t_odku_onupdate;
+
+-- same, plus a stored generated column derived from the ON UPDATE column:
+-- its recomputed value must not defeat no-op detection either.
+drop table if exists t_odku_onupdate_gen;
+create table t_odku_onupdate_gen (
+  id int primary key,
+  v int,
+  updated_at timestamp default current_timestamp on update current_timestamp,
+  g timestamp as (updated_at) stored
+);
+insert into t_odku_onupdate_gen(id, v) values (1, 10);
+set @g0 = (select g from t_odku_onupdate_gen where id = 1);
+select sleep(2);
+insert into t_odku_onupdate_gen(id, v) values (1, 10) on duplicate key update v = v;
+select updated_at = @g0 as ts_unchanged, g = @g0 as g_unchanged from t_odku_onupdate_gen where id = 1;
+insert into t_odku_onupdate_gen(id, v) values (1, 99) on duplicate key update v = values(v);
+select v, g > @g0 as g_advanced from t_odku_onupdate_gen where id = 1;
+drop table if exists t_odku_onupdate_gen;
+
+-- ODKU into a nullable UNIQUE key: an all-NULL row never conflicts, so it must
+-- be inserted (not silently dropped by the no-op guard comparing NULL images).
+drop table if exists t_odku_null_unique;
+create table t_odku_null_unique (a int unique key, b int);
+insert into t_odku_null_unique values (null, null) on duplicate key update b = values(b);
+select count(*) as after_first from t_odku_null_unique;
+insert into t_odku_null_unique values (null, null) on duplicate key update b = values(b);
+select count(*) as after_second from t_odku_null_unique;
+select a, b from t_odku_null_unique;
+-- non-NULL keys on the same table still follow normal ODKU semantics
+insert into t_odku_null_unique values (1, 10) on duplicate key update b = values(b);
+insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
+select a, b from t_odku_null_unique where a = 1;
+-- a no-op update on the conflicting key must leave the row untouched
+insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
+select a, b from t_odku_null_unique where a = 1;
+drop table if exists t_odku_null_unique;
+
+-- ODKU whose conflict is resolved through a SECONDARY unique key while the
+-- incoming PK differs from the existing row's PK. v = v writes the old value, so
+-- it is a no-op even though the incoming v (99) differs from the stored v (5):
+-- the guard must compare the old value against the final written value (old),
+-- not the raw incoming image. It must also not compare the immutable PK. So the
+-- ON UPDATE timestamp must NOT advance.
+drop table if exists t_odku_sec_uk;
+create table t_odku_sec_uk (
+  id int primary key,
+  u int unique,
+  v int,
+  updated_at timestamp default current_timestamp on update current_timestamp
+);
+insert into t_odku_sec_uk(id, u, v) values (1, 10, 5);
+set @ts_sec = (select updated_at from t_odku_sec_uk where u = 10);
+select sleep(2);
+insert into t_odku_sec_uk(id, u, v) values (2, 10, 99) on duplicate key update v = v;
+select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order by id;
+insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
+select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by id;
+drop table if exists t_odku_sec_uk;

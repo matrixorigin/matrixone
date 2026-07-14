@@ -131,7 +131,15 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if function.GetFunctionIsWinValueFunByName(winName) {
 					continue
 				}
-				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				// Derive one argument type per aggregate argument so multi-argument
+				// window aggregates (e.g. json_objectagg) receive all their types,
+				// mirroring the group operator (colexec/group/helper.go).
+				argExprs := ag.GetArgExpressions()
+				argTypes := make([]types.Type, len(argExprs))
+				for j, arg := range argExprs {
+					argTypes[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+				}
+				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 				if err != nil {
 					return result, err
 				}

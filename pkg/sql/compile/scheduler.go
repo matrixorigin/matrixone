@@ -15,11 +15,16 @@
 package compile
 
 import (
+	"context"
+	"reflect"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -86,18 +91,49 @@ func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision)
 		zap.String("current-cn-id", currentCN.ID),
 		zap.String("current-cn-address", currentCN.Addr),
 		zap.Int("worker-count", len(placement.Workers)),
+		zap.Int("dropped-worker-count", len(placement.Dropped)),
 		zap.Bool("is-internal", c.isInternal),
 	}
 }
 
 func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement schedule.QueryDecision) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN || len(nodes) <= 1 {
+	if c.execType != plan2.ExecTypeAP_MULTICN {
+		return nil
+	}
+	for _, node := range nodes {
+		if !schedulableEngineWorkState(node.WorkState) {
+			c.recordSchedulingFailure(
+				scheduleFailureRuntimeIneligibleSelectedWorker,
+				toScheduleWorker(node),
+			)
+			recordSelectedWorkerFailureMetric(scheduleFailureRuntimeIneligibleSelectedWorker)
+			getQueryScheduleLogger().WarnWithConfig(
+				"query-schedule-runtime-ineligible-selected-worker",
+				"query schedule selected a runtime-ineligible worker",
+				queryScheduleLogRateLimit,
+				append(c.querySchedulePlacementFields(placement),
+					zap.String("worker-id", node.Id),
+					zap.String("worker-address", node.Addr),
+					zap.String("worker-state", node.WorkState.String()),
+					zap.Int("worker-mcpu", node.Mcpu))...)
+			return moerr.NewInternalErrorNoCtxf(
+				"query schedule selected worker %s with runtime state %s",
+				node.Id,
+				node.WorkState.String())
+		}
+	}
+	if len(nodes) <= 1 {
 		return nil
 	}
 	for _, node := range nodes {
 		if node.Addr != "" {
 			continue
 		}
+		c.recordSchedulingFailure(
+			scheduleFailureUnroutableSelectedWorker,
+			toScheduleWorker(node),
+		)
+		recordSelectedWorkerFailureMetric(scheduleFailureUnroutableSelectedWorker)
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-unroutable-selected-worker",
 			"query schedule selected a worker without route for multi-CN execution",
@@ -112,14 +148,218 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 	return nil
 }
 
-func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
-	if c.e == nil {
-		return nil, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
+func schedulableEngineWorkState(state metadata.WorkState) bool {
+	switch state {
+	case metadata.WorkState_Draining, metadata.WorkState_Drained:
+		return false
+	default:
+		return true
 	}
-	return c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 }
 
-func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
+type queryCandidatePoolRequest = engine.QueryCandidatePoolRequest
+
+type queryCandidateMode uint8
+
+const (
+	queryCandidateModeExecution queryCandidateMode = iota
+	queryCandidateModePreview
+)
+
+type discoveredQueryCandidates struct {
+	legacyNodes engine.Nodes
+	candidates  engine.QueryCandidates
+	source      schedule.CandidateSource
+}
+
+type queryCandidateDiscoverer interface {
+	discover(context.Context) (discoveredQueryCandidates, error)
+}
+
+// legacyEngineNodesCandidateDiscoverer captures pool constraints only because
+// Engine.Nodes still combines discovery with pool/label resolution. The
+// discoverer interface itself intentionally has no pool-policy input.
+type legacyEngineNodesCandidateDiscoverer struct {
+	engine      engine.Engine
+	poolRequest queryCandidatePoolRequest
+}
+
+func (d legacyEngineNodesCandidateDiscoverer) discover(ctx context.Context) (discoveredQueryCandidates, error) {
+	if err := ctx.Err(); err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	if nilEngineValue(d.engine) {
+		return discoveredQueryCandidates{}, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
+	}
+	nodes, err := d.engine.Nodes(
+		d.poolRequest.IsInternal,
+		d.poolRequest.Tenant,
+		d.poolRequest.Username,
+		cloneCNLabels(d.poolRequest.CNLabel),
+	)
+	if err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	return discoveredQueryCandidates{
+		legacyNodes: nodes,
+		source:      schedule.CandidateSourceEngineNodes,
+	}, nil
+}
+
+type engineQueryCandidateDiscoverer struct {
+	provider engine.QueryCandidateDiscoverer
+}
+
+func (d engineQueryCandidateDiscoverer) discover(ctx context.Context) (discoveredQueryCandidates, error) {
+	candidates, err := d.provider.DiscoverQueryCandidates(ctx)
+	if err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	return discoveredQueryCandidates{
+		candidates: candidates,
+		source:     schedule.CandidateSourceClusterInventory,
+	}, nil
+}
+
+func unwrapSchedulingEngine(e engine.Engine) (engine.Engine, bool) {
+	const maxEntireEngineDepth = 8
+	for depth := 0; depth < maxEntireEngineDepth; depth++ {
+		if nilEngineValue(e) {
+			return nil, false
+		}
+		entire, ok := e.(*engine.EntireEngine)
+		if !ok {
+			return e, true
+		}
+		if entire == nil || entire.Engine == nil {
+			return nil, false
+		}
+		e = entire.Engine
+	}
+	return nil, false
+}
+
+func nilEngineValue(e engine.Engine) bool {
+	if e == nil {
+		return true
+	}
+	value := reflect.ValueOf(e)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+type resolvedQueryCandidates struct {
+	workers    schedule.Workers
+	resolution schedule.CandidateResolution
+}
+
+type queryCandidatePoolResolver interface {
+	resolve(context.Context, discoveredQueryCandidates, queryCandidatePoolRequest) (resolvedQueryCandidates, error)
+}
+
+// legacyEngineNodesPoolResolver is an explicit compatibility boundary:
+// Engine.Nodes currently applies tenant/label pool constraints while discovering
+// nodes, so this resolver is intentionally a one-to-one adapter.
+type legacyEngineNodesPoolResolver struct{}
+
+func (legacyEngineNodesPoolResolver) resolve(
+	ctx context.Context,
+	discovered discoveredQueryCandidates,
+	_ queryCandidatePoolRequest,
+) (resolvedQueryCandidates, error) {
+	if err := ctx.Err(); err != nil {
+		return resolvedQueryCandidates{}, err
+	}
+	workers := toScheduleCandidateWorkers(discovered.legacyNodes)
+	return resolvedQueryCandidates{
+		workers: workers,
+		resolution: schedule.CandidateResolution{
+			DiscoverySource: discovered.source,
+			PoolResolution:  schedule.PoolResolutionLegacyEngineNodes,
+			DiscoveredCount: len(discovered.legacyNodes),
+		},
+	}, nil
+}
+
+type engineQueryCandidatePoolResolver struct {
+	provider engine.QueryCandidatePoolResolver
+}
+
+func (r engineQueryCandidatePoolResolver) resolve(
+	ctx context.Context,
+	discovered discoveredQueryCandidates,
+	request queryCandidatePoolRequest,
+) (resolvedQueryCandidates, error) {
+	request.CNLabel = cloneCNLabels(request.CNLabel)
+	nodes, err := r.provider.ResolveQueryCandidatePool(
+		ctx,
+		discovered.candidates,
+		request,
+	)
+	if err != nil {
+		return resolvedQueryCandidates{}, err
+	}
+	return resolvedQueryCandidates{
+		workers: toScheduleCandidateWorkers(nodes),
+		resolution: schedule.CandidateResolution{
+			DiscoverySource: discovered.source,
+			PoolResolution:  schedule.PoolResolutionTenantLabels,
+			DiscoveredCount: len(discovered.candidates),
+		},
+	}, nil
+}
+
+func queryCandidatePipeline(
+	e engine.Engine,
+	poolRequest queryCandidatePoolRequest,
+	mode queryCandidateMode,
+) (queryCandidateDiscoverer, queryCandidatePoolResolver, error) {
+	base, ok := unwrapSchedulingEngine(e)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
+	}
+	discoverer, hasDiscoverer := base.(engine.QueryCandidateDiscoverer)
+	resolver, hasResolver := base.(engine.QueryCandidatePoolResolver)
+	switch {
+	case hasDiscoverer && hasResolver:
+		return engineQueryCandidateDiscoverer{provider: discoverer},
+			engineQueryCandidatePoolResolver{provider: resolver}, nil
+	case !hasDiscoverer && !hasResolver:
+		// Engine.Nodes has no context, so preview cannot bound its latency.
+		if mode == queryCandidateModePreview {
+			return nil, nil, moerr.NewInternalErrorNoCtx(
+				"query scheduling preview requires context-aware candidate discovery and pool resolution")
+		}
+		return legacyEngineNodesCandidateDiscoverer{engine: base, poolRequest: poolRequest},
+			legacyEngineNodesPoolResolver{}, nil
+	default:
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"compile engine must implement both query candidate discovery and pool resolution")
+	}
+}
+
+func cloneCNLabels(labels map[string]string) map[string]string {
+	if labels == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(labels))
+	for key, value := range labels {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (c *Compile) evaluateQueryPlacement(
+	ctx context.Context,
+	mode queryCandidateMode,
+) (schedule.QueryDecision, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	currentCN := c.currentCNWorker()
 	req := schedule.QueryRequest{
 		ExecKind:        toScheduleExecKind(c.execType),
@@ -127,30 +367,149 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 		CurrentCNPolicy: c.currentCNPolicy(),
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
-		return schedule.DecideQueryPlacement(req), nil
+		req.CandidateResolution = schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		}
+		return schedule.DecideQueryPlacement(req), "", nil
+	}
+	if err := ctx.Err(); err != nil {
+		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
 	}
 
-	candidates, err := c.getCandidateCNs()
+	poolRequest := queryCandidatePoolRequest{
+		IsInternal: c.isInternal,
+		Tenant:     c.tenant,
+		Username:   c.uid,
+		CNLabel:    c.cnLabel,
+	}
+	discoverer, poolResolver, err := queryCandidatePipeline(c.e, poolRequest, mode)
 	if err != nil {
+		return schedule.QueryDecision{}, scheduleFailureCandidateProvider, err
+	}
+	discovered, err := discoverer.discover(ctx)
+	if err != nil {
+		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+	}
+	if discovered.source == schedule.CandidateSourceClusterInventory {
+		currentCN = currentCNWorkerFromCandidates(currentCN, discovered.candidates)
+	} else {
+		currentCN, err = c.currentCNWorkerWithRuntimeState(ctx)
+		if err != nil {
+			return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+		}
+	}
+	req.CurrentCN = currentCN
+	resolved, err := poolResolver.resolve(ctx, discovered, poolRequest)
+	if err != nil {
+		return schedule.QueryDecision{}, scheduleFailurePoolResolution, err
+	}
+	req.Candidates = resolved.workers
+	req.CandidateResolution = resolved.resolution
+	return schedule.DecideQueryPlacement(req), "", nil
+}
+
+func currentCNWorkerFromCandidates(
+	current schedule.Worker,
+	candidates engine.QueryCandidates,
+) schedule.Worker {
+	for _, candidate := range candidates {
+		service := candidate.Service
+		if current.ID != "" {
+			if service.ServiceID != current.ID {
+				continue
+			}
+		} else if current.Addr == "" || service.PipelineServiceAddress != current.Addr {
+			continue
+		}
+		current.State = toScheduleWorkerState(service.WorkState)
+		return current
+	}
+	return current
+}
+
+func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
+	decision, failureCategory, err := c.evaluateQueryPlacement(
+		c.querySchedulingContext(),
+		queryCandidateModeExecution,
+	)
+	if err != nil {
+		c.recordSchedulingFailure(failureCategory, schedule.Worker{})
 		return schedule.QueryDecision{}, err
 	}
-
-	rawCandidateCount := len(candidates)
-	req.Candidates = toScheduleCandidateWorkers(candidates)
-	if len(req.Candidates) < rawCandidateCount {
+	c.recordQuerySchedulingTrace(decision)
+	c.recordQuerySchedulingMetrics(decision)
+	if len(decision.Dropped) > 0 {
 		getQueryScheduleLogger().WarnWithConfig(
-			"query-schedule-unroutable-cn",
-			"query schedule dropped unroutable CN candidates",
+			"query-schedule-dropped-cn-candidates",
+			"query schedule dropped CN candidates",
 			queryScheduleLogRateLimit,
-			zap.Int("candidate-count", rawCandidateCount),
-			zap.Int("routable-count", len(req.Candidates)),
-			zap.String("current-cn-policy", req.CurrentCNPolicy.String()),
-			zap.String("exec-type", queryExecTypeString(c.execType)),
-			zap.String("current-cn-id", req.CurrentCN.ID),
-			zap.String("current-cn-address", req.CurrentCN.Addr),
-			zap.Bool("is-internal", c.isInternal))
+			c.queryScheduleDroppedCandidateFields(decision)...)
 	}
-	return schedule.DecideQueryPlacement(req), nil
+	return decision, nil
+}
+
+func (c *Compile) querySchedulingContext() context.Context {
+	if c.proc == nil {
+		return context.Background()
+	}
+	if c.proc.Base != nil {
+		if ctx := c.proc.GetTopContext(); ctx != nil {
+			return ctx
+		}
+	}
+	if c.proc.Ctx != nil {
+		return c.proc.Ctx
+	}
+	return context.Background()
+}
+
+func (c *Compile) SetSchedulingTraceRecorder(recorder *schedule.TraceRecorder) {
+	c.schedulingTrace = recorder
+	c.schedulingAttempt = 0
+}
+
+func (c *Compile) beginSchedulingTraceAttempt() {
+	c.schedulingAttempt = c.schedulingTrace.StartAttempt()
+}
+
+func (c *Compile) recordQuerySchedulingTrace(
+	decision schedule.QueryDecision,
+) {
+	c.schedulingTrace.RecordQuery(
+		c.schedulingAttempt,
+		decision,
+	)
+}
+
+func (c *Compile) recordSchedulingFailure(category string, worker schedule.Worker) {
+	c.schedulingTrace.RecordFailure(c.schedulingAttempt, category, worker)
+}
+
+func (c *Compile) queryScheduleDroppedCandidateFields(
+	placement schedule.QueryDecision,
+) []zap.Field {
+	counts := droppedWorkerReasonCounts(placement.Dropped)
+	fields := c.querySchedulePlacementFields(placement)
+	fields = append(fields,
+		zap.String("candidate-source", string(placement.CandidateResolution.DiscoverySource)),
+		zap.String("pool-resolution", string(placement.CandidateResolution.PoolResolution)),
+		zap.Int("candidate-count", placement.CandidateResolution.DiscoveredCount),
+		zap.Int("candidate-worker-count", placement.ResolvedCandidateCount),
+		zap.Int("dropped-unroutable-count", counts[schedule.ReasonDroppedUnroutableCN]),
+		zap.Int("dropped-draining-count", counts[schedule.ReasonDroppedDrainingCN]),
+		zap.Int("dropped-drained-count", counts[schedule.ReasonDroppedDrainedCN]),
+		zap.Int("dropped-duplicate-count", counts[schedule.ReasonDroppedDuplicateCN]),
+	)
+	return fields
+}
+
+func droppedWorkerReasonCounts(dropped schedule.DroppedWorkers) map[string]int {
+	counts := make(map[string]int, len(dropped))
+	for _, worker := range dropped {
+		counts[worker.Reason]++
+	}
+	return counts
 }
 
 func (c *Compile) currentCNWorker() schedule.Worker {
@@ -159,6 +518,45 @@ func (c *Compile) currentCNWorker() schedule.Worker {
 		currentCN.Id = c.proc.GetService()
 	}
 	return toScheduleWorker(currentCN)
+}
+
+func (c *Compile) currentCNWorkerWithRuntimeState(ctx context.Context) (schedule.Worker, error) {
+	worker := c.currentCNWorker()
+	state, err := c.currentCNWorkState(ctx, worker.ID)
+	worker.State = toScheduleWorkerState(state)
+	return worker, err
+}
+
+func (c *Compile) currentCNWorkState(ctx context.Context, serviceID string) (metadata.WorkState, error) {
+	// State lookup is best-effort. Missing runtime or cluster metadata falls
+	// back to Unknown, which the scheduler treats as schedulable. Only an
+	// explicit Draining/Drained signal should block current-CN placement.
+	if serviceID == "" {
+		return metadata.WorkState_Unknown, nil
+	}
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return metadata.WorkState_Unknown, nil
+	}
+	v, ok := rt.GetGlobalVariables(moruntime.ClusterService)
+	if !ok {
+		return metadata.WorkState_Unknown, nil
+	}
+	cluster, ok := v.(clusterservice.MOCluster)
+	if !ok || cluster == nil {
+		return metadata.WorkState_Unknown, nil
+	}
+
+	state := metadata.WorkState_Unknown
+	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewServiceIDSelector(serviceID),
+		func(cn metadata.CNService) bool {
+			state = cn.WorkState
+			return false
+		})
+	return state, err
 }
 
 func (c *Compile) currentCNPolicy() schedule.CurrentCNPolicy {
@@ -194,15 +592,16 @@ func queryExecTypeString(execType plan2.ExecType) string {
 
 func toScheduleWorker(node engine.Node) schedule.Worker {
 	return schedule.Worker{
-		ID:   node.Id,
-		Addr: node.Addr,
-		Mcpu: normalizeMcpu(node.Mcpu),
+		ID:    node.Id,
+		Addr:  node.Addr,
+		Mcpu:  normalizeMcpu(node.Mcpu),
+		State: toScheduleWorkerState(node.WorkState),
 	}
 }
 
 // toScheduleCandidateWorkers converts engine discovery results into schedulable
-// candidates. Candidate workers without a route cannot be selected for remote
-// execution, so they are dropped here.
+// candidates. Runtime eligibility and route validation are handled by the
+// schedule layer so candidate drops remain observable.
 func toScheduleCandidateWorkers(nodes engine.Nodes) schedule.Workers {
 	if len(nodes) == 0 {
 		return nil
@@ -210,9 +609,6 @@ func toScheduleCandidateWorkers(nodes engine.Nodes) schedule.Workers {
 	workers := make(schedule.Workers, 0, len(nodes))
 	for _, node := range nodes {
 		worker := toScheduleWorker(node)
-		if worker.Addr == "" {
-			continue
-		}
 		workers = append(workers, worker)
 	}
 	if len(workers) == 0 {
@@ -248,9 +644,10 @@ func (c *Compile) scheduledQueryWorkers() schedule.Workers {
 
 func toEngineNode(worker schedule.Worker) engine.Node {
 	return engine.Node{
-		Id:   worker.ID,
-		Addr: worker.Addr,
-		Mcpu: normalizeMcpu(worker.Mcpu),
+		Id:        worker.ID,
+		Addr:      worker.Addr,
+		Mcpu:      normalizeMcpu(worker.Mcpu),
+		WorkState: toEngineWorkState(worker.State),
 	}
 }
 
@@ -285,4 +682,30 @@ func normalizeMcpu(mcpu int) int {
 		return 1
 	}
 	return mcpu
+}
+
+func toScheduleWorkerState(state metadata.WorkState) schedule.WorkerState {
+	switch state {
+	case metadata.WorkState_Working:
+		return schedule.WorkerStateWorking
+	case metadata.WorkState_Draining:
+		return schedule.WorkerStateDraining
+	case metadata.WorkState_Drained:
+		return schedule.WorkerStateDrained
+	default:
+		return schedule.WorkerStateUnknown
+	}
+}
+
+func toEngineWorkState(state schedule.WorkerState) metadata.WorkState {
+	switch state {
+	case schedule.WorkerStateWorking:
+		return metadata.WorkState_Working
+	case schedule.WorkerStateDraining:
+		return metadata.WorkState_Draining
+	case schedule.WorkerStateDrained:
+		return metadata.WorkState_Drained
+	default:
+		return metadata.WorkState_Unknown
+	}
 }

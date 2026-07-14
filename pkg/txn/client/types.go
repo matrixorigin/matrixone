@@ -262,17 +262,27 @@ type Workspace interface {
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	// UpdateSnapshotWriteOffset advances the statement boundary of the
+	// workspace to its current end. Only statement-boundary callers may use
+	// it (compiling a new user statement); internal sub-sql executions must
+	// not move the caller's boundary.
 	UpdateSnapshotWriteOffset()
+	// GetSnapshotWriteOffset returns the current statement boundary.
 	GetSnapshotWriteOffset() int
+	// WriteOffset returns the current end of the workspace write list. An
+	// internal sub-sql (DisableIncrStatement) compiles against this value to
+	// see everything its caller has written so far without touching the
+	// shared statement boundary.
+	WriteOffset() uint64
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	FinalizeCommit(ctx context.Context)
-	// FinalizeCommitWithUnknownResult is called after the commit request may
-	// have reached TN, but the final commit result is unknown. It must not run
-	// rollback cleanup, because the transaction may have committed.
+	// FinalizeCommitWithUnknownResult releases CN-local resources after a Commit
+	// request may have reached TN but no final response was received. It must
+	// not perform rollback object GC, because TN may have committed.
 	FinalizeCommitWithUnknownResult(ctx context.Context)
 	Rollback(ctx context.Context) error
 

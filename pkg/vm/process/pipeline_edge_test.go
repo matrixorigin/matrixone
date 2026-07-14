@@ -21,6 +21,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 // TestPipelineEdgeSendEndIsIdempotent verifies that calling SendEnd
@@ -781,5 +785,117 @@ func TestPipelineEdgeSetNilBatchCntForReusePreservesChannel(t *testing.T) {
 		}
 	default:
 		t.Fatal("SendEnd after reuse did not enqueue terminal signal")
+	}
+}
+
+// A prepared statement reuses its cached pipeline across executions: after one
+// execution delivered End and closed the edge, the next execution must be able
+// to send data and End again once the terminal state is cleared.
+func TestPipelineEdgeResetTerminalStateForReuse(t *testing.T) {
+	edge := NewPipelineEdge(2, 1)
+	originalCh := edge.Ch2
+	if !edge.SendEnd() {
+		t.Fatal("initial SendEnd failed")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed before reset")
+	}
+	if edge.SendDataDirect(context.Background(), &batch.Batch{}, nil) {
+		t.Fatal("done edge should reject data before reset")
+	}
+
+	edge.ResetTerminalStateForReuse()
+
+	if edge.Ch2 != originalCh {
+		t.Fatal("ResetTerminalStateForReuse should not recreate Ch2")
+	}
+	if edge.NilBatchCnt != 1 {
+		t.Fatalf("NilBatchCnt after reset = %d, want 1", edge.NilBatchCnt)
+	}
+	select {
+	case <-edge.Ch2:
+		t.Fatal("ResetTerminalStateForReuse did not drain stale buffered signal")
+	default:
+	}
+	select {
+	case <-edge.Done():
+		t.Fatal("Done stayed closed after reset")
+	default:
+	}
+
+	if !edge.SendDataDirect(context.Background(), &batch.Batch{}, nil) {
+		t.Fatal("SendDataDirect after reset failed")
+	}
+	if !edge.SendEnd() {
+		t.Fatal("SendEnd after reset failed")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed after reset End")
+	}
+
+	var nilEdge *PipelineEdge
+	nilEdge.ResetTerminalStateForReuse()
+}
+
+// Draining a stale PipelineSignal must release its held resources (direct
+// batch mpool memory, spool references) or the reuse path would leak.
+// This test cannot directly assert mpool stats (CurrNB is 0 with NoFixed
+// in the test environment), so it exercises the release path structurally:
+// signal.release() calls batch.Clean(mp) which frees the mpool memory.
+func TestPipelineEdgeDrainReleasesSignalResources(t *testing.T) {
+	mp := mpool.MustNewNoFixed()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < 100; i++ {
+		if err := vector.AppendFixed(bat.Vecs[0], int64(i), false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bat.SetRowCount(100)
+
+	// Exercise the release path: send batch into edge, then drain via reset.
+	edge := NewPipelineEdge(1, 1)
+	if !edge.SendDataDirect(context.Background(), bat, mp) {
+		t.Fatal("SendDataDirect failed")
+	}
+	// This must not leak: sig.release() calls sig.directly.Clean(sig.mp).
+	edge.ResetTerminalStateForReuse()
+
+	// Verify the edge is reusable after the drain.
+	if !edge.SendDataDirect(context.Background(), batch.EmptyBatch, mp) {
+		t.Fatal("edge not reusable after drain")
+	}
+}
+
+// ResetForReuse with a new channel must drain old signals before replacing
+// Ch2, or the abandoned channel's held resources would leak.
+func TestPipelineEdgeResetForReuseDrainsOldChannel(t *testing.T) {
+	mp := mpool.MustNewNoFixed()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < 100; i++ {
+		if err := vector.AppendFixed(bat.Vecs[0], int64(i), false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bat.SetRowCount(100)
+
+	edge := NewPipelineEdge(1, 1)
+	if !edge.SendDataDirect(context.Background(), bat, mp) {
+		t.Fatal("SendDataDirect failed")
+	}
+
+	// ResetForReuse replaces Ch2; must drain the old one first.
+	edge.ResetForReuse(1, 1)
+
+	// New channel should accept data.
+	if !edge.SendDataDirect(context.Background(), batch.EmptyBatch, mp) {
+		t.Fatal("new channel not usable after ResetForReuse")
 	}
 }

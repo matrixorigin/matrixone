@@ -70,12 +70,15 @@ func NewMemPKFilter(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	if !basePKFilter.Valid || tableDef.Pkey == nil {
+	if !basePKFilter.Valid || tableDef == nil || tableDef.Pkey == nil || packerPool == nil {
 		return
 	}
 
 	// Currently only support single atomic filter in memory path.
 	if len(basePKFilter.Disjuncts) > 0 {
+		return
+	}
+	if !validBlockPKSearchFilter(basePKFilter) {
 		return
 	}
 
@@ -87,6 +90,16 @@ func NewMemPKFilter(
 
 	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
 		switch basePKFilter.Oid {
+		case types.T_bool:
+			lbVal = types.DecodeBool(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeBool(basePKFilter.UB)
+			}
+		case types.T_bit:
+			lbVal = types.DecodeUint64(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUint64(basePKFilter.UB)
+			}
 		case types.T_int8:
 			lbVal = types.DecodeInt8(basePKFilter.LB)
 			if len(basePKFilter.UB) > 0 {
@@ -157,6 +170,11 @@ func NewMemPKFilter(
 			if len(basePKFilter.UB) > 0 {
 				ubVal = types.DecodeTimestamp(basePKFilter.UB)
 			}
+		case types.T_year:
+			lbVal = types.DecodeMoYear(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeMoYear(basePKFilter.UB)
+			}
 		case types.T_decimal64:
 			lbVal = types.DecodeDecimal64(basePKFilter.LB)
 			if len(basePKFilter.UB) > 0 {
@@ -172,7 +190,7 @@ func NewMemPKFilter(
 			if len(basePKFilter.UB) > 0 {
 				ubVal = types.DecodeDecimal256(basePKFilter.UB)
 			}
-		case types.T_varchar, types.T_char, types.T_binary:
+		case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary:
 			lbVal = basePKFilter.LB
 			ubVal = basePKFilter.UB
 		case types.T_json:
@@ -228,10 +246,14 @@ func NewMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
-		RangeLeftOpen, RangeRightOpen, RangeBothOpen:
+		RangeLeftOpen, RangeRightOpen, RangeBothOpen,
+		PrefixRangeLeftOpen, PrefixRangeRightOpen, PrefixRangeBothOpen:
 		packed = append(packed, EncodePrimaryKey(lbVal, packer))
 		packed = append(packed, EncodePrimaryKey(ubVal, packer))
-		if basePKFilter.Op == function.PREFIX_BETWEEN {
+		if basePKFilter.Op == function.PREFIX_BETWEEN ||
+			basePKFilter.Op == PrefixRangeLeftOpen ||
+			basePKFilter.Op == PrefixRangeRightOpen ||
+			basePKFilter.Op == PrefixRangeBothOpen {
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
@@ -377,6 +399,26 @@ func (f *MemPKFilter) FilterVector(
 
 		case RangeBothOpen:
 			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.PREFIX_BETWEEN:
+			if !(types.PrefixCompare(keys[i], f.packed[0]) >= 0 && types.PrefixCompare(keys[i], f.packed[1]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case PrefixRangeLeftOpen:
+			if !(types.PrefixCompare(keys[i], f.packed[0]) > 0 && types.PrefixCompare(keys[i], f.packed[1]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case PrefixRangeRightOpen:
+			if !(types.PrefixCompare(keys[i], f.packed[0]) >= 0 && types.PrefixCompare(keys[i], f.packed[1]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case PrefixRangeBothOpen:
+			if !(types.PrefixCompare(keys[i], f.packed[0]) > 0 && types.PrefixCompare(keys[i], f.packed[1]) < 0) {
 				skipMask.Add(uint64(i))
 			}
 
