@@ -737,10 +737,16 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) (func(), error) {
 		cancel()
 		return func() {}, err
 	}
-	ses.pushRunSQLToken(token)
+	// Legacy TxnOperator implementations may use zero as an opaque/no-op token.
+	// Preserve the pre-admission-API session bookkeeping contract for them.
+	if token != 0 {
+		ses.pushRunSQLToken(token)
+	}
 	return func() {
 		txnOp.ExitRunSqlWithToken(token)
-		ses.popRunSQLToken()
+		if token != 0 {
+			ses.popRunSQLToken()
+		}
 		cancel()
 	}, nil
 }

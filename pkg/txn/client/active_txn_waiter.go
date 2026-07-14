@@ -19,14 +19,30 @@ import (
 	"sync"
 )
 
+type activeTxnWaiterState uint8
+
+const (
+	activeTxnQueued activeTxnWaiterState = iota
+	activeTxnPromoting
+	activeTxnPromotionCanceled
+	activeTxnAdmitted
+	activeTxnCanceled
+	activeTxnFailed
+)
+
 // activeTxnWaiter is the admission gate for one max-active queued transaction.
-// It has one terminal result: admitted, client closed, or another terminal
-// failure. Caller cancellation is deliberately not a terminal result for the
-// gate; closeTxn removes the abandoned entry from the client-owned queue.
+// Cancellation and promotion compete for queued ownership. Once promotion
+// wins, a canceled creator waits until the client has published the operator in
+// activeTxns; its ClosedEvent can then remove that ownership without falling
+// into a dequeue-to-publication gap.
 type activeTxnWaiter struct {
 	doneC chan struct{}
-	once  sync.Once
-	err   error
+
+	mu struct {
+		sync.Mutex
+		state activeTxnWaiterState
+		err   error
+	}
 }
 
 func newActiveTxnWaiter() *activeTxnWaiter {
@@ -36,24 +52,86 @@ func newActiveTxnWaiter() *activeTxnWaiter {
 func (w *activeTxnWaiter) wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		if w.cancel(ctx.Err()) {
+			return ctx.Err()
+		}
+		// Promotion already owns the operator. Do not let cancellation publish
+		// ClosedEvent until addActiveTxn has made that ownership removable.
+		<-w.doneC
+		result, _ := w.result()
+		return result
 	case <-w.doneC:
-		return w.err
+		result, _ := w.result()
+		return result
 	}
 }
 
-func (w *activeTxnWaiter) complete(err error) {
-	w.once.Do(func() {
-		w.err = err
+// claimPromotion is the linearization point between queued cancellation and
+// queued-to-active ownership transfer. It must be called while client.mu keeps
+// the operator in waitActiveTxns.
+func (w *activeTxnWaiter) claimPromotion() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.mu.state != activeTxnQueued {
+		return false
+	}
+	w.mu.state = activeTxnPromoting
+	return true
+}
+
+// cancel returns true when cancellation removed the creator's queued claim.
+// If promotion already won, it records the cancellation but leaves doneC open
+// until active ownership has been published.
+func (w *activeTxnWaiter) cancel(err error) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch w.mu.state {
+	case activeTxnQueued:
+		w.mu.state = activeTxnCanceled
+		w.mu.err = err
 		close(w.doneC)
-	})
+		return true
+	case activeTxnPromoting:
+		w.mu.state = activeTxnPromotionCanceled
+		w.mu.err = err
+	}
+	return false
+}
+
+func (w *activeTxnWaiter) complete(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch w.mu.state {
+	case activeTxnQueued, activeTxnPromoting:
+		if err == nil {
+			w.mu.state = activeTxnAdmitted
+		} else {
+			w.mu.state = activeTxnFailed
+		}
+		w.mu.err = err
+		close(w.doneC)
+	case activeTxnPromotionCanceled:
+		// Preserve the cancellation result recorded by the creator. Promotion
+		// only supplies the ownership-publication barrier in this state.
+		w.mu.state = activeTxnCanceled
+		close(w.doneC)
+	}
 }
 
 func (w *activeTxnWaiter) result() (error, bool) {
 	select {
 	case <-w.doneC:
-		return w.err, true
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.mu.err, true
 	default:
 		return nil, false
 	}
+}
+
+func (w *activeTxnWaiter) canceled() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.mu.state == activeTxnPromotionCanceled ||
+		w.mu.state == activeTxnCanceled
 }

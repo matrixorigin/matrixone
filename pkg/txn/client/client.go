@@ -892,18 +892,15 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 			return
 		}
 
-		// Collect waiting ops to activate
+		// Claim queued ownership before removing an operator from the queue.
+		// Cancellation competes with this claim in activeTxnWaiter: if it wins,
+		// the entry is discarded without reserving a user slot; if promotion
+		// wins, the canceled creator cannot return until active publication.
 		var toActivate []*txnOperator
 		if len(client.mu.waitActiveTxns) > 0 {
 			newCanAdded := client.maxActiveTxn - client.mu.users
-			for i := 0; i < newCanAdded; i++ {
-				waitOp := client.fetchWaitActiveOpLocked()
-				if waitOp == nil {
-					break
-				}
-				client.mu.users++
-				toActivate = append(toActivate, waitOp)
-			}
+			toActivate = client.claimWaitActiveOpsLocked(newCanAdded)
+			client.mu.users += len(toActivate)
 		}
 
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
@@ -920,6 +917,10 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 
 	if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
 		client.removeFromLeakCheck(txn.ID)
+	} else if txnOp.(*txnOperator).reset.waiter != nil &&
+		txnOp.(*txnOperator).reset.waiter.canceled() {
+		// A promoter may have discarded a canceled queue entry before this
+		// ClosedEvent acquired client.mu. No client ownership remains.
 	} else if !client.mu.closed {
 		client.logger.Warn("txn closed",
 			zap.String("txn ID", hex.EncodeToString(txn.ID)),
@@ -932,16 +933,30 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	return
 }
 
-func (client *txnClient) fetchWaitActiveOpLocked() *txnOperator {
-	if len(client.mu.waitActiveTxns) == 0 {
-		return nil
+// claimWaitActiveOpsLocked performs one stable O(n) queue compaction. It drops
+// canceled ownership, claims at most limit live entries in FIFO order, retains
+// the rest, and clears detached backing-array references.
+func (client *txnClient) claimWaitActiveOpsLocked(limit int) []*txnOperator {
+	queued := client.mu.waitActiveTxns
+	remaining := queued[:0]
+	claimed := make([]*txnOperator, 0, limit)
+	for _, waitOp := range queued {
+		if len(claimed) < limit {
+			if waitOp.reset.waiter.claimPromotion() {
+				claimed = append(claimed, waitOp)
+			}
+			// A failed claim means cancellation already owns terminal cleanup;
+			// either way this entry no longer belongs in the queue.
+			continue
+		}
+		if waitOp.reset.waiter.canceled() {
+			continue
+		}
+		remaining = append(remaining, waitOp)
 	}
-	op := client.mu.waitActiveTxns[0]
-	copy(client.mu.waitActiveTxns, client.mu.waitActiveTxns[1:])
-	last := len(client.mu.waitActiveTxns) - 1
-	client.mu.waitActiveTxns[last] = nil
-	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:last]
-	return op
+	clear(queued[len(remaining):])
+	client.mu.waitActiveTxns = remaining
+	return claimed
 }
 
 func (client *txnClient) Pause() {

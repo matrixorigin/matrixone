@@ -2087,11 +2087,16 @@ func TestMalformedReadWriteResponseDoesNotPublishTxnState(t *testing.T) {
 
 type legacyRunSQLTxnOperator struct {
 	TxnOperator
-	token uint64
+	token      uint64
+	exitTokens []uint64
 }
 
 func (op *legacyRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
 	return op.token
+}
+
+func (op *legacyRunSQLTxnOperator) ExitRunSqlWithToken(token uint64) {
+	op.exitTokens = append(op.exitTokens, token)
 }
 
 func TestTryEnterRunSQLSupportsLegacyTxnOperator(t *testing.T) {
@@ -2104,11 +2109,13 @@ func TestTryEnterRunSQLSupportsLegacyTxnOperator(t *testing.T) {
 	legacy.token = 0
 	token, err = TryEnterRunSqlWithTokenAndSQL(legacy, func() { close(canceled) }, "select 2")
 	require.Zero(t, token)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+	require.NoError(t, err)
+	legacy.ExitRunSqlWithToken(token)
+	require.Equal(t, []uint64{0}, legacy.exitTokens)
 	select {
 	case <-canceled:
+		t.Fatal("legacy zero token was incorrectly treated as admission rejection")
 	default:
-		t.Fatal("legacy admission rejection did not cancel the SQL context")
 	}
 }
 

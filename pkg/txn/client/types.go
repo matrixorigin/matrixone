@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -199,10 +198,11 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
-	// EnterRunSqlWithTokenAndSQL registers one SQL execution. Zero means the
-	// operator rejected admission. Use TryEnterRunSqlWithTokenAndSQL when the
-	// rejection reason is required. This legacy signature is retained for
-	// source compatibility with external TxnOperator implementations.
+	// EnterRunSqlWithTokenAndSQL registers one SQL execution. The returned token
+	// is opaque, including zero, and must be passed to ExitRunSqlWithToken. Use
+	// TryEnterRunSqlWithTokenAndSQL when rejection reasons are required. This
+	// legacy signature is retained for source and behavioral compatibility with
+	// external TxnOperator implementations.
 	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64
 	ExitRunSqlWithToken(token uint64)
 	EnterIncrStmt()
@@ -234,14 +234,10 @@ func TryEnterRunSqlWithTokenAndSQL(
 	if admission, ok := op.(RunSQLAdmissionOperator); ok {
 		return admission.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
 	}
-	token := op.EnterRunSqlWithTokenAndSQL(cancel, sql)
-	if token == 0 {
-		if cancel != nil {
-			cancel()
-		}
-		return 0, moerr.NewTxnClosedNoCtx(nil)
-	}
-	return token, nil
+	// The legacy API has no error channel and never defined zero as rejection.
+	// Preserve its token verbatim; only RunSQLAdmissionOperator may reject an
+	// admission explicitly.
+	return op.EnterRunSqlWithTokenAndSQL(cancel, sql), nil
 }
 
 // TxnIDGenerator txn id generator

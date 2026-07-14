@@ -24,6 +24,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,6 +43,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type legacyZeroRunSQLTxnOperator struct {
+	client.TxnOperator
+	exited chan uint64
+}
+
+func (op *legacyZeroRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
+	return 0
+}
+
+func (op *legacyZeroRunSQLTxnOperator) ExitRunSqlWithToken(token uint64) {
+	op.exited <- token
+}
 
 func TestEnterFrontendRunSQLRejectsSealedTransaction(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -62,6 +76,29 @@ func TestEnterFrontendRunSQLRejectsSealedTransaction(t *testing.T) {
 	assert.ErrorIs(t, err, expectedErr)
 	assert.NotNil(t, finish)
 	assert.Empty(t, ses.runSQLTokens)
+}
+
+func TestEnterFrontendRunSQLPreservesLegacyZeroToken(t *testing.T) {
+	ctx := context.Background()
+	op := &legacyZeroRunSQLTxnOperator{exited: make(chan uint64, 1)}
+	ses := &Session{}
+	ses.txnHandler = InitTxnHandler("", nil, ctx, op)
+	defer ses.txnHandler.txnCtxCancel()
+
+	finish, err := enterFrontendRunSQL(ses, &ExecCtx{
+		reqCtx:    ctx,
+		sqlOfStmt: "select 1",
+	})
+	require.NoError(t, err)
+	require.Empty(t, ses.runSQLTokens)
+	finish()
+	select {
+	case token := <-op.exited:
+		require.Zero(t, token)
+	case <-time.After(time.Second):
+		t.Fatal("legacy zero token was not returned to ExitRunSqlWithToken")
+	}
+	require.Empty(t, ses.runSQLTokens)
 }
 
 func TestTxnHandler_NewTxn(t *testing.T) {
