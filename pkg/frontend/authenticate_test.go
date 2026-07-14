@@ -9129,6 +9129,37 @@ func Test_doInterpretCall(t *testing.T) {
 	})
 }
 
+func TestParseStoredProcedureBodyUsesSessionSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
+
+	stmts, err := parseStoredProcedureBody(context.Background(), ses, "begin select 'a'||'b' as c; end")
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.NotEmpty(t, stmts)
+
+	compound, ok := stmts[0].(*tree.CompoundStmt)
+	require.True(t, ok)
+	var selectStmt *tree.Select
+	for _, stmt := range compound.Stmts {
+		if selectStmt, ok = stmt.(*tree.Select); ok {
+			break
+		}
+	}
+	require.NotNil(t, selectStmt)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "concat", name.ColName())
+}
+
 func Test_initProcedure(t *testing.T) {
 	convey.Convey("init precedure fail", t, func() {
 		ctrl := gomock.NewController(t)

@@ -183,6 +183,7 @@ func getTableInfosFromTS(ctx context.Context,
 		return tableInfos, nil
 	}
 	return fillTableCreateSQLsForRestore(
+		newCtx,
 		sid,
 		fmt.Sprintf("%d:%d", from, ts),
 		tableInfos,
@@ -205,8 +206,8 @@ func showFullTablesFromTS(ctx context.Context,
 	sql := buildTableInfoListSQL(dbName, tblName, ts, from)
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s` sql: %s", from, ts, dbName, tblName, sql))
-	// cols: table name, table type, relkind
-	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -218,6 +219,7 @@ func showFullTablesFromTS(ctx context.Context,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
 			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s`, get table number `%d`", from, ts, dbName, tblName, len(ans)))

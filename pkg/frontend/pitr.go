@@ -1538,6 +1538,7 @@ func getTableInfoWithPitr(
 	}
 
 	return fillTableCreateSQLsForRestore(
+		ctx,
 		sid,
 		pitrName,
 		tableInfos,
@@ -1561,8 +1562,8 @@ func showFullTablesWitsTs(
 	}
 	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type, relkind
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -1574,6 +1575,7 @@ func showFullTablesWitsTs(
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
 			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))

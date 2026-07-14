@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -150,6 +151,7 @@ type tableInfo struct {
 	tblName   string
 	typ       tableType
 	relKind   string
+	viewDef   string
 	createSql string
 }
 
@@ -1898,8 +1900,8 @@ func showFullTables(
 		"[%v] show full table `%s.%s` sql: %s",
 		snapshot, dbName, tblName, sql))
 
-	// cols: table name, table type, relkind
-	colsList, err := getStringColsList(newCtx, bh, sql, 0, 1, 2)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsList(newCtx, bh, sql, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -1911,6 +1913,7 @@ func showFullTables(
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
 			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 
@@ -1928,7 +1931,7 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	}
 	whereClause := buildTableInfoListWhereClause(dbName, tblName, accountId)
 	sql := fmt.Sprintf(
-		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind from %s.mo_tables%s where %s",
+		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind, viewdef from %s.mo_tables%s where %s",
 		quoteSQLStringLiteral(catalog.SystemViewRel),
 		quoteSQLStringLiteral(catalog.SystemClusterRel),
 		moCatalog,
@@ -1997,6 +2000,7 @@ func getTableInfos(
 	}
 
 	return fillTableCreateSQLsForRestore(
+		ctx,
 		sid,
 		fmt.Sprint(snapshot),
 		tableInfos,
@@ -2007,6 +2011,7 @@ func getTableInfos(
 }
 
 func fillTableCreateSQLsForRestore(
+	ctx context.Context,
 	sid string,
 	restoreSource string,
 	tableInfos []*tableInfo,
@@ -2029,10 +2034,54 @@ func fillTableCreateSQLsForRestore(
 			return nil, err
 		}
 
+		if tblInfo.typ == view {
+			createSQL, err = canonicalizeViewCreateSQLForRestore(ctx, createSQL, tblInfo.viewDef)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		tblInfo.createSql = createSQL
 		restorable = append(restorable, tblInfo)
 	}
 	return restorable, nil
+}
+
+const legacyViewParserSQLModeForRestore = "PIPES_AS_CONCAT"
+
+// canonicalizeViewCreateSQLForRestore makes a persisted view definition safe
+// to parse and execute in a restore session whose sql_mode may differ from the
+// mode in effect when the view was created.
+func canonicalizeViewCreateSQLForRestore(ctx context.Context, createSQL string, viewDef string) (string, error) {
+	parserSQLMode, err := viewParserSQLModeForRestore(viewDef)
+	if err != nil {
+		return "", err
+	}
+
+	stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, createSQL, 1, parserSQLMode)
+	defer freeStatements(stmts)
+	if err != nil {
+		return "", err
+	}
+	if len(stmts) != 1 {
+		return "", moerr.NewInternalErrorf(ctx, "expected one CREATE VIEW statement, got %d", len(stmts))
+	}
+	return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()), nil
+}
+
+func viewParserSQLModeForRestore(viewDef string) (string, error) {
+	if viewDef == "" {
+		return legacyViewParserSQLModeForRestore, nil
+	}
+
+	var data plan.ViewData
+	if err := json.Unmarshal([]byte(viewDef), &data); err != nil {
+		return "", err
+	}
+	if data.SQLMode == nil {
+		return legacyViewParserSQLModeForRestore, nil
+	}
+	return *data.SQLMode, nil
 }
 
 func getCreateDatabaseSql(ctx context.Context,

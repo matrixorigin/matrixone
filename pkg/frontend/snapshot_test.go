@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -53,7 +59,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
 				{"hive_ext", "BASE TABLE", catalog.SystemExternalRel},
 			})
@@ -83,7 +89,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {snapshot = '%s'} where datname = '%s' and account_id = 0", snapshotName, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, snapshotTs, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
@@ -109,7 +115,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, toAccount)+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
 				{"hive_ext", "BASE TABLE", catalog.SystemExternalRel},
 			})
@@ -141,7 +147,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
 				{"hive_ext", "BASE TABLE", catalog.SystemExternalRel},
 			})
@@ -172,7 +178,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, ts, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
@@ -234,7 +240,7 @@ func TestGetTableInfosFromTSSkipsStaleTableMetadata(t *testing.T) {
 	)
 
 	bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
-		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 			{"base_t", "BASE TABLE", "r"},
 			{"aff01", "BASE TABLE", "r"},
 		})
@@ -273,7 +279,7 @@ func TestGetTableInfosFromTSReturnsCreateTableErrors(t *testing.T) {
 	createTableSQL := fmt.Sprintf("show create table `%s`.`aff01` {MO_TS = %d}", dbName, snapshotTs)
 	createTableErr := moerr.NewInternalError(ctx, "failed to read create table")
 	bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
-		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 			{"aff01", "BASE TABLE", "r"},
 		})
 	bh.sql2err[createTableSQL] = createTableErr
@@ -293,9 +299,76 @@ func newMrsForRestoreStringRows(colNames []string, rows [][]interface{}) *MysqlR
 		mrs.AddColumn(col)
 	}
 	for _, row := range rows {
-		mrs.AddRow(row)
+		values := append([]interface{}(nil), row...)
+		for len(values) < len(colNames) {
+			values = append(values, "")
+		}
+		mrs.AddRow(values)
 	}
 	return mrs
+}
+
+func TestCanonicalizeViewCreateSQLForRestore(t *testing.T) {
+	pipesAsConcat := "PIPES_AS_CONCAT"
+	ansiQuotes := "ANSI_QUOTES"
+	noBackslashEscapes := "NO_BACKSLASH_ESCAPES"
+
+	tests := []struct {
+		name    string
+		sqlMode *string
+		create  string
+		want    string
+		value   string
+	}{
+		{
+			name:    "pipes as concat",
+			sqlMode: &pipesAsConcat,
+			create:  "create view v_pipe as select 'a'||'b' as c",
+			want:    "concat(",
+		},
+		{
+			name:    "ansi quotes",
+			sqlMode: &ansiQuotes,
+			create:  `create view v_ansi as select "a" as c from "t"`,
+			want:    "`a`",
+		},
+		{
+			name:   "legacy view defaults to pipes as concat",
+			create: "create view v_legacy as select 'a'||'b' as c",
+			want:   "concat(",
+		},
+		{
+			name:    "no backslash escapes",
+			sqlMode: &noBackslashEscapes,
+			create:  `create view v_backslash as select 'a\b' as c`,
+			want:    `a\\b`,
+			value:   `a\b`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			viewDef, err := json.Marshal(plan.ViewData{Stmt: test.create, SQLMode: test.sqlMode})
+			require.NoError(t, err)
+
+			canonical, err := canonicalizeViewCreateSQLForRestore(context.Background(), test.create, string(viewDef))
+			require.NoError(t, err)
+			require.Contains(t, strings.ToLower(canonical), test.want)
+
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, canonical, 1)
+			require.NoError(t, err)
+			if test.value != "" {
+				viewStmt, ok := stmts[0].(*tree.CreateView)
+				require.True(t, ok)
+				selectClause, ok := viewStmt.AsSource.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				value, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, test.value, value.String())
+			}
+			freeStatements(stmts)
+		})
+	}
 }
 
 func restoreTestExecutedSQLContains(bh *backgroundExecTest, needle string) bool {

@@ -11394,15 +11394,11 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 
 	switch spLang {
 	case "sql":
-		stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+		stmt, err := parseStoredProcedureBody(ctx, ses, spBody)
 		if err != nil {
 			return nil, err
 		}
-		defer func() {
-			for _, st := range stmt {
-				st.Free()
-			}
-		}()
+		defer freeStatements(stmt)
 
 		err = interpreter.ExecuteSp(stmt[0], dbName)
 		if err != nil {
@@ -11420,6 +11416,16 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	default:
 		return nil, moerr.NewInternalError(ctx, "unknown language")
 	}
+}
+
+func parseStoredProcedureBody(ctx context.Context, ses FeSession, sql string) ([]tree.Statement, error) {
+	return parsers.ParseWithSQLMode(
+		ctx,
+		dialect.MYSQL,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sessionSQLModeForParser(ses),
+	)
 }
 
 func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
