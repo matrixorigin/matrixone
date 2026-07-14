@@ -14,9 +14,12 @@
 
 package incrservice
 
+import "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+
 type ranges struct {
 	step        uint64
 	values      []uint64
+	allocatedAt []timestamp.Timestamp
 	minCanAdded uint64
 }
 
@@ -43,6 +46,7 @@ func (r *ranges) next() uint64 {
 			r.values[2*i] += r.step
 			if r.values[2*i] == to {
 				r.values = r.values[2*i+2:]
+				r.allocatedAt = trimTimestamps(r.allocatedAt, i+1)
 			}
 			return from
 		}
@@ -74,27 +78,38 @@ func (r *ranges) left() int {
 func (r *ranges) setManual(
 	value uint64,
 	skipped *ranges) {
+	// Each input range emits at most one remaining range, so compacting in
+	// place cannot overwrite a range or timestamp that the loop has not read.
 	newValues := r.values[:0]
+	newAllocatedAt := r.allocatedAt[:0]
 	n := r.rangeCount()
 	for i := 0; i < n; i++ {
 		from, to := r.values[2*i], r.values[2*i+1]
+		allocatedAt := timestampAt(r.allocatedAt, i)
 		if to <= value {
 			skipped.add(from, to)
 			continue
 		}
 		if from > value {
 			newValues = append(newValues, from, to)
+			newAllocatedAt = append(newAllocatedAt, allocatedAt)
 			continue
 		}
 		skipped.add(from, value)
 		if value+1 < to {
 			newValues = append(newValues, value+1, to)
+			newAllocatedAt = append(newAllocatedAt, allocatedAt)
 		}
 	}
 	r.values = newValues
+	r.allocatedAt = newAllocatedAt
 }
 
 func (r *ranges) add(from, to uint64) {
+	r.addWithTimestamp(from, to, timestamp.Timestamp{})
+}
+
+func (r *ranges) addWithTimestamp(from, to uint64, allocatedAt timestamp.Timestamp) {
 	if r.minCanAdded >= to {
 		return
 	}
@@ -102,9 +117,21 @@ func (r *ranges) add(from, to uint64) {
 		from = r.minCanAdded
 	}
 	if from < to {
+		r.normalizeTimestamps()
 		r.values = append(r.values, from, to)
+		r.allocatedAt = append(r.allocatedAt, allocatedAt)
 	}
 	r.minCanAdded = to
+}
+
+func (r *ranges) oldestAllocateAt() timestamp.Timestamp {
+	n := r.rangeCount()
+	for i := 0; i < n; i++ {
+		if r.values[2*i] < r.values[2*i+1] {
+			return timestampAt(r.allocatedAt, i)
+		}
+	}
+	return timestamp.Timestamp{}
 }
 
 // updateTo after updateTo returns, make sure that the value
@@ -114,8 +141,9 @@ func (r *ranges) add(from, to uint64) {
 // skipping the value when restarting or other cache is allocated
 // next time.
 func (r *ranges) updateTo(value uint64) bool {
+	r.normalizeTimestamps()
 	n := r.rangeCount()
-	compactTo := -1
+	compactTo := 0
 	contains := false
 	for i := 0; i < n; i++ {
 		from, to := r.values[2*i], r.values[2*i+1]
@@ -124,18 +152,39 @@ func (r *ranges) updateTo(value uint64) bool {
 			break
 		}
 		if value >= to {
-			compactTo = 2*i + 2
+			compactTo = i + 1
 			continue
 		}
 		r.values[2*i] = value
 		contains = true
 		break
 	}
-	if compactTo != -1 {
-		r.values = r.values[compactTo:]
+	if compactTo > 0 {
+		r.values = r.values[2*compactTo:]
+		r.allocatedAt = r.allocatedAt[compactTo:]
 	}
 	if !contains {
 		r.minCanAdded = value
 	}
 	return contains
+}
+
+func (r *ranges) normalizeTimestamps() {
+	for len(r.allocatedAt) < r.rangeCount() {
+		r.allocatedAt = append(r.allocatedAt, timestamp.Timestamp{})
+	}
+}
+
+func timestampAt(values []timestamp.Timestamp, idx int) timestamp.Timestamp {
+	if idx >= len(values) {
+		return timestamp.Timestamp{}
+	}
+	return values[idx]
+}
+
+func trimTimestamps(values []timestamp.Timestamp, count int) []timestamp.Timestamp {
+	if count >= len(values) {
+		return nil
+	}
+	return values[count:]
 }

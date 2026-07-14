@@ -971,8 +971,11 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	nativePath := l.toNativeFilePath(path.File)
 
 	stat, err := os.Stat(nativePath)
-	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFound(ctx, filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, moerr.NewFileNotFound(ctx, filePath)
+		}
+		return nil, err
 	}
 
 	if stat.IsDir() {

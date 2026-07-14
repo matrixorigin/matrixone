@@ -4630,7 +4630,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
+		arg.SegmentMap = colexec.MustGetServer(c.proc.GetService()).GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
