@@ -1391,7 +1391,7 @@ func restoreViews(
 				"[%s] start to create view: %v, create view sql: %s",
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
 
-			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
 				if skipIfDependencyMissing && canSkipRestoreViewError(err) {
 					getLogger(ses.GetService()).Info(fmt.Sprintf(
 						"[%s] skip restore view %v because dependency is missing: %v",
@@ -1439,7 +1439,6 @@ func sortedViewInfos(
 	var (
 		err         error
 		snapshot    *plan.Snapshot
-		stmts       []tree.Statement
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
@@ -1465,7 +1464,7 @@ func sortedViewInfos(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -1473,10 +1472,15 @@ func sortedViewInfos(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return nil, err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return nil, err
 			}
@@ -2000,7 +2004,6 @@ func getTableInfos(
 	}
 
 	return fillTableCreateSQLsForRestore(
-		ctx,
 		sid,
 		fmt.Sprint(snapshot),
 		tableInfos,
@@ -2011,7 +2014,6 @@ func getTableInfos(
 }
 
 func fillTableCreateSQLsForRestore(
-	ctx context.Context,
 	sid string,
 	restoreSource string,
 	tableInfos []*tableInfo,
@@ -2034,13 +2036,6 @@ func fillTableCreateSQLsForRestore(
 			return nil, err
 		}
 
-		if tblInfo.typ == view {
-			createSQL, err = canonicalizeViewCreateSQLForRestore(ctx, createSQL, tblInfo.viewDef)
-			if err != nil {
-				return nil, err
-			}
-		}
-
 		tblInfo.createSql = createSQL
 		restorable = append(restorable, tblInfo)
 	}
@@ -2049,24 +2044,21 @@ func fillTableCreateSQLsForRestore(
 
 const legacyViewParserSQLModeForRestore = "PIPES_AS_CONCAT"
 
-// canonicalizeViewCreateSQLForRestore makes a persisted view definition safe
-// to parse and execute in a restore session whose sql_mode may differ from the
-// mode in effect when the view was created.
-func canonicalizeViewCreateSQLForRestore(ctx context.Context, createSQL string, viewDef string) (string, error) {
-	parserSQLMode, err := viewParserSQLModeForRestore(viewDef)
+func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lowerCaseTableNames int64) ([]tree.Statement, error) {
+	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, createSQL, 1, parserSQLMode)
-	defer freeStatements(stmts)
+	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, tblInfo.createSql, lowerCaseTableNames, parserSQLMode)
+}
+
+func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if len(stmts) != 1 {
-		return "", moerr.NewInternalErrorf(ctx, "expected one CREATE VIEW statement, got %d", len(stmts))
-	}
-	return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()), nil
+	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
 }
 
 func viewParserSQLModeForRestore(viewDef string) (string, error) {

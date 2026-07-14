@@ -29,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1538,7 +1536,6 @@ func getTableInfoWithPitr(
 	}
 
 	return fillTableCreateSQLsForRestore(
-		ctx,
 		sid,
 		pitrName,
 		tableInfos,
@@ -1731,7 +1728,6 @@ func restoreViewsWithPitr(
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore views", pitrName))
 	var (
 		err         error
-		stmts       []tree.Statement
 		sortedViews []string
 		snapshot    *pbplan.Snapshot
 		oldSnapshot *pbplan.Snapshot
@@ -1754,7 +1750,7 @@ func restoreViewsWithPitr(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v", pitrName, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return err
 		}
@@ -1762,9 +1758,14 @@ func restoreViewsWithPitr(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return err
 			}
@@ -1797,7 +1798,7 @@ func restoreViewsWithPitr(
 				return err
 			}
 
-			if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {
 				return err
 			}
 		}

@@ -11165,10 +11165,11 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 }
 
 type backgroundExecTest struct {
-	currentSql   string
-	sql2result   map[string]ExecResult
-	sql2err      map[string]error
-	executedSQLs []string
+	currentSql    string
+	parserSQLMode string
+	sql2result    map[string]ExecResult
+	sql2err       map[string]error
+	executedSQLs  []string
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -11206,6 +11207,11 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
 	return bt.sql2err[s]
+}
+
+func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sqlMode string) error {
+	bt.parserSQLMode = sqlMode
+	return bt.Exec(ctx, s)
 }
 
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {

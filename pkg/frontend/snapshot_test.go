@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -308,41 +307,46 @@ func newMrsForRestoreStringRows(colNames []string, rows [][]interface{}) *MysqlR
 	return mrs
 }
 
-func TestCanonicalizeViewCreateSQLForRestore(t *testing.T) {
+func TestViewRestoreUsesPersistedParserSQLModeWithoutRewritingSQL(t *testing.T) {
 	pipesAsConcat := "PIPES_AS_CONCAT"
 	ansiQuotes := "ANSI_QUOTES"
 	noBackslashEscapes := "NO_BACKSLASH_ESCAPES"
 
 	tests := []struct {
-		name    string
-		sqlMode *string
-		create  string
-		want    string
-		value   string
+		name     string
+		sqlMode  *string
+		create   string
+		wantMode string
+		want     string
+		value    string
 	}{
 		{
-			name:    "pipes as concat",
-			sqlMode: &pipesAsConcat,
-			create:  "create view v_pipe as select 'a'||'b' as c",
-			want:    "concat(",
+			name:     "pipes as concat",
+			sqlMode:  &pipesAsConcat,
+			create:   "create view v_pipe as select 'a'||'b' as c",
+			wantMode: pipesAsConcat,
+			want:     "concat(",
 		},
 		{
-			name:    "ansi quotes",
-			sqlMode: &ansiQuotes,
-			create:  `create view v_ansi as select "a" as c from "t"`,
-			want:    "`a`",
+			name:     "ansi quotes",
+			sqlMode:  &ansiQuotes,
+			create:   `create view v_ansi as select "a" as c from "t"`,
+			wantMode: ansiQuotes,
+			want:     "`a`",
 		},
 		{
-			name:   "legacy view defaults to pipes as concat",
-			create: "create view v_legacy as select 'a'||'b' as c",
-			want:   "concat(",
+			name:     "legacy view defaults to pipes as concat",
+			create:   "create view v_legacy as select 'a'||'b' as c",
+			wantMode: legacyViewParserSQLModeForRestore,
+			want:     "concat(",
 		},
 		{
-			name:    "no backslash escapes",
-			sqlMode: &noBackslashEscapes,
-			create:  `create view v_backslash as select 'a\b' as c`,
-			want:    `a\\b`,
-			value:   `a\b`,
+			name:     "no backslash escapes",
+			sqlMode:  &noBackslashEscapes,
+			create:   `create view v_backslash as select 'a\b' as c`,
+			wantMode: noBackslashEscapes,
+			want:     `a\\b`,
+			value:    `a\b`,
 		},
 	}
 
@@ -351,12 +355,15 @@ func TestCanonicalizeViewCreateSQLForRestore(t *testing.T) {
 			viewDef, err := json.Marshal(plan.ViewData{Stmt: test.create, SQLMode: test.sqlMode})
 			require.NoError(t, err)
 
-			canonical, err := canonicalizeViewCreateSQLForRestore(context.Background(), test.create, string(viewDef))
+			tblInfo := &tableInfo{viewDef: string(viewDef), createSql: test.create}
+			parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 			require.NoError(t, err)
-			require.Contains(t, strings.ToLower(canonical), test.want)
+			require.Equal(t, test.wantMode, parserSQLMode)
 
-			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, canonical, 1)
+			stmts, err := parseViewCreateSQLForRestore(context.Background(), tblInfo, 1)
 			require.NoError(t, err)
+			canonical := tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
+			require.Contains(t, strings.ToLower(canonical), test.want)
 			if test.value != "" {
 				viewStmt, ok := stmts[0].(*tree.CreateView)
 				require.True(t, ok)
@@ -367,6 +374,12 @@ func TestCanonicalizeViewCreateSQLForRestore(t *testing.T) {
 				require.Equal(t, test.value, value.String())
 			}
 			freeStatements(stmts)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			require.NoError(t, executeViewCreateSQLForRestore(context.Background(), bh, tblInfo))
+			require.Equal(t, test.create, bh.currentSql)
+			require.Equal(t, test.wantMode, bh.parserSQLMode)
 		})
 	}
 }

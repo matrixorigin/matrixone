@@ -23,9 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -183,7 +180,6 @@ func getTableInfosFromTS(ctx context.Context,
 		return tableInfos, nil
 	}
 	return fillTableCreateSQLsForRestore(
-		newCtx,
 		sid,
 		fmt.Sprintf("%d:%d", from, ts),
 		tableInfos,
@@ -648,7 +644,6 @@ func restoreViewsFromTS(
 	var (
 		err         error
 		snapshot    *plan.Snapshot
-		stmts       []tree.Statement
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
@@ -670,7 +665,7 @@ func restoreViewsFromTS(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to restore view: %v", restoreAccount, snapshotTs, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return err
 		}
@@ -678,10 +673,15 @@ func restoreViewsFromTS(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return err
 			}
@@ -715,7 +715,7 @@ func restoreViewsFromTS(
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))
