@@ -125,8 +125,8 @@ Hard rule: never claim a failure is "pre-existing" without proving it from clean
 | Test hangs >5s, no output | Deadlock or blocking channel send. Check `done` channel and non-blocking `select`. |
 | `context deadline exceeded` after 30s | Did all senders call `Reset()` and send typed terminal signals? |
 | `fatal error: 'xxhash.h' file not found` | `CGO_CFLAGS`; read [cgo-build-test.md](references/cgo-build-test.md). |
-| `Undefined symbols` / `undefined symbol:` | `CGO_LDFLAGS` and stale `libusearch_c`; read [cgo-build-test.md](references/cgo-build-test.md). |
-| `cannot find -lmo` / `ld: library 'mo' not found` | `-ldflags="-extldflags '-L... -lmo'"`; read [cgo-build-test.md](references/cgo-build-test.md). |
+| `Undefined symbols` / `undefined symbol:` | Inspect the ordered native dependency graph and artifact freshness; read [cgo-build-test.md](references/cgo-build-test.md). |
+| `cannot find -lmo` / `ld: library 'mo' not found` | Use the wrapper; for manual links, place `cgo` package `CgoLDFLAGS` after `-lmo`. Read [cgo-build-test.md](references/cgo-build-test.md). |
 | `dyld`/loader searches a temporary `go-build.../lib` directory | A package-relative rpath was used for a temporary test binary; use the CGo test wrapper or absolute test rpaths. |
 | Only linker warnings appear, no PASS/FAIL | Check the returned session and live test process; do not infer success from partial output. |
 | `unsupported index type: ivfpq|cagra` | CPU binary lacks GPU plugin registration; read [index-plugin.md](references/index-plugin.md) and GPU notes. |

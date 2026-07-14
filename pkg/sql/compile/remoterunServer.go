@@ -226,7 +226,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		if err = MarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); err != nil {
+		if err = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); err != nil {
 			return err
 		}
 		defer func() {

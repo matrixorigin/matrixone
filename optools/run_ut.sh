@@ -120,6 +120,20 @@ function run_tests(){
     make cgo
     make thirdparties
 
+    # Compile and link a CGo-transitive package through the same deterministic
+    # CPU wrapper documented for local development. This catches drift between
+    # libmo's declared native dependencies and the wrapper before the full UT
+    # matrix obscures it among unrelated package output. GPU builds have a
+    # separate, explicit CUDA/cuVS link contract.
+    if [[ "${MO_CL_CUDA:-0}" != "1" ]]; then
+        logger "INF" "Smoke test the deterministic CGo test wrapper"
+        if ! .agents/skills/mo-dev/scripts/mo-cgo-test \
+            -count=1 -timeout=120s ./optools/testdata/mo_cgo_transitive; then
+            logger "ERR" "Deterministic CGo test wrapper smoke failed"
+            exit 1
+        fi
+    fi
+
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT

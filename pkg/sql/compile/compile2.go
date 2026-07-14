@@ -158,7 +158,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	if err = MarkQueryRunning(c, txnOperator); err != nil {
+	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
 		return nil, err
 	}
 	defer func() {

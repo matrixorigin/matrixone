@@ -3794,8 +3794,8 @@ func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
 		return "", "", nil, moerr.NewInternalError(ctx, "test stub - no relation")
 	}))
 
-	// Stub EnterRunSql to avoid touching real txn state in tests.
-	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(context.Context, client.TxnOperator, string) (func(), error) {
+	// Stub TryEnterRunSql to avoid touching real txn state in tests.
+	stubs = append(stubs, gostub.Stub(&cdc.TryEnterRunSql, func(context.Context, client.TxnOperator, string) (func(), error) {
 		return func() {}, nil
 	}))
 

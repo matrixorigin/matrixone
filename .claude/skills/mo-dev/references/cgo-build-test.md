@@ -62,7 +62,7 @@ CGO_OPTS := CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include"
 GOLDFLAGS := -ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(RPATH)'"
 ```
 
-Note: Makefile does **not** set `CGO_LDFLAGS`; `libmo` link flags all go through `-ldflags` -> `-extldflags`. The `usearch` Go module ships its own `#cgo LDFLAGS: -lusearch_c`, so `CGO_LDFLAGS` only needs to put the intended thirdparty directory on the search path. Repeating `-lusearch_c` adds noise and can obscure the effective linker graph.
+Note: Makefile does **not** set `CGO_LDFLAGS`; `libmo` link flags all go through `-ldflags` -> `-extldflags`. `CGO_LDFLAGS` only needs to put the intended thirdparty directory on the search path. The test wrapper is different: because it injects `-lmo` even when the target does not import `cgo/lib.go`, it queries that package's `CgoLDFLAGS` with `go list` and appends the declared native dependency graph after `-lmo`. Do not maintain a second hard-coded dependency list in the wrapper; it will drift when `libmo` gains or removes a native dependency.
 
 ### macOS vs Linux
 
@@ -105,20 +105,24 @@ supplement, not the sole proof of loadability.
 macOS:
 
 ```bash
-CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include" \
-CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib" \
-DYLD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib" GOWORK=off \
-go test -mod=readonly -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib'" \
+export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
+export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib"
+export DYLD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib"
+export GOWORK=off
+libmo_deps=$(go list -mod=readonly -f '{{join .CgoLDFLAGS " "}}' ./cgo)
+go test -mod=readonly -ldflags="-extldflags '-L$(pwd)/cgo -lmo $libmo_deps -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib'" \
   -v -count=1 -timeout 120s ./pkg/target/...
 ```
 
 Linux:
 
 ```bash
-CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include" \
-CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib" \
-LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib" GOWORK=off \
-go test -mod=readonly -ldflags="-extldflags '-fopenmp -L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib'" \
+export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
+export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib"
+export LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib"
+export GOWORK=off
+libmo_deps=$(go list -mod=readonly -f '{{join .CgoLDFLAGS " "}}' ./cgo)
+go test -mod=readonly -ldflags="-extldflags '-fopenmp -L$(pwd)/cgo -lmo $libmo_deps -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib'" \
   -v -count=1 -timeout 120s ./pkg/target/...
 ```
 
@@ -129,49 +133,59 @@ go test -mod=readonly -ldflags="-extldflags '-fopenmp -L$(pwd)/cgo -lmo -L$(pwd)
 | `fatal error: 'xxhash.h' file not found` | `CGO_CFLAGS` | Compiler cannot find thirdparties headers |
 | `Undefined symbols: _usearch_hardware_acceleration_*` (macOS) or `undefined symbol:` (Linux) | `CGO_LDFLAGS` | usearch module's `#cgo LDFLAGS` found old `libusearch_c` |
 | `ld: library 'mo' not found` (macOS) or `cannot find -lmo` (Linux) | `-ldflags="-extldflags '-L... -lmo'"` | Linker cannot find `libmo` |
+| Native symbols are unresolved from `libmo` | declared dependencies absent or placed before `-lmo` in `-extldflags` | A forced `libmo` link did not close its ordered dependency graph |
 | Loader searches `go-build.../lib` | Test used packaged-binary relative rpath | Temporary executable resolves relative to its own directory |
 | `dyld: Library not loaded` / `error while loading shared libraries` | Runtime path/rpath | Runtime cannot find a dynamic library; inspect every dependency, not only `libmo` |
 | Inconsistent vendoring | Module mode/vendor metadata | Do not regenerate vendor or silently switch modes as a side effect of testing; use `GOWORK=off -mod=readonly` and report the mismatch |
 
 ## 3. Layered Testing Strategy
 
+Classify the current dependency graph instead of assuming a package stays pure
+Go or CGo-transitive forever:
+
+```bash
+# Empty output means the complete dependency graph is pure Go.
+GOWORK=off go list -mod=readonly -deps -test \
+  -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./pkg/target
+
+# Empty output here, but non-empty dependency output above, means the target is
+# CGo-transitive rather than CGo-direct.
+GOWORK=off go list -mod=readonly \
+  -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./pkg/target
+```
+
 | Layer | Example Packages | CGo Behavior | Variables Needed |
 |-------|------------------|--------------|------------------|
-| **Pure Go** | `pkg/vm/process`, `pkg/container/pSpool`, `pkg/vm/pipeline` | Zero CGo in transitive closure | None |
-| **CGo-transitive** | `pkg/sql/colexec/connector`, `dispatch`, `merge` | Test binary links usearch Go module | `CGO_CFLAGS` + `CGO_LDFLAGS` + runtime loader path |
-| **CGo-direct** | `pkg/sql/compile` | Test binary directly links `libmo` + `libusearch_c` | All four: CGO_CFLAGS + CGO_LDFLAGS + ldflags + DYLD/LD_LIBRARY_PATH |
+| **Pure Go** | `pkg/common/moerr`, `pkg/pb/timestamp` | Zero CGo in transitive closure | None |
+| **CGo-transitive** | `optools/testdata/mo_cgo_transitive`, `pkg/txn/client` | Target has no CGo files, but its test/dependencies force an external link | CGo compile/search flags plus any forcibly linked library closure |
+| **CGo-direct** | `cgo`, packages reported with their own `CgoFiles` | Target itself compiles CGo and declares native libraries | All compile, ordered link, and runtime-load layers |
 | **Integration** | `pkg/frontend`, cmd packages | Full MO binary, needs external services | All + services |
 
 Layer 1, pure Go:
 
 ```bash
-go test -v -count=1 -timeout 120s ./pkg/vm/process/... ./pkg/container/pSpool/...
+go test -v -count=1 -timeout 120s ./pkg/common/moerr/... ./pkg/pb/timestamp/...
 ```
 
-Layer 2, CGo-transitive on macOS:
+Layer 2, CGo-transitive:
 
 ```bash
-export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
-export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib"
-export DYLD_LIBRARY_PATH="$(pwd)/thirdparties/install/lib"
-GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s ./pkg/sql/colexec/connector/... ./pkg/sql/colexec/dispatch/...
+.agents/skills/mo-dev/scripts/mo-cgo-test \
+  -v -count=1 -timeout 120s ./optools/testdata/mo_cgo_transitive
 ```
 
-Layer 3, CGo-direct on macOS:
+Layer 3, CGo-direct:
 
 ```bash
-export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
-export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib"
-export DYLD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib"
-GOWORK=off go test -mod=readonly -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib'" \
-  -v -count=1 -timeout 120s ./pkg/sql/compile/...
+.agents/skills/mo-dev/scripts/mo-cgo-test \
+  -v -count=1 -timeout 120s ./cgo
 ```
 
 | Variable | What It Does | When Needed |
 |----------|--------------|-------------|
 | `CGO_CFLAGS` | Tells C compiler where to find headers | Package in transitive closure has CGo C code |
-| `CGO_LDFLAGS` | Overrides usearch module's own `#cgo LDFLAGS` path | usearch Go module is linked |
-| `-ldflags "-extldflags ..."` | Tells external linker where to find `libmo` + sets rpath | Package directly links `libmo` |
+| `CGO_LDFLAGS` | Supplies deterministic native-library search roots to CGo packages | A dependency resolves native libraries outside system roots |
+| `-ldflags "-extldflags ..."` | Tells external linker where to find `libmo`, closes its ordered CPU dependencies, and sets rpath | Package directly or forcibly links `libmo` |
 | `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` | Tells OS runtime loader where to find `.dylib` / `.so` | Test binary loads `libmo` at runtime |
 
 Bottom-up testing matters: pure Go tests finish in seconds with zero env setup. If they fail, the problem is in code, not CGo.
