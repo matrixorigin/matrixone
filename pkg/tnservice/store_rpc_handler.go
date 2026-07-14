@@ -73,8 +73,13 @@ func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *t
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
-
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.Read(ctx, request, response)
 }
@@ -84,7 +89,13 @@ func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.Write(ctx, request, response)
 }
@@ -94,8 +105,13 @@ func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
-
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.Debug(ctx, request, response)
 }
@@ -109,8 +125,13 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
-
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.Commit(ctx, request, response)
 }
@@ -120,7 +141,13 @@ func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, res
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.Rollback(ctx, request, response)
 }
@@ -130,7 +157,13 @@ func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, resp
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.Prepare(ctx, request, response)
 }
@@ -140,7 +173,13 @@ func (s *store) handleCommitTNShard(ctx context.Context, request *txn.TxnRequest
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.CommitTNShard(ctx, request, response)
 }
@@ -150,7 +189,13 @@ func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnReque
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.RollbackTNShard(ctx, request, response)
 }
@@ -160,7 +205,13 @@ func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, re
 	if r == nil {
 		return nil
 	}
-	r.waitStarted()
+	started, err := s.waitTNReplicaStarted(ctx, r, response)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	prepareResponse(request, response)
 	return r.service.GetStatus(ctx, request, response)
 }
@@ -174,6 +225,24 @@ func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, respo
 		return nil
 	}
 	return r
+}
+
+func (s *store) waitTNReplicaStarted(
+	ctx context.Context,
+	r *replica,
+	response *txn.TxnResponse,
+) (bool, error) {
+	if err := r.waitStarted(ctx); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		response.TxnError = txn.WrapError(
+			moerr.NewTNShardNotFound(ctx, s.cfg.UUID, r.shard.ShardID),
+			0,
+		)
+		return false, nil
+	}
+	return true, nil
 }
 
 func prepareResponse(request *txn.TxnRequest, response *txn.TxnResponse) {

@@ -43,7 +43,7 @@ func TestWaitStarted(t *testing.T) {
 	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
 	c := make(chan struct{})
 	go func() {
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 		c <- struct{}{}
 	}()
 
