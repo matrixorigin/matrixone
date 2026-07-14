@@ -132,15 +132,9 @@ func (r *DataRetrieverImpl) Next() *ISCPData {
 	var data *ISCPData
 	select {
 	case <-r.ctx.Done():
-		r.mu.Lock()
-		err := r.err
-		r.mu.Unlock()
-		if err == nil {
-			err = r.ctx.Err()
-		}
 		return &ISCPData{
 			noMoreData: true,
-			err:        err,
+			err:        r.terminalError(),
 		}
 	case data = <-r.insertDataCh:
 	}
@@ -211,6 +205,15 @@ func (r *DataRetrieverImpl) hasError() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.err != nil
+}
+
+func (r *DataRetrieverImpl) terminalError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	return r.ctx.Err()
 }
 
 // after error occurs, the data retriever won't consume any more data
