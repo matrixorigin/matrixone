@@ -103,6 +103,39 @@ func TestSaveToFileNoFDLeak(t *testing.T) {
 		"SaveToFile leaked file descriptors: before=%d after=%d (expected ~0, pre-fix ~%d)", before, after, n)
 }
 
+// TestSaveToFileCleanupOnError covers #25630's failure path: when a step after the temp file is
+// created fails (CheckSum here, forced via the injectable saveToFileCheckSum hook), SaveToFile
+// must remove the temp file (no orphan) via the deferred cleanup and leave idx.Path unset.
+func TestSaveToFileCleanupOnError(t *testing.T) {
+	orig := saveToFileCheckSum
+	defer func() { saveToFileCheckSum = orig }()
+	saveToFileCheckSum = func(string) (string, error) {
+		return "", moerr.NewInternalErrorNoCtx("mock checksum failure")
+	}
+
+	before := len(hnswTempFiles())
+
+	idxcfg := usearch.DefaultConfig(3)
+	idxcfg.Metric = usearch.L2sq
+	uidx, err := usearch.NewIndex(idxcfg)
+	require.NoError(t, err)
+	require.NoError(t, uidx.Reserve(1))
+	require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+
+	model := &HnswModel[float32]{Index: uidx}
+	model.Dirty.Store(true)
+
+	err = model.SaveToFile()
+	require.Error(t, err, "SaveToFile must propagate the checksum failure")
+	require.Empty(t, model.Path, "Path must stay unset on failure")
+	require.Equal(t, before, len(hnswTempFiles()), "SaveToFile orphaned a temp file on the error path")
+
+	// the save failed before Destroy, so the index is still live — clean it up.
+	if model.Index != nil {
+		require.NoError(t, model.Index.Destroy())
+	}
+}
+
 // give blob
 func mock_runSql_streaming_error(
 	ctx context.Context,
