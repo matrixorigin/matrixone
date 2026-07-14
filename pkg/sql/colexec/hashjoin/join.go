@@ -291,6 +291,8 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe(),
 				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
 				HashOnPK:                hashJoin.HashOnPK,
+				NeedAllocateSels:        !hashJoin.HashOnPK,
+				NeedBatches:             hashJoin.NeedBuildBatches(),
 			})
 			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
 			if err := engine.ScatterProbeTable(proc,

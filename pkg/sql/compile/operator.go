@@ -1878,19 +1878,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 
-		// to find if hashmap need to keep build batches for probe
-		var needMergedBatch bool
-		if arg.NonEqCond != nil {
-			needMergedBatch = true
-		} else {
-			for _, rp := range arg.ResultCols {
-				if rp.Rel == 1 {
-					needMergedBatch = true
-					break
-				}
-			}
-		}
-		ret.NeedBatches = needMergedBatch
+		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK
@@ -1973,19 +1961,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
-		// to find if hashmap need to keep build batches for probe
-		var needMergedBatch bool
-		if arg.NonEqCond != nil {
-			needMergedBatch = true
-		} else {
-			for _, rp := range arg.ResultCols {
-				if rp.Rel == 1 {
-					needMergedBatch = true
-					break
-				}
-			}
-		}
-		ret.NeedBatches = needMergedBatch
+		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK

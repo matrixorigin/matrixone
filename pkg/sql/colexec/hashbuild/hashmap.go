@@ -87,7 +87,9 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	return message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	sels := hb.Sels
+	hb.Sels = message.GroupSels{}
+	return message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {

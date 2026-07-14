@@ -212,6 +212,8 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: true,
 				NeedsBuildForEmptyProbe: false,
+				NeedAllocateSels:        false,
+				NeedBatches:             false,
 				IsDedup:                 false,
 				OnDuplicateAction:       rightDedupJoin.OnDuplicateAction,
 				DedupColName:            rightDedupJoin.DedupColName,

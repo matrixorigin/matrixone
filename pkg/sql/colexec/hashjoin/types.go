@@ -136,6 +136,18 @@ func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
 	return &hashJoin.OperatorBase
 }
 
+func (hashJoin *HashJoin) NeedBuildBatches() bool {
+	if hashJoin.NonEqCond != nil {
+		return true
+	}
+	for _, rp := range hashJoin.ResultCols {
+		if rp.Rel == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func init() {
 	reuse.CreatePool[HashJoin](
 		func() *HashJoin {

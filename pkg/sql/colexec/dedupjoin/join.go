@@ -259,6 +259,8 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				SpillThreshold:            ctr.spillThreshold,
 				NeedsProbeForEmptyBuild:   false,
 				NeedsBuildForEmptyProbe:   true,
+				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
+				NeedBatches:               true,
 				IsDedup:                   true,
 				OnDuplicateAction:         dedupJoin.OnDuplicateAction,
 				DedupBuildKeepLast:        dedupJoin.DedupBuildKeepLast,

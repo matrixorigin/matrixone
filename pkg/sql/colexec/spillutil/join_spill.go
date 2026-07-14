@@ -439,6 +439,8 @@ type SpillEngineConfig struct {
 	NeedsProbeForEmptyBuild bool         // keep probe file when build is empty (left outer/anti)
 	NeedsBuildForEmptyProbe bool         // keep build sub-buckets when probe is empty (right/full outer)
 	HashOnPK                bool         // hashmap build strategy
+	NeedAllocateSels        bool         // build per-group row selections
+	NeedBatches             bool         // retain build batches in the published JoinMap
 	// Dedup metadata — passed through to HashmapBuilder during rebuild so that
 	// duplicate detection, IGNORE/UPDATE/REPLACE semantics are preserved.
 	IsDedup                   bool
@@ -679,11 +681,13 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		}
 	}
 
-	hashOnNonPK := !e.cfg.HashOnPK
-	if err := builder.BuildHashmap(e.cfg.HashOnPK, hashOnNonPK, false, proc); err != nil {
+	if err := builder.BuildHashmap(e.cfg.HashOnPK, e.cfg.NeedAllocateSels, false, proc); err != nil {
 		builder.FreeHashMapAndBatches(proc)
 		builder.Free(proc)
 		return nil, BucketSkip, err
+	}
+	if !e.cfg.NeedBatches {
+		builder.Batches.Clean(proc.Mp())
 	}
 
 	jm := builder.GetJoinMap(proc.Mp())

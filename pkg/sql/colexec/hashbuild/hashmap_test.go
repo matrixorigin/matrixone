@@ -54,6 +54,36 @@ func TestBuildHashMap(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestGetJoinMapTransfersGroupSels(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+	input := makeIntKeyValueBatch(proc, []int32{1, 1}, []int32{10, 20})
+	require.NoError(t, hb.Batches.CopyIntoBatches(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, true, false, proc))
+	require.Greater(t, hb.Sels.Size(), int64(0))
+
+	jm := hb.GetJoinMap(proc.Mp())
+	require.NotNil(t, jm)
+	jm.IncRef(1)
+	require.Zero(t, hb.Sels.Size(), "builder must relinquish GroupSels ownership")
+	require.Equal(t, []int32{0, 1}, jm.GetSels(0))
+
+	// A subsequent empty build cleanup must not release the previous JoinMap's sels.
+	hb.Reset(proc, false)
+	hb.Reset(proc, false)
+	require.Equal(t, []int32{0, 1}, jm.GetSels(0))
+
+	hb.Free(proc)
+	jm.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestHashMapAllocAndFree(t *testing.T) {
 	mp := mpool.MustNewZero()
 

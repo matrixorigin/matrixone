@@ -1111,6 +1111,56 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	engine.Cleanup(proc)
 }
 
+func TestRebuildHashmapRespectsNeedFlags(t *testing.T) {
+	tests := []struct {
+		name             string
+		needAllocateSels bool
+		needBatches      bool
+	}{
+		{name: "sels only", needAllocateSels: true},
+		{name: "batches only", needBatches: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+
+			bat := makeInt32Batch(proc, []int32{1, 1})
+			fd := writeBuildFile(proc, "test_rebuild_flags", bat)
+			bat.Clean(proc.Mp())
+
+			engine := NewSpillEngine(SpillEngineConfig{
+				BuildKeyExprs:    makeTestKeyExpr(),
+				NeedAllocateSels: tt.needAllocateSels,
+				NeedBatches:      tt.needBatches,
+			})
+			require.NoError(t, engine.InitFromSpilledMap([]*os.File{fd}))
+
+			jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+			require.NoError(t, err)
+			require.Equal(t, BucketReady, res)
+			require.NotNil(t, jm)
+
+			if tt.needAllocateSels {
+				require.Equal(t, []int32{0, 1}, jm.GetSels(0))
+			} else {
+				require.Nil(t, jm.GetSels(0))
+			}
+			if tt.needBatches {
+				require.Len(t, jm.GetBatches(), 1)
+				require.Equal(t, 2, jm.GetBatches()[0].RowCount())
+			} else {
+				require.Empty(t, jm.GetBatches())
+			}
+
+			jm.Free()
+			engine.Cleanup(proc)
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestRebuildHashmapEmptyBuild(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
