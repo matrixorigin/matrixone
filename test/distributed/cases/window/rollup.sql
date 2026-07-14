@@ -637,5 +637,25 @@ from grouping_order
 group by region, product, amount with rollup
 order by 6;
 
+-- DISTINCT grouping-set path: a grouping() ORDER BY key matching a visible
+-- select item must resolve to that item's star-expanded position, and the
+-- row set must reflect branch-level DISTINCT.
+select distinct *, grouping(region) as gr
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region), 1, 2, 3;
+
+select distinct region, grouping(region) as gr
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region;
+
+-- alias shadowing: the ORDER BY `product` is the alias for `region`, so the
+-- expression differs from the select-list one (source column) and is rejected.
+select distinct region as product, grouping(region) as gr
+from grouping_order
+group by region, product with rollup
+order by grouping(region) + product;
+
 drop table grouping_order;
 drop database rollup_test;
