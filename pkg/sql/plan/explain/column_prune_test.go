@@ -786,6 +786,26 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Equal(t, "starcount", agg.AggList[0].GetF().Func.ObjName)
 	})
 
+	t.Run("scalar aggregate handles interval carrier candidate", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s",
+		)
+		require.NoError(t, err)
+
+		var agg *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_AGG {
+				agg = node
+				break
+			}
+		}
+		require.NotNil(t, agg)
+		require.Len(t, agg.AggList, 1)
+		require.Equal(t, "starcount", agg.AggList[0].GetF().Func.ObjName)
+	})
+
 	t.Run("union all retains side-effecting positions", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),

@@ -367,19 +367,47 @@ type rowCarrierCost struct {
 	width         int64
 }
 
+func getRowCarrierTypeCost(typ plan.Type) rowCarrierCost {
+	if typ.Id < 0 || typ.Id > int32(^uint8(0)) {
+		return rowCarrierCost{varlen: true, width: int64(^uint32(0) >> 1)}
+	}
+	switch types.T(typ.Id) {
+	case types.T_bool, types.T_int8, types.T_uint8:
+		return rowCarrierCost{width: 1}
+	case types.T_int16, types.T_uint16, types.T_year, types.T_enum:
+		return rowCarrierCost{width: 2}
+	case types.T_int32, types.T_uint32, types.T_date, types.T_float32:
+		return rowCarrierCost{width: 4}
+	case types.T_bit, types.T_int64, types.T_uint64, types.T_datetime, types.T_time,
+		types.T_float64, types.T_timestamp, types.T_decimal64:
+		return rowCarrierCost{width: 8}
+	case types.T_TS:
+		return rowCarrierCost{width: types.TxnTsSize}
+	case types.T_uuid, types.T_decimal128:
+		return rowCarrierCost{width: 16}
+	case types.T_Blockid:
+		return rowCarrierCost{width: types.BlockidSize}
+	case types.T_Rowid:
+		return rowCarrierCost{width: types.RowidSize}
+	case types.T_decimal256:
+		return rowCarrierCost{width: 32}
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_array_float32, types.T_array_float64,
+		types.T_datalink, types.T_geometry, types.T_geometry32:
+		width := int64(typ.Width)
+		if width <= 0 {
+			width = int64(^uint32(0) >> 1)
+		}
+		return rowCarrierCost{varlen: true, width: width}
+	default:
+		return rowCarrierCost{varlen: true, width: int64(^uint32(0) >> 1)}
+	}
+}
+
 func getRowCarrierCost(expr *plan.Expr, aggregate bool) rowCarrierCost {
 	cost := rowCarrierCost{width: 1}
 	if expr != nil {
-		fixedLength := types.T(expr.Typ.Id).FixedLength()
-		if fixedLength > 0 {
-			cost.width = int64(fixedLength)
-		} else if fixedLength < 0 {
-			cost.varlen = true
-			cost.width = int64(expr.Typ.Width)
-			if cost.width <= 0 {
-				cost.width = int64(^uint32(0) >> 1)
-			}
-		}
+		cost = getRowCarrierTypeCost(expr.Typ)
 	}
 	if !aggregate || expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
 		return cost

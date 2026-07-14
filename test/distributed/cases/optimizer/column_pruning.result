@@ -77,6 +77,9 @@ select 1 from (select group_concat(payload), count(*) from carrier_l) s;
 select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
 1
 1
+select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+1
+1
 create table tw(ts timestamp, v int);
 insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
 select _wend, max(v) from tw interval(ts, 1, day);

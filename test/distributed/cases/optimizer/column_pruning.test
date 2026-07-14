@@ -54,6 +54,7 @@ select 1 from (
 -- A discarded expensive aggregate must not become the scalar row carrier.
 select 1 from (select group_concat(payload), count(*) from carrier_l) s;
 select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
+select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
 
 -- _wstart is deliberately unprojected. Column pruning must continue and keep
 -- _wend instead of leaving the time-window remapping incomplete.

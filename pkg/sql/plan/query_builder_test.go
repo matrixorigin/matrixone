@@ -80,6 +80,23 @@ func TestChooseRowCarrier(t *testing.T) {
 		require.Equal(t, 1, chooseTableRowCarrier(cols))
 	})
 
+	t.Run("internal and unknown types are conservative", func(t *testing.T) {
+		for _, typ := range []int32{
+			-1,
+			int32(types.T_any),
+			int32(types.T_interval),
+			int32(types.T_tuple),
+			256,
+			999,
+		} {
+			exprs := []*plan.Expr{
+				{Typ: plan.Type{Id: typ}},
+				makeExpr(types.T_int8, 0),
+			}
+			require.Equal(t, 1, chooseRowCarrier(exprs, false), "type %d", typ)
+		}
+	})
+
 	t.Run("cheap aggregate before expensive varlen aggregate", func(t *testing.T) {
 		exprs := []*plan.Expr{
 			makeAgg("group_concat", types.T_text, 0),
