@@ -115,6 +115,10 @@ func (w *trackingWorkspace) IncrStatementID(context.Context, bool) error {
 	return nil
 }
 
+func (w *trackingWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	return nil
+}
+
 func (w *trackingWorkspace) RollbackLastStatement(context.Context) error {
 	return nil
 }
