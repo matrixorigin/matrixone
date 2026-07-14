@@ -434,7 +434,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if err != nil {
 		return
 	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
+	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointRangeRecovery(
 		ctx,
 		h.tbl.tableId,
 		h.tbl.proc.Load().GetService(),

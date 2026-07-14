@@ -315,6 +315,9 @@ func (n *AppendMVCCHandle) PrepareCompact() bool {
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
+	if n.appends == nil || n.appends.IsEmpty() {
+		return types.TS{}
+	}
 	return n.appends.GetUpdateNodeLocked().Prepare
 }
 func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
