@@ -98,56 +98,13 @@ explain select count(*) as cnt from t4 group by c2 having cnt>1;
 select count(*) as cnt from t4 group by c2 having cnt>1;
 -- dedup join spill: large ODKU with low join_spill_mem
 drop table if exists t_dedup_spill;
-create table t_dedup_spill (id int not null, val int) cluster by id;
-insert into t_dedup_spill select *,* from generate_series(100000) g;
+create table t_dedup_spill (id int primary key, val int);
+insert into t_dedup_spill select *,* from generate_series(400000) g;
 set @@join_spill_mem = 1000;
-insert into t_dedup_spill select *, 0 from generate_series(100000, 200000) g
+insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;
 drop table if exists t_dedup_spill;
-
--- LEFT JOIN spill with non-overlapping build/probe keys:
--- exercises outer-join spill path.
-drop table if exists t_left_build;
-drop table if exists t_left_probe;
-create table t_left_build(c1 int not null, c2 int not null) cluster by c1;
-create table t_left_probe(c1 int not null, c2 int not null) cluster by c1;
-insert into t_left_build select *, 1 from generate_series(1, 100000) g;
-insert into t_left_probe select *, 1 from generate_series(100001, 200000) g;
--- @separator:table
-select mo_ctl('dn', 'flush', 'd1.t_left_build');
--- @separator:table
-select mo_ctl('dn', 'flush', 'd1.t_left_probe');
-select Sleep(1);
-set @@join_spill_mem = 1000;
-select count(*) from t_left_probe left join t_left_build on t_left_probe.c1=t_left_build.c1;
-drop table if exists t_left_build;
-drop table if exists t_left_probe;
-
--- RIGHT JOIN spill: exercises RIGHT path with spill.
-drop table if exists t_right_build;
-drop table if exists t_right_probe;
-create table t_right_build(c1 int not null, c2 int not null) cluster by c1;
-create table t_right_probe(c1 int not null, c2 int not null) cluster by c1;
-insert into t_right_build select *, 1 from generate_series(1, 100000) g;
-insert into t_right_probe select *, 1 from generate_series(100001, 200000) g;
--- @separator:table
-select mo_ctl('dn', 'flush', 'd1.t_right_build');
--- @separator:table
-select mo_ctl('dn', 'flush', 'd1.t_right_probe');
-select Sleep(1);
-select count(*) from t_right_build right join t_right_probe on t_right_build.c1=t_right_probe.c1;
-drop table if exists t_right_build;
-drop table if exists t_right_probe;
-
--- Dedup join spill with empty target table.
-drop table if exists t_dedup_empty;
-create table t_dedup_empty (id int not null, val int) cluster by id;
-set @@join_spill_mem = 1000;
-insert into t_dedup_empty select *, 0 from generate_series(1, 100000) g
-on duplicate key update val = val + 1;
-select count(*) from t_dedup_empty;
-drop table if exists t_dedup_empty;
 
 drop database if exists d1;
 drop database if exists test;

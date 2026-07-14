@@ -32,3 +32,15 @@ func ResolveSpillThreshold(threshold int64) int64 {
 	}
 	return mem
 }
+
+// ShouldSpill preserves the existing threshold convention: small values are
+// row counts, while larger values are byte limits.
+func ShouldSpill(memUsed, rowCount, threshold int64) bool {
+	if threshold <= 0 {
+		return false
+	}
+	if threshold <= 100000 {
+		return rowCount >= threshold
+	}
+	return memUsed > threshold
+}

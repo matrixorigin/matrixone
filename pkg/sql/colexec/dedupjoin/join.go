@@ -257,7 +257,6 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				SpillThreshold:            ctr.spillThreshold,
-				NeedsProbeForEmptyBuild:   false,
 				NeedsBuildForEmptyProbe:   true,
 				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
 				NeedBatches:               true,

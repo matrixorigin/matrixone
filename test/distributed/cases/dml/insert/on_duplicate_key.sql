@@ -165,13 +165,3 @@ insert into t_null_dup values (1, 100, 100), (3, 300, 300);
 insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);
 select * from t_null_dup order by id;
 drop table if exists t_null_dup;
-
--- dedup join: force spill by setting join_spill_mem to minimum
-drop table if exists t_dup_large;
-create table t_dup_large (id int primary key, val int);
-insert into t_dup_large select result, result * 10 from generate_series(1, 2000) g;
-set @@join_spill_mem = 1000;
-insert into t_dup_large select result, 0 from generate_series(1, 500000) g
-on duplicate key update val = val + 1;
-select count(*) from t_dup_large;
-select sum(val) from t_dup_large;

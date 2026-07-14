@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -45,32 +44,26 @@ const (
 
 // SpillBucket holds file descriptors for one spilled bucket.
 type SpillBucket struct {
-	BuildFd  *os.File
-	ProbeFd  *os.File
-	BaseName string
-	Depth    int
+	BuildFd *os.File
+	ProbeFd *os.File
+	Depth   int
 }
 
 // BucketReader reads serialized batch records from an fd.
 type BucketReader struct {
-	fd          *os.File
-	reader      *bufio.Reader
-	buf         []byte
-	limitReader io.LimitedReader
-	Empty       bool // true when no file exists (lazy-created file was never written)
+	fd     *os.File
+	reader *bufio.Reader
+	buf    [16]byte
 }
 
 func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
-	if r.Empty {
+	if r.fd == nil {
 		return nil, io.EOF
 	}
 	if r.reader == nil {
 		r.reader = bufio.NewReaderSize(r.fd, 4*1024*1024)
 	}
-	if r.buf == nil {
-		r.buf = make([]byte, 16)
-	}
-	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
+	if _, err := io.ReadFull(r.reader, r.buf[:]); err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -81,15 +74,14 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 
 	reuseBat.CleanOnlyData()
 
-	r.limitReader.R = r.reader
-	r.limitReader.N = batchSize
-	if err := reuseBat.UnmarshalFromReader(&r.limitReader, proc.Mp()); err != nil {
+	limitReader := io.LimitedReader{R: r.reader, N: batchSize}
+	if err := reuseBat.UnmarshalFromReader(&limitReader, proc.Mp()); err != nil {
 		return nil, err
 	}
 
 	// Verify the batch unmarshal consumed exactly batchSize bytes.
-	if r.limitReader.N > 0 {
-		return nil, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", r.limitReader.N)
+	if limitReader.N > 0 {
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", limitReader.N)
 	}
 
 	// Read magic (8 bytes)
@@ -109,15 +101,12 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 
 func (r *BucketReader) ResetForFd(fd *os.File) {
 	r.Close()
-	r.Empty = false
 	if fd == nil {
-		r.Empty = true
 		return
 	}
 	r.fd = fd
 	if r.reader == nil {
 		r.reader = bufio.NewReaderSize(fd, 4*1024*1024)
-		r.buf = make([]byte, 16)
 	} else {
 		r.reader.Reset(fd)
 	}
@@ -173,7 +162,7 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 		return nil
 	}
 	if !w.Created() {
-		fs, err := GetSpillFS(proc)
+		fs, err := proc.GetSpillFileService()
 		if err != nil {
 			return err
 		}
@@ -217,9 +206,9 @@ func hashCombine(h, val uint64) uint64 {
 // ComputeXXHash evaluates key vectors and computes XXHash64 values using
 // column-at-a-time processing for better cache locality. seed initialises every
 // hash slot so different spill depths produce different bucket distributions.
-func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) error {
+func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	if len(keyVecs) == 0 || len(hashValues) == 0 {
-		return nil
+		return
 	}
 
 	rowCount := len(hashValues)
@@ -254,25 +243,6 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) e
 			}
 		}
 	}
-
-	return nil
-}
-
-// ScatterBatch partitions rows by hash key into bucket writers using a two-pass
-// bulk approach: compute hashes once, collect row indices per bucket, then bulk-
-// copy via UnionInt32 for better performance.
-// If analyzer is non-nil, spill bytes/rows are tracked on flush.
-func ScatterBatch(
-	proc *process.Process,
-	bat *batch.Batch,
-	keyVecs []*vector.Vector,
-	writers []BucketWriter,
-	buffers []*batch.Batch,
-	seed uint64,
-	bucketBuf *bytes.Buffer,
-	analyzer process.Analyzer,
-) error {
-	return scatterImpl(proc, bat, keyVecs, writers, buffers, seed, bucketBuf, analyzer, nil, nil)
 }
 
 // scatterImpl is the internal implementation that accepts reusable buffers.
@@ -302,9 +272,7 @@ func scatterImpl(
 			*reuseHashValues = hashValues
 		}
 	}
-	if err := ComputeXXHash(keyVecs, hashValues, seed); err != nil {
-		return err
-	}
+	ComputeXXHash(keyVecs, hashValues, seed)
 
 	// Collect row indices per bucket.
 	var bucketRowIds [][]int32
@@ -378,24 +346,6 @@ func (e *SpillEngine) scatterBatch(
 ) error {
 	return scatterImpl(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, analyzer,
 		&e.scatterHashValues, &e.scatterBucketRowIds)
-}
-
-// ShouldSpill returns true when memory or row count exceeds the spill threshold.
-// Matches hashbuild.shouldSpillBatches: threshold ≤ 100000 is row-count mode,
-// otherwise byte mode.
-func ShouldSpill(memUsed int64, rowCnt int64, threshold int64) bool {
-	if threshold <= 0 {
-		return false
-	}
-	if threshold <= 100000 {
-		return rowCnt >= threshold
-	}
-	return memUsed > threshold
-}
-
-// GetSpillFS returns a spill file service for the given process.
-func GetSpillFS(proc *process.Process) (fileservice.MutableFileService, error) {
-	return proc.GetSpillFileService()
 }
 
 // ReusableBufferPool maintains a persistent pool of spill buffers, preserving
@@ -474,7 +424,6 @@ type SpillEngine struct {
 	probeReader    BucketReader
 	buildReadBatch *batch.Batch
 	probeReadBatch *batch.Batch
-	probingActive  bool
 
 	// Reusable scatter state
 	buildPool ReusableBufferPool
@@ -502,7 +451,7 @@ func NewSpillEngine(cfg SpillEngineConfig) *SpillEngine {
 
 // InitFromSpilledMap creates SpillBucket entries from build FDs.
 // Empty (nil) FDs become placeholder buckets for outer-join semantics.
-func (e *SpillEngine) InitFromSpilledMap(buildFds []*os.File) error {
+func (e *SpillEngine) InitFromSpilledMap(buildFds []*os.File) {
 	e.buckets = make([]SpillBucket, 0, len(buildFds))
 	for _, fd := range buildFds {
 		e.buckets = append(e.buckets, SpillBucket{
@@ -510,7 +459,6 @@ func (e *SpillEngine) InitFromSpilledMap(buildFds []*os.File) error {
 			Depth:   1,
 		})
 	}
-	return nil
 }
 
 // ScatterProbeTable consumes all probe batches from children, hash-partitions
@@ -582,7 +530,7 @@ func (e *SpillEngine) ScatterProbeTable(
 // NextProbeBatch returns the next probe batch from the current bucket's probe file.
 // Returns nil when EOF is reached (caller should then call FinishBucket).
 func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error) {
-	if !e.probingActive {
+	if e.probeReader.fd == nil {
 		return nil, nil
 	}
 	if e.probeReadBatch == nil {
@@ -624,7 +572,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		e.buckets = e.buckets[1:]
 		if e.cfg.NeedsProbeForEmptyBuild && bucket.ProbeFd != nil {
 			e.probeReader.ResetForFd(bucket.ProbeFd)
-			e.probingActive = true
 			return nil, BucketEmptyBuild, nil
 		}
 		if bucket.ProbeFd != nil {
@@ -668,8 +615,8 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		}
 		builder.InputBatchRowCount += bat.RowCount()
 
-		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
-			ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
+		if bucket.Depth < SpillMaxPass &&
+			colexec.ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
@@ -696,7 +643,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		e.buckets = e.buckets[1:]
 		if e.cfg.NeedsProbeForEmptyBuild && bucket.ProbeFd != nil {
 			e.probeReader.ResetForFd(bucket.ProbeFd)
-			e.probingActive = true
 			return nil, BucketEmptyBuild, nil
 		}
 		if bucket.ProbeFd != nil {
@@ -714,7 +660,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	e.buckets = e.buckets[1:]
 	if bucket.ProbeFd != nil {
 		e.probeReader.ResetForFd(bucket.ProbeFd)
-		e.probingActive = true
 	}
 	return jm, BucketReady, nil
 }
@@ -856,10 +801,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			(hasProbe && e.cfg.NeedsProbeForEmptyBuild)
 		if enqueue {
 			subBuckets = append(subBuckets, SpillBucket{
-				BuildFd:  buildWriters[i].HandOffFd(),
-				ProbeFd:  probeWriters[i].HandOffFd(),
-				BaseName: buildWriters[i].Name,
-				Depth:    bucket.Depth + 1,
+				BuildFd: buildWriters[i].HandOffFd(),
+				ProbeFd: probeWriters[i].HandOffFd(),
+				Depth:   bucket.Depth + 1,
 			})
 		}
 	}
@@ -869,11 +813,10 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 // FinishBucket closes the current bucket's probe reader.
 func (e *SpillEngine) FinishBucket() {
 	e.probeReader.Close()
-	e.probingActive = false
 }
 
 // IsProbing reports whether a probe file is currently open.
-func (e *SpillEngine) IsProbing() bool { return e.probingActive }
+func (e *SpillEngine) IsProbing() bool { return e.probeReader.fd != nil }
 
 // HasMoreBuckets reports whether there are remaining buckets to process.
 func (e *SpillEngine) HasMoreBuckets() bool { return len(e.buckets) > 0 }
@@ -887,9 +830,6 @@ func (e *SpillEngine) AdvanceToNextBucket(
 	analyzer process.Analyzer,
 	onRebuild func(jm *message.JoinMap, res BucketResult),
 ) (bool, error) {
-	if !e.HasMoreBuckets() {
-		return false, nil
-	}
 	jm, res, err := e.RebuildHashmap(proc, analyzer)
 	if err != nil {
 		return false, err
@@ -924,25 +864,10 @@ func (e *SpillEngine) freeKeyExecs() {
 	e.keyExecs = nil
 }
 
-// TestSetBucketDepth sets the depth of bucket 0 (test helper).
-func (e *SpillEngine) TestSetBucketDepth(idx int, depth int) {
-	if idx < len(e.buckets) {
-		e.buckets[idx].Depth = depth
-	}
-}
-
-// TestSetBucketProbeFd sets the probe fd of bucket 0 (test helper).
-func (e *SpillEngine) TestSetBucketProbeFd(idx int, fd *os.File) {
-	if idx < len(e.buckets) {
-		e.buckets[idx].ProbeFd = fd
-	}
-}
-
 // Cleanup releases all engine resources.
 func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.probeReader.Close()
 	e.buildReader.Close()
-	e.probingActive = false
 	for i := range e.buckets {
 		if e.buckets[i].BuildFd != nil {
 			e.buckets[i].BuildFd.Close()

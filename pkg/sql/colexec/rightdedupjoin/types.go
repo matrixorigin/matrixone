@@ -130,7 +130,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.groupCount = 0
 	ctr.buildGroupCount = 0
 
-	ctr.cleanBitmap(proc)
+	ctr.cleanBitmap()
 	ctr.cleanHashMap()
 	ctr.resetResultBatch()
 	ctr.resetExprExecutor()
@@ -144,7 +144,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 
 func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightDedupJoin.ctr
-	ctr.cleanBitmap(proc)
+	ctr.cleanBitmap()
 	ctr.cleanHashMap()
 	ctr.cleanResultBatch(proc)
 	if ctr.spillEngine != nil {
@@ -180,7 +180,7 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanBitmap(proc *process.Process) {
+func (ctr *container) cleanBitmap() {
 	ctr.matched = nil
 }
 

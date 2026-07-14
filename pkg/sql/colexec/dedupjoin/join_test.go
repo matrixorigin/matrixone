@@ -17,6 +17,7 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -71,6 +72,65 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	res, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, res.Status)
+	require.Nil(t, arg.ctr.buf)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, value int32) *os.File {
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fd, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+	require.NoError(t, err)
+	w := spillutil.BucketWriter{Name: name, Fd: fd}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	var buf bytes.Buffer
+	require.NoError(t, spillutil.FlushBucketBatch(proc, bat, &w, &buf, nil))
+	bat.Clean(proc.Mp())
+	return w.HandOffFd()
+}
+
+func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+		BuildKeyExprs:           conditions[1],
+		NeedBatches:             true,
+		NeedsBuildForEmptyProbe: true,
+		IsDedup:                 true,
+	})
+	engine.InitFromSpilledMap([]*os.File{
+		writeDedupSpillBatch(t, proc, "dedup_bucket_1", 1),
+		writeDedupSpillBatch(t, proc, "dedup_bucket_2", 2),
+	})
+
+	arg := &DedupJoin{
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.state = Finalize
+	arg.ctr.spillEngine = engine
+
+	for _, want := range []int32{1, 2} {
+		res, err := arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecHasMore, res.Status)
+		require.Equal(t, []int32{want}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0]))
+	}
+	res, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	require.Nil(t, arg.ctr.buf)
+
 	arg.Free(proc, false, nil)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
@@ -886,38 +946,4 @@ func TestReceiveWorkerMsg_ChannelClose(t *testing.T) {
 
 	msg := receiveWorkerMsg(context.Background(), ch)
 	require.Nil(t, msg)
-}
-
-// TestCleanBucketState verifies that cleanBucketState releases all per-bucket
-// state without leaking memory or leaving stale references.
-func TestCleanBucketState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	ctr := &container{
-		mp:            message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp()),
-		batches:       []*batch.Batch{batch.NewWithSize(1)},
-		batchRowCount: 10,
-		matched:       &bitmap.Bitmap{},
-		captured:      &bitmap.Bitmap{},
-		capturedVecs:  []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int32.ToType())},
-	}
-	ctr.mp.IncRef(1)
-
-	// Verify state is set up.
-	require.NotNil(t, ctr.mp)
-	require.NotNil(t, ctr.batches)
-	require.Equal(t, int64(10), ctr.batchRowCount)
-	require.NotNil(t, ctr.matched)
-	require.NotNil(t, ctr.captured)
-
-	// Clean and verify everything is cleared.
-	ctr.cleanBucketState(proc)
-
-	require.Nil(t, ctr.mp)
-	require.Nil(t, ctr.batches)
-	require.Equal(t, int64(0), ctr.batchRowCount)
-	require.Nil(t, ctr.matched)
-	require.Nil(t, ctr.capturedVecs)
-	require.Nil(t, ctr.captured)
 }

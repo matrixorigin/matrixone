@@ -48,11 +48,10 @@ type container struct {
 	spillThreshold  int64
 
 	// reusable buffers for spill operations
-	spillHashValues      []uint64
-	spillBucketRowIds    [][]int32
-	spillWriteBuf        bytes.Buffer
-	spillKeyVecs         []*vector.Vector
-	spillNonEmptyBuckets []int
+	spillHashValues   []uint64
+	spillBucketRowIds [][]int32
+	spillWriteBuf     bytes.Buffer
+	spillKeyVecs      []*vector.Vector
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
@@ -143,7 +142,6 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.ctr.spillKeyVecs = nil
 	hashBuild.ctr.spillHashValues = nil
 	hashBuild.ctr.spillBucketRowIds = nil
-	hashBuild.ctr.spillNonEmptyBuckets = nil
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {

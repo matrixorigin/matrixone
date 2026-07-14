@@ -211,14 +211,6 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: true,
-				NeedsBuildForEmptyProbe: false,
-				NeedAllocateSels:        false,
-				NeedBatches:             false,
-				IsDedup:                 false,
-				OnDuplicateAction:       rightDedupJoin.OnDuplicateAction,
-				DedupColName:            rightDedupJoin.DedupColName,
-				DedupColTypes:           rightDedupJoin.DedupColTypes,
-				DelColIdx:               rightDedupJoin.DelColIdx,
 			})
 			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
 			if err := engine.ScatterProbeTable(proc,

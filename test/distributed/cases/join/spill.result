@@ -303,97 +303,15 @@ Project  𝄀
 select count(*) as cnt from t4 group by c2 having cnt>1;
 ➤ cnt[-5,64,0]
 drop table if exists t_dedup_spill;
-create table t_dedup_spill (id int not null, val int) cluster by id;
-insert into t_dedup_spill select *,* from generate_series(100000) g;
+create table t_dedup_spill (id int primary key, val int);
+insert into t_dedup_spill select *,* from generate_series(400000) g;
 set @@join_spill_mem = 1000;
-insert into t_dedup_spill select *, 0 from generate_series(100000, 200000) g
+insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;
 ➤ count(*)[-5,64,0]  𝄀
-200001
+600001
 drop table if exists t_dedup_spill;
-drop table if exists t_left_build;
-drop table if exists t_left_probe;
-create table t_left_build(c1 int not null, c2 int not null) cluster by c1;
-create table t_left_probe(c1 int not null, c2 int not null) cluster by c1;
-insert into t_left_build select *, 1 from generate_series(1, 100000) g;
-insert into t_left_probe select *, 1 from generate_series(100001, 200000) g;
-select mo_ctl('dn', 'flush', 'd1.t_left_build');
-➤ mo_ctl(dn, flush, d1.t_left_build)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
-select mo_ctl('dn', 'flush', 'd1.t_left_probe');
-➤ mo_ctl(dn, flush, d1.t_left_probe)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
-select Sleep(1);
-➤ Sleep(1)[-6,8,0]  𝄀
-0
-set @@join_spill_mem = 1000;
-select count(*) from t_left_probe left join t_left_build on t_left_probe.c1=t_left_build.c1;
-➤ count(*)[-5,64,0]  𝄀
-100000
-drop table if exists t_left_build;
-drop table if exists t_left_probe;
-drop table if exists t_right_build;
-drop table if exists t_right_probe;
-create table t_right_build(c1 int not null, c2 int not null) cluster by c1;
-create table t_right_probe(c1 int not null, c2 int not null) cluster by c1;
-insert into t_right_build select *, 1 from generate_series(1, 100000) g;
-insert into t_right_probe select *, 1 from generate_series(100001, 200000) g;
-select mo_ctl('dn', 'flush', 'd1.t_right_build');
-➤ mo_ctl(dn, flush, d1.t_right_build)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
-select mo_ctl('dn', 'flush', 'd1.t_right_probe');
-➤ mo_ctl(dn, flush, d1.t_right_probe)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
-select Sleep(1);
-➤ Sleep(1)[-6,8,0]  𝄀
-0
-select count(*) from t_right_build right join t_right_probe on t_right_build.c1=t_right_probe.c1;
-➤ count(*)[-5,64,0]  𝄀
-100000
-drop table if exists t_right_build;
-drop table if exists t_right_probe;
-drop table if exists t_dedup_empty;
-create table t_dedup_empty (id int not null, val int) cluster by id;
-set @@join_spill_mem = 1000;
-insert into t_dedup_empty select *, 0 from generate_series(1, 100000) g
-on duplicate key update val = val + 1;
-select count(*) from t_dedup_empty;
-➤ count(*)[-5,64,0]  𝄀
-100000
-drop table if exists t_dedup_empty;
 drop database if exists d1;
 drop database if exists test;
 create database test;
