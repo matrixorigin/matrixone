@@ -738,9 +738,18 @@ func TestLeastGreatestTemporalResolution(t *testing.T) {
 			inputs:       []types.Type{types.T_json.ToType(), types.T_date.ToType(), types.T_int64.ToType()},
 			wantOK:       true,
 			wantReturn:   types.T_varchar,
-			wantOverload: leastGreatestTemporalOverload,
+			wantOverload: 2,
 			wantMode:     leastGreatestComparePackedDate,
 			wantTargets:  []types.T{types.T_varchar, types.T_date, types.T_varchar},
+		},
+		{
+			name:         "json date time keeps temporal inputs for json temporal overload",
+			inputs:       []types.Type{types.T_json.ToType(), types.T_date.ToType(), types.T_time.ToType()},
+			wantOK:       true,
+			wantReturn:   types.T_varchar,
+			wantOverload: 2,
+			wantMode:     leastGreatestComparePackedDate,
+			wantTargets:  []types.T{types.T_varchar, types.T_date, types.T_time},
 		},
 		{
 			name:         "year date bigint keeps temporal peers",
@@ -786,7 +795,7 @@ func TestLeastGreatestHighPriorityResolution(t *testing.T) {
 		})
 		require.True(t, ok)
 		require.Equal(t, types.T_decimal128, resolution.resultType.Oid)
-		require.Equal(t, 2, resolution.overloadID)
+		require.Equal(t, leastGreatestYearNumericOverload, resolution.overloadID)
 		require.Equal(t, []types.T{types.T_year, types.T_decimal128}, []types.T{
 			resolution.castTypes[0].Oid,
 			resolution.castTypes[1].Oid,
@@ -944,6 +953,27 @@ func TestLeastGreatestYearNumericFunctionResolution(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestJSONTemporalFunctionResolution(t *testing.T) {
+	for _, name := range []string{"greatest", "least"} {
+		fn, err := GetFunctionByName(context.Background(), name, []types.Type{
+			types.T_json.ToType(),
+			types.T_date.ToType(),
+			types.T_time.ToType(),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(2), fn.overloadId)
+		require.Equal(t, types.T_varchar, fn.GetReturnType().Oid)
+
+		targets, shouldCast := fn.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Equal(t, []types.T{types.T_varchar, types.T_date, types.T_time}, []types.T{
+			targets[0].Oid,
+			targets[1].Oid,
+			targets[2].Oid,
+		})
+	}
+}
+
 func TestLeastGreatestTemporalExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	d1, err := types.ParseDateCast("2020-01-01")
@@ -971,6 +1001,18 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		NewFunctionTestResult(varcharTyp, false, []string{"2020-01-01", "2020-01-01"}, nil),
 		leastTemporalFn)
 	ok, info = tcLeast.Run()
+	require.True(t, ok, info)
+
+	// JSON-temporal parameters reach this executor after JSON is cast to
+	// VARCHAR. The specialized overload keeps the VARCHAR return contract.
+	tcJSONGreatest := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dateTyp, []types.Date{d1, d2}, nil),
+			NewFunctionTestInput(varcharTyp, []string{"2020-01-02", "2020-01-01"}, nil),
+		},
+		NewFunctionTestResult(varcharTyp, false, []string{"2020-01-02", "2020-01-03"}, nil),
+		greatestJSONTemporalFn)
+	ok, info = tcJSONGreatest.Run()
 	require.True(t, ok, info)
 }
 

@@ -51,6 +51,7 @@ const (
 const (
 	leastGreatestNormalOverload = iota
 	leastGreatestTemporalOverload
+	leastGreatestJSONTemporalOverload
 	leastGreatestYearNumericOverload
 )
 
@@ -142,7 +143,9 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		if !ok {
 			return leastGreatestResolution{}, false
 		}
-		return leastGreatestPackedDateResolution(inputs, target), true
+		resolution := leastGreatestPackedDateResolution(inputs, target)
+		resolution.overloadID = leastGreatestJSONTemporalOverload
+		return resolution, true
 	}
 
 	if hasLeastGreatestJSON(nonNull) {
@@ -889,7 +892,32 @@ func leastGreatestFnPackedDate(
 	if !ok || resolution.comparisonMode != leastGreatestComparePackedDate {
 		return moerr.NewInternalErrorNoCtx("unsupported temporal comparison resolution")
 	}
+	return leastGreatestFnPackedDateResolved(parameters, result, proc, length, selectList, resolution, compareFn)
+}
 
+func leastGreatestFnJSONPackedDate(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	compareFn func(v1, v2 types.Datetime) bool) error {
+	resolution := leastGreatestResolution{
+		resultType:       types.T_varchar.ToType(),
+		comparisonMode:   leastGreatestComparePackedDate,
+		temporalItemType: leastGreatestTemporalItemType(vectorTypes(parameters)),
+	}
+	return leastGreatestFnPackedDateResolved(parameters, result, proc, length, selectList, resolution, compareFn)
+}
+
+func leastGreatestFnPackedDateResolved(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	resolution leastGreatestResolution,
+	compareFn func(v1, v2 types.Datetime) bool) error {
 	rsVec := result.GetResultVector()
 	rsNull := rsVec.GetNulls()
 	if selectList != nil {
@@ -1371,6 +1399,16 @@ func leastTemporalFn(parameters []*vector.Vector,
 	})
 }
 
+func leastJSONTemporalFn(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	return leastGreatestFnJSONPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
+		return v1 < v2
+	})
+}
+
 func leastYearNumericFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
@@ -1680,6 +1718,16 @@ func greatestTemporalFn(parameters []*vector.Vector,
 	length int,
 	selectList *FunctionSelectList) error {
 	return leastGreatestFnPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
+		return v1 > v2
+	})
+}
+
+func greatestJSONTemporalFn(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	return leastGreatestFnJSONPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
 		return v1 > v2
 	})
 }

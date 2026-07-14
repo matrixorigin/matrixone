@@ -164,7 +164,217 @@ select greatest(cast(2020 as year), 1999) as greatest_year_num;
 select least(cast(2020 as year), 1999) as least_year_num;
 ➤ least_year_num[3,20,0]  𝄀
 1999
+select greatest(json_extract('{"a":1}', '$'), '2') as greatest_json_varchar;
+➤ greatest_json_varchar[12,-1,0]  𝄀
+{"a": 1}
+select greatest(json_extract('{"a":1}', '$'), json_extract('{"b":2}', '$')) as greatest_json_json;
+➤ greatest_json_json[12,-1,0]  𝄀
+{"b": 2}
+select greatest(cast('2020-01-01' as date), json_extract('"2020-01-02"', '$')) as greatest_date_json;
+➤ greatest_date_json[12,-1,0]  𝄀
+2020-01-02
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast(2021 as year)) as greatest_json_date_year;
+➤ greatest_json_date_year[12,-1,0]  𝄀
+2021-01-01
+select greatest(cast('2020-01-01' as date), '2020-01-02') as greatest_date_varchar;
+➤ greatest_date_varchar[12,-1,0]  𝄀
+2020-01-02
+select greatest(cast('2020-01-01' as date), 'not-a-date');
+invalid input: invalid datetime value not-a-date
+select least(cast('2020-01-01' as date), 'not-a-date');
+invalid input: invalid datetime value not-a-date
+select greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as greatest_date_time;
+➤ greatest_date_time[93,64,0]  𝄀
+2026-07-14 12:00:00
+select greatest(cast(2020 as year), cast('2020-01-01' as date), 1) as greatest_year_date_num;
+➤ greatest_year_date_num[12,-1,0]  𝄀
+2026-07-14
+select hex(greatest(cast('2020-01-01' as date), cast('2020-01-02' as blob))) as greatest_date_blob;
+➤ greatest_date_blob[12,-1,0]  𝄀
+323032302D30312D3032
+select hex(greatest(cast('2020-01-01' as date), cast('2020-01-02' as varbinary))) as greatest_date_varbinary;
+➤ greatest_date_varbinary[12,-1,0]  𝄀
+323032302D30312D3032
+select least(cast('10:00:00' as time), '09:00:00') as least_time_varchar;
+➤ least_time_varchar[12,-1,0]  𝄀
+09:00:00
+select greatest(cast(2020 as year), cast(2021.5 as decimal(10,1))) as greatest_year_decimal;
+➤ greatest_year_decimal[3,10,1]  𝄀
+2021.5
+select least(cast(2020 as year), cast(2019.5 as decimal(10,1))) as least_year_decimal;
+➤ least_year_decimal[3,10,1]  𝄀
+2019.5
+select greatest(cast(2020 as year), 2021.5) as greatest_year_double;
+➤ greatest_year_double[3,18,1]  𝄀
+2021.5
+select least(cast(2020 as year), cast(2021 as bit(16))) as least_year_bit;
+➤ least_year_bit[-5,64,0]  𝄀
+2020
+select greatest(1999, cast(2020 as year), cast(2021 as year)) as greatest_multi_year_numeric;
+➤ greatest_multi_year_numeric[3,20,0]  𝄀
+2021
+select greatest(cast('10:00:00' as time), 2) as greatest_time_numeric;
+➤ greatest_time_numeric[12,-1,0]  𝄀
+2
+select greatest(cast('10:00:00' as time), cast(2 as bit(4))) as greatest_time_bit;
+➤ greatest_time_bit[12,-1,0]  𝄀
+2
+select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2))) as greatest_time_scale;
+➤ greatest_time_scale[92,64,0]  𝄀
+10:00:00.990000000
+select greatest(null, null) as greatest_all_null, least(null, null) as least_all_null;
+➤ greatest_all_null[12,-1,0]  ¦  least_all_null[12,-1,0]  𝄀
+null  ¦  null
+select greatest('10', null, 2) as greatest_mixed_null, least('10', null, 2) as least_mixed_null;
+➤ greatest_mixed_null[12,-1,0]  ¦  least_mixed_null[12,-1,0]  𝄀
+null  ¦  null
+select greatest(cast('a' as varchar), cast('b' as varchar)) as greatest_varchar_same_oid;
+➤ greatest_varchar_same_oid[12,-1,0]  𝄀
+b
+select least(cast('a' as blob), cast('b' as blob)) as least_blob_same_oid;
+➤ least_blob_same_oid[12,0,0]  𝄀
+a
+select greatest(cast(1.5 as decimal(10,1)), cast(1.49 as decimal(12,2))) as greatest_decimal_scale_align;
+➤ greatest_decimal_scale_align[3,12,2]  𝄀
+1.50
+select least(cast(1.5 as decimal(10,1)), cast(1.49 as decimal(12,2))) as least_decimal_scale_align;
+➤ least_decimal_scale_align[3,12,2]  𝄀
+1.49
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.99' as datetime(2))) as greatest_datetime_scale;
+➤ greatest_datetime_scale[93,64,0]  𝄀
+2020-01-01 00:00:00.990000000
+select greatest(cast('2020-01-01 00:00:00.1' as timestamp(1)), cast('2020-01-01 00:00:00.99' as timestamp(2))) as greatest_timestamp_scale;
+➤ greatest_timestamp_scale[93,64,0]  𝄀
+2020-01-01 00:00:00.990000000
+select least(json_extract('{"a":1}', '$'), json_extract('{"b":2}', '$')) as least_json_json;
+➤ least_json_json[12,-1,0]  𝄀
+{"a": 1}
+select greatest(json_extract('"b"', '$'), cast('a' as text)) as greatest_json_text;
+➤ greatest_json_text[12,0,0]  𝄀
+b
+select greatest(json_extract('10', '$'), 2) as greatest_json_numeric;
+➤ greatest_json_numeric[12,-1,0]  𝄀
+2
+select greatest(json_extract('"10:00:00"', '$'), cast('09:00:00' as time)) as greatest_json_time;
+➤ greatest_json_time[12,-1,0]  𝄀
+10:00:00
+select greatest(json_extract('2020', '$'), cast(2019 as year)) as greatest_json_year;
+➤ greatest_json_year[12,-1,0]  𝄀
+2020
+select greatest(json_extract('1', '$'), cast('1' as blob));
+invalid argument function greatest, bad value [JSON BLOB]
+select greatest(json_extract('1', '$'), cast('1' as binary));
+invalid argument function greatest, bad value [JSON BINARY]
+select greatest(json_extract('1', '$'), cast('1' as varbinary));
+invalid argument function greatest, bad value [JSON VARBINARY]
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('x' as text));
+invalid argument function greatest, bad value [JSON DATE TEXT]
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('2020-01-03' as blob));
+invalid argument function greatest, bad value [JSON DATE BLOB]
+select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as datetime)) as greatest_json_datetime;
+➤ greatest_json_datetime[12,-1,0]  𝄀
+2020-01-02 12:00:00
+select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as timestamp)) as greatest_json_timestamp;
+➤ greatest_json_timestamp[12,-1,0]  𝄀
+2020-01-02 12:00:00
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), 20200103) as greatest_json_date_bigint;
+➤ greatest_json_date_bigint[12,-1,0]  𝄀
+2020-01-03
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('12:00:00' as time)) as greatest_json_date_time;
+➤ greatest_json_date_time[12,-1,0]  𝄀
+2026-07-14
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), interval 1 day);
+invalid argument function greatest, bad value [JSON DATE INTERVAL]
+select greatest(cast('2020-01-01' as datetime), '2020-01-02') as greatest_datetime_varchar;
+➤ greatest_datetime_varchar[12,-1,0]  𝄀
+2020-01-02 00:00:00
+select greatest(cast('2020-01-01' as date), cast('2020-01-01 12:00:00' as datetime)) as greatest_date_datetime;
+➤ greatest_date_datetime[93,64,0]  𝄀
+2020-01-01 12:00:00
+select greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as greatest_date_time_format;
+➤ greatest_date_time_format[93,64,0]  𝄀
+2026-07-14 12:00:00
+select greatest(cast('2020-01-01' as date), cast('2020-01-02' as text)) as greatest_date_text;
+➤ greatest_date_text[12,0,0]  𝄀
+2020-01-02
+select least(cast('10:00:00' as time), cast('09:00:00' as text)) as least_time_text;
+➤ least_time_text[12,0,0]  𝄀
+09:00:00
+select greatest(cast('10:00:00' as time), cast('09:00:00' as blob)) as greatest_time_blob;
+➤ greatest_time_blob[12,0,0]  𝄀
+10:00:00
+select greatest(cast('2020-01-01' as date), 20200102) as greatest_date_numeric;
+➤ greatest_date_numeric[12,-1,0]  𝄀
+2020-01-02
+select greatest(cast('2020-01-01' as date), cast(20200102 as bit(25))) as greatest_date_bit;
+➤ greatest_date_bit[12,-1,0]  𝄀
+2020-01-02
+select greatest(cast(2020 as year), cast('10:00:00' as time)) as greatest_year_time;
+➤ greatest_year_time[12,-1,0]  𝄀
+2020
+select greatest(cast('2020-01-01' as date), cast('12:00:00' as time), '2020-01-02') as greatest_date_time_varchar;
+➤ greatest_date_time_varchar[12,-1,0]  𝄀
+2026-07-14
+select greatest(cast('2020-01-01' as date), cast('12:00:00' as time), 20200102) as greatest_date_time_bigint;
+➤ greatest_date_time_bigint[12,-1,0]  𝄀
+2026-07-14
+select hex(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), cast('2020-01-02' as blob))) as greatest_date_time_blob;
+➤ greatest_date_time_blob[12,-1,0]  𝄀
+323032362D30372D3134
+select greatest(cast('b' as text), cast('a' as blob)) as greatest_text_blob;
+➤ greatest_text_blob[12,0,0]  𝄀
+b
+select greatest(cast('b' as char), cast('a' as varbinary)) as greatest_char_varbinary;
+➤ greatest_char_varbinary[12,-1,0]  𝄀
+b
+select hex(greatest(cast('a' as blob), cast('b' as varbinary))) as greatest_blob_varbinary;
+➤ greatest_blob_varbinary[12,-1,0]  𝄀
+62
+select hex(greatest(cast('a' as binary), cast('b' as varbinary))) as greatest_binary_varbinary;
+➤ greatest_binary_varbinary[12,-1,0]  𝄀
+62
+drop table if exists greatest_least_supported_oid;
+create table greatest_least_supported_oid (id int primary key, v32 vecf32(3), v64 vecf64(3));
+insert into greatest_least_supported_oid values (1, '[1,2,3]', '[1,2,3]');
+select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), cast('00000000-0000-0000-0000-000000000002' as uuid)) as greatest_uuid_same_oid;
+➤ greatest_uuid_same_oid[12,-1,0]  𝄀
+00000000-0000-0000-0000-000000000002
+select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
+invalid argument function greatest, bad value [UUID VARCHAR]
+select greatest(__mo_rowid, __mo_rowid) as greatest_rowid_same_oid from greatest_least_supported_oid;
+➤ greatest_rowid_same_oid[12,0,0]  𝄀
+019f5ec9-dc42-75e2-a1e4-3e5825928859-0-0-0
+select greatest(__mo_rowid, 1) from greatest_least_supported_oid;
+invalid argument function greatest, bad value [ROWID BIGINT]
+select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
+➤ greatest_vecf32_same_oid[12,3,0]  𝄀
+[1, 2, 3]
+select greatest(v32, v64) from greatest_least_supported_oid;
+invalid argument function greatest, bad value [VECF32 VECF64]
+select greatest(cast('file://greatest-least-a' as datalink), cast('file://greatest-least-b' as datalink)) as greatest_datalink_same_oid;
+➤ greatest_datalink_same_oid[12,0,0]  𝄀
+file://greatest-least-b
+select greatest(cast('file://greatest-least-a' as datalink), 'x');
+invalid argument function greatest, bad value [DATALINK VARCHAR]
+select greatest(interval 1 day, interval 2 day);
+invalid argument function greatest, bad value [INTERVAL INTERVAL]
+select greatest(interval 1 day, cast('2020-01-01' as date));
+invalid argument function greatest, bad value [INTERVAL DATE]
+select greatest(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(2 2)'));
+invalid argument function greatest, bad value [GEOMETRY GEOMETRY]
+select greatest(st_geomfromtext('POINT(1 1)'), 'x');
+invalid argument function greatest, bad value [GEOMETRY VARCHAR]
+drop table if exists greatest_least_enum;
+create table greatest_least_enum (e enum('a', 'b'), d date);
+insert into greatest_least_enum values ('a', '2020-01-01');
+select greatest(e, e) from greatest_least_enum;
+➤ greatest(e, e)[12,-1,0]  𝄀
+a
+select greatest(e, d) from greatest_least_enum;
+invalid input: invalid datetime value a
 drop table if exists toll_transactions;
 drop table if exists mixed_num;
 drop table if exists uns;
 drop table if exists bt;
+drop table if exists greatest_least_supported_oid;
+drop table if exists greatest_least_enum;

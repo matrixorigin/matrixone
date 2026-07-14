@@ -757,6 +757,15 @@ var supportedStringBuiltIns = []FuncNew{
 					return leastGreatestReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
+					return greatestJSONTemporalFn
+				},
+			},
+			{
+				overloadId: 3,
+				retType: func(parameters []types.Type) types.Type {
+					return leastGreatestReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
 					return greatestYearNumericFn
 				},
 			},
@@ -2098,6 +2107,15 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return leastGreatestReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return leastJSONTemporalFn
+				},
+			},
+			{
+				overloadId: 3,
 				retType: func(parameters []types.Type) types.Type {
 					return leastGreatestReturnType(parameters)
 				},
