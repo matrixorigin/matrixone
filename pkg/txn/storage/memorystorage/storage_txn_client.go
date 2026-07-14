@@ -17,6 +17,7 @@ package memorystorage
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,6 +110,84 @@ func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimpl
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
+	runSQL   storageRunSQLTracker
+}
+
+// storageRunSQLTracker gives the memory-engine operator the same admission
+// boundary as the distributed operator without coupling the two
+// implementations. Tokens are operator-lifetime identities; terminal calls
+// seal admission, cancel registered SQL, and wait for ownership to drain.
+type storageRunSQLTracker struct {
+	sync.Mutex
+	next    uint64
+	active  map[uint64]context.CancelFunc
+	sealed  bool
+	changed chan struct{}
+}
+
+func (t *storageRunSQLTracker) enter(cancel context.CancelFunc) (uint64, error) {
+	t.Lock()
+	if t.sealed || t.next == ^uint64(0) {
+		t.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	if t.active == nil {
+		t.active = make(map[uint64]context.CancelFunc)
+	}
+	if t.changed == nil {
+		t.changed = make(chan struct{})
+	}
+	t.next++
+	token := t.next
+	t.active[token] = cancel
+	t.Unlock()
+	return token, nil
+}
+
+func (t *storageRunSQLTracker) exit(token uint64) {
+	if token == 0 {
+		return
+	}
+	t.Lock()
+	if _, ok := t.active[token]; ok {
+		delete(t.active, token)
+		close(t.changed)
+		t.changed = make(chan struct{})
+	}
+	t.Unlock()
+}
+
+func (t *storageRunSQLTracker) sealAndWait(ctx context.Context) error {
+	t.Lock()
+	t.sealed = true
+	cancels := make([]context.CancelFunc, 0, len(t.active))
+	for _, cancel := range t.active {
+		if cancel != nil {
+			cancels = append(cancels, cancel)
+		}
+	}
+	t.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	for {
+		t.Lock()
+		if len(t.active) == 0 {
+			t.Unlock()
+			return nil
+		}
+		changed := t.changed
+		t.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
 }
 
 func (s *StorageTxnOperator) EnterIncrStmt() {
@@ -144,14 +223,21 @@ func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) clien
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) (uint64, error) {
-	return 1, nil
+func (s *StorageTxnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, _ string) uint64 {
+	token, _ := s.TryEnterRunSqlWithTokenAndSQL(cancel, "")
+	return token
 }
 
-func (s *StorageTxnOperator) ExitRunSqlWithToken(_ uint64) {
+func (s *StorageTxnOperator) TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, _ string) (uint64, error) {
+	return s.runSQL.enter(cancel)
+}
+
+func (s *StorageTxnOperator) ExitRunSqlWithToken(token uint64) {
+	s.runSQL.exit(token)
 }
 
 var _ client.TxnOperator = new(StorageTxnOperator)
+var _ client.RunSQLAdmissionOperator = new(StorageTxnOperator)
 
 func (s *StorageTxnOperator) AddWorkspace(_ client.Workspace) {
 	panic("unimplemented")
@@ -190,6 +276,9 @@ func (s *StorageTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*
 }
 
 func (s *StorageTxnOperator) Commit(ctx context.Context) error {
+	if err := s.runSQL.sealAndWait(ctx); err != nil {
+		return err
+	}
 	for _, storage := range s.storages {
 		if _, err := storage.Commit(ctx, s.meta, nil, nil); err != nil {
 			return err
@@ -240,6 +329,9 @@ func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*r
 }
 
 func (s *StorageTxnOperator) Rollback(ctx context.Context) error {
+	if err := s.runSQL.sealAndWait(ctx); err != nil {
+		return err
+	}
 	for _, storage := range s.storages {
 		if err := storage.Rollback(ctx, s.meta); err != nil {
 			return err

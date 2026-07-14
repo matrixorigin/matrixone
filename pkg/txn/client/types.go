@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -198,10 +199,11 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
-	// EnterRunSqlWithTokenAndSQL registers one SQL execution. A non-nil error
-	// means the transaction is sealed and the caller must not start or continue
-	// using its workspace.
-	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+	// EnterRunSqlWithTokenAndSQL registers one SQL execution. Zero means the
+	// operator rejected admission. Use TryEnterRunSqlWithTokenAndSQL when the
+	// rejection reason is required. This legacy signature is retained for
+	// source compatibility with external TxnOperator implementations.
+	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64
 	ExitRunSqlWithToken(token uint64)
 	EnterIncrStmt()
 	ExitIncrStmt()
@@ -213,6 +215,33 @@ type TxnOperator interface {
 	Set(key string, value any)
 	Get(key string) (any, bool)
 	Delete(key string)
+}
+
+// RunSQLAdmissionOperator is an additive capability implemented by operators
+// that can report why a SQL execution was rejected. Keeping it separate from
+// TxnOperator preserves source compatibility for external implementations.
+type RunSQLAdmissionOperator interface {
+	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+}
+
+// TryEnterRunSqlWithTokenAndSQL admits one SQL execution using the richer
+// capability when available and safely falls back to the legacy contract.
+func TryEnterRunSqlWithTokenAndSQL(
+	op TxnOperator,
+	cancel context.CancelFunc,
+	sql string,
+) (uint64, error) {
+	if admission, ok := op.(RunSQLAdmissionOperator); ok {
+		return admission.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
+	}
+	token := op.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	if token == 0 {
+		if cancel != nil {
+			cancel()
+		}
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	return token, nil
 }
 
 // TxnIDGenerator txn id generator

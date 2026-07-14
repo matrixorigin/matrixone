@@ -43,7 +43,7 @@ func MarkQueryRunning(c *Compile, txn txnClient.TxnOperator) error {
 	if sqlText == "" {
 		sqlText = c.sql
 	}
-	token, err := txn.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	token, err := txnClient.TryEnterRunSqlWithTokenAndSQL(txn, cancel, sqlText)
 	if err != nil {
 		if cancel != nil {
 			cancel()

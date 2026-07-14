@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
@@ -731,7 +732,7 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) (func(), error) {
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token, err := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	token, err := client.TryEnterRunSqlWithTokenAndSQL(txnOp, cancel, sqlText)
 	if err != nil {
 		cancel()
 		return func() {}, err

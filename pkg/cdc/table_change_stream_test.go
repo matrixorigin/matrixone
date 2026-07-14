@@ -1942,8 +1942,8 @@ func (n *noopTxnOperator) NextSequence() uint64 {
 	return 0
 }
 
-func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) (uint64, error) {
-	return 1, nil
+func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 1
 }
 func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
 func (n *noopTxnOperator) EnterIncrStmt()               {}

@@ -489,7 +489,7 @@ func (client *txnClient) doCreateTxn(
 	// be closed immediately.
 	if closed && op.reset.waiter == nil {
 		err := moerr.NewClientClosedNoCtx()
-		op.closeAsAborted(ctx, err)
+		op.closeAsAborted(context.WithoutCancel(ctx), err)
 		return nil, err
 	}
 
@@ -514,17 +514,22 @@ func (client *txnClient) doCreateTxn(
 		if err := op.updateSnapshotWithClose(snapshotCtx, ts, closeC); err != nil {
 			if op.reset.waiter != nil {
 				if waitErr, completed := op.reset.waiter.result(); completed && waitErr != nil {
-					op.closeAsAborted(ctx, waitErr)
+					op.closeAsAborted(context.WithoutCancel(ctx), waitErr)
 					return nil, waitErr
 				}
 			}
 			if client.isClosed() {
 				err := moerr.NewClientClosedNoCtx()
-				op.closeAsAborted(ctx, err)
+				op.closeAsAborted(context.WithoutCancel(ctx), err)
 				return nil, err
 			}
-			_ = op.Rollback(ctx)
-			return nil, errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
+			createErr := errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
+			// openTxn has transferred ownership to the client before snapshot
+			// acquisition. Creation failure owns a private abort transition: public
+			// Rollback may be sealed while RestartTxn is being admitted and cannot
+			// be relied on to release active/queued client ownership.
+			op.closeAsAborted(context.WithoutCancel(ctx), createErr)
+			return nil, createErr
 		}
 	}
 
@@ -535,7 +540,10 @@ func (client *txnClient) doCreateTxn(
 	)
 
 	if err := op.waitActive(ctx); err != nil {
-		_ = op.Rollback(ctx)
+		// The failed creator still owns cleanup even when the public terminal
+		// gate is sealed by RestartTxn. ClosedEvent removes either direct active
+		// ownership or the queued admission entry.
+		op.closeAsAborted(context.WithoutCancel(ctx), err)
 		if moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
 			return nil, err
 		}
@@ -546,7 +554,7 @@ func (client *txnClient) doCreateTxn(
 	client.mu.RUnlock()
 	if closed {
 		err := moerr.NewClientClosedNoCtx()
-		op.closeAsAborted(ctx, err)
+		op.closeAsAborted(context.WithoutCancel(ctx), err)
 		return nil, err
 	}
 	return op, nil

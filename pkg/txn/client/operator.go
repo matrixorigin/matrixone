@@ -1033,7 +1033,7 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 
 	requests = tc.maybeInsertCachedWrites(requests, false)
 	result, err := tc.doSend(ctx, requests, false)
-	return tc.trimResponses(tc.handleError(ctx, result, err))
+	return tc.trimResponses(tc.handleError(ctx, result, err, false))
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
@@ -1177,7 +1177,7 @@ func (tc *txnOperator) rollback(ctx context.Context) (err error) {
 		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true)
 
-	result, err := tc.handleError(ctx, sendresult, err)
+	result, err := tc.handleError(ctx, sendresult, err, true)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnClosed) {
 			return nil
@@ -1338,7 +1338,7 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 
 	requests = tc.maybeInsertCachedWrites(requests, false)
 	result, err := tc.doSend(ctx, requests, false)
-	return tc.trimResponses(tc.handleError(ctx, result, err))
+	return tc.trimResponses(tc.handleError(ctx, result, err, false))
 }
 
 func (tc *txnOperator) doWrite(
@@ -1452,7 +1452,7 @@ func (tc *txnOperator) doWrite(
 
 	var result *rpc.SendResult
 	result, err = tc.doSend(ctx, requests, commit)
-	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
+	resp, err = tc.trimResponses(tc.handleError(ctx, result, err, commit))
 	if err != nil && commit {
 		tc.reset.commitErr = err
 	}
@@ -1609,25 +1609,15 @@ func (tc *txnOperator) doSend(
 	}
 	util.LogTxnReceivedResponses(tc.logger, result.Responses)
 
-	if len(result.Responses) == 0 {
-		return result, nil
-	}
-
-	// update commit timestamp
-	resp := result.Responses[len(result.Responses)-1]
-	if resp.Txn == nil {
-		return result, nil
-	}
-	if !commit {
-		tc.mu.Lock()
-		defer tc.mu.Unlock()
-	}
-	tc.mu.txn.CommitTS = resp.Txn.CommitTS
-	tc.mu.txn.Status = resp.Txn.Status
 	return result, nil
 }
 
-func (tc *txnOperator) handleError(ctx context.Context, result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+func (tc *txnOperator) handleError(
+	ctx context.Context,
+	result *rpc.SendResult,
+	err error,
+	locked bool,
+) (*rpc.SendResult, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -1638,7 +1628,34 @@ func (tc *txnOperator) handleError(ctx context.Context, result *rpc.SendResult, 
 			return nil, err
 		}
 	}
+
+	// A response is externally supplied protocol data. Publish its transaction
+	// state only after every response in the batch has passed validation, so a
+	// malformed response cannot poison a still-owned local operator.
+	tc.publishResponseTxn(result, locked)
 	return result, nil
+}
+
+func (tc *txnOperator) publishResponseTxn(result *rpc.SendResult, locked bool) {
+	if result == nil || len(result.Responses) == 0 {
+		return
+	}
+	resp := result.Responses[len(result.Responses)-1]
+	if resp.Txn == nil {
+		return
+	}
+	if !locked {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+	}
+	// A non-terminal response can race a direct terminal API caller that does
+	// not participate in the SQL tracker. Never let a late Active response
+	// rewrite the observable state of an already closed operator.
+	if tc.mu.closed {
+		return
+	}
+	tc.mu.txn.CommitTS = resp.Txn.CommitTS
+	tc.mu.txn.Status = resp.Txn.Status
 }
 
 func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResponse) error {
@@ -2053,7 +2070,12 @@ func (tc *txnOperator) doCostAction(
 	return cost, err
 }
 
-func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
+func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
+	token, _ := tc.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
+	return token
+}
+
+func (tc *txnOperator) TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
 	token := tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
 	if token == 0 {
 		return 0, moerr.NewTxnClosedNoCtx(nil)

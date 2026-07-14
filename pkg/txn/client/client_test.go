@@ -353,7 +353,7 @@ func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
 		terminalErr := make(chan error, 1)
 		client.txnOpenedCallbacks = []func(TxnOperator){func(opened TxnOperator) {
 			_, sqlCancel := context.WithCancel(context.Background())
-			token, err := opened.EnterRunSqlWithTokenAndSQL(sqlCancel, "late old-generation sql")
+			token, err := TryEnterRunSqlWithTokenAndSQL(opened, sqlCancel, "late old-generation sql")
 			require.Zero(t, token)
 			registrationErr <- err
 			terminalErr <- opened.Commit(ctx)
@@ -365,7 +365,7 @@ func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(<-terminalErr, moerr.ErrTxnClosed))
 
 		_, sqlCancel := context.WithCancel(context.Background())
-		token, err := restarted.EnterRunSqlWithTokenAndSQL(sqlCancel, "new-generation sql")
+		token, err := TryEnterRunSqlWithTokenAndSQL(restarted, sqlCancel, "new-generation sql")
 		require.NoError(t, err)
 		require.NotZero(t, token)
 		restarted.ExitRunSqlWithToken(token)
@@ -395,7 +395,7 @@ func TestRestartTxnAdmissionFailureLeavesOperatorClosed(t *testing.T) {
 		tc.mu.RUnlock()
 
 		rejectedCtx, rejectedCancel := context.WithCancel(context.Background())
-		token, err := tc.EnterRunSqlWithTokenAndSQL(rejectedCancel, "sql after failed restart")
+		token, err := tc.TryEnterRunSqlWithTokenAndSQL(rejectedCancel, "sql after failed restart")
 		require.Zero(t, token)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		select {
@@ -410,6 +410,92 @@ func TestRestartTxnAdmissionFailureLeavesOperatorClosed(t *testing.T) {
 	})
 }
 
+func TestRestartTxnCanceledSnapshotReleasesAdmission(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := client.New(ctx, timestamp.Timestamp{}, WithUserTxn())
+		require.NoError(t, err)
+		require.NoError(t, op.Rollback(ctx))
+
+		client.timestampWaiter = waiter
+		restartCtx, cancelRestart := context.WithCancel(ctx)
+		errC := make(chan error, 1)
+		go func() {
+			_, err := client.RestartTxn(restartCtx, op, timestamp.Timestamp{}, WithUserTxn())
+			errC <- err
+		}()
+
+		select {
+		case <-waiter.entered:
+		case <-ctx.Done():
+			t.Fatal("restart did not enter snapshot acquisition")
+		}
+		cancelRestart()
+		require.ErrorIs(t, <-errC, context.Canceled)
+
+		require.Zero(t, client.atomic.activeTxnCount.Load())
+		client.mu.RLock()
+		require.Zero(t, client.mu.users)
+		require.Empty(t, client.mu.waitActiveTxns)
+		client.mu.RUnlock()
+
+		// Failure closes the generation without poisoning operator reuse.
+		client.timestampWaiter = nil
+		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{}, WithUserTxn())
+		require.NoError(t, err)
+		require.NoError(t, restarted.Rollback(ctx))
+	}, WithMaxActiveTxn(1))
+}
+
+func TestRestartTxnCanceledMaxActiveWaitReleasesAdmission(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+
+		reusable, err := client.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, reusable.Rollback(ctx))
+		holder, err := client.New(ctx, timestamp.Timestamp{}, WithUserTxn())
+		require.NoError(t, err)
+
+		restartCtx, cancelRestart := context.WithCancel(ctx)
+		errC := make(chan error, 1)
+		go func() {
+			_, err := client.RestartTxn(
+				restartCtx,
+				reusable,
+				timestamp.Timestamp{},
+				WithUserTxn(),
+				WithSkipPushClientReady(),
+			)
+			errC <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			return len(client.mu.waitActiveTxns) == 1
+		}, time.Second, time.Millisecond)
+		cancelRestart()
+		require.ErrorIs(t, <-errC, context.Canceled)
+
+		client.mu.RLock()
+		require.Equal(t, 1, client.mu.users)
+		require.Empty(t, client.mu.waitActiveTxns)
+		client.mu.RUnlock()
+		require.Equal(t, int64(1), client.atomic.activeTxnCount.Load())
+
+		require.NoError(t, holder.Rollback(ctx))
+		restarted, err := client.RestartTxn(ctx, reusable, timestamp.Timestamp{}, WithUserTxn())
+		require.NoError(t, err)
+		require.NoError(t, restarted.Rollback(ctx))
+	}, WithMaxActiveTxn(1))
+}
+
 func TestRestartTxnCannotReopenRunSQLAfterConcurrentClose(t *testing.T) {
 	op := &txnOperator{}
 	op.reset.txnID = []byte("restart")
@@ -418,7 +504,7 @@ func TestRestartTxnCannotReopenRunSQLAfterConcurrentClose(t *testing.T) {
 
 	err := op.openRunSQLAfterRestart()
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
-	_, err = op.EnterRunSqlWithTokenAndSQL(nil, "select 1")
+	_, err = op.TryEnterRunSqlWithTokenAndSQL(nil, "select 1")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 }
 

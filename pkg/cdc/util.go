@@ -668,7 +668,7 @@ var EnterRunSql = func(ctx context.Context, txnOp client.TxnOperator, sql string
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token, err := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	token, err := client.TryEnterRunSqlWithTokenAndSQL(txnOp, cancel, sql)
 	if err != nil {
 		cancel()
 		return func() {}, err

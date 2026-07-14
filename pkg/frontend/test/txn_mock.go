@@ -589,18 +589,32 @@ func (mr *MockTxnOperatorMockRecorder) EnterRollbackStmt() *gomock.Call {
 }
 
 // EnterRunSqlWithTokenAndSQL mocks base method.
-func (m *MockTxnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
+func (m *MockTxnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "EnterRunSqlWithTokenAndSQL", cancel, sql)
 	ret0, _ := ret[0].(uint64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	return ret0
 }
 
 // EnterRunSqlWithTokenAndSQL indicates an expected call of EnterRunSqlWithTokenAndSQL.
 func (mr *MockTxnOperatorMockRecorder) EnterRunSqlWithTokenAndSQL(cancel, sql interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSqlWithTokenAndSQL", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSqlWithTokenAndSQL), cancel, sql)
+}
+
+// TryEnterRunSqlWithTokenAndSQL mocks the additive RunSQLAdmissionOperator capability.
+func (m *MockTxnOperator) TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TryEnterRunSqlWithTokenAndSQL", cancel, sql)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// TryEnterRunSqlWithTokenAndSQL indicates an expected capability call.
+func (mr *MockTxnOperatorMockRecorder) TryEnterRunSqlWithTokenAndSQL(cancel, sql interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryEnterRunSqlWithTokenAndSQL", reflect.TypeOf((*MockTxnOperator)(nil).TryEnterRunSqlWithTokenAndSQL), cancel, sql)
 }
 
 // ExitIncrStmt mocks base method.

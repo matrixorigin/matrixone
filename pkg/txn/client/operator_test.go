@@ -44,7 +44,7 @@ func mustEnterRunSQL(
 	sql string,
 ) uint64 {
 	t.Helper()
-	token, err := tc.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	token, err := tc.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
 	require.NoError(t, err)
 	require.NotZero(t, token)
 	return token
@@ -1226,7 +1226,7 @@ func TestCommitSealsRunSQLRegistrationBeforeWaiting(t *testing.T) {
 		}
 
 		lateCtx, lateCancel := context.WithCancel(context.Background())
-		lateToken, err := tc.EnterRunSqlWithTokenAndSQL(lateCancel, "late sql")
+		lateToken, err := tc.TryEnterRunSqlWithTokenAndSQL(lateCancel, "late sql")
 		require.Zero(t, lateToken)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		select {
@@ -1288,7 +1288,7 @@ func TestWriteAndCommitSealsAndWaitsForRunningSQL(t *testing.T) {
 		}
 
 		lateCtx, lateCancel := context.WithCancel(context.Background())
-		lateToken, err := tc.EnterRunSqlWithTokenAndSQL(lateCancel, "late sql")
+		lateToken, err := tc.TryEnterRunSqlWithTokenAndSQL(lateCancel, "late sql")
 		require.Zero(t, lateToken)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		select {
@@ -1334,7 +1334,7 @@ func TestRunSQLFastRejectDoesNotWaitForCommitLock(t *testing.T) {
 		rejected := make(chan error, 1)
 		go func() {
 			_, cancel := context.WithCancel(context.Background())
-			_, err := tc.EnterRunSqlWithTokenAndSQL(cancel, "late sql")
+			_, err := tc.TryEnterRunSqlWithTokenAndSQL(cancel, "late sql")
 			rejected <- err
 		}()
 		select {
@@ -1523,7 +1523,7 @@ func TestCloseAsAbortedAndRunSQLExitDoNotDeadlock(t *testing.T) {
 		tc.mu.RLock()
 		require.True(t, tc.mu.closed)
 		tc.mu.RUnlock()
-		_, err := tc.EnterRunSqlWithTokenAndSQL(nil, "after close")
+		_, err := tc.TryEnterRunSqlWithTokenAndSQL(nil, "after close")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 	})
 }
@@ -1553,7 +1553,7 @@ func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
 		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
 
 		rejectedCtx, rejectedCancel := context.WithCancel(context.Background())
-		rejectedToken, err := tc.EnterRunSqlWithTokenAndSQL(rejectedCancel, "new sql")
+		rejectedToken, err := tc.TryEnterRunSqlWithTokenAndSQL(rejectedCancel, "new sql")
 		require.Zero(t, rejectedToken)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		select {
@@ -1846,7 +1846,7 @@ func BenchmarkRunSQLTrackerEnterExit(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		token, err := tc.EnterRunSqlWithTokenAndSQL(nil, "select 1")
+		token, err := tc.TryEnterRunSqlWithTokenAndSQL(nil, "select 1")
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1859,7 +1859,7 @@ func BenchmarkRunSQLTrackerEnterExitParallel(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			token, err := tc.EnterRunSqlWithTokenAndSQL(nil, "select 1")
+			token, err := tc.TryEnterRunSqlWithTokenAndSQL(nil, "select 1")
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1874,7 +1874,7 @@ func BenchmarkRunSQLTrackerRejected(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := tc.EnterRunSqlWithTokenAndSQL(nil, "select 1"); err == nil {
+		if _, err := tc.TryEnterRunSqlWithTokenAndSQL(nil, "select 1"); err == nil {
 			b.Fatal("sealed tracker accepted SQL")
 		}
 	}
@@ -1893,6 +1893,81 @@ func TestMalformedTNResponsesReturnErrors(t *testing.T) {
 	require.Error(t, tc.checkResponseTxnStatusForRollback(txn.TxnResponse{
 		Txn: &txn.TxnMeta{Status: txn.TxnStatus_Active},
 	}))
+}
+
+func TestMalformedReadWriteResponseDoesNotPublishTxnState(t *testing.T) {
+	for _, method := range []txn.TxnMethod{
+		txn.TxnMethod_Read,
+		txn.TxnMethod_Write,
+	} {
+		t.Run(method.String(), func(t *testing.T) {
+			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				before := tc.Txn()
+				poisonCommitTS := before.SnapshotTS.Next().Next()
+				ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+					require.NoError(t, err)
+					require.NotEmpty(t, result.Responses)
+					for i := range result.Responses {
+						result.Responses[i].Txn.Status = txn.TxnStatus(99)
+						result.Responses[i].Txn.CommitTS = poisonCommitTS
+					}
+					return result, nil
+				})
+
+				request := []txn.TxnRequest{newTNRequest(1, 1)}
+				var result *rpc.SendResult
+				var err error
+				switch method {
+				case txn.TxnMethod_Read:
+					result, err = tc.Read(ctx, request)
+				case txn.TxnMethod_Write:
+					result, err = tc.Write(ctx, request)
+				default:
+					t.Fatalf("unexpected method %s", method)
+				}
+				require.Error(t, err)
+				require.Nil(t, result)
+
+				after := tc.Txn()
+				require.Equal(t, before.Status, after.Status)
+				require.Equal(t, before.CommitTS, after.CommitTS)
+				require.Equal(t, txn.TxnStatus_Active, after.Status)
+
+				// A protocol-invalid non-terminal response is an operation error, not
+				// an implicit concurrent rollback. The caller retains terminal
+				// ownership and can safely roll the still-active transaction back.
+				ts.setAuto()
+				require.NoError(t, tc.Rollback(ctx))
+			})
+		})
+	}
+}
+
+type legacyRunSQLTxnOperator struct {
+	TxnOperator
+	token uint64
+}
+
+func (op *legacyRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
+	return op.token
+}
+
+func TestTryEnterRunSQLSupportsLegacyTxnOperator(t *testing.T) {
+	legacy := &legacyRunSQLTxnOperator{token: 42}
+	token, err := TryEnterRunSqlWithTokenAndSQL(legacy, nil, "select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), token)
+
+	canceled := make(chan struct{})
+	legacy.token = 0
+	token, err = TryEnterRunSqlWithTokenAndSQL(legacy, func() { close(canceled) }, "select 2")
+	require.Zero(t, token)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("legacy admission rejection did not cancel the SQL context")
+	}
 }
 
 func TestWithTxnLockWaitTimeout(t *testing.T) {

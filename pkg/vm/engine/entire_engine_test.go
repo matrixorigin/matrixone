@@ -447,8 +447,8 @@ func (o *testOperator) NextSequence() uint64 {
 	panic("should not call")
 }
 
-func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) (uint64, error) {
-	return 1, nil
+func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 1
 }
 
 func (o *testOperator) ExitRunSqlWithToken(_ uint64) {}
