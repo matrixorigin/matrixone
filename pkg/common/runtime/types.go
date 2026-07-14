@@ -63,6 +63,9 @@ const (
 	TestingContextKey = "testing-context"
 
 	CNMemoryThrottler = "cn-memory-throttler"
+
+	// ColexecServer is the colexec server owned by one CN service.
+	ColexecServer = "colexec-server"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
