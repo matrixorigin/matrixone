@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -752,10 +753,13 @@ func (a *MergeScheduler) handleMainLoop() {
 					// handle msg first, because it can change the priority queue
 					break
 				}
-				if a.rc.Available() < 500*common.Const1MBytes {
+				available := a.rc.Available()
+				v2.TaskMergeAvailableMemoryGauge.Set(float64(available))
+				if available < 500*common.Const1MBytes {
+					v2.TaskMergeOOMPauseCounter.Inc()
 					logutil.Info(
 						"MergeExecutorEvent-PauseDueToOOMAlert",
-						zap.Int64("available-mem", a.rc.Available()),
+						zap.Int64("available-mem", available),
 					)
 					// let's pause for a while to avoid OOM
 					break

@@ -113,6 +113,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nameByColRef:         make(map[[2]int32]string),
 		protectedScans:       make(map[int32]int),
 		projectSpecialGuards: make(map[int32]*specialIndexGuard),
+		indexHintOwnerByNode: make(map[int32]int32),
 		nextBindTag:          0,
 		mysqlCompatible:      mysqlCompatible,
 		aggSpillMem:          aggSpillMem,
@@ -2419,7 +2420,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 		builder.prepareSpecialIndexGuards(rootID)
-		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		idxColMap := make(map[[2]int32]*plan.Expr)
+		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
+		if err == nil {
+			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
+		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
@@ -6134,9 +6139,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
+		if err != nil {
+			return
+		}
 
 		//tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 		midNode := builder.qry.Nodes[nodeID]
+		if midNode.NodeType == plan.Node_TABLE_SCAN {
+			if err = builder.recordIndexHints(nodeID, midNode.TableDef, tbl.IndexHints); err != nil {
+				return 0, err
+			}
+		}
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.
