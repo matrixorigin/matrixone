@@ -1107,6 +1107,20 @@ func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
 }
 
+// AdvanceSnapshot mocks base method.
+func (m *MockWorkspace) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AdvanceSnapshot", ctx, ts)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AdvanceSnapshot indicates an expected call of AdvanceSnapshot.
+func (mr *MockWorkspaceMockRecorder) AdvanceSnapshot(ctx, ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvanceSnapshot", reflect.TypeOf((*MockWorkspace)(nil).AdvanceSnapshot), ctx, ts)
+}
+
 // BindTxnOp mocks base method.
 func (m *MockWorkspace) BindTxnOp(op client.TxnOperator) {
 	m.ctrl.T.Helper()

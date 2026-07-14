@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -139,6 +140,7 @@ func TestWorkspaceNotDuplicated(t *testing.T) {
 // 4. Realistic: Tests defensive programming against invalid message types
 func TestHandlePipelineMessage_UnknownType(t *testing.T) {
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		messageCtx:    context.Background(),
 		connectionCtx: context.Background(),
 		messageId:     1,
@@ -194,6 +196,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		messageCtx:    ctx,
 		connectionCtx: ctx,
 		cnInformation: cnInformation{
@@ -239,6 +242,7 @@ func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: testTxnID}).AnyTimes()
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		messageCtx:    ctx,
 		connectionCtx: ctx,
 		messageTyp:    pipeline.Method_PipelineMessage,
@@ -314,6 +318,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 func TestCnServerMessageHandlerWaitObservesMessageCtxCancellation(t *testing.T) {
 	messageCtx, cancelMessage := context.WithCancel(context.Background())
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(), // never closed
 		messageCtx:    messageCtx,
 	}
@@ -346,6 +351,7 @@ func TestCnServerMessageHandlerWaitObservesMessageCtxCancellation(t *testing.T) 
 func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	connectionCtx, closeConnection := context.WithCancel(context.Background())
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: connectionCtx,
 		messageCtx:    context.Background(), // never cancelled
 	}

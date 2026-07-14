@@ -213,7 +213,7 @@ func runTestWithLogTailServer(t *testing.T, test func(ctx context.Context, e *En
 	e.skipConsume = true
 	defer e.Close()
 
-	colexec.NewServer(nil)
+	colexec.NewServer("")
 
 	stop := startLogtailServer(t, serverAddr, rt)
 	defer stop()
