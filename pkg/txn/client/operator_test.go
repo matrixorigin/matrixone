@@ -106,6 +106,10 @@ func (w *trackingWorkspace) GetSnapshotWriteOffset() int {
 	return w.snapshotOffset
 }
 
+func (w *trackingWorkspace) WriteOffset() uint64 {
+	return uint64(len(w.commitRequests))
+}
+
 func (w *trackingWorkspace) Adjust(uint64) error {
 	return nil
 }

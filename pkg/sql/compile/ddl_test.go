@@ -1239,6 +1239,58 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	require.ErrorIs(t, s.DropDatabase(c), deleteStopErr)
 }
 
+func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().SetSnapshotTS(gomock.Any()).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	stopErr := moerr.NewInternalError(ctx, "stop after FK cleanup check")
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+	mockDb.EXPECT().Relations(gomock.Any()).Return(nil, stopErr).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	// The first lookup opens the database; the second collects its tables.
+	// A third lookup would mean removeFkeysRelationships was not skipped.
+	eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(mockDb, nil).Times(2)
+
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		return nil
+	})
+	defer lockMoDb.Reset()
+
+	dropDbDef := &plan2.DropDatabase{Database: "db1"}
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+	s := &Scope{Magic: DropDatabase, Plan: cplan}
+	c := NewCompile("test", "test", "drop database db1", "", "", eng, proc, nil, false, nil, time.Now())
+
+	require.ErrorIs(t, s.DropDatabase(c), stopErr)
+}
+
 func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

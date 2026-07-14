@@ -374,8 +374,12 @@ type Transaction struct {
 	approximateInMemInsertCnt int
 	// the approximation of total row count for delete entries
 	approximateInMemDeleteCnt int
-	// the last snapshot write offset
-	snapshotWriteOffset int
+	// snapshotWriteOffset is the statement boundary of txn.writes: readers of
+	// this transaction iterate the [0, snapshotWriteOffset) prefix. It is
+	// advanced under txn.Lock at statement boundaries only (a new compile of
+	// a user statement), never by internal SQL, and mid-statement dumps only
+	// compact entries at or after the boundary; reading it is lock-free.
+	snapshotWriteOffset atomic.Int64
 	// the earliest write offset that Adjust must still consider for the current SQL
 	// after in-place workspace compaction shifts surviving writes to the left.
 	adjustWriteOffset int
@@ -623,7 +627,7 @@ func (txn *Transaction) PPString() string {
 		}),
 		stringifySyncMap(txn.tableCache),
 		txn.approximateInMemInsertCnt,
-		txn.snapshotWriteOffset,
+		txn.snapshotWriteOffset.Load(),
 		txn.rollbackCount,
 		txn.statementID,
 		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
