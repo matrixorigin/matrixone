@@ -2706,10 +2706,11 @@ func (m *CheckOrphanResponse) GetOrphan() bool {
 type OrphanTxn struct {
 	Service string   `protobuf:"bytes,1,opt,name=Service,proto3" json:"Service,omitempty"`
 	Txn     [][]byte `protobuf:"bytes,2,rep,name=Txn,proto3" json:"Txn,omitempty"`
-	// Persist keeps the cannot-commit tombstone until the allocator is
-	// restarted. It is used only when a Commit request may already be buffered
-	// in the source CN transport, so a live-CN active-txn sweep cannot prove
-	// that the request will never reach TN.
+	// Persist keeps the cannot-commit tombstone until the allocator observes
+	// that the source lockservice incarnation is no longer valid. It is used
+	// only when a Commit request may already be buffered in the source CN
+	// transport, so a live-CN active-txn sweep cannot prove that the request
+	// will never reach TN.
 	Persist              bool     `protobuf:"varint,3,opt,name=Persist,proto3" json:"Persist,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

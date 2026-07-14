@@ -136,9 +136,9 @@ func (lp *localLockTableProxy) unlockWithContext(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	_ ...pb.ExtraMutation) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	// The resolver can expire while waiting for txn.Lock after the transaction
+	// has been removed from activeTxnHolder. Always detach it from this local
+	// proxy before passing cancellation to the remote RPC.
 	rows := ls.slice()
 	defer rows.unref()
 

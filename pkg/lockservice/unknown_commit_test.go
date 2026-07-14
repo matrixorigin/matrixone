@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -137,6 +138,38 @@ func TestUnknownCommitFenceSurvivesLiveServiceCleanup(t *testing.T) {
 
 		_, err := allocator.Valid(service.serviceID, txnID, nil)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+	})
+}
+
+func TestUnknownCommitFencesAreCollectedAfterSourceIncarnationInvalid(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		service := services[0]
+		const fenceCount = 128
+		txnIDs := make([][]byte, 0, fenceCount)
+		for i := 0; i < fenceCount; i++ {
+			txnIDs = append(txnIDs, []byte(fmt.Sprintf("late-commit-%d", i)))
+		}
+
+		_, _, ok := service.canUnlockUnknownCommits(context.Background(), txnIDs)
+		require.True(t, ok)
+
+		// GetActiveTxn.Valid=false is authoritative only after the allocator
+		// has refreshed the backend. It means this exact serviceID incarnation
+		// has exited, so no request buffered on its transport can reach TN.
+		client := &resetTrackingClient{}
+		require.NoError(t, allocator.client.Close())
+		allocator.client = client
+		allocator.cleanCommitStateOnce(
+			context.Background(),
+			func(context.Context, string) (bool, [][]byte, error) {
+				return false, nil, nil
+			},
+			time.Hour,
+		)
+
+		require.Equal(t, int32(1), client.resets.Load())
+		_, exists := allocator.ctl.Load(service.serviceID)
+		require.False(t, exists)
 	})
 }
 

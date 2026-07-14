@@ -811,14 +811,17 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 
 	l.ctlMu.Lock()
 	for _, sid := range invalidServices {
-		l.cleanCtlLocked(sid, nil, false, cleanupWatermarks[sid])
+		// Valid=false after endpoint refresh proves this source service
+		// incarnation no longer exists. Its transport is gone too, so no
+		// buffered Commit from that incarnation can still arrive at TN.
+		l.cleanCtlLocked(sid, nil, false, true, cleanupWatermarks[sid])
 	}
 	for _, sid := range unknownServices {
 		_, expired := expiredUnknownServices[sid]
-		l.cleanCtlLocked(sid, nil, !expired, cleanupWatermarks[sid])
+		l.cleanCtlLocked(sid, nil, !expired, false, cleanupWatermarks[sid])
 	}
 	for sid, activeTxns := range activeTxnMap {
-		l.cleanCtlLocked(sid, activeTxns, false, cleanupWatermarks[sid])
+		l.cleanCtlLocked(sid, activeTxns, false, false, cleanupWatermarks[sid])
 	}
 	l.ctlMu.Unlock()
 }
@@ -1330,6 +1333,7 @@ func (c *commitCtl) getCommitState(txnID string) (commitState, bool) {
 func (c *commitCtl) clean(
 	activeTxns map[string]struct{},
 	preserveCannotCommit bool,
+	removePersistent bool,
 	maxGeneration uint64,
 	logger *log.MOLogger,
 ) {
@@ -1342,7 +1346,8 @@ func (c *commitCtl) clean(
 			continue
 		}
 		_, active := activeTxns[txnID]
-		if active || state.inflight > 0 || state.persist ||
+		if active || state.inflight > 0 ||
+			(state.persist && !removePersistent) ||
 			(preserveCannotCommit && state.state == cannotCommitState) {
 			continue
 		}
@@ -1425,6 +1430,7 @@ func (l *lockTableAllocator) cleanCtlLocked(
 	serviceID string,
 	activeTxns map[string]struct{},
 	preserveCannotCommit bool,
+	removePersistent bool,
 	maxGeneration uint64,
 ) {
 	value, ok := l.ctl.Load(serviceID)
@@ -1432,7 +1438,7 @@ func (l *lockTableAllocator) cleanCtlLocked(
 		return
 	}
 	c := value.(*commitCtl)
-	c.clean(activeTxns, preserveCannotCommit, maxGeneration, l.logger)
+	c.clean(activeTxns, preserveCannotCommit, removePersistent, maxGeneration, l.logger)
 	// Serialize removal with Resume and conditional inactive marking. This
 	// prevents an old cleanup from passing an identity check while its ctl is
 	// concurrently replaced (ABA).

@@ -144,3 +144,73 @@ func TestProxySharedUnlock(t *testing.T) {
 		},
 	)
 }
+
+func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			const tableID = uint64(10)
+			row := []byte("row")
+			seedTxn := []byte("seed")
+			timedOutTxn := []byte("timed-out")
+			survivorTxn := []byte("survivor")
+			s1 := services[0]
+			s2 := services[1]
+
+			// Make s1 the table owner, then consolidate two shared holders on
+			// s2 behind one remote holder.
+			s1.cfg.EnableRemoteLocalProxy = true
+			_, err := s1.Lock(ctx, tableID, [][]byte{row}, seedTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+			require.NoError(t, s1.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+
+			s2.cfg.EnableRemoteLocalProxy = true
+			_, err = s2.Lock(ctx, tableID, [][]byte{row}, timedOutTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s2.Lock(ctx, tableID, [][]byte{row}, survivorTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			proxy := s2.tableGroups.get(0, tableID).(*localLockTableProxy)
+			timedOut := s2.activeTxnHolder.getActiveTxn(timedOutTxn, false, "")
+			survivor := s2.activeTxnHolder.getActiveTxn(survivorTxn, false, "")
+			require.NotNil(t, timedOut)
+			require.NotNil(t, survivor)
+
+			// unlockWithContext removes the active transaction before waiting on
+			// its mutex. Expire the resolver context in that gap.
+			timedOut.Lock()
+			unlockCtx, unlockCancel := context.WithCancel(context.Background())
+			defer unlockCancel()
+			unlocked := make(chan error, 1)
+			go func() {
+				unlocked <- s2.unlockUnknownCommit(
+					unlockCtx,
+					timedOutTxn,
+					timestamp.Timestamp{},
+				)
+			}()
+			require.Eventually(t, func() bool {
+				return !s2.activeTxnHolder.hasActiveTxn(timedOutTxn)
+			}, time.Second, time.Millisecond)
+			unlockCancel()
+			timedOut.Unlock()
+
+			require.ErrorIs(t, <-unlocked, context.Canceled)
+
+			// The closed activeTxn must not remain in the proxy. A later shared
+			// lock uses survivor as the remote handoff target instead of a
+			// reusable activeTxn pointer.
+			proxy.mu.RLock()
+			defer proxy.mu.RUnlock()
+			shared := proxy.mu.holders[string(row)]
+			require.NotNil(t, shared)
+			require.Len(t, shared.txns, 1)
+			require.Same(t, survivor, shared.txns[0])
+			require.Equal(t, survivorTxn, proxy.mu.currentHolder[string(row)])
+		},
+	)
+}

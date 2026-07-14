@@ -297,7 +297,7 @@ func TestCleanCommitStateKeepsInflightCommit(t *testing.T) {
 			require.NoError(t, err)
 
 			a.ctlMu.Lock()
-			a.cleanCtlLocked("s1", nil, false, a.getCtl("s1").currentGeneration())
+			a.cleanCtlLocked("s1", nil, false, false, a.getCtl("s1").currentGeneration())
 			a.ctlMu.Unlock()
 
 			state, ok := a.getCtl("s1").getCommitState(string(txnID))
@@ -319,14 +319,14 @@ func TestCleanCommitStatePreservesCannotCommitWhenServiceStateUnknown(t *testing
 			require.Equal(t, cannotCommitState, c.tryCannotCommit("txn1"))
 
 			a.ctlMu.Lock()
-			a.cleanCtlLocked("s1", nil, true, c.currentGeneration())
+			a.cleanCtlLocked("s1", nil, true, false, c.currentGeneration())
 			a.ctlMu.Unlock()
 			state, ok := c.getCommitState("txn1")
 			require.True(t, ok)
 			require.Equal(t, cannotCommitState, state.state)
 
 			a.ctlMu.Lock()
-			a.cleanCtlLocked("s1", nil, false, c.currentGeneration())
+			a.cleanCtlLocked("s1", nil, false, false, c.currentGeneration())
 			a.ctlMu.Unlock()
 			_, ok = c.getCommitState("txn1")
 			require.False(t, ok)
@@ -373,7 +373,7 @@ func TestCannotCommitGenerationRefresh(t *testing.T) {
 
 	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
 	require.Equal(t, cannotCommitState, c.beginCommit("rejected"))
-	c.clean(nil, false, watermark, getLogger(""))
+	c.clean(nil, false, false, watermark, getLogger(""))
 
 	_, ok := c.getCommitState("refreshed")
 	require.True(t, ok)
@@ -386,7 +386,7 @@ func TestCommitCtlGenerationOverflowFailsClosed(t *testing.T) {
 	require.Equal(t, cannotCommitState, c.tryCannotCommit("txn1"))
 	require.Equal(t, uint64(math.MaxUint64), c.currentGeneration())
 
-	c.clean(nil, false, math.MaxUint64, getLogger(""))
+	c.clean(nil, false, false, math.MaxUint64, getLogger(""))
 	_, ok := c.getCommitState("txn1")
 	require.True(t, ok)
 	require.Equal(t, uint64(math.MaxUint64), c.currentGeneration())
