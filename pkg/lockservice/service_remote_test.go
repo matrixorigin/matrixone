@@ -1163,7 +1163,7 @@ func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
 			elapsed := time.Since(start)
 
 			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
 				"expected lock-timeout, got %v", err)
 			// Must fire well before the 10s coarse tick.
 			require.Less(t, elapsed, 3*time.Second,
@@ -1298,9 +1298,9 @@ func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
 
 			require.Error(t, err)
 			// Must receive lock-timeout, not connectivity/backend error.
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
-				"expected ErrLockTimeout (InvalidState), got %v", err)
-			require.Contains(t, err.Error(), "lock timeout",
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected ErrLockWaitTimeout, got %v", err)
+			require.Contains(t, err.Error(), "Lock wait timeout exceeded",
 				"expected lock timeout message, got %v", err)
 			require.GreaterOrEqual(t, elapsed, time.Second,
 				"should have waited at least LockWaitTimeout")
