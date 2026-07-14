@@ -712,7 +712,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
 	schema.Name = tableName

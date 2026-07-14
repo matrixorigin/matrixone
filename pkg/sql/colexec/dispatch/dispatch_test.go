@@ -279,7 +279,7 @@ func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
 }
 
 func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -314,7 +314,7 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 		case <-ctx.Done():
 			return
 		}
-		registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+		registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 		if !ok || registeredProc != proc {
 			return
 		}
@@ -338,7 +338,7 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 }
 
 func TestDispatchEmptyInputRemoteWaitPropagatesCancellation(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithCancelCause(context.Background())

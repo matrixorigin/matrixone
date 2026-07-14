@@ -1322,7 +1322,7 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 }
 
 func TestRemoteNotifyRetryAttachesToEmptyDispatchBeforeCompletion(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	colexecServer := colexec.NewServer("")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1353,6 +1353,7 @@ func TestRemoteNotifyRetryAttachesToEmptyDispatchBeforeCompletion(t *testing.T) 
 		receiver := &messageReceiverOnServer{
 			connectionCtx: ctx,
 			messageCtx:    ctx,
+			colexecServer: colexecServer,
 		}
 		if attempts.Add(1) == 1 {
 			_, _, lookupErr := receiver.TryGetProcByUuid(uid)
