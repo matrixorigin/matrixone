@@ -280,6 +280,8 @@ const (
 	ErrCannotCommitOnInvalidCN uint16 = 20708
 	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
 	ErrRemoteLockWaitTimeout uint16 = 20709
+	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
+	ErrLockWaitTimeout uint16 = 20710
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -542,6 +544,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
+	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -1489,6 +1492,10 @@ func NewLockConflict(ctx context.Context) *Error {
 
 func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
 	return newError(ctx, ErrRemoteLockWaitTimeout)
+}
+
+func NewLockWaitTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrLockWaitTimeout)
 }
 
 func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {

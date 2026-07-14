@@ -4548,9 +4548,9 @@ func TestLockWaitTimeout(t *testing.T) {
 
 			// Should time out after ~1 second, not immediately and not indefinitely.
 			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
-				"expected lock-timeout error (ErrInvalidState), got %v", err)
-			require.Contains(t, err.Error(), "lock timeout")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected lock-wait-timeout error, got %v", err)
+			require.Contains(t, err.Error(), "Lock wait timeout exceeded")
 			require.GreaterOrEqual(t, elapsed, time.Second)
 			require.Less(t, elapsed, 3*time.Second)
 		},
