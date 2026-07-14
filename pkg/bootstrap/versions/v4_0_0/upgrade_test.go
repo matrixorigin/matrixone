@@ -256,9 +256,9 @@ func Test_upg_mo_indexes_add_included_columns_check_error(t *testing.T) {
 
 func Test_upg_mo_indexes_add_included_columns_ordering(t *testing.T) {
 	clusterEntryIdx := findUpgradeEntryIndex(clusterUpgEntries, upg_mo_indexes_add_included_columns_for_cluster)
-	clusterCreateIdx := findUpgradeEntryIndex(clusterUpgEntries, upg_mo_ccpr_tables_new)
+	clusterCreateIdx := findUpgradeEntryIndex(clusterUpgEntries, upg_mo_iscp_log_new)
 	if assert.NotEqual(t, -1, clusterEntryIdx) && assert.NotEqual(t, -1, clusterCreateIdx) {
-		assert.Greater(t, clusterEntryIdx, clusterCreateIdx)
+		assert.Less(t, clusterEntryIdx, clusterCreateIdx)
 	}
 
 	tenantEntryIdx := findUpgradeEntryIndex(tenantUpgEntries, upg_mo_indexes_add_included_columns_for_tenant)
