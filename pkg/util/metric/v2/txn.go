@@ -116,6 +116,22 @@ var (
 			Help:      "Total number of remote lock owner-side wait timeouts.",
 		}, []string{"granularity", "mode"})
 
+	TxnLockActiveTxnRecoveryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "active_txn_recovery_total",
+			Help:      "Total number of active transaction recovery events.",
+		}, []string{"result"})
+
+	TxnLockRPCQueueRejectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "rpc_queue_rejected_total",
+			Help:      "Total number of lockservice RPC requests rejected before worker admission.",
+		}, []string{"reason"})
+
 	txnPKChangeCheckCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
