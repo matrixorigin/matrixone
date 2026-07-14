@@ -136,22 +136,27 @@ func (lp *localLockTableProxy) unlockWithContext(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	_ ...pb.ExtraMutation) error {
-	// The resolver can expire while waiting for txn.Lock after the transaction
-	// has been removed from activeTxnHolder. Always detach it from this local
-	// proxy before passing cancellation to the remote RPC.
 	rows := ls.slice()
 	defer rows.unref()
+
+	type holderUpdate struct {
+		row              string
+		replaceWith      []byte
+		keepRemoteHolder bool
+	}
 
 	skipped := 0
 	n := rows.len()
 	var remoteMutations []pb.ExtraMutation
+	var updates []holderUpdate
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
 		row := util.UnsafeBytesToString(key)
 		if v, ok := lp.mu.holders[row]; ok {
 			isHolder := lp.isRemoteHolderLocked(row, txn.txnID)
-			if !v.remove(txn) {
+			replacement, found := v.lastExcept(txn)
+			if !found {
 				return true
 			}
 
@@ -165,34 +170,57 @@ func (lp *localLockTableProxy) unlockWithContext(
 							Skip: true,
 						})
 				}
+				updates = append(updates, holderUpdate{
+					row:              row,
+					replaceWith:      lp.mu.currentHolder[row],
+					keepRemoteHolder: true,
+				})
 				return true
 			}
 
-			// update holder to last txn
-			if !v.isEmpty() {
-				lp.mu.currentHolder[row] = v.last()
-				remoteMutations = append(remoteMutations,
-					pb.ExtraMutation{
-						Key:       key,
-						Skip:      false,
-						ReplaceTo: v.last(),
-					})
-			} else {
-				delete(lp.mu.currentHolder, row)
-			}
+			// Do not publish the replacement locally until the owner has
+			// acknowledged ReplaceTo. If the resolver context expires, the
+			// source txn stays active and a retry can safely converge both sides.
+			// Always send a mutation for the remote holder. Besides carrying a
+			// replacement, an empty ReplaceTo is an explicit proxy-handoff
+			// marker: if the response is lost after the owner released this last
+			// holder, a retry must not fail when another transaction already owns
+			// the row.
+			remoteMutations = append(remoteMutations,
+				pb.ExtraMutation{
+					Key:       key,
+					Skip:      false,
+					ReplaceTo: replacement,
+				})
+			updates = append(updates, holderUpdate{row: row, replaceWith: replacement})
 		}
 		return true
 	})
 
 	// all skipped
-	if skipped == rows.len() {
-		return nil
+	var err error
+	if unlocker, ok := lp.remote.(contextUnlocker); ok {
+		if skipped != rows.len() {
+			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
+		}
+	} else if skipped != rows.len() {
+		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
+	}
+	if err != nil {
+		return err
 	}
 
-	if unlocker, ok := lp.remote.(contextUnlocker); ok {
-		return unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
+	for _, update := range updates {
+		v := lp.mu.holders[update.row]
+		if v == nil || !v.remove(txn) {
+			continue
+		}
+		if update.keepRemoteHolder || len(update.replaceWith) > 0 {
+			lp.mu.currentHolder[update.row] = update.replaceWith
+		} else {
+			delete(lp.mu.currentHolder, update.row)
+		}
 	}
-	lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	return nil
 }
 
@@ -267,6 +295,21 @@ func (s *sharedOps) isEmpty() bool {
 
 func (s *sharedOps) last() []byte {
 	return s.txns[len(s.txns)-1].txnID
+}
+
+func (s *sharedOps) lastExcept(txn *activeTxn) ([]byte, bool) {
+	found := false
+	var replacement []byte
+	for idx := len(s.txns) - 1; idx >= 0; idx-- {
+		if s.txns[idx] == txn {
+			found = true
+			continue
+		}
+		if replacement == nil {
+			replacement = s.txns[idx].txnID
+		}
+	}
+	return replacement, found
 }
 
 func (s *sharedOps) add(

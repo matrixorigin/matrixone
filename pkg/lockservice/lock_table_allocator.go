@@ -163,7 +163,14 @@ func (l *lockTableAllocator) addCannotCommitLocked(values []pb.OrphanTxn) [][]by
 	for _, v := range values {
 		c := l.getCtl(v.Service)
 		for _, txn := range v.Txn {
-			state := c.tryCannotCommit(util.UnsafeBytesToString(txn), v.Persist)
+			state := c.tryCannotCommit(
+				util.UnsafeBytesToString(txn),
+				commitFence{
+					persist:        v.Persist,
+					expiresAt:      v.ExpireAtUnixNano,
+					commitSequence: v.CommitSequence,
+				},
+			)
 			if state == committingState {
 				committing = append(committing, txn)
 			}
@@ -249,6 +256,7 @@ func (l *lockTableAllocator) Valid(
 	serviceID string,
 	txnID []byte,
 	binds []pb.LockTable,
+	commitMetas ...CommitRequestMeta,
 ) ([]uint64, error) {
 	var invalid []uint64
 	l.mu.Lock()
@@ -287,8 +295,12 @@ func (l *lockTableAllocator) Valid(
 		return nil, moerr.NewCannotCommitOnInvalidCNNoCtx()
 	}
 
+	var commitMeta CommitRequestMeta
+	if len(commitMetas) > 0 {
+		commitMeta = commitMetas[0]
+	}
 	c := l.getCtl(serviceID)
-	state := c.beginCommit(util.UnsafeBytesToString(txnID))
+	state := c.beginCommit(util.UnsafeBytesToString(txnID), commitMeta)
 	if state == cannotCommitState {
 		return nil, moerr.NewCannotCommitOrphanNoCtx()
 	}
@@ -811,17 +823,17 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 
 	l.ctlMu.Lock()
 	for _, sid := range invalidServices {
-		// Valid=false after endpoint refresh proves this source service
-		// incarnation no longer exists. Its transport is gone too, so no
-		// buffered Commit from that incarnation can still arrive at TN.
-		l.cleanCtlLocked(sid, nil, false, true, cleanupWatermarks[sid])
+		// A lockservice endpoint mismatch says nothing about a Commit already
+		// accepted by the TN RPC queue. Persistent unknown-commit fences remain
+		// until their Commit deadline makes a late admission impossible.
+		l.cleanCtlLocked(sid, nil, false, cleanupWatermarks[sid])
 	}
 	for _, sid := range unknownServices {
 		_, expired := expiredUnknownServices[sid]
-		l.cleanCtlLocked(sid, nil, !expired, false, cleanupWatermarks[sid])
+		l.cleanCtlLocked(sid, nil, !expired, cleanupWatermarks[sid])
 	}
 	for sid, activeTxns := range activeTxnMap {
-		l.cleanCtlLocked(sid, activeTxns, false, false, cleanupWatermarks[sid])
+		l.cleanCtlLocked(sid, activeTxns, false, cleanupWatermarks[sid])
 	}
 	l.ctlMu.Unlock()
 }
@@ -1236,23 +1248,41 @@ var (
 )
 
 type commitCtl struct {
-	mu            sync.Mutex
-	generation    uint64
-	recoveryEpoch uint64
-	states        map[string]commitState
+	mu                       sync.Mutex
+	generation               uint64
+	recoveryEpoch            uint64
+	persistentFenceExpiresAt int64
+	persistentFenceSequence  uint64
+	states                   map[string]commitState
 }
 
 type commitState struct {
 	state      ctlState
 	inflight   uint32
 	generation uint64
-	persist    bool
 }
 
-func (c *commitCtl) beginCommit(txnID string) ctlState {
+type commitFence struct {
+	persist        bool
+	expiresAt      int64
+	commitSequence uint64
+}
+
+func (c *commitCtl) beginCommit(
+	txnID string,
+	commitMetas ...CommitRequestMeta,
+) ctlState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ensureStatesLocked()
+
+	var commitMeta CommitRequestMeta
+	if len(commitMetas) > 0 {
+		commitMeta = commitMetas[0]
+	}
+	if c.hasPersistentFenceLocked(time.Now().UnixNano(), commitMeta.Sequence) {
+		return cannotCommitState
+	}
 
 	state, ok := c.states[txnID]
 	if ok && state.state == cannotCommitState {
@@ -1287,8 +1317,11 @@ func (c *commitCtl) finishCommit(txnID string) bool {
 	return true
 }
 
-func (c *commitCtl) tryCannotCommit(txnID string, persists ...bool) ctlState {
-	persist := len(persists) > 0 && persists[0]
+func (c *commitCtl) tryCannotCommit(txnID string, fences ...commitFence) ctlState {
+	var fence commitFence
+	if len(fences) > 0 {
+		fence = fences[0]
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ensureStatesLocked()
@@ -1297,15 +1330,30 @@ func (c *commitCtl) tryCannotCommit(txnID string, persists ...bool) ctlState {
 	if ok && state.state == committingState && state.inflight > 0 {
 		return committingState
 	}
+	if fence.persist {
+		// Keep one bounded source-CN fence instead of one permanent state per
+		// unknown transaction. CommitSequence is allocated by the source
+		// lockservice, so a larger sequence is a new Commit even when it has a
+		// shorter context deadline than the unknown request.
+		if fence.expiresAt > c.persistentFenceExpiresAt {
+			c.persistentFenceExpiresAt = fence.expiresAt
+		}
+		if fence.commitSequence == 0 {
+			// Missing sequence is a legacy or malformed request. Keep the fence
+			// fail-closed until its TN admission deadline elapses.
+			c.persistentFenceSequence = math.MaxUint64
+		} else if fence.commitSequence > c.persistentFenceSequence {
+			c.persistentFenceSequence = fence.commitSequence
+		}
+		return cannotCommitState
+	}
 	if ok && state.state == cannotCommitState {
-		state.persist = state.persist || persist
 		state.generation = c.nextGenerationLocked()
 		c.states[txnID] = state
 		return cannotCommitState
 	}
 	state.state = cannotCommitState
 	state.inflight = 0
-	state.persist = persist
 	state.generation = c.nextGenerationLocked()
 	c.states[txnID] = state
 	return cannotCommitState
@@ -1333,12 +1381,13 @@ func (c *commitCtl) getCommitState(txnID string) (commitState, bool) {
 func (c *commitCtl) clean(
 	activeTxns map[string]struct{},
 	preserveCannotCommit bool,
-	removePersistent bool,
 	maxGeneration uint64,
 	logger *log.MOLogger,
 ) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := time.Now().UnixNano()
+	_ = c.hasPersistentFenceLocked(now, 0)
 	for txnID, state := range c.states {
 		// A newer state was created or refreshed while GetActiveTxn was in
 		// flight, so the response cannot be used to remove it.
@@ -1347,7 +1396,6 @@ func (c *commitCtl) clean(
 		}
 		_, active := activeTxns[txnID]
 		if active || state.inflight > 0 ||
-			(state.persist && !removePersistent) ||
 			(preserveCannotCommit && state.state == cannotCommitState) {
 			continue
 		}
@@ -1361,13 +1409,36 @@ func (c *commitCtl) clean(
 func (c *commitCtl) empty() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.states) == 0
+	_ = c.hasPersistentFenceLocked(time.Now().UnixNano(), 0)
+	return len(c.states) == 0 && c.persistentFenceExpiresAt == 0
 }
 
 func (c *commitCtl) size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.states)
+}
+
+func (c *commitCtl) hasPersistentFenceLocked(now int64, commitSequence uint64) bool {
+	if c.persistentFenceExpiresAt == 0 {
+		return false
+	}
+	if now >= c.persistentFenceExpiresAt {
+		c.persistentFenceExpiresAt = 0
+		c.persistentFenceSequence = 0
+		return false
+	}
+	// A legacy caller has no source sequence, so it cannot prove that it was
+	// created after the unknown Commit. Fail closed until the admission
+	// deadline, while allowing all newer source-CN Commit requests.
+	return commitSequence == 0 || commitSequence <= c.persistentFenceSequence
+}
+
+func (c *commitCtl) persistentFenceExpiry() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_ = c.hasPersistentFenceLocked(time.Now().UnixNano(), 0)
+	return c.persistentFenceExpiresAt
 }
 
 func (c *commitCtl) ensureStatesLocked() {
@@ -1430,7 +1501,6 @@ func (l *lockTableAllocator) cleanCtlLocked(
 	serviceID string,
 	activeTxns map[string]struct{},
 	preserveCannotCommit bool,
-	removePersistent bool,
 	maxGeneration uint64,
 ) {
 	value, ok := l.ctl.Load(serviceID)
@@ -1438,7 +1508,7 @@ func (l *lockTableAllocator) cleanCtlLocked(
 		return
 	}
 	c := value.(*commitCtl)
-	c.clean(activeTxns, preserveCannotCommit, removePersistent, maxGeneration, l.logger)
+	c.clean(activeTxns, preserveCannotCommit, maxGeneration, l.logger)
 	// Serialize removal with Resume and conditional inactive marking. This
 	// prevents an old cleanup from passing an identity check while its ctl is
 	// concurrently replaced (ABA).

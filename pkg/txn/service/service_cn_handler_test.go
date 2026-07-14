@@ -886,6 +886,18 @@ func commitWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn
 	return responses
 }
 
+func TestCommitRequestExpired(t *testing.T) {
+	now := time.Unix(0, 100)
+	req := txn.TxnRequest{CommitRequest: &txn.TxnCommitRequest{DeadlineUnixNano: 99}}
+	require.True(t, commitRequestExpired(&req, now))
+
+	req.CommitRequest.DeadlineUnixNano = 101
+	require.False(t, commitRequestExpired(&req, now))
+
+	req.CommitRequest.DeadlineUnixNano = 0
+	require.False(t, commitRequestExpired(&req, now))
+}
+
 func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
 	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestRollbackRequest(wTxn)})
 	assert.NoError(t, err)

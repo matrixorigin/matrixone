@@ -46,17 +46,31 @@ type checkLockTableBindLockService struct {
 
 type unknownCommitResolverLockService struct {
 	lockservice.LockService
-	resolvedTxnID []byte
-	unlockedTxnID []byte
+	resolvedTxnID    []byte
+	resolvedDeadline time.Time
+	resolvedSequence uint64
+	nextSequence     uint64
+	unlockedTxnID    []byte
 }
 
 func (s *unknownCommitResolverLockService) GetServiceID() string {
 	return "unknown-commit-resolver"
 }
 
-func (s *unknownCommitResolverLockService) ResolveCommitUnknown(txnID []byte) error {
+func (s *unknownCommitResolverLockService) ResolveCommitUnknown(
+	txnID []byte,
+	deadline time.Time,
+	sequence uint64,
+) error {
 	s.resolvedTxnID = append(s.resolvedTxnID[:0], txnID...)
+	s.resolvedDeadline = deadline
+	s.resolvedSequence = sequence
 	return nil
+}
+
+func (s *unknownCommitResolverLockService) NextCommitSequence() uint64 {
+	s.nextSequence++
+	return s.nextSequence
 }
 
 func (s *unknownCommitResolverLockService) Unlock(
@@ -1129,6 +1143,14 @@ func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
 		err := tc.Commit(ctx)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
 		require.Equal(t, tc.mu.txn.ID, resolver.resolvedTxnID)
+		require.False(t, resolver.resolvedDeadline.IsZero())
+		require.Equal(t, tc.reset.commitDeadline, resolver.resolvedDeadline)
+		require.Equal(t, tc.reset.commitSequence, resolver.resolvedSequence)
+		require.NotEmpty(t, ts.lastRequests)
+		commitReq := ts.lastRequests[len(ts.lastRequests)-1]
+		require.NotNil(t, commitReq.CommitRequest)
+		require.Equal(t, resolver.resolvedDeadline.UnixNano(), commitReq.CommitRequest.DeadlineUnixNano)
+		require.Equal(t, resolver.resolvedSequence, commitReq.CommitRequest.CommitSequence)
 		require.True(t, tc.mu.txn.CommitTS.IsEmpty())
 		require.Equal(t, 1, ws.unknownCount)
 		require.Zero(t, ws.rollbackCount)

@@ -312,6 +312,8 @@ type txnOperator struct {
 		runningSQL            atomic.Bool
 		commitErr             error
 		commitNeedsResolution bool
+		commitDeadline        time.Time
+		commitSequence        uint64
 		cache                 sync.Map
 	}
 
@@ -322,6 +324,12 @@ type txnOperator struct {
 		waitActiveHandle   func()
 	}
 }
+
+// commitDeadlineFallback bounds only TN admission for callers that do not
+// provide a context deadline. It does not alter the caller context or cancel a
+// normal Commit. The finite value lets unknown-commit fencing be collected
+// without keeping one permanent tombstone per transaction.
+const commitDeadlineFallback = 24 * time.Hour
 
 type runSQLTracker struct {
 	// Tracks running SQL by token so callers can cancel and wait during retry/rollback/commit.
@@ -551,6 +559,8 @@ func (tc *txnOperator) initReset() {
 	tc.reset.runningSQL.Store(false)
 	tc.reset.commitErr = nil
 	tc.reset.commitNeedsResolution = false
+	tc.reset.commitDeadline = time.Time{}
+	tc.reset.commitSequence = 0
 	tc.reset.cache = sync.Map{}
 }
 
@@ -1132,6 +1142,9 @@ func (tc *txnOperator) doWrite(
 	}
 	var payload []txn.TxnRequest
 	workspacePrepared := false
+	var commitDeadline time.Time
+	var hasCommitDeadline bool
+	var commitSequence uint64
 	if commit {
 		if tc.reset.workspace != nil {
 			var reqs []txn.TxnRequest
@@ -1214,12 +1227,21 @@ func (tc *txnOperator) doWrite(
 		}
 
 		requests = tc.maybeInsertCachedWrites(requests, true)
+		commitDeadline, hasCommitDeadline = ctx.Deadline()
+		if !hasCommitDeadline {
+			commitDeadline = time.Now().Add(commitDeadlineFallback)
+		}
+		if sequencer, ok := tc.lockService.(lockservice.CommitSequenceProvider); ok {
+			commitSequence = sequencer.NextCommitSequence()
+		}
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Commit,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
-				Payload:       txnReqs,
-				Disable1PCOpt: tc.opts.options.Is1PCDisabled(),
+				Payload:          txnReqs,
+				Disable1PCOpt:    tc.opts.options.Is1PCDisabled(),
+				DeadlineUnixNano: commitDeadline.UnixNano(),
+				CommitSequence:   commitSequence,
 			}})
 	}
 	if commit && tc.markAbortedLocked() {
@@ -1234,6 +1256,8 @@ func (tc *txnOperator) doWrite(
 		tc.reset.commitErr = err
 		if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
 			tc.reset.commitNeedsResolution = true
+			tc.reset.commitDeadline = commitDeadline
+			tc.reset.commitSequence = commitSequence
 		}
 	}
 	return resp, err
@@ -1590,7 +1614,11 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 				util.TxnField(tc.mu.txn))
 			return
 		}
-		if err := resolver.ResolveCommitUnknown(tc.mu.txn.ID); err != nil {
+		if err := resolver.ResolveCommitUnknown(
+			tc.mu.txn.ID,
+			tc.reset.commitDeadline,
+			tc.reset.commitSequence,
+		); err != nil {
 			tc.logger.Error("failed to schedule unknown commit resolution",
 				util.TxnField(tc.mu.txn),
 				zap.Error(err))

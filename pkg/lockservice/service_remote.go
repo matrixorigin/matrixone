@@ -532,7 +532,16 @@ func (s *service) handleCheckActiveTxn(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CheckActiveTxn.Valid = s.serviceID == req.CheckActiveTxn.ServiceID
-	if resp.CheckActiveTxn.Valid && s.cfg.TxnIterFunc != nil {
+	if resp.CheckActiveTxn.Valid && s.unknownCommitResolver != nil {
+		// TxnIterFunc tracks frontend transaction operators. An unknown Commit
+		// can already have removed its operator while lockservice is still
+		// retaining it to finish a remote proxy ReplaceTo. Only that resolver-
+		// owned state must delay orphan cleanup. activeTxnHolder also contains
+		// ordinary lockservice holders, whose liveness must remain governed by
+		// TxnIterFunc.
+		resp.CheckActiveTxn.Active = s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
+	}
+	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active && s.cfg.TxnIterFunc != nil {
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {
 			resp.CheckActiveTxn.Active = bytes.Equal(req.CheckActiveTxn.Txn, txnID)
 			return !resp.CheckActiveTxn.Active

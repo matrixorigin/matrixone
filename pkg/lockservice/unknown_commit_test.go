@@ -41,7 +41,11 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		require.NoError(t, err)
 		_, err = allocator.Valid(service.serviceID, holderTxn, nil)
 		require.NoError(t, err)
-		require.NoError(t, service.ResolveCommitUnknown(holderTxn))
+		require.NoError(t, service.ResolveCommitUnknown(
+			holderTxn,
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+		))
 
 		type lockResult struct {
 			result pb.Result
@@ -95,6 +99,8 @@ func TestUnknownCommitBatchFencesOnlyNonCommittingTxns(t *testing.T) {
 		committing, fenceTS, ok := service.canUnlockUnknownCommits(
 			context.Background(),
 			[][]byte{committingTxn, unstartedTxn},
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
 		)
 		require.True(t, ok)
 		_, ok = committing[string(committingTxn)]
@@ -114,9 +120,12 @@ func TestUnknownCommitFenceSurvivesLiveServiceCleanup(t *testing.T) {
 		service := services[0]
 		txnID := []byte("late-commit")
 
+		sequence := service.NextCommitSequence()
 		_, _, ok := service.canUnlockUnknownCommits(
 			context.Background(),
 			[][]byte{txnID},
+			time.Now().Add(time.Hour),
+			sequence,
 		)
 		require.True(t, ok)
 
@@ -131,17 +140,21 @@ func TestUnknownCommitFenceSurvivesLiveServiceCleanup(t *testing.T) {
 			time.Hour,
 		)
 
-		state, exists := allocator.getCtl(service.serviceID).getCommitState(string(txnID))
-		require.True(t, exists)
-		require.Equal(t, cannotCommitState, state.state)
-		require.True(t, state.persist)
+		ctl := allocator.getCtl(service.serviceID)
+		require.NotZero(t, ctl.persistentFenceExpiry())
+		require.Zero(t, ctl.size(), "persistent fences are compacted per source CN")
 
-		_, err := allocator.Valid(service.serviceID, txnID, nil)
+		_, err := allocator.Valid(
+			service.serviceID,
+			txnID,
+			nil,
+			CommitRequestMeta{Sequence: sequence},
+		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
 	})
 }
 
-func TestUnknownCommitFencesAreCollectedAfterSourceIncarnationInvalid(t *testing.T) {
+func TestUnknownCommitFencesSurviveSourceIncarnationInvalid(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
 		service := services[0]
 		const fenceCount = 128
@@ -150,12 +163,17 @@ func TestUnknownCommitFencesAreCollectedAfterSourceIncarnationInvalid(t *testing
 			txnIDs = append(txnIDs, []byte(fmt.Sprintf("late-commit-%d", i)))
 		}
 
-		_, _, ok := service.canUnlockUnknownCommits(context.Background(), txnIDs)
+		sequence := service.NextCommitSequence()
+		_, _, ok := service.canUnlockUnknownCommits(
+			context.Background(),
+			txnIDs,
+			time.Now().Add(time.Hour),
+			sequence,
+		)
 		require.True(t, ok)
 
-		// GetActiveTxn.Valid=false is authoritative only after the allocator
-		// has refreshed the backend. It means this exact serviceID incarnation
-		// has exited, so no request buffered on its transport can reach TN.
+		// A lockservice endpoint mismatch does not drain the TN RPC queue. A
+		// Commit decoded before the mismatch can still reach allocator.Valid.
 		client := &resetTrackingClient{}
 		require.NoError(t, allocator.client.Close())
 		allocator.client = client
@@ -168,8 +186,125 @@ func TestUnknownCommitFencesAreCollectedAfterSourceIncarnationInvalid(t *testing
 		)
 
 		require.Equal(t, int32(1), client.resets.Load())
+		ctl := allocator.getCtl(service.serviceID)
+		require.NotZero(t, ctl.persistentFenceExpiry())
+		require.Zero(t, ctl.size(), "persistent fences are compacted per source CN")
+		_, err := allocator.Valid(
+			service.serviceID,
+			txnIDs[0],
+			nil,
+			CommitRequestMeta{Sequence: sequence},
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+	})
+}
+
+func TestUnknownCommitFenceRejectsOnlyOlderCommitSequences(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		service := services[0]
+		unknownDeadline := time.Now().Add(time.Hour)
+		unknownSequence := service.NextCommitSequence()
+		_, _, ok := service.canUnlockUnknownCommits(
+			context.Background(),
+			[][]byte{[]byte("unknown")},
+			unknownDeadline,
+			unknownSequence,
+		)
+		require.True(t, ok)
+
+		// The unknown Commit's sequence is rejected even if it remains queued.
+		_, err := allocator.Valid(
+			service.serviceID,
+			[]byte("old-commit"),
+			nil,
+			CommitRequestMeta{
+				DeadlineUnixNano: unknownDeadline.UnixNano(),
+				Sequence:         unknownSequence,
+			},
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+
+		// A newer Commit remains admissible even with a shorter deadline. This
+		// avoids converting an unknown outcome into normal-traffic failures for
+		// callers that use a tighter context timeout.
+		newTxnID := []byte("new-commit")
+		_, err = allocator.Valid(
+			service.serviceID,
+			newTxnID,
+			nil,
+			CommitRequestMeta{
+				DeadlineUnixNano: time.Now().Add(time.Millisecond).UnixNano(),
+				Sequence:         service.NextCommitSequence(),
+			},
+		)
+		require.NoError(t, err)
+		allocator.FinishCommit(service.serviceID, newTxnID)
+	})
+}
+
+func TestUnknownCommitFencesStayBoundedForSequentialTxns(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		service := services[0]
+		const fenceCount = 128
+		deadline := time.Now().Add(time.Hour)
+
+		for i := 0; i < fenceCount; i++ {
+			txnID := []byte(fmt.Sprintf("sequential-unknown-%d", i))
+			_, _, ok := service.canUnlockUnknownCommits(
+				context.Background(),
+				[][]byte{txnID},
+				deadline,
+				service.NextCommitSequence(),
+			)
+			require.True(t, ok)
+		}
+
+		ctl := allocator.getCtl(service.serviceID)
+		require.NotZero(t, ctl.persistentFenceExpiry())
+		require.Zero(t, ctl.size(), "unknown Commit fences must not retain each txn")
+
+		// A normal live-service cleanup must preserve the compact source fence.
+		allocator.cleanCommitStateOnce(
+			context.Background(),
+			func(context.Context, string) (bool, [][]byte, error) {
+				return true, nil, nil
+			},
+			time.Hour,
+		)
+		require.NotZero(t, ctl.persistentFenceExpiry())
+		require.Zero(t, ctl.size())
+	})
+}
+
+func TestUnknownCommitFencesExpireAfterCommitDeadline(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		service := services[0]
+		const fenceCount = 128
+		txnIDs := make([][]byte, 0, fenceCount)
+		for i := 0; i < fenceCount; i++ {
+			txnIDs = append(txnIDs, []byte(fmt.Sprintf("expired-unknown-%d", i)))
+		}
+
+		// The expiry is deliberately far in the past so it dominates the
+		// allocator's bounded clock-skew grace on every test clock.
+		_, _, ok := service.canUnlockUnknownCommits(
+			context.Background(),
+			txnIDs,
+			time.Now().Add(-time.Hour),
+			service.NextCommitSequence(),
+		)
+		require.True(t, ok)
+
+		allocator.cleanCommitStateOnce(
+			context.Background(),
+			func(context.Context, string) (bool, [][]byte, error) {
+				return true, nil, nil
+			},
+			time.Hour,
+		)
+
 		_, exists := allocator.ctl.Load(service.serviceID)
-		require.False(t, exists)
+		require.False(t, exists, "expired persistent fences must not grow forever")
 	})
 }
 
@@ -202,7 +337,11 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 		txn.Lock()
 		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
 		txn.Unlock()
-		require.NoError(t, service.ResolveCommitUnknown(txnID))
+		require.NoError(t, service.ResolveCommitUnknown(
+			txnID,
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+		))
 
 		select {
 		case <-client.unlockStarted:

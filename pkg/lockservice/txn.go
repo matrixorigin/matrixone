@@ -185,6 +185,45 @@ func (txn *activeTxn) closeWithContext(
 	logger *log.MOLogger,
 	mutations ...pb.ExtraMutation,
 ) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		true,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithoutFreeWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		false,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithContextInternal(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	release bool,
+	mutations ...pb.ExtraMutation,
+) error {
 	logTxnReadyToClose(logger, txn)
 
 	// cancel all blocked waiters
@@ -201,7 +240,11 @@ func (txn *activeTxn) closeWithContext(
 	}
 
 	n := len(txn.lockHolders)
-	parallelUnlock := n > parallelUnlockTables && ctx.Done() == nil
+	// Unknown-commit cleanup can be retried after a bounded remote RPC attempt
+	// expires. Keep that path sequential and remove every table only after its
+	// unlock succeeds, so a retry never replays a successful local unlock.
+	// Normal transaction cleanup retains its existing parallel behavior.
+	parallelUnlock := release && n > parallelUnlockTables && ctx.Done() == nil
 	var wg sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
@@ -218,6 +261,9 @@ func (txn *activeTxn) closeWithContext(
 				panic(err)
 			}
 			if l == nil || canSkipTable(isRemoteTable, l) {
+				if !release {
+					txn.removeClosedLockTable(group, table, cs)
+				}
 				continue
 			}
 
@@ -240,6 +286,8 @@ func (txn *activeTxn) closeWithContext(
 							firstErr = err
 						}
 						errMu.Unlock()
+					} else if !release {
+						txn.removeClosedLockTable(group, table, cs)
 					}
 					logTxnUnlockTableCompleted(
 						logger,
@@ -266,8 +314,31 @@ func (txn *activeTxn) closeWithContext(
 		wg.Wait()
 	}
 
-	reuse.Free(txn, nil)
+	if release {
+		reuse.Free(txn, nil)
+	}
 	return firstErr
+}
+
+// removeClosedLockTable forgets a successfully released table while an
+// unknown-commit cleanup is still retryable. activeTxn is held by the caller.
+func (txn *activeTxn) removeClosedLockTable(
+	group uint32,
+	table uint64,
+	cs *cowSlice,
+) {
+	h, ok := txn.lockHolders[group]
+	if !ok || h.tableKeys[table] != cs {
+		return
+	}
+	delete(h.tableKeys, table)
+	delete(h.tableBinds, table)
+	delete(h.tableBindIntents, table)
+	cs.close()
+	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
+		len(h.tableBindIntents) == 0 {
+		delete(txn.lockHolders, group)
+	}
 }
 
 func (txn *activeTxn) reset() {

@@ -61,6 +61,7 @@ type service struct {
 	bindChangeMu          sync.RWMutex
 	fetchWhoWaitingListC  chan who
 	logger                *log.MOLogger
+	commitSequence        atomic.Uint64
 
 	allocatorVersionMu         sync.Mutex
 	lastAllocatorVersion       uint64
@@ -91,6 +92,19 @@ type service struct {
 }
 
 const maxSupersededAllocatorIDs = 64
+
+var _ CommitSequenceProvider = (*service)(nil)
+
+// NextCommitSequence returns a non-zero sequence scoped to this lockservice
+// incarnation. serviceID also includes the process creation time, so a restart
+// gets a distinct source identity at TN.
+func (s *service) NextCommitSequence() uint64 {
+	sequence := s.commitSequence.Add(1)
+	if sequence != 0 {
+		return sequence
+	}
+	return s.commitSequence.Add(1)
+}
 
 // NewLockService create a lock service instance
 func NewLockService(
@@ -252,7 +266,59 @@ func (s *service) unlockUnknownCommit(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
-	return s.unlockWithContext(ctx, txnID, commitTS, mutations...)
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Keep the source transaction registered until every owner-side unlock has
+	// acknowledged. In particular, a local proxy must not publish a replacement
+	// holder before its ReplaceTo mutation reaches the remote owner. Retaining
+	// the active transaction on a bounded-attempt failure makes orphan cleanup
+	// fail closed; the resolver retries it later.
+	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	if txn == nil {
+		return nil
+	}
+
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
+	defer logUnlockTxn(s.logger, txn)()
+	if err := txn.closeWithoutFreeWithContext(
+		ctx,
+		txnID,
+		commitTS,
+		s.getLockTable,
+		s.logger,
+		mutations...,
+	); err != nil {
+		return err
+	}
+
+	if s.activeTxnHolder.deleteActiveTxn(txnID) != txn {
+		return nil
+	}
+	if !s.isStatus(pb.Status_ServiceLockEnable) {
+		s.reduceCanMoveGroupTables(txn)
+		if s.isStatus(pb.Status_ServiceLockWaiting) && s.activeTxnHolder.empty() {
+			s.setStatus(pb.Status_ServiceUnLockSucc)
+		}
+	}
+	s.deadlockDetector.txnClosed(txnID)
+	reuse.Free(txn, nil)
+	return nil
 }
 
 func (s *service) unlockWithContext(

@@ -323,6 +323,16 @@ func (l *localLockTable) unlock(
 			}
 
 			if !lock.holders.contains(txn.txnID) {
+				// A remote proxy retries ReplaceTo after an RPC response is lost.
+				// The first request may already have replaced the holder, so make
+				// that exact handoff idempotent instead of treating it as a stale
+				// ordinary unlock.
+				if idx != -1 {
+					if len(mutations[idx].ReplaceTo) == 0 ||
+						lock.holders.contains(mutations[idx].ReplaceTo) {
+						return true
+					}
+				}
 				// 1. txn1 hold key1 on bind version 0
 				// 2. txn1 commit success
 				// 3. dn restart
@@ -344,7 +354,7 @@ func (l *localLockTable) unlock(
 				panic("BUG: missing range end key")
 			}
 
-			if idx != -1 {
+			if idx != -1 && len(mutations[idx].ReplaceTo) > 0 {
 				replaceTo := mutations[idx].ReplaceTo
 				lock.holders.replace(txn.txnID,
 					pb.WaitTxn{TxnID: replaceTo, CreatedOn: txn.remoteService})

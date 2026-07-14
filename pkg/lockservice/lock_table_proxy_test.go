@@ -16,12 +16,32 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
+
+// unlockAfterApplyErrorTable simulates an owner that applies an Unlock before
+// the source CN loses the response.
+type unlockAfterApplyErrorTable struct {
+	lockTable
+	err error
+}
+
+func (t *unlockAfterApplyErrorTable) unlockWithContext(
+	_ context.Context,
+	txn *activeTxn,
+	locks *cowSlice,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation,
+) error {
+	t.lockTable.unlock(txn, locks, commitTS, mutations...)
+	return t.err
+}
 
 func TestProxySharedLock(t *testing.T) {
 	runLockServiceTests(
@@ -179,9 +199,16 @@ func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
 			survivor := s2.activeTxnHolder.getActiveTxn(survivorTxn, false, "")
 			require.NotNil(t, timedOut)
 			require.NotNil(t, survivor)
+			s2.unknownCommitResolver.mu.Lock()
+			s2.unknownCommitResolver.mu.pending[string(timedOutTxn)] = unknownCommitTxn{
+				id: timedOutTxn,
+			}
+			s2.unknownCommitResolver.mu.Unlock()
 
-			// unlockWithContext removes the active transaction before waiting on
-			// its mutex. Expire the resolver context in that gap.
+			// Expire the resolver context while the unknown-commit resolver is
+			// waiting on the source txn mutex. It must leave both proxy and owner
+			// on the old holder so a later orphan cleanup cannot release a lock
+			// that the proxy still treats as held by survivor.
 			timedOut.Lock()
 			unlockCtx, unlockCancel := context.WithCancel(context.Background())
 			defer unlockCancel()
@@ -194,23 +221,107 @@ func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
 				)
 			}()
 			require.Eventually(t, func() bool {
-				return !s2.activeTxnHolder.hasActiveTxn(timedOutTxn)
+				return s2.activeTxnHolder.hasActiveTxn(timedOutTxn)
 			}, time.Second, time.Millisecond)
 			unlockCancel()
 			timedOut.Unlock()
 
 			require.ErrorIs(t, <-unlocked, context.Canceled)
 
-			// The closed activeTxn must not remain in the proxy. A later shared
-			// lock uses survivor as the remote handoff target instead of a
-			// reusable activeTxn pointer.
+			// The failed handoff cannot publish survivor as the remote holder.
+			// Keeping the old source txn active makes CheckActiveTxn report it as
+			// live even after the frontend transaction is gone.
 			proxy.mu.RLock()
-			defer proxy.mu.RUnlock()
 			shared := proxy.mu.holders[string(row)]
 			require.NotNil(t, shared)
-			require.Len(t, shared.txns, 1)
-			require.Same(t, survivor, shared.txns[0])
-			require.Equal(t, survivorTxn, proxy.mu.currentHolder[string(row)])
+			require.Len(t, shared.txns, 2)
+			require.Same(t, timedOut, shared.txns[0])
+			require.Same(t, survivor, shared.txns[1])
+			require.Equal(t, timedOutTxn, proxy.mu.currentHolder[string(row)])
+			proxy.mu.RUnlock()
+
+			holder, ok, err := s1.tableGroups.get(0, tableID).getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, timedOutTxn, holder.TxnID)
+
+			// Exercise the owner-side orphan path. The unknown-commit resolver
+			// still owns the source holder, so the owner must not use
+			// CannotCommit to release it before ReplaceTo has been acknowledged.
+			owner := s1.tableGroups.get(0, tableID).(*localLockTable)
+			s1.activeTxnHolder.keepRemoteLockBindActive(s2.serviceID, owner.bind)
+			s1.events.checkOrphan(checkOrphan{
+				wait: waitTooLong,
+				key:  row,
+				lt:   owner,
+				txn:  pb.WaitTxn{TxnID: []byte("owner-waiter"), CreatedOn: s1.serviceID},
+			})
+
+			holder, ok, err = owner.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, timedOutTxn, holder.TxnID)
+		},
+	)
+}
+
+func TestProxyUnlockRetryIgnoresNewOwnerAfterLostLastHolderResponse(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			const tableID = uint64(10)
+			row := []byte("row")
+			seedTxn := []byte("seed")
+			timedOutTxn := []byte("timed-out")
+			newOwnerTxn := []byte("new-owner")
+			s1 := services[0]
+			s2 := services[1]
+
+			// Make s1 the table owner, then acquire one shared proxy holder on s2.
+			s1.cfg.EnableRemoteLocalProxy = true
+			_, err := s1.Lock(ctx, tableID, [][]byte{row}, seedTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+			require.NoError(t, s1.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+
+			s2.cfg.EnableRemoteLocalProxy = true
+			_, err = s2.Lock(ctx, tableID, [][]byte{row}, timedOutTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			proxy := s2.tableGroups.get(0, tableID).(*localLockTableProxy)
+			owner := s1.tableGroups.get(0, tableID).(*localLockTable)
+			remote := proxy.remote
+			proxy.remote = &unlockAfterApplyErrorTable{
+				lockTable: owner,
+				err:       errors.New("unlock response lost"),
+			}
+
+			// The owner executes the first Unlock, but the source does not receive
+			// the response and therefore retains the old proxy holder for retry.
+			err = s2.unlockUnknownCommit(ctx, timedOutTxn, timestamp.Timestamp{})
+			require.EqualError(t, err, "unlock response lost")
+
+			holder, ok, err := owner.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.False(t, ok)
+			require.Empty(t, holder.TxnID)
+
+			// A different owner-local transaction may acquire the row before the
+			// source retries its already-applied Unlock.
+			_, err = s1.Lock(ctx, tableID, [][]byte{row}, newOwnerTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+
+			proxy.remote = remote
+			require.NoError(t, s2.unlockUnknownCommit(ctx, timedOutTxn, timestamp.Timestamp{}))
+
+			holder, ok, err = owner.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, newOwnerTxn, holder.TxnID)
+			require.NoError(t, s1.Unlock(ctx, newOwnerTxn, timestamp.Timestamp{}))
 		},
 	)
 }

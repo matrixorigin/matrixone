@@ -413,6 +413,43 @@ func TestHandleCheckActiveTxn(t *testing.T) {
 	)
 }
 
+func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("txn1")
+			s.activeTxnHolder.getActiveTxn(txnID, true, "")
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       txnID,
+				},
+			}
+			cs := &testClientSession{ctx: context.Background()}
+
+			resp := acquireResponse()
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.False(t, resp.CheckActiveTxn.Active)
+			releaseResponse(resp)
+
+			s.unknownCommitResolver.mu.Lock()
+			s.unknownCommitResolver.mu.pending[string(txnID)] = unknownCommitTxn{id: txnID}
+			s.unknownCommitResolver.mu.Unlock()
+
+			resp = acquireResponse()
+			defer releaseResponse(resp)
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+		},
+	)
+}
+
 func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
 	runLockServiceTests(
 		t,
