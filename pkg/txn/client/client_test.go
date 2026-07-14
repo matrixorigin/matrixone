@@ -294,8 +294,183 @@ func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
 		require.Eventually(t, func() bool {
 			tc.mu.RLock()
 			defer tc.mu.RUnlock()
-			return tc.mu.terminalCleanupDone
+			return tc.mu.terminalOutcome == txnTerminalOutcomeSucceeded
 		}, time.Second, time.Millisecond)
+
+		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, restarted.Rollback(ctx))
+	})
+}
+
+func TestRestartTxnRejectsFailedDeferredRollback(t *testing.T) {
+	tests := []struct {
+		name         string
+		workspaceErr error
+		sendErr      error
+		unlockErr    error
+	}{
+		{name: "workspace", workspaceErr: assert.AnError},
+		{name: "tn rollback", sendErr: assert.AnError},
+		{name: "unlock", unlockErr: assert.AnError},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				client := c.(*txnClient)
+				op, err := c.New(ctx, timestamp.Timestamp{})
+				require.NoError(t, err)
+				tc := op.(*txnOperator)
+				workspace := &trackingWorkspace{rollbackErr: test.workspaceErr}
+				lockService := &trackingUnlockLockService{unlockErr: test.unlockErr}
+				tc.AddWorkspace(workspace)
+				tc.lockService = lockService
+				tc.mu.Lock()
+				tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				tc.mu.Unlock()
+
+				if test.sendErr != nil {
+					sender.(*testTxnSender).setManual(func(result *rpc.SendResult, _ error) (*rpc.SendResult, error) {
+						result.Release()
+						return nil, test.sendErr
+					})
+				}
+
+				_, runningCancel := context.WithCancel(context.Background())
+				runningToken := mustEnterRunSQL(t, tc, runningCancel, "stuck sql")
+				commitCtx, cancelCommit := context.WithCancel(ctx)
+				cancelCommit()
+				require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
+				tc.ExitRunSqlWithToken(runningToken)
+
+				require.Eventually(t, func() bool {
+					tc.mu.RLock()
+					defer tc.mu.RUnlock()
+					return tc.mu.terminalOutcome == txnTerminalOutcomeFailed
+				}, time.Second, time.Millisecond)
+				require.Equal(t, 1, workspace.rollbackCount)
+				require.Equal(t, 1, lockService.unlockCount)
+				requests := sender.(*testTxnSender).getLastRequests()
+				require.Len(t, requests, 1)
+				require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+
+				for range 2 {
+					_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+				}
+				_, err = tc.TryEnterRunSqlWithTokenAndSQL(nil, "after failed cleanup")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+			})
+		})
+	}
+}
+
+func TestRestartTxnRejectsFailedSynchronousTerminalCall(t *testing.T) {
+	actions := []struct {
+		name string
+		run  func(context.Context, *txnOperator) error
+	}{
+		{name: "commit", run: func(ctx context.Context, tc *txnOperator) error {
+			return tc.Commit(ctx)
+		}},
+		{name: "rollback", run: func(ctx context.Context, tc *txnOperator) error {
+			return tc.Rollback(ctx)
+		}},
+		{name: "write-and-commit", run: func(ctx context.Context, tc *txnOperator) error {
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			if result != nil {
+				result.Release()
+			}
+			return err
+		}},
+	}
+
+	for _, action := range actions {
+		t.Run(action.name, func(t *testing.T) {
+			RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				client := c.(*txnClient)
+				op, err := c.New(ctx, timestamp.Timestamp{})
+				require.NoError(t, err)
+				tc := op.(*txnOperator)
+				tc.mu.Lock()
+				tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+				oldTxnID := append([]byte(nil), tc.reset.txnID...)
+				tc.mu.Unlock()
+				sender.(*testTxnSender).setManual(func(result *rpc.SendResult, _ error) (*rpc.SendResult, error) {
+					result.Release()
+					return nil, assert.AnError
+				})
+
+				require.ErrorIs(t, action.run(ctx, tc), assert.AnError)
+				tc.mu.RLock()
+				require.True(t, tc.mu.closed)
+				require.Equal(t, txnTerminalOutcomeFailed, tc.mu.terminalOutcome)
+				tc.mu.RUnlock()
+
+				for range 2 {
+					_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+				}
+				require.Equal(t, oldTxnID, tc.reset.txnID)
+				_, err = tc.TryEnterRunSqlWithTokenAndSQL(nil, "after failed terminal call")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+			})
+		})
+	}
+}
+
+func TestRestartTxnRejectsCommitWithFailedUnlock(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		workspace := &trackingWorkspace{commitRequests: []txn.TxnRequest{newTNRequest(1, 1)}}
+		lockService := &trackingUnlockLockService{unlockErr: assert.AnError}
+		tc.AddWorkspace(workspace)
+		tc.lockService = lockService
+		tc.mu.Lock()
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.mu.Unlock()
+
+		// TN commit is authoritative, so preserve the successful Commit result
+		// and workspace finalization. Only reuse is rejected because old locks
+		// still have no confirmed cleanup owner.
+		require.NoError(t, tc.Commit(ctx))
+		require.Equal(t, 1, workspace.finalizeCount)
+		require.Zero(t, workspace.rollbackCount)
+		require.Equal(t, 1, lockService.unlockCount)
+		tc.mu.RLock()
+		require.True(t, tc.mu.closed)
+		require.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
+		require.Equal(t, txnTerminalOutcomeFailed, tc.mu.terminalOutcome)
+		tc.mu.RUnlock()
+
+		_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+	})
+}
+
+func TestRestartTxnAfterSuccessfulWriteAndCommit(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		result, err := op.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+		require.NoError(t, err)
+		if result != nil {
+			result.Release()
+		}
 
 		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
 		require.NoError(t, err)
@@ -537,6 +712,7 @@ func TestRestartTxnClaimsClosedOperatorOnce(t *testing.T) {
 	op := &txnOperator{}
 	op.reset.runSQLTracker.seal()
 	op.mu.closed = true
+	op.mu.terminalOutcome = txnTerminalOutcomeSucceeded
 
 	start := make(chan struct{})
 	results := make(chan error, 2)

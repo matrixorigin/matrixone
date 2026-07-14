@@ -62,11 +62,12 @@ type checkLockTableBindLockService struct {
 type trackingUnlockLockService struct {
 	lockservice.LockService
 	unlockCount int
+	unlockErr   error
 }
 
 func (s *trackingUnlockLockService) Unlock(context.Context, []byte, timestamp.Timestamp, ...lock.ExtraMutation) error {
 	s.unlockCount++
-	return nil
+	return s.unlockErr
 }
 
 func (s *checkLockTableBindLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
@@ -87,6 +88,7 @@ type trackingWorkspace struct {
 	readonly        bool
 	commitRequests  []txn.TxnRequest
 	commitErr       error
+	rollbackErr     error
 	commitCount     int
 	rollbackCount   int
 	finalizeCount   int
@@ -192,7 +194,7 @@ func (w *trackingWorkspace) FinalizeCommitWithUnknownResult(context.Context) {
 
 func (w *trackingWorkspace) Rollback(context.Context) error {
 	w.rollbackCount++
-	return nil
+	return w.rollbackErr
 }
 
 func (w *trackingWorkspace) IncrSQLCount() {
