@@ -125,6 +125,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
 				}
 			}
+			// An UPDATE that changes a primary key column of an irregular-index table must go
+			// through the table-update path: for a synchronous FULLTEXT/IVF index that path
+			// rejects it (its hidden table is keyed by the old PK and would go stale, #25617),
+			// and for async indexes it maintains them via CDC. This binder cannot maintain
+			// either, so bail out to it (ErrUnsupportedDML triggers the fallback).
+			if tableDef.Pkey != nil {
+				for _, pkColName := range tableDef.Pkey.Names {
+					if _, ok := dmlCtx.updateCol2Expr[i][pkColName]; ok {
+						return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key with vector/full-text index")
+					}
+				}
+			}
 		}
 
 		validIndexes, _ := getValidIndexes(tableDef)
