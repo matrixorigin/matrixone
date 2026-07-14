@@ -293,10 +293,6 @@ func (s *sharedOps) isEmpty() bool {
 	return len(s.txns) == 0
 }
 
-func (s *sharedOps) last() []byte {
-	return s.txns[len(s.txns)-1].txnID
-}
-
 func (s *sharedOps) lastExcept(txn *activeTxn) ([]byte, bool) {
 	found := false
 	var replacement []byte
