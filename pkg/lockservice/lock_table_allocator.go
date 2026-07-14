@@ -171,7 +171,7 @@ func (l *lockTableAllocator) addCannotCommitLocked(values []pb.OrphanTxn) [][]by
 					commitSequence: v.CommitSequence,
 				},
 			)
-			if state != cannotCommitState {
+			if state == committingState {
 				committing = append(committing, txn)
 			}
 		}
@@ -1245,13 +1245,13 @@ type ctlState int
 var (
 	committingState   = ctlState(0)
 	cannotCommitState = ctlState(1)
-	fencePendingState = ctlState(2)
 )
 
-// A frontier entry is retained only until its Commit admission deadline. Keep
-// an explicit bound nevertheless: a response-loss storm with deliberately
-// different deadlines must not turn that temporary state into allocator OOM.
-// When full, unknown-commit cleanup retries without releasing its locks.
+// A frontier entry is retained only until its Commit admission deadline. A
+// response-loss storm can use deliberately different deadlines, so retain at
+// most this many exact entries before collapsing them into one conservative
+// per-source fence. The collapse permits unknown cleanup to finish instead of
+// transferring unbounded pending state and locked transactions back to CN.
 const maxPersistentFenceFrontierEntries = 1024
 
 type commitCtl struct {
@@ -1347,9 +1347,7 @@ func (c *commitCtl) tryCannotCommit(txnID string, fences ...commitFence) ctlStat
 		return committingState
 	}
 	if fence.persist {
-		if !c.addPersistentFenceLocked(time.Now().UnixNano(), fence) {
-			return fencePendingState
-		}
+		c.addPersistentFenceLocked(time.Now().UnixNano(), fence)
 		return cannotCommitState
 	}
 	if ok && state.state == cannotCommitState {
@@ -1457,10 +1455,10 @@ func (c *commitCtl) persistentFenceCount() int {
 	return len(c.persistentFences)
 }
 
-func (c *commitCtl) addPersistentFenceLocked(now int64, fence commitFence) bool {
+func (c *commitCtl) addPersistentFenceLocked(now int64, fence commitFence) {
 	c.removeExpiredPersistentFencesLocked(now)
 	if fence.expiresAt <= now {
-		return true
+		return
 	}
 
 	sequence := fence.commitSequence
@@ -1475,7 +1473,7 @@ func (c *commitCtl) addPersistentFenceLocked(now int64, fence commitFence) bool 
 	// frontier so expiry and sequence remain coupled.
 	for _, current := range c.persistentFences {
 		if current.commitSequence >= sequence && current.expiresAt >= fence.expiresAt {
-			return true
+			return
 		}
 	}
 
@@ -1487,13 +1485,25 @@ func (c *commitCtl) addPersistentFenceLocked(now int64, fence commitFence) bool 
 		values = append(values, current)
 	}
 	if len(values) >= maxPersistentFenceFrontierEntries {
-		return false
+		collapsed := persistentCommitFence{
+			expiresAt:      fence.expiresAt,
+			commitSequence: sequence,
+		}
+		for _, current := range values {
+			if current.expiresAt > collapsed.expiresAt {
+				collapsed.expiresAt = current.expiresAt
+			}
+			if current.commitSequence > collapsed.commitSequence {
+				collapsed.commitSequence = current.commitSequence
+			}
+		}
+		c.persistentFences = append(c.persistentFences[:0], collapsed)
+		return
 	}
 	c.persistentFences = append(values, persistentCommitFence{
 		expiresAt:      fence.expiresAt,
 		commitSequence: sequence,
 	})
-	return true
 }
 
 func (c *commitCtl) removeExpiredPersistentFencesLocked(now int64) {

@@ -267,7 +267,7 @@ func TestUnknownCommitFenceKeepsSequenceExpiryPairs(t *testing.T) {
 	ctl.mu.Unlock()
 }
 
-func TestUnknownCommitFenceFrontierIsBounded(t *testing.T) {
+func TestUnknownCommitFenceFrontierCollapsesAtBound(t *testing.T) {
 	ctl := &commitCtl{}
 	now := time.Now()
 	for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
@@ -291,8 +291,56 @@ func TestUnknownCommitFenceFrontierIsBounded(t *testing.T) {
 			commitSequence: maxPersistentFenceFrontierEntries + 1,
 		},
 	)
-	require.Equal(t, fencePendingState, state)
-	require.Equal(t, maxPersistentFenceFrontierEntries, ctl.persistentFenceCount())
+	require.Equal(t, cannotCommitState, state)
+	require.Equal(t, 1, ctl.persistentFenceCount())
+	ctl.mu.Lock()
+	require.True(t, ctl.hasPersistentFenceLocked(now.UnixNano(), maxPersistentFenceFrontierEntries+1))
+	require.False(t, ctl.hasPersistentFenceLocked(now.UnixNano(), maxPersistentFenceFrontierEntries+2))
+	ctl.mu.Unlock()
+}
+
+func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		service := services[0]
+		now := time.Now()
+		for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
+			// Increasing sequence and decreasing expiry intentionally build the
+			// largest exact non-dominated frontier.
+			_, _, ok := service.canUnlockUnknownCommits(
+				ctx,
+				[][]byte{[]byte(fmt.Sprintf("seed-%d", i))},
+				now.Add(time.Duration(maxPersistentFenceFrontierEntries-i+3)*time.Second),
+				uint64(i+1),
+			)
+			require.True(t, ok)
+		}
+
+		overflowTxn := []byte("overflow")
+		_, err := service.Lock(
+			ctx,
+			1,
+			[][]byte{[]byte("overflow-key")},
+			overflowTxn,
+			newTestRowExclusiveOptions(),
+		)
+		require.NoError(t, err)
+		require.NoError(t, service.ResolveCommitUnknown(
+			overflowTxn,
+			now.Add(time.Second),
+			maxPersistentFenceFrontierEntries+1,
+		))
+
+		require.Eventually(t, func() bool {
+			return !service.activeTxnHolder.hasActiveTxn(overflowTxn) &&
+				!service.unknownCommitResolver.isPending(overflowTxn)
+		}, 2*time.Second, 10*time.Millisecond)
+
+		ctl := allocator.getCtl(service.serviceID)
+		require.Equal(t, 1, ctl.persistentFenceCount())
+	})
 }
 
 func TestUnknownCommitFencesStayBoundedForSequentialTxns(t *testing.T) {

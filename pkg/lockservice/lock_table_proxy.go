@@ -214,18 +214,26 @@ func (lp *localLockTableProxy) unlockWithContext(
 			// marker: if the response is lost after the owner released this last
 			// holder, a retry must not fail when another transaction already owns
 			// the row.
-			if len(replacement) > 0 {
-				lp.mu.pendingRemoteHolders[row] = replacement
+			remoteReplacement := replacement
+			if pending, ok := lp.mu.pendingRemoteHolders[row]; ok {
+				// A response-lost handoff has already selected the only remote
+				// representative that can be safely retried. Later local sharers
+				// must stay behind that representative until the owner confirms a
+				// transition; otherwise the proxy and owner can publish different
+				// holders for the same shared lock.
+				remoteReplacement = pending
+			} else if len(remoteReplacement) > 0 {
+				lp.mu.pendingRemoteHolders[row] = remoteReplacement
 			}
 			remoteMutations = append(remoteMutations,
 				pb.ExtraMutation{
 					Key:       key,
 					Skip:      false,
-					ReplaceTo: replacement,
+					ReplaceTo: remoteReplacement,
 				})
 			updates = append(updates, holderUpdate{
 				row:                      row,
-				replaceWith:              replacement,
+				replaceWith:              remoteReplacement,
 				clearPendingRemoteHolder: true,
 			})
 		}
