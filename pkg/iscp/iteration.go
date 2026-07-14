@@ -249,34 +249,10 @@ func ExecuteIteration(
 	if len(tableDef.Pkey.Names) == 1 {
 		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
 	}
-	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
-		if atomicBatch == nil {
-			atomicBatch = NewAtomicBatch(mp)
-		}
-		return atomicBatch
-	}
 
-	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
 	typ := ISCPDataType_Tail
 	if iterCtx.fromTS.IsEmpty() {
 		typ = ISCPDataType_Snapshot
-	}
-	waitGroups := make([]sync.WaitGroup, len(consumers))
-	for i := range consumers {
-		if consumers[i] == nil {
-			continue
-		}
-		dataRetrievers[i] = NewDataRetriever(
-			ctxWithoutTimeout,
-			iterCtx.accountID,
-			iterCtx.tableID,
-			iterCtx.jobNames[i],
-			iterCtx.jobIDs[i],
-			statuses[i],
-			iterCtx.lsn[i],
-			typ,
-		)
-		defer dataRetrievers[i].Close()
 	}
 
 	err = FlushJobStatusOnIterationState(
@@ -298,7 +274,107 @@ func ExecuteIteration(
 		return
 	}
 
-	ctxWithCancel, cancel := context.WithCancel(ctxWithoutTimeout)
+	runISCPTaskIterationConsumers(
+		ctxWithoutTimeout,
+		iterCtx,
+		changes,
+		consumers,
+		statuses,
+		typ,
+		packer,
+		mp,
+		insTSColIdx,
+		insCompositedPkColIdx,
+		delTSColIdx,
+		delCompositedPkColIdx,
+	)
+	for i, status := range statuses {
+		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
+			state := ISCPJobState_Completed
+			if status.PermanentlyFailed() {
+				state = ISCPJobState_Error
+			}
+			watermark := status.From
+			if status.ErrorCode == 0 {
+				watermark = status.To
+			}
+			err = retry(
+				ctx,
+				func() error {
+					return FlushJobStatusOnIterationState(
+						ctx,
+						cnUUID,
+						cnEngine,
+						cnTxnClient,
+						iterCtx.accountID,
+						iterCtx.tableID,
+						[]string{iterCtx.jobNames[i]},
+						[]uint64{iterCtx.jobIDs[i]},
+						[]uint64{iterCtx.lsn[i]},
+						[]*JobStatus{status},
+						watermark,
+						state,
+						iterCtx.lsn,
+					)
+				},
+				SubmitRetryTimes,
+				DefaultRetryInterval,
+				SubmitRetryDuration,
+			)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task iteration flush job status failed",
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+func runISCPTaskIterationConsumers(
+	ctx context.Context,
+	iterCtx *IterationContext,
+	changes engine.ChangesHandle,
+	consumers []Consumer,
+	statuses []*JobStatus,
+	typ int8,
+	packer *types.Packer,
+	mp *mpool.MPool,
+	insTSColIdx int,
+	insCompositedPkColIdx int,
+	delTSColIdx int,
+	delCompositedPkColIdx int,
+) {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
+	for i := range consumers {
+		if consumers[i] == nil {
+			continue
+		}
+		dataRetrievers[i] = NewDataRetriever(
+			ctxWithCancel,
+			iterCtx.accountID,
+			iterCtx.tableID,
+			iterCtx.jobNames[i],
+			iterCtx.jobIDs[i],
+			statuses[i],
+			iterCtx.lsn[i],
+			typ,
+		)
+		defer dataRetrievers[i].Close()
+	}
+
+	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
+		if atomicBatch == nil {
+			atomicBatch = NewAtomicBatch(mp)
+		}
+		return atomicBatch
+	}
+
 	changeHandelWg := sync.WaitGroup{}
 	changeHandelWg.Add(1)
 	go func() {
@@ -306,7 +382,6 @@ func ExecuteIteration(
 		defer func() {
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
-		defer cancel()
 		defer changeHandelWg.Done()
 		for {
 			select {
@@ -386,6 +461,7 @@ func ExecuteIteration(
 		}
 	}()
 
+	waitGroups := make([]sync.WaitGroup, len(consumers))
 	for i, consumerEntry := range consumers {
 		if dataRetrievers[i] == nil {
 			continue
@@ -393,8 +469,8 @@ func ExecuteIteration(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-			err := consumerEntry.Consume(ctx, dataRetrievers[i])
+			consumerCtx := context.WithValue(ctxWithCancel, defines.TenantIDKey{}, catalog.System_Account)
+			err := consumerEntry.Consume(consumerCtx, dataRetrievers[i])
 			if err != nil {
 				logutil.Error(
 					"ISCP-Task sink consume failed",
@@ -407,6 +483,7 @@ func ExecuteIteration(
 				)
 				dataRetrievers[i].SetError(err)
 				statuses[i].SetError(err)
+				cancel()
 			}
 		}(i)
 	}
@@ -416,49 +493,6 @@ func ExecuteIteration(
 
 	cancel()
 	changeHandelWg.Wait()
-	for i, status := range statuses {
-		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
-			state := ISCPJobState_Completed
-			if status.PermanentlyFailed() {
-				state = ISCPJobState_Error
-			}
-			watermark := status.From
-			if status.ErrorCode == 0 {
-				watermark = status.To
-			}
-			err = retry(
-				ctx,
-				func() error {
-					return FlushJobStatusOnIterationState(
-						ctx,
-						cnUUID,
-						cnEngine,
-						cnTxnClient,
-						iterCtx.accountID,
-						iterCtx.tableID,
-						[]string{iterCtx.jobNames[i]},
-						[]uint64{iterCtx.jobIDs[i]},
-						[]uint64{iterCtx.lsn[i]},
-						[]*JobStatus{status},
-						watermark,
-						state,
-						iterCtx.lsn,
-					)
-				},
-				SubmitRetryTimes,
-				DefaultRetryInterval,
-				SubmitRetryDuration,
-			)
-			if err != nil {
-				logutil.Error(
-					"ISCP-Task iteration flush job status failed",
-					zap.Error(err),
-				)
-			}
-		}
-	}
-
-	return nil
 }
 
 var FlushJobStatusOnIterationState = func(
