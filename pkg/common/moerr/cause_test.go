@@ -101,6 +101,7 @@ var causeArray = []error{
 	CauseDoGetLock,
 	CauseInitRemote1,
 	CauseInitRemote2,
+	CauseResetLockServiceBackend,
 	CauseGetTxnWaitingListOnRemote,
 	CauseGetLockTableBind,
 
