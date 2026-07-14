@@ -195,7 +195,8 @@ select greatest(cast('file://greatest-least-a' as datalink), cast('file://greate
 select greatest(cast('file://greatest-least-a' as datalink), 'x');
 
 -- Unsupported Oids must fail both for same-Oid and mixed calls rather than
--- reaching the normal executor's unreachable branch.
+-- reaching the normal executor's unreachable branch. ENUM is normalized to
+-- VARCHAR before function resolution, so it follows the string/temporal rules.
 select greatest(interval 1 day, interval 2 day);
 select greatest(interval 1 day, cast('2020-01-01' as date));
 select greatest(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(2 2)'));
@@ -204,6 +205,8 @@ drop table if exists greatest_least_enum;
 create table greatest_least_enum (e enum('a', 'b'), d date);
 insert into greatest_least_enum values ('a', '2020-01-01');
 select greatest(e, e) from greatest_least_enum;
+select greatest(e, 'b') from greatest_least_enum;
+select least(e, 'b') from greatest_least_enum;
 select greatest(e, d) from greatest_least_enum;
 
 drop table if exists toll_transactions;

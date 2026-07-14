@@ -343,7 +343,7 @@ select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
 invalid argument function greatest, bad value [UUID VARCHAR]
 select greatest(__mo_rowid, __mo_rowid) as greatest_rowid_same_oid from greatest_least_supported_oid;
 ➤ greatest_rowid_same_oid[12,0,0]  𝄀
-019f5ec9-dc42-75e2-a1e4-3e5825928859-0-0-0
+019f5eef-b733-705c-bde4-8ec6ae5317bf-0-0-0
 select greatest(__mo_rowid, 1) from greatest_least_supported_oid;
 invalid argument function greatest, bad value [ROWID BIGINT]
 select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
@@ -369,6 +369,12 @@ create table greatest_least_enum (e enum('a', 'b'), d date);
 insert into greatest_least_enum values ('a', '2020-01-01');
 select greatest(e, e) from greatest_least_enum;
 ➤ greatest(e, e)[12,-1,0]  𝄀
+a
+select greatest(e, 'b') from greatest_least_enum;
+➤ greatest(e, b)[12,-1,0]  𝄀
+b
+select least(e, 'b') from greatest_least_enum;
+➤ least(e, b)[12,-1,0]  𝄀
 a
 select greatest(e, d) from greatest_least_enum;
 invalid input: invalid datetime value a

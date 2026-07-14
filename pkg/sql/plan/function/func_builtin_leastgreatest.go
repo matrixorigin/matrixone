@@ -109,6 +109,23 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}, true
 	}
 
+	if hasLeastGreatestEnum(nonNull) {
+		normalized := append([]types.Type(nil), inputs...)
+		for i := range normalized {
+			if normalized[i].Oid == types.T_enum {
+				normalized[i] = types.T_varchar.ToType()
+			}
+		}
+		resolution, ok := resolveLeastGreatestType(normalized)
+		if !ok {
+			return leastGreatestResolution{}, false
+		}
+		if len(resolution.castTypes) == 0 {
+			resolution.castTypes = leastGreatestCastTypes(inputs, resolution.resultType)
+		}
+		return resolution, true
+	}
+
 	// Fast path: every non-NULL argument already shares the same type Oid. This
 	// preserves the original behavior (including any per-type scale handling) for
 	// the common case where no promotion is needed.
@@ -256,6 +273,15 @@ func hasLeastGreatestJSON(inputs []types.Type) bool {
 func hasLeastGreatestYear(inputs []types.Type) bool {
 	for i := range inputs {
 		if inputs[i].Oid == types.T_year {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLeastGreatestEnum(inputs []types.Type) bool {
+	for i := range inputs {
+		if inputs[i].Oid == types.T_enum {
 			return true
 		}
 	}
@@ -966,7 +992,7 @@ func leastGreatestFnPackedDateResolved(
 				}
 				goto nextRow
 			}
-			v, err := leastGreatestDatetimeValue(pv, i, loc)
+			v, err := leastGreatestDatetimeValue(pv, i, proc, loc)
 			if err != nil {
 				return err
 			}
@@ -1000,7 +1026,7 @@ func leastGreatestSetNullResult(result vector.FunctionResultWrapper, length int)
 	return nil
 }
 
-func leastGreatestDatetimeValue(v *vector.Vector, row uint64, loc *time.Location) (types.Datetime, error) {
+func leastGreatestDatetimeValue(v *vector.Vector, row uint64, proc *process.Process, loc *time.Location) (types.Datetime, error) {
 	switch v.GetType().Oid {
 	case types.T_date:
 		p := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
@@ -1017,7 +1043,7 @@ func leastGreatestDatetimeValue(v *vector.Vector, row uint64, loc *time.Location
 	case types.T_time:
 		p := vector.GenerateFunctionFixedTypeParameter[types.Time](v)
 		val, _ := p.GetValue(row)
-		return val.ToDatetime(v.GetType().Scale), nil
+		return leastGreatestTimeToDatetime(val, v.GetType().Scale, proc, loc), nil
 	case types.T_year:
 		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](v)
 		val, _ := p.GetValue(row)
@@ -1027,6 +1053,37 @@ func leastGreatestDatetimeValue(v *vector.Vector, row uint64, loc *time.Location
 	default:
 		return types.Datetime(0), moerr.NewInternalErrorNoCtxf("unsupported temporal comparison type %s", v.GetType().Oid.String())
 	}
+}
+
+// leastGreatestTimeToDatetime follows MySQL's temporal comparison rule: when
+// TIME must be compared as a datetime, it is combined with the statement's
+// start date in the session time zone. Do not use Time.ToDatetime here: that
+// helper uses the instantaneous UTC date, which can differ within a query and
+// from the session-local date.
+func leastGreatestTimeToDatetime(value types.Time, scale int32, proc *process.Process, loc *time.Location) types.Datetime {
+	if loc == nil {
+		loc = time.Local
+	}
+
+	queryStart := time.Time{}
+	if proc != nil {
+		queryStart = proc.GetStmtProfile().GetQueryStart()
+		if queryStart.IsZero() && proc.GetUnixTime() != 0 {
+			queryStart = time.Unix(0, proc.GetUnixTime())
+		}
+	}
+	if queryStart.IsZero() {
+		queryStart = time.Now()
+	}
+	queryStart = queryStart.In(loc)
+
+	base := types.DatetimeFromClock(
+		int32(queryStart.Year()),
+		uint8(queryStart.Month()),
+		uint8(queryStart.Day()),
+		0, 0, 0, 0,
+	)
+	return base + types.Datetime(value.TruncateToScale(scale))
 }
 
 func leastGreatestParseDatetimeBytes(v []byte) (types.Datetime, error) {
@@ -1095,11 +1152,30 @@ func leastGreatestParamType(parameters []*vector.Vector) types.Type {
 	return types.T_varchar.ToType()
 }
 
+// leastGreatestRestoreTemporalResultType keeps runtime result metadata aligned
+// with the resolver. Some execution paths can allocate the result wrapper
+// before the aligned TIME/DATETIME/TIMESTAMP scale reaches it.
+func leastGreatestRestoreTemporalResultType(parameters []*vector.Vector, result vector.FunctionResultWrapper) {
+	resolution, ok := resolveLeastGreatestType(vectorTypes(parameters))
+	if !ok {
+		return
+	}
+
+	switch resolution.resultType.Oid {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		resultType := result.GetResultVector().GetType()
+		if resultType.Oid == resolution.resultType.Oid && !resultType.Eq(resolution.resultType) {
+			result.GetResultVector().SetType(resolution.resultType)
+		}
+	}
+}
+
 func leastFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList) error {
+	leastGreatestRestoreTemporalResultType(parameters, result)
 	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
 	case types.T_bool:
@@ -1424,6 +1500,7 @@ func greatestFn(parameters []*vector.Vector,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList) error {
+	leastGreatestRestoreTemporalResultType(parameters, result)
 	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
 	case types.T_bool:

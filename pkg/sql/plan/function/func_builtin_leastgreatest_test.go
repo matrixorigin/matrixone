@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -686,6 +688,20 @@ func TestLeastGreatestFunctionResolution(t *testing.T) {
 			wantCast:    true,
 			wantTargets: []types.T{types.T_varbinary, types.T_varbinary},
 		},
+		{
+			name:        "enum varchar returns varchar",
+			args:        []types.Type{types.T_enum.ToType(), types.T_varchar.ToType()},
+			wantReturn:  types.T_varchar,
+			wantCast:    true,
+			wantTargets: []types.T{types.T_varchar, types.T_varchar},
+		},
+		{
+			name:        "enum enum returns varchar",
+			args:        []types.Type{types.T_enum.ToType(), types.T_enum.ToType()},
+			wantReturn:  types.T_varchar,
+			wantCast:    true,
+			wantTargets: []types.T{types.T_varchar, types.T_varchar},
+		},
 	}
 
 	for _, c := range cases {
@@ -1014,6 +1030,55 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		greatestJSONTemporalFn)
 	ok, info = tcJSONGreatest.Run()
 	require.True(t, ok, info)
+}
+
+func TestLeastGreatestPackedDateUsesStatementStartForTime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	proc.GetSessionInfo().TimeZone = loc
+	stmtProfile := &process.StmtProfile{}
+	stmtProfile.SetQueryStart(time.Date(2024, 5, 6, 1, 2, 3, 0, loc))
+	proc.SetStmtProfile(stmtProfile)
+
+	date, err := types.ParseDateCast("2020-01-01")
+	require.NoError(t, err)
+	timeValue, err := types.ParseTime("12:34:56", 0)
+	require.NoError(t, err)
+
+	resultType := types.T_datetime.ToType()
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil),
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{timeValue}, nil),
+		},
+		NewFunctionTestResult(resultType, false,
+			[]types.Datetime{types.DatetimeFromClock(2024, 5, 6, 12, 34, 56, 0)}, nil),
+		greatestTemporalFn)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestLeastGreatestNormalExecutorRestoresTemporalScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	timeScale1 := types.New(types.T_time, 64, 1)
+	timeScale2 := types.New(types.T_time, 64, 2)
+	first, err := types.ParseTime("10:00:00.1", timeScale1.Scale)
+	require.NoError(t, err)
+	second, err := types.ParseTime("10:00:00.99", timeScale2.Scale)
+	require.NoError(t, err)
+
+	// Simulate an execution path whose result wrapper was initialized before
+	// the resolver's aligned temporal metadata reached it.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(timeScale1, []types.Time{first}, nil),
+			NewFunctionTestInput(timeScale2, []types.Time{second}, nil),
+		},
+		NewFunctionTestResult(types.New(types.T_time, 64, 0), false, []types.Time{second}, nil),
+		greatestFn)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.Equal(t, int32(2), tc.GetResultVectorDirectly().GetType().Scale)
 }
 
 // TestLeastGreatestWidthHelpers covers every branch of the integer-width →
