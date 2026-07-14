@@ -61,6 +61,7 @@ type ivfSearchState struct {
 	baseBucketExpandStep uint
 	searchRoundLimit     uint
 	bucketExpandStep     uint
+	emittedCandidates    uint64
 	nthRow               int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -111,6 +112,7 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.includeData = nil
 	u.includeNulls = nil
 	u.cursor = nil
+	u.emittedCandidates = 0
 	// Note: runtimeFilterData is kept across resets as it's only set once during initialization
 	// It will be cleared in free() method
 }
@@ -127,6 +129,15 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 	for n < batchTargetRows {
 		if u.offset >= len(u.keys) {
 			if !u.multiRoundEnabled {
+				break
+			}
+			// Drain the whole current SQL round before stopping. A round is sorted
+			// independently, so truncating it as soon as the cumulative count reaches
+			// the budget could discard a row that belongs in the global top-K.
+			if u.limit > 0 && u.emittedCandidates >= u.limit {
+				if u.cursor != nil {
+					u.cursor.Exhausted = true
+				}
 				break
 			}
 			if u.cursor != nil && u.cursor.Exhausted {
@@ -159,6 +170,7 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 			vector.AppendAny(u.batch.Vecs[2+i], u.includeData[col][u.offset], isNull, proc.Mp())
 		}
 		u.offset++
+		u.emittedCandidates++
 		n++
 	}
 
@@ -429,6 +441,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 	} else {
 		u.cursor = nil
 	}
+	u.emittedCandidates = 0
 	u.nthRow = nthRow
 
 	u.batch.CleanOnlyData()

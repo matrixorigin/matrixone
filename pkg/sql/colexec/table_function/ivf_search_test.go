@@ -514,7 +514,7 @@ func TestIvfSearchCallReturnsIncludeColumnsAndLazyFetchesMoreRounds(t *testing.T
 	require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[2], 1))
 }
 
-func TestIvfSearchManyDisjointRoundsRetainOnlyCurrentRound(t *testing.T) {
+func TestIvfSearchManyDisjointRoundsStopAtCandidateBudget(t *testing.T) {
 	oldNewIvfAlgo := newIvfAlgo
 	oldGetVersion := getVersion
 	defer func() {
@@ -567,8 +567,9 @@ func TestIvfSearchManyDisjointRoundsRetainOnlyCurrentRound(t *testing.T) {
 		plan2.MakePlan2Uint64ConstExprWithType(rowsPerRound),
 		plan2.MakePlan2Uint64ConstExprWithType(1),
 	)
-	ut.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(50000)
-	ut.arg.IndexReaderParam = &plan.IndexReaderParam{Limit: plan2.MakePlan2Uint64ConstExprWithType(50000)}
+	const candidateBudget = uint64(1024)
+	ut.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(candidateBudget)
+	ut.arg.IndexReaderParam = &plan.IndexReaderParam{Limit: plan2.MakePlan2Uint64ConstExprWithType(candidateBudget)}
 
 	err := ut.arg.Prepare(ut.proc)
 	require.NoError(t, err)
@@ -593,9 +594,10 @@ func TestIvfSearchManyDisjointRoundsRetainOnlyCurrentRound(t *testing.T) {
 		require.LessOrEqual(t, cap(state.keys), 2*rowsPerRound)
 	}
 
-	require.Greater(t, searchCalls, 32)
-	require.Greater(t, totalRows, 8192)
+	require.Equal(t, 4, searchCalls)
+	require.Equal(t, int(candidateBudget), totalRows)
 	require.Equal(t, searchCalls*rowsPerRound, totalRows)
+	require.True(t, state.cursor.Exhausted)
 }
 
 func TestIvfSearchCallPreservesNullableIncludeColumn(t *testing.T) {
@@ -958,7 +960,7 @@ func TestIvfSearchCallContinuesAfterManyEmptyRounds(t *testing.T) {
 	require.GreaterOrEqual(t, calls, 7)
 }
 
-func TestIvfSearchCallStopsOnceLimitRowsAreBuffered(t *testing.T) {
+func TestIvfSearchUnfilteredStopsAfterInitialProbeSatisfiesBudget(t *testing.T) {
 	oldNewIvfAlgo := newIvfAlgo
 	oldGetVersion := getVersion
 	defer func() {
@@ -970,8 +972,14 @@ func TestIvfSearchCallStopsOnceLimitRowsAreBuffered(t *testing.T) {
 	mock := &MockIvfSearch[float32]{}
 	mock.searchFn = func(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 		calls++
-		if rt.SearchCursor != nil && len(rt.SearchCursor.RankedCentroidIDs) == 0 {
-			rt.SearchCursor.RankedCentroidIDs = []int64{11, 22, 33}
+		if rt.SearchCursor != nil {
+			if len(rt.SearchCursor.RankedCentroidIDs) == 0 {
+				rt.SearchCursor.RankedCentroidIDs = []int64{11, 22, 33}
+			}
+			if rt.SearchCursor.CurrentBucketCount == 0 {
+				rt.SearchCursor.CurrentBucketCount = 1
+			}
+			rt.SearchCursor.Round++
 		}
 		return []any{int64(1), int64(2)}, []float64{1.0, 2.0}, nil
 	}
@@ -1009,7 +1017,81 @@ func TestIvfSearchCallStopsOnceLimitRowsAreBuffered(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecNext, result.Status)
 	require.Equal(t, 2, result.Batch.RowCount())
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
 	require.Equal(t, 1, calls)
+}
+
+func TestIvfSearchPushdownExpandsOnlyUntilCandidateBudget(t *testing.T) {
+	oldNewIvfAlgo := newIvfAlgo
+	oldGetVersion := getVersion
+	defer func() {
+		newIvfAlgo = oldNewIvfAlgo
+		getVersion = oldGetVersion
+	}()
+
+	var calls int
+	mock := &MockIvfSearch[float32]{}
+	mock.searchFn = func(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+		calls++
+		require.NotEmpty(t, rt.PushdownFilterSQL)
+		if len(rt.SearchCursor.RankedCentroidIDs) == 0 {
+			rt.SearchCursor.RankedCentroidIDs = makeRankedCentroidIDsForTest(100)
+		}
+		if rt.SearchCursor.CurrentBucketCount == 0 {
+			rt.SearchCursor.CurrentBucketCount = 1
+		}
+		rt.SearchCursor.Round++
+		if calls == 1 {
+			return []any{int64(1)}, []float64{1.0}, nil
+		}
+		return []any{int64(2), int64(3), int64(4), int64(5)}, []float64{2.0, 3.0, 4.0, 5.0}, nil
+	}
+
+	newIvfAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
+		return mock, nil
+	}
+	getVersion = mockVersion
+	cache.Cache = cache.NewVectorIndexCache()
+
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"100\"}"
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	inbat := makeBatchIvfSearch(ut.proc)
+	ut.arg.Args = append(
+		makeConstInputExprsIvfSearchWithConfig(
+			fmt.Sprintf(`{"db":"db","src":"src","metadata":"__metadata","index":"__index_pushdown_stop","entries":"__entries","parttype": %d}`, int32(types.T_array_float32)),
+		),
+		plan2.MakePlan2StringConstExprWithType("`_mo_index_include_category` = 7"),
+		plan2.MakePlan2Uint64ConstExprWithType(13),
+		plan2.MakePlan2Uint64ConstExprWithType(1),
+	)
+	ut.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(3)
+
+	err := ut.arg.Prepare(ut.proc)
+	require.NoError(t, err)
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil))
+
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 3, result.Batch.RowCount())
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 2, result.Batch.RowCount())
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, 2, calls)
+	require.True(t, ut.arg.ctr.state.(*ivfSearchState).cursor.Exhausted)
 }
 
 func TestIvfSearchPreparePrefersLargerIndexReaderLimit(t *testing.T) {
