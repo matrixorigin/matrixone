@@ -16,7 +16,7 @@ package plan
 
 import (
 	"fmt"
-	"slices"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -246,14 +246,12 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	slices.SortFunc(subTrees, func(a, b *plan.Node) int {
-		if compareStats(a.Stats, b.Stats) {
-			return -1
-		}
-		if compareStats(b.Stats, a.Stats) {
-			return 1
-		}
-		return 0
+	// compareStats is non-transitive (it groups selectivities within a 0.01
+	// tolerance, then compares outcnt), so it is not a valid strict weak ordering
+	// and can't be a slices.SortFunc comparator. Keep it on sort.Slice until the
+	// comparator is made transitive; see issue #25702.
+	sort.Slice(subTrees, func(i, j int) bool {
+		return compareStats(subTrees[i].Stats, subTrees[j].Stats)
 	})
 
 	leafByTag := make(map[int32]int32)
@@ -587,14 +585,10 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	slices.SortFunc(dimensions, func(a, b *joinVertex) int {
-		if compareStats(a.node.Stats, b.node.Stats) {
-			return -1
-		}
-		if compareStats(b.node.Stats, a.node.Stats) {
-			return 1
-		}
-		return 0
+	// See the subTrees sort above: compareStats is non-transitive, so this stays
+	// on sort.Slice until #25702 makes it a valid strict weak ordering.
+	sort.Slice(dimensions, func(i, j int) bool {
+		return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats)
 	})
 
 	for _, child := range dimensions {

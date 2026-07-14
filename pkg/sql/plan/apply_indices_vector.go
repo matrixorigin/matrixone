@@ -767,57 +767,37 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 		currIdx++
 	}
 
-	return filters[:currIdx], distRange
-}
+	// If every matching predicate was non-literal (kept as a residual), the range
+	// was allocated but never bounded; return nil so callers don't stash an empty
+	// DistRange on the index reader.
+	if distRange != nil &&
+		distRange.LowerBoundType == plan.BoundType_UNBOUNDED &&
+		distRange.UpperBoundType == plan.BoundType_UNBOUNDED {
+		distRange = nil
+	}
 
-// distBoundLiteralFloat64 extracts a comparable float64 from a distance-bound
-// literal expression. It accepts the same numeric literal kinds the index reader
-// accepts (getLiteralFloat64), returning ok=false for anything that is not a
-// plain numeric literal.
-func distBoundLiteralFloat64(expr *plan.Expr) (float64, bool) {
-	lit := expr.GetLit()
-	if lit == nil || lit.Isnull {
-		return 0, false
-	}
-	switch v := lit.Value.(type) {
-	case *plan.Literal_Fval:
-		return float64(v.Fval), true
-	case *plan.Literal_Dval:
-		return v.Dval, true
-	case *plan.Literal_I8Val:
-		return float64(v.I8Val), true
-	case *plan.Literal_I16Val:
-		return float64(v.I16Val), true
-	case *plan.Literal_I32Val:
-		return float64(v.I32Val), true
-	case *plan.Literal_I64Val:
-		return float64(v.I64Val), true
-	case *plan.Literal_U8Val:
-		return float64(v.U8Val), true
-	case *plan.Literal_U16Val:
-		return float64(v.U16Val), true
-	case *plan.Literal_U32Val:
-		return float64(v.U32Val), true
-	case *plan.Literal_U64Val:
-		return float64(v.U64Val), true
-	default:
-		return 0, false
-	}
+	return filters[:currIdx], distRange
 }
 
 // mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,
 // or exclusive on an equal value) bound so the range is the intersection of all
-// upper bounds. It returns false when the bounds cannot be compared as numeric
-// literals, in which case the caller keeps the predicate as a residual filter.
+// upper bounds. The bound MUST be a numeric literal the index reader can
+// evaluate; otherwise the predicate would be peeled off the filter list but the
+// reader would later reject it and silently drop the constraint. It returns
+// false for a non-literal bound (including the first one) so the caller keeps
+// the predicate as a residual filter.
 func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	newVal, ok := plan.GetLiteralFloat64(bound)
+	if !ok {
+		return false
+	}
 	if dr.UpperBoundType == plan.BoundType_UNBOUNDED {
 		dr.UpperBoundType = boundType
 		dr.UpperBound = bound
 		return true
 	}
-	newVal, ok1 := distBoundLiteralFloat64(bound)
-	curVal, ok2 := distBoundLiteralFloat64(dr.UpperBound)
-	if !ok1 || !ok2 {
+	curVal, ok := plan.GetLiteralFloat64(dr.UpperBound)
+	if !ok {
 		return false
 	}
 	if newVal < curVal || (newVal == curVal && boundType == plan.BoundType_EXCLUSIVE) {
@@ -830,14 +810,17 @@ func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundT
 // mergeLowerBound folds a new lower bound into dr, keeping the tighter (larger,
 // or exclusive on an equal value) bound. See mergeUpperBound.
 func mergeLowerBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	newVal, ok := plan.GetLiteralFloat64(bound)
+	if !ok {
+		return false
+	}
 	if dr.LowerBoundType == plan.BoundType_UNBOUNDED {
 		dr.LowerBoundType = boundType
 		dr.LowerBound = bound
 		return true
 	}
-	newVal, ok1 := distBoundLiteralFloat64(bound)
-	curVal, ok2 := distBoundLiteralFloat64(dr.LowerBound)
-	if !ok1 || !ok2 {
+	curVal, ok := plan.GetLiteralFloat64(dr.LowerBound)
+	if !ok {
 		return false
 	}
 	if newVal > curVal || (newVal == curVal && boundType == plan.BoundType_EXCLUSIVE) {

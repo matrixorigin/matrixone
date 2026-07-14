@@ -365,7 +365,31 @@ func TestGetDistRangeFromFiltersKeepsTightestBound(t *testing.T) {
 		)
 		require.Empty(t, remaining)
 		require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.UpperBoundType)
-		v, ok := distBoundLiteralFloat64(distRange.UpperBound)
+		v, ok := plan.GetLiteralFloat64(distRange.UpperBound)
+		require.True(t, ok)
+		require.InDelta(t, 1.1, v, 1e-6)
+	}
+
+	// A non-literal bound must never be peeled into the range (the reader can't
+	// evaluate it): it stays a residual filter, in both orders, while a literal
+	// bound of the same side still becomes the range. Regression for the
+	// "first bound accepted without validation" case.
+	nonLit := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 7}}}
+	}
+	for _, nonLitFirst := range []bool{true, false} {
+		bad := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, nonLit())
+		good := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(1.1))
+		input := []*plan.Expr{bad, good}
+		if !nonLitFirst {
+			input = []*plan.Expr{good, bad}
+		}
+		remaining, distRange := builder.getDistRangeFromFilters(
+			input, partPos, "l2_distance", vecLitArg,
+		)
+		require.Equal(t, []*plan.Expr{bad}, remaining) // non-literal kept as residual
+		require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.UpperBoundType)
+		v, ok := plan.GetLiteralFloat64(distRange.UpperBound)
 		require.True(t, ok)
 		require.InDelta(t, 1.1, v, 1e-6)
 	}

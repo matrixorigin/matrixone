@@ -241,7 +241,10 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
 		// Find the global checkpoint with end == maxGlobalEnd
 		for i := range entries {
-			if entries[i].end.Equal(&maxGlobalEnd) &&
+			// nil entries sort first (see the comparator above), so guard the
+			// dereference here rather than assume a non-nil invariant.
+			if entries[i] != nil &&
+				entries[i].end.Equal(&maxGlobalEnd) &&
 				entries[i].entryType == ET_Global {
 				// Return only the global checkpoint, since snapshot ts == gckp.end
 				return []*CheckpointEntry{entries[i]}
