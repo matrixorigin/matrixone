@@ -279,7 +279,7 @@ type txnOperator struct {
 		txn                    txn.TxnMeta
 		cachedWrites           map[uint64][]txn.TxnRequest
 		lockTables             []lock.LockTable
-		callbacks              map[EventType][]TxnEventCallback
+		callbacks              *txnEventCallbacks
 		retry                  bool
 		lockSeq                uint64
 		waitLocks              map[uint64]Lock
@@ -567,11 +567,7 @@ func (tc *txnOperator) initProtectedFields() {
 			delete(tc.mu.cachedWrites, k)
 		}
 	}
-	if tc.mu.callbacks != nil {
-		for k, v := range tc.mu.callbacks {
-			tc.mu.callbacks[k] = v[:0]
-		}
-	}
+	tc.mu.callbacks = nil
 	if tc.mu.waitLocks != nil {
 		for k := range tc.mu.waitLocks {
 			delete(tc.mu.waitLocks, k)

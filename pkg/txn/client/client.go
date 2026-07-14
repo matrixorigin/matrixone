@@ -186,6 +186,8 @@ type txnClient struct {
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
 	txnOpenedCallbacks         []func(TxnOperator)
+	defaultEventCallbacks      defaultTxnEventCallbacks
+	sharedEventCallbacks       txnEventCallbacks
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -350,6 +352,11 @@ func NewTxnClient(
 		sender: sender,
 		abortC: make(chan time.Time, 1),
 	}
+	c.defaultEventCallbacks.closed = [2]TxnEventCallback{
+		{Func: c.updateLastCommitTS},
+		{Func: c.closeTxn},
+	}
+	c.sharedEventCallbacks.defaults = &c.defaultEventCallbacks
 	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
 	c.mu.state = paused
 	c.mu.cond = sync.NewCond(&c.mu)
@@ -440,15 +447,7 @@ func (client *txnClient) doCreateTxn(
 	client.limiter.Take()
 
 	op.timestampWaiter = client.timestampWaiter
-	op.AppendEventCallback(
-		ClosedEvent,
-		TxnEventCallback{
-			Func: client.updateLastCommitTS,
-		},
-		TxnEventCallback{
-			Func: client.closeTxn,
-		},
-	)
+	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
 	if err := client.openTxn(op); err != nil {
 		return nil, err
