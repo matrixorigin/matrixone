@@ -667,6 +667,9 @@ func TestPrepareArithCastContextBackfill(t *testing.T) {
 		{"prepare s from select cast(? % ? as decimal(30,0))", int32(types.T_decimal128)},
 		{"prepare s from select cast(? div ? as decimal(30,0))", int32(types.T_decimal128)},
 		{"prepare s from select cast(? mod ? as decimal(30,0))", int32(types.T_decimal128)},
+		// MOD function form must match the infix "? % ?" / "? mod ?" behavior.
+		{"prepare s from select cast(mod(?, ?) as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(mod(?, ?) as signed)", int32(types.T_int64)},
 		{"prepare s from select cast(? + ? as signed)", int32(types.T_int64)},
 		// nested unary is type-transparent, so params still retype.
 		{"prepare s from select cast(-(? + ?) as decimal(30,0))", int32(types.T_decimal128)},
@@ -916,6 +919,14 @@ func TestPrepareArithUnaryContext(t *testing.T) {
 // change the result (a fractional literal like 0.6 rounding to an integer) or
 // introduce overflow that float64 avoids (±1e100 cancelling in DOUBLE but
 // overflowing DECIMAL). This guards the round-5 correctness findings.
+//
+// NOTE: verified against MySQL 8.4 that these cases keep params EXACT (e.g.
+// "cast((? + ?) + 1 as decimal(30,0))" with 2^53+1 yields ...994, not ...992).
+// We intentionally diverge to the safe DOUBLE default here: matching MySQL for
+// nested typed-sibling arithmetic needs full type-context inference (a typed
+// sibling can even override the assignment target — "set dec = (? + ?) + f"
+// with f DOUBLE computes in DOUBLE and must not overflow). This divergence is
+// precision-only and never yields a wrong result or an overflow.
 func TestPrepareArithNonParamPeerKeepsDouble(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addArithCtxTableForTest(mock)

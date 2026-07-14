@@ -1841,6 +1841,24 @@ var bareParamUnaryOps = map[tree.UnaryOp]bool{
 	tree.UNARY_PLUS:  true,
 }
 
+// bareParamArithFuncs is the set of function-call spellings of an arithmetic
+// operator (e.g. "MOD(a, b)" for "a % b") that the plan classifier rebinds by
+// its resolved operator name.  The AST gate must accept these too, otherwise
+// the function form is silently left on DOUBLE while the infix form is retyped.
+var bareParamArithFuncs = map[string]bool{
+	"mod": true,
+}
+
+// funcExprArithName returns the lowercased function name of a tree.FuncExpr when
+// it is a plain function reference, else "".
+func funcExprArithName(fe *tree.FuncExpr) string {
+	ref, ok := fe.Func.FunctionReference.(*tree.UnresolvedName)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(ref.ColName())
+}
+
 // isBareParamArithAst reports whether the AST is a "bare" prepared-param
 // arithmetic expression: internal nodes are only parentheses, unary +/-, and
 // binary arithmetic operators; leaves are only bare parameter markers; and at
@@ -1869,6 +1887,12 @@ func isBareParamArithAst(e tree.Expr) bool {
 			return bareParamArithOps[n.Op] && walk(n.Left) && walk(n.Right)
 		case *tree.UnaryExpr:
 			return bareParamUnaryOps[n.Op] && walk(n.Expr)
+		case *tree.FuncExpr:
+			// function-call spelling of an arithmetic operator, e.g. MOD(?, ?)
+			if !bareParamArithFuncs[funcExprArithName(n)] || len(n.Exprs) != 2 {
+				return false
+			}
+			return walk(n.Exprs[0]) && walk(n.Exprs[1])
 		case *tree.ParamExpr:
 			hasParam = true
 			return true
