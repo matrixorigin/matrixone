@@ -364,6 +364,14 @@ func doneChan(ctx context.Context) <-chan struct{} {
 	return ctx.Done()
 }
 
+func rejectJob(job Job, workerName string) error {
+	err := moerr.NewInternalErrorNoCtxf("%s is closed", workerName)
+	if job != nil {
+		job.Fail(err)
+	}
+	return err
+}
+
 func NewWorker(
 	cnUUID string,
 	cnEngine engine.Engine,
@@ -563,20 +571,22 @@ func (w *worker) Stop() {
 	w.stopOnce.Do(func() {
 		w.closed.Store(true)
 		w.admissions.seal(w.cancel)
-		w.wg.Wait()
-		w.drainPending()
-		w.syncProtectionMu.Lock()
-		clear(w.syncProtectionJobs)
-		w.syncProtectionMu.Unlock()
-		if w.filterObjectWorker != nil {
-			w.filterObjectWorker.Stop()
-		}
+		// Stop leaf pools before their callers. A running filter job can wait on
+		// get-chunk/write jobs, and a top-level iteration can wait on a filter job.
 		if w.getChunkWorker != nil {
 			w.getChunkWorker.Stop()
 		}
 		if w.writeObjectWorker != nil {
 			w.writeObjectWorker.Stop()
 		}
+		if w.filterObjectWorker != nil {
+			w.filterObjectWorker.Stop()
+		}
+		w.wg.Wait()
+		w.drainPending()
+		w.syncProtectionMu.Lock()
+		clear(w.syncProtectionJobs)
+		w.syncProtectionMu.Unlock()
 	})
 }
 
@@ -795,6 +805,7 @@ func (w *filterObjectWorker) start() {
 					select {
 					case <-w.ctx.Done():
 						w.cancelPending()
+						job.Fail(moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
 						return
 					default:
 					}
@@ -821,7 +832,7 @@ func (w *filterObjectWorker) cancelPending() {
 
 func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
 	if !w.admissions.enter(&w.closed) {
-		return moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed")
+		return rejectJob(job, "FilterObjectWorker")
 	}
 	defer w.admissions.leave()
 	if job == nil {
@@ -834,7 +845,7 @@ func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
 		return nil
 	case <-doneChan(w.ctx):
 		w.cancelPending()
-		return moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed")
+		return rejectJob(job, "FilterObjectWorker")
 	}
 }
 
@@ -845,8 +856,9 @@ func (w *filterObjectWorker) Stop() {
 		w.wg.Wait()
 		for {
 			select {
-			case <-w.jobChan:
+			case job := <-w.jobChan:
 				w.cancelPending()
+				job.Fail(moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
 			default:
 				return
 			}
@@ -893,6 +905,7 @@ func (w *getChunkWorker) start() {
 					select {
 					case <-w.ctx.Done():
 						w.cancelPending(jobType)
+						job.Fail(moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
 						return
 					default:
 					}
@@ -935,7 +948,7 @@ func (w *getChunkWorker) cancelPending(jobType int8) {
 
 func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 	if !w.admissions.enter(&w.closed) {
-		return moerr.NewInternalErrorNoCtx("GetChunkWorker is closed")
+		return rejectJob(job, "GetChunkWorker")
 	}
 	defer w.admissions.leave()
 	if job == nil {
@@ -953,7 +966,7 @@ func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 		return nil
 	case <-doneChan(w.ctx):
 		w.cancelPending(jobType)
-		return moerr.NewInternalErrorNoCtx("GetChunkWorker is closed")
+		return rejectJob(job, "GetChunkWorker")
 	}
 }
 
@@ -966,6 +979,7 @@ func (w *getChunkWorker) Stop() {
 			select {
 			case job := <-w.jobChan:
 				w.cancelPending(job.GetType())
+				job.Fail(moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
 			default:
 				return
 			}
@@ -1030,6 +1044,7 @@ func (w *simpleJobWorker) start(threadCount int) {
 					select {
 					case <-w.ctx.Done():
 						w.cancelPending()
+						job.Fail(moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
 						return
 					default:
 					}
@@ -1055,7 +1070,7 @@ func (w *simpleJobWorker) cancelPending() {
 
 func (w *simpleJobWorker) submit(job Job) error {
 	if !w.admissions.enter(&w.closed) {
-		return moerr.NewInternalErrorf(context.Background(), "%s is closed", w.name)
+		return rejectJob(job, w.name)
 	}
 	defer w.admissions.leave()
 	if job == nil {
@@ -1067,7 +1082,7 @@ func (w *simpleJobWorker) submit(job Job) error {
 		return nil
 	case <-doneChan(w.ctx):
 		w.cancelPending()
-		return moerr.NewInternalErrorf(context.Background(), "%s is closed", w.name)
+		return rejectJob(job, w.name)
 	}
 }
 
@@ -1078,8 +1093,9 @@ func (w *simpleJobWorker) stop() {
 		w.wg.Wait()
 		for {
 			select {
-			case <-w.jobChan:
+			case job := <-w.jobChan:
 				w.cancelPending()
+				job.Fail(moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
 			default:
 				return
 			}

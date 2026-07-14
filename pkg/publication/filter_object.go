@@ -392,7 +392,9 @@ func filterNonAppendableObject(
 	// For data objects (or tombstone without aobjectMap), write directly to fileservice
 	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
 	if writeObjectWorker != nil {
-		writeObjectWorker.SubmitWriteObject(writeJob)
+		if err := writeObjectWorker.SubmitWriteObject(writeJob); err != nil {
+			return objectio.ObjectStats{}, err
+		}
 	} else {
 		writeJob.Execute()
 	}
@@ -438,7 +440,9 @@ var GetObjectFromUpstreamWithWorker = func(
 		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
 		chunkJobs[i-1] = chunkJob
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
+			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
+				return nil, err
+			}
 		} else {
 			chunkJob.Execute()
 		}
@@ -493,7 +497,9 @@ func getMetaWithRetry(
 
 		metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(metaJob)
+			if err := getChunkWorker.SubmitGetChunk(metaJob); err != nil {
+				return nil, err
+			}
 		} else {
 			metaJob.Execute()
 		}
@@ -533,7 +539,9 @@ func getChunkWithRetry(
 
 		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, chunkIndex, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
+			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
+				return nil, err
+			}
 		} else {
 			chunkJob.Execute()
 		}

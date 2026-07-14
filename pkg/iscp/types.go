@@ -149,8 +149,11 @@ type ISCPTaskExecutor struct {
 	) (func(), error) // for test
 	option *ISCPExecutorOption
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx           context.Context
+	cancel        context.CancelFunc
+	ownerCtx      context.Context
+	terminated    chan struct{}
+	terminateOnce sync.Once
 
 	worker Worker
 	wg     sync.WaitGroup

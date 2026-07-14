@@ -16,12 +16,14 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +35,157 @@ func TestWorkerStopImmediatelyAfterConstruction(t *testing.T) {
 	w := NewWorker("", nil, nil, nil, nil)
 	w.Stop()
 	runtime.Gosched()
+}
+
+func TestStoppedWorkersCompleteRejectedJobs(t *testing.T) {
+	tests := []struct {
+		name   string
+		job    Job
+		submit func(Job) error
+	}{
+		{
+			name: "filter object",
+			job:  NewFilterObjectJob(context.Background(), nil, types.TS{}, nil, false, nil, nil, nil, nil, "", "", nil, nil, nil, nil),
+			submit: func(job Job) error {
+				worker := NewFilterObjectWorker()
+				worker.Stop()
+				return worker.SubmitFilterObject(job)
+			},
+		},
+		{
+			name: "get chunk",
+			job:  NewGetChunkJob(context.Background(), nil, "object", 1, "", ""),
+			submit: func(job Job) error {
+				worker := NewGetChunkWorker()
+				worker.Stop()
+				return worker.SubmitGetChunk(job)
+			},
+		},
+		{
+			name: "write object",
+			job:  NewWriteObjectJob(context.Background(), nil, "object", nil, nil, nil),
+			submit: func(job Job) error {
+				worker := NewWriteObjectWorker()
+				worker.Stop()
+				return worker.SubmitWriteObject(job)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Error(t, test.submit(test.job))
+			assertJobFailedPromptly(t, test.job)
+		})
+	}
+}
+
+func TestWorkerStopCompletesQueuedJobs(t *testing.T) {
+	previousStats := globalJobStats
+	globalJobStats = &JobStats{}
+	defer func() { globalJobStats = previousStats }()
+
+	filterCtx, filterCancel := context.WithCancel(context.Background())
+	filterWorker := &filterObjectWorker{
+		jobChan: make(chan Job, 1),
+		ctx:     filterCtx,
+		cancel:  filterCancel,
+	}
+	chunkCtx, chunkCancel := context.WithCancel(context.Background())
+	chunkWorker := &getChunkWorker{
+		jobChan: make(chan Job, 1),
+		ctx:     chunkCtx,
+		cancel:  chunkCancel,
+	}
+	writeCtx, writeCancel := context.WithCancel(context.Background())
+	writeWorker := &simpleJobWorker{
+		name:              "WriteObjectWorker",
+		jobChan:           make(chan Job, 1),
+		ctx:               writeCtx,
+		cancel:            writeCancel,
+		onPending:         func() {},
+		onPendingCanceled: func() {},
+	}
+
+	tests := []struct {
+		name   string
+		job    Job
+		submit func(Job) error
+		stop   func()
+	}{
+		{
+			name:   "filter object",
+			job:    NewFilterObjectJob(context.Background(), nil, types.TS{}, nil, false, nil, nil, nil, nil, "", "", nil, nil, nil, nil),
+			submit: filterWorker.SubmitFilterObject,
+			stop:   filterWorker.Stop,
+		},
+		{
+			name:   "get chunk",
+			job:    NewGetChunkJob(context.Background(), nil, "object", 1, "", ""),
+			submit: chunkWorker.SubmitGetChunk,
+			stop:   chunkWorker.Stop,
+		},
+		{
+			name:   "write object",
+			job:    NewWriteObjectJob(context.Background(), nil, "object", nil, nil, nil),
+			submit: writeWorker.submit,
+			stop:   writeWorker.stop,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, test.submit(test.job))
+			test.stop()
+			assertJobFailedPromptly(t, test.job)
+		})
+	}
+
+	require.Zero(t, globalJobStats.FilterObjectPending.Load())
+	require.Zero(t, globalJobStats.GetChunkPending.Load())
+}
+
+func TestJobCompletionIsExactlyOnce(t *testing.T) {
+	firstErr := errors.New("first")
+	job := NewWriteObjectJob(context.Background(), nil, "object", nil, nil, nil)
+	job.Fail(firstErr)
+	job.Fail(errors.New("second"))
+
+	result := job.WaitDone().(*WriteObjectJobResult)
+	require.ErrorIs(t, result.Err, firstErr)
+	select {
+	case <-job.result:
+		t.Fatal("job published more than one terminal result")
+	default:
+	}
+}
+
+func TestGetMetaReturnsWorkerRejection(t *testing.T) {
+	worker := NewGetChunkWorker()
+	worker.Stop()
+
+	_, err := getMetaWithRetry(context.Background(), nil, "object", worker, "", "")
+	require.Error(t, err)
+}
+
+func assertJobFailedPromptly(t *testing.T, job Job) {
+	t.Helper()
+	result := make(chan any, 1)
+	go func() { result <- job.WaitDone() }()
+	select {
+	case value := <-result:
+		switch value := value.(type) {
+		case *FilterObjectJobResult:
+			require.Error(t, value.Err)
+		case *GetChunkJobResult:
+			require.Error(t, value.Err)
+		case *WriteObjectJobResult:
+			require.Error(t, value.Err)
+		default:
+			t.Fatalf("unexpected job result type %T", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("job did not reach a terminal result")
+	}
 }
 
 func TestWorkerStopIsConcurrentAndIdempotent(t *testing.T) {

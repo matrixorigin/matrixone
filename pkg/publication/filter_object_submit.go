@@ -455,7 +455,9 @@ func ApplyObjects(
 			// Data objects don't need aobjectMap for rewriting, pass nil
 			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil, ttlChecker)
 			if filterObjectWorker != nil {
-				filterObjectWorker.SubmitFilterObject(filterJob)
+				if err = filterObjectWorker.SubmitFilterObject(filterJob); err != nil {
+					return
+				}
 			} else {
 				filterJob.Execute()
 			}
@@ -559,7 +561,9 @@ func ApplyObjects(
 			// Tombstone objects need aobjectMap for rowid rewriting
 			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
 			if filterObjectWorker != nil {
-				filterObjectWorker.SubmitFilterObject(filterJob)
+				if err = filterObjectWorker.SubmitFilterObject(filterJob); err != nil {
+					return
+				}
 			} else {
 				filterJob.Execute()
 			}

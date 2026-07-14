@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -43,5 +44,49 @@ func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
 
 	for range 2 {
 		require.ErrorIs(t, factory(context.Background(), &task.DaemonTask{}), attachErr)
+	}
+}
+
+func TestExecutorLifetimeSurvivesPauseAndEndsOnCancel(t *testing.T) {
+	exec := &PublicationTaskExecutor{terminated: make(chan struct{})}
+	returned := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		exec.waitForTermination(context.Background())
+		close(returned)
+	}()
+	<-started
+
+	require.NoError(t, exec.Pause())
+	select {
+	case <-returned:
+		t.Fatal("pause terminated the daemon executor lifetime")
+	default:
+	}
+
+	require.NoError(t, exec.Cancel())
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not terminate the daemon executor lifetime")
+	}
+	require.Error(t, exec.Start())
+}
+
+func TestExecutorLifetimeEndsWithOwnerContext(t *testing.T) {
+	exec := &PublicationTaskExecutor{terminated: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan struct{})
+	go func() {
+		exec.waitForTermination(ctx)
+		close(returned)
+	}()
+	cancel()
+
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("owner cancellation did not terminate the daemon executor lifetime")
 	}
 }

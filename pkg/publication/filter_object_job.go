@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,6 +60,9 @@ type Job interface {
 	Execute()
 	WaitDone() any
 	GetType() int8
+	// Fail completes a job that cannot be executed. It is safe to race with
+	// Execute; exactly one terminal result is published.
+	Fail(error)
 }
 
 // GetMetaJobResult holds the result of GetMetaJob
@@ -79,6 +83,7 @@ type GetMetaJob struct {
 	subscriptionAccountName string
 	pubName                 string
 	result                  chan *GetMetaJobResult
+	completed               atomic.Bool
 }
 
 // NewGetMetaJob creates a new GetMetaJob
@@ -104,7 +109,7 @@ func (j *GetMetaJob) Execute() {
 		select {
 		case <-j.ctx.Done():
 			res.Err = j.ctx.Err()
-			j.result <- res
+			j.complete(res)
 			return
 		default:
 		}
@@ -114,7 +119,7 @@ func (j *GetMetaJob) Execute() {
 			lastErr = err
 			if !(DefaultClassifier{}).IsRetryable(err) {
 				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
-				j.result <- res
+				j.complete(res)
 				return
 			}
 			continue
@@ -127,7 +132,7 @@ func (j *GetMetaJob) Execute() {
 				lastErr = err
 				if !(DefaultClassifier{}).IsRetryable(err) {
 					res.Err = moerr.NewInternalErrorf(j.ctx, "failed to read metadata for %s: %v", j.objectName, err)
-					j.result <- res
+					j.complete(res)
 					return
 				}
 				continue
@@ -135,7 +140,7 @@ func (j *GetMetaJob) Execute() {
 			result.Close()
 			cancel()
 			res.Err = moerr.NewInternalErrorf(j.ctx, "no object content returned for %s", j.objectName)
-			j.result <- res
+			j.complete(res)
 			return
 		}
 
@@ -145,7 +150,7 @@ func (j *GetMetaJob) Execute() {
 			lastErr = err
 			if !(DefaultClassifier{}).IsRetryable(err) {
 				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset 0: %v", err)
-				j.result <- res
+				j.complete(res)
 				return
 			}
 			continue
@@ -155,23 +160,33 @@ func (j *GetMetaJob) Execute() {
 
 		if res.TotalChunks <= 0 {
 			res.Err = moerr.NewInternalErrorf(j.ctx, "invalid total_chunks: %d", res.TotalChunks)
-			j.result <- res
+			j.complete(res)
 			return
 		}
 
 		// Success
-		j.result <- res
+		j.complete(res)
 		return
 	}
 
 	// All retries failed
 	res.Err = moerr.NewInternalErrorf(j.ctx, "failed to get metadata for %s after %d retries: %v", j.objectName, maxRetries, lastErr)
-	j.result <- res
+	j.complete(res)
 }
 
 // WaitDone waits for the job to complete and returns the result
 func (j *GetMetaJob) WaitDone() any {
 	return <-j.result
+}
+
+func (j *GetMetaJob) complete(result *GetMetaJobResult) {
+	if j.completed.CompareAndSwap(false, true) {
+		j.result <- result
+	}
+}
+
+func (j *GetMetaJob) Fail(err error) {
+	j.complete(&GetMetaJobResult{Err: err})
 }
 
 // GetType returns the job type
@@ -195,6 +210,7 @@ type GetChunkJob struct {
 	subscriptionAccountName string
 	pubName                 string
 	result                  chan *GetChunkJobResult
+	completed               atomic.Bool
 }
 
 // NewGetChunkJob creates a new GetChunkJob
@@ -222,7 +238,7 @@ func (j *GetChunkJob) Execute() {
 		// acquired
 	case <-j.ctx.Done():
 		res.Err = j.ctx.Err()
-		j.result <- res
+		j.complete(res)
 		return
 	}
 	defer func() { <-sem }()
@@ -234,7 +250,7 @@ func (j *GetChunkJob) Execute() {
 		select {
 		case <-j.ctx.Done():
 			res.Err = j.ctx.Err()
-			j.result <- res
+			j.complete(res)
 			return
 		default:
 		}
@@ -244,7 +260,7 @@ func (j *GetChunkJob) Execute() {
 			lastErr = err
 			if !(DefaultClassifier{}).IsRetryable(err) {
 				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v, sql: %v", j.chunkIndex, err, getChunkSQL)
-				j.result <- res
+				j.complete(res)
 				return
 			}
 			continue
@@ -262,7 +278,7 @@ func (j *GetChunkJob) Execute() {
 				lastErr = err
 				if !(DefaultClassifier{}).IsRetryable(err) {
 					res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset %d: %v", j.chunkIndex, err)
-					j.result <- res
+					j.complete(res)
 					return
 				}
 				continue
@@ -271,7 +287,7 @@ func (j *GetChunkJob) Execute() {
 			result.Close()
 			cancel()
 			// Success
-			j.result <- res
+			j.complete(res)
 			return
 		} else {
 			if err := result.Err(); err != nil {
@@ -280,7 +296,7 @@ func (j *GetChunkJob) Execute() {
 				lastErr = err
 				if !(DefaultClassifier{}).IsRetryable(err) {
 					res.Err = moerr.NewInternalErrorf(j.ctx, "failed to read chunk %d of %s: %v", j.chunkIndex, j.objectName, err)
-					j.result <- res
+					j.complete(res)
 					return
 				}
 				continue
@@ -289,19 +305,29 @@ func (j *GetChunkJob) Execute() {
 			cancel()
 			// No data returned and no error - this is a real "no content" error, don't retry
 			res.Err = moerr.NewInternalErrorf(j.ctx, "no chunk content returned for chunk %d of %s", j.chunkIndex, j.objectName)
-			j.result <- res
+			j.complete(res)
 			return
 		}
 	}
 
 	// All retries failed
 	res.Err = moerr.NewInternalErrorf(j.ctx, "failed to get chunk %d of %s after %d retries: %v", j.chunkIndex, j.objectName, maxRetries, lastErr)
-	j.result <- res
+	j.complete(res)
 }
 
 // WaitDone waits for the job to complete and returns the result
 func (j *GetChunkJob) WaitDone() any {
 	return <-j.result
+}
+
+func (j *GetChunkJob) complete(result *GetChunkJobResult) {
+	if j.completed.CompareAndSwap(false, true) {
+		j.result <- result
+	}
+}
+
+func (j *GetChunkJob) Fail(err error) {
+	j.complete(&GetChunkJobResult{ChunkIndex: j.chunkIndex, Err: err})
 }
 
 // GetType returns the job type
@@ -333,6 +359,7 @@ type WriteObjectJob struct {
 	ccprCache     CCPRTxnCacheWriter
 	txnID         []byte
 	result        chan *WriteObjectJobResult
+	completed     atomic.Bool
 }
 
 // NewWriteObjectJob creates a new WriteObjectJob
@@ -367,7 +394,7 @@ func (j *WriteObjectJob) Execute() {
 		isNewFile, err := j.ccprCache.WriteObject(j.ctx, j.objectName, j.txnID)
 		if err != nil {
 			res.Err = err
-			j.result <- res
+			j.complete(res)
 			return
 		}
 		isNewDuration := time.Since(t1)
@@ -386,7 +413,7 @@ func (j *WriteObjectJob) Execute() {
 			})
 			if err != nil {
 				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
-				j.result <- res
+				j.complete(res)
 				return
 			}
 			// Notify cache that file has been written
@@ -415,18 +442,28 @@ func (j *WriteObjectJob) Execute() {
 				// File already exists, this is ok
 			} else {
 				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
-				j.result <- res
+				j.complete(res)
 				return
 			}
 		}
 	}
 
-	j.result <- res
+	j.complete(res)
 }
 
 // WaitDone waits for the job to complete and returns the result
 func (j *WriteObjectJob) WaitDone() any {
 	return <-j.result
+}
+
+func (j *WriteObjectJob) complete(result *WriteObjectJobResult) {
+	if j.completed.CompareAndSwap(false, true) {
+		j.result <- result
+	}
+}
+
+func (j *WriteObjectJob) Fail(err error) {
+	j.complete(&WriteObjectJobResult{Err: err})
 }
 
 // GetType returns the job type
@@ -480,6 +517,7 @@ type FilterObjectJob struct {
 	aobjectMap              *AObjectMap // Used for tombstone rowid rewriting
 	ttlChecker              TTLChecker  // TTL expiration checker
 	result                  chan *FilterObjectJobResult
+	completed               atomic.Bool
 }
 
 // NewFilterObjectJob creates a new FilterObjectJob
@@ -527,7 +565,7 @@ func (j *FilterObjectJob) Execute() {
 	// Check TTL before starting
 	if j.ttlChecker != nil && !j.ttlChecker() {
 		res.Err = ErrSyncProtectionTTLExpired
-		j.result <- res
+		j.complete(res)
 		return
 	}
 
@@ -557,12 +595,22 @@ func (j *FilterObjectJob) Execute() {
 		res.DownstreamStats = filterResult.DownstreamStats
 		res.RowOffsetMap = filterResult.RowOffsetMap
 	}
-	j.result <- res
+	j.complete(res)
 }
 
 // WaitDone waits for the job to complete and returns the result
 func (j *FilterObjectJob) WaitDone() any {
 	return <-j.result
+}
+
+func (j *FilterObjectJob) complete(result *FilterObjectJobResult) {
+	if j.completed.CompareAndSwap(false, true) {
+		j.result <- result
+	}
+}
+
+func (j *FilterObjectJob) Fail(err error) {
+	j.complete(&FilterObjectJobResult{Err: err})
 }
 
 // GetType returns the job type

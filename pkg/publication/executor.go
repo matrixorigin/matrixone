@@ -125,17 +125,10 @@ func PublicationTaskExecutorFactory(
 			return
 		}
 
-		exec.runningMu.Lock()
-		if exec.running {
-			exec.runningMu.Unlock()
+		if err = exec.Start(); err != nil {
 			return
 		}
-		err = exec.initStateLocked(ctx)
-		exec.runningMu.Unlock()
-		if err != nil {
-			return
-		}
-		exec.run(exec.ctx, exec.worker)
+		exec.waitForTermination(ctx)
 		exec.Stop()
 		return
 	}
@@ -191,6 +184,8 @@ func NewPublicationTaskExecutor(
 	}()
 	option = fillDefaultOption(option)
 	exec = &PublicationTaskExecutor{
+		ownerCtx:                 ctx,
+		terminated:               make(chan struct{}),
 		ctx:                      ctx,
 		tasks:                    btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true}),
 		cnUUID:                   cdUUID,
@@ -232,8 +227,11 @@ type PublicationTaskExecutor struct {
 
 	option *PublicationExecutorOption
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx           context.Context
+	cancel        context.CancelFunc
+	ownerCtx      context.Context
+	terminated    chan struct{}
+	terminateOnce sync.Once
 
 	worker Worker
 	wg     sync.WaitGroup
@@ -256,7 +254,10 @@ func (exec *PublicationTaskExecutor) Pause() error {
 }
 
 func (exec *PublicationTaskExecutor) Cancel() error {
-	exec.Stop()
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	exec.terminate()
+	exec.stopLocked()
 	return nil
 }
 
@@ -272,15 +273,47 @@ func (exec *PublicationTaskExecutor) Restart() error {
 func (exec *PublicationTaskExecutor) Start() error {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	if exec.isTerminated() {
+		return moerr.NewInternalErrorNoCtx("Publication-Task Executor is canceled")
+	}
 	if exec.running {
 		return nil
 	}
-	err := exec.initStateLocked(context.Background())
+	parent := exec.ownerCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	err := exec.initStateLocked(parent)
 	if err != nil {
 		return err
 	}
 	go exec.run(exec.ctx, exec.worker)
 	return nil
+}
+
+func (exec *PublicationTaskExecutor) waitForTermination(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+	case <-exec.terminated:
+	}
+}
+
+func (exec *PublicationTaskExecutor) terminate() {
+	if exec.terminated != nil {
+		exec.terminateOnce.Do(func() { close(exec.terminated) })
+	}
+}
+
+func (exec *PublicationTaskExecutor) isTerminated() bool {
+	if exec.terminated == nil {
+		return false
+	}
+	select {
+	case <-exec.terminated:
+		return true
+	default:
+		return false
+	}
 }
 
 func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) error {
@@ -321,6 +354,10 @@ func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) err
 func (exec *PublicationTaskExecutor) Stop() {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	exec.stopLocked()
+}
+
+func (exec *PublicationTaskExecutor) stopLocked() {
 	if !exec.running {
 		return
 	}
@@ -395,7 +432,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context, worker Worker) {
 			}
 			if !ok {
 				logutil.Error("Publication-Task lease check failed, stopping executor")
-				go exec.Stop()
+				go exec.Cancel()
 				return
 			}
 			for _, task := range candidateTasks {

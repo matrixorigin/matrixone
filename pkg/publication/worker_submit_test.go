@@ -81,6 +81,7 @@ type mockJob struct{}
 func (m *mockJob) Execute()      {}
 func (m *mockJob) WaitDone() any { return nil }
 func (m *mockJob) GetType() int8 { return 0 }
+func (m *mockJob) Fail(error)    {}
 
 // ---- Worker pool submit success tests ----
 

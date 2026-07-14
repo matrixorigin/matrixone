@@ -108,17 +108,10 @@ func ISCPTaskExecutorFactory(
 			return
 		}
 
-		exec.runningMu.Lock()
-		if exec.running {
-			exec.runningMu.Unlock()
+		if err = exec.Start(); err != nil {
 			return
 		}
-		err = exec.initStateLocked(ctx)
-		exec.runningMu.Unlock()
-		if err != nil {
-			return
-		}
-		exec.run(exec.ctx, exec.worker)
+		exec.waitForTermination(ctx)
 		exec.Stop()
 		return
 	}
@@ -176,6 +169,8 @@ func NewISCPTaskExecutor(
 	}()
 	option = fillDefaultOption(option)
 	exec = &ISCPTaskExecutor{
+		ownerCtx:    ctx,
+		terminated:  make(chan struct{}),
 		ctx:         ctx,
 		packer:      types.NewPacker(),
 		tables:      btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
@@ -239,7 +234,10 @@ func (exec *ISCPTaskExecutor) Pause() error {
 	return nil
 }
 func (exec *ISCPTaskExecutor) Cancel() error {
-	exec.Stop()
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	exec.terminate()
+	exec.stopLocked()
 	return nil
 }
 func (exec *ISCPTaskExecutor) Restart() error {
@@ -253,15 +251,47 @@ func (exec *ISCPTaskExecutor) Restart() error {
 func (exec *ISCPTaskExecutor) Start() error {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	if exec.isTerminated() {
+		return moerr.NewInternalErrorNoCtx("ISCP-Task Executor is canceled")
+	}
 	if exec.running {
 		return nil
 	}
-	err := exec.initStateLocked(context.Background())
+	parent := exec.ownerCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	err := exec.initStateLocked(parent)
 	if err != nil {
 		return err
 	}
 	go exec.run(exec.ctx, exec.worker)
 	return nil
+}
+
+func (exec *ISCPTaskExecutor) waitForTermination(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+	case <-exec.terminated:
+	}
+}
+
+func (exec *ISCPTaskExecutor) terminate() {
+	if exec.terminated != nil {
+		exec.terminateOnce.Do(func() { close(exec.terminated) })
+	}
+}
+
+func (exec *ISCPTaskExecutor) isTerminated() bool {
+	if exec.terminated == nil {
+		return false
+	}
+	select {
+	case <-exec.terminated:
+		return true
+	default:
+		return false
+	}
 }
 
 func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error) {
@@ -314,6 +344,10 @@ func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error
 func (exec *ISCPTaskExecutor) Stop() {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	exec.stopLocked()
+}
+
+func (exec *ISCPTaskExecutor) stopLocked() {
 	if !exec.running {
 		return
 	}
@@ -480,7 +514,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 						continue
 					}
 					if !ok {
-						go exec.Stop()
+						go exec.Cancel()
 						break
 					}
 					err = worker.Submit(iter)
