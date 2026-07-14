@@ -77,7 +77,7 @@ func moFeatureEscapeSQLString(s string) string {
 func moFeatureRegistryQueryOne(exec executor.SQLExecutor, proc *process.Process, featureCode string) (*featureRegistryRow, error) {
 	featureCode = strings.ToUpper(strings.TrimSpace(featureCode))
 	sql := fmt.Sprintf(
-		"select feature_code, description, scope_spec, enabled from %s.%s where feature_code = '%s'",
+		"select feature_code, description, scope_spec, enabled from %s.%s where feature_code = '%s' limit 2",
 		moCatalog, catalog.MO_FEATURE_REGISTRY, moFeatureEscapeSQLString(featureCode),
 	)
 	res, err := exec.Exec(proc.Ctx, sql, moFeatureInternalExecOpts(proc))
@@ -90,11 +90,7 @@ func moFeatureRegistryQueryOne(exec executor.SQLExecutor, proc *process.Process,
 		found bool
 		row   featureRegistryRow
 	)
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows <= 0 {
-			return true
-		}
-		found = true
+	found, err = readSingleResultRow(res, func(cols []*vector.Vector) {
 		row.FeatureCode = string(cols[0].GetBytesAt(0))
 		row.Description = string(cols[1].GetBytesAt(0))
 		scopeSpecBytes := cols[2].GetBytesAt(0)
@@ -108,8 +104,10 @@ func moFeatureRegistryQueryOne(exec executor.SQLExecutor, proc *process.Process,
 		}
 		row.ScopeSpec = append(row.ScopeSpec[:0], scopeSpecBytes...)
 		row.Enabled = vector.GetFixedAtNoTypeCheck[bool](cols[3], 0)
-		return true
 	})
+	if err != nil {
+		return nil, err
+	}
 	if !found {
 		return nil, nil
 	}
@@ -119,7 +117,7 @@ func moFeatureRegistryQueryOne(exec executor.SQLExecutor, proc *process.Process,
 func moFeatureLimitQueryOne(exec executor.SQLExecutor, proc *process.Process, accountID int64, featureCode, scope string) (*featureLimitRow, error) {
 	featureCode = strings.ToUpper(strings.TrimSpace(featureCode))
 	sql := fmt.Sprintf(
-		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s'",
+		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s' limit 2",
 		moCatalog,
 		catalog.MO_FEATURE_LIMIT,
 		accountID,
@@ -136,21 +134,37 @@ func moFeatureLimitQueryOne(exec executor.SQLExecutor, proc *process.Process, ac
 		found bool
 		row   featureLimitRow
 	)
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows <= 0 {
-			return true
-		}
-		found = true
+	found, err = readSingleResultRow(res, func(cols []*vector.Vector) {
 		row.AccountID = accountID
 		row.FeatureCode = featureCode
 		row.Scope = scope
 		row.Quota = vector.GetFixedAtNoTypeCheck[int64](cols[0], 0)
-		return true
 	})
+	if err != nil {
+		return nil, err
+	}
 	if !found {
 		return nil, nil
 	}
 	return &row, nil
+}
+
+func readSingleResultRow(res executor.Result, onRow func(cols []*vector.Vector)) (found bool, err error) {
+	totalRows := 0
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		totalRows += rows
+		if totalRows > 1 {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", totalRows))
+			return false
+		}
+		onRow(cols)
+		found = true
+		return true
+	})
+	return
 }
 
 func moFeatureRequireSysAccount(proc *process.Process) error {

@@ -296,6 +296,7 @@ func Test_checkDatabaseExistsOrNot(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccountId(ctx, 0)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
@@ -314,6 +315,20 @@ func Test_checkDatabaseExistsOrNot(t *testing.T) {
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func TestGetSqlForCheckDatabaseByAccountUsesAccountID(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 42)
+
+	sql, err := getSqlForCheckDatabaseByAccount(ctx, "db1")
+	require.NoError(t, err)
+	require.Equal(t,
+		`select dat_id from mo_catalog.mo_database where datname = "db1" and account_id = 42;`,
+		sql,
+	)
+
+	_, err = getSqlForCheckDatabaseByAccount(context.Background(), "db1")
+	require.Error(t, err)
 }
 
 func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
@@ -10530,7 +10545,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
 
 		sql = "show databases;"
-		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
+		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{{"db1"}})
+		bh.sql2result["drop database if exists `db1`;"] = nil
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
@@ -10539,6 +10555,7 @@ func Test_doDropAccount(t *testing.T) {
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(bh.dropDatabaseIgnoresForeignKeys, convey.ShouldBeTrue)
 	})
 	convey.Convey("drop account (if exists)", t, func() {
 		ctrl := gomock.NewController(t)
@@ -11134,10 +11151,11 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 }
 
 type backgroundExecTest struct {
-	currentSql   string
-	sql2result   map[string]ExecResult
-	sql2err      map[string]error
-	executedSQLs []string
+	currentSql                     string
+	sql2result                     map[string]ExecResult
+	sql2err                        map[string]error
+	executedSQLs                   []string
+	dropDatabaseIgnoresForeignKeys bool
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -11174,6 +11192,9 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	if strings.HasPrefix(s, "drop database if exists ") {
+		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	}
 	return bt.sql2err[s]
 }
 

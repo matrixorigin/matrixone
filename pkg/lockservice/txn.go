@@ -423,6 +423,13 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				wt,
 				func(lock Lock) {
 					lock.waiters.iter(func(w *waiter) bool {
+						// Completed or already-notified waiters can remain in the
+						// lock queue until the holder releases the lock. They no
+						// longer represent wait-for edges and must not participate
+						// in deadlock detection.
+						if !w.isBlocking() {
+							return true
+						}
 						hasDeadLock = !waiters(w.txn, waiterAddress)
 						return !hasDeadLock
 					})
