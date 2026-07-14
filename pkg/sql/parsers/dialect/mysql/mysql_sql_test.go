@@ -3591,27 +3591,27 @@ var (
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc dfc ghc')",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc dfc ghc)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc dfc ghc')",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc- +abc IN BOOLEAN MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc%' IN NATURAL LANGUAGE MODE)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc% IN NATURAL LANGUAGE MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc%' IN NATURAL LANGUAGE MODE)",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc gg* WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
 		},
 		{
 			input:  "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
-			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+			output: "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 		},
 		{
 			input:  "alter user user1 unlock",
@@ -3768,6 +3768,35 @@ func TestValid(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 		ast.StmtKind()
+	}
+}
+
+// TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path
+// (not only the WithSingleQuoteString path): MATCH(...) AGAINST('...') must deparse to a
+// quoted, re-parseable string literal so re-serialized statements (CREATE TABLE AS SELECT,
+// view expansion, etc.) round-trip. Before the fix the default path emitted the pattern bare
+// (AGAINST (防水 ...)) which is invalid SQL.
+func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
+	ctx := context.TODO()
+	cases := []string{
+		"select * from t where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+		"select * from t where MATCH (a, b) AGAINST ('abc dfc')",
+		"select MATCH (body) AGAINST ('abc%' IN NATURAL LANGUAGE MODE) from t",
+		// embedded single quote must survive escaping on the default path
+		"select * from t where MATCH (body) AGAINST ('it''s a test')",
+	}
+	for _, sql := range cases {
+		ast, err := ParseOne(ctx, sql, 1)
+		require.NoError(t, err, sql)
+
+		// DEFAULT path (no WithSingleQuoteString / WithQuoteString).
+		out := tree.String(ast, dialect.MYSQL)
+		require.Contains(t, out, "AGAINST ('", "default deparse must quote the pattern, got: "+out)
+
+		// The deparsed SQL must re-parse and be idempotent under further deparse.
+		ast2, err := ParseOne(ctx, out, 1)
+		require.NoError(t, err, "deparsed SQL must re-parse: "+out)
+		require.Equal(t, out, tree.String(ast2, dialect.MYSQL), "deparse must be idempotent")
 	}
 }
 

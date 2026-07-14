@@ -1927,11 +1927,18 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	// Pattern is stored unquoted (search_pattern: STRING strips the quotes). Re-emit it
-	// as a properly-quoted/escaped string literal, matching NumVal, so a deparsed
-	// statement (e.g. CREATE TABLE AS SELECT, which re-serializes the query) round-trips
-	// and re-parses. Raw WriteString here dropped the quotes -> syntax error (#24823).
-	ctx.WriteValue(P_char, FormatString(node.Pattern))
+	// Pattern is ALWAYS a string literal and is stored unquoted (search_pattern: STRING strips
+	// the surrounding quotes). Emit it as a single-quoted, escaped SQL string literal
+	// UNCONDITIONALLY — do NOT route it through ctx.WriteValue, which only quotes when the
+	// FmtCtx opts in (quoteString/singleQuoteString). The default tree.String() path does not
+	// opt in, so WriteValue emitted the pattern bare and any deparsed statement (CREATE TABLE
+	// AS SELECT, view expansion, or any other re-serialization) produced invalid SQL that
+	// failed to re-parse (#24823). Unconditional quoting is correct here precisely because the
+	// pattern is never a number/null/bool (unlike the polymorphic NumVal) — bare output is
+	// never valid SQL for this node.
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(FormatString(node.Pattern), "'", "''"))
+	ctx.WriteString("'")
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")
