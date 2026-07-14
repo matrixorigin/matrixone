@@ -121,6 +121,10 @@ func (txn *testWorkspace) IncrStatementID(ctx context.Context, commit bool) erro
 	return nil
 }
 
+func (txn *testWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	return nil
+}
+
 func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
