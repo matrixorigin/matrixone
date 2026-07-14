@@ -1132,9 +1132,13 @@ func (b *testBackend) Locked() bool {
 }
 
 func (b *testBackend) active() {
+	b.setActiveTime(time.Now())
+}
+
+func (b *testBackend) setActiveTime(value time.Time) {
 	b.RWMutex.Lock()
 	defer b.RWMutex.Unlock()
-	b.activeTime = time.Now()
+	b.activeTime = value
 }
 
 type testMessage struct {
