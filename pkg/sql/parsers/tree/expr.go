@@ -1927,7 +1927,15 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	// Pattern is ALWAYS a string literal and is stored unquoted (search_pattern: STRING strips
+	// the surrounding quotes). Emit it as a single-quoted, escaped SQL string literal
+	// UNCONDITIONALLY. Writing it bare produced invalid SQL that failed to re-parse whenever a
+	// statement is re-serialized (CREATE TABLE AS SELECT, view expansion, or any other deparse)
+	// (#24823). Unconditional quoting is correct here precisely because the pattern is never a
+	// number/null/bool (unlike the polymorphic NumVal) — bare output is never valid SQL.
+	ctx.WriteString("'")
+	ctx.WriteString(strings.ReplaceAll(FormatString(node.Pattern), "'", "''"))
+	ctx.WriteString("'")
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")
