@@ -85,16 +85,16 @@ select greatest(u1, u2, u3) as g3u, least(u1, u2, u3) as l3u from uns order by u
 9000000000  ¦  100  𝄀
 200  ¦  1
 select greatest(cast(-3 as bigint), cast(9000000000000000000 as bigint unsigned)) as g_su;
-➤ g_su[3,21,0]  𝄀
+➤ g_su[3,20,0]  𝄀
 9000000000000000000
 select least(cast(-3 as bigint), cast(9000000000000000000 as bigint unsigned)) as l_su;
-➤ l_su[3,21,0]  𝄀
+➤ l_su[3,20,0]  𝄀
 -3
 drop table if exists bt;
 create table bt(b bit(16), i int);
 insert into bt values (10, 3), (20, 25), (7, 7);
 select greatest(b, i) as g_bi, least(b, i) as l_bi from bt order by i;
-➤ g_bi[3,21,0]  ¦  l_bi[3,21,0]  𝄀
+➤ g_bi[3,20,0]  ¦  l_bi[3,20,0]  𝄀
 10  ¦  3  𝄀
 7  ¦  7  𝄀
 25  ¦  20
@@ -110,6 +110,60 @@ select greatest(cast(1234567890123456789012345678901234567890.12 as decimal(60,2
 select least(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as l_d256;
 ➤ l_d256[3,60,2]  𝄀
 2.00
+select greatest(cast(0.9 as decimal(65,65)), cast(1 as decimal(65,0))) as g_d256_scale_overflow;
+➤ g_d256_scale_overflow[8,54,0]  𝄀
+1.0
+select least(cast(0.9 as decimal(65,65)), cast(1 as decimal(65,0))) as l_d256_scale_overflow;
+➤ l_d256_scale_overflow[8,54,0]  𝄀
+0.8999999999999999
+select greatest('10', 2) as greatest_str_num;
+➤ greatest_str_num[12,-1,0]  𝄀
+2
+select least('10', 2) as least_str_num;
+➤ least_str_num[12,-1,0]  𝄀
+10
+select greatest(2, '10') as greatest_num_str;
+➤ greatest_num_str[12,-1,0]  𝄀
+2
+select least(2, '10') as least_num_str;
+➤ least_num_str[12,-1,0]  𝄀
+10
+select greatest('10', 2, 11.0) as greatest_three_mixed;
+➤ greatest_three_mixed[12,-1,0]  𝄀
+2
+select least('10', 2, 11.0) as least_three_mixed;
+➤ least_three_mixed[12,-1,0]  𝄀
+10
+select greatest('B', binary 'A') as greatest_nonbinary_binary;
+➤ greatest_nonbinary_binary[12,-1,0]  𝄀
+B
+select least('B', binary 'A') as least_nonbinary_binary;
+➤ least_nonbinary_binary[12,-1,0]  𝄀
+A
+select greatest(cast('10' as text), 2) as greatest_text_num;
+➤ greatest_text_num[12,0,0]  𝄀
+2
+select least(cast('10' as text), 2) as least_text_num;
+➤ least_text_num[12,0,0]  𝄀
+10
+select hex(greatest(cast('61' as blob), 2)) as greatest_blob_num;
+➤ greatest_blob_num[12,-1,0]  𝄀
+3631
+select hex(least(cast('61' as blob), 2)) as least_blob_num;
+➤ least_blob_num[12,-1,0]  𝄀
+32
+select hex(greatest(cast('61' as binary), 2)) as greatest_binary_num;
+➤ greatest_binary_num[12,-1,0]  𝄀
+3631
+select hex(least(cast('61' as binary), 2)) as least_binary_num;
+➤ least_binary_num[12,-1,0]  𝄀
+32
+select greatest(cast(2020 as year), 1999) as greatest_year_num;
+➤ greatest_year_num[3,20,0]  𝄀
+2020
+select least(cast(2020 as year), 1999) as least_year_num;
+➤ least_year_num[3,20,0]  𝄀
+1999
 drop table if exists toll_transactions;
 drop table if exists mixed_num;
 drop table if exists uns;

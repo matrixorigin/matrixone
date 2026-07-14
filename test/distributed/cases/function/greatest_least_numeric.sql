@@ -72,6 +72,31 @@ select least(cast(1.5 as decimal(10,1)), cast(2.25 as decimal(20,2))) as l_dec;
 select greatest(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as g_d256;
 select least(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as l_d256;
 
+-- same-Oid DECIMAL256 values whose common width exceeds DECIMAL256 must use
+-- the FLOAT64 fallback instead of comparing their different-scale raw values.
+-- SQL DECIMAL precision is limited to 65, but these types require 65 + 65 =
+-- 130 digits after scale alignment.
+select greatest(cast(0.9 as decimal(65,65)), cast(1 as decimal(65,0))) as g_d256_scale_overflow;
+select least(cast(0.9 as decimal(65,65)), cast(1 as decimal(65,0))) as l_d256_scale_overflow;
+
+-- issue #25215: mixed string and numeric arguments compare as strings.
+select greatest('10', 2) as greatest_str_num;
+select least('10', 2) as least_str_num;
+select greatest(2, '10') as greatest_num_str;
+select least(2, '10') as least_num_str;
+select greatest('10', 2, 11.0) as greatest_three_mixed;
+select least('10', 2, 11.0) as least_three_mixed;
+select greatest('B', binary 'A') as greatest_nonbinary_binary;
+select least('B', binary 'A') as least_nonbinary_binary;
+select greatest(cast('10' as text), 2) as greatest_text_num;
+select least(cast('10' as text), 2) as least_text_num;
+select hex(greatest(cast('61' as blob), 2)) as greatest_blob_num;
+select hex(least(cast('61' as blob), 2)) as least_blob_num;
+select hex(greatest(cast('61' as binary), 2)) as greatest_binary_num;
+select hex(least(cast('61' as binary), 2)) as least_binary_num;
+select greatest(cast(2020 as year), 1999) as greatest_year_num;
+select least(cast(2020 as year), 1999) as least_year_num;
+
 drop table if exists toll_transactions;
 drop table if exists mixed_num;
 drop table if exists uns;
