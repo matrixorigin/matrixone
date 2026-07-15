@@ -138,6 +138,31 @@ func TestScheduleQueryWorkersKeepsIvfLocalDuringMixedCommitTopology(t *testing.T
 	require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
 }
 
+func TestScheduleQueryWorkersKeepsCurrentCNFirstForIvfEntriesScan(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "z-local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{
+				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+			},
+			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
+		}},
+	}}}
+	c.e = &schedulerTestEngine{nodes: engine.Nodes{
+		{Id: "remote", Addr: "a-remote:6001", Mcpu: 4},
+		{Id: "local", Addr: "z-local:6001", Mcpu: 6},
+	}}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, []string{"z-local:6001", "a-remote:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
+}
+
 func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "local:6001"

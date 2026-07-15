@@ -14,6 +14,19 @@ insert into t_int values
 (13, '[12,0,0,0]'),(14, '[13,0,0,0]'),(15, '[14,0,0,0]'),(16, '[15,0,0,0]');
 create index idx_int_b using ivfflat on t_int(b) lists=4 op_type 'vector_l2_ops';
 
+-- The production rewrite must select the Multi-CN FUNCTION_SCAN path.
+-- @regex("(?i)ap query plan on multicn",true)
+-- @regex("Table Function on ivf_search",true)
+explain select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
+
+-- EXPLAIN ANALYZE must retain one representative internal entries-scan plan.
+-- Ignore the timing/statistics column values while asserting both plan layers.
+-- @ignore:0
+-- @regex("(?i)ap query plan on multicn",true)
+-- @regex("Table Function on ivf_search",true)
+-- @regex("Table Scan on vector_ivf_multicn_search.__mo_index_secondary_",true)
+explain analyze select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
+
 select group_concat(a order by a) as nearest_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 

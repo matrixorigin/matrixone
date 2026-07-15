@@ -154,6 +154,24 @@ func TestScopeSerialization2(t *testing.T) {
 	checkScopeRoot(t, scope)
 }
 
+func TestDecodeRemoteScopePreservesRemoteRunContextDuringPipelineInit(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.counterSet = &perfcounter.CounterSet{}
+	sourceScope := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	scopeData, err := encodeScope(sourceScope)
+	require.NoError(t, err)
+
+	remoteScope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	testCompile.scopes = []*Scope{remoteScope}
+	testCompile.InitPipelineContextToExecuteQuery()
+
+	require.Equal(t, true, testCompile.proc.Ctx.Value(defines.RemoteRunContext{}))
+	require.Equal(t, true, remoteScope.Proc.Ctx.Value(defines.RemoteRunContext{}))
+}
+
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {

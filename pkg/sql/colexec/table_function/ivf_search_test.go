@@ -85,14 +85,17 @@ func TestIvfSearchDetectsRemoteRunContext(t *testing.T) {
 	require.True(t, isRemoteRunContext(proc))
 }
 
-func TestIvfSearchSkipsBackgroundQueriesForRemoteOrPartitionedRun(t *testing.T) {
+func TestIvfSearchRecordsBackgroundQueriesOnlyOnCoordinator(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	require.True(t, shouldRecordIvfSearchBackgroundQueries(proc, nil))
 	require.True(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 1}))
-	require.False(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 2}))
+	require.True(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 2, PartitionCnIdx: 0}))
+	require.True(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 2, PartitionCnIdx: 1}))
 
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	require.False(t, shouldRecordIvfSearchBackgroundQueries(proc, nil))
+	require.False(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 2, PartitionCnIdx: 0}))
+	require.False(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 2, PartitionCnIdx: 1}))
 }
 
 func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {

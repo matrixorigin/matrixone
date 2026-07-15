@@ -98,6 +98,11 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			proc.Ctx = context.Background()
 		}
 		proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+		topCtx := proc.GetTopContext()
+		if topCtx == nil {
+			topCtx = context.Background()
+		}
+		proc.ReplaceTopCtx(context.WithValue(topCtx, defines.RemoteRunContext{}, true))
 	}
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}

@@ -139,6 +139,10 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 	if c.pn != nil {
 		qry = c.pn.GetQuery()
 	}
+	// The local partition is the only one that can see the coordinator's
+	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
+	// distributed by ObjectID across all selected workers.
+	req.CurrentCNFirst = queryHasIvfSearchEntriesInternalScan(qry)
 	if hasMixedCommit(candidates) && queryHasIvfSearchEntriesInternalScan(qry) {
 		c.execType = plan2.ExecTypeAP_ONECN
 		req.ExecKind = schedule.QueryExecAPOneCN

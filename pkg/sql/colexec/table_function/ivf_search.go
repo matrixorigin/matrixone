@@ -274,7 +274,12 @@ func isRemoteRunContext(proc *process.Process) bool {
 }
 
 func shouldRecordIvfSearchBackgroundQueries(proc *process.Process, param *plan.IndexReaderParam) bool {
-	return !isRemoteRunContext(proc) && param.GetPartitionCnCnt() <= 1
+	// A Multi-CN query has one partition executing on its coordinator. Record
+	// that local plan as the representative entries scan, regardless of its
+	// partition index. Remote physical plans use JSON for operator statistics;
+	// plan.Expr contains protobuf oneofs that cannot be decoded through that
+	// JSON path, so remote partitions must not carry background query plans.
+	return !isRemoteRunContext(proc)
 }
 
 func ivfSearchCacheKey(indexTable string, version int64, param *plan.IndexReaderParam) string {
