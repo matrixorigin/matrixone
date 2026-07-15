@@ -512,9 +512,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected binary type %T", val)
 		}
-		buf.WriteString("x'")
-		buf.WriteString(hex.EncodeToString(bytesVal))
-		buf.WriteByte('\'')
+		writeSQLHexLiteral(buf, bytesVal)
 	case types.T_timestamp:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
