@@ -16,14 +16,139 @@ package tnservice
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestStartedTNReplicaLifecycle(t *testing.T) {
+	newStore := func() *store {
+		return &store{cfg: &Config{UUID: "test"}, replicas: &sync.Map{}}
+	}
+	newRequest := func(shardID, replicaID uint64) txn.TxnRequest {
+		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, shardID), shardID)
+		req.CNRequest.Target.ReplicaID = replicaID
+		return req
+	}
+	newReadyReplica := func(t *testing.T, shardID, replicaID uint64) *replica {
+		r := newReplica(newTestTNShard(shardID, replicaID, shardID), runtime.DefaultRuntime())
+		require.True(t, r.reserveStart())
+		r.finishStart(nil)
+		return r
+	}
+	requireNotFound := func(t *testing.T, response *txn.TxnResponse) {
+		require.NotNil(t, response.TxnError)
+		require.Equal(t, uint32(moerr.ErrTNShardNotFound), response.TxnError.Code)
+	}
+
+	t.Run("ready", func(t *testing.T) {
+		s := newStore()
+		r := newReadyReplica(t, 1, 2)
+		s.replicas.Store(uint64(1), r)
+		req := newRequest(1, 2)
+
+		got, err := s.startedTNReplica(context.Background(), &req, &txn.TxnResponse{})
+		require.NoError(t, err)
+		require.Same(t, r, got)
+	})
+
+	t.Run("wait then ready", func(t *testing.T) {
+		s := newStore()
+		r := newReplica(newTestTNShard(1, 2, 1), runtime.DefaultRuntime())
+		require.True(t, r.reserveStart())
+		s.replicas.Store(uint64(1), r)
+		req := newRequest(1, 2)
+		entered := make(chan struct{})
+		result := make(chan *replica, 1)
+		errC := make(chan error, 1)
+		go func() {
+			close(entered)
+			got, err := s.startedTNReplica(context.Background(), &req, &txn.TxnResponse{})
+			result <- got
+			errC <- err
+		}()
+
+		<-entered
+		r.finishStart(nil)
+		require.Same(t, r, <-result)
+		require.NoError(t, <-errC)
+	})
+
+	t.Run("caller cancel", func(t *testing.T) {
+		s := newStore()
+		r := newReplica(newTestTNShard(1, 2, 1), runtime.DefaultRuntime())
+		require.True(t, r.reserveStart())
+		s.replicas.Store(uint64(1), r)
+		req := newRequest(1, 2)
+		ctx, cancel := context.WithCancel(context.Background())
+		entered := make(chan struct{})
+		errC := make(chan error, 1)
+		go func() {
+			close(entered)
+			_, err := s.startedTNReplica(ctx, &req, &txn.TxnResponse{})
+			errC <- err
+		}()
+
+		<-entered
+		cancel()
+		require.ErrorIs(t, <-errC, context.Canceled)
+	})
+
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "terminal start failure", err: errors.New("start failed")},
+		{name: "terminal start cancellation", err: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newStore()
+			r := newReplica(newTestTNShard(1, 2, 1), runtime.DefaultRuntime())
+			require.True(t, r.reserveStart())
+			r.finishStart(test.err)
+			s.replicas.Store(uint64(1), r)
+			req := newRequest(1, 2)
+			response := &txn.TxnResponse{}
+
+			got, err := s.startedTNReplica(context.Background(), &req, response)
+			require.NoError(t, err)
+			require.Nil(t, got)
+			requireNotFound(t, response)
+		})
+	}
+
+	t.Run("remove and re-add generation", func(t *testing.T) {
+		s := newStore()
+		oldReplica := newReadyReplica(t, 1, 2)
+		s.replicas.Store(uint64(1), oldReplica)
+		oldRequest := newRequest(1, 2)
+		got, err := s.startedTNReplica(context.Background(), &oldRequest, &txn.TxnResponse{})
+		require.NoError(t, err)
+		require.Same(t, oldReplica, got)
+
+		s.replicas.Delete(uint64(1))
+		replacement := newReadyReplica(t, 1, 4)
+		s.replicas.Store(uint64(1), replacement)
+		oldResponse := &txn.TxnResponse{}
+		got, err = s.startedTNReplica(context.Background(), &oldRequest, oldResponse)
+		require.NoError(t, err)
+		require.Nil(t, got)
+		requireNotFound(t, oldResponse)
+
+		newRequest := newRequest(1, 4)
+		got, err = s.startedTNReplica(context.Background(), &newRequest, &txn.TxnResponse{})
+		require.NoError(t, err)
+		require.Same(t, replacement, got)
+	})
+}
 
 func TestHandleRead(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {

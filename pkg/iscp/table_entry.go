@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -69,7 +70,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobEntry, ok := t.jobs[key]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
-		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state, dropAt)
+		jobEntry = NewJobEntryWithStatus(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 		t.jobs[key] = jobEntry
 		return
 	}
@@ -90,6 +91,17 @@ func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) 
 		}
 	}
 	return types.TS{}, false
+}
+
+func (t *TableEntry) getJobState(jobName string) (lsn uint64, state int8, ok bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, job := range t.jobs {
+		if job.jobName == jobName && job.dropAt == 0 {
+			return job.currentLSN, job.state, true
+		}
+	}
+	return 0, ISCPJobState_Invalid, false
 }
 
 func (t *TableEntry) IsEmpty() bool {
@@ -188,6 +200,41 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		}
 	}
 	return iterations, minFromTS
+}
+
+// markIterationPending records ownership only after a worker accepts the
+// iteration. Validate the complete shared iteration before changing any job so
+// the in-memory transition is all-or-nothing.
+func (t *TableEntry) markIterationPending(iter *IterationContext) error {
+	if iter == nil || len(iter.jobNames) != len(iter.jobIDs) || len(iter.jobNames) != len(iter.lsn) {
+		return moerr.NewInternalErrorNoCtx("invalid ISCP iteration")
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	jobs := make([]*JobEntry, len(iter.jobNames))
+	for i, jobName := range iter.jobNames {
+		job := t.jobs[JobKey{JobName: jobName, JobID: iter.jobIDs[i]}]
+		if job == nil {
+			return moerr.NewInternalErrorNoCtxf("ISCP job %s/%d no longer exists", jobName, iter.jobIDs[i])
+		}
+		if job.state != ISCPJobState_Completed || job.currentLSN+1 != iter.lsn[i] {
+			return moerr.NewInternalErrorNoCtxf(
+				"ISCP job %s/%d changed before admission: state %d, lsn %d, iteration lsn %d",
+				jobName,
+				iter.jobIDs[i],
+				job.state,
+				job.currentLSN,
+				iter.lsn[i],
+			)
+		}
+		jobs[i] = job
+	}
+	for i, job := range jobs {
+		job.currentLSN = iter.lsn[i]
+		job.state = ISCPJobState_Pending
+	}
+	return nil
 }
 
 func (t *TableEntry) UpdateWatermark(iter *IterationContext) {

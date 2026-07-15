@@ -150,6 +150,81 @@ func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
 	})
 }
 
+func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := getLogger("")
+		bind := pb.LockTable{Group: 0, Table: 1, ServiceID: "owner"}
+		key := []byte("key")
+		holderID := []byte("holder")
+
+		txn := newActiveTxn(holderID, string(holderID), newFixedSlicePool(2), "")
+		defer reuse.Free(txn, nil)
+		require.NoError(t, txn.lockAdded(0, bind, [][]byte{key}, logger))
+
+		lt := newLocalLockTable(
+			bind,
+			nil,
+			nil,
+			runtime.DefaultRuntime().Clock(),
+			nil,
+			logger,
+		).(*localLockTable)
+
+		holders := newHolders()
+		holders.add(pb.WaitTxn{TxnID: holderID, CreatedOn: "origin"})
+		waiterQueue := newWaiterQueue()
+		waiterQueue.init(logger)
+
+		completedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed")}, "test", logger)
+		completedWaiter.setStatus(completed)
+		defer completedWaiter.close("test", logger)
+
+		notifiedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("notified")}, "test", logger)
+		notifiedWaiter.setStatus(notified)
+		defer notifiedWaiter.close("test", logger)
+
+		blockingWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("blocking")}, "test", logger)
+		blockingWaiter.setStatus(blocking)
+		defer blockingWaiter.close("test", logger)
+
+		waiterQueue.put(completedWaiter, notifiedWaiter, blockingWaiter)
+		defer func() {
+			removed, _ := waiterQueue.remove(completedWaiter)
+			require.True(t, removed)
+			removed, _ = waiterQueue.remove(notifiedWaiter)
+			require.True(t, removed)
+			removed, _ = waiterQueue.remove(blockingWaiter)
+			require.True(t, removed)
+		}()
+
+		lt.mu.store.Add(key, Lock{
+			value:    flagLockRow | flagLockExclusiveMode,
+			createAt: time.Now(),
+			holders:  holders,
+			waiters:  waiterQueue,
+		})
+
+		var waitingTxnIDs [][]byte
+		ok := txn.fetchWhoWaitingMe(
+			"origin",
+			holderID,
+			func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+				waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+				assert.Equal(t, bind.ServiceID, waiterAddress)
+				return true
+			},
+			func(group uint32, table uint64) (lockTable, error) {
+				assert.Equal(t, bind.Group, group)
+				assert.Equal(t, bind.Table, table)
+				return lt, nil
+			},
+		)
+
+		assert.True(t, ok)
+		assert.Equal(t, [][]byte{[]byte("blocking")}, waitingTxnIDs)
+	})
+}
+
 func TestClose(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		events := newWaiterEvents(1, nil, nil, time.Second, nil, getLogger(""))
