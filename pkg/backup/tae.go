@@ -289,6 +289,20 @@ func execBackup(
 	protectionMgr *backupProtectionManager, // Optional: nil for tests, non-nil for production
 	globalIndex *GlobalFileIndex, // Optional: global file index for checking if file already backed up
 ) error {
+	if len(names) < 2 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incomplete backup checkpoint response: expected backup time and checkpoint location, got %d field(s)",
+			len(names),
+		)
+	}
+	if names[0] == "" {
+		return moerr.NewInternalError(ctx, "incomplete backup checkpoint response: backup time is empty")
+	}
+	if names[1] == "" {
+		return moerr.NewInternalError(ctx, "incomplete backup checkpoint response: checkpoint location is empty")
+	}
+
 	backupTime := names[0]
 	trimString := names[1]
 	names = names[1:]
@@ -320,7 +334,7 @@ func execBackup(
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 && i > 0 {
+		if (i == 0 && len(ckpStr) != 5) || (i > 0 && len(ckpStr) != 2) {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
