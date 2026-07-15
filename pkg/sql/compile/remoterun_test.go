@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -403,6 +404,31 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
 		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.IsRemote)
+		require.False(t, restoredOp.CountDeleteAffectRows,
+			"CountDeleteAffectRows must stay false when the source op did not set it")
+	})
+
+	t.Run("MultiUpdate_CountDeleteAffectRows", func(t *testing.T) {
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
+					TableDef: &plan.TableDef{Name: "t1"},
+				},
+			},
+			Action:                multi_update.UpdateWriteTable,
+			CountDeleteAffectRows: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.MultiUpdate.UpdateCtxList[0].CountDeleteAffectRows,
+			"serialized UpdateCtx must carry CountDeleteAffectRows")
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*multi_update.MultiUpdate)
+		require.True(t, restoredOp.CountDeleteAffectRows,
+			"CountDeleteAffectRows must survive the remote pipeline round-trip")
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
@@ -560,7 +586,7 @@ func Test_decodeBatch(t *testing.T) {
 }
 
 func Test_GetProcByUuid(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	{
 		// first get action or deletion just convert the k-v to be `ready to remove` status.
@@ -569,15 +595,16 @@ func Test_GetProcByUuid(t *testing.T) {
 		require.Nil(t, err)
 
 		receiver := &messageReceiverOnServer{
+			colexecServer: colexec.GetServer(""),
 			connectionCtx: context.TODO(),
 		}
 
 		p0 := &process.Process{}
 		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+		require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
 
 		// this action will convert it to be ready-to-remove status.
-		colexec.Get().DeleteUuids([]uuid.UUID{uid})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 
 		// get a nil p and c.
 		p, c, err := receiver.GetProcByUuid(uid)
@@ -585,7 +612,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		require.Nil(t, p)
 		require.Nil(t, c)
 
-		colexec.Get().DeleteUuids([]uuid.UUID{uid})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 	}
 
 	{
@@ -594,6 +621,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		// 2. no need to return error.
 		cctx, ccancel := context.WithCancel(context.Background())
 		receiver := &messageReceiverOnServer{
+			colexecServer: colexec.GetServer(""),
 			connectionCtx: cctx,
 		}
 		ccancel()
@@ -602,8 +630,8 @@ func Test_GetProcByUuid(t *testing.T) {
 		require.Nil(t, p)
 
 		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{{}})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{{}})
 	}
 
 	{
@@ -612,40 +640,42 @@ func Test_GetProcByUuid(t *testing.T) {
 		require.Nil(t, err)
 
 		receiver := &messageReceiverOnServer{
+			colexecServer: colexec.GetServer(""),
 			connectionCtx: context.TODO(),
 		}
 
 		p0 := &process.Process{}
 		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+		require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
 
 		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Equal(t, p0, p)
 		require.Equal(t, c0, c)
 
-		colexec.Get().DeleteUuids([]uuid.UUID{uid})
-		colexec.Get().DeleteUuids([]uuid.UUID{uid})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 	}
 
 	{
 		// test if receiver done first, put action should return error.
-		colexec.Get().GetProcByUuid(uuid.UUID{}, true)
-		err := colexec.Get().PutProcIntoUuidMap(uuid.UUID{}, nil, nil)
+		colexec.GetServer("").GetProcByUuid(uuid.UUID{}, true)
+		err := colexec.GetServer("").PutProcIntoUuidMap(uuid.UUID{}, nil, nil)
 		require.NotNil(t, err)
 
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{{}})
+		colexec.GetServer("").DeleteUuids([]uuid.UUID{{}})
 	}
 }
 
 func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.Nil(t, err)
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.TODO(),
 		messageCtx:    context.TODO(),
 	}
@@ -669,7 +699,7 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 
 	p0 := &process.Process{}
 	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
 
 	select {
 	case r := <-done:
@@ -680,17 +710,18 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 		t.Fatal("GetProcByUuid did not wake after PutProcIntoUuidMap")
 	}
 
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
 func Test_GetProcByUuid_TimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
 
 	receiver := &messageReceiverOnServer{
+		colexecServer:           colexec.GetServer(""),
 		connectionCtx:           context.TODO(),
 		messageCtx:              context.TODO(),
 		waitRegistrationTimeout: 10 * time.Millisecond,
@@ -703,19 +734,20 @@ func Test_GetProcByUuid_TimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
 
 	p0 := &process.Process{}
 	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
 
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
 func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.TODO(),
 		messageCtx:    context.TODO(),
 	}
@@ -728,24 +760,25 @@ func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *tes
 
 	p0 := &process.Process{}
 	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
 
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
 func Test_TryGetProcByUuid_ReturnsRegisteredProc(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
 
 	p0 := &process.Process{}
 	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
-	defer colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
+	defer colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(),
 		messageCtx:    context.Background(),
 	}
@@ -756,8 +789,8 @@ func Test_TryGetProcByUuid_ReturnsRegisteredProc(t *testing.T) {
 	require.Equal(t, c0, ch)
 }
 
-func Test_TryGetProcByUuid_ConnectionClosedBeforeRegistrationConsumesUuid(t *testing.T) {
-	_ = colexec.NewServer(nil)
+func Test_TryGetProcByUuid_ClosedRetryDoesNotPoisonLaterRegistration(t *testing.T) {
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
@@ -765,18 +798,455 @@ func Test_TryGetProcByUuid_ConnectionClosedBeforeRegistrationConsumesUuid(t *tes
 	connectionCtx, cancelConnection := context.WithCancel(context.Background())
 	cancelConnection()
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: connectionCtx,
 		messageCtx:    context.Background(),
 	}
 
 	p, ch, err := receiver.TryGetProcByUuid(uid)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.True(t, isRemoteDispatchNotRegisteredYetError(err))
 	require.Nil(t, p)
 	require.Nil(t, ch)
 
-	err = colexec.Get().PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
+	dispatchProc := &process.Process{}
+	notifyCh := make(chan *process.WrapCs)
+	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+
+	nextAttempt := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
+		connectionCtx: context.Background(),
+		messageCtx:    context.Background(),
+	}
+	p, ch, err = nextAttempt.TryGetProcByUuid(uid)
+	require.NoError(t, err)
+	require.Same(t, dispatchProc, p)
+	require.Equal(t, process.RemotePipelineInformationChannel(notifyCh), ch)
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+}
+
+func Test_TryGetProcByUuid_CloseVsRegisterInterleavings(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	for _, tc := range []struct {
+		name                    string
+		closeBeforeRegistration bool
+	}{
+		{name: "close before registration", closeBeforeRegistration: true},
+		{name: "registration before close", closeBeforeRegistration: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, err := uuid.NewV7()
+			require.NoError(t, err)
+
+			connectionCtx, closeConnection := context.WithCancel(context.Background())
+			defer closeConnection()
+			lookupDone := make(chan struct{})
+			allowLookup := make(chan struct{})
+			lookupErr := make(chan error, 1)
+			go func() {
+				if tc.closeBeforeRegistration {
+					<-allowLookup
+				}
+				receiver := &messageReceiverOnServer{
+					colexecServer: colexec.GetServer(""),
+					connectionCtx: connectionCtx,
+					messageCtx:    context.Background(),
+				}
+				_, _, lookupErrValue := receiver.TryGetProcByUuid(uid)
+				lookupErr <- lookupErrValue
+				close(lookupDone)
+			}()
+
+			if tc.closeBeforeRegistration {
+				closeConnection()
+				close(allowLookup)
+			} else {
+				<-lookupDone
+			}
+			require.True(t, isRemoteDispatchNotRegisteredYetError(<-lookupErr))
+
+			dispatchProc := &process.Process{}
+			notifyCh := make(process.RemotePipelineInformationChannel)
+			require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+			if !tc.closeBeforeRegistration {
+				closeConnection()
+			}
+
+			nextAttempt := &messageReceiverOnServer{
+				colexecServer: colexec.GetServer(""),
+				connectionCtx: context.Background(),
+				messageCtx:    context.Background(),
+			}
+			gotProc, gotCh, err := nextAttempt.TryGetProcByUuid(uid)
+			require.NoError(t, err)
+			require.Same(t, dispatchProc, gotProc)
+			require.Equal(t, notifyCh, gotCh)
+			colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+		})
+	}
+}
+
+type blockingPrepareOperator struct {
+	*colexec.MockOperator
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (op *blockingPrepareOperator) Prepare(*process.Process) error {
+	close(op.entered)
+	<-op.release
+	return nil
+}
+
+func TestCoordinatorDispatchRegisteredBeforePrepare(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
+	child := &blockingPrepareOperator{
+		MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}),
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.FuncId = dispatch.SendToAllFunc
+	dispatchOp.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	dispatchOp.AppendChild(child)
+	scope := &Scope{Magic: Normal, Proc: proc, RootOp: dispatchOp}
+	runCompile := &Compile{
+		scopes:     []*Scope{scope},
+		pn:         &planpb.Plan{},
+		execType:   plan.ExecTypeTP,
+		proc:       proc,
+		affectRows: &atomic.Uint64{},
+		addr:       "local-cn",
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runCompile.runOnce()
+	}()
+	select {
+	case <-child.entered:
+	case <-time.After(time.Second):
+		t.Fatal("source did not reach the pre-dispatch Prepare barrier")
+	}
+
+	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
+		connectionCtx: context.Background(),
+		messageCtx:    context.Background(),
+	}
+	registeredProc, notifyCh, err := receiver.TryGetProcByUuid(uid)
+	require.NoError(t, err)
+	require.Same(t, proc, registeredProc)
+	require.NotNil(t, notifyCh)
+
+	ctrl := gomock.NewController(t)
+	clientSession := mock_morpc.NewMockClientSession(ctrl)
+	clientSession.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	remoteReceiver := &process.WrapCs{
+		Uid: uid,
+		Cs:  clientSession,
+		Err: make(chan error, 1),
+	}
+	attached := make(chan struct{})
+	go func() {
+		notifyCh <- remoteReceiver
+		close(attached)
+	}()
+	close(child.release)
+
+	select {
+	case <-attached:
+	case <-time.After(time.Second):
+		t.Fatal("remote notify did not attach after dispatch Prepare resumed")
+	}
+	select {
+	case err := <-runDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("coordinator dispatch pipeline did not finish")
+	}
+
+	_, _, err = receiver.TryGetProcByUuid(uid)
+	require.True(t, isRemoteDispatchNotRegisteredYetError(err), "runOnce must clean its early registration")
+}
+
+func TestRegisterLocalDispatchReceiversNestedAndIdempotent(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	rootProc := testutil.NewProcess(t)
+	nestedProc := rootProc.NewNoContextChildProc(0)
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.FuncId = dispatch.SendToAllFunc
+	dispatchOp.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	nested := &Scope{Magic: Normal, Proc: nestedProc, RootOp: dispatchOp}
+	root := &Scope{Magic: Merge, Proc: rootProc, PreScopes: []*Scope{nested}}
+
+	first, err := registerLocalDispatchReceivers([]*Scope{root}, "local-cn")
+	require.NoError(t, err)
+	defer first.cleanup()
+	second, err := registerLocalDispatchReceivers([]*Scope{root}, "local-cn")
+	require.NoError(t, err)
+	defer second.cleanup()
+
+	registeredProc, _, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, nestedProc, registeredProc)
+}
+
+func TestRegisterLocalDispatchReceiversRegistersRetainedRemoteRootOnly(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	localUID, err := uuid.NewV7()
+	require.NoError(t, err)
+	remoteUID, err := uuid.NewV7()
+	require.NoError(t, err)
+	rootProc := testutil.NewProcess(t)
+	remoteProc := rootProc.NewNoContextChildProc(0)
+	remoteChild := dispatch.NewArgument()
+	remoteChild.FuncId = dispatch.SendToAllFunc
+	remoteChild.RemoteRegs = []colexec.ReceiveInfo{{Uuid: remoteUID}}
+	localRoot := dispatch.NewArgument()
+	localRoot.FuncId = dispatch.SendToAllFunc
+	localRoot.RemoteRegs = []colexec.ReceiveInfo{{Uuid: localUID}}
+	localRoot.AppendChild(remoteChild)
+	remote := &Scope{
+		Magic:    Remote,
+		Proc:     remoteProc,
+		RootOp:   localRoot,
+		NodeInfo: engine.Node{Addr: "remote-cn:6002"},
+	}
+	root := &Scope{Magic: Merge, Proc: rootProc, PreScopes: []*Scope{remote}}
+
+	registrations, err := registerLocalDispatchReceivers([]*Scope{root}, "local-cn:6002")
+	require.NoError(t, err)
+	defer registrations.cleanup()
+	registeredProc, _, ok := colexec.GetServer("").GetProcByUuid(localUID, false)
+	require.True(t, ok)
+	require.Same(t, remoteProc, registeredProc)
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(remoteUID, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+}
+
+func TestRegisterLocalDispatchReceiversTraversesRemoteAncestorForNestedLocalReturn(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	for _, tc := range []struct {
+		name string
+		root vm.Operator
+	}{
+		{name: "remote non-dispatch root", root: merge.NewArgument()},
+		{name: "retained remote dispatch root", root: dispatch.NewArgument()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, err := uuid.NewV7()
+			require.NoError(t, err)
+			rootProc := testutil.NewProcess(t)
+			outerProc := rootProc.NewNoContextChildProc(0)
+			localProc := rootProc.NewNoContextChildProc(0)
+			localDispatch := dispatch.NewArgument()
+			localDispatch.FuncId = dispatch.SendToAllFunc
+			localDispatch.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+			localReturn := &Scope{
+				Magic:    Remote,
+				Proc:     localProc,
+				RootOp:   localDispatch,
+				NodeInfo: engine.Node{Addr: "local-cn:6002"},
+			}
+			outerRemote := &Scope{
+				Magic:     Remote,
+				Proc:      outerProc,
+				RootOp:    tc.root,
+				NodeInfo:  engine.Node{Addr: "remote-cn:6002"},
+				PreScopes: []*Scope{localReturn},
+			}
+			// The remote tree is valid to execute on remote-cn. When it does, its child
+			// RemoteRun comes back to local-cn and needs this dispatch receiver before
+			// the remote sender can notify it.
+			require.True(t, checkPipelineStandaloneExecutableAtRemote(outerRemote))
+
+			registrations, err := registerLocalDispatchReceivers([]*Scope{outerRemote}, "local-cn:6002")
+			require.NoError(t, err)
+			defer registrations.cleanup()
+			registeredProc, _, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+			require.True(t, ok)
+			require.Same(t, localProc, registeredProc)
+		})
+	}
+}
+
+func TestRegisterLocalDispatchReceiversSkipsGuaranteedRemoteRunFailures(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		cannotRun  bool
+	}{
+		{name: "malformed remote address", remoteAddr: "not-an-address"},
+		{name: "cannot remote operator", remoteAddr: "remote-cn:6002", cannotRun: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid := uuid.Must(uuid.NewV7())
+			proc := testutil.NewProcess(t)
+			root := dispatch.NewArgument()
+			defer root.Release()
+			root.FuncId = dispatch.SendToAllFunc
+			root.RecCTE = tc.cannotRun
+			root.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+			s := &Scope{
+				Magic:    Remote,
+				Proc:     proc,
+				RootOp:   root,
+				NodeInfo: engine.Node{Addr: tc.remoteAddr},
+			}
+
+			registrations, err := registerLocalDispatchReceivers([]*Scope{s}, "local-cn:6002")
+			require.NoError(t, err)
+			defer registrations.cleanup()
+			registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+			require.False(t, ok)
+			require.Nil(t, registeredProc)
+			require.Nil(t, notifyCh)
+		})
+	}
+}
+
+func TestRegisterRemoteDispatchReceiversUsesOwningScopeProcess(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	rootProc := testutil.NewProcess(t)
+	nestedProc := rootProc.NewNoContextChildProc(0)
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.FuncId = dispatch.SendToAllFunc
+	dispatchOp.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	nested := &Scope{Magic: Normal, Proc: nestedProc, RootOp: dispatchOp}
+	root := &Scope{Magic: Merge, Proc: rootProc, PreScopes: []*Scope{nested}}
+
+	registrations, err := registerRemoteDispatchReceivers(root)
+	require.NoError(t, err)
+	defer registrations.cleanup()
+	registeredProc, _, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, nestedProc, registeredProc)
+}
+
+func TestRegisterLocalDispatchReceiversRollsBackEarlierScopes(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid1, err := uuid.NewV7()
+	require.NoError(t, err)
+	uid2, err := uuid.NewV7()
+	require.NoError(t, err)
+	colexec.GetServer("").GetProcByUuid(uid2, true)
+	defer colexec.GetServer("").DeleteUuids([]uuid.UUID{uid2})
+
+	proc1 := testutil.NewProcess(t)
+	proc1.BuildPipelineContext(context.Background())
+	proc2 := testutil.NewProcess(t)
+	proc2.BuildPipelineContext(context.Background())
+	dispatch1 := dispatch.NewArgument()
+	dispatch1.FuncId = dispatch.SendToAllFunc
+	dispatch1.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid1}}
+	dispatch2 := dispatch.NewArgument()
+	dispatch2.FuncId = dispatch.SendToAllFunc
+	dispatch2.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid2}}
+	scopes := []*Scope{
+		{Magic: Normal, Proc: proc1, RootOp: dispatch1},
+		{Magic: Normal, Proc: proc2, RootOp: dispatch2},
+	}
+
+	_, err = registerLocalDispatchReceivers(scopes, "local-cn")
 	require.Error(t, err)
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	require.ErrorIs(t, context.Cause(proc1.Ctx), err)
+	require.ErrorIs(t, context.Cause(proc2.Ctx), err)
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+
+	registrations, err := registerLocalDispatchReceivers(scopes[:1], "local-cn")
+	require.NoError(t, err, "rollback must clear the dispatch's early-registration state")
+	registeredProc, notifyCh, ok = colexec.GetServer("").GetProcByUuid(uid1, false)
+	require.True(t, ok)
+	require.Same(t, proc1, registeredProc)
+	require.NotNil(t, notifyCh)
+	registrations.cleanup()
+	registeredProc, notifyCh, ok = colexec.GetServer("").GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+}
+
+func TestRemoteDispatchRegistrationRollbackReleasesPendingAttach(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.FuncId = dispatch.SendToAllFunc
+	dispatchOp.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	registration, err := dispatchOp.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+
+	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
+		connectionCtx: context.Background(),
+		messageCtx:    context.Background(),
+	}
+	registeredProc, notifyCh, err := receiver.TryGetProcByUuid(uid)
+	require.NoError(t, err)
+	require.Same(t, proc, registeredProc)
+
+	pendingDone := make(chan string, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		select {
+		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
+			pendingDone <- "attached"
+		case <-proc.Ctx.Done():
+			pendingDone <- "canceled"
+		}
+	}()
+	<-started
+	select {
+	case result := <-pendingDone:
+		t.Fatalf("pending remote notify completed before rollback: %s", result)
+	default:
+	}
+
+	cause := moerr.NewInternalErrorNoCtx("later receiver registration failed")
+	registrations := &remoteDispatchReceiverRegistrations{
+		registrations: []*dispatch.RemoteReceiverRegistration{registration},
+	}
+	registrations.rollback(cause)
+	require.ErrorIs(t, context.Cause(proc.Ctx), cause)
+	select {
+	case result := <-pendingDone:
+		require.Equal(t, "canceled", result)
+	case <-time.After(time.Second):
+		t.Fatal("registration rollback did not release the pending remote notify")
+	}
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
 }
 
 func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
@@ -849,6 +1319,142 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 
 	wg.Wait()
 	require.Equal(t, 2, attempts)
+}
+
+func TestRemoteNotifyRetryAttachesToEmptyDispatchBeforeCompletion(t *testing.T) {
+	colexecServer := colexec.NewServer("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(ctx)
+	scopeProc := proc.NewContextChildProc(1)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	s := &Scope{
+		Proc: scopeProc,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{
+			{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+		},
+	}
+
+	firstLookupDone := make(chan struct{})
+	allowFirstResponse := make(chan struct{})
+	var attempts atomic.Int32
+	factory := func(
+		ctx context.Context,
+		sid string,
+		toAddr string,
+		mp *mpool.MPool,
+		analyzeModule *AnalyzeModule,
+	) (*messageSenderOnClient, error) {
+		receiveCh := make(chan morpc.Message, 1)
+		receiver := &messageReceiverOnServer{
+			connectionCtx: ctx,
+			messageCtx:    ctx,
+			colexecServer: colexecServer,
+		}
+		if attempts.Add(1) == 1 {
+			_, _, lookupErr := receiver.TryGetProcByUuid(uid)
+			close(firstLookupDone)
+			if lookupErr == nil {
+				unexpected := errors.New("first remote notify unexpectedly found the registration")
+				cancel()
+				return nil, unexpected
+			}
+			select {
+			case <-allowFirstResponse:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+			msg.SetMoError(ctx, lookupErr)
+			receiveCh <- msg
+		} else {
+			dispatchProc, notifyCh, lookupErr := receiver.TryGetProcByUuid(uid)
+			if lookupErr != nil {
+				cancel()
+				return nil, lookupErr
+			}
+			if dispatchProc == nil {
+				unexpected := errors.New("registered remote dispatch returned a nil process")
+				cancel()
+				return nil, unexpected
+			}
+			wrap := &process.WrapCs{Uid: uid, Err: make(chan error, 1)}
+			go func() {
+				select {
+				case notifyCh <- wrap:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case terminalErr := <-wrap.Err:
+					msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+					if terminalErr != nil {
+						msg.SetMoError(ctx, terminalErr)
+					}
+					receiveCh <- msg
+				case <-ctx.Done():
+				}
+			}()
+		}
+		return &messageSenderOnClient{
+			ctx:          ctx,
+			mp:           mp,
+			streamSender: &fakeStreamSender{},
+			receiveCh:    receiveCh,
+			safeToClose:  true,
+		}, nil
+	}
+
+	var wg sync.WaitGroup
+	resultCh := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+	select {
+	case <-firstLookupDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first remote notify did not observe the absent registration")
+	}
+
+	child := value_scan.NewArgument()
+	defer child.Release()
+	require.NoError(t, child.Prepare(proc))
+	dispatchOp := dispatch.NewArgument()
+	defer dispatchOp.Release()
+	dispatchOp.FuncId = dispatch.SendToAllFunc
+	dispatchOp.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	dispatchOp.AppendChild(child)
+	registration, err := dispatchOp.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
+	require.NoError(t, dispatchOp.Prepare(proc))
+	close(allowFirstResponse)
+
+	callResult, err := dispatchOp.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, callResult.Status)
+	dispatchOp.Reset(proc, false, nil)
+
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		require.NoError(t, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote notify did not complete after the empty dispatch registered")
+	}
+	select {
+	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+		bat, signalErr := signal.Action()
+		require.NoError(t, signalErr)
+		require.Nil(t, bat)
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote receiver did not observe the empty dispatch terminal signal")
+	}
+	wg.Wait()
+	require.Equal(t, int32(2), attempts.Load())
 }
 
 func TestSendNotifyMessageWrapperWithNoRemoteReceivers(t *testing.T) {
@@ -1102,7 +1708,7 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 }
 
 func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.Nil(t, err)
@@ -1113,24 +1719,32 @@ func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *te
 		Cancel: procCancel,
 	}
 	notifyCh := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
 
-	receiver := &messageReceiverOnServer{messageCtx: context.Background()}
+	receiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		colexecServer: colexec.GetServer(""),
+	}
 	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
 	receiver.cancelPendingDispatchRegistration(uid, cancelCause)
 
 	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+	registeredProc, notifyChannel, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyChannel)
 }
 
 func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.Nil(t, err)
 
 	messageCtx, cancelMessage := context.WithCancel(context.Background())
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(),
 		messageCtx:    messageCtx,
 	}
@@ -1158,7 +1772,7 @@ func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *tes
 		t.Fatal("GetProcByUuid did not return after message context cancellation")
 	}
 
-	err = colexec.Get().PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
+	err = colexec.GetServer("").PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
 	require.Error(t, err)
 }
 
@@ -1289,17 +1903,43 @@ func TestGetScopeForRemoteRunEncodingDoesNotMutateOriginalScope(t *testing.T) {
 
 func TestBuildRemoteDispatchReceiverRootDoesNotMutateOriginalChildren(t *testing.T) {
 	origin := dispatch.NewArgument()
+	defer origin.Release()
 	originChild := value_scan.NewArgument()
 	fakeChild := value_scan.NewArgument()
 	origin.AppendChild(originChild)
 
 	cloned := buildRemoteDispatchReceiverRoot(origin, fakeChild)
+	defer cloned.Release()
 
 	require.NotSame(t, origin, cloned)
 	require.Equal(t, 1, origin.GetOperatorBase().NumChildren())
 	require.Same(t, originChild, origin.GetOperatorBase().GetChildren(0))
 	require.Equal(t, 1, cloned.GetOperatorBase().NumChildren())
 	require.Same(t, fakeChild, cloned.GetOperatorBase().GetChildren(0))
+}
+
+func TestBuildRemoteDispatchReceiverRootReusesEarlyRegistration(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid := uuid.Must(uuid.NewV7())
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	origin := dispatch.NewArgument()
+	defer origin.Release()
+	origin.FuncId = dispatch.SendToAllFunc
+	origin.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	registration, err := origin.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
+
+	cloned := buildRemoteDispatchReceiverRoot(origin, colexec.NewMockOperator())
+	defer cloned.Release()
+	cloned.AdoptCleanupState(origin)
+	require.NoError(t, cloned.Prepare(proc), "the local runner must reuse, not duplicate, the early registration")
+
+	origin.AdoptCleanupState(cloned)
+	origin.Reset(proc, true, moerr.NewInternalErrorNoCtx("test cleanup"))
 }
 
 func Test_MessageSenderSendPipeline(t *testing.T) {

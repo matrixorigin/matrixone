@@ -90,6 +90,10 @@ func (w *trackingWorkspace) IncrStatementID(context.Context, bool) error {
 	return nil
 }
 
+func (w *trackingWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	return nil
+}
+
 func (w *trackingWorkspace) RollbackLastStatement(context.Context) error {
 	return nil
 }
@@ -100,6 +104,10 @@ func (w *trackingWorkspace) UpdateSnapshotWriteOffset() {
 
 func (w *trackingWorkspace) GetSnapshotWriteOffset() int {
 	return w.snapshotOffset
+}
+
+func (w *trackingWorkspace) WriteOffset() uint64 {
+	return uint64(len(w.commitRequests))
 }
 
 func (w *trackingWorkspace) Adjust(uint64) error {
@@ -304,7 +312,7 @@ func TestCommitRollsBackPreparedWorkspaceAfterCommitSendError(t *testing.T) {
 	})
 }
 
-func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
+func TestCommitFinalizesPreparedWorkspaceWithoutRollbackAfterTxnUnknown(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ws := &trackingWorkspace{
 			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
@@ -320,7 +328,14 @@ func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
 		require.Zero(t, ws.finalizeCount)
 		require.Equal(t, 1, ws.unknownCount)
 		require.Zero(t, ws.rollbackCount)
-		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
+		require.True(t, tc.reset.cannotCleanWorkspace.Load())
+
+		// A retained direct handle must still be unable to run workspace
+		// rollback after an unknown finalization.
+		require.NoError(t, tc.Rollback(ctx))
+		require.Zero(t, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
 	})
 }
 

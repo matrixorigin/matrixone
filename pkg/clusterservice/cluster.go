@@ -50,6 +50,93 @@ func GetMOCluster(
 	}
 }
 
+// GetMOClusterWithContext returns the service-scoped cluster without making a
+// query path wait past its cancellation or the legacy ten-second startup
+// bound. GetMOCluster remains available for callers that require its panic
+// contract.
+func GetMOClusterWithContext(ctx context.Context, service string) (MOCluster, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cluster, ready, err := lookupMOCluster(service); ready || err != nil {
+		return cluster, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			if cluster, ready, err := lookupMOCluster(service); ready || err != nil {
+				return cluster, err
+			}
+		}
+	}
+}
+
+// GetCNServiceWithoutWorkingStateWithContext is the context-aware snapshot
+// counterpart of MOCluster.GetCNServiceWithoutWorkingState. The built-in
+// cluster can cancel its startup wait; external implementations retain their
+// existing synchronous contract and are checked before and after the call.
+func GetCNServiceWithoutWorkingStateWithContext(
+	ctx context.Context,
+	service MOCluster,
+	selector Selector,
+	apply func(metadata.CNService) bool,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if service == nil {
+		return moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	if builtIn, ok := service.(*cluster); ok {
+		if err := builtIn.waitReadyWithContext(ctx); err != nil {
+			return err
+		}
+		if selector.regexpCache == nil && builtIn.regexpCache != nil {
+			selector.regexpCache = builtIn.regexpCache
+		}
+		services := builtIn.services.Load()
+		for _, cn := range services.cn {
+			if selector.filterCN(cn) && !apply(cn) {
+				break
+			}
+		}
+		return ctx.Err()
+	}
+
+	service.GetCNServiceWithoutWorkingState(selector, apply)
+	return ctx.Err()
+}
+
+func lookupMOCluster(service string) (MOCluster, bool, error) {
+	rt := runtime.ServiceRuntime(service)
+	if rt == nil {
+		return nil, false, nil
+	}
+	value, ok := rt.GetGlobalVariables(runtime.ClusterService)
+	if !ok {
+		return nil, false, nil
+	}
+	cluster, ok := value.(MOCluster)
+	if !ok || cluster == nil {
+		return nil, false, moerr.NewInternalErrorNoCtxf(
+			"invalid mocluster service %s", service)
+	}
+	return cluster, true, nil
+}
+
 // Option options for create cluster
 type Option func(*cluster)
 
@@ -75,7 +162,8 @@ func WithDisableRefresh() Option {
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
-	mu              sync.Mutex
+	refreshGateOnce sync.Once
+	refreshGateC    chan struct{}
 	client          ClusterClient
 	refreshInterval time.Duration
 	forceRefreshC   chan struct{}
@@ -220,7 +308,7 @@ func (c *cluster) ForceRefresh(sync bool) {
 		return
 	}
 	if sync {
-		c.refresh()
+		c.refreshAndLog(context.Background())
 		return
 	}
 
@@ -228,6 +316,25 @@ func (c *cluster) ForceRefresh(sync bool) {
 	case c.forceRefreshC <- struct{}{}:
 	default:
 	}
+}
+
+// Refresh obtains and publishes a new HAKeeper snapshot, or returns the reason
+// why freshness could not be established. Unlike ForceRefresh, this method is
+// suitable for callers whose correctness depends on a successful refresh.
+func (c *cluster) Refresh(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.options.disableRefresh {
+		// WithDisableRefresh makes the supplied static snapshot authoritative.
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, c.refreshInterval, moerr.CauseRefresh)
+	defer cancel()
+	return c.refreshWithContext(ctx)
 }
 
 func (c *cluster) Close() {
@@ -319,6 +426,18 @@ func (c *cluster) waitReady() {
 	<-c.readyC
 }
 
+func (c *cluster) waitReadyWithContext(ctx context.Context) error {
+	if c.ready.Load() {
+		return nil
+	}
+	select {
+	case <-c.readyC:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (c *cluster) refreshTask(ctx context.Context) {
 	c.ForceRefresh(false)
 
@@ -331,32 +450,36 @@ func (c *cluster) refreshTask(ctx context.Context) {
 			c.logger.Info("refresh cluster details task stopped")
 			return
 		case <-timer.C:
-			c.refresh()
+			c.refreshAndLog(ctx)
 			timer.Reset(c.refreshInterval)
 		case <-c.forceRefreshC:
-			c.refresh()
+			c.refreshAndLog(ctx)
 		}
 	}
 }
 
-func (c *cluster) refresh() {
+func (c *cluster) refreshAndLog(parent context.Context) {
+	if err := c.Refresh(parent); err != nil {
+		c.logger.Error("failed to refresh cluster details from hakeeper",
+			zap.Error(err))
+	}
+}
+
+func (c *cluster) refreshWithContext(ctx context.Context) error {
 	defer c.logger.LogAction("refresh from hakeeper",
 		log.DefaultLogOptions().WithLevel(zap.DebugLevel))()
 
-	// There is data race as ForceRefresh and refreshTask may call this function
-	// at the same time, which will cause inconsistent CN services.
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	ctx, cancel := context.WithTimeoutCause(context.Background(), c.refreshInterval, moerr.CauseRefresh)
-	defer cancel()
+	// Serialize snapshots so an older concurrent HAKeeper response cannot
+	// overwrite a newer one. Admission is context-aware: freshness callers must
+	// not wait past their own deadline behind another refresh.
+	if err := c.acquireRefresh(ctx); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	defer c.releaseRefresh()
 
 	details, err := c.client.GetClusterDetails(ctx)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		c.logger.Error("failed to refresh cluster details from hakeeper",
-			zap.Error(err))
-		return
+		return moerr.AttachCause(ctx, err)
 	}
 
 	c.logger.Debug("refresh cluster details from hakeeper",
@@ -392,6 +515,24 @@ func (c *cluster) refresh() {
 		c.ready.Store(true)
 		close(c.readyC)
 	})
+	return nil
+}
+
+func (c *cluster) acquireRefresh(ctx context.Context) error {
+	c.refreshGateOnce.Do(func() {
+		c.refreshGateC = make(chan struct{}, 1)
+		c.refreshGateC <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.refreshGateC:
+		return nil
+	}
+}
+
+func (c *cluster) releaseRefresh() {
+	c.refreshGateC <- struct{}{}
 }
 
 func (c *cluster) copyServices() *services {
