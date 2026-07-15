@@ -176,6 +176,7 @@ func (l *localLockTable) doLock(
 		}
 		waitStart := time.Now()
 		v := c.w.wait(waitCtx, l.logger)
+		l.events.removeBlockedWaiter(c.w)
 		lockWaitTimeoutHit := leftTimeout > 0 &&
 			errors.Is(v.err, context.DeadlineExceeded) &&
 			context.Cause(waitCtx) == ErrLockTimeout

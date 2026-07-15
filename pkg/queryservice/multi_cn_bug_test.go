@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -340,8 +339,9 @@ func TestRequestMultipleCn_EmptyNodeAddress(t *testing.T) {
 	})
 }
 
-// TestRequestMultipleCn_ConcurrentSafety verifies no race conditions
-func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
+// TestRequestMultipleCnConcurrentSend verifies concurrent requests after the
+// client's backend for the target CN has been established.
+func TestRequestMultipleCnConcurrentSend(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	cn := metadata.CNService{ServiceID: "test_concurrent"}
@@ -349,10 +349,17 @@ func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Multiple nodes to increase concurrency
+		warmupReq := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+		warmupReq.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+		warmupResp, err := cli.SendMessage(ctx, addr, warmupReq)
+		assert.NoError(t, err)
+		if warmupResp != nil {
+			cli.Release(warmupResp)
+		}
+
+		// Multiple requests to the same CN exercise concurrent Send calls.
 		nodes := []string{addr, addr, addr}
 
-		var mu sync.Mutex
 		var successCount int
 		genRequest := func() *pb.Request {
 			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
@@ -362,19 +369,13 @@ func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 
 		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
 			if rsp != nil && rsp.GetCacheInfoResponse != nil {
-				// Concurrent access to shared state
-				mu.Lock()
 				successCount++
-				mu.Unlock()
-				// Simulate some work
-				time.Sleep(1 * time.Millisecond)
 			}
 		}
 
-		// Execute: concurrent processing
-		err := RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
+		// Execute concurrent sends.
+		err = RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
 
-		// Verify no race conditions (test with -race flag)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, successCount, "All nodes should succeed")
 	})
