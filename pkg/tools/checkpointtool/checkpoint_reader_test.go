@@ -298,6 +298,40 @@ func TestCheckpointReaderEmptyLocationBranches(t *testing.T) {
 	require.Nil(t, tombByTable)
 }
 
+func TestCheckpointReaderMissingLocationFileBranches(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Global)
+	loc := objectio.MockLocation(objectio.MockObjectName())
+	entry.SetLocation(loc, loc)
+
+	_, err = reader.GetTableRanges(entry)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	_, err = reader.GetAccounts(entry)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	_, err = reader.GetTables(entry)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	_, err = reader.GetTablesByAccount(entry, 1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	_, _, err = reader.GetObjectEntries(entry, 42)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+
+	_, _, err = reader.GetObjectEntriesForTables(entry, map[uint64]struct{}{42: {}})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+}
+
 func TestCheckpointReaderReadTableAndRangeData(t *testing.T) {
 	ctx := context.Background()
 	fs, stats := writeLogicalTableTestObject(t, "range.obj")

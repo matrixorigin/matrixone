@@ -168,6 +168,59 @@ func TestCSVProjectionAndOrderingHelpers(t *testing.T) {
 	assert.Equal(t, types.T_int64, projected[2].Oid)
 }
 
+func TestCSVOptionsAndSmallHelperBranches(t *testing.T) {
+	defaults := defaultCSVExportOptions()
+	require.True(t, defaults.IncludeMetadata)
+	require.True(t, defaults.IncludeHeader)
+	require.Equal(t, CSVRowOrderStorage, defaults.RowOrder)
+
+	opts := resolveCSVExportOptions([]CSVExportOption{
+		WithCSVMetaComments(false),
+		WithCSVHeader(false),
+		WithCSVRowOrder(CSVRowOrderLexical),
+	})
+	require.False(t, opts.IncludeMetadata)
+	require.False(t, opts.IncludeHeader)
+	require.Equal(t, CSVRowOrderLexical, opts.RowOrder)
+
+	order, err := ParseCSVRowOrder(" LEXICAL ")
+	require.NoError(t, err)
+	require.Equal(t, CSVRowOrderLexical, order)
+	order, err = ParseCSVRowOrder("")
+	require.NoError(t, err)
+	require.Equal(t, CSVRowOrderStorage, order)
+	_, err = ParseCSVRowOrder("unknown")
+	require.Error(t, err)
+
+	require.Empty(t, schemaForLayout(catalogLayout{}, 999999))
+	require.Equal(t, []string{"a", "c"}, catalogSchemaWithout([]string{"a", "b", "c"}, "b"))
+	require.Equal(t, []TableColumn{{Name: "b", ClusterBy: true}}, clusterByColumns([]TableColumn{{Name: "a"}, {Name: "b", ClusterBy: true}}))
+	require.Equal(t, []TableColumn{{Name: "missing", Position: 1}}, primaryKeyColumns([]TableColumn{{Name: "a"}}, []string{"missing"}))
+	require.Equal(t, -1, dataIndexForSeqNum(&LogicalTableView{ColSeqNums: []uint16{3, 5}}, 9))
+	require.Equal(t, 1, compareCSVRowsLexical([]string{"a", "b"}, []string{"a"}))
+	require.Equal(t, -1, compareCSVRowsLexical([]string{"a"}, []string{"a", "b"}))
+	require.Equal(t, 0, compareCSVRowsLexical([]string{"a"}, []string{"a"}))
+	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(0, false))
+	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(8<<30, true))
+	require.Equal(t, uint64(2<<30), csvPipelineMemoryFloorFromTotal(20<<30, true))
+
+	released := 0
+	block := &csvPipelineBlock{
+		releaseCommitTS: func() { released++ },
+		release:         func() { released++ },
+	}
+	block.releaseBlock()
+	block.releaseBlock()
+	require.Equal(t, 2, released)
+	require.Nil(t, block.releaseCommitTS)
+	require.Nil(t, block.release)
+
+	plan := csvPipelineWorkerCount(1)
+	require.Equal(t, 1, plan.readerWorkers)
+	require.Equal(t, 1, plan.processorWorkers)
+	require.GreaterOrEqual(t, plan.readQueueCapacity, 1)
+}
+
 func TestCSVScalarFormattingAndSQLTypeMapping(t *testing.T) {
 	var buf bytes.Buffer
 	appendCSVInt(&buf, -12)

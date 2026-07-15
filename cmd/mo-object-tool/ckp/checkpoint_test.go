@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
@@ -292,6 +295,80 @@ func TestFilterAccountRestoreScriptTablesLeavesNonAccountDumpUnchanged(t *testin
 	assert.Zero(t, skipped)
 }
 
+func TestCommandValidationBranches(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "cpu profile create error",
+			args: []string{"--cpuprofile", t.TempDir()},
+			want: "create cpuprofile",
+		},
+		{
+			name: "missing selector",
+			args: nil,
+			want: "--table-id, or at least one of --database-id/--account-id is required",
+		},
+		{
+			name: "no load without load script",
+			args: []string{"--table-id=1", "--no-load"},
+			want: "--no-load requires --load-script",
+		},
+		{
+			name: "table id conflicts with output dir",
+			args: []string{"--table-id=1", "--output-dir=out"},
+			want: "--table-id cannot be combined",
+		},
+		{
+			name: "batch output needs output dir",
+			args: []string{"--database-id=1", "-o", "out.csv"},
+			want: "--output cannot be used",
+		},
+		{
+			name: "load script needs output",
+			args: []string{"--database-id=1", "--load-script"},
+			want: "--output/-o directory is required",
+		},
+		{
+			name: "batch needs output dir",
+			args: []string{"--database-id=1"},
+			want: "--output-dir is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := dumpCommand(&toolfs.StorageOptions{})
+			cmd.SetArgs(tc.args)
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			err := cmd.Execute()
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	showCmd := showCreateTableCommand(&toolfs.StorageOptions{})
+	showCmd.SetArgs(nil)
+	showCmd.SetOut(&bytes.Buffer{})
+	showCmd.SetErr(&bytes.Buffer{})
+	require.ErrorContains(t, showCmd.Execute(), "--table-id is required")
+
+	showCmd = showCreateTableCommand(&toolfs.StorageOptions{})
+	showCmd.SetArgs([]string{"--table-id=1", "--local", "--local2", t.TempDir()})
+	showCmd.SetOut(&bytes.Buffer{})
+	showCmd.SetErr(&bytes.Buffer{})
+	require.Error(t, showCmd.Execute())
+}
+
+func TestDumpCommandRunsUntilResolveSnapshotValidation(t *testing.T) {
+	cmd := dumpCommand(&toolfs.StorageOptions{})
+	cmd.SetArgs([]string{"--table-id=1", "--row-order=bad", t.TempDir()})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	err := cmd.Execute()
+	require.ErrorContains(t, err, "resolve --ts")
+}
+
 func TestDumpOutputLocalCreateMkdirAndClose(t *testing.T) {
 	ctx := context.Background()
 	out, err := openDumpOutput(ctx, toolfs.StorageOptions{})
@@ -314,6 +391,59 @@ func TestDumpOutputLocalCreateMkdirAndClose(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nil-output")
 	require.NoError(t, nilOut.MkdirAll(dir))
 	require.DirExists(t, dir)
+}
+
+func TestOpenReaderResolveSnapshotAndFileServiceWriteCloser(t *testing.T) {
+	ctx := context.Background()
+
+	reader, err := openReader(ctx, t.TempDir(), toolfs.StorageOptions{}, objectio.OfflineKindLocal)
+	require.NoError(t, err)
+	require.Equal(t, objectio.OfflineKindLocal, reader.Kind())
+	require.NoError(t, reader.Close())
+
+	_, err = resolveSnapshotTS(ctx, reader, "")
+	require.ErrorContains(t, err, "no checkpoint timestamp")
+	_, err = resolveSnapshotTS(ctx, reader, "bad-ts")
+	require.ErrorContains(t, err, "timestamp must be")
+	_, err = resolveSnapshotTS(ctx, reader, "1:0")
+	require.ErrorContains(t, err, "not usable")
+
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	w, err := newFileServiceWriteCloser(ctx, fs, "/remote/out.csv")
+	require.NoError(t, err)
+	n, err := w.Write([]byte("a,b\n"))
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+	require.NoError(t, w.Close())
+	require.NoError(t, w.Close())
+
+	vec := &fileservice.IOVector{
+		FilePath: "remote/out.csv",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   4,
+			ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error) {
+				return allocator.CopyToCacheData(ctx, data), nil
+			},
+		}},
+	}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, []byte("a,b\n"), vec.Entries[0].CachedData.Bytes())
+	vec.Release()
+	(&dumpOutput{fs: fs}).Close(ctx)
+
+	_, err = openReader(ctx, ".", toolfs.StorageOptions{Backend: "GCS"}, objectio.OfflineKindLocal)
+	require.ErrorContains(t, err, "unsupported backend")
+	_, err = openReader(ctx, ".", toolfs.StorageOptions{Backend: "S3"}, objectio.OfflineKindLocal)
+	require.ErrorContains(t, err, "missing --s3 arguments")
+
+	_, err = openDumpOutput(ctx, toolfs.StorageOptions{Backend: "GCS"})
+	require.ErrorContains(t, err, "unsupported backend")
+
+	_, err = openDumpOutput(ctx, toolfs.StorageOptions{Backend: "S3"})
+	require.ErrorContains(t, err, "missing --s3 arguments")
 }
 
 func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
@@ -345,6 +475,94 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	byID[1].Schema.ForeignKeys = []checkpointtool.TableForeignKey{{ReferDatabase: child.DatabaseName, ReferTable: child.TableName}}
 	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, parent}, byID)
 	require.Len(t, ordered, 2)
+}
+
+func TestWriteRestoreScriptForViewAndErrors(t *testing.T) {
+	ctx := context.Background()
+	reader := &checkpointtool.CheckpointReader{}
+	dumpOut := &dumpOutput{}
+	scriptDir := filepath.Join(t.TempDir(), "scripts")
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseName: "db",
+		TableName:    "v1",
+		TableID:      10,
+		RelKind:      "v",
+	}
+	dataByTable := map[uint64]*checkpointtool.TableDumpData{
+		10: {
+			TableID: 10,
+			Schema: &checkpointtool.TableSchema{
+				TableName: "v1",
+				CreateSQL: "CREATE VIEW old_v AS SELECT 1 AS c",
+			},
+		},
+	}
+	resolver := loadDataPathResolver{}
+
+	path, err := writeRestoreScript(
+		ctx,
+		reader,
+		dumpOut,
+		[]checkpointtool.TableCatalogEntry{table},
+		dataByTable,
+		types.BuildTS(1, 0),
+		scriptDir,
+		"csv",
+		resolver,
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(scriptDir, "restore.sql"), path)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	sql := string(data)
+	require.Contains(t, sql, "CREATE DATABASE IF NOT EXISTS `db`;")
+	require.Contains(t, sql, "USE `db`;")
+	require.Contains(t, sql, "CREATE VIEW `db`.`v1` AS SELECT 1 AS c")
+	require.NotContains(t, sql, "LOAD DATA")
+
+	_, err = writeRestoreScript(
+		ctx,
+		reader,
+		dumpOut,
+		[]checkpointtool.TableCatalogEntry{{TableID: 11, TableName: "bad"}},
+		map[uint64]*checkpointtool.TableDumpData{},
+		types.BuildTS(1, 0),
+		filepath.Join(t.TempDir(), "bad"),
+		"csv",
+		resolver,
+		false,
+		false,
+	)
+	require.ErrorContains(t, err, "empty database name")
+}
+
+func TestDumpTablesConcurrentlySkipsViews(t *testing.T) {
+	var out bytes.Buffer
+	err := dumpTablesConcurrently(
+		context.Background(),
+		&checkpointtool.CheckpointReader{},
+		&dumpOutput{},
+		[]tableDumpPlan{{
+			table: checkpointtool.TableCatalogEntry{
+				DatabaseName: "db",
+				TableName:    "v1",
+				TableID:      10,
+				RelKind:      "view",
+			},
+		}},
+		types.BuildTS(1, 0),
+		t.TempDir(),
+		1,
+		checkpointtool.CSVRowOrderStorage,
+		false,
+		true,
+		&out,
+	)
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "View 10 db.v1 skipped CSV dump")
 }
 
 func TestNewLoadDataPathResolverErrors(t *testing.T) {

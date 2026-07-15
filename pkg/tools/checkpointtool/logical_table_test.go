@@ -105,6 +105,8 @@ func TestColumnSeqNumsAndAlignRowValues(t *testing.T) {
 	values, nulls = alignRowValuesBySeqNums(cols, []uint16{4, 2}, []string{"v2"}, nil)
 	require.Equal(t, []string{"", "v2"}, values)
 	require.Equal(t, []bool{true, false}, nulls)
+
+	debugLogicalObjectColumns(objectio.ObjectStats{}, nil)
 }
 
 func TestVisibleObjectEntriesEmptyAndSorted(t *testing.T) {
@@ -165,6 +167,62 @@ func TestBuildLogicalTableViewReadsVisibleRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, view.Rows)
 	require.Zero(t, view.PhysicalRows)
+}
+
+func TestScanLogicalTableCallbacksAndSnapshotCutoff(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "logical-callbacks.obj")
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	entries := []*ObjectEntryInfo{{
+		ObjectStats: stats,
+		CreateTime:  types.BuildTS(1, 0),
+	}}
+
+	colErr := assert.AnError
+	_, err := reader.scanLogicalTable(ctx, types.BuildTS(200, 0), entries, nil,
+		func([]objecttool.ColInfo) error { return colErr },
+		nil,
+	)
+	require.ErrorIs(t, err, colErr)
+
+	rowErr := assert.AnError
+	_, err = reader.scanLogicalTable(ctx, types.BuildTS(200, 0), entries, nil,
+		func([]objecttool.ColInfo) error { return nil },
+		func(string, int, int, []string, []bool) error { return rowErr },
+	)
+	require.ErrorIs(t, err, rowErr)
+
+	statsAt50, err := reader.scanLogicalTable(ctx, types.BuildTS(50, 0), entries, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, statsAt50.PhysicalRows)
+	require.Equal(t, 2, statsAt50.VisibleRows)
+	require.Zero(t, statsAt50.DeletedRows)
+}
+
+func TestScanLogicalTableSkipsMissingDataFile(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	stats, err := reader.scanLogicalTable(ctx, types.BuildTS(200, 0), []*ObjectEntryInfo{
+		newTestObjectEntryInfo(9, 1, 0),
+	}, nil, nil, nil)
+	require.ErrorContains(t, err, "is not found")
+	require.Zero(t, stats.PhysicalRows)
+	require.Zero(t, stats.VisibleRows)
+	require.Zero(t, stats.DeletedRows)
 }
 
 func writeLogicalTableTestObject(t *testing.T, _ string) (fileservice.FileService, objectio.ObjectStats) {
