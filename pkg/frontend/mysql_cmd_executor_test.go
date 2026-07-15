@@ -1624,9 +1624,15 @@ func TestInheritAnalyzeRewriteHint(t *testing.T) {
 		require.NotNil(t, sel.RewriteOption)
 		chain := sel.RewriteOption.Rewrites["src.t"]
 		require.Len(t, chain, 3)
-		for _, rewrite := range chain {
+		wantBodies := []string{
+			"select * from src.t where role_keep = 1",
+			"select * from src.t where session_keep = 1",
+			"select * from dst.t where inline_keep = 1",
+		}
+		for i, rewrite := range chain {
 			require.Equal(t, "src", rewrite.DbName)
 			require.Equal(t, "t", rewrite.TableName)
+			require.Equal(t, wantBodies[i], tree.String(rewrite.Stmt, dialect.MYSQL), "rewrite chain index %d", i)
 		}
 		require.Equal(t, "dst", sel.RewriteOption.RemapDb["src"])
 	})
