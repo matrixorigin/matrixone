@@ -15,6 +15,7 @@
 package object
 
 import (
+	"bytes"
 	"path/filepath"
 	"testing"
 
@@ -62,6 +63,42 @@ func TestOfflineKindFlags(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		}
 	}
+}
+
+func TestObjectCommandRootHelpAndArgValidation(t *testing.T) {
+	cmd := PrepareCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(nil)
+	require.NoError(t, cmd.Execute())
+	require.Contains(t, out.String(), "Tools for analyzing and browsing MatrixOne object files")
+	require.Contains(t, out.String(), "Available Commands:")
+
+	cmd = PrepareCommand()
+	cmd.SetArgs([]string{"a.obj", "b.obj"})
+	require.Error(t, cmd.Execute())
+
+	cmd = PrepareCommand()
+	var hasInfo, hasView bool
+	for _, sub := range cmd.Commands() {
+		switch sub.Name() {
+		case "info":
+			hasInfo = true
+		case "view":
+			hasView = true
+		}
+	}
+	require.True(t, hasInfo)
+	require.True(t, hasView)
+
+	cmd = PrepareCommand()
+	cmd.SetArgs([]string{"info"})
+	require.Error(t, cmd.Execute())
+
+	cmd = PrepareCommand()
+	cmd.SetArgs([]string{"view"})
+	require.Error(t, cmd.Execute())
 }
 
 // TestObjectInfoViewCommands drives the info/view subcommands. `info` with a

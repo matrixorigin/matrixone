@@ -17,8 +17,14 @@ package checkpointtool
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/stretchr/testify/assert"
@@ -95,6 +101,111 @@ func TestColumnSeqNumsAndAlignRowValues(t *testing.T) {
 	values, nulls = alignRowValuesBySeqNums(cols, nil, []string{"x"}, []bool{false})
 	require.Equal(t, []string{"x"}, values)
 	require.Equal(t, []bool{false}, nulls)
+
+	values, nulls = alignRowValuesBySeqNums(cols, []uint16{4, 2}, []string{"v2"}, nil)
+	require.Equal(t, []string{"", "v2"}, values)
+	require.Equal(t, []bool{true, false}, nulls)
+}
+
+func TestVisibleObjectEntriesEmptyAndSorted(t *testing.T) {
+	require.Nil(t, visibleObjectEntries(nil, types.BuildTS(10, 0)))
+
+	visible := visibleObjectEntries([]*ObjectEntryInfo{
+		newTestObjectEntryInfo(3, 1, 0),
+		newTestObjectEntryInfo(1, 1, 0),
+		newTestObjectEntryInfo(2, 1, 0),
+	}, types.BuildTS(10, 0))
+	require.Len(t, visible, 3)
+	assert.Less(t, visible[0].ObjectStats.ObjectName().String(), visible[1].ObjectStats.ObjectName().String())
+	assert.Less(t, visible[1].ObjectStats.ObjectName().String(), visible[2].ObjectStats.ObjectName().String())
+}
+
+func TestFilterTombstonesAndDeleteMaskEmptyInputs(t *testing.T) {
+	reader := &CheckpointReader{}
+	relevant, err := reader.filterTombstonesForObject(context.Background(), &objectio.ObjectId{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, relevant)
+
+	mask, err := reader.buildDeleteMaskForBlock(context.Background(), &types.TS{}, objectio.ObjectStats{}, 0, nil)
+	require.NoError(t, err)
+	require.False(t, mask.IsValid())
+}
+
+func TestBuildLogicalTableViewReadsVisibleRows(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "logical.obj")
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	view, err := reader.BuildLogicalTableView(ctx, types.BuildTS(200, 0), []*ObjectEntryInfo{
+		{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"object", "block", "row", "col_0", "col_1"}, view.Headers)
+	require.Len(t, view.Rows, 2)
+	require.Equal(t, 2, view.PhysicalRows)
+	require.Equal(t, 0, view.DeletedRows)
+	require.Equal(t, 2, view.VisibleRows)
+	require.Equal(t, []string{"1", "alice"}, view.DataRow(view.Rows[0]))
+
+	view, err = reader.BuildLogicalTableView(ctx, types.BuildTS(200, 0), []*ObjectEntryInfo{
+		{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.BuildTS(100, 0),
+		},
+	}, nil)
+	require.NoError(t, err)
+	require.Empty(t, view.Rows)
+	require.Zero(t, view.PhysicalRows)
+}
+
+func writeLogicalTableTestObject(t *testing.T, _ string) (fileservice.FileService, objectio.ObjectStats) {
+	t.Helper()
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	objectName := objectio.BuildObjectName(&types.Uuid{1}, 1)
+	filename := objectName.String()
+	fs, err := fileservice.NewFileService(ctx, fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: t.TempDir(),
+		Cache:   fileservice.DisabledCacheConfig,
+	}, nil)
+	require.NoError(t, err)
+
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterNormal, filename, fs)
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("alice"), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(2), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("bob"), false, mp))
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx, objectio.WriteOptions{
+		Type: objectio.WriteTS,
+		Val:  time.Unix(100, 0),
+	})
+	require.NoError(t, err)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectName))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	return fs, *stats
 }
 
 func TestLogicalTableViewWidthsAndRows(t *testing.T) {

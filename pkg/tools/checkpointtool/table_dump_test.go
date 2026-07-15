@@ -213,6 +213,205 @@ func TestCSVScalarFormattingAndSQLTypeMapping(t *testing.T) {
 	}
 }
 
+func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
+	cases := []struct {
+		name string
+		col  TableColumn
+		want string
+	}{
+		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
+		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
+		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},
+		{"enum already typed", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('x')"},
+		{"set parens", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('x','y')"},
+		{"bigint unsigned set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: "red,blue"}, "SET('red','blue')"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, renderColumnSQLType(tc.col))
+		})
+	}
+
+	require.Equal(t, []string{"'a,b'", " c", " 'd''e'", " f\\", "g"}, splitEnumSetValues("'a,b', c, 'd''e', f\\,g"))
+	require.Equal(t, "x,y", stripEnumSetValueParens(" ( x,y ) "))
+	require.True(t, isQuotedSQLString(`"x"`))
+	require.False(t, isQuotedSQLString(`x`))
+}
+
+func TestAppendColumnDDLAttributesBranches(t *testing.T) {
+	var sb strings.Builder
+	appendColumnDDLAttributes(&sb, TableColumn{
+		Generated:       "a + 1",
+		GeneratedStored: true,
+		NotNull:         true,
+		Comment:         "generated",
+	})
+	require.Equal(t, " NOT NULL GENERATED ALWAYS AS (a + 1) STORED COMMENT 'generated'", sb.String())
+
+	sb.Reset()
+	appendColumnDDLAttributes(&sb, TableColumn{
+		Generated: "a + 1",
+	})
+	require.Equal(t, " GENERATED ALWAYS AS (a + 1) VIRTUAL", sb.String())
+
+	sb.Reset()
+	appendColumnDDLAttributes(&sb, TableColumn{
+		AutoIncrement: true,
+		HasDefault:    true,
+		Default:       "5",
+	})
+	require.Equal(t, " NOT NULL AUTO_INCREMENT", sb.String())
+
+	sb.Reset()
+	appendColumnDDLAttributes(&sb, TableColumn{
+		HasDefault: true,
+		OnUpdate:   "'tick'",
+	})
+	require.Equal(t, " DEFAULT NULL ON UPDATE 'tick'", sb.String())
+}
+
+func TestNormalizeKeysAndRenderForeignKeyBranches(t *testing.T) {
+	unique := normalizedUniqueKeys([]TableUniqueKey{
+		{Columns: []string{" id ", ""}, Unique: true},
+		{Name: "id", Columns: []string{"id"}, Unique: true},
+		{Name: "ft", Columns: []string{"body"}, Algo: " fulltext ", AlgoParams: " parser ngram ", Comment: " c "},
+		{Columns: nil},
+	})
+	require.Len(t, unique, 2)
+	require.Equal(t, "id", unique[0].Name)
+	require.True(t, unique[0].Unique)
+	require.Equal(t, "fulltext", unique[1].Algo)
+	require.Equal(t, "parser ngram", unique[1].AlgoParams)
+	require.Equal(t, "c", unique[1].Comment)
+
+	foreign := normalizedForeignKeys([]TableForeignKey{
+		{Columns: []string{" col ", ""}, ReferTable: "parent", ReferColumns: []string{" id "}},
+		{Columns: []string{"col"}, ReferTable: "parent", ReferColumns: []string{"id"}},
+		{Name: "z", Columns: []string{"a"}, ReferTable: "", ReferColumns: []string{"id"}},
+		{Name: "bad", Columns: []string{"a", "b"}, ReferTable: "p", ReferColumns: []string{"id"}},
+	})
+	require.Len(t, foreign, 1)
+	require.Equal(t, "col", foreign[0].Name)
+	require.Equal(t, "parent", foreign[0].ReferTable)
+	require.Equal(t, []string{"id"}, foreign[0].ReferColumns)
+
+	clause := renderForeignKeyClause(TableForeignKey{
+		Name:         "fk",
+		Columns:      []string{"child"},
+		ReferTable:   "parent",
+		ReferColumns: []string{"id"},
+		OnDelete:     plan.ForeignKeyDef_SET_NULL,
+		OnUpdate:     plan.ForeignKeyDef_NO_ACTION,
+	})
+	require.Equal(t, "CONSTRAINT `fk` FOREIGN KEY (`child`) REFERENCES `parent` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION", clause)
+
+	require.Equal(t, "CASCADE", renderFKAction(plan.ForeignKeyDef_CASCADE))
+	require.Equal(t, "SET DEFAULT", renderFKAction(plan.ForeignKeyDef_SET_DEFAULT))
+	require.Equal(t, "RESTRICT", renderFKAction(plan.ForeignKeyDef_RESTRICT))
+}
+
+func TestSchemaFallbackAndCatalogLayoutHelpers(t *testing.T) {
+	builtin := &TableSchema{
+		TableName:    "mo_tables",
+		DatabaseName: "mo_catalog",
+		CreateSQL:    "CREATE TABLE mo_tables (id BIGINT)",
+		Columns:      []TableColumn{{Name: "id", SQLType: "BIGINT"}},
+	}
+	schema := mergeBuiltinSchemaFallback(&TableSchema{TableName: "2"}, builtin, 2)
+	require.Equal(t, "mo_tables", schema.TableName)
+	require.Equal(t, "mo_catalog", schema.DatabaseName)
+	require.Equal(t, builtin.CreateSQL, schema.CreateSQL)
+	require.Equal(t, builtin.Columns, schema.Columns)
+
+	kept := mergeBuiltinSchemaFallback(&TableSchema{
+		TableName:    "custom",
+		DatabaseName: "db",
+		CreateSQL:    "sql",
+		Columns:      []TableColumn{{Name: "x"}},
+	}, builtin, 2)
+	require.Equal(t, "custom", kept.TableName)
+	require.Equal(t, "db", kept.DatabaseName)
+	require.Equal(t, "sql", kept.CreateSQL)
+	require.Equal(t, "x", kept.Columns[0].Name)
+
+	layout := inferBuiltinCatalogLayout(moTablesID, &LogicalTableView{
+		Headers: append(logicalTableViewMetaHeaders, make([]string, len(catalog.MoTablesSchema))...),
+	}, nil)
+	require.NotEmpty(t, schemaForLayout(layout, moTablesID))
+
+	matches := catalogLayoutMatches(len(catalog.MoTablesSchema)+2, moTablesID)
+	require.NotEmpty(t, matches)
+	require.GreaterOrEqual(t, catalogColIndexForLayout(currentCatalogLayout, moTablesID, "relname", 1), 0)
+	require.Equal(t, -1, catalogColIndexForLayout(currentCatalogLayout, moTablesID, "missing", 0))
+}
+
+func TestCatalogDatabaseRowsHeadersAndCloneHelpers(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "dat_id", "datname", "account_id"},
+		Rows: [][]string{
+			{"obj", "0", "0", "7", "db1", "3"},
+			{"obj", "0", "1", "7", "db1", "3"},
+			{"obj", "0", "2", "0", "skip", "3"},
+			{"obj", "0", "3", "8", "", "3"},
+			{"obj", "0", "4", "9", "db2", "bad"},
+		},
+	}
+	dbs := buildCatalogDatabasesFromMoDatabaseRows(view)
+	require.Len(t, dbs, 2)
+	require.Equal(t, TableCatalogEntry{AccountID: 3, DatabaseID: 7, DatabaseName: "db1"}, dbs[0])
+	require.Equal(t, TableCatalogEntry{AccountID: 0, DatabaseID: 9, DatabaseName: "db2"}, dbs[1])
+
+	merged := mergeCatalogDatabaseEntries([]TableCatalogEntry{dbs[0]}, dbs)
+	require.Len(t, merged, 2)
+	require.Contains(t, catalogDatabaseEntryKey(merged[0]), "db1")
+
+	require.Nil(t, buildCatalogDatabasesFromMoDatabaseRowsAt(view, -1, 1, 2))
+
+	headerView := &LogicalTableView{
+		Headers:    []string{"object", "block", "row", "col_0", "col_1", "col_2"},
+		ColSeqNums: []uint16{2, 0, 99},
+	}
+	applyCatalogHeadersBySeqNums(headerView, []string{"a", "b", "c"})
+	require.Equal(t, []string{"object", "block", "row", "c", "a", "col_2"}, headerView.Headers)
+
+	fallbackView := &LogicalTableView{Headers: []string{"x"}, ColSeqNums: nil}
+	applyCatalogHeadersBySeqNums(fallbackView, []string{"a", "b"})
+	require.Equal(t, []string{"object", "block", "row", "a", "b"}, fallbackView.Headers)
+
+	require.False(t, isMissingCheckpointTableError(nil, 42))
+	require.True(t, isMissingCheckpointTableError(errors.New("table 42 not found in checkpoint"), 42))
+	require.False(t, isMissingCheckpointTableError(errors.New("table 43 not found in checkpoint"), 42))
+
+	original := &TableSchema{
+		TableName:    "t",
+		DatabaseName: "db",
+		AccountID:    1,
+		CreateSQL:    "create",
+		Comment:      "comment",
+		Partition:    "partition",
+		PrimaryKey:   []string{"id"},
+		ClusterBy:    []string{"id"},
+		Columns:      []TableColumn{{Name: "id", SQLType: "INT"}},
+		UniqueKeys:   []TableUniqueKey{{Name: "u", Columns: []string{"id"}}},
+		ForeignKeys:  []TableForeignKey{{Name: "fk", Columns: []string{"id"}, ReferColumns: []string{"pid"}}},
+	}
+	clone := cloneTableSchema(original)
+	require.Equal(t, original, clone)
+	require.NotSame(t, original, clone)
+	original.PrimaryKey[0] = "changed"
+	original.ClusterBy[0] = "changed"
+	original.Columns[0].Name = "changed"
+	original.UniqueKeys[0].Columns[0] = "changed"
+	original.ForeignKeys[0].ReferColumns[0] = "changed"
+	require.Equal(t, "id", clone.PrimaryKey[0])
+	require.Equal(t, "id", clone.ClusterBy[0])
+	require.Equal(t, "id", clone.Columns[0].Name)
+	require.Equal(t, "id", clone.UniqueKeys[0].Columns[0])
+	require.Equal(t, "pid", clone.ForeignKeys[0].ReferColumns[0])
+	require.Nil(t, cloneTableSchema(nil))
+}
+
 func TestCatalogMergeHelpers(t *testing.T) {
 	baseDBs := []TableCatalogEntry{{AccountID: 1, DatabaseID: 10, DatabaseName: "db"}}
 	mergedDBs := mergeCatalogDatabaseEntries(baseDBs, []TableCatalogEntry{

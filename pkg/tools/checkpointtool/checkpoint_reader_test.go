@@ -181,6 +181,50 @@ func TestCheckpointReaderBasicAccessorsAndFork(t *testing.T) {
 	require.Equal(t, customCtx, fork.ctx)
 }
 
+func TestCheckpointReaderInfoSummarizesEntries(t *testing.T) {
+	reader := &CheckpointReader{
+		dir: "/ckp",
+		entries: []*checkpoint.CheckpointEntry{
+			checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(20, 0), checkpoint.ET_Global),
+			checkpoint.NewCheckpointEntry("", types.BuildTS(21, 0), types.BuildTS(30, 0), checkpoint.ET_Incremental),
+			checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(5, 0), checkpoint.ET_Compacted),
+			checkpoint.NewCheckpointEntry("", types.TS{}, types.BuildTS(3, 0), checkpoint.ET_Incremental),
+		},
+	}
+
+	info := reader.Info()
+	require.Equal(t, "/ckp", info.Dir)
+	require.Equal(t, 4, info.TotalEntries)
+	require.Equal(t, 1, info.GlobalCount)
+	require.Equal(t, 2, info.IncrCount)
+	require.Equal(t, 1, info.CompactCount)
+	require.Equal(t, types.BuildTS(1, 0), info.EarliestTS)
+	require.Equal(t, types.BuildTS(30, 0), info.LatestTS)
+}
+
+func TestValidateSnapshotRequiresCatalogTables(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+	}
+
+	reader.getTablesForTest = func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		return nil, nil
+	}
+	require.ErrorContains(t, reader.ValidateSnapshot(context.Background(), types.BuildTS(10, 0)), "no tables")
+
+	reader.getTablesForTest = func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		return []*TableInfo{{TableID: moTablesID}}, nil
+	}
+	require.ErrorContains(t, reader.ValidateSnapshot(context.Background(), types.BuildTS(10, 0)), "mo_columns")
+
+	reader.getTablesForTest = func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		return []*TableInfo{{TableID: moTablesID}, {TableID: moColumnsID}}, nil
+	}
+	require.NoError(t, reader.ValidateSnapshot(context.Background(), types.BuildTS(10, 0)))
+}
+
 func TestCheckpointReaderTestHooksAndRangesToTables(t *testing.T) {
 	hookErr := errors.New("hook failed")
 	dataStats := testCheckpointObjectStats(t, 1)
@@ -252,6 +296,36 @@ func TestCheckpointReaderEmptyLocationBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, dataByTable)
 	require.Nil(t, tombByTable)
+}
+
+func TestCheckpointReaderReadTableAndRangeData(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "range.obj")
+	defer fs.Close(ctx)
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+
+	rng := ckputil.TableRange{
+		TableID:     1,
+		ObjectType:  ckputil.ObjectType_Data,
+		ObjectStats: stats,
+	}
+	rng.Start.SetRowOffset(1)
+	rng.End.SetRowOffset(1)
+
+	bat, release, err := reader.ReadTableData(ctx, rng)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.Equal(t, 2, bat.RowCount())
+	release()
+
+	cols, rows, err := reader.ReadRangeData(&checkpoint.CheckpointEntry{}, rng)
+	require.NoError(t, err)
+	require.Equal(t, []string{"account_id", "db_id"}, cols)
+	require.Equal(t, [][]string{{"2", "bob"}}, rows)
 }
 
 func TestCheckpointReaderSmallHelpers(t *testing.T) {
