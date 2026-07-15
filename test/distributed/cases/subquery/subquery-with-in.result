@@ -760,7 +760,7 @@ t3.a in (select t1.b from t1
 where t1.a+1=t1.a+1 and
 t1.a < (select t4.a+10
 from t4, t5 limit 2));
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -1669,7 +1669,7 @@ use test_subq_err;
 create table t1 (a int);
 insert into t1 values (1), (2);
 select (select a from t1) from t1;
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 drop database test_subq_err;
 create database test_subq_err;
 use test_subq_err;
@@ -1678,7 +1678,7 @@ create table t2 (a int);
 insert into t1 values (1);
 insert into t2 values (1), (1);
 select * from t1 where a = (select a from t2 where t2.a = t1.a);
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 drop database test_subq_err;
 create database test_subq_err;
 use test_subq_err;
@@ -1687,7 +1687,7 @@ create table t2 (a int, b int);
 insert into t1 values (3);
 insert into t2 values (1, 10), (2, 20);
 select * from t1 where a > (select b from t2 where t2.a < t1.a);
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 drop database test_subq_err;
 create database test_subq_err;
 use test_subq_err;
@@ -1696,5 +1696,5 @@ create table t2 (a int);
 insert into t1 values (1);
 insert into t2 values (1), (2), (3);
 select (select a from t2) from t1;
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 drop database test_subq_err;

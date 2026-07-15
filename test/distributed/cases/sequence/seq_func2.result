@@ -83,7 +83,7 @@ select @single_var1,@single_var2;
 ➤ @single_var1[12,0,0]  ¦  @single_var2[12,0,0]  𝄀
 1  ¦  2
 set @single_var2 = (select a from seq_t1 limit 2);
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 set @single_var3 = (select a,b from seq_t1 limit 1);
 select @single_var3;
 ➤ @single_var3[12,0,0]  𝄀
@@ -97,9 +97,9 @@ select @single_var4,@single_var5,@single_var6;
 ➤ @single_var4[12,0,0]  ¦  @single_var5[12,0,0]  ¦  @single_var6[12,0,0]  𝄀
 2  ¦  2  ¦  1
 set @single_var7 = (select a,b from seq_t1);
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 set @single_var8 = (select b,a from seq_t1);
-scalar subquery returns more than 1 row
+Subquery returns more than 1 row
 drop table if exists seq_t1;
 create sequence seq1;
 set @seq_var1 = nextval('seq1'),@seq_var2 = nextval('seq1'),@seq_var3 = nextval('seq1');
