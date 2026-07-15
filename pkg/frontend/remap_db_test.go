@@ -38,6 +38,19 @@ func applyRemapDbToSQL(t *testing.T, sql string, remap map[string]string) string
 func TestApplyRemapDb(t *testing.T) {
 	remap := map[string]string{"dbxxx": "dbyyy"}
 
+	t.Run("analyze all qualified entries", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "analyze table dbxxx.a(x), dbxxx.b", remap)
+		require.Contains(t, out, "dbyyy.a(x)")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("analyze unqualified entry untouched", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "analyze table a(x)", remap)
+		require.Contains(t, out, "analyze table a(x)")
+		require.NotContains(t, out, "dbyyy")
+	})
+
 	t.Run("qualified ref", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select * from dbxxx.t", remap)
 		require.Contains(t, out, "dbyyy.t")

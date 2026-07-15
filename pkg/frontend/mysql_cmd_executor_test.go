@@ -1580,16 +1580,31 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 	entry := &tree.AnalyzeTableEntry{
 		Table: tree.NewTableName(
-			tree.Identifier("quoted_cols"),
-			tree.ObjectNamePrefix{SchemaName: tree.Identifier("db"), ExplicitSchema: true},
+			tree.Identifier("tick`table"),
+			tree.ObjectNamePrefix{SchemaName: tree.Identifier("select-db"), ExplicitSchema: true},
 			nil,
 		),
 		Cols: tree.IdentifierList{"select", "a-b", "tick`name"},
 	}
 	require.Equal(t,
-		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`) from db.quoted_cols",
+		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`) from `select-db`.`tick``table`",
 		buildAnalyzeDerivedSQL(entry, entry.Cols),
 	)
+}
+
+func TestResolveAnalyzeDatabaseUsesRemappedDefault(t *testing.T) {
+	tcc := &TxnCompilerContext{
+		dbName: "dbxxx",
+		execCtx: &ExecCtx{
+			remapDb: map[string]string{"dbxxx": "dbyyy"},
+		},
+	}
+	unqualified := tree.NewTableName("t", tree.ObjectNamePrefix{}, nil)
+	require.Equal(t, "dbyyy", resolveAnalyzeDatabase(tcc, unqualified))
+	qualified := tree.NewTableName("t", tree.ObjectNamePrefix{
+		SchemaName: "explicit", ExplicitSchema: true,
+	}, nil)
+	require.Equal(t, "explicit", resolveAnalyzeDatabase(tcc, qualified))
 }
 
 type countingMysqlWriter struct {
@@ -1786,8 +1801,8 @@ func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
 
-	firstSQL := "select approx_count_distinct(`a`) from first_table"
-	secondSQL := "select approx_count_distinct(`x`) from second_table"
+	firstSQL := "select approx_count_distinct(`a`) from `first_table`"
+	secondSQL := "select approx_count_distinct(`x`) from `second_table`"
 	results := map[string]*result{
 		firstSQL:  {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
 		secondSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(x)", 4) }},
@@ -1818,8 +1833,8 @@ func TestHandleAnalyzeStmtDoesNotPublishPartialResultsOnDerivedError(t *testing.
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
 
-	firstSQL := "select approx_count_distinct(`a`) from first_table"
-	secondSQL := "select approx_count_distinct(`x`) from second_table"
+	firstSQL := "select approx_count_distinct(`a`) from `first_table`"
+	secondSQL := "select approx_count_distinct(`x`) from `second_table`"
 	results := map[string]*result{
 		firstSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
 	}

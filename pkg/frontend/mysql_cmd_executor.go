@@ -1319,19 +1319,22 @@ func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierL
 		ctx.WriteByte(')')
 	}
 	ctx.WriteString(" from ")
-	tableCtx := tree.NewFmtCtx(dialect.MYSQL)
-	entry.Table.Format(tableCtx)
-	ctx.WriteString(tableCtx.String())
+	entry.Table.Format(ctx)
 	return ctx.String()
+}
+
+func resolveAnalyzeDatabase(tcc *TxnCompilerContext, tbl *tree.TableName) string {
+	if dbName := string(tbl.Schema()); dbName != "" {
+		return dbName
+	}
+	return tcc.DefaultDatabase()
 }
 
 // resolveTableVisibleColumns returns the names of all visible (non-hidden) columns
 // of the given table. Used by ANALYZE TABLE without an explicit column list.
 func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.TableName) (tree.IdentifierList, error) {
-	dbName := string(tbl.Schema())
-	if dbName == "" {
-		dbName = ses.GetDatabaseName()
-	}
+	tcc := ses.GetTxnCompileCtx()
+	dbName := resolveAnalyzeDatabase(tcc, tbl)
 	if dbName == "" {
 		return nil, moerr.NewNoDB(ctx)
 	}
@@ -1342,7 +1345,6 @@ func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.Tab
 		return nil, err
 	}
 
-	tcc := ses.GetTxnCompileCtx()
 	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot)
 	if err != nil {
 		return nil, err

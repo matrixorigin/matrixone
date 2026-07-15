@@ -70,6 +70,12 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 		remapDbInTableExprs(s.Tables, remap)
 		remapDbInTableExprs(s.TableRefs, remap)
 		remapDbInWhere(s.Where, remap)
+	case *tree.AnalyzeStmt:
+		for _, entry := range s.Entries {
+			if entry != nil {
+				remapTableName(entry.Table, remap)
+			}
+		}
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked
