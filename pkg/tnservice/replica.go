@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -24,58 +25,125 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 )
 
 // replica tn shard replica.
 type replica struct {
-	rt       runtime.Runtime
-	logger   *log.MOLogger
-	shard    metadata.TNShard
-	service  service.TxnService
-	startedC chan struct{}
+	rt           runtime.Runtime
+	logger       *log.MOLogger
+	shard        metadata.TNShard
+	service      service.TxnService
+	startedC     chan struct{}
+	createCtx    context.Context
+	cancelCreate context.CancelFunc
+	startedOnce  sync.Once
 
 	mu struct {
 		sync.RWMutex
-		starting bool
+		starting        bool
+		cancelled       bool
+		destroyOnCancel bool
+		startErr        error
 	}
 }
 
 func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &replica{
-		rt:       rt,
-		shard:    shard,
-		logger:   rt.Logger().With(util.TxnTNShardField(shard)),
-		startedC: make(chan struct{}),
+		rt:           rt,
+		shard:        shard,
+		logger:       rt.Logger().With(util.TxnTNShardField(shard)),
+		startedC:     make(chan struct{}),
+		createCtx:    ctx,
+		cancelCreate: cancel,
 	}
 }
 
 func (r *replica) start(txnService service.TxnService) error {
+	if !r.reserveStart() {
+		return r.createCtx.Err()
+	}
+	return r.startReserved(txnService)
+}
+
+func (r *replica) reserveStart() bool {
 	r.mu.Lock()
-	if r.mu.starting {
-		r.mu.Unlock()
-		return nil
+	defer r.mu.Unlock()
+	if r.mu.starting || r.mu.cancelled {
+		return false
 	}
 	r.mu.starting = true
+	return true
+}
+
+func (r *replica) startReserved(txnService service.TxnService) error {
+	r.mu.Lock()
+	if !r.mu.starting {
+		r.mu.Unlock()
+		return context.Canceled
+	}
+	r.service = txnService
 	r.mu.Unlock()
 
-	defer close(r.startedC)
-	r.service = txnService
-	return r.service.Start()
+	err := txnService.Start()
+	r.finishStart(err)
+	return err
+}
+
+func (r *replica) finishStart(err error) {
+	r.startedOnce.Do(func() {
+		r.mu.Lock()
+		r.mu.startErr = err
+		r.mu.Unlock()
+		close(r.startedC)
+	})
+}
+
+func (r *replica) cancelStart(destroy bool) {
+	r.mu.Lock()
+	r.mu.cancelled = true
+	r.mu.destroyOnCancel = r.mu.destroyOnCancel || destroy
+	r.mu.Unlock()
+	r.cancelCreate()
+}
+
+func (r *replica) closeStorage(txnStorage storage.TxnStorage) error {
+	r.mu.RLock()
+	destroy := r.mu.destroyOnCancel
+	r.mu.RUnlock()
+	if destroy {
+		return txnStorage.Destroy(context.Background())
+	}
+	return txnStorage.Close(context.Background())
+}
+
+func (r *replica) waitStartCompleted() {
+	<-r.startedC
 }
 
 func (r *replica) close(destroy bool) error {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if !r.mu.starting {
+	starting := r.mu.starting
+	r.mu.RUnlock()
+	if !starting {
 		return nil
 	}
-	r.waitStarted()
-	return r.service.Close(destroy)
+	startErr := r.waitStarted(context.Background())
+	r.mu.RLock()
+	txnService := r.service
+	r.mu.RUnlock()
+	if txnService == nil {
+		return startErr
+	}
+	return errors.Join(startErr, txnService.Close(destroy))
 }
 
 func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r.waitStarted()
+	if err := r.waitStarted(ctx); err != nil {
+		return err
+	}
 	prepareResponse(request, response)
 
 	switch request.Method {
@@ -92,6 +160,13 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 	}
 }
 
-func (r *replica) waitStarted() {
-	<-r.startedC
+func (r *replica) waitStarted(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.startedC:
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+		return r.mu.startErr
+	}
 }
