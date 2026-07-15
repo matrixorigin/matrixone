@@ -16,13 +16,17 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
 func TestExecutionResourceRecorder(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
-	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
+	stats := statistic.NewStatsInfo()
+	stats.ParseStage.ParseDuration = 5 * time.Nanosecond
+	ctx := statistic.ContextWithStatsInfo(context.Background(), stats)
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(ctx, root))
 	require.NotNil(t, recorder)
 
 	anal := &AnalyzeModule{}
@@ -51,19 +55,19 @@ func TestExecutionResourceRecorder(t *testing.T) {
 
 	summary := root.PreResponseSummary()
 	require.Equal(t, uint64(1), summary.AttemptCount)
-	require.GreaterOrEqual(t, summary.Usage.ExclusiveActiveNS, uint64(30))
+	require.GreaterOrEqual(t, summary.Usage.ExclusiveActiveNS, uint64(35))
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
 }
 
-func TestAttemptMemoryRecorderUsesQuiescentEpoch(t *testing.T) {
+func TestAttemptMemoryRecorderDoesNotResetSharedPool(t *testing.T) {
 	pool, err := mpool.NewMPool("resource-attempt", 0, mpool.NoFixed)
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(pool)
 
 	memory := beginAttemptMemory(pool)
-	require.True(t, memory.exact)
+	require.False(t, memory.exact)
 	buf, err := pool.Alloc(128, true)
 	require.NoError(t, err)
 	pool.Free(buf)
@@ -77,11 +81,11 @@ func TestAttemptMemoryRecorderUsesQuiescentEpoch(t *testing.T) {
 	recorder.publish()
 
 	summary := root.PreResponseSummary()
-	require.Equal(t, uint64(128), summary.Memory.AllocatedBytes)
-	require.Equal(t, uint64(128), summary.Memory.FreedBytes)
-	require.Equal(t, uint64(128), summary.Memory.MaxDomainPeakLiveBytes)
-	require.Zero(t, summary.MissingMemoryDomainCount)
-	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
+	require.Zero(t, summary.Memory.AllocatedBytes)
+	require.Zero(t, summary.Memory.FreedBytes)
+	require.Zero(t, summary.Memory.MaxDomainPeakLiveBytes)
+	require.Equal(t, uint64(1), summary.MissingMemoryDomainCount)
+	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 }
 
 func TestRemoteTerminalEnvelope(t *testing.T) {

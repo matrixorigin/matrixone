@@ -250,6 +250,23 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	attemptStart := time.Now()
 	attemptMemory := beginAttemptMemory(runC.proc.Mp())
+	attemptOpen := true
+	var attemptPreRunWall time.Duration
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if attemptOpen {
+				if attemptPreRunWall == 0 {
+					attemptPreRunWall = time.Since(attemptStart)
+				}
+				resourceRecorder.finishAttempt(
+					uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+					runC.scopes, runC.anal, c.addr, resource.OutcomePanic, false, attemptMemory,
+				)
+				attemptOpen = false
+			}
+			panic(recovered)
+		}
+	}()
 	var carriedPreRunWall time.Duration
 	for {
 		// Record the time from the beginning of Run to just before runOnce().
@@ -261,6 +278,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
+			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
 			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
@@ -275,12 +293,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 					uint64(retryTimes), attemptStart, preRunWall, stats,
 					runC.scopes, runC.anal, c.addr, resource.OutcomeSuccess, false, attemptMemory,
 				)
+				attemptOpen = false
 				break
 			}
 		}
 		if preRunWall == 0 {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 		}
+		attemptPreRunWall = preRunWall
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
@@ -307,19 +327,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				uint64(retryTimes), attemptStart, preRunWall, stats,
 				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false, attemptMemory,
 			)
+			attemptOpen = false
 			return nil, err
 		}
-
-		resourceRecorder.finishAttempt(
-			uint64(retryTimes), attemptStart, preRunWall, stats,
-			runC.scopes, runC.anal, c.addr, resourceOutcome(err), true, attemptMemory,
-		)
-
-		retryTimes++
-		if runC != c {
-			releaseRetryCompile(runC)
-		}
-		c.retryTimes = retryTimes
+		retryErr := err
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
 		if forcePreMode {
@@ -343,18 +354,36 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 		}
 
-		attemptStart = time.Now()
-		attemptMemory = beginAttemptMemory(c.proc.Mp())
 		retryPrepareStart := time.Now()
-		if runC, err = c.prepareRetry(defChanged || forcePreMode); err != nil {
-			carriedPreRunWall = time.Since(retryPrepareStart)
+		nextRunC, prepareErr := c.prepareRetry(defChanged || forcePreMode)
+		transitionWall := time.Since(retryPrepareStart)
+		attemptPreRunWall = preRunWall + transitionWall
+		if prepareErr != nil {
+			err = prepareErr
 			resourceRecorder.finishAttempt(
-				uint64(retryTimes), attemptStart, carriedPreRunWall, stats,
-				nil, nil, c.addr, resourceOutcome(err), false, attemptMemory,
+				uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false, attemptMemory,
 			)
+			attemptOpen = false
 			return nil, err
 		}
-		carriedPreRunWall = time.Since(retryPrepareStart)
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+			runC.scopes, runC.anal, c.addr, resourceOutcome(retryErr), true, attemptMemory,
+		)
+		attemptOpen = false
+		if runC != c {
+			releaseRetryCompile(runC)
+		}
+
+		retryTimes++
+		c.retryTimes = retryTimes
+		runC = nextRunC
+		attemptStart = time.Now()
+		attemptMemory = beginAttemptMemory(runC.proc.Mp())
+		attemptOpen = true
+		attemptPreRunWall = 0
+		carriedPreRunWall = 0
 
 		// rebuild context for the retry.
 		runC.InitPipelineContextToRetryQuery()
@@ -634,6 +663,10 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			runC.Release()
+			panic(recovered)
+		}
 		if e != nil {
 			runC.Release()
 		}

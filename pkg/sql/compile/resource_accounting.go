@@ -21,6 +21,7 @@ import (
 
 type executionResourceRecorder struct {
 	root      *resource.Root
+	stats     *statistic.StatsInfo
 	execution resource.ExecutionSummary
 	published bool
 }
@@ -42,20 +43,31 @@ func newExecutionResourceRecorder(ctx context.Context) *executionResourceRecorde
 	if root == nil {
 		return nil
 	}
-	return &executionResourceRecorder{root: root}
+	return &executionResourceRecorder{
+		root:  root,
+		stats: statistic.StatsInfoFromContext(ctx),
+	}
 }
 
 func (r *executionResourceRecorder) publish() {
 	if r != nil && !r.published {
+		if phases, ok := r.stats.ClaimRootPhaseResource(); ok {
+			r.execution.Quality |= phases.Quality |
+				resource.MergeUsage(&r.execution.Usage, phases.Usage)
+		}
 		r.root.MergeExecution(r.execution)
 		r.published = true
 	}
 }
 
 func beginAttemptMemory(pool *mpool.MPool) attemptMemoryRecorder {
+	// The coordinator uses the session MPool, which is shared by nested and
+	// background execution. Resetting its epoch here makes overlapping attempts
+	// erase each other's peaks. Until coordinator attempts own isolated pools,
+	// leave this domain explicitly missing instead of publishing a false peak.
 	return attemptMemoryRecorder{
 		pool:  pool,
-		exact: pool != nil && pool.ResetResourceEpoch(),
+		exact: false,
 	}
 }
 
@@ -77,11 +89,6 @@ func (r *executionResourceRecorder) finishAttempt(
 	attempt := resource.NewAttempt(generation, 0, 1)
 	requireMemoryReport := attempt.MarkMemoryDomainDispatched(0)
 	delta := collectScopeResourceDelta(scopes, localAddress)
-	if generation == 0 && stats != nil {
-		if phases, ok := stats.ClaimRootPhaseResource(); ok {
-			delta.Quality |= phases.Quality | resource.MergeUsage(&delta.Usage, phases.Usage)
-		}
-	}
 	remoteUsage, remoteMemory, remoteQuality, remoteReports := anal.remoteResourceSummary()
 	delta.Quality |= remoteQuality | resource.MergeUsage(&delta.Usage, remoteUsage)
 	if expected := countExpectedRemoteScopes(scopes, localAddress); remoteReports < expected {
