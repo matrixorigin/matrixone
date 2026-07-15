@@ -437,8 +437,9 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId        uuid.UUID
-	prepareParams *vector.Vector
+	StmtId             uuid.UUID
+	prepareParams      *vector.Vector
+	prepareParamsIsBin []bool
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -565,7 +566,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.SetPrepareParams(pHelper.prepareParams)
+	proc.SetPrepareParamsWithIsBin(pHelper.prepareParams, pHelper.prepareParamsIsBin)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
@@ -693,6 +694,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 				result.prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
+		result.prepareParamsIsBin = append(result.prepareParamsIsBin, procInfo.PrepareParams.IsBin...)
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {

@@ -138,11 +138,14 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
 	execCtx := &ExecCtx{
 		reqCtx: ctx,
+		ses:    ses,
+		proc:   proc,
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
 		},
 	}
+	ses.txnCompileCtx.execCtx = execCtx
 	return ses, prepareStmt, cw, execCtx
 }
 
@@ -152,6 +155,17 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 
 	require.NoError(t, ses.setUserDefinedVar("binary_param", "AB\x00\x00", "", true))
 	require.NoError(t, ses.SetUserDefinedVar("text_param", "text", ""))
+	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("binary_param", false, false)
+	require.NoError(t, err)
+	require.True(t, isBin)
+	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("text_param", false, false)
+	require.NoError(t, err)
+	require.False(t, isBin)
+	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("system_var", true, false)
+	require.NoError(t, err)
+	require.False(t, isBin)
+	_, err = ses.txnCompileCtx.ResolveVariableIsBin("missing", false, false)
+	require.Error(t, err)
 	cw.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		variable, err := ses.GetUserDefinedVar(name)
 		if err != nil {
@@ -167,7 +181,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))

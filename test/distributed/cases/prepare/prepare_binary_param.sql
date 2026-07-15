@@ -24,13 +24,15 @@ insert into scanned_values values (1, 0x41420000, 'scanned'), (2, 0x43440000, 'o
 prepare indexed_lookup from 'select id, hex(b), label from indexed_values where b = ? and label = ?';
 prepare scanned_lookup from 'select id, hex(b), label from scanned_values where b = ? and label = ?';
 
-set @binary_value = (0x41420000);
+set @binary_source = (0x41420000);
+set @binary_value = @binary_source;
 set @indexed_label = 'indexed';
 set @scanned_label = 'scanned';
 execute indexed_lookup using @binary_value, @indexed_label;
 execute scanned_lookup using @binary_value, @scanned_label;
 
-set @binary_value = 'AB';
+set @text_source = 'AB';
+set @binary_value = @text_source;
 execute indexed_lookup using @binary_value, @indexed_label;
 execute scanned_lookup using @binary_value, @scanned_label;
 

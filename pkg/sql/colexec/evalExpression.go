@@ -361,10 +361,20 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err != nil {
 		return nil, err
 	}
+	isBin := false
+	if resolveIsBin := proc.GetResolveVariableIsBinFunc(); resolveIsBin != nil {
+		isBin, err = resolveIsBin(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if val == nil {
 		if expr.null == nil {
 			expr.null, err = util.GenVectorByVarValue(proc, expr.typ, nil)
+		}
+		if err == nil {
+			expr.null.SetIsBin(isBin)
 		}
 		return expr.null, err
 	}
@@ -380,6 +390,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		default:
 			err = vector.SetConstBytes(expr.vec, util2.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, proc.GetMPool())
 		}
+	}
+	if err == nil {
+		expr.vec.SetIsBin(isBin)
 	}
 	return expr.vec, err
 }

@@ -323,20 +323,21 @@ type BaseProcess struct {
 	PartitionService partitionservice.PartitionService
 	IncrService      incrservice.AutoIncrementService
 
-	LastInsertID        *uint64
-	LoadLocalReader     *io.PipeReader
-	Aicm                *defines.AutoIncrCacheManager
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-	prepareParamsIsBin  []bool
-	QueryClient         qclient.QueryClient
-	Hakeeper            logservice.CNHAKeeperClient
-	UdfService          udf.Service
-	WaitPolicy          lock.WaitPolicy
-	messageBoard        *message.MessageBoard
-	logger              *log.MOLogger
-	TxnOperator         client.TxnOperator
-	CloneTxnOperator    client.TxnOperator
+	LastInsertID             *uint64
+	LoadLocalReader          *io.PipeReader
+	Aicm                     *defines.AutoIncrCacheManager
+	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	prepareParams            *vector.Vector
+	prepareParamsIsBin       []bool
+	QueryClient              qclient.QueryClient
+	Hakeeper                 logservice.CNHAKeeperClient
+	UdfService               udf.Service
+	WaitPolicy               lock.WaitPolicy
+	messageBoard             *message.MessageBoard
+	logger                   *log.MOLogger
+	TxnOperator              client.TxnOperator
+	CloneTxnOperator         client.TxnOperator
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -486,6 +487,14 @@ func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
+}
+
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

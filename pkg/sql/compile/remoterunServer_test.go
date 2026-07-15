@@ -26,6 +26,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -194,6 +196,11 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+	sourceProc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, sourceProc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, sourceProc.Mp()))
+	t.Cleanup(func() { params.Free(sourceProc.Mp()) })
 
 	receiver := &messageReceiverOnServer{
 		colexecServer: colexec.GetServer(""),
@@ -204,11 +211,13 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:          "test-proc-id",
-			accountId:   catalog.System_Account,
-			unixTime:    time.Now().Unix(),
-			txnClient:   txnClient,
-			txnOperator: txnOperator,
+			id:                 "test-proc-id",
+			accountId:          catalog.System_Account,
+			unixTime:           time.Now().Unix(),
+			txnClient:          txnClient,
+			txnOperator:        txnOperator,
+			prepareParams:      params,
+			prepareParamsIsBin: []bool{true, false},
 		},
 		messageAcquirer: func() morpc.Message {
 			return &pipeline.Message{}
@@ -221,6 +230,10 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Equal(t, "test-addr", compile.addr)
 	require.Equal(t, mockEngine, compile.e)
 	require.NotNil(t, compile.proc)
+	require.Equal(t, "AB\x00\x00", compile.proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
+	require.True(t, compile.proc.GetPrepareParamIsBin(0))
+	require.False(t, compile.proc.GetPrepareParamIsBin(1))
 	require.NotNil(t, compile.fill, "fill callback should be set")
 }
 
@@ -287,6 +300,12 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	txnClient.EXPECT().NewWithSnapshot(gomock.Any()).Return(txnOperator, nil).Times(1)
 
 	// Create a valid ProcessInfo
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
 	procInfo := &pipeline.ProcessInfo{
 		Id:        "test-proc-id",
 		AccountId: catalog.System_Account,
@@ -295,6 +314,13 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
 			},
+		},
+		PrepareParams: pipeline.PrepareParamInfo{
+			Length: 2,
+			Data:   append([]byte(nil), params.GetData()...),
+			Area:   append([]byte(nil), params.GetArea()...),
+			Nulls:  []bool{false, false},
+			IsBin:  []bool{true, false},
 		},
 	}
 
@@ -305,6 +331,9 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "test-proc-id", helper.id)
 	require.Equal(t, catalog.System_Account, helper.accountId)
+	require.Equal(t, []bool{true, false}, helper.prepareParamsIsBin)
+	require.Equal(t, "AB\x00\x00", helper.prepareParams.GetStringAt(0))
+	require.Equal(t, "text", helper.prepareParams.GetStringAt(1))
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")

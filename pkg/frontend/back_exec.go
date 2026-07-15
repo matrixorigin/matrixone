@@ -361,6 +361,7 @@ func doComQueryInBack(
 	}
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
 	// Frontend back-exec — session-bound resolver. backSession is a
 	// frontend session without a client connection (NOT a system
 	// background task); all callers go through ses.GetBackgroundExec(...)
