@@ -34,7 +34,12 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-const maxSegmentedLogtailResponseSize = math.MaxInt32
+const (
+	maxSegmentedLogtailResponseSize = math.MaxInt32
+	// Deleted sessions are diagnostic history, not live owners. Keep the
+	// history bounded independently of connection churn.
+	maxDeletedSessionHistory = 1024
+)
 
 type TableState int
 
@@ -62,7 +67,12 @@ var (
 type SessionManager struct {
 	sync.RWMutex
 	clients        map[morpcStream]*Session
-	deletedClients []*Session
+	deletedClients []deletedSessionRecord
+}
+
+type deletedSessionRecord struct {
+	remote    string
+	deletedAt time.Time
 }
 
 // NewSessionManager constructs a session manager.
@@ -103,9 +113,49 @@ func (sm *SessionManager) DeleteSession(stream morpcStream) {
 	ss, ok := sm.clients[stream]
 	if ok {
 		delete(sm.clients, stream)
-		ss.deletedAt = time.Now()
-		sm.deletedClients = append(sm.deletedClients, ss)
+		deletedAt := time.Now()
+		ss.mu.Lock()
+		ss.deletedAt = deletedAt
+		remote := ss.stream.remote
+		ss.mu.Unlock()
+		sm.recordDeletedSession(deletedSessionRecord{
+			remote:    remote,
+			deletedAt: deletedAt,
+		})
 	}
+}
+
+// recordDeletedSession retains a bounded amount of lightweight diagnostic
+// history. In particular, it must never retain *Session: every live Session
+// owns an approximately 1 MiB response channel backing array.
+//
+// Drop the oldest half when the limit is reached. This keeps insertion
+// amortized O(1), preserves chronological order, and avoids doing an O(limit)
+// copy on every disconnect once the history is full.
+func (sm *SessionManager) recordDeletedSession(record deletedSessionRecord) {
+	if len(sm.deletedClients) == maxDeletedSessionHistory {
+		keep := maxDeletedSessionHistory / 2
+		copy(sm.deletedClients[:keep], sm.deletedClients[len(sm.deletedClients)-keep:])
+		clear(sm.deletedClients[keep:])
+		sm.deletedClients = sm.deletedClients[:keep]
+	}
+	sm.deletedClients = append(sm.deletedClients, record)
+}
+
+func (sm *SessionManager) pruneDeletedSessionsBefore(cutoff time.Time) {
+	sm.Lock()
+	defer sm.Unlock()
+
+	pos := 0
+	for pos < len(sm.deletedClients) && sm.deletedClients[pos].deletedAt.Before(cutoff) {
+		pos++
+	}
+	if pos == 0 {
+		return
+	}
+	copy(sm.deletedClients, sm.deletedClients[pos:])
+	clear(sm.deletedClients[len(sm.deletedClients)-pos:])
+	sm.deletedClients = sm.deletedClients[:len(sm.deletedClients)-pos]
 }
 
 func (sm *SessionManager) HasSession(stream morpcStream) bool {
@@ -142,12 +192,11 @@ func (sm *SessionManager) AddSession(id uint64) {
 }
 
 // AddDeletedSession is only for test.
-func (sm *SessionManager) AddDeletedSession(id uint64) {
+func (sm *SessionManager) AddDeletedSession(_ uint64) {
 	sm.Lock()
 	defer sm.Unlock()
-	stream := morpcStream{streamID: id}
-	sm.deletedClients = append(sm.deletedClients, &Session{
-		stream: stream,
+	sm.recordDeletedSession(deletedSessionRecord{
+		deletedAt: time.Now(),
 	})
 }
 
@@ -155,7 +204,12 @@ func (sm *SessionManager) DeletedSessions() []*Session {
 	sm.RLock()
 	defer sm.RUnlock()
 	sessions := make([]*Session, 0, len(sm.deletedClients))
-	sessions = append(sessions, sm.deletedClients...)
+	for _, record := range sm.deletedClients {
+		sessions = append(sessions, &Session{
+			stream:    morpcStream{remote: record.remote},
+			deletedAt: record.deletedAt,
+		})
+	}
 	return sessions
 }
 

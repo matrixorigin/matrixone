@@ -90,12 +90,6 @@ type wrapLogtail struct {
 	tail logtail.TableLogtail
 }
 
-// sessionError describes error when writing via morpc client session.
-type sessionError struct {
-	session *Session
-	err     error
-}
-
 // subscription describes new subscription.
 type subscription struct {
 	timeout    time.Duration
@@ -123,7 +117,14 @@ type LogtailServer struct {
 	ssmgr     *SessionManager
 	waterline *Waterliner
 
-	errChan chan sessionError // errChan has no buffer in order to improve sensitivity.
+	// errChan is only a coalescing wakeup. pendingSessionErrors owns the cleanup
+	// responsibility, so a busy reaper can never backpressure the global
+	// logtail publisher and a dropped wakeup can never lose a failed session.
+	errChan              chan struct{}
+	pendingSessionErrors struct {
+		sync.Mutex
+		items map[*Session]error
+	}
 
 	// subReqChan is the channel that contains the subscription request.
 	subReqChan chan subscription
@@ -146,10 +147,10 @@ type LogtailServer struct {
 	cancelFunc  context.CancelFunc
 	stopper     *stopper.Stopper
 	pullWorkers sync.WaitGroup
-	// shutdownMu prevents a phase-1 worker from handing a batch to subTailChan
-	// after Close has drained it. It is held only around the channel hand-off,
-	// never while collecting logtail data.
-	shutdownMu sync.RWMutex
+	// lifecycleMu prevents both session admission and phase-1 hand-off after
+	// Close has started its final drain. It is held only around ownership
+	// transfers, never while collecting logtail data or writing the transport.
+	lifecycleMu sync.RWMutex
 }
 
 func defaultRPCServerFactory(
@@ -199,12 +200,13 @@ func NewLogtailServer(
 		transportProbeInterval: defaultSessionHeartbeatInterval,
 		ssmgr:                  NewSessionManager(),
 		waterline:              NewWaterliner(),
-		errChan:                make(chan sessionError, 1),
+		errChan:                make(chan struct{}, 1),
 		subReqChan:             make(chan subscription, 100),
 		subTailChan:            make(chan *LogtailPhase, 300),
 		pullWorkerPool:         make(chan struct{}, cfg.PullWorkerPoolSize),
 		logtailer:              logtailer,
 	}
+	s.pendingSessionErrors.items = make(map[*Session]error)
 
 	for _, opt := range opts {
 		opt(s)
@@ -308,14 +310,10 @@ func (s *LogtailServer) onSubscription(
 	logger := s.logger
 
 	tableID := MarshalTableID(req.Table)
-	session := s.ssmgr.GetSession(
-		// FIXME: using s.cfg
-		s.rootCtx, logger, s.pool.responses, s, stream,
-		s.cfg.ResponseSendTimeout,
-		s.cfg.RPCStreamPoisonTime,
-		s.cfg.LogtailCollectInterval,
-		s.transportProbeInterval,
-	)
+	session, err := s.getSession(stream)
+	if err != nil {
+		return err
+	}
 
 	repeated, generation := session.RegisterWithGeneration(tableID, *req.Table)
 	if repeated {
@@ -337,7 +335,32 @@ func (s *LogtailServer) onSubscription(
 		session:    session,
 	}
 
+	retry := time.NewTicker(time.Second)
+	defer retry.Stop()
 	for {
+		// The hand-off is an ownership transition: after it succeeds the pull
+		// worker/Close drain owns the pending generation. Serialize it with the
+		// final shutdown drain, just like the phase-1 tail hand-off.
+		s.lifecycleMu.RLock()
+		if err := s.rootCtx.Err(); err != nil {
+			s.lifecycleMu.RUnlock()
+			logger.Error("logtail server context done", zap.Error(err))
+			return err
+		}
+		if err := sendCtx.Err(); err != nil {
+			s.lifecycleMu.RUnlock()
+			logger.Error("request context done", zap.Error(err))
+			return err
+		}
+		select {
+		case s.subReqChan <- sub:
+			s.lifecycleMu.RUnlock()
+			accepted = true
+			return nil
+		default:
+			s.lifecycleMu.RUnlock()
+		}
+
 		select {
 		case <-s.rootCtx.Done():
 			logger.Error("logtail server context done", zap.Error(s.rootCtx.Err()))
@@ -345,14 +368,11 @@ func (s *LogtailServer) onSubscription(
 		case <-sendCtx.Done():
 			logger.Error("request context done", zap.Error(sendCtx.Err()))
 			return sendCtx.Err()
-		case <-time.After(time.Second):
+		case <-retry.C:
 			logger.Error("cannot send subscription request, retry",
 				zap.Int("chan cap", cap(s.subReqChan)),
 				zap.Int("chan len", len(s.subReqChan)),
 			)
-		case s.subReqChan <- sub:
-			accepted = true
-			return nil
 		}
 	}
 }
@@ -362,14 +382,10 @@ func (s *LogtailServer) onUnsubscription(
 	sendCtx context.Context, stream morpcStream, req *logtail.UnsubscribeRequest,
 ) error {
 	tableID := MarshalTableID(req.Table)
-	session := s.ssmgr.GetSession(
-		// FIXME: using s.cfg
-		s.rootCtx, s.logger, s.pool.responses, s, stream,
-		s.cfg.ResponseSendTimeout,
-		s.cfg.RPCStreamPoisonTime,
-		s.cfg.LogtailCollectInterval,
-		s.transportProbeInterval,
-	)
+	session, err := s.getSession(stream)
+	if err != nil {
+		return err
+	}
 
 	state := session.Unregister(tableID)
 	if state == TableNotFound {
@@ -379,15 +395,63 @@ func (s *LogtailServer) onUnsubscription(
 	return session.CompleteUnsubscription(sendCtx, *req.Table, state)
 }
 
+// getSession admits a new live owner only while the server is running. The
+// read lock closes the check-then-insert race with Close's final session drain.
+func (s *LogtailServer) getSession(stream morpcStream) (*Session, error) {
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	if err := s.rootCtx.Err(); err != nil {
+		return nil, err
+	}
+	return s.ssmgr.GetSession(
+		// FIXME: using s.cfg
+		s.rootCtx, s.logger, s.pool.responses, s, stream,
+		s.cfg.ResponseSendTimeout,
+		s.cfg.RPCStreamPoisonTime,
+		s.cfg.LogtailCollectInterval,
+		s.transportProbeInterval,
+	), nil
+}
+
 // NotifySessionError notifies session manager with session error.
 func (s *LogtailServer) NotifySessionError(
 	session *Session, err error,
 ) {
+	if err == nil {
+		return
+	}
 	select {
 	case <-s.rootCtx.Done():
-		s.logger.Error("fail to notify session error", zap.Error(s.rootCtx.Err()))
-	case s.errChan <- sessionError{session: session, err: err}:
+		return
+	default:
 	}
+
+	s.pendingSessionErrors.Lock()
+	if s.rootCtx.Err() != nil {
+		s.pendingSessionErrors.Unlock()
+		return
+	}
+	s.pendingSessionErrors.items[session] = err
+	s.pendingSessionErrors.Unlock()
+
+	select {
+	case s.errChan <- struct{}{}:
+	default:
+	}
+}
+
+func (s *LogtailServer) takePendingSessionErrors() map[*Session]error {
+	s.pendingSessionErrors.Lock()
+	defer s.pendingSessionErrors.Unlock()
+	items := s.pendingSessionErrors.items
+	s.pendingSessionErrors.items = make(map[*Session]error)
+	return items
+}
+
+func (s *LogtailServer) clearPendingSessionErrors() {
+	s.pendingSessionErrors.Lock()
+	clear(s.pendingSessionErrors.items)
+	s.pendingSessionErrors.Unlock()
 }
 
 // sessionErrorHandler handles morpc client session writing error.
@@ -400,16 +464,13 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 			logger.Error("stop session error handler", zap.Error(ctx.Err()))
 			return
 
-		case e, ok := <-s.errChan:
-			if !ok {
-				logger.Info("session error channel closed")
-				return
-			}
-
-			// drop session directly
-			if e.err != nil && s.ssmgr.HasSession(e.session.stream) {
-				e.session.PostClean()
-				s.ssmgr.DeleteSession(e.session.stream)
+		case <-s.errChan:
+			for session, err := range s.takePendingSessionErrors() {
+				if s.ssmgr.HasSession(session.stream) {
+					logger.Info("remove failed logtail session", zap.Error(err))
+					session.PostClean()
+					s.ssmgr.DeleteSession(session.stream)
+				}
 			}
 		}
 	}
@@ -484,26 +545,26 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 }
 
 // enqueuePhase1Tail transfers a successful phase-1 result to the sender. Until
-// the transfer succeeds, this worker owns tail.closeCB. shutdownMu closes the
+// the transfer succeeds, this worker owns tail.closeCB. lifecycleMu closes the
 // hand-off race with Close: Close drains only after no worker can still enqueue.
 func (s *LogtailServer) enqueuePhase1Tail(ctx context.Context, tail *LogtailPhase) {
 	for {
-		s.shutdownMu.RLock()
+		s.lifecycleMu.RLock()
 		if s.rootCtx.Err() != nil || ctx.Err() != nil {
-			s.shutdownMu.RUnlock()
+			s.lifecycleMu.RUnlock()
 			releaseLogtailPhase(tail)
 			return
 		}
 		select {
 		case <-ctx.Done():
-			s.shutdownMu.RUnlock()
+			s.lifecycleMu.RUnlock()
 			releaseLogtailPhase(tail)
 			return
 		case s.subTailChan <- tail:
-			s.shutdownMu.RUnlock()
+			s.lifecycleMu.RUnlock()
 			return
 		default:
-			s.shutdownMu.RUnlock()
+			s.lifecycleMu.RUnlock()
 			s.logger.Warn("the queue of logtails of phase1 is full")
 			time.Sleep(time.Second)
 		}
@@ -705,19 +766,7 @@ func (s *LogtailServer) gcDeletedSessions(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			func() {
-				s.ssmgr.Lock()
-				defer s.ssmgr.Unlock()
-				var pos int
-				for i := range s.ssmgr.deletedClients {
-					if time.Since(s.ssmgr.deletedClients[i].deletedAt) > gcTimeout {
-						pos++
-					} else {
-						break
-					}
-				}
-				s.ssmgr.deletedClients = s.ssmgr.deletedClients[pos:]
-			}()
+			s.ssmgr.pruneDeletedSessionsBefore(time.Now().Add(-gcTimeout))
 		}
 	}
 }
@@ -732,21 +781,37 @@ func (s *LogtailServer) Close() error {
 	// race a new worker. Every admitted phase-1 worker must finish before its
 	// logtailer dependency or queued ownership can be torn down.
 	s.pullWorkers.Wait()
-	// Session senders are not stopper tasks. Stop and drain every session so
-	// responses accepted before rootCtx cancellation release their closeCBs.
+	// Block admission before taking the final session snapshot. Session senders
+	// are not stopper tasks, so stop and drain each one explicitly.
+	s.lifecycleMu.Lock()
+	s.drainSubscriptionRequests()
 	for _, session := range s.ssmgr.ListSession() {
 		session.PostClean()
 		s.ssmgr.DeleteSession(session.stream)
 	}
-	// No pull worker can enqueue while this lock is held. Drain every phase-1
+	// No handler or pull worker can transfer new ownership while this lock is
+	// held. Drain every phase-1
 	// batch left behind by a stopped sender before returning ownership.
-	s.shutdownMu.Lock()
 	s.drainPhase1Tails()
-	s.shutdownMu.Unlock()
+	s.lifecycleMu.Unlock()
+	s.clearPendingSessionErrors()
 	// The sender has stopped, so no queued event can still transfer its batch
 	// ownership to a response. Release every remaining callback here.
 	s.event.Drain()
 	return s.rpc.Close()
+}
+
+func (s *LogtailServer) drainSubscriptionRequests() {
+	for {
+		select {
+		case sub := <-s.subReqChan:
+			if sub.session != nil {
+				sub.session.unregisterGeneration(sub.tableID, sub.generation)
+			}
+		default:
+			return
+		}
+	}
 }
 
 func (s *LogtailServer) drainPhase1Tails() {

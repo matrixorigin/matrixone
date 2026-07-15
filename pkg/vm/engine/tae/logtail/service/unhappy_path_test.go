@@ -459,7 +459,7 @@ func TestFailedUnsubscriptionResponseStillRemovesActiveOwnership(t *testing.T) {
 }
 
 func TestPublishEventDoesNotWaitForSlowSessionQueue(t *testing.T) {
-	server := newUnitLogtailServer(t, &controlledLogtailer{})
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
 	transport := newCaptureSession()
 	ctx, cancel := context.WithCancel(server.rootCtx)
 	t.Cleanup(cancel)
@@ -485,6 +485,10 @@ func TestPublishEventDoesNotWaitForSlowSessionQueue(t *testing.T) {
 	// A full queue represents a session whose sender cannot make progress.
 	slow.sendChan <- message{response: responses.Acquire()}
 	server.ssmgr.clients[slow.stream] = slow
+	// A pending wakeup represents a reaper that is already busy cleaning a
+	// different failed session. Error reporting must still not feed that delay
+	// back into the global publisher.
+	server.errChan <- struct{}{}
 
 	done := make(chan struct{})
 	go func() {
@@ -503,6 +507,44 @@ func TestPublishEventDoesNotWaitForSlowSessionQueue(t *testing.T) {
 		cancel()
 		<-done
 		t.Fatal("one slow session blocked the global logtail publisher")
+	}
+	server.pendingSessionErrors.Lock()
+	_, cleanupRetained := server.pendingSessionErrors.items[slow]
+	server.pendingSessionErrors.Unlock()
+	require.True(t, cleanupRetained,
+		"non-blocking notification must retain cleanup responsibility")
+}
+
+func TestServerRejectsSessionAdmissionAfterShutdownStarts(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*LogtailServer, morpcStream, api.TableID) error
+	}{
+		{
+			name: "subscribe",
+			call: func(server *LogtailServer, stream morpcStream, table api.TableID) error {
+				return server.onSubscription(
+					context.Background(), stream, &logtail.SubscribeRequest{Table: &table})
+			},
+		},
+		{
+			name: "unsubscribe",
+			call: func(server *LogtailServer, stream morpcStream, table api.TableID) error {
+				return server.onUnsubscription(
+					context.Background(), stream, &logtail.UnsubscribeRequest{Table: &table})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
+			server.cancelFunc()
+			transport := newCaptureSession()
+			err := test.call(server, newCaptureStream(transport), mockTable(1, 1, 1))
+			require.ErrorIs(t, err, context.Canceled)
+			require.Empty(t, server.ssmgr.ListSession(),
+				"shutdown must close the check-then-insert admission race")
+		})
 	}
 }
 
@@ -580,6 +622,20 @@ func TestLogtailServerCloseReleasesQueuedSessionResponse(t *testing.T) {
 
 	require.NoError(t, server.Close())
 	require.Equal(t, int32(1), released.Load())
+}
+
+func TestLogtailServerCloseDrainsQueuedSubscription(t *testing.T) {
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
+	transport := newCaptureSession()
+	table := mockTable(1, 1, 1)
+	require.NoError(t, server.onSubscription(
+		context.Background(), newCaptureStream(transport),
+		&logtail.SubscribeRequest{Table: &table},
+	))
+	require.Len(t, server.subReqChan, 1)
+
+	require.NoError(t, server.Close())
+	require.Empty(t, server.subReqChan)
 }
 
 func TestPhaseTwoFailureReleasesPhaseOneTail(t *testing.T) {
