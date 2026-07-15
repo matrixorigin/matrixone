@@ -759,11 +759,15 @@ var _ FileCache = new(DiskCache)
 
 func (d *DiskCache) SetFile(
 	ctx context.Context,
-	path string,
+	filePath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) error {
-	diskPath := d.pathForFile(path)
-	_, err := d.writeFile(ctx, diskPath, openReader)
+	path, err := ParsePath(filePath)
+	if err != nil {
+		return err
+	}
+	diskPath := d.pathForFile(path.File)
+	_, err = d.writeFile(ctx, diskPath, openReader)
 	if err != nil {
 		return err
 	}
@@ -774,7 +778,11 @@ func (d *DiskCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
 ) (err error) {
-	for _, path := range paths {
+	canonical, err := canonicalFilePaths(paths)
+	if err != nil {
+		return err
+	}
+	for _, path := range canonical {
 		//TODO also delete IOEntry files
 		if err = d.removeOnePath(ctx, path); err != nil {
 			return
