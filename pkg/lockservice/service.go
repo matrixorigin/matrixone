@@ -1152,10 +1152,13 @@ type mapBasedTxnHolder struct {
 	serviceID string
 	logger    *log.MOLogger
 	fsp       *fixedSlicePool
-	validTxn  func(txn pb.WaitTxn) (bool, error)
-	valid     func(sid string) (bool, error)
-	notify    func([]pb.OrphanTxn) (pb.CannotCommitResponse, error)
-	mu        struct {
+	// validTxn returns an authoritative liveness result only when err is nil.
+	// Any error means the remote transaction state is unknown; transport
+	// reachability is not evidence that the transaction is inactive.
+	validTxn func(txn pb.WaitTxn) (bool, error)
+	valid    func(sid string) (bool, error)
+	notify   func([]pb.OrphanTxn) (pb.CannotCommitResponse, error)
+	mu       struct {
 		sync.RWMutex
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
@@ -1436,21 +1439,24 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 		return true
 	}
 
-	valid, err := h.validTxn(txn)
-	if err == nil {
-		if valid {
-			return true
-		}
-		// A remote CN active-txn miss does not prove the txn is safe to unlock.
-		// The commit response may be lost after TN has already committed it, so
-		// require the allocator to confirm the txn cannot still be committing.
-		canUnlock, _ := h.canUnlockRemoteTxn(txn)
-		return !canUnlock
-	}
-	logValidTxnFailed(h.logger, txn, err)
-	if isRetryError(err) {
+	active, err := h.validTxn(txn)
+	if err != nil {
+		// A failed observation cannot establish transaction liveness. In
+		// particular, BackendClosed also represents transient MORPC pool and
+		// creation states; fencing on it can abort a healthy remote transaction.
+		// Keep the holder for this cycle. The waiter checker retries periodically,
+		// while a genuinely dead service is still reclaimed by the independent
+		// remote-bind heartbeat timeout path.
+		logValidTxnFailed(h.logger, txn, err)
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("indeterminate").Inc()
 		return true
 	}
+	if active {
+		return true
+	}
+	// A remote CN active-txn miss does not prove the txn is safe to unlock.
+	// The commit response may be lost after TN has already committed it, so
+	// require the allocator to confirm the txn cannot still be committing.
 	canUnlock, _ := h.canUnlockRemoteTxn(txn)
 	return !canUnlock
 }
