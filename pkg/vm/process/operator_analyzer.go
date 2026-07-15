@@ -16,12 +16,14 @@ package process
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 )
 
 type MetricType int
@@ -198,31 +200,40 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 		panic("operatorAnalyzer.Stop: operatorAnalyzer.opStats is nil")
 	}
 
-	// Calculate waiting time and total time consumption
+	// Calculate producer-local exclusive active time. Child calls and waits are
+	// subtracted only from the Call interval that observed them.
 	waitDuration := opAlyzr.wait
-
 	opDuration := time.Since(opAlyzr.start)
-	totalDuration := opDuration - waitDuration - opAlyzr.childrenCallDuration
-
-	// Check if the time consumption is legal
-	// In rare cases (clock adjustments, timing precision issues), this could be slightly negative
-	// Clamp to 0 instead of panicking
-	if totalDuration < 0 {
-		//str := fmt.Sprintf("opName:%s, opDuration: %v, waitDuration:%v, childrenCallDuration:%v , start:%v, end:%v\n",
-		//	opAlyzr.opStats.OperatorName,
-		//	opDuration,
-		//	waitDuration,
-		//	opAlyzr.childrenCallDuration,
-		//	opAlyzr.start,
-		//	time.Now())
-		//panic("Time consumed by the operator cannot be less than 0, " + str)
-		totalDuration = 0
+	if opDuration < 0 || waitDuration < 0 || opAlyzr.childrenCallDuration < 0 {
+		opAlyzr.opStats.ResourceQuality |= resource.QualityInvariantFailure
+	} else {
+		active, flags := resource.ExclusiveActive(
+			uint64(opDuration.Nanoseconds()),
+			uint64(waitDuration.Nanoseconds()),
+			uint64(opAlyzr.childrenCallDuration.Nanoseconds()),
+		)
+		opAlyzr.opStats.ResourceQuality |= flags
+		opAlyzr.opStats.TimeConsumed = addResourceInt64(
+			opAlyzr.opStats.TimeConsumed, active, &opAlyzr.opStats.ResourceQuality)
 	}
 
 	// Update the statistical information of the operation analyzer
-	opAlyzr.opStats.WaitTimeConsumed += waitDuration.Nanoseconds()
-	opAlyzr.opStats.TimeConsumed += totalDuration.Nanoseconds()
+	if waitDuration >= 0 {
+		opAlyzr.opStats.WaitTimeConsumed = addResourceInt64(
+			opAlyzr.opStats.WaitTimeConsumed,
+			uint64(waitDuration.Nanoseconds()),
+			&opAlyzr.opStats.ResourceQuality,
+		)
+	}
 	opAlyzr.opStats.CallNum++
+}
+
+func addResourceInt64(current int64, delta uint64, flags *resource.QualityFlags) int64 {
+	if current < 0 || delta > math.MaxInt64 || current > math.MaxInt64-int64(delta) {
+		*flags |= resource.QualityInvariantFailure
+		return math.MaxInt64
+	}
+	return current + int64(delta)
 }
 
 func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
@@ -400,6 +411,7 @@ func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet
 
 	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
 	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+	opAlyzr.opStats.S3WriteSize += counter.FileService.S3WriteSize.Load()
 	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
 }
 
@@ -448,24 +460,26 @@ func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 }
 
 type OperatorStats struct {
-	OperatorName     string `json:"-"`
-	CallNum          int    `json:"CallCount,omitempty"`
-	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
-	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
-	MemorySize       int64  `json:"MemorySize,omitempty"`
-	SpillSize        int64  `json:"SpillSize,omitempty"`
-	SpillRows        int64  `json:"SpillRows,omitempty"`
-	InputRows        int64  `json:"InputRows,omitempty"`
-	InputSize        int64  `json:"InputSize,omitempty"`
-	OutputRows       int64  `json:"OutputRows,omitempty"`
-	OutputSize       int64  `json:"OutputSize,omitempty"`
-	NetworkIO        int64  `json:"NetworkIO,omitempty"`
-	DiskIO           int64  `json:"DiskIO,omitempty"`
+	OperatorName     string                `json:"-"`
+	CallNum          int                   `json:"CallCount,omitempty"`
+	TimeConsumed     int64                 `json:"TimeConsumed,omitempty"`
+	WaitTimeConsumed int64                 `json:"WaitTimeConsumed,omitempty"`
+	MemorySize       int64                 `json:"MemorySize,omitempty"`
+	SpillSize        int64                 `json:"SpillSize,omitempty"`
+	SpillRows        int64                 `json:"SpillRows,omitempty"`
+	InputRows        int64                 `json:"InputRows,omitempty"`
+	InputSize        int64                 `json:"InputSize,omitempty"`
+	OutputRows       int64                 `json:"OutputRows,omitempty"`
+	OutputSize       int64                 `json:"OutputSize,omitempty"`
+	NetworkIO        int64                 `json:"NetworkIO,omitempty"`
+	DiskIO           int64                 `json:"DiskIO,omitempty"`
+	ResourceQuality  resource.QualityFlags `json:"-"`
 
 	InputBlocks  int64 `json:"-"`
 	ScanBytes    int64 `json:"-"`
 	ReadSize     int64 `json:"ReadSize,omitempty"`     // ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
 	S3ReadSize   int64 `json:"S3ReadSize,omitempty"`   // S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
+	S3WriteSize  int64 `json:"S3WriteSize,omitempty"`  // S3WriteSize: actual bytes accepted by object storage
 	DiskReadSize int64 `json:"DiskReadSize,omitempty"` // DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
 	WrittenRows  int64 `json:"WrittenRows,omitempty"`  // WrittenRows Used to estimate S3input
 	DeletedRows  int64 `json:"DeletedRows,omitempty"`  // DeletedRows Used to estimate S3input
@@ -520,6 +534,43 @@ type OperatorStats struct {
 	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 
 	BackgroundQueries []*plan.Query `json:"BackgroundQueries,omitempty"`
+}
+
+// ResourceDelta returns the producer facts owned by this analyzer. Operator
+// memory is deliberately excluded; exact memory comes from the isolated MPool
+// domain.
+func (ps *OperatorStats) ResourceDelta() resource.Delta {
+	var delta resource.Delta
+	delta.Quality = ps.ResourceQuality
+	add := func(value int64, target *uint64) {
+		if value < 0 {
+			delta.Quality |= resource.QualityInvariantFailure
+			return
+		}
+		*target = uint64(value)
+	}
+	add(ps.TimeConsumed, &delta.Usage.ExclusiveActiveNS)
+	lockWait := int64(0)
+	if ps.OperatorMetrics != nil {
+		lockWait = ps.OperatorMetrics[OpWaitLockTime]
+	}
+	if lockWait < 0 || ps.WaitTimeConsumed < lockWait {
+		delta.Quality |= resource.QualityInvariantFailure
+		add(ps.WaitTimeConsumed, &delta.Usage.WaitNS[resource.WaitOther])
+	} else {
+		add(lockWait, &delta.Usage.WaitNS[resource.WaitLock])
+		add(ps.WaitTimeConsumed-lockWait, &delta.Usage.WaitNS[resource.WaitOther])
+	}
+	add(ps.SpillSize, &delta.Usage.SpillBytes)
+	add(ps.S3ReadSize, &delta.Usage.S3ReadBytes)
+	add(ps.S3WriteSize, &delta.Usage.S3WriteBytes)
+	add(ps.S3Head, &delta.Usage.S3Requests[resource.S3Head])
+	add(ps.S3Get, &delta.Usage.S3Requests[resource.S3Get])
+	add(ps.S3Put, &delta.Usage.S3Requests[resource.S3Put])
+	add(ps.S3List, &delta.Usage.S3Requests[resource.S3List])
+	add(ps.S3Delete, &delta.Usage.S3Requests[resource.S3Delete])
+	add(ps.S3DeleteMul, &delta.Usage.S3Requests[resource.S3DeleteMulti])
+	return delta
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {

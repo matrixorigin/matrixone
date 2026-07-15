@@ -20,9 +20,41 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOperatorStatsResourceDelta(t *testing.T) {
+	stats := OperatorStats{
+		TimeConsumed:     10,
+		WaitTimeConsumed: 20,
+		SpillSize:        30,
+		S3ReadSize:       40,
+		S3WriteSize:      41,
+		S3Head:           1,
+		S3Get:            2,
+		S3Put:            3,
+		S3List:           4,
+		S3Delete:         5,
+		S3DeleteMul:      6,
+		OperatorMetrics:  map[MetricType]int64{OpWaitLockTime: 7},
+	}
+	delta := stats.ResourceDelta()
+	assert.Zero(t, delta.Quality)
+	assert.Equal(t, uint64(10), delta.Usage.ExclusiveActiveNS)
+	assert.Equal(t, uint64(7), delta.Usage.WaitNS[resource.WaitLock])
+	assert.Equal(t, uint64(13), delta.Usage.WaitNS[resource.WaitOther])
+	assert.Equal(t, uint64(30), delta.Usage.SpillBytes)
+	assert.Equal(t, uint64(40), delta.Usage.S3ReadBytes)
+	assert.Equal(t, uint64(41), delta.Usage.S3WriteBytes)
+	assert.Equal(t, [resource.S3OpCount]uint64{1, 2, 3, 4, 5, 6}, delta.Usage.S3Requests)
+
+	stats.TimeConsumed = -1
+	delta = stats.ResourceDelta()
+	assert.NotZero(t, delta.Quality&resource.QualityInvariantFailure)
+	assert.Zero(t, delta.Usage.ExclusiveActiveNS)
+}
 
 func Test_operatorAnalyzer_AddWaitLockTime(t *testing.T) {
 	type fields struct {

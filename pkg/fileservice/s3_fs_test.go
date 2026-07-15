@@ -189,6 +189,8 @@ func testS3FS(
 			},
 		})
 		assert.Nil(t, err)
+		assert.Equal(t, int64(3), counterSet.FileService.S3WriteSize.Load())
+		assert.Equal(t, int64(3), counterSet2.FileService.S3WriteSize.Load())
 
 		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
