@@ -3306,28 +3306,40 @@ func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
 
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	target := &plan.LockTarget{
-		TableId:  42,
-		ObjRef:   &plan.ObjectRef{Obj: 42, ObjName: "parent"},
-		Mode:     lockpb.LockMode_Shared,
-		LockRows: makePlan2Int64ConstExprWithType(7),
+		TableId:              42,
+		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},
+		Mode:                 lockpb.LockMode_Shared,
+		PrimaryColRelPos:     11,
+		FilterColRelPos:      12,
+		PartitionColIdxInBat: 13,
+		HasPartitionCol:      true,
+		LockRows:             makePlan2Int64ConstExprWithType(7),
+	}
+	assertScalarFields := func(t *testing.T, copied *plan.LockTarget) {
+		t.Helper()
+		assert.Equal(t, lockpb.LockMode_Shared, copied.Mode)
+		assert.Equal(t, int32(11), copied.PrimaryColRelPos)
+		assert.Equal(t, int32(12), copied.FilterColRelPos)
+		assert.Equal(t, int32(13), copied.PartitionColIdxInBat)
+		assert.True(t, copied.HasPartitionCol)
 	}
 
 	direct := DeepCopyLockTarget(target)
 	require.NotSame(t, target, direct)
-	assert.Equal(t, lockpb.LockMode_Shared, direct.Mode)
+	assertScalarFields(t, direct)
 	require.NotSame(t, target.ObjRef, direct.ObjRef)
 	require.NotSame(t, target.LockRows, direct.LockRows)
 
 	node := &plan.Node{NodeType: plan.Node_LOCK_OP, LockTargets: []*plan.LockTarget{target}}
 	nodeCopy := DeepCopyNode(node)
 	require.Len(t, nodeCopy.LockTargets, 1)
-	assert.Equal(t, lockpb.LockMode_Shared, nodeCopy.LockTargets[0].Mode)
+	assertScalarFields(t, nodeCopy.LockTargets[0])
 	require.NotSame(t, target, nodeCopy.LockTargets[0])
 
 	queryCopy := DeepCopyQuery(&plan.Query{Nodes: []*plan.Node{node}})
 	require.Len(t, queryCopy.Nodes, 1)
 	require.Len(t, queryCopy.Nodes[0].LockTargets, 1)
-	assert.Equal(t, lockpb.LockMode_Shared, queryCopy.Nodes[0].LockTargets[0].Mode)
+	assertScalarFields(t, queryCopy.Nodes[0].LockTargets[0])
 	require.NotSame(t, target, queryCopy.Nodes[0].LockTargets[0])
 }
 
