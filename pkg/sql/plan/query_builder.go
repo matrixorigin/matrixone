@@ -5384,13 +5384,43 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}
 	nodeID := builder.appendNode(node, ctx)
 
-	ctx.binder = NewTableBinder(builder, ctx)
+	if joinType == plan.Node_INNER {
+		ctx.binder = NewJoinOnBinder(builder, ctx)
+	} else {
+		ctx.binder = NewTableBinder(builder, ctx)
+	}
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
 		joinConds, err := splitAndBindCondition(cond.Expr, NoAlias, ctx)
 		if err != nil {
 			return 0, err
+		}
+
+		// An INNER JOIN predicate is semantically equivalent to a WHERE
+		// predicate, so subqueries can be lowered through the same path. Keep
+		// them out of OnList: expression executors cannot execute Expr_Sub.
+		if joinType == plan.Node_INNER {
+			var onConds, filterConds []*plan.Expr
+			for _, cond := range joinConds {
+				if hasSubquery(cond) {
+					nodeID, cond, err = builder.flattenSubqueries(nodeID, cond, ctx)
+					if err != nil {
+						return 0, err
+					}
+					filterConds = append(filterConds, cond)
+				} else {
+					onConds = append(onConds, cond)
+				}
+			}
+			joinConds = onConds
+			if len(filterConds) > 0 {
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{nodeID},
+					FilterList: filterConds,
+				}, ctx)
+			}
 		}
 		node.OnList = joinConds
 
