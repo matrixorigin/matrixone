@@ -233,11 +233,26 @@ select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:0
 select least(cast('2020-01-01 00:00:00.26' as datetime(2)), cast('2020-01-01 00:00:00.3' as datetime(1)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale_reordered;
 ➤ least_mixed_datetime_scale_reordered[12,-1,0]  𝄀
 2020-01-01 00:00:00.25
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as timestamp(6)), '2020-01-01 00:00:00.123457') as greatest_datetime_timestamp_scale;
+➤ greatest_datetime_timestamp_scale[12,-1,0]  𝄀
+2020-01-01 00:00:00.123457
+select greatest(cast('2020-01-01 00:00:00.123456' as timestamp(6)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.123457') as greatest_datetime_timestamp_scale_reordered;
+➤ greatest_datetime_timestamp_scale_reordered[12,-1,0]  𝄀
+2020-01-01 00:00:00.123457
+select least(cast('2020-01-01 00:00:00.2' as datetime(1)), cast('2020-01-01 00:00:00.123456' as timestamp(6)), '2020-01-01 00:00:00.123455') as least_datetime_timestamp_scale;
+➤ least_datetime_timestamp_scale[12,-1,0]  𝄀
+2020-01-01 00:00:00.123455
+select least(cast('2020-01-01 00:00:00.123456' as timestamp(6)), cast('2020-01-01 00:00:00.2' as datetime(1)), '2020-01-01 00:00:00.123455') as least_datetime_timestamp_scale_reordered;
+➤ least_datetime_timestamp_scale_reordered[12,-1,0]  𝄀
+2020-01-01 00:00:00.123455
 select greatest(cast('2020-01-01' as date), cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as datetime(6))) as greatest_all_temporal_max_fsp;
 ➤ greatest_all_temporal_max_fsp[93,64,0]  𝄀
 2020-01-01 00:00:00.123456000
 select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as greatest_json_mixed_datetime_scale;
 ➤ greatest_json_mixed_datetime_scale[12,-1,0]  𝄀
+2020-01-01 00:00:00.25
+select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as least_json_mixed_datetime_scale;
+➤ least_json_mixed_datetime_scale[12,-1,0]  𝄀
 2020-01-01 00:00:00.25
 select cast(greatest(cast('2020-01-01' as date), cast('12:00:00.500000' as time(6)), concat(cast(current_date() as char), ' 13:00:00.250000')) as datetime) = cast(concat(cast(current_date() as char), ' 13:00:00.250000') as datetime) as greatest_date_time_varchar_preserves_time;
 ➤ greatest_date_time_varchar_preserves_time[-7,1,0]  𝄀

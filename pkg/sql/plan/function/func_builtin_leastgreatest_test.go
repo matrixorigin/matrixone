@@ -1266,7 +1266,7 @@ func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
 		return datetime
 	}
 	parseTimestamp := func(value string, scale int32) types.Timestamp {
-		timestamp, err := types.ParseTimestamp(time.Local, value, scale)
+		timestamp, err := types.ParseTimestamp(loc, value, scale)
 		require.NoError(t, err)
 		return timestamp
 	}
@@ -1332,6 +1332,16 @@ func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
 			expected: "2020-01-01 00:00:00.123457",
 		},
 		{
+			name: "greatest mixed datetime timestamp is permutation invariant",
+			fn:   greatestTemporalFn,
+			first: NewFunctionTestInput(timestampScale6,
+				[]types.Timestamp{parseTimestamp("2020-01-01 00:00:00.123456", 6)}, nil),
+			second: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.1", 1)}, nil),
+			text:     "2020-01-01 00:00:00.123457",
+			expected: "2020-01-01 00:00:00.123457",
+		},
+		{
 			name: "greatest date time varchar preserves time peer",
 			fn:   greatestTemporalFn,
 			first: NewFunctionTestInput(types.T_date.ToType(),
@@ -1360,6 +1370,36 @@ func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
 				[]types.Time{parseTime("12:00:00.500000", 6)}, nil),
 			text:     "2024-05-06 13:00:00.250000",
 			expected: "2024-05-06 13:00:00.250000",
+		},
+		{
+			name: "least json temporal overload keeps peer precision",
+			fn:   leastJSONTemporalFn,
+			first: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.3", 1)}, nil),
+			second: NewFunctionTestInput(datetimeScale2,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.26", 2)}, nil),
+			text:     "2020-01-01 00:00:00.25",
+			expected: "2020-01-01 00:00:00.25",
+		},
+		{
+			name: "least mixed datetime timestamp uses max scale",
+			fn:   leastTemporalFn,
+			first: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.2", 1)}, nil),
+			second: NewFunctionTestInput(timestampScale6,
+				[]types.Timestamp{parseTimestamp("2020-01-01 00:00:00.123456", 6)}, nil),
+			text:     "2020-01-01 00:00:00.123455",
+			expected: "2020-01-01 00:00:00.123455",
+		},
+		{
+			name: "least mixed datetime timestamp is permutation invariant",
+			fn:   leastTemporalFn,
+			first: NewFunctionTestInput(timestampScale6,
+				[]types.Timestamp{parseTimestamp("2020-01-01 00:00:00.123456", 6)}, nil),
+			second: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.2", 1)}, nil),
+			text:     "2020-01-01 00:00:00.123455",
+			expected: "2020-01-01 00:00:00.123455",
 		},
 		{
 			name: "least keeps varchar peer precision",

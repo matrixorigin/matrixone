@@ -135,8 +135,13 @@ select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 0
 select greatest(cast('2020-01-01 00:00:00.24' as datetime(2)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale_reordered;
 select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale;
 select least(cast('2020-01-01 00:00:00.26' as datetime(2)), cast('2020-01-01 00:00:00.3' as datetime(1)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale_reordered;
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as timestamp(6)), '2020-01-01 00:00:00.123457') as greatest_datetime_timestamp_scale;
+select greatest(cast('2020-01-01 00:00:00.123456' as timestamp(6)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.123457') as greatest_datetime_timestamp_scale_reordered;
+select least(cast('2020-01-01 00:00:00.2' as datetime(1)), cast('2020-01-01 00:00:00.123456' as timestamp(6)), '2020-01-01 00:00:00.123455') as least_datetime_timestamp_scale;
+select least(cast('2020-01-01 00:00:00.123456' as timestamp(6)), cast('2020-01-01 00:00:00.2' as datetime(1)), '2020-01-01 00:00:00.123455') as least_datetime_timestamp_scale_reordered;
 select greatest(cast('2020-01-01' as date), cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as datetime(6))) as greatest_all_temporal_max_fsp;
 select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as greatest_json_mixed_datetime_scale;
+select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as least_json_mixed_datetime_scale;
 
 -- DATE + TIME needs a DATETIME peer target so VARCHAR/JSON time components
 -- survive packed-date comparison and formatting. TIME uses the statement date.
