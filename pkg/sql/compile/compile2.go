@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ import (
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -198,6 +200,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// update the top context with some trace information and values.
 	execTopContext, span := trace.Start(c.proc.GetTopContext(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
+	resourceRecorder := newExecutionResourceRecorder(execTopContext)
+	defer resourceRecorder.publish()
 
 	// statistical information record and trace.
 	runStart := time.Now()
@@ -244,14 +248,19 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
+	attemptStart := time.Now()
+	attemptMemory := beginAttemptMemory(runC.proc.Mp())
+	var carriedPreRunWall time.Duration
 	for {
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
+		var preRunWall time.Duration
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 		resetStatsInfoPreRun(stats, isInExecutor)
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
+			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			runC.MessageBoard.BeforeRunonce()
 			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
@@ -262,8 +271,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
 				}
+				resourceRecorder.finishAttempt(
+					uint64(retryTimes), attemptStart, preRunWall, stats,
+					runC.scopes, runC.anal, c.addr, resource.OutcomeSuccess, false, attemptMemory,
+				)
 				break
 			}
+		}
+		if preRunWall == 0 {
+			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 		}
 
 		c.fatalLog(retryTimes, err)
@@ -287,8 +303,17 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 					err = moerr.NewCannotCommitOrphan(execTopContext)
 				}
 			}
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, preRunWall, stats,
+				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false, attemptMemory,
+			)
 			return nil, err
 		}
+
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, preRunWall, stats,
+			runC.scopes, runC.anal, c.addr, resourceOutcome(err), true, attemptMemory,
+		)
 
 		retryTimes++
 		if runC != c {
@@ -318,13 +343,23 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 		}
 
+		attemptStart = time.Now()
+		attemptMemory = beginAttemptMemory(c.proc.Mp())
+		retryPrepareStart := time.Now()
 		if runC, err = c.prepareRetry(defChanged || forcePreMode); err != nil {
+			carriedPreRunWall = time.Since(retryPrepareStart)
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, carriedPreRunWall, stats,
+				nil, nil, c.addr, resourceOutcome(err), false, attemptMemory,
+			)
 			return nil, err
 		}
+		carriedPreRunWall = time.Since(retryPrepareStart)
 
 		// rebuild context for the retry.
 		runC.InitPipelineContextToRetryQuery()
 	}
+	resourceRecorder.publish()
 
 	if err = runC.proc.GetQueryContextError(); err != nil {
 		return nil, err
@@ -356,6 +391,17 @@ func releaseRetryCompile(c *Compile) {
 	prepareParams := proc.DetachPrepareParams()
 	defer proc.RestorePrepareParams(prepareParams)
 	c.Release()
+}
+
+func resourceOutcome(err error) resource.Outcome {
+	if err == nil {
+		return resource.OutcomeSuccess
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
+		return resource.OutcomeCanceled
+	}
+	return resource.OutcomeError
 }
 
 // rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'

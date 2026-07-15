@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -248,15 +249,21 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		var runErr error
 		defer func() {
+			receiver.resourceDelta = collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
+			receiver.resourceDelta.Outcome = resourceOutcome(runErr)
+			memoryPool := runCompile.proc.Mp()
 			runCompile.clear()
+			receiver.resourceMemory, receiver.resourceMemoryQuality = memoryPool.ResourceSnapshot()
+			mpool.DeleteMPool(memoryPool)
 			runCompile.Release()
 		}()
 
 		// decode and running the pipeline.
-		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
-		if err != nil {
-			return err
+		s, runErr := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
+		if runErr != nil {
+			return runErr
 		}
 		if !receiver.needNotReply {
 			s = appendWriteBackOperator(runCompile, s)
@@ -277,9 +284,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
 
-		registrations, err := registerRemoteDispatchReceivers(s)
-		if err != nil {
-			return err
+		registrations, runErr := registerRemoteDispatchReceivers(s)
+		if runErr != nil {
+			return runErr
 		}
 		defer registrations.cleanup()
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
@@ -292,12 +299,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
-		err = s.MergeRun(runCompile)
-		if err == nil {
+		runErr = s.MergeRun(runCompile)
+		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
-		return err
+		return runErr
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
@@ -529,7 +536,10 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan *models.PhyPlan
+	phyPlan               *models.PhyPlan
+	resourceDelta         resource.Delta
+	resourceMemory        resource.MemoryDomainSummary
+	resourceMemoryQuality resource.QualityFlags
 }
 
 func newMessageReceiverOnServer(
@@ -704,6 +714,9 @@ func (receiver *messageReceiverOnServer) sendError(
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
+	if err = receiver.setTerminalAnalysis(message); err != nil {
+		return err
+	}
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
@@ -763,13 +776,26 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 
-	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
+	if err = receiver.setTerminalAnalysis(message); err != nil {
+		return err
+	}
+
+	return receiver.clientSession.Write(receiver.messageCtx, message)
+}
+
+func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
+	envelope := remoteTerminalEnvelope{
+		Plan:          receiver.phyPlan,
+		Delta:         receiver.resourceDelta,
+		Memory:        receiver.resourceMemory,
+		MemoryQuality: receiver.resourceMemoryQuality,
+	}
+	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
-	message.SetAnalysis(jsonData)
-
-	return receiver.clientSession.Write(receiver.messageCtx, message)
+	message.SetAnalysis(data)
+	return nil
 }
 
 func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {

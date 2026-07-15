@@ -107,7 +107,7 @@ type ExecutionSummary struct {
 // true only when the execution actually proceeds to another attempt.
 func (s *ExecutionSummary) AddAttempt(attempt AttemptSummary, retried bool) {
 	s.Quality |= attempt.Quality | MergeUsage(&s.Usage, attempt.Usage)
-	s.Quality |= mergeMemoryTotals(&s.Memory, attempt.Memory)
+	s.Quality |= MergeMemoryTotals(&s.Memory, attempt.Memory)
 	s.AttemptCount, s.Quality = addChecked(s.AttemptCount, 1, s.Quality)
 	if retried {
 		s.RetryWallNS, s.Quality = addChecked(s.RetryWallNS, attempt.WallNS, s.Quality)
@@ -148,7 +148,7 @@ type StatementResourceSummary struct {
 // MergeExecution merges one sealed logical execution into its root.
 func (s *StatementResourceSummary) MergeExecution(execution ExecutionSummary) {
 	s.Quality |= execution.Quality | MergeUsage(&s.Usage, execution.Usage)
-	s.Quality |= mergeMemoryTotals(&s.Memory, execution.Memory)
+	s.Quality |= MergeMemoryTotals(&s.Memory, execution.Memory)
 	s.AttemptCount, s.Quality = addChecked(s.AttemptCount, execution.AttemptCount, s.Quality)
 	s.RetryWallNS, s.Quality = addChecked(s.RetryWallNS, execution.RetryWallNS, s.Quality)
 	s.MissingFragmentCount, s.Quality = addChecked(
@@ -162,7 +162,7 @@ func (s *StatementResourceSummary) MergeExecution(execution ExecutionSummary) {
 // are explicitly flagged.
 func (s *StatementResourceSummary) Merge(other StatementResourceSummary) {
 	s.Quality |= other.Quality | QualityAggregated | MergeUsage(&s.Usage, other.Usage)
-	s.Quality |= mergeMemoryTotals(&s.Memory, other.Memory)
+	s.Quality |= MergeMemoryTotals(&s.Memory, other.Memory)
 	s.StatementWallNS, s.Quality = addChecked(s.StatementWallNS, other.StatementWallNS, s.Quality)
 	s.AttemptCount, s.Quality = addChecked(s.AttemptCount, other.AttemptCount, s.Quality)
 	s.RetryWallNS, s.Quality = addChecked(s.RetryWallNS, other.RetryWallNS, s.Quality)
@@ -178,7 +178,8 @@ func (s *StatementResourceSummary) Merge(other StatementResourceSummary) {
 	}
 }
 
-func mergeMemoryTotals(dst *MemoryTotals, delta MemoryTotals) QualityFlags {
+// MergeMemoryTotals composes already-reduced physical memory domains.
+func MergeMemoryTotals(dst *MemoryTotals, delta MemoryTotals) QualityFlags {
 	var flags QualityFlags
 	dst.AllocatedBytes, flags = addChecked(dst.AllocatedBytes, delta.AllocatedBytes, flags)
 	dst.FreedBytes, flags = addChecked(dst.FreedBytes, delta.FreedBytes, flags)
