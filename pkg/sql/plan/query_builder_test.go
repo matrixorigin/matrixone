@@ -1046,6 +1046,14 @@ func TestQueryBuilder_bindOrderByNullDistinctRejectsFollowingMissingSelectExpr(t
 
 func bindDistinctOrderByForTest(sql string) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
 	builder, bindCtx := genBuilderAndCtx()
+	return bindDistinctOrderByWithTestContext(sql, builder, bindCtx)
+}
+
+func bindDistinctOrderByWithTestContext(
+	sql string,
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
 	bindCtx.isDistinct = true
 	bindCtx.projectTag = builder.genNewBindTag()
 
@@ -1115,6 +1123,58 @@ func TestQueryBuilder_bindOrderByDistinctDerivedAlias(t *testing.T) {
 	require.NotNil(t, boundOrderBys[0].Expr.GetF())
 	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
 	require.Len(t, bindCtx.projects, 1)
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedAggregateAliasDoesNotRebind(t *testing.T) {
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		"select distinct count(distinct a) as x from select_test.bind_select order by x + 1",
+	)
+	require.NoError(t, err)
+
+	require.Len(t, boundOrderBys, 1)
+	require.Len(t, bindCtx.aggregates, 1, "derived aliases must not bind their projected aggregate again")
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedSubqueryAliasDoesNotRebind(t *testing.T) {
+	builder, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		"select distinct (select 1) as x from select_test.bind_select order by x + 1",
+	)
+	require.NoError(t, err)
+
+	require.Len(t, boundOrderBys, 1)
+	require.Len(t, builder.qry.Nodes, 2, "derived aliases must not build their projected subquery again")
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedFullTextReturnsSyntaxError(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	_, _, _, _, err := bindDistinctOrderByWithTestContext(
+		"select distinct body from select_test.bind_select order by match(body) against('database')",
+		builder,
+		bindCtx,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	require.NotContains(t, err.Error(), "escaped projection scope")
+
+	builder, bindCtx = genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	_, _, _, _, err = bindDistinctOrderByWithTestContext(
+		"select distinct match(body) against('database') as score from select_test.bind_select order by match(body) against('database')",
+		builder,
+		bindCtx,
+	)
+	require.NoError(t, err, "an exact projected full-text expression must remain orderable")
+
+	builder, bindCtx = genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByWithTestContext(
+		"select distinct match(body) against('database') as score from select_test.bind_select order by not score",
+		builder,
+		bindCtx,
+	)
+	require.NoError(t, err, "a derived expression over a projected full-text alias must remain orderable")
+	require.Len(t, boundOrderBys, 1)
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedRejectsUnselectedInputs(t *testing.T) {
