@@ -1421,12 +1421,21 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 				f.F.Func.ObjName == plan2.NameClusterCenters ||
 				f.F.Func.ObjName == "approx_percentile") && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
+				if f.F.Func.ObjName == "approx_percentile" {
+					if err := validateApproxPercentileExpr(argExpr); err != nil {
+						panic(err)
+					}
+				}
 				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 				if err != nil {
 					panic(err)
 				}
 				if f.F.Func.ObjName == "approx_percentile" {
-					cfg = getPercentileConfig(vec)
+					cfg, err = getPercentileConfig(vec)
+					if err != nil {
+						free()
+						panic(err)
+					}
 				} else {
 					cfg = []byte(vec.GetStringAt(0))
 				}
@@ -1481,12 +1490,21 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 					f.F.Func.ObjName == plan2.NameClusterCenters ||
 					f.F.Func.ObjName == "approx_percentile") && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
+					if f.F.Func.ObjName == "approx_percentile" {
+						if err := validateApproxPercentileExpr(argExpr); err != nil {
+							panic(err)
+						}
+					}
 					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 					if err != nil {
 						panic(err)
 					}
 					if f.F.Func.ObjName == "approx_percentile" {
-						cfg = getPercentileConfig(vec)
+						cfg, err = getPercentileConfig(vec)
+						if err != nil {
+							free()
+							panic(err)
+						}
 					} else {
 						cfg = []byte(vec.GetStringAt(0))
 					}
@@ -2324,8 +2342,25 @@ func constructTableClone(
 	return metaCopy, nil
 }
 
+func validateApproxPercentileExpr(expr *plan.Expr) error {
+	if expr == nil || !rule.IsConstant(expr, true) {
+		return moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	return nil
+}
+
 // getPercentileConfig extracts the percentile value from a vector for approx_percentile.
-func getPercentileConfig(vec *vector.Vector) []byte {
+func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
+	if vec == nil || !vec.IsConst() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	if vec.Length() == 0 || vec.IsConstNull() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile cannot be NULL")
+	}
+
 	var p float64
 	switch vec.GetType().Oid {
 	case types.T_float64:
@@ -2343,7 +2378,12 @@ func getPercentileConfig(vec *vector.Vector) []byte {
 		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
 		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
 	default:
-		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
 	}
-	return []byte(strconv.FormatFloat(p, 'f', -1, 64))
+	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
+	}
+	return []byte(strconv.FormatFloat(p, 'f', -1, 64)), nil
 }

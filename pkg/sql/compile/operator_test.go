@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -254,36 +255,104 @@ func TestGetPercentileConfig(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	t.Run("float64", func(t *testing.T) {
-		vec := vector.NewVec(types.T_float64.ToType())
+		vec, err := vector.NewConstFixed(types.T_float64.ToType(), float64(0.95), 1, mp)
+		require.NoError(t, err)
 		defer vec.Free(mp)
-		require.NoError(t, vector.AppendFixed(vec, float64(0.95), false, mp))
-		cfg := getPercentileConfig(vec)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
 		require.Equal(t, "0.95", string(cfg))
 	})
 
 	t.Run("float32", func(t *testing.T) {
-		vec := vector.NewVec(types.T_float32.ToType())
+		vec, err := vector.NewConstFixed(types.T_float32.ToType(), float32(0.5), 1, mp)
+		require.NoError(t, err)
 		defer vec.Free(mp)
-		require.NoError(t, vector.AppendFixed(vec, float32(0.5), false, mp))
-		cfg := getPercentileConfig(vec)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
 		require.Equal(t, "0.5", string(cfg))
 	})
 
 	t.Run("int64", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, mp)
+		require.NoError(t, err)
 		defer vec.Free(mp)
-		require.NoError(t, vector.AppendFixed(vec, int64(0), false, mp))
-		cfg := getPercentileConfig(vec)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
 		require.Equal(t, "0", string(cfg))
 	})
 
 	t.Run("int32", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
+		require.NoError(t, err)
 		defer vec.Free(mp)
-		require.NoError(t, vector.AppendFixed(vec, int32(1), false, mp))
-		cfg := getPercentileConfig(vec)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
 		require.Equal(t, "1", string(cfg))
 	})
+}
+
+func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
+	mp, err := mpool.NewMPool("test_pct_config_invalid", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	flat := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(flat, 0.5, false, mp))
+	nullVec := vector.NewConstNull(types.T_float64.ToType(), 1, mp)
+	unsupported, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("0.5"), 1, mp)
+	require.NoError(t, err)
+	below, err := vector.NewConstFixed(types.T_float64.ToType(), -0.1, 1, mp)
+	require.NoError(t, err)
+	above, err := vector.NewConstFixed(types.T_float64.ToType(), 1.1, 1, mp)
+	require.NoError(t, err)
+	nan, err := vector.NewConstFixed(types.T_float64.ToType(), math.NaN(), 1, mp)
+	require.NoError(t, err)
+	inf, err := vector.NewConstFixed(types.T_float64.ToType(), math.Inf(1), 1, mp)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		vec  *vector.Vector
+	}{
+		{name: "non-constant", vec: flat},
+		{name: "null", vec: nullVec},
+		{name: "unsupported", vec: unsupported},
+		{name: "below range", vec: below},
+		{name: "above range", vec: above},
+		{name: "nan", vec: nan},
+		{name: "infinity", vec: inf},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			defer tc.vec.Free(mp)
+			require.NotPanics(t, func() {
+				_, err := getPercentileConfig(tc.vec)
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
+func TestValidateApproxPercentileExpr(t *testing.T) {
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+
+	require.Error(t, validateApproxPercentileExpr(nil))
+	require.Error(t, validateApproxPercentileExpr(column))
+	literal := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: 1},
+		}},
+	}
+	require.NoError(t, validateApproxPercentileExpr(literal))
+	require.NoError(t, validateApproxPercentileExpr(parameter))
 }
 
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {

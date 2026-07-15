@@ -168,8 +168,9 @@ func parsePercentileConfig(partialResult any) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if p < 0 || p > 1 {
-		return 0, moerr.NewInternalErrorNoCtxf("approx_percentile: percentile must be in [0,1], got %f", p)
+	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"approx_percentile: percentile must be in [0,1] and finite, got %v", p)
 	}
 	return p, nil
 }

@@ -346,6 +346,11 @@ func TestApproxPercentileExec_SetExtraInformation_Invalid(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "percentile must be in [0,1]")
 
+	for _, value := range []string{"NaN", "+Inf", "-Inf"} {
+		err = exec.SetExtraInformation([]byte(value), 0)
+		require.Error(t, err, "non-finite percentile %s must be rejected", value)
+	}
+
 	exec.Free()
 }
 
