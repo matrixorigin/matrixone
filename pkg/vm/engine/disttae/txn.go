@@ -891,7 +891,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			// to the workspace while the lock was released; keep them in
 			// memory for the next dump instead of calling getTable with
 			// the lock held.
-			if _, ok := tables[tbKey]; ok {
+			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
 				*size += uint64(bat.Size())
 				*pkCount += bat.RowCount()
@@ -930,7 +930,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl := tables[tbKey]
+		tbl := tables[tbKey.tableKey]
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 		s3Writer = colexec.NewCNS3DataWriter(
@@ -1032,7 +1032,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			// to the workspace while the lock was released; keep them in
 			// memory for the next dump instead of calling getTable with
 			// the lock held.
-			if _, ok := tables[tbKey]; ok {
+			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
 				deleteCnt += bat.RowCount()
 				*size += uint64(bat.Size())
@@ -1074,7 +1074,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl := tables[tbKey]
+		tbl := tables[tbKey.tableKey]
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
@@ -2103,7 +2103,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		// resolveCompactTablesLocked guarantees every table referenced by
 		// txn.deletedBlocks is in the map
-		rel, ok := tables[tbKey]
+		rel, ok := tables[tbKey.tableKey]
 		if !ok {
 			panicWhenFailed(moerr.NewInternalErrorNoCtx(
 				"table not pre-resolved for object compaction"), "get table failed")
