@@ -1594,7 +1594,7 @@ func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 
 type countingMysqlWriter struct {
 	*testMysqlWriter
-	responses int
+	responses []*Response
 	strProps  map[PropertyID]string
 	u32Props  map[PropertyID]uint32
 	u8Props   map[PropertyID]uint8
@@ -1616,8 +1616,8 @@ func (w *countingMysqlWriter) GetSequenceId() uint8           { return w.u8Props
 func (w *countingMysqlWriter) IsEstablished() bool            { return w.boolProps[ESTABLISHED] }
 func (w *countingMysqlWriter) IsTlsEstablished() bool         { return w.boolProps[TLS_ESTABLISHED] }
 
-func (w *countingMysqlWriter) WriteResponse(context.Context, *Response) error {
-	w.responses++
+func (w *countingMysqlWriter) WriteResponse(_ context.Context, resp *Response) error {
+	w.responses = append(w.responses, resp)
 	return nil
 }
 
@@ -1631,7 +1631,7 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnError(t *testing.T) {
 	ses.ReplaceResponser(live)
 	outerExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
 
-	err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select from")
+	_, err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select from")
 	require.Error(t, err)
 	require.Same(t, live, ses.GetResponser())
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
@@ -1664,8 +1664,14 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	ses.txnHandler.txnOp = txnOperator
 	ses.txnHandler.txnCtx = outerExecCtx.reqCtx
 
-	err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1")
+	result, err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1")
 	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, uint64(1), result.GetColumnCount())
+	require.Equal(t, uint64(1), result.GetRowCount())
+	value, err := result.GetValue(ctx, 0, 0)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, value)
 	require.Same(t, live, ses.GetResponser())
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
 	require.Zero(t, writer.responses)
@@ -1735,7 +1741,8 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 	ses.txnHandler.txnOp = txnOperator
 	ses.txnHandler.txnCtx = outerExecCtx.reqCtx
 
-	require.NoError(t, executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1"))
+	_, err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1")
+	require.NoError(t, err)
 	require.Equal(t, uint64(24659), ses.proc.Base.SessionInfo.ConnectionID)
 	require.Same(t, live, ses.GetResponser())
 	require.Equal(t, "db", writer.strProps[DBNAME])
@@ -1743,6 +1750,44 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 	require.Equal(t, uint8(7), writer.u8Props[SEQUENCEID])
 	require.True(t, writer.boolProps[ESTABLISHED])
 	require.Zero(t, writer.responses)
+}
+
+func TestAnalyzeStmtUsesSituationResponse(t *testing.T) {
+	kind := (&tree.AnalyzeStmt{}).StmtKind()
+	require.Equal(t, tree.OUTPUT_UNDEFINED, kind.OutputType())
+	require.Equal(t, tree.RESP_BY_SITUATION, kind.RespType())
+	require.Equal(t, tree.EXEC_IN_FRONTEND, kind.ExecLocation())
+}
+
+func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	makeResult := func(name string, value uint64) *MysqlResultSet {
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName(name)
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		mrs.AddColumn(col)
+		mrs.AddRow([]any{value})
+		return mrs
+	}
+	first := makeResult("approx_count_distinct(a)", 2)
+	second := makeResult("approx_count_distinct(x)", 4)
+	execCtx := &ExecCtx{
+		reqCtx:  context.Background(),
+		ses:     ses,
+		results: []ExecResult{first, second},
+	}
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+	require.Zero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+	require.Same(t, first, writer.responses[0].GetData().(*MysqlExecutionResult).Mrs())
+	require.Same(t, second, writer.responses[1].GetData().(*MysqlExecutionResult).Mrs())
+	require.Nil(t, execCtx.results)
 }
 
 func Test_convert_type(t *testing.T) {

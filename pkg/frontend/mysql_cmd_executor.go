@@ -1190,6 +1190,7 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
 	}
 
+	results := make([]ExecResult, 0, len(stmt.Entries))
 	for _, entry := range stmt.Entries {
 		cols := entry.Cols
 		if len(cols) == 0 {
@@ -1206,18 +1207,24 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 			cols = resolved
 		}
 		sql := buildAnalyzeDerivedSQL(entry, cols)
-		if err := executeAnalyzeDerivedQuery(ses, execCtx, sql); err != nil {
+		result, err := executeAnalyzeDerivedQuery(ses, execCtx, sql)
+		if err != nil {
 			return err
 		}
+		results = append(results, result)
 	}
+	execCtx.results = results
 	return nil
 }
 
-func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) error {
+func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) (*MysqlResultSet, error) {
 	liveResponder := ses.GetResponser()
 	proto := &analyzeDerivedProtocol{
-		internalProtocol: &internalProtocol{result: &internalExecResult{}},
-		live:             liveResponder,
+		internalProtocol: &internalProtocol{
+			result:      &internalExecResult{},
+			stashResult: true,
+		},
+		live: liveResponder,
 	}
 	ses.ReplaceResponser(&analyzeDerivedResponder{
 		MysqlResp: NewMysqlResp(proto),
@@ -1232,7 +1239,10 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 			tcc.SetExecCtx(outerExecCtx)
 		}
 	}()
-	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+	if err := doComQuery(ses, &tempExecCtx, &UserInput{sql: sql}); err != nil {
+		return nil, err
+	}
+	return proto.swapOutResult().resultSet, nil
 }
 
 // analyzeDerivedProtocol keeps the internal protocol's output sink while exposing
