@@ -170,7 +170,7 @@ func NewTestTAEEngine(
 }
 
 func InitTxnHandle(ctx context.Context, taeDir string, opts *options.Options) (*rpc.Handle, error) {
-	handle, err := rpc.NewTAEHandle(ctx, taeDir, nil, opts)
+	handle, err := rpc.NewTAEHandleWithError(ctx, taeDir, nil, opts)
 	if err != nil {
 		return nil, err
 	}
