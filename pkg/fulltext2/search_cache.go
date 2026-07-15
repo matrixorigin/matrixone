@@ -39,8 +39,9 @@ type Fulltext2Query struct {
 // eviction) with bm25 and the vector plugins, keyed by its storage table name.
 // Before this, fulltext2_search reloaded the whole index (LoadAllBases +
 // LoadTailSegments + NewIndex) on EVERY query — ~1s per query at 50K vs bm25's ~3ms.
-// fulltext2 segments are pure Go (vellum FST + slices), so Destroy just drops the
-// reference; there is no off-heap memory to free.
+// A loaded segment's postings (docIDs/tfs/positions) are decoded OFF the Go heap
+// (C allocator) so a large cached index is not GC-scanned and releases RSS
+// deterministically; Destroy frees them (mirrors bm25's WandModel).
 type Fulltext2Search struct {
 	cfg    TableConfig
 	idx    *Index
@@ -66,6 +67,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	tails, deletes, err := LoadTailSegments(sqlproc, s.cfg)
 	if err != nil {
+		freeSegs(bases) // don't leak the off-heap base buffers on a tail-load error
 		return err
 	}
 	segs := append(bases, tails...)
@@ -125,9 +127,10 @@ func (s *Fulltext2Search) UpdateConfig(newalgo veccache.VectorIndexSearchIf) err
 	return nil
 }
 
-// Destroy drops the loaded index. The cache holds the write lock around this, so no
-// search is in flight. Segments are pure Go — GC reclaims them.
+// Destroy releases the loaded index's off-heap posting buffers, then drops it. The
+// cache holds the write lock around this, so no search is in flight.
 func (s *Fulltext2Search) Destroy() {
+	s.idx.Free()
 	s.idx = nil
 	s.loaded = false
 }

@@ -35,8 +35,13 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 	}
 	tails, deletes, err := LoadTailSegments(sqlproc, cfg)
 	if err != nil {
+		freeSegs(bases)
 		return 0, err
 	}
+	// Free the loaded (off-heap) base + tail buffers on every return path; the fresh
+	// rebuilt segments below are build-side (Go heap, no deallocators — Free no-op).
+	defer freeSegs(bases)
+	defer freeSegs(tails)
 	if len(tails) == 0 && len(deletes) == 0 {
 		return 0, nil // no CDC delta since the last build/compaction
 	}

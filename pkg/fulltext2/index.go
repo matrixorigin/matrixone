@@ -235,7 +235,7 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 				if _, live := buckets[l]; !live {
 					continue
 				}
-				for _, pos := range tp.positions[i] {
+				for _, pos := range tp.posAt(i) {
 					buckets[l] = append(buckets[l], posTerm{pos, term})
 				}
 			}
@@ -266,6 +266,15 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 
 // NumDocs returns the number of live documents in the index.
 func (idx *Index) NumDocs() int64 { return idx.globalN }
+
+// Free releases the off-heap posting buffers of every segment the index owns.
+// Called on cache eviction (Fulltext2Search.Destroy) and by single-shot loaders
+// (compact) once done. Build-side segments free nothing (no-op).
+func (idx *Index) Free() {
+	if idx != nil {
+		freeSegs(idx.segments)
+	}
+}
 
 // keyOf produces a stable string key for a primary-key value, used for
 // cross-segment liveness and result dedup. Bytes/strings pass through; other

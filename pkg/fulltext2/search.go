@@ -180,7 +180,7 @@ func (s *Segment) avgDocLenOrMean() float64 {
 func positionsInDoc(pl *termPostings, ord int64) (pos []int32, ok bool) {
 	i := sort.Search(len(pl.docIDs), func(i int) bool { return pl.docIDs[i] >= ord })
 	if i < len(pl.docIDs) && pl.docIDs[i] == ord {
-		return pl.positions[i], true
+		return pl.posAt(i), true
 	}
 	return nil, false
 }

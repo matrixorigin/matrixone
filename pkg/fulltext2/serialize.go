@@ -221,26 +221,23 @@ func (s *Segment) encodeTermsAndPostings() (fst []byte, postings []byte, err err
 // derived from these postings + docLen by the scorer (P1); here we load only the
 // exact posting data (docIDs, tfs, positions).
 func (s *Segment) decodePostings(data []byte) error {
+	// Pass 1: totals — nterms, totalP (Σ df) and totalPos (Σ position counts) — to
+	// size the off-heap buffers up front. The blob is fully in memory, so seeking
+	// past the fixed-width docIDs/tfs and each position run is cheap, and it keeps
+	// the on-disk format unchanged (no totals stored).
 	r := bytes.NewReader(data)
 	var nterms int64
 	if err := binary.Read(r, binary.LittleEndian, &nterms); err != nil {
 		return err
 	}
-	s.loaded = make([]*termPostings, nterms)
+	var totalP, totalPos int64
 	for t := int64(0); t < nterms; t++ {
 		var df uint32
 		if err := binary.Read(r, binary.LittleEndian, &df); err != nil {
 			return err
 		}
-		tp := &termPostings{
-			docIDs:    make([]int64, df),
-			tfs:       make([]uint8, df),
-			positions: make([][]int32, df),
-		}
-		if err := binary.Read(r, binary.LittleEndian, tp.docIDs); err != nil {
-			return err
-		}
-		if _, err := io.ReadFull(r, tp.tfs); err != nil {
+		totalP += int64(df)
+		if _, err := r.Seek(int64(df)*8+int64(df), io.SeekCurrent); err != nil { // docIDs + tfs
 			return err
 		}
 		for d := uint32(0); d < df; d++ {
@@ -248,17 +245,63 @@ func (s *Segment) decodePostings(data []byte) error {
 			if err := binary.Read(r, binary.LittleEndian, &pc); err != nil {
 				return err
 			}
-			pos := make([]int32, pc)
-			if err := binary.Read(r, binary.LittleEndian, pos); err != nil {
+			totalPos += int64(pc)
+			if _, err := r.Seek(int64(pc)*4, io.SeekCurrent); err != nil { // positions
 				return err
 			}
-			tp.positions[d] = pos
 		}
-		// Derive the raw score-UB fields (maxTf / minDocLen) from the loaded
-		// postings + docLen — used by WAND max-impact bounds. docLen is decoded
-		// from the docmap member, which precedes postings in the archive.
+	}
+
+	// Allocate the segment's off-heap posting buffers once; each term's slices are
+	// views into these, freed by Segment.Free() on eviction.
+	bigDocIDs, bigTfs, bigPos, bigOff, err := s.allocPostings(totalP, totalPos, nterms)
+	if err != nil {
+		return err
+	}
+
+	// Pass 2: fill per-term views into the big buffers.
+	if _, err := r.Seek(8, io.SeekStart); err != nil { // past nterms
+		return err
+	}
+	s.loaded = make([]*termPostings, nterms)
+	var cp, cpos, coff int64 // running offsets into docIDs/tfs, positions, offsets
+	for t := int64(0); t < nterms; t++ {
+		var df uint32
+		if err := binary.Read(r, binary.LittleEndian, &df); err != nil {
+			return err
+		}
+		d64 := int64(df)
+		tp := &termPostings{
+			docIDs:  bigDocIDs[cp : cp+d64],
+			tfs:     bigTfs[cp : cp+d64],
+			posFlat: bigPos,
+			posOff:  bigOff[coff : coff+d64+1],
+		}
+		if err := binary.Read(r, binary.LittleEndian, tp.docIDs); err != nil {
+			return err
+		}
+		if _, err := io.ReadFull(r, tp.tfs); err != nil {
+			return err
+		}
+		tp.posOff[0] = cpos
+		for d := uint32(0); d < df; d++ {
+			var pc uint32
+			if err := binary.Read(r, binary.LittleEndian, &pc); err != nil {
+				return err
+			}
+			if err := binary.Read(r, binary.LittleEndian, bigPos[cpos:cpos+int64(pc)]); err != nil {
+				return err
+			}
+			cpos += int64(pc)
+			tp.posOff[d+1] = cpos
+		}
+		// Derive the raw score-UB fields (maxTf / minDocLen / block-max) from the
+		// loaded postings + docLen. docLen is decoded from the docmap member, which
+		// precedes postings in the archive.
 		deriveTermStats(tp, s.docLen)
 		s.loaded[t] = tp
+		cp += d64
+		coff += d64 + 1
 	}
 	return nil
 }

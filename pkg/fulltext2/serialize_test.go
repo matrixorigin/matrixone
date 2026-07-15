@@ -47,12 +47,17 @@ func roundtrip(t *testing.T, s *Segment) *Segment {
 	return loaded
 }
 
-// assertPostingsEqual compares a loaded term's posting list to the original.
+// assertPostingsEqual compares a loaded term's posting list to the original. The
+// loaded side keeps positions off-heap (flat posFlat + posOff, not the build-side
+// [][]int32), so compare per-doc via posAt rather than the raw positions field.
 func assertPostingsEqual(t *testing.T, want, got *termPostings) {
 	t.Helper()
 	require.Equal(t, want.docIDs, got.docIDs)
 	require.Equal(t, want.tfs, got.tfs)
-	require.Equal(t, want.positions, got.positions)
+	require.Equal(t, len(want.positions), got.df())
+	for i := range want.positions {
+		require.Equalf(t, want.positions[i], got.posAt(i), "positions[%d]", i)
+	}
 }
 
 func TestSegmentRoundtripInt64PK(t *testing.T) {

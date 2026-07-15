@@ -14,7 +14,11 @@
 
 package fulltext2
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+)
 
 const (
 	// MaxCappedTf caps stored term frequency at one byte (matches classic
@@ -39,7 +43,14 @@ const (
 type termPostings struct {
 	docIDs    []int64   // doc ords, ascending, len == df
 	tfs       []uint8   // parallel, capped tf (<= MaxCappedTf)
-	positions [][]int32 // parallel, per-doc ascending token positions (len == df)
+	positions [][]int32 // BUILD-side per-doc positions (len == df); nil on a LOADED segment
+
+	// LOADED-side positions (Deserialize): a flat buffer shared across the
+	// segment's terms (points into the segment's off-heap bigPos), indexed by
+	// per-term absolute offsets posOff (len df+1): doc i's positions are
+	// posFlat[posOff[i]:posOff[i+1]]. nil on a build-side segment. Use posAt().
+	posFlat []int32
+	posOff  []int64
 
 	// Term-level score-UB inputs (raw, scorer-agnostic).
 	maxTf     uint8 // max tf over all postings
@@ -54,6 +65,15 @@ type termPostings struct {
 
 // df is the document frequency (number of docs containing the term).
 func (p *termPostings) df() int { return len(p.docIDs) }
+
+// posAt returns doc i's ascending token positions — from the build-side
+// per-doc [][]int32, or a view into the loaded-side flat off-heap buffer.
+func (p *termPostings) posAt(i int) []int32 {
+	if p.positions != nil {
+		return p.positions[i]
+	}
+	return p.posFlat[p.posOff[i]:p.posOff[i+1]]
+}
 
 // Segment is one loadable in-memory fulltext v2 index unit — a tag=0 base sub or
 // a tag=1 CDC tail frame (§4 of fulltext2.md). It is the positional analogue of
@@ -92,6 +112,34 @@ type Segment struct {
 	// slices vs loaded buffers split.)
 	dict   *termDict
 	loaded []*termPostings
+
+	// deallocators frees the off-heap (C-allocated) posting buffers of a LOADED
+	// segment (Deserialize keeps docIDs/tfs/positions off the Go heap so a
+	// multi-GB cached index is not GC-scanned and releases RSS deterministically
+	// on eviction — mirrors bm25's WandModel). A build-side segment leaves this
+	// nil, so Free() is a no-op there.
+	deallocators []malloc.Deallocator
+}
+
+// Free releases a loaded segment's off-heap posting buffers. Safe on a build-side
+// segment (nil deallocators → no-op) and idempotent. After Free the segment must
+// not be queried; the VectorIndexCache holds the write lock when calling Destroy,
+// and single-shot loaders (compact) Free after they finish reading.
+func (s *Segment) Free() {
+	for _, d := range s.deallocators {
+		d.Deallocate()
+	}
+	s.deallocators = nil
+	s.loaded = nil
+}
+
+// freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).
+func freeSegs(segs []*Segment) {
+	for _, s := range segs {
+		if s != nil {
+			s.Free()
+		}
+	}
 }
 
 // NewSegment returns an empty segment with the given id and pk type. Postings
