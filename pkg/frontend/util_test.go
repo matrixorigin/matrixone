@@ -17,6 +17,7 @@ package frontend
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -88,6 +90,11 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	writer := &accountingMysqlWriter{}
 	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
 	root := resource.NewRoot(resource.ConnExternal)
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage:        resource.Usage{ExclusiveActiveNS: 10},
+		AttemptCount: 1,
+		LastOutcome:  resource.OutcomeError,
+	}))
 	stmt := motrace.NewStatementInfo()
 	stmt.RequestAt = time.Now()
 	stmt.SetResourceRoot(root)
@@ -117,6 +124,17 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	require.Equal(t, uint64(1), summary.OutputPacketCount)
 	require.Equal(t, uint64(64), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.MissingMemoryDomainCount)
+	projected := statistic.FromResourceSummary(summary, 0)
+	var persisted statistic.StatsArray
+	require.NoError(t, json.Unmarshal(projected.ToJsonString(), &persisted))
+	require.Equal(t, float64(statistic.StatsArrayVersion6), persisted.GetVersion())
+	require.Equal(t, float64(10), persisted.GetTimeConsumed())
+	require.Equal(t, float64(64), persisted.GetMemorySize())
+	require.Equal(t, float64(17), persisted.GetOutTrafficBytes())
+	require.Equal(t, float64(1), persisted.GetOutPacketCount())
+	require.Equal(t, float64(1), persisted.GetAttemptCount())
+	require.Zero(t, persisted.GetQualityFlags())
+	require.GreaterOrEqual(t, persisted.GetCU(), float64(0))
 }
 
 func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {

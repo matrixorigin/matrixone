@@ -664,12 +664,11 @@ func (s *StatementInfo) SetResourceMemoryPoolEpoch(pool *mpool.MPool, exact bool
 	s.resourceMPool = pool
 	s.resourceMPExact = exact
 	if s.resourceRoot != nil {
-		s.resourceRoot.SetMemoryDomainPreview(func() (resource.MemoryDomainSummary, bool) {
+		s.resourceRoot.SetMemoryPeakPreview(func() (uint64, bool) {
 			if pool == nil || !exact {
-				return resource.MemoryDomainSummary{}, false
+				return 0, false
 			}
-			domain, _ := pool.ResourceSnapshot()
-			return domain, true
+			return pool.ResourcePeakLiveBytes()
 		})
 	}
 }
@@ -784,7 +783,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.resourceRoot.AddProtocolOutput(uint64(outBytes), uint64(outPacket))
 		}
 		if s.resourceMPool != nil {
-			s.resourceRoot.ClearMemoryDomainPreview()
+			s.resourceRoot.ClearMemoryPeakPreview()
 			if s.resourceMPExact {
 				domain, _ := s.resourceMPool.ResourceSnapshot()
 				s.resourceRoot.AddMemoryDomain(domain)

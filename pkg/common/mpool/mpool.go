@@ -482,6 +482,19 @@ func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
 }
 
+// ResourcePeakLiveBytes returns a live-safe peak preview for an open allocator
+// epoch. It deliberately exposes no terminal allocation/free/live facts.
+func (mp *MPool) ResourcePeakLiveBytes() (uint64, bool) {
+	if mp == nil {
+		return 0, false
+	}
+	peak := mp.stats.HighWaterMark.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
 // ResourceSnapshot returns exact allocator-domain facts for a quiescent MPool
 // epoch. Negative counters are flagged instead of being converted to uint64.
 func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.QualityFlags) {

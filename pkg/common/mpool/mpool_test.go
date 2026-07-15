@@ -163,6 +163,9 @@ func TestMPoolResourceEpoch(t *testing.T) {
 	require.NoError(t, err)
 	second, err := mp.Alloc(200, true)
 	require.NoError(t, err)
+	peak, exact := mp.ResourcePeakLiveBytes()
+	require.True(t, exact)
+	require.Equal(t, uint64(300), peak)
 
 	summary, flags := mp.ResourceSnapshot()
 	require.Equal(t, resource.QualityNonZeroLiveAtSeal, flags)

@@ -184,12 +184,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if proc != nil {
 		pool := proc.Mp()
 		resourceMPExact = pool != nil && pool.ResetResourceEpoch()
-		root.SetMemoryDomainPreview(func() (resource.MemoryDomainSummary, bool) {
+		root.SetMemoryPeakPreview(func() (uint64, bool) {
 			if pool == nil || !resourceMPExact {
-				return resource.MemoryDomainSummary{}, false
+				return 0, false
 			}
-			domain, _ := pool.ResourceSnapshot()
-			return domain, true
+			return pool.ResourcePeakLiveBytes()
 		})
 	}
 	// set StatementID

@@ -19,7 +19,7 @@ import (
 type Root struct {
 	mu            sync.Mutex
 	summary       StatementResourceSummary
-	memoryPreview func() (MemoryDomainSummary, bool)
+	memoryPreview func() (uint64, bool)
 	sealed        bool
 }
 
@@ -28,10 +28,10 @@ func NewRoot(conn ConnType) *Root {
 	return &Root{summary: StatementResourceSummary{ConnType: conn}}
 }
 
-// SetMemoryDomainPreview installs the statement allocator snapshot used by
+// SetMemoryPeakPreview installs the live-safe statement allocator peak used by
 // pre-response consumers such as EXPLAIN ANALYZE. Terminal publication still
 // happens exactly once through AddMemoryDomain or MarkMemoryDomainMissing.
-func (r *Root) SetMemoryDomainPreview(preview func() (MemoryDomainSummary, bool)) bool {
+func (r *Root) SetMemoryPeakPreview(preview func() (uint64, bool)) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sealed {
@@ -41,9 +41,9 @@ func (r *Root) SetMemoryDomainPreview(preview func() (MemoryDomainSummary, bool)
 	return true
 }
 
-// ClearMemoryDomainPreview removes the non-authoritative preview before the
+// ClearMemoryPeakPreview removes the non-authoritative preview before the
 // terminal memory domain is published.
-func (r *Root) ClearMemoryDomainPreview() {
+func (r *Root) ClearMemoryPeakPreview() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.memoryPreview = nil
@@ -122,8 +122,12 @@ func (r *Root) PreResponseSummary() StatementResourceSummary {
 	if preview == nil {
 		return summary
 	}
-	if domain, exact := preview(); exact {
-		summary.Quality |= MergeMemoryDomain(&summary.Memory, domain)
+	if peak, exact := preview(); exact {
+		summary.Memory.SumDomainPeakLiveBytesBound, summary.Quality = addChecked(
+			summary.Memory.SumDomainPeakLiveBytesBound, peak, summary.Quality)
+		if peak > summary.Memory.MaxDomainPeakLiveBytes {
+			summary.Memory.MaxDomainPeakLiveBytes = peak
+		}
 	} else {
 		summary.MissingMemoryDomainCount, summary.Quality = addChecked(
 			summary.MissingMemoryDomainCount, 1,
