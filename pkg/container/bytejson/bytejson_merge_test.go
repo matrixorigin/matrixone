@@ -15,10 +15,23 @@
 package bytejson
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func nestedJSONObject(depth int, leaf string) string {
+	var builder strings.Builder
+	for range depth {
+		builder.WriteString(`{"a":`)
+	}
+	builder.WriteString(leaf)
+	for range depth {
+		builder.WriteByte('}')
+	}
+	return builder.String()
+}
 
 func TestByteJsonMergePatch(t *testing.T) {
 	target, err := ParseFromString(`{"a":1,"nested":{"keep":1,"remove":2}}`)
@@ -101,4 +114,36 @@ func TestByteJsonMergePreserveMySQLValueCombinations(t *testing.T) {
 		require.NoError(t, err)
 		require.JSONEq(t, tt.want, merged.String())
 	}
+}
+
+func TestByteJsonMergePatchNestingDepth(t *testing.T) {
+	target, err := ParseFromString(nestedJSONObject(100, `1`))
+	require.NoError(t, err)
+	patch, err := ParseFromString(nestedJSONObject(100, `2`))
+	require.NoError(t, err)
+
+	_, err = target.MergePatch(patch)
+	require.NoError(t, err)
+
+	tooDeep, err := ParseFromString(nestedJSONObject(101, `1`))
+	require.NoError(t, err)
+	_, err = tooDeep.MergePatch(patch)
+	require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+}
+
+func TestByteJsonMergePreserveNestingDepth(t *testing.T) {
+	withinLimit, err := ParseFromString(nestedJSONObject(99, `1`))
+	require.NoError(t, err)
+	withinLimitOther, err := ParseFromString(nestedJSONObject(99, `2`))
+	require.NoError(t, err)
+
+	_, err = withinLimit.MergePreserve(withinLimitOther)
+	require.NoError(t, err)
+
+	atLimit, err := ParseFromString(nestedJSONObject(100, `1`))
+	require.NoError(t, err)
+	atLimitOther, err := ParseFromString(nestedJSONObject(100, `2`))
+	require.NoError(t, err)
+	_, err = atLimit.MergePreserve(atLimitOther)
+	require.ErrorContains(t, err, "json document nesting depth exceeds 100")
 }

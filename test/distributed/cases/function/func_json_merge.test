@@ -46,6 +46,23 @@ select json_merge_patch(1, '2');
 select json_merge_preserve('{', '{}');
 select json_merge_patch('{"a":"b"}', '[1,');
 
+-- MySQL limits JSON nesting to 100 levels. Validate merge input and result bounds.
+select json_length(json_merge_patch(
+    concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+    '{}'
+)) as merge_patch_depth_100_length;
+-- @regex("json document nesting depth exceeds 100",true)
+select json_merge_patch(
+    concat(repeat('{"a":', 101), '1', repeat('}', 101)),
+    '{}'
+);
+-- Each input is 100 levels, but preserving conflicting scalar leaves adds an array level.
+-- @regex("json document nesting depth exceeds 100",true)
+select json_merge_preserve(
+    concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+    concat(repeat('{"a":', 100), '2', repeat('}', 100))
+);
+
 drop table if exists json_merge_docs;
 create table json_merge_docs (
     id int primary key,

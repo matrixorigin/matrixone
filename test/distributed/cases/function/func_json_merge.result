@@ -107,6 +107,24 @@ select json_merge_preserve('{', '{}');
 invalid input: json text {
 select json_merge_patch('{"a":"b"}', '[1,');
 invalid input: json text [1,
+select json_length(json_merge_patch(
+concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+'{}'
+)) as merge_patch_depth_100_length;
+➤ merge_patch_depth_100_length[-5,64,0]  𝄀
+1
+select json_merge_patch(
+concat(repeat('{"a":', 101), '1', repeat('}', 101)),
+'{}'
+);
+-- @regex("json document nesting depth exceeds 100", true)
+invalid input: json document nesting depth exceeds 100
+select json_merge_preserve(
+concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+concat(repeat('{"a":', 100), '2', repeat('}', 100))
+);
+-- @regex("json document nesting depth exceeds 100", true)
+invalid input: json document nesting depth exceeds 100
 drop table if exists json_merge_docs;
 create table json_merge_docs (
 id int primary key,

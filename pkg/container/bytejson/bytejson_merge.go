@@ -14,10 +14,34 @@
 
 package bytejson
 
-import "bytes"
+import (
+	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+const maxJSONMergeNestingDepth = 100
 
 // MergePatch applies an RFC 7396 JSON merge patch to bj.
 func (bj ByteJson) MergePatch(patch ByteJson) (ByteJson, error) {
+	if err := checkJSONMergeNestingDepth(bj); err != nil {
+		return Null, err
+	}
+	if err := checkJSONMergeNestingDepth(patch); err != nil {
+		return Null, err
+	}
+
+	merged, err := mergePatch(bj, patch)
+	if err != nil {
+		return Null, err
+	}
+	if err = checkJSONMergeNestingDepth(merged); err != nil {
+		return Null, err
+	}
+	return merged, nil
+}
+
+func mergePatch(bj ByteJson, patch ByteJson) (ByteJson, error) {
 	if patch.Type != TpCodeObject {
 		return cloneByteJson(patch), nil
 	}
@@ -35,6 +59,24 @@ func (bj ByteJson) MergePatch(patch ByteJson) (ByteJson, error) {
 
 // MergePreserve merges bj and other using MySQL JSON_MERGE_PRESERVE rules.
 func (bj ByteJson) MergePreserve(other ByteJson) (ByteJson, error) {
+	if err := checkJSONMergeNestingDepth(bj); err != nil {
+		return Null, err
+	}
+	if err := checkJSONMergeNestingDepth(other); err != nil {
+		return Null, err
+	}
+
+	merged, err := mergePreserve(bj, other)
+	if err != nil {
+		return Null, err
+	}
+	if err = checkJSONMergeNestingDepth(merged); err != nil {
+		return Null, err
+	}
+	return merged, nil
+}
+
+func mergePreserve(bj ByteJson, other ByteJson) (ByteJson, error) {
 	if bj.Type == TpCodeObject && other.Type == TpCodeObject {
 		return mergePreserveObjects(bj, other)
 	}
@@ -76,7 +118,7 @@ func mergePatchObjects(target, patch ByteJson) (ByteJson, error) {
 		case targetIdx == target.GetElemCnt():
 			patchValue := patch.GetObjectVal(patchIdx)
 			if !isJSONNull(patchValue) {
-				value, err := Null.MergePatch(patchValue)
+				value, err := mergePatch(Null, patchValue)
 				if err != nil {
 					return Null, err
 				}
@@ -96,7 +138,7 @@ func mergePatchObjects(target, patch ByteJson) (ByteJson, error) {
 			case cmp > 0:
 				patchValue := patch.GetObjectVal(patchIdx)
 				if !isJSONNull(patchValue) {
-					value, err := Null.MergePatch(patchValue)
+					value, err := mergePatch(Null, patchValue)
 					if err != nil {
 						return Null, err
 					}
@@ -107,7 +149,7 @@ func mergePatchObjects(target, patch ByteJson) (ByteJson, error) {
 			default:
 				patchValue := patch.GetObjectVal(patchIdx)
 				if !isJSONNull(patchValue) {
-					value, err := target.GetObjectVal(targetIdx).MergePatch(patchValue)
+					value, err := mergePatch(target.GetObjectVal(targetIdx), patchValue)
 					if err != nil {
 						return Null, err
 					}
@@ -149,7 +191,7 @@ func mergePreserveObjects(left, right ByteJson) (ByteJson, error) {
 				values = append(values, right.GetObjectVal(rightIdx))
 				rightIdx++
 			default:
-				value, err := left.GetObjectVal(leftIdx).MergePreserve(right.GetObjectVal(rightIdx))
+				value, err := mergePreserve(left.GetObjectVal(leftIdx), right.GetObjectVal(rightIdx))
 				if err != nil {
 					return Null, err
 				}
@@ -169,4 +211,45 @@ func cloneByteJson(bj ByteJson) ByteJson {
 
 func isJSONNull(bj ByteJson) bool {
 	return bj.Type == TpCodeLiteral && len(bj.Data) == 1 && bj.Data[0] == LiteralNull
+}
+
+func checkJSONMergeNestingDepth(bj ByteJson) error {
+	if bj.Type != TpCodeObject && bj.Type != TpCodeArray {
+		return nil
+	}
+
+	type nestingFrame struct {
+		value ByteJson
+		next  int
+		depth int
+	}
+
+	stack := []nestingFrame{{value: bj, depth: 1}}
+	for len(stack) > 0 {
+		frame := &stack[len(stack)-1]
+		if frame.next == frame.value.GetElemCnt() {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+
+		var child ByteJson
+		if frame.value.Type == TpCodeObject {
+			child = frame.value.GetObjectVal(frame.next)
+		} else {
+			child = frame.value.GetArrayElem(frame.next)
+		}
+		frame.next++
+
+		if child.Type != TpCodeObject && child.Type != TpCodeArray {
+			continue
+		}
+		depth := frame.depth + 1
+		if depth > maxJSONMergeNestingDepth {
+			return moerr.NewInvalidInputNoCtxf(
+				"json document nesting depth exceeds %d", maxJSONMergeNestingDepth,
+			)
+		}
+		stack = append(stack, nestingFrame{value: child, depth: depth})
+	}
+	return nil
 }
