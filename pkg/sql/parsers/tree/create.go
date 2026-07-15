@@ -2144,10 +2144,7 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
-	// Version selects the index engine version (currently fulltext only): 0/1 = the
-	// classic engine, 2 = the WAND-based fulltext v2 engine. Plumbed to algo_params.
-	Version        int64
-	IncludeColumns []*UnresolvedName
+	IncludeColumns           []*UnresolvedName
 }
 
 // Must follow the following sequence when test
@@ -2162,7 +2159,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.Version != 0 ||
+		node.MaxIndexCapacity != 0 ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2279,11 +2276,6 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.MaxIndexCapacity != 0 {
 		ctx.WriteString("MAX_INDEX_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
-		ctx.WriteByte(' ')
-	}
-	if node.Version != 0 {
-		ctx.WriteString("VERSION ")
-		ctx.WriteString(strconv.FormatInt(node.Version, 10))
 		ctx.WriteByte(' ')
 	}
 	if len(node.IncludeColumns) != 0 {

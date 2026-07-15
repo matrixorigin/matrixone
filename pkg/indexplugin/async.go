@@ -20,36 +20,31 @@ import "github.com/matrixorigin/matrixone/pkg/catalog"
 //
 // An index's hidden tables are maintained either SYNCHRONOUSLY (updated in the
 // same transaction as the source DML) or ASYNCHRONOUSLY (a background ISCP CDC
-// pipeline catches up). Whether an index is async has three inputs, which used
+// pipeline catches up). Whether an index is async has two inputs, which used
 // to be combined ad-hoc at every call site (and were easy to get wrong by
 // checking only one):
 //
-//   - algorithm identity — hnsw / bm25 / cagra / ivfpq are ALWAYS async,
-//     declared in their static catalog SyncDescriptor().AlwaysAsync;
-//   - engine version — fulltext VERSION=2 (the WAND engine) is always async,
-//     a per-index param (catalog.IndexAlgoParamVersionOf);
-//   - user opt-in — a normally-synchronous engine (classic fulltext v1,
-//     ivfflat) put into async via the `async` param (catalog.IndexParamAsync).
+//   - algorithm identity — hnsw / bm25 / cagra / ivfpq / fulltext2 are ALWAYS
+//     async, declared in their static catalog SyncDescriptor().AlwaysAsync;
+//   - user opt-in — a normally-synchronous engine (classic fulltext, ivfflat)
+//     put into async via the `async` param (catalog.IndexParamAsync).
 //
 // These resolvers live here, not in catalog, because the first input needs the
 // plugin registry (catalog sits below it). They read the STATIC SyncDescriptor
 // (no algoParams) — the descriptor is a per-algorithm constant, so nothing here
 // needs a per-index descriptor and no caller has to synthesize one.
 //
-// IsAsync is the union of all three and is what callers should reach for;
+// IsAsync is the union of both and is what callers should reach for;
 // AlwaysAsync is exposed for the few generic sites (clone / CDC validity) that
 // must distinguish "intrinsically async" from "user opted in".
 
 // AlwaysAsync reports whether the algorithm is intrinsically async (CDC-only)
 // regardless of the user's async param: true for an identity-async algorithm
-// (hnsw/bm25/cagra/ivfpq, via its static SyncDescriptor) OR a versioned
-// always-async engine (fulltext VERSION=2). An unregistered algo with no
-// version is never always-async.
+// (hnsw/bm25/cagra/ivfpq/fulltext2, via its static SyncDescriptor). An
+// unregistered algo is never always-async.
 func AlwaysAsync(algo, algoParams string) bool {
-	if p, ok := Get(algo); ok && p.Catalog().SyncDescriptor().AlwaysAsync {
-		return true
-	}
-	return catalog.IndexAlgoParamVersionOf(algoParams) >= 2
+	p, ok := Get(algo)
+	return ok && p.Catalog().SyncDescriptor().AlwaysAsync
 }
 
 // IsAsync is the canonical async check: an index is asynchronously (CDC)
