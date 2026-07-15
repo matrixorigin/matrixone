@@ -355,6 +355,8 @@ message TableFunction {
   bytes params = 4;
   string name = 5;
   bool is_single = 6;
+  plan.IndexReaderParam index_reader_param = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
 }
 
 message ExternalName2ColIndex {

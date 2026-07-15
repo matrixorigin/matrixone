@@ -33,6 +33,109 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestChooseRowCarrier(t *testing.T) {
+	makeExpr := func(typ types.T, width int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ), Width: width}}
+	}
+	makeAgg := func(name string, typ types.T, width int32, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(typ), Width: width},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+
+	t.Run("fixed width before varlen", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeExpr(types.T_varchar, 8),
+			makeExpr(types.T_int64, 0),
+			makeExpr(types.T_int32, 0),
+		}
+		require.Equal(t, 2, chooseRowCarrier(exprs, false))
+	})
+
+	t.Run("short varlen before long varlen", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeExpr(types.T_varchar, 1024),
+			makeExpr(types.T_varchar, 32),
+		}
+		require.Equal(t, 1, chooseRowCarrier(exprs, false))
+	})
+
+	t.Run("stable tie break", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeExpr(types.T_int32, 0),
+			makeExpr(types.T_int32, 0),
+		}
+		require.Equal(t, 0, chooseRowCarrier(exprs, false))
+	})
+
+	t.Run("table columns use the same cost model", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4096}},
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int8)}},
+		}
+		require.Equal(t, 1, chooseTableRowCarrier(plan.Node_TABLE_SCAN, cols))
+	})
+
+	t.Run("external scan excludes hidden columns", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4096}},
+			{Name: "__mo_fake_pk_col", Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64)}},
+		}
+		require.Equal(t, 0, chooseTableRowCarrier(plan.Node_EXTERNAL_SCAN, cols))
+		require.Equal(t, 1, chooseTableRowCarrier(plan.Node_TABLE_SCAN, cols))
+	})
+
+	t.Run("internal and unknown types are conservative", func(t *testing.T) {
+		for _, typ := range []int32{
+			-1,
+			int32(types.T_any),
+			int32(types.T_interval),
+			int32(types.T_tuple),
+			256,
+			999,
+		} {
+			exprs := []*plan.Expr{
+				{Typ: plan.Type{Id: typ}},
+				makeExpr(types.T_int8, 0),
+			}
+			require.Equal(t, 1, chooseRowCarrier(exprs, false), "type %d", typ)
+		}
+	})
+
+	t.Run("cheap aggregate before expensive varlen aggregate", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeAgg("group_concat", types.T_text, 0),
+			makeAgg("sum", types.T_int64, 0),
+			makeAgg("starcount", types.T_int64, 0),
+		}
+		require.Equal(t, 2, chooseRowCarrier(exprs, true))
+	})
+
+	t.Run("aggregate input width affects cost", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeAgg("count", types.T_int64, 0, makeExpr(types.T_varchar, 4096)),
+			makeAgg("sum", types.T_int64, 0, makeExpr(types.T_int32, 0)),
+		}
+		require.Equal(t, 1, chooseRowCarrier(exprs, true))
+	})
+
+	t.Run("union combines both inputs", func(t *testing.T) {
+		left := []*plan.Expr{
+			makeExpr(types.T_int16, 0),
+			makeExpr(types.T_int32, 0),
+		}
+		right := []*plan.Expr{
+			makeExpr(types.T_varchar, 8),
+			makeExpr(types.T_int32, 0),
+		}
+		require.Equal(t, 1, chooseUnionRowCarrier(left, right, 2))
+	})
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
