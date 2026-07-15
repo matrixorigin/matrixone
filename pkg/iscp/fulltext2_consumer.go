@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -102,6 +103,14 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				if err != nil {
 					errch <- err
 					return
+				}
+				// Evict the cached search index so the next query reloads tag=0 + the
+				// freshly-appended tag=1 frames, instead of serving the warm (stale)
+				// cache until its idle TTL. Only when frames were actually written.
+				// Local to this CN's cache.
+				if len(segs) > 0 {
+					veccache.Cache.Remove(w.cfg.IndexTable)
+					logutil.Infof("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable)
 				}
 				return
 			}

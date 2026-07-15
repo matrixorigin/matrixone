@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -136,43 +138,38 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	}
 	pattern := patVec.GetStringAt(nthRow)
 
-	// Load the index (base + CDC tail) and run the query. Build+query must
-	// tokenize identically — both use the index's parser (step-4: SimpleTokenizer).
+	// Run the query through the shared VectorIndexCache: the index (base + CDC tail)
+	// is loaded ONCE and reused across queries, evicted on CDC append / compaction /
+	// rebuild (fulltext2_{create,compact} + the CDC consumer call Cache.Remove).
+	// Before caching, every MATCH reloaded the whole index (~1s at 50K); now warm
+	// queries are ~ms, matching bm25. Build+query tokenize identically — both use the
+	// index's parser (carried in tblcfg).
 	sp := sqlexec.NewSqlProcess(proc)
-	bases, lerr := fulltext2.LoadAllBases(sp, u.tblcfg)
-	if lerr != nil {
-		return lerr
-	}
-	tails, _, terr := fulltext2.LoadTailSegments(sp, u.tblcfg)
-	if terr != nil {
-		return terr
-	}
-	segs := append(bases, tails...)
-	if len(segs) == 0 {
-		return nil // empty index → no hits
-	}
-	idx := fulltext2.NewIndex(segs, nil)
+	veccache.Cache.Once()
 
-	k := int(u.limit)
-	if k <= 0 {
-		k = int(idx.NumDocs())
-	}
 	// mode (argVecs[2], a query const): boolean → operator query, else NL phrase.
 	var mode int64
 	if mv := tf.ctr.argVecs[2]; mv != nil && mv.Length() > 0 {
 		mode = vector.GetFixedAtNoTypeCheck[int64](mv, 0)
 	}
-	algo := fulltext2ScoreAlgo(proc)
-	results, err := idx.SearchQuery([]byte(pattern), mode == int64(tree.FULLTEXT_BOOLEAN), u.tblcfg.Parser, algo, k)
-	if err != nil {
-		return err
+	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
+	q := fulltext2.Fulltext2Query{
+		Pattern: []byte(pattern),
+		Boolean: mode == int64(tree.FULLTEXT_BOOLEAN),
+		Algo:    fulltext2ScoreAlgo(proc),
 	}
-	u.keys = make([]any, len(results))
-	u.distances = make([]float64, len(results))
-	for i, r := range results {
-		u.keys[i] = r.Pk
-		u.distances[i] = r.Score
+	// u.limit==0 means "no pushed LIMIT" → Fulltext2Search.Search returns all docs.
+	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
+	keys, dists, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
+	if serr != nil {
+		return serr
 	}
+	ks, ok := keys.([]any)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "fulltext2_search: unexpected result key type")
+	}
+	u.keys = ks
+	u.distances = dists
 	return nil
 }
 

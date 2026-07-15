@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -99,6 +100,10 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity); err != nil {
 		return err
 	}
+	// The tag=0 base changed (tail folded into a fresh merged base) — evict any cached
+	// search index so the next query reloads the merged base instead of the stale one
+	// held until the TTL.
+	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }
 
