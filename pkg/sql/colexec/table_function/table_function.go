@@ -123,6 +123,8 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	tableFunction.cleanForPrepare(proc)
+
 	if tableFunction.OpAnalyzer == nil {
 		tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
 	} else {
@@ -204,6 +206,16 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	}
 
 	return err
+}
+
+// cleanForPrepare releases resources from a previous prepared execution before
+// rebuilding the table function's argument executors and state.
+func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
+	tableFunction.ctr.cleanExecutors()
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, false, nil)
+		tableFunction.ctr.state = nil
+	}
 }
 
 func (tableFunction *TableFunction) createResultBatch() *batch.Batch {

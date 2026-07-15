@@ -226,6 +226,21 @@ func TestResetAndFreeWithPartiallyInitializedExecutors(t *testing.T) {
 	require.Nil(t, arg.ctr.executorsForArgs)
 }
 
+func TestPrepareReleasesPreviousExecutorsAndState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	executor := &stubExpressionExecutor{}
+	state := &stubTableFunctionState{}
+	arg := &TableFunction{FuncName: "unsupported"}
+	arg.ctr.executorsForArgs = []colexec.ExpressionExecutor{executor}
+	arg.ctr.state = state
+
+	require.Error(t, arg.Prepare(proc))
+	require.Equal(t, 1, executor.freeCount)
+	require.Equal(t, 1, state.freeCount)
+	require.Nil(t, arg.ctr.executorsForArgs)
+	require.Nil(t, arg.ctr.state)
+}
+
 func TestSourceTableFunctionResetAfterStartError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	state := &startErrorState{startErr: moerr.NewInvalidInputNoCtx("invalid argument")}
@@ -307,6 +322,26 @@ func (s *startErrorState) end(*TableFunction, *process.Process) error { return n
 func (s *startErrorState) reset(*TableFunction, *process.Process) { s.called = false }
 
 func (s *startErrorState) free(*TableFunction, *process.Process, bool, error) {}
+
+type stubTableFunctionState struct {
+	freeCount int
+}
+
+func (*stubTableFunctionState) start(*TableFunction, *process.Process, int, process.Analyzer) error {
+	return nil
+}
+
+func (*stubTableFunctionState) call(*TableFunction, *process.Process) (vm.CallResult, error) {
+	return vm.CancelResult, nil
+}
+
+func (*stubTableFunctionState) end(*TableFunction, *process.Process) error { return nil }
+
+func (*stubTableFunctionState) reset(*TableFunction, *process.Process) {}
+
+func (s *stubTableFunctionState) free(*TableFunction, *process.Process, bool, error) {
+	s.freeCount++
+}
 
 func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
 	return nil, nil
