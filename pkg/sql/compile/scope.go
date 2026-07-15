@@ -649,16 +649,17 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 
 	//need to shuffle blocks when cncnt>1
 	rsp := &engine.RangesShuffleParam{
-		Node:  s.DataSource.node,
-		CNCNT: s.NodeInfo.CNCNT,
-		CNIDX: s.NodeInfo.CNIDX,
-		Init:  false,
+		Node:              s.DataSource.node,
+		CNCNT:             s.NodeInfo.CNCNT,
+		CNIDX:             s.NodeInfo.CNIDX,
+		ShuffleByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
+		Init:              false,
 	}
 	if !s.IsRemote { // this is local CN
 		rsp.IsLocalCN = true
 	}
 
-	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
+	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
 	// local
@@ -694,6 +695,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	return err
+}
+
+func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
+	if plan2.IsIvfSearchEntriesInternalScan(node) && cnidx > 0 {
+		return engine.Policy_CollectCommittedPersistedData
+	}
+	return engine.Policy_CollectAllData
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {

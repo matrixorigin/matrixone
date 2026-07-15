@@ -91,6 +91,18 @@ func TestNew_MyErrorCode(t *testing.T) {
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 }
 
+func TestLockWaitTimeoutMySQLError(t *testing.T) {
+	err := NewLockWaitTimeout(context.Background())
+	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
+	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Lock wait timeout exceeded; try restarting transaction", err.Error())
+
+	noCtxErr := NewLockWaitTimeoutNoCtx()
+	require.Equal(t, ErrLockWaitTimeout, noCtxErr.ErrorCode())
+	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, noCtxErr.MySQLCode())
+}
+
 func TestIsMoErrCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))

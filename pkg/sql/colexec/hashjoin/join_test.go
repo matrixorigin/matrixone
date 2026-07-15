@@ -51,6 +51,29 @@ type joinTestCase struct {
 	resultBatch *batch.Batch
 }
 
+func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &HashJoin{
+		EqConds:   [][]*plan.Expr{{valid}, {valid}},
+		NonEqCond: invalid,
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.eqCondVecs)
+	require.Nil(t, arg.ctr.eqCondExecs)
+	require.Nil(t, arg.ctr.nonEqCondExec)
+
+	arg.NonEqCond = valid
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.eqCondExecs, 1)
+	require.NotNil(t, arg.ctr.nonEqCondExec)
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
 var (
 	tag int32
 )
@@ -363,7 +386,7 @@ func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
 		Channel:  make(chan *bitmap.Bitmap, 1),
 	}
 	hashJoin.Channel <- remoteMatches
-	ctr := container{rightRowsMatched: localMatches}
+	ctr := container{rightRowsMatched: localMatches, probeSingle: true}
 
 	err := ctr.syncBitmap(hashJoin, proc)
 	require.Error(t, err)
