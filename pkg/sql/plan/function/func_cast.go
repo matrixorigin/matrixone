@@ -506,7 +506,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = float64ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		err = decimal64ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = decimal64ToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
 		err = decimal128ToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
@@ -1644,9 +1644,10 @@ func timeToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from time to %s", toType))
 }
 
-func decimal64ToOthers(ctx context.Context,
+func decimal64ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Decimal64],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -1699,8 +1700,12 @@ func decimal64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal256](result)
 		return decimal64ToDecimal256(source, rs, length)
 	case types.T_timestamp:
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return decimal64ToTimestamp(source, rs, length, selectList)
+		return decimal64ToTimestamp(source, rs, length, zone, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return decimal64ToDatetime(source, rs, length, selectList)
@@ -4393,9 +4398,11 @@ func decimal128ToDatetime(
 
 func decimal64ToTimestamp(
 	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Timestamp], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Timestamp], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
+	fromType := from.GetType()
+	toType := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4403,7 +4410,10 @@ func decimal64ToTimestamp(
 				return err
 			}
 		} else {
-			ts := types.UnixToTimestamp(int64(v))
+			ts, err := types.ParseTimestamp(zone, v.Format(fromType.Scale), toType.Scale)
+			if err != nil {
+				return err
+			}
 			if err := to.Append(ts, false); err != nil {
 				return err
 			}

@@ -37,6 +37,9 @@ select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as signed) as tim
 select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as decimal(20,6)) as timestamp_decimal;
 ➤ timestamp_decimal[3,20,6]  𝄀
 20240102030405.123456
+select cast(cast(20240102030405 as decimal(14,0)) as timestamp) as timestamp_from_decimal64;
+➤ timestamp_from_decimal64[93,64,0]  𝄀
+2024-01-02 03:04:05
 select cast('2024-01-02 03:04:05.123456' as timestamp(6)) + 0 as timestamp_plus_zero;
 ➤ timestamp_plus_zero[3,38,6]  𝄀
 20240102030405.123456

@@ -22,6 +22,7 @@ select cast(cast('2024-01-02 03:04:05' as datetime) as int) as datetime_int32;
 -- TIMESTAMP uses session time_zone before converting to packed numeric value.
 select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as signed) as timestamp_signed;
 select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as decimal(20,6)) as timestamp_decimal;
+select cast(cast(20240102030405 as decimal(14,0)) as timestamp) as timestamp_from_decimal64;
 select cast('2024-01-02 03:04:05.123456' as timestamp(6)) + 0 as timestamp_plus_zero;
 select cast('2024-01-02 03:04:05.123456' as timestamp(6)) = cast(20240102030405.123456 as decimal(20,6)) as timestamp_eq_compact_decimal;
 -- INT is int32 in MatrixOne; the packed TIMESTAMP value cannot fit.

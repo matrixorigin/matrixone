@@ -621,10 +621,10 @@ drop table t1;
 set @tt=now();
 select @tt;
 ➤ @tt[12,0,0]  𝄀
-2026-07-15 14:45:16.950977
+2026-07-15 15:09:12.915759
 select date_add(@tt, Interval 30 SECOND);
 ➤ date_add(@tt, INTERVAL 30 second)[12,0,0]  𝄀
-2026-07-15 14:45:46.950977
+2026-07-15 15:09:42.915759
 select date_sub(@tt, Interval 30 SECOND);
 ➤ date_sub(@tt, INTERVAL 30 second)[12,0,0]  𝄀
-2026-07-15 14:44:46.950977
+2026-07-15 15:08:42.915759

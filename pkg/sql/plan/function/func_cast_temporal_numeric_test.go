@@ -177,6 +177,7 @@ func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 		{name: "year to decimal128", source: types.T_year, target: types.T_decimal128},
 		{name: "decimal64 to datetime", source: types.T_decimal64, target: types.T_datetime},
 		{name: "decimal128 to datetime", source: types.T_decimal128, target: types.T_datetime},
+		{name: "decimal64 to timestamp", source: types.T_decimal64, target: types.T_timestamp},
 		{name: "decimal128 to timestamp", source: types.T_decimal128, target: types.T_timestamp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,25 +232,47 @@ func TestCastDecimalPackedDatetimeToDatetime(t *testing.T) {
 	}
 }
 
-func TestCastDecimal128PackedDatetimeToTimestamp(t *testing.T) {
+func TestCastDecimalPackedDatetimeToTimestamp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
 
-	packed, err := types.ParseDecimal128("20220102000101", 20, 0)
+	packed64, err := types.ParseDecimal64("20220102000101", 14, 0)
 	require.NoError(t, err)
-	expected, err := types.ParseTimestamp(time.UTC, "2022-01-02 00:01:01", 0)
+	packed128, err := types.ParseDecimal128("20240102030405.123456", 20, 6)
+	require.NoError(t, err)
+	expected64, err := types.ParseTimestamp(time.UTC, "2022-01-02 00:01:01", 0)
+	require.NoError(t, err)
+	expected128, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
 	require.NoError(t, err)
 
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{packed}, nil),
-			NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{}, nil),
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "decimal64 packed datetime",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal64, 14, 0), []types.Decimal64{packed64}, nil),
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{expected64}, nil),
 		},
-		NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{expected}, nil),
-		NewCast,
-	)
-	succeed, info := tc.Run()
-	require.True(t, succeed, info)
+		{
+			name: "decimal128 packed datetime preserves fractional seconds",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal128, 20, 6), []types.Decimal128{packed128}, nil),
+				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_timestamp.ToTypeWithScale(6), false, []types.Timestamp{expected128}, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 func TestTimestampNumericCastUsesSessionTimeZone(t *testing.T) {
