@@ -181,13 +181,6 @@ func NewFlushTableTailTask(
 		if !hdl.IsAppendable() {
 			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
-		rows, err := obj.GetObjectData().Rows()
-		if err != nil {
-			return nil, err
-		}
-		if rows == 0 {
-			continue
-		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Info(
 				"[FLUSH-NEED-RETRY]",
@@ -217,13 +210,6 @@ func NewFlushTableTailTask(
 		}
 		if !hdl.IsAppendable() {
 			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
-		}
-		rows, err := obj.GetObjectData().Rows()
-		if err != nil {
-			return nil, err
-		}
-		if rows == 0 {
-			continue
 		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Infof("[FlushTabletail] obj %v needs retry", obj.ID().String())

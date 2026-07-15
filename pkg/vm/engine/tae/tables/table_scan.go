@@ -94,28 +94,28 @@ func TombstoneRangeScanByObject(
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()
-	earlybreak := false
 	for ok := it.Last(); ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-
 		tombstone := it.Item()
-		// we only check the created version of the object.
-		if tombstone.HasDropIntent() {
-			continue
-		}
 
 		if tombstone.IsAppendable() {
 			if tombstone.CreatedAt.GT(&end) {
 				// committing create object is excluded here
 				continue
 			}
-			// first committed appendable object with CreatedAt < start, stop at next round
-			if tombstone.CreatedAt.LT(&start) {
-				earlybreak = true
+			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
+				continue
+			}
+			if tombstone.HasDropCommitted() {
+				deleteAt := tombstone.GetDeleteAt()
+				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
+					continue
+				}
 			}
 		} else {
+			// we only check the created version of the object.
+			if tombstone.HasDropIntent() {
+				continue
+			}
 			if !tombstone.ObjectStats.GetCNCreated() {
 				continue
 			}

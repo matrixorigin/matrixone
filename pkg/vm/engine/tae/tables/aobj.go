@@ -118,6 +118,14 @@ func (obj *aobject) PrepareCompact() bool {
 		}
 		return false
 	}
+	rows, err := obj.Rows()
+	if err != nil {
+		logutil.Warnf("get object rows failed, obj: %v, err: %v", obj.meta.Load().ID().String(), err)
+		return false
+	}
+	if rows == 0 {
+		return false
+	}
 
 	// see more notes in flushtabletail.go
 	obj.freezelock.Lock()
