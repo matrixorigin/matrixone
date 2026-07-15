@@ -291,6 +291,12 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			if berr != nil {
 				return -1, nil, nil, berr
 			}
+		} else if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
+			var berr error
+			tmpTableFunc, berr = builder.buildFulltext2SearchTableFunc(scanNode, idxdef, pattern, alias_name)
+			if berr != nil {
+				return -1, nil, nil, berr
+			}
 		} else {
 			idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
 			srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
@@ -740,7 +746,17 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		if idx == nil || !idx.TableExist {
+			continue
+		}
+		// A classic fulltext index (single def), or a fulltext2 index — for which
+		// we match only the storage def as the representative (its metadata sibling
+		// is resolved later in buildFulltext2SearchTableFunc, mirroring bm25).
+		if catalog.IsFullText2IndexAlgo(idx.IndexAlgo) {
+			if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
+				continue
+			}
+		} else if !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

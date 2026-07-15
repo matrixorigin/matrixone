@@ -186,6 +186,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = bm25CreatePrepare(proc, tblArg)
 	case "bm25_search":
 		tblArg.ctr.state, err = bm25SearchPrepare(proc, tblArg)
+	case "fulltext2_search":
+		tblArg.ctr.state, err = fulltext2SearchPrepare(proc, tblArg)
 	case "bm25_compact":
 		tblArg.ctr.state, err = bm25CompactPrepare(proc, tblArg)
 	case "parse_jsonl_data":
