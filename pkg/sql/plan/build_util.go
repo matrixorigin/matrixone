@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1231,6 +1232,17 @@ func genParentSideReplaceFKSqls(
 	qualifiedCol := func(alias, name string) string {
 		return quoteIdentifier(alias) + "." + quoteIdentifier(name)
 	}
+	findParentCol := func(name string) (*plan.ColDef, bool) {
+		if pos, found := parent.Name2ColIndex[name]; found && int(pos) < len(parent.Cols) {
+			return parent.Cols[pos], true
+		}
+		for _, col := range parent.Cols {
+			if col.Name == name {
+				return col, true
+			}
+		}
+		return nil, false
+	}
 
 	type uniqueKey struct {
 		parts         []string
@@ -1257,42 +1269,138 @@ func genParentSideReplaceFKSqls(
 
 	const parentAlias = "__mo_replace_parent"
 	literalFmt := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	formatLiteral := func(expr *plan.Expr) (string, bool, bool) {
+		lit := expr.GetLit()
+		if lit == nil {
+			return "", false, false
+		}
+		if lit.Isnull {
+			return "", true, true
+		}
+		switch val := lit.Value.(type) {
+		case *plan.Literal_I8Val:
+			return strconv.FormatInt(int64(val.I8Val), 10), false, true
+		case *plan.Literal_I16Val:
+			return strconv.FormatInt(int64(val.I16Val), 10), false, true
+		case *plan.Literal_I32Val:
+			return strconv.FormatInt(int64(val.I32Val), 10), false, true
+		case *plan.Literal_I64Val:
+			return strconv.FormatInt(val.I64Val, 10), false, true
+		case *plan.Literal_U8Val:
+			return strconv.FormatUint(uint64(val.U8Val), 10), false, true
+		case *plan.Literal_U16Val:
+			return strconv.FormatUint(uint64(val.U16Val), 10), false, true
+		case *plan.Literal_U32Val:
+			return strconv.FormatUint(uint64(val.U32Val), 10), false, true
+		case *plan.Literal_U64Val:
+			return strconv.FormatUint(val.U64Val, 10), false, true
+		case *plan.Literal_Fval:
+			return strconv.FormatFloat(float64(val.Fval), 'g', -1, 32), false, true
+		case *plan.Literal_Dval:
+			return strconv.FormatFloat(val.Dval, 'g', -1, 64), false, true
+		case *plan.Literal_Bval:
+			return strconv.FormatBool(val.Bval), false, true
+		case *plan.Literal_EnumVal:
+			return strconv.FormatUint(uint64(val.EnumVal), 10), false, true
+		case *plan.Literal_Decimal64Val:
+			return types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.Scale), false, true
+		case *plan.Literal_Decimal128Val:
+			decimal := types.Decimal128{
+				B0_63:   uint64(val.Decimal128Val.A),
+				B64_127: uint64(val.Decimal128Val.B),
+			}
+			return decimal.Format(expr.Typ.Scale), false, true
+		case *plan.Literal_Sval:
+			tree.NewNumVal(val.Sval, val.Sval, false, tree.P_char).Format(literalFmt)
+			formatted := literalFmt.String()
+			literalFmt.Reset()
+			return formatted, false, true
+		default:
+			return "", false, false
+		}
+	}
+	materializeDefault := func(colName string) (string, bool, error) {
+		col, found := findParentCol(colName)
+		if !found {
+			return "", false, moerr.NewInternalErrorf(ctx.GetContext(),
+				"REPLACE conflict column %s not found", colName)
+		}
+		if col.GeneratedCol != nil {
+			return "", false, moerr.NewNotSupported(ctx.GetContext(),
+				"REPLACE with an omitted generated conflict key")
+		}
+		defaultExpr, err := getDefaultExpr(ctx.GetContext(), col)
+		if err != nil {
+			return "", false, err
+		}
+		formatted, isNull, ok := formatLiteral(defaultExpr)
+		if !ok {
+			return "", false, moerr.NewNotSupported(ctx.GetContext(),
+				"REPLACE with a non-literal default conflict key")
+		}
+		return formatted, isNull, nil
+	}
 	conflictPredicates := make([]string, 0, len(values.Rows)*len(uniqueKeys))
 	for _, row := range values.Rows {
 		for _, key := range uniqueKeys {
 			parts := make([]string, 0, len(key.parts))
-			missing := 0
-			allMissingAutoIncrement := true
+			keyCannotConflict := false
 			for _, colName := range key.parts {
 				pos, supplied := positions[colName]
+				var incomingExpr string
 				if !supplied || pos >= len(row) {
-					missing++
-					colPos, found := parent.Name2ColIndex[colName]
-					if !found || !parent.Cols[colPos].Typ.AutoIncr {
-						allMissingAutoIncrement = false
+					col, found := findParentCol(colName)
+					if !found {
+						return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
+							"REPLACE conflict column %s not found", colName)
 					}
-					continue
-				}
-				switch row[pos].(type) {
-				case *tree.NumVal, *tree.StrVal:
-					parentExpr := qualifiedCol(parentAlias, colName)
-					row[pos].Format(literalFmt)
-					incomingExpr := literalFmt.String()
-					literalFmt.Reset()
-					if length := key.prefixLengths[colName]; length > 0 {
-						parentExpr = fmt.Sprintf("substring(%s, 1, %d)", parentExpr, length)
-						incomingExpr = fmt.Sprintf("substring(%s, 1, %d)", incomingExpr, length)
+					if col.Typ.AutoIncr {
+						keyCannotConflict = true
+						break
 					}
-					parts = append(parts, fmt.Sprintf("%s = %s", parentExpr, incomingExpr))
-				default:
-					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
+					var isNull bool
+					var err error
+					incomingExpr, isNull, err = materializeDefault(colName)
+					if err != nil {
+						return nil, nil, err
+					}
+					if isNull {
+						keyCannotConflict = true
+						break
+					}
+				} else {
+					switch row[pos].(type) {
+					case *tree.NumVal, *tree.StrVal:
+						row[pos].Format(literalFmt)
+						incomingExpr = literalFmt.String()
+						literalFmt.Reset()
+					case *tree.DefaultVal:
+						var isNull bool
+						var err error
+						incomingExpr, isNull, err = materializeDefault(colName)
+						if err != nil {
+							return nil, nil, err
+						}
+						if isNull {
+							keyCannotConflict = true
+							break
+						}
+					default:
+						return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
+					}
 				}
+				if keyCannotConflict {
+					break
+				}
+				parentExpr := qualifiedCol(parentAlias, colName)
+				if length := key.prefixLengths[colName]; length > 0 {
+					parentExpr = fmt.Sprintf("substring(%s, 1, %d)", parentExpr, length)
+					incomingExpr = fmt.Sprintf("substring(%s, 1, %d)", incomingExpr, length)
+				}
+				parts = append(parts, fmt.Sprintf("%s = %s", parentExpr, incomingExpr))
 			}
-			if missing == len(key.parts) && allMissingAutoIncrement {
+			if keyCannotConflict {
 				continue
-			}
-			if missing != 0 {
-				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with an omitted conflict key")
 			}
 			conflictPredicates = append(conflictPredicates, "("+strings.Join(parts, " and ")+")")
 		}

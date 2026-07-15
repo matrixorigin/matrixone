@@ -3256,6 +3256,84 @@ func TestReplaceParentSideFKUniquePrefixConflict(t *testing.T) {
 	assert.Contains(t, actions[0], `substring("abcdyyyy", 1, 4)`)
 }
 
+func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
+	parseReplace := func(t *testing.T, sql string) *tree.Replace {
+		t.Helper()
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		return stmt.(*tree.Replace)
+	}
+	newParent := func(t *testing.T) (*MockOptimizer, *plan.TableDef) {
+		t.Helper()
+		mock := NewMockOptimizer(true)
+		parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+		parent.Indexes = append(parent.Indexes, &plan.IndexDef{
+			Unique: true,
+			Parts:  []string{"v"},
+		})
+		return mock, parent
+	}
+	parentCol := func(t *testing.T, parent *plan.TableDef, name string) *plan.ColDef {
+		t.Helper()
+		for _, col := range parent.Cols {
+			if col.Name == name {
+				return col
+			}
+		}
+		t.Fatalf("missing parent column %s", name)
+		return nil
+	}
+
+	t.Run("nullable default cannot conflict", func(t *testing.T) {
+		mock, parent := newParent(t)
+		v := parentCol(t, parent, "v")
+		v.Default = &plan.Default{NullAbility: true}
+
+		_, actions, err := genParentSideReplaceFKSqls(
+			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
+			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
+		require.NoError(t, err)
+		require.Len(t, actions, 1)
+		assert.Contains(t, actions[0], "`__mo_replace_parent`.`id` = 1")
+		assert.NotContains(t, actions[0], "`__mo_replace_parent`.`v` =")
+	})
+
+	t.Run("constant prefix default participates", func(t *testing.T) {
+		mock, parent := newParent(t)
+		parent.Indexes[len(parent.Indexes)-1].IndexAlgoParams = `{"prefix_lengths":"v:4"}`
+		v := parentCol(t, parent, "v")
+		v.Default = &plan.Default{
+			NullAbility: true,
+			Expr:        makeStringConstExpr(v.Typ, "abcdyyyy"),
+		}
+
+		_, actions, err := genParentSideReplaceFKSqls(
+			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
+			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
+		require.NoError(t, err)
+		require.Len(t, actions, 1)
+		assert.Contains(t, actions[0], "substring(`__mo_replace_parent`.`v`, 1, 4)")
+		assert.Contains(t, actions[0], `substring("abcdyyyy", 1, 4)`)
+	})
+
+	t.Run("dynamic default fails closed", func(t *testing.T) {
+		mock, parent := newParent(t)
+		v := parentCol(t, parent, "v")
+		v.Default = &plan.Default{
+			NullAbility: true,
+			Expr: &plan.Expr{
+				Typ:  v.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "dynamic_default"}},
+			},
+		}
+
+		_, _, err := genParentSideReplaceFKSqls(
+			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
+			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
+		require.ErrorContains(t, err, "non-literal default conflict key")
+	})
+}
+
 func TestReplaceODKU(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// INSERT ON DUPLICATE KEY UPDATE should be rewritten to REPLACE path
