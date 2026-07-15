@@ -557,6 +557,12 @@ func (s *service) handleRemoteGetLock(
 			resp.GetTxnLock.Value = int32(lock.value)
 			values := make([]pb.WaitTxn, 0)
 			lock.waiters.iter(func(w *waiter) bool {
+				// The response is a wait-for graph snapshot. Only waiters that
+				// are actively blocking represent an edge; notified and completed
+				// waiters may still be present in the queue.
+				if w.getStatus() != blocking {
+					return true
+				}
 				values = append(values, w.txn)
 				return true
 			})

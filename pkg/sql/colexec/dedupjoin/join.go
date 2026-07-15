@@ -665,7 +665,21 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 
 			case plan.Node_IGNORE:
-				ctr.matched.Add(vals[k] - 1)
+				// The build side marks the old key of every UPDATE target as
+				// deleted.  A match to that key is the row updating itself, not a
+				// conflicting row to be ignored.
+				if ctr.mp.IsDeleted(vals[k] - 1) {
+					continue
+				}
+				if sels := ctr.mp.GetSels(vals[k]); len(sels) > 0 {
+					for _, sel := range sels {
+						ctr.matched.Add(uint64(sel))
+					}
+				} else {
+					// Compact unique maps omit GroupSels; in that representation
+					// group g still maps directly to build row g-1.
+					ctr.matched.Add(vals[k] - 1)
+				}
 
 			case plan.Node_UPDATE:
 				err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k), 1, ctr.cfs1)
