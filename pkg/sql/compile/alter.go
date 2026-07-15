@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -56,6 +57,52 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 		return moerr.NewNoSuchTable(ctx, dbName, tblName)
 	}
 	return e
+}
+
+type alterAutoIncrementResetCleanup struct {
+	c        *Compile
+	tableIDs []uint64
+	tracked  map[uint64]struct{}
+}
+
+func newAlterAutoIncrementResetCleanup(c *Compile) *alterAutoIncrementResetCleanup {
+	return &alterAutoIncrementResetCleanup{
+		c:       c,
+		tracked: make(map[uint64]struct{}),
+	}
+}
+
+func (cleanup *alterAutoIncrementResetCleanup) track(tableID uint64) {
+	if _, ok := cleanup.tracked[tableID]; ok {
+		return
+	}
+	cleanup.tracked[tableID] = struct{}{}
+	cleanup.tableIDs = append(cleanup.tableIDs, tableID)
+}
+
+func (cleanup *alterAutoIncrementResetCleanup) finish(statementErr *error) {
+	if *statementErr == nil && cleanup.c.proc.Ctx != nil {
+		*statementErr = cleanup.c.proc.Ctx.Err()
+	}
+	if *statementErr == nil || len(cleanup.tableIDs) == 0 {
+		return
+	}
+
+	ctx := cleanup.c.proc.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	svc := incrservice.GetAutoIncrementService(cleanup.c.proc.GetService())
+	var cleanupErr error
+	for _, tableID := range cleanup.tableIDs {
+		cleanupErr = errors.Join(
+			cleanupErr,
+			svc.DiscardOffsetReset(ctx, tableID, cleanup.c.proc.GetTxnOperator()),
+		)
+	}
+	*statementErr = errors.Join(*statementErr, cleanupErr)
 }
 
 func shouldEnableAlterCopyPipelineFlush(opt *plan.AlterCopyOpt) bool {
@@ -274,7 +321,13 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 	return opt, nil
 }
 
-func (s *Scope) AlterTableCopy(c *Compile) error {
+func (s *Scope) AlterTableCopy(c *Compile) (err error) {
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
+	return s.alterTableCopy(c, cleanup)
+}
+
+func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 
@@ -448,7 +501,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
-	if err = c.reconcileAlterCopyAutoIncrement(dbName, qry.CopyTableDef, newRel); err != nil {
+	if err = c.reconcileAlterCopyAutoIncrement(dbName, qry.CopyTableDef, newRel, cleanup); err != nil {
 		return err
 	}
 
@@ -716,6 +769,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	dbName string,
 	copyDef *plan.TableDef,
 	newRel engine.Relation,
+	cleanup *alterAutoIncrementResetCleanup,
 ) error {
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
@@ -747,6 +801,10 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			effectiveOffset,
 			c.proc.GetTxnOperator(),
 		); err != nil {
+			return err
+		}
+		cleanup.track(tableID)
+		if err := c.proc.Ctx.Err(); err != nil {
 			return err
 		}
 	}
@@ -913,14 +971,15 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	return moerr.NewInternalError(c.proc.Ctx, "unsupported alter partition type")
 }
 
-func (s *Scope) doAlterTable(c *Compile) error {
+func (s *Scope) doAlterTable(c *Compile) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
 
-	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
-		err = s.AlterTableCopy(c)
+		err = s.alterTableCopy(c, cleanup)
 	} else {
-		err = s.AlterTableInplace(c)
+		err = s.alterTableInplace(c, cleanup)
 	}
 	if err != nil {
 		return err

@@ -518,7 +518,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	return m
 }
 
-func (s *Scope) AlterTableInplace(c *Compile) error {
+func (s *Scope) AlterTableInplace(c *Compile) (err error) {
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
+	return s.alterTableInplace(c, cleanup)
+}
+
+func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 	if dbName == "" {
@@ -1128,6 +1134,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					c.proc.GetTxnOperator(),
 				); err != nil {
 					return err
+				}
+				cleanup.track(tid)
+				if c.proc.Ctx != nil {
+					if err := c.proc.Ctx.Err(); err != nil {
+						return err
+					}
 				}
 				reqs = append(reqs, api.NewUpdateAutoIncrementReq(did, tid, offset))
 			}

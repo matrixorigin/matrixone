@@ -56,6 +56,32 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
+func TestAlterAutoIncrementResetCleanupDiscardsEveryTrackedTableAndJoinsErrors(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.Background()
+	_, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnOperator = txnOp
+
+	cleanupErr := errors.New("discard failed")
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), txnOp).Return(cleanupErr)
+	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), txnOp).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(&Compile{proc: proc})
+	cleanup.track(11)
+	cleanup.track(11)
+	cleanup.track(12)
+	originalErr := errors.New("statement failed")
+	statementErr := originalErr
+	cleanup.finish(&statementErr)
+
+	require.ErrorIs(t, statementErr, originalErr)
+	require.ErrorIs(t, statementErr, cleanupErr)
+	require.Contains(t, statementErr.Error(), "statement failed")
+}
+
 type alterCopyInsertSpyExecutor struct {
 	insertSQL    string
 	insertErr    error
@@ -110,10 +136,12 @@ func TestScopeAlterTableCopyReconcilesAutoIncrementAfterDataCopy(t *testing.T) {
 		copiedMax       uint64
 		wantOffset      uint64
 		cancelAfterCopy bool
+		failAfterReset  bool
 	}{
 		{name: "empty table keeps requested offset", copiedMax: 0, wantOffset: requestedOffset},
 		{name: "copied maximum wins", copiedMax: 500, wantOffset: 500},
 		{name: "cancellation stops reconciliation", cancelAfterCopy: true},
+		{name: "later copy failure discards destination reset", copiedMax: 500, wantOffset: 500, failAfterReset: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -179,6 +207,11 @@ func TestScopeAlterTableCopyReconcilesAutoIncrementAfterDataCopy(t *testing.T) {
 				insertSQL: alterTable.InsertTmpDataSql,
 				results:   map[string]executor.Result{maxSQL: result},
 			}
+			postResetErr := errors.New("drop source failed after destination reset")
+			dropSQL := "drop table `test`.`dept`"
+			if tc.failAfterReset {
+				spyExec.errs = map[string]error{dropSQL: postResetErr}
+			}
 			if tc.cancelAfterCopy {
 				spyExec.afterInsert = cancel
 			}
@@ -190,6 +223,9 @@ func TestScopeAlterTableCopyReconcilesAutoIncrementAfterDataCopy(t *testing.T) {
 			stopAfterSet := errors.New("stop after setting copy offset")
 			if tc.cancelAfterCopy {
 				autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+			} else if tc.failAfterReset {
+				autoSvc.EXPECT().SetOffset(ctx, copyTableID, "id", tc.wantOffset, txnOp).Return(nil)
+				autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), copyTableID, txnOp).Return(nil)
 			} else {
 				autoSvc.EXPECT().SetOffset(ctx, copyTableID, "id", tc.wantOffset, txnOp).Return(stopAfterSet)
 			}
@@ -201,6 +237,10 @@ func TestScopeAlterTableCopyReconcilesAutoIncrementAfterDataCopy(t *testing.T) {
 			if tc.cancelAfterCopy {
 				require.ErrorIs(t, err, context.Canceled)
 				assert.Equal(t, []string{alterTable.CreateTmpTableSql, alterTable.InsertTmpDataSql}, spyExec.executedSQLs)
+			} else if tc.failAfterReset {
+				require.ErrorIs(t, err, postResetErr)
+				assert.Equal(t, []string{alterTable.CreateTmpTableSql, alterTable.InsertTmpDataSql, maxSQL, dropSQL}, spyExec.executedSQLs)
+				assert.Zero(t, resultMP.CurrNB(), "MAX query result must be closed")
 			} else {
 				require.ErrorIs(t, err, stopAfterSet)
 				assert.Equal(t, []string{alterTable.CreateTmpTableSql, alterTable.InsertTmpDataSql, maxSQL}, spyExec.executedSQLs)
