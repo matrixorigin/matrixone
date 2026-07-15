@@ -178,6 +178,41 @@ func TestRestoreCreateTableDDLExternalRequiresCreateSQL(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing external table parameter JSON")
 }
 
+func TestRenderExternalInfileClauseWithOptionalSettings(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath:         "/tmp/data.jsonl",
+			CompressType:     "none",
+			Format:           "jsonline",
+			HivePartitioning: true,
+			HivePartitionCols: []string{
+				"ds",
+				"region",
+			},
+			Tail: &tree.TailParameter{
+				Fields: &tree.Fields{
+					EscapedBy: &tree.EscapedBy{Value: '\\'},
+				},
+				Lines: &tree.Lines{
+					StartingBy: "\t",
+				},
+			},
+		},
+		ExParam: tree.ExParam{JsonData: "object"},
+	}
+
+	got := renderExternalInfileClause(param)
+	require.Contains(t, got, "'jsondata'='object'")
+	require.Contains(t, got, "'hive_partitioning'='true'")
+	require.Contains(t, got, "'hive_partition_columns'='ds,region'")
+	require.Contains(t, got, "ESCAPED BY '\\\\'")
+	require.Contains(t, got, "STARTING BY '\\\\t'")
+	require.Equal(t, []string{"a", "b", "c"}, appendExternalOptionIfSet([]string{"a"}, "b", "c"))
+	require.Equal(t, []string{"a"}, appendExternalOptionIfSet([]string{"a"}, "b", ""))
+	require.Equal(t, "", byteSQLString(0))
+	require.Equal(t, ",", byteSQLString(','))
+}
+
 func TestRestoreCreateTableDDLUsesViewCreateSQL(t *testing.T) {
 	table := checkpointtool.TableCatalogEntry{
 		DatabaseName: "ckp_views",
@@ -800,6 +835,27 @@ func TestNormalizeCreateTableDDLNameWithCreateTableModifiers(t *testing.T) {
 	assert.Equal(t, "CREATE CLUSTER TABLE `ckp_constraints`.`parent` (id INT)", got)
 }
 
+func TestSQLIdentifierParserEdges(t *testing.T) {
+	name, ok := readLeadingSQLIdent(" `a``b` rest")
+	require.True(t, ok)
+	require.Equal(t, "a`b", name)
+	_, ok = readLeadingSQLIdent("`unterminated")
+	require.False(t, ok)
+	_, ok = readLeadingSQLIdent(" !bad")
+	require.False(t, ok)
+	name, ok = readLeadingSQLIdent("abc$123 next")
+	require.True(t, ok)
+	require.Equal(t, "abc$123", name)
+
+	start, end, ok := createTableNameRange("CREATE OR REPLACE TEMPORARY EXTERNAL TABLE IF NOT EXISTS `db`.`t``x` (id INT)")
+	require.True(t, ok)
+	require.Equal(t, "`db`.`t``x`", "CREATE OR REPLACE TEMPORARY EXTERNAL TABLE IF NOT EXISTS `db`.`t``x` (id INT)"[start:end])
+	_, _, ok = createTableNameRange("CREATE TABLE ")
+	require.False(t, ok)
+	require.Equal(t, "\t", inferCreateTableClauseIndent("(\n\t`id` INT\n)"))
+	require.Equal(t, "  ", inferCreateTableClauseIndent("( )"))
+}
+
 func TestCleanObjectPath(t *testing.T) {
 	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
 	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))
@@ -939,6 +995,11 @@ func TestDumpCommandValidationErrors(t *testing.T) {
 			args: []string{"--database-id=2"},
 			want: "--output-dir is required",
 		},
+		{
+			name: "cpuprofile create error",
+			args: []string{"--table-id=1", "--cpuprofile", filepath.Join(t.TempDir(), "missing", "cpu.pprof")},
+			want: "create cpuprofile",
+		},
 	}
 
 	for _, tt := range tests {
@@ -953,6 +1014,42 @@ func TestDumpCommandValidationErrors(t *testing.T) {
 			err := cmd.Execute()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestShowCreateTableCommandRequiresTableID(t *testing.T) {
+	var storage toolfs.StorageOptions
+	cmd := showCreateTableCommand(&storage)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(nil)
+	err := cmd.Execute()
+	require.ErrorContains(t, err, "--table-id is required")
+}
+
+func TestCheckpointCommandsRejectConflictingLocalFlags(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "view", args: []string{"--local", "--local2", "view", t.TempDir()}},
+		{name: "list", args: []string{"--local", "--local2", "list", t.TempDir()}},
+		{name: "dump", args: []string{"--local", "--local2", "dump", "--table-id=1", t.TempDir()}},
+		{name: "show-create", args: []string{"--local", "--local2", "show-create-table", "--table-id=1", t.TempDir()}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := PrepareCommand()
+			cmd.SilenceUsage = true
+			cmd.SilenceErrors = true
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs(tt.args)
+			require.Error(t, cmd.Execute())
 		})
 	}
 }

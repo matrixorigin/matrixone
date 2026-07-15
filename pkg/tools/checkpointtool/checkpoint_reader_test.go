@@ -328,6 +328,52 @@ func TestCheckpointReaderReadTableAndRangeData(t *testing.T) {
 	require.Equal(t, [][]string{{"2", "bob"}}, rows)
 }
 
+func TestCheckpointReaderComposeAtWithHooks(t *testing.T) {
+	dataStats := testCheckpointObjectStats(t, 1)
+	tombStats := testCheckpointObjectStats(t, 2)
+	gcEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(5, 0), checkpoint.ET_Global)
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(6, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	incrEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(11, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
+	futureEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(16, 0), types.BuildTS(25, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{gcEntry, baseEntry, incrEntry, futureEntry},
+	}
+	reader.getTablesForTest = func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		switch entry {
+		case gcEntry:
+			return nil, moerr.NewFileNotFoundNoCtx("gc")
+		case baseEntry:
+			return []*TableInfo{{TableID: 42, AccountID: 7, DataRanges: []ckputil.TableRange{{TableID: 42, ObjectType: ckputil.ObjectType_Data, ObjectStats: dataStats}}}}, nil
+		case incrEntry:
+			return []*TableInfo{{TableID: 42, AccountID: 7, TombRanges: []ckputil.TableRange{{TableID: 42, ObjectType: ckputil.ObjectType_Tombstone, ObjectStats: tombStats}}}}, nil
+		default:
+			t.Fatalf("unexpected entry at %s", entry.GetEnd().ToString())
+			return nil, nil
+		}
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(20, 0))
+	require.NoError(t, err)
+	require.NotNil(t, view.BaseEntry)
+	require.Equal(t, 1, view.BaseEntry.Index)
+	require.Len(t, view.Incrementals, 1)
+	require.Equal(t, 2, view.Incrementals[0].Index)
+	require.Len(t, view.Tables, 1)
+	require.Len(t, view.Tables[42].DataRanges, 1)
+	require.Len(t, view.Tables[42].TombRanges, 1)
+
+	hookErr := errors.New("table hook failed")
+	reader.getTablesForTest = func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		if entry == gcEntry {
+			return nil, moerr.NewFileNotFoundNoCtx("gc")
+		}
+		return nil, hookErr
+	}
+	_, err = reader.ComposeAt(types.BuildTS(20, 0))
+	require.ErrorIs(t, err, hookErr)
+}
+
 func TestCheckpointReaderSmallHelpers(t *testing.T) {
 	entries := []fileservice.DirEntry{
 		{Name: "dir", IsDir: true},

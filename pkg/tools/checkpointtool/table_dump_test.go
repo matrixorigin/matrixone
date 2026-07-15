@@ -768,6 +768,90 @@ func TestWriteProjectedCSVRowFromVecsFastPath(t *testing.T) {
 	assert.Equal(t, "-42,-123.40,123456789012345.67890,2024-06-01,\"a\"\"b\\\\c\",\\N\n", buf.String())
 }
 
+func TestAppendCSVUnquotedVecValueScalarTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	timeVal, err := types.ParseTime("12:30:45.123", 3)
+	require.NoError(t, err)
+	datetimeVal, err := types.ParseDatetime("2024-01-02 03:04:05.123", 3)
+	require.NoError(t, err)
+	timestampVal, err := types.ParseTimestamp(time.Local, "2024-01-02 03:04:05.123", 3)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name string
+		typ  types.Type
+		fill func(*vector.Vector)
+		want string
+	}{
+		{name: "bool true", typ: types.T_bool.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, true, false, mp)) }, want: "true"},
+		{name: "bool false", typ: types.T_bool.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, false, false, mp)) }, want: "false"},
+		{name: "int8", typ: types.T_int8.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, int8(-8), false, mp)) }, want: "-8"},
+		{name: "int16", typ: types.T_int16.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, int16(-16), false, mp)) }, want: "-16"},
+		{name: "int32", typ: types.T_int32.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, int32(-32), false, mp)) }, want: "-32"},
+		{name: "uint8", typ: types.T_uint8.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint8(8), false, mp)) }, want: "8"},
+		{name: "uint16", typ: types.T_uint16.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint16(16), false, mp)) }, want: "16"},
+		{name: "uint32", typ: types.T_uint32.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint32(32), false, mp)) }, want: "32"},
+		{name: "uint64", typ: types.T_uint64.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint64(64), false, mp)) }, want: "64"},
+		{name: "float32", typ: types.T_float32.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, float32(1.25), false, mp)) }, want: "1.25"},
+		{name: "float64", typ: types.T_float64.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, float64(2.5), false, mp)) }, want: "2.5"},
+		{name: "time", typ: types.T_time.ToTypeWithScale(3), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, timeVal, false, mp)) }, want: "12:30:45.123"},
+		{name: "datetime", typ: types.T_datetime.ToTypeWithScale(3), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, datetimeVal, false, mp)) }, want: "2024-01-02 03:04:05.123"},
+		{name: "timestamp", typ: types.T_timestamp.ToTypeWithScale(3), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, timestampVal, false, mp)) }, want: "2024-01-02 03:04:05.123"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			defer vec.Free(mp)
+			tc.fill(vec)
+			var buf bytes.Buffer
+			appendCSVUnquotedVecValue(&buf, tc.typ, vec, 0)
+			require.Equal(t, tc.want, buf.String())
+		})
+	}
+
+	constVec := vector.NewConstNull(types.T_int32.ToType(), 3, mp)
+	defer constVec.Free(mp)
+	require.Equal(t, 0, vectorRowIndex(constVec, 2))
+}
+
+func TestCSVDDLAndCatalogHelperEdges(t *testing.T) {
+	require.Equal(t, "NULL", formatDDLDefault(""))
+	require.Equal(t, "NULL", formatDDLDefault(" null "))
+	require.Equal(t, "'a''b'", formatDDLDefault("'a'b'"))
+	require.Equal(t, "current_timestamp()", formatDDLDefault("current_timestamp()"))
+
+	var buf bytes.Buffer
+	appendDecimal128(&buf, types.Decimal128{}, 3)
+	require.Equal(t, "0.000", buf.String())
+	buf.Reset()
+	decimal128, err := types.ParseDecimal128("-42", 38, 0)
+	require.NoError(t, err)
+	appendDecimal128(&buf, decimal128, 0)
+	require.Equal(t, "-42", buf.String())
+
+	tables := []TableCatalogEntry{
+		{AccountID: 2, DatabaseID: 20, DatabaseName: "b", TableName: "t2", TableID: 2},
+		{AccountID: 1, DatabaseID: 10, DatabaseName: "a", TableName: "t1", TableID: 1},
+		{AccountID: 1, DatabaseID: 11, DatabaseName: "a", TableName: "t3", TableID: 3},
+	}
+	accountID := uint32(1)
+	databaseID := uint64(10)
+	filtered := filterCatalogTablesForList(tables, TableListOptions{AccountID: &accountID, DatabaseID: &databaseID})
+	require.Equal(t, []TableCatalogEntry{tables[1]}, filtered)
+	require.True(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 9, DatabaseName: "db", TableName: "t", DatabaseID: 1, RelKind: "r"},
+		TableCatalogEntry{TableID: 9},
+	))
+	require.False(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 9},
+		TableCatalogEntry{TableID: 9, DatabaseName: "db", TableName: "t", DatabaseID: 1, RelKind: "r"},
+	))
+	require.Equal(t, -1, compareCSVRowsLexical([]string{"a"}, []string{"a", "b"}))
+	require.Equal(t, 1, compareCSVRowsLexical([]string{"b"}, []string{"a"}))
+	require.Equal(t, 0, compareCSVRowsLexical([]string{"a"}, []string{"a"}))
+}
+
 // TestWriteCSV_withCreateSQLHeader tests the header comment from CreateSQL.
 func TestWriteCSV_withCreateSQLHeader(t *testing.T) {
 	schema := &TableSchema{
