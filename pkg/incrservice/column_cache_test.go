@@ -545,10 +545,11 @@ func runColumnCacheTestsWithInitOffset(
 
 }
 
-// TestLastAllocateAtUpdate verifies that lastAllocateAt is correctly updated
-// when new ranges are allocated. This is critical for multi-CN scenarios where
-// lastAllocateAt is used for PrimaryKeysMayBeUpserted check.
-func TestLastAllocateAtUpdate(t *testing.T) {
+// TestOldestAllocateAtFollowsConsumableRange verifies that conflict detection
+// starts at the allocation timestamp of the range that can still issue values.
+// A newer prefetched range must not hide manual inserts that can conflict with
+// values remaining in an older range.
+func TestOldestAllocateAtFollowsConsumableRange(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	sid := ""
@@ -570,39 +571,27 @@ func TestLastAllocateAtUpdate(t *testing.T) {
 				allocatingC: make(chan error, 1), // Initialize allocatingC channel
 			}
 
-			// Test 1: Initial allocation with valid timestamp
 			ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
-			cc.applyAllocateLocked(1, 100, ts1, nil)
-			assert.Equal(t, ts1, cc.lastAllocateAt, "lastAllocateAt should be updated to ts1")
+			cc.applyAllocateLocked(1, 4, ts1, nil)
+			assert.Equal(t, ts1, cc.ranges.oldestAllocateAt())
 
-			// Reset allocatingC for next test (applyAllocateLocked closes it)
 			cc.allocatingC = make(chan error, 1)
-
-			// Test 2: Subsequent allocation with larger timestamp should update
 			ts2 := timestamp.Timestamp{PhysicalTime: 2000, LogicalTime: 2}
-			cc.applyAllocateLocked(101, 200, ts2, nil)
-			assert.Equal(t, ts2, cc.lastAllocateAt, "lastAllocateAt should be updated to ts2")
+			cc.applyAllocateLocked(4, 7, ts2, nil)
 
-			// Reset allocatingC for next test
-			cc.allocatingC = make(chan error, 1)
-
-			// Test 3: Allocation with smaller timestamp should NOT update
-			ts3 := timestamp.Timestamp{PhysicalTime: 1500, LogicalTime: 1}
-			cc.applyAllocateLocked(201, 300, ts3, nil)
-			assert.Equal(t, ts2, cc.lastAllocateAt, "lastAllocateAt should remain ts2 (larger timestamp)")
-
-			// Reset allocatingC for next test
-			cc.allocatingC = make(chan error, 1)
-
-			// Test 4: Allocation with empty timestamp should NOT update
-			cc.applyAllocateLocked(301, 400, timestamp.Timestamp{}, nil)
-			assert.Equal(t, ts2, cc.lastAllocateAt, "lastAllocateAt should remain ts2 (empty timestamp ignored)")
+			assert.Equal(t, ts1, cc.ranges.oldestAllocateAt(),
+				"prefetch must retain the timestamp of the range still issuing values")
+			assert.Equal(t, uint64(1), cc.ranges.next())
+			assert.Equal(t, uint64(2), cc.ranges.next())
+			assert.Equal(t, uint64(3), cc.ranges.next())
+			assert.Equal(t, ts2, cc.ranges.oldestAllocateAt(),
+				"timestamp should advance after the older range is exhausted")
 		},
 	)
 }
 
-// TestLastAllocateAtEmptyInitial verifies that lastAllocateAt is correctly
-// initialized from empty state when first allocation happens.
+// TestLastAllocateAtEmptyInitial verifies that an empty allocation timestamp
+// remains a safe zero timestamp and the first valid allocation is exposed.
 func TestLastAllocateAtEmptyInitial(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -623,17 +612,16 @@ func TestLastAllocateAtEmptyInitial(t *testing.T) {
 				ranges:      &ranges{step: 1, values: make([]uint64, 0, 1)},
 				committed:   true,
 				allocatingC: make(chan error, 1), // Initialize allocatingC channel
-				// lastAllocateAt is zero-value (empty)
 			}
 
 			// Verify initial state
-			assert.True(t, cc.lastAllocateAt.IsEmpty(), "Initial lastAllocateAt should be empty")
+			assert.True(t, cc.ranges.oldestAllocateAt().IsEmpty(), "Initial allocation timestamp should be empty")
 
-			// First allocation should set lastAllocateAt
+			// First allocation should expose its timestamp.
 			ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
 			cc.applyAllocateLocked(1, 100, ts1, nil)
-			assert.Equal(t, ts1, cc.lastAllocateAt, "lastAllocateAt should be set to ts1 from empty")
-			assert.False(t, cc.lastAllocateAt.IsEmpty(), "lastAllocateAt should no longer be empty")
+			assert.Equal(t, ts1, cc.ranges.oldestAllocateAt())
+			assert.False(t, cc.ranges.oldestAllocateAt().IsEmpty())
 		},
 	)
 }
