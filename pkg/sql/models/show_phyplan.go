@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
@@ -68,13 +69,28 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 	if option == VerboseOption || option == AnalyzeOption {
 		gblStats := ExtractPhyPlanGlbStats(phy)
 		buffer.WriteString("Overview:\n")
-		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB,  RetryTime: %v",
-			gblStats.MemorySize,
-			gblStats.SpillSize,
-			gblStats.DiskIOSize,
-			gblStats.NetWorkSize,
-			phy.RetryTime,
-		))
+		if summary := phy.Resource; summary != nil {
+			waitNS, waitQuality := summary.Usage.TotalWaitNS()
+			quality := summary.Quality | waitQuality
+			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, PeakMemory:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
+				summary.Usage.ExclusiveActiveNS,
+				waitNS,
+				summary.Memory.MaxDomainPeakLiveBytes,
+				summary.Usage.SpillBytes,
+				summary.Usage.S3ReadBytes,
+				summary.Usage.S3WriteBytes,
+				summary.AttemptCount,
+				quality,
+			))
+		} else {
+			buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB, SpillSize:%dB, DiskI/O:%dB, NetworkI/O:%dB, RetryTime:%v",
+				gblStats.MemorySize,
+				gblStats.SpillSize,
+				gblStats.DiskIOSize,
+				gblStats.NetWorkSize,
+				phy.RetryTime,
+			))
+		}
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
@@ -91,6 +107,9 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock - statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+			if phy.Resource != nil {
+				cpuTimeVal = int64(phy.Resource.Usage.ExclusiveActiveNS)
+			}
 
 			buffer.WriteString("\tCPU Usage: \n")
 			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
@@ -109,7 +128,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 			//-------------------------------------------------------------------------------------------------------
 			if option == AnalyzeOption {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", diagnosticExclusiveNS(int64(statsInfo.PlanStage.PlanDuration), statsInfo.PlanStage.BuildPlanStatsIOConsumption)))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanS3Request.List,
 					statsInfo.PlanStage.BuildPlanS3Request.Head,
@@ -146,7 +165,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", diagnosticExclusiveNS(gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration, statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)))
 				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
 				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
@@ -183,6 +202,14 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 			buffer.WriteString("Physical Plan Deployment:")
 		}
 	}
+}
+
+func diagnosticExclusiveNS(wall, wait int64) uint64 {
+	if wall < 0 || wait < 0 {
+		return 0
+	}
+	active, _ := resource.ExclusiveActive(uint64(wall), uint64(wait), 0)
+	return active
 }
 
 //----------------------------------------------------------------------------------------------------------------------

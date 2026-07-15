@@ -17,7 +17,10 @@
 // one model without introducing an execution or observability dependency cycle.
 package resource
 
-import "math"
+import (
+	"math"
+	"strings"
+)
 
 // WaitKind identifies a producer-local blocking reason.
 type WaitKind uint8
@@ -32,6 +35,35 @@ const (
 
 	WaitKindCount
 )
+
+func (f QualityFlags) String() string {
+	if f == 0 {
+		return "complete"
+	}
+	names := make([]string, 0, 8)
+	for _, flag := range [...]struct {
+		value QualityFlags
+		name  string
+	}{
+		{QualityPartial, "partial"},
+		{QualityMissingFragment, "missing-fragment"},
+		{QualityMissingMemoryDomain, "missing-memory-domain"},
+		{QualityInvariantFailure, "invariant-failure"},
+		{QualityProjectionOverflow, "projection-overflow"},
+		{QualityCrossPoolFree, "cross-pool-free"},
+		{QualityNonZeroLiveAtSeal, "live-at-seal"},
+		{QualityAggregated, "aggregated"},
+	} {
+		if f&flag.value != 0 {
+			names = append(names, flag.name)
+			f &^= flag.value
+		}
+	}
+	if f != 0 {
+		names = append(names, "unknown")
+	}
+	return strings.Join(names, "|")
+}
 
 // S3Op identifies an observed physical object-store operation.
 type S3Op uint8
