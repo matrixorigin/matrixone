@@ -55,6 +55,7 @@ type unknownCommitResolverLockService struct {
 	unlockedTxnID    []byte
 	onResolved       func()
 	resolveInline    bool
+	resolveErr       error
 }
 
 func (s *unknownCommitResolverLockService) GetServiceID() string {
@@ -71,6 +72,11 @@ func (s *unknownCommitResolverLockService) ResolveCommitUnknown(
 	s.resolvedTxnID = append(s.resolvedTxnID[:0], txnID...)
 	s.resolvedDeadline = deadline
 	s.resolvedSequence = sequence
+	if s.resolveErr != nil {
+		err := s.resolveErr
+		s.mu.Unlock()
+		return err
+	}
 	if s.resolveInline {
 		s.mu.Unlock()
 		if onResolved != nil {
@@ -1292,6 +1298,166 @@ func TestCommitUnknownResolvedBeforeCloseReleasesAdmissionOnce(t *testing.T) {
 		require.Zero(t, active)
 		require.Zero(t, waiting)
 	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestOptimisticCommitUnknownReleasesAdmission(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Optimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+		require.Empty(t, resolver.resolvedTxnID)
+
+		next, err := c.New(ctx, newTestTimestamp(0), WithUserTxn())
+		require.NoError(t, err)
+		require.NoError(t, next.Rollback(ctx))
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestCommitUnknownScheduleFailureReleasesAdmission(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{resolveErr: assert.AnError}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestInternalCommitUnknownAdmissionIsBounded(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+
+		newInternal := func() *txnOperator {
+			op, err := c.New(
+				ctx,
+				newTestTimestamp(0),
+				WithTxnMode(txn.TxnMode_Pessimistic),
+			)
+			require.NoError(t, err)
+			tc := op.(*txnOperator)
+			tc.AddWorkspace(&trackingWorkspace{
+				commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+			})
+			tc.mu.txn.TNShards = append(
+				tc.mu.txn.TNShards,
+				metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+			)
+			return tc
+		}
+
+		first := newInternal()
+		err := first.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Len(t, c.(*txnClient).internalUnknownCommitC, 1)
+		firstResolvedTxn := append([]byte(nil), resolver.resolvedTxnID...)
+
+		second := newInternal()
+		err = second.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrAllCNServersBusy))
+		require.Equal(t, 1, second.reset.workspace.(*trackingWorkspace).rollbackCount)
+		require.Equal(t, second.mu.txn.ID, resolver.unlockedTxnID)
+		require.Equal(t, firstResolvedTxn, resolver.resolvedTxnID)
+		require.Len(t, c.(*txnClient).internalUnknownCommitC, 1)
+
+		resolver.completeResolution()
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return result, err
+		})
+		third := newInternal()
+		require.NoError(t, third.Commit(ctx))
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+
+		prepareFailure := newInternal()
+		prepareFailure.reset.workspace.(*trackingWorkspace).commitErr = assert.AnError
+		require.ErrorIs(t, prepareFailure.Commit(ctx), assert.AnError)
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+
+		resolver.mu.Lock()
+		resolver.resolveErr = assert.AnError
+		resolver.mu.Unlock()
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+		scheduleFailure := newInternal()
+		err = scheduleFailure.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+	},
+		WithLockService(resolver),
+		func(client *txnClient) { client.maxInternalUnknownCommitTxn = 1 },
+	)
 }
 
 func txnAdmissionCounts(c TxnClient) (int, int64, int) {

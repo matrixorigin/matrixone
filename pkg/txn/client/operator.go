@@ -291,31 +291,34 @@ type txnOperator struct {
 	}
 
 	reset struct {
-		txnID                 []byte
-		parent                atomic.Pointer[txnOperator]
-		waiter                *waiter
-		waitActiveCost        time.Duration
-		sequence              atomic.Uint64
-		commitSeq             uint64
-		createAt              time.Time
-		commitAt              time.Time
-		createTs              timestamp.Timestamp
-		cannotCleanWorkspace  atomic.Bool
-		workspace             Workspace
-		commitCounter         counter
-		rollbackCounter       counter
-		runSqlCounter         counter
-		runSQLTracker         runSQLTracker
-		incrStmtCounter       counter
-		rollbackStmtCounter   counter
-		fprints               *footPrints
-		runningSQL            atomic.Bool
-		commitErr             error
-		commitNeedsResolution bool
-		commitDeadline        time.Time
-		commitSequence        uint64
-		unknownCommitResolved func()
-		cache                 sync.Map
+		txnID                              []byte
+		parent                             atomic.Pointer[txnOperator]
+		waiter                             *waiter
+		waitActiveCost                     time.Duration
+		sequence                           atomic.Uint64
+		commitSeq                          uint64
+		createAt                           time.Time
+		commitAt                           time.Time
+		createTs                           timestamp.Timestamp
+		cannotCleanWorkspace               atomic.Bool
+		workspace                          Workspace
+		commitCounter                      counter
+		rollbackCounter                    counter
+		runSqlCounter                      counter
+		runSQLTracker                      runSQLTracker
+		incrStmtCounter                    counter
+		rollbackStmtCounter                counter
+		fprints                            *footPrints
+		runningSQL                         atomic.Bool
+		commitErr                          error
+		commitNeedsResolution              bool
+		commitDeadline                     time.Time
+		commitSequence                     uint64
+		unknownCommitResolutionTransferred bool
+		internalUnknownCommitAdmissionHeld bool
+		tryAcquireUnknownCommit            func() bool
+		unknownCommitResolved              func()
+		cache                              sync.Map
 	}
 
 	opts struct {
@@ -562,6 +565,9 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitNeedsResolution = false
 	tc.reset.commitDeadline = time.Time{}
 	tc.reset.commitSequence = 0
+	tc.reset.unknownCommitResolutionTransferred = false
+	tc.reset.internalUnknownCommitAdmissionHeld = false
+	tc.reset.tryAcquireUnknownCommit = nil
 	tc.reset.unknownCommitResolved = nil
 	tc.reset.cache = sync.Map{}
 }
@@ -1147,6 +1153,24 @@ func (tc *txnOperator) doWrite(
 	var commitDeadline time.Time
 	var hasCommitDeadline bool
 	var commitSequence uint64
+	if commit && !tc.opts.options.UserTxn() && tc.needUnlockLocked() &&
+		tc.reset.tryAcquireUnknownCommit != nil {
+		if !tc.reset.tryAcquireUnknownCommit() {
+			busyErr := moerr.NewAllCNServersBusyNoCtx()
+			if rollbackErr := tc.Rollback(ctx); rollbackErr != nil {
+				return nil, errors.Join(busyErr, rollbackErr)
+			}
+			return nil, busyErr
+		}
+		tc.reset.internalUnknownCommitAdmissionHeld = true
+		defer func() {
+			if tc.reset.internalUnknownCommitAdmissionHeld &&
+				!tc.reset.commitNeedsResolution {
+				tc.reset.unknownCommitResolved()
+				tc.reset.internalUnknownCommitAdmissionHeld = false
+			}
+		}()
+	}
 	if commit {
 		if tc.reset.workspace != nil {
 			var reqs []txn.TxnRequest
@@ -1250,7 +1274,6 @@ func (tc *txnOperator) doWrite(
 		tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 		return nil, tc.reset.commitErr
 	}
-
 	var result *rpc.SendResult
 	result, err = tc.doSend(ctx, requests, commit)
 	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
@@ -1614,6 +1637,7 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 		if !ok {
 			tc.logger.Error("lockservice does not support unknown commit resolution",
 				util.TxnField(tc.mu.txn))
+			tc.releaseInternalUnknownCommitAdmission()
 			return
 		}
 		if err := resolver.ResolveCommitUnknown(
@@ -1625,7 +1649,11 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			tc.logger.Error("failed to schedule unknown commit resolution",
 				util.TxnField(tc.mu.txn),
 				zap.Error(err))
+			tc.releaseInternalUnknownCommitAdmission()
+			return
 		}
+		tc.reset.unknownCommitResolutionTransferred = true
+		tc.reset.internalUnknownCommitAdmissionHeld = false
 		return
 	}
 
@@ -1669,6 +1697,13 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 		tc.logger.Error("failed to unlock txn",
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
+	}
+}
+
+func (tc *txnOperator) releaseInternalUnknownCommitAdmission() {
+	if tc.reset.internalUnknownCommitAdmissionHeld {
+		tc.reset.unknownCommitResolved()
+		tc.reset.internalUnknownCommitAdmissionHeld = false
 	}
 }
 

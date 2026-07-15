@@ -161,6 +161,9 @@ const (
 	// activeTxnShards is the number of shards for activeTxns map.
 	// Using sharded locks to reduce contention on high-concurrency workloads.
 	activeTxnShards = 16
+	// Keep normal internal workloads independent from the user transaction
+	// limit while still bounding resolver-owned internal transactions.
+	defaultMaxInternalUnknownCommitTxn = 1024
 )
 
 // activeTxnShard is a shard of active transactions with its own lock.
@@ -170,22 +173,24 @@ type activeTxnShard struct {
 }
 
 type txnClient struct {
-	sid                        string
-	stopper                    *stopper.Stopper
-	logger                     *log.MOLogger
-	clock                      clock.Clock
-	sender                     rpc.TxnSender
-	generator                  TxnIDGenerator
-	lockService                lockservice.LockService
-	timestampWaiter            TimestampWaiter
-	leakChecker                *leakChecker
-	limiter                    ratelimit.Limiter
-	maxActiveTxn               int
-	enableCheckDup             bool
-	enableCNBasedConsistency   bool
-	enableSacrificingFreshness bool
-	enableRefreshExpression    bool
-	txnOpenedCallbacks         []func(TxnOperator)
+	sid                         string
+	stopper                     *stopper.Stopper
+	logger                      *log.MOLogger
+	clock                       clock.Clock
+	sender                      rpc.TxnSender
+	generator                   TxnIDGenerator
+	lockService                 lockservice.LockService
+	timestampWaiter             TimestampWaiter
+	leakChecker                 *leakChecker
+	limiter                     ratelimit.Limiter
+	maxActiveTxn                int
+	maxInternalUnknownCommitTxn int
+	internalUnknownCommitC      chan struct{}
+	enableCheckDup              bool
+	enableCNBasedConsistency    bool
+	enableSacrificingFreshness  bool
+	enableRefreshExpression     bool
+	txnOpenedCallbacks          []func(TxnOperator)
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -381,6 +386,17 @@ func (client *txnClient) adjust() {
 	if client.maxActiveTxn == 0 {
 		client.maxActiveTxn = math.MaxInt
 	}
+	if client.maxInternalUnknownCommitTxn == 0 {
+		client.maxInternalUnknownCommitTxn = client.maxActiveTxn
+		if client.maxInternalUnknownCommitTxn == math.MaxInt ||
+			client.maxInternalUnknownCommitTxn < defaultMaxInternalUnknownCommitTxn {
+			client.maxInternalUnknownCommitTxn = defaultMaxInternalUnknownCommitTxn
+		}
+	}
+	client.internalUnknownCommitC = make(
+		chan struct{},
+		client.maxInternalUnknownCommitTxn,
+	)
 	// Initialize sharded activeTxns if not already initialized
 	for i := range client.activeTxns {
 		if client.activeTxns[i].txns == nil {
@@ -442,6 +458,9 @@ func (client *txnClient) doCreateTxn(
 	op.timestampWaiter = client.timestampWaiter
 	if op.opts.options.UserTxn() {
 		op.reset.unknownCommitResolved = client.releaseUnknownCommitAdmission
+	} else {
+		op.reset.tryAcquireUnknownCommit = client.tryAcquireUnknownCommit
+		op.reset.unknownCommitResolved = client.releaseInternalUnknownCommit
 	}
 	op.AppendEventCallback(
 		ClosedEvent,
@@ -702,7 +721,7 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 			client.mu.Unlock()
 			return
 		}
-		if op.reset.commitNeedsResolution &&
+		if op.reset.unknownCommitResolutionTransferred &&
 			op.reset.unknownCommitResolved != nil {
 			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
 			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
@@ -745,6 +764,23 @@ func (client *txnClient) releaseUnknownCommitAdmission() {
 	client.mu.Unlock()
 
 	client.activateWaitActiveTxns(toActivate)
+}
+
+func (client *txnClient) tryAcquireUnknownCommit() bool {
+	select {
+	case client.internalUnknownCommitC <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (client *txnClient) releaseInternalUnknownCommit() {
+	select {
+	case <-client.internalUnknownCommitC:
+	default:
+		panic("BUG: unknown commit admission released twice")
+	}
 }
 
 func (client *txnClient) releaseUserTxnLocked() []*txnOperator {
