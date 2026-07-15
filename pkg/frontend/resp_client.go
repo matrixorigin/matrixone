@@ -74,10 +74,7 @@ func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
 // drives the next COM_QUERY, since the proc is reseeded from the session) and
 // the given proc (for completeness within the current request). proc may be nil.
 func markRowCountFailed(ses *Session, proc *process.Process) {
-	ses.SetLastAffectedRows(-1)
-	if proc != nil {
-		proc.SetAffectedRows(-1)
-	}
+	setRowCount(ses, proc, -1)
 }
 
 // restoreRowCount writes v back to both the session and proc. It is used to keep
@@ -85,6 +82,10 @@ func markRowCountFailed(ses *Session, proc *process.Process) {
 // (COM_STMT_CLOSE/COM_STMT_RESET -> DEALLOCATE/RESET PREPARE) from clobbering the
 // preceding statement's ROW_COUNT() when it succeeds. proc may be nil.
 func restoreRowCount(ses *Session, proc *process.Process, v int64) {
+	setRowCount(ses, proc, v)
+}
+
+func setRowCount(ses *Session, proc *process.Process, v int64) {
 	ses.SetLastAffectedRows(v)
 	if proc != nil {
 		proc.SetAffectedRows(v)

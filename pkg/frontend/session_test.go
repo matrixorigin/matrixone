@@ -634,7 +634,8 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(s, &query.MigrateConnToRequest{
-			DB: "d1",
+			DB:               "d1",
+			LastAffectedRows: 7,
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
@@ -643,6 +644,8 @@ func TestSession_Migrate(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
 		assert.Equal(t, 2, len(s.prepareStmts))
+		assert.Equal(t, int64(7), s.GetLastAffectedRows())
+		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 	})
 
 	t.Run("db dropped", func(t *testing.T) {

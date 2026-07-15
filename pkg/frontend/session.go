@@ -2087,6 +2087,9 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
+	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
+	// Restore the source session value after all replay work has finished.
+	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx

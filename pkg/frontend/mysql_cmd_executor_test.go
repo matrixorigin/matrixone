@@ -2899,6 +2899,7 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
+	setRowCount(ses, ses.GetProc(), 7)
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -2910,6 +2911,8 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, ResultResponse, resp.category)
+	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 }
 
 func Test_ExecRequest_SidecarError(t *testing.T) {
@@ -2933,6 +2936,7 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
+	setRowCount(ses, ses.GetProc(), 7)
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -2945,6 +2949,36 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	require.NotNil(t, resp)
 	// Should be an error response (from sidecar), not a success.
 	assert.Equal(t, ErrorResponse, resp.category)
+	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+}
+
+func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
+	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_PREPARE} {
+		t.Run(cmd.String(), func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			ses.txnHandler = &TxnHandler{}
+			ses.rewriteEnabled.Store(true)
+			ses.ruleCache = map[string]string{}
+			setRowCount(ses, ses.GetProc(), 7)
+
+			ec := newTestExecCtx(ctx, ctrl)
+			req := &Request{
+				cmd:  cmd,
+				data: []byte(`/*+ {"rewrites":{"db.t":123}} */ select * from db.t`),
+			}
+			resp, err := ExecRequest(ses, ec, req)
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			assert.Equal(t, ErrorResponse, resp.category)
+			assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
+			assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+		})
+	}
 }
 
 func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
