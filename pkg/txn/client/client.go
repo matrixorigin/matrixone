@@ -161,6 +161,9 @@ const (
 	// activeTxnShards is the number of shards for activeTxns map.
 	// Using sharded locks to reduce contention on high-concurrency workloads.
 	activeTxnShards = 16
+	// Keep normal internal workloads independent from the user transaction
+	// limit while still bounding resolver-owned internal transactions.
+	defaultMaxInternalUnknownCommitTxn = 1024
 )
 
 // activeTxnShard is a shard of active transactions with its own lock.
@@ -170,24 +173,26 @@ type activeTxnShard struct {
 }
 
 type txnClient struct {
-	sid                        string
-	stopper                    *stopper.Stopper
-	logger                     *log.MOLogger
-	clock                      clock.Clock
-	sender                     rpc.TxnSender
-	generator                  TxnIDGenerator
-	lockService                lockservice.LockService
-	timestampWaiter            TimestampWaiter
-	leakChecker                *leakChecker
-	limiter                    ratelimit.Limiter
-	maxActiveTxn               int
-	enableCheckDup             bool
-	enableCNBasedConsistency   bool
-	enableSacrificingFreshness bool
-	enableRefreshExpression    bool
-	txnOpenedCallbacks         []func(TxnOperator)
-	defaultEventCallbacks      defaultTxnEventCallbacks
-	sharedEventCallbacks       txnEventCallbacks
+	sid                         string
+	stopper                     *stopper.Stopper
+	logger                      *log.MOLogger
+	clock                       clock.Clock
+	sender                      rpc.TxnSender
+	generator                   TxnIDGenerator
+	lockService                 lockservice.LockService
+	timestampWaiter             TimestampWaiter
+	leakChecker                 *leakChecker
+	limiter                     ratelimit.Limiter
+	maxActiveTxn                int
+	maxInternalUnknownCommitTxn int
+	internalUnknownCommitC      chan struct{}
+	enableCheckDup              bool
+	enableCNBasedConsistency    bool
+	enableSacrificingFreshness  bool
+	enableRefreshExpression     bool
+	txnOpenedCallbacks          []func(TxnOperator)
+	defaultEventCallbacks       defaultTxnEventCallbacks
+	sharedEventCallbacks        txnEventCallbacks
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -388,6 +393,17 @@ func (client *txnClient) adjust() {
 	if client.maxActiveTxn == 0 {
 		client.maxActiveTxn = math.MaxInt
 	}
+	if client.maxInternalUnknownCommitTxn == 0 {
+		client.maxInternalUnknownCommitTxn = client.maxActiveTxn
+		if client.maxInternalUnknownCommitTxn == math.MaxInt ||
+			client.maxInternalUnknownCommitTxn < defaultMaxInternalUnknownCommitTxn {
+			client.maxInternalUnknownCommitTxn = defaultMaxInternalUnknownCommitTxn
+		}
+	}
+	client.internalUnknownCommitC = make(
+		chan struct{},
+		client.maxInternalUnknownCommitTxn,
+	)
 	// Initialize sharded activeTxns if not already initialized
 	for i := range client.activeTxns {
 		if client.activeTxns[i].txns == nil {
@@ -447,6 +463,12 @@ func (client *txnClient) doCreateTxn(
 	client.limiter.Take()
 
 	op.timestampWaiter = client.timestampWaiter
+	if op.opts.options.UserTxn() {
+		op.reset.unknownCommitResolved = client.releaseUnknownCommitAdmission
+	} else {
+		op.reset.tryAcquireUnknownCommit = client.tryAcquireUnknownCommit
+		op.reset.unknownCommitResolved = client.releaseInternalUnknownCommit
+	}
 	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
 	if err := client.openTxn(op); err != nil {
@@ -698,34 +720,21 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 			client.mu.Unlock()
 			return
 		}
-		client.mu.users--
-		if client.mu.users < 0 {
-			panic("BUG: user txns < 0")
+		if op.reset.unknownCommitResolutionTransferred &&
+			op.reset.unknownCommitResolved != nil {
+			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			client.mu.Unlock()
+			return
 		}
 
-		// Collect waiting ops to activate
-		var toActivate []*txnOperator
-		if len(client.mu.waitActiveTxns) > 0 {
-			newCanAdded := client.maxActiveTxn - client.mu.users
-			for i := 0; i < newCanAdded; i++ {
-				waitOp := client.fetchWaitActiveOpLocked()
-				if waitOp == nil {
-					break
-				}
-				client.mu.users++
-				toActivate = append(toActivate, waitOp)
-			}
-		}
+		toActivate := client.releaseUserTxnLocked()
 
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 		client.mu.Unlock()
 
-		// Add to sharded map and notify outside mu lock
-		for _, waitOp := range toActivate {
-			client.addActiveTxn(waitOp)
-			waitOp.notifyActive()
-		}
+		client.activateWaitActiveTxns(toActivate)
 		return
 	}
 
@@ -741,6 +750,62 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 	client.mu.Unlock()
 	return
+}
+
+// releaseUnknownCommitAdmission returns the user transaction slot only after
+// lockservice has reached terminal cleanup for an unknown Commit. Until then,
+// the resolver-owned transaction remains covered by MaxActiveTxn backpressure.
+func (client *txnClient) releaseUnknownCommitAdmission() {
+	client.mu.Lock()
+	toActivate := client.releaseUserTxnLocked()
+	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	client.mu.Unlock()
+
+	client.activateWaitActiveTxns(toActivate)
+}
+
+func (client *txnClient) tryAcquireUnknownCommit() bool {
+	select {
+	case client.internalUnknownCommitC <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (client *txnClient) releaseInternalUnknownCommit() {
+	select {
+	case <-client.internalUnknownCommitC:
+	default:
+		panic("BUG: unknown commit admission released twice")
+	}
+}
+
+func (client *txnClient) releaseUserTxnLocked() []*txnOperator {
+	client.mu.users--
+	if client.mu.users < 0 {
+		panic("BUG: user txns < 0")
+	}
+
+	var toActivate []*txnOperator
+	newCanAdded := client.maxActiveTxn - client.mu.users
+	for i := 0; i < newCanAdded; i++ {
+		waitOp := client.fetchWaitActiveOpLocked()
+		if waitOp == nil {
+			break
+		}
+		client.mu.users++
+		toActivate = append(toActivate, waitOp)
+	}
+	return toActivate
+}
+
+func (client *txnClient) activateWaitActiveTxns(ops []*txnOperator) {
+	for _, op := range ops {
+		client.addActiveTxn(op)
+		op.notifyActive()
+	}
 }
 
 func (client *txnClient) fetchWaitActiveOpLocked() *txnOperator {
