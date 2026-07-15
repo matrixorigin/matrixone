@@ -299,6 +299,26 @@ func TestDecideQueryPlacementCanRequireCurrentCN(t *testing.T) {
 	require.True(t, decision.Satisfied)
 }
 
+func TestDecideQueryPlacementOrdersRequiredCurrentCNFirstWhenRequested(t *testing.T) {
+	local := Worker{ID: "local", Addr: "z-local:6001", Mcpu: 8}
+	remote := Worker{ID: "remote", Addr: "a-remote:6001", Mcpu: 16}
+
+	req := QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      Workers{remote, local},
+		CurrentCNPolicy: CurrentCNRequired,
+	}
+	require.Equal(t, Workers{remote, local}, DecideQueryPlacement(req).Workers)
+
+	req.CurrentCNFirst = true
+	decision := DecideQueryPlacement(req)
+
+	require.Equal(t, Workers{local, remote}, decision.Workers)
+	require.Equal(t, ReasonRequiredCurrentCN, decision.Reason)
+	require.True(t, decision.Satisfied)
+}
+
 func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 
