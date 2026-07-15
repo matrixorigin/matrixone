@@ -514,6 +514,96 @@ func TestExpressionReset(t *testing.T) {
 	}
 }
 
+func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
+	tests := []struct {
+		name       string
+		op         string
+		jsonOnLeft bool
+		jsonValue  string
+		paramValue string
+		paramNull  bool
+		want       bool
+		wantNull   bool
+		wantErr    bool
+	}{
+		{name: "adjacent integers json left", op: "<", jsonOnLeft: true, jsonValue: "9007199254740992", paramValue: "9007199254740993", want: true},
+		{name: "adjacent integers json right", op: ">", jsonOnLeft: false, jsonValue: "9007199254740992", paramValue: "9007199254740993", want: true},
+		{name: "maximum uint64", op: "<", jsonOnLeft: true, jsonValue: "18446744073709551614", paramValue: "18446744073709551615", want: true},
+		{name: "precise decimals", op: "<", jsonOnLeft: true, jsonValue: "0.123456789123456788", paramValue: "0.123456789123456789", want: true},
+		{name: "null parameter", op: "<", jsonOnLeft: true, jsonValue: "1", paramNull: true, wantNull: true},
+		{name: "invalid string parameter", op: "<", jsonOnLeft: true, jsonValue: "1", paramValue: "not-json", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(test.paramValue), test.paramNull, proc.Mp()))
+			proc.SetPrepareParams(params)
+
+			jsonType := types.T_json.ToType()
+			textType := types.T_text.ToType()
+			normalizeFn, err := function.GetFunctionByName(proc.Ctx, function.JsonOrderingParamFunctionName, []types.Type{textType})
+			require.NoError(t, err)
+			paramExpr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_json)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: function.JsonOrderingParamFunctionName, Obj: normalizeFn.GetEncodedOverloadID()},
+					Args: []*plan.Expr{
+						{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+					},
+				}},
+			}
+			jsonExpr := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_json)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			args := []*plan.Expr{jsonExpr, paramExpr}
+			if !test.jsonOnLeft {
+				args[0], args[1] = args[1], args[0]
+			}
+			compareFn, err := function.GetFunctionByName(proc.Ctx, test.op, []types.Type{jsonType, jsonType})
+			require.NoError(t, err)
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: test.op, Obj: compareFn.GetEncodedOverloadID()},
+					Args: args,
+				}},
+			}
+
+			json, err := types.ParseStringToByteJson(test.jsonValue)
+			require.NoError(t, err)
+			encoded, err := types.EncodeJson(json)
+			require.NoError(t, err)
+			jsonVec := vector.NewVec(jsonType)
+			require.NoError(t, vector.AppendBytes(jsonVec, encoded, false, proc.Mp()))
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = jsonVec
+			input.SetRowCount(1)
+
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			if test.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.wantNull, result.GetNulls().Contains(0))
+				if !test.wantNull {
+					require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[bool](result)[0])
+				}
+			}
+
+			executor.Free()
+			input.Clean(proc.Mp())
+			proc.SetPrepareParams(nil)
+			params.Free(proc.Mp())
+			proc.Free()
+		})
+	}
+}
+
 func TestFunctionFold(t *testing.T) {
 	t.Skip("todo: implement this test")
 }
