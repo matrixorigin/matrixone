@@ -15598,6 +15598,7 @@ yydefault:
 			yyLOCAL = &tree.Update{
 				Tables:  tree.TableExprs{yyDollar[4].tableExprUnion()},
 				Exprs:   yyDollar[6].updateExprsUnion(),
+				Ignore:  yyDollar[3].str != "",
 				Where:   yyDollar[7].whereUnion(),
 				OrderBy: yyDollar[8].orderByUnion(),
 				Limit:   yyDollar[9].limitUnion(),
@@ -15613,6 +15614,7 @@ yydefault:
 			yyLOCAL = &tree.Update{
 				Tables: tree.TableExprs{yyDollar[4].tableExprUnion()},
 				Exprs:  yyDollar[6].updateExprsUnion(),
+				Ignore: yyDollar[3].str != "",
 				Where:  yyDollar[7].whereUnion(),
 			}
 		}
@@ -15629,6 +15631,7 @@ yydefault:
 			yyLOCAL = &tree.Update{
 				Tables: tree.TableExprs{yyDollar[4].tableExprUnion()},
 				Exprs:  yyDollar[6].updateExprsUnion(),
+				Ignore: yyDollar[3].str != "",
 				From:   &tree.From{Tables: tree.TableExprs{yyDollar[8].tableExprUnion()}},
 				Where:  yyDollar[9].whereUnion(),
 			}
@@ -18470,8 +18473,15 @@ yydefault:
 		}
 	case 802:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line mysql_sql.y:5381
+//line mysql_sql.y:5384
 		{
+			yyVAL.str = ""
+		}
+	case 803:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line mysql_sql.y:5388
+		{
+			yyVAL.str = "ignore"
 		}
 	case 804:
 		yyDollar = yyS[yypt-0 : yypt+1]

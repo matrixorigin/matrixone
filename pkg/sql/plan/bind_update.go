@@ -78,6 +78,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	onDuplicateAction := plan.Node_FAIL
+	if stmt.Ignore {
+		onDuplicateAction = plan.Node_IGNORE
+	}
 
 	var selectList []tree.SelectExpr
 	oldColName2Idx := make(map[string]int32)
@@ -559,7 +563,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					Children:          []int32{scanNodeID, lastNodeID},
 					JoinType:          plan.Node_DEDUP,
 					OnList:            []*plan.Expr{joinCond},
-					OnDuplicateAction: plan.Node_FAIL,
+					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
 					DedupJoinCtx: &plan.DedupJoinCtx{
@@ -719,7 +723,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					Children:          []int32{idxTableNodeID, lastNodeID},
 					JoinType:          plan.Node_DEDUP,
 					OnList:            []*plan.Expr{joinCond},
-					OnDuplicateAction: plan.Node_FAIL,
+					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
 					DedupJoinCtx: &plan.DedupJoinCtx{
