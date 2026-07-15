@@ -175,6 +175,7 @@ func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 		{name: "date to decimal128", source: types.T_date, target: types.T_decimal128},
 		{name: "year to decimal64", source: types.T_year, target: types.T_decimal64},
 		{name: "year to decimal128", source: types.T_year, target: types.T_decimal128},
+		{name: "decimal128 to timestamp", source: types.T_decimal128, target: types.T_timestamp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.True(t, IfTypeCastSupported(tc.source, tc.target))
@@ -184,6 +185,27 @@ func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestCastDecimal128PackedDatetimeToTimestamp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	packed, err := types.ParseDecimal128("20220102000101", 20, 0)
+	require.NoError(t, err)
+	expected, err := types.ParseTimestamp(time.UTC, "2022-01-02 00:01:01", 0)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{packed}, nil),
+			NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{}, nil),
+		},
+		NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{expected}, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
 }
 
 func TestTimestampNumericCastUsesSessionTimeZone(t *testing.T) {

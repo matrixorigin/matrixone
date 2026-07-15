@@ -257,6 +257,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_timestamp,
 		types.T_year,
 	},
 
@@ -508,7 +509,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = decimal64ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = decimal128ToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_decimal256:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
 		err = decimal256ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
@@ -1714,9 +1715,10 @@ func decimal64ToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
 
-func decimal128ToOthers(ctx context.Context,
+func decimal128ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Decimal128],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -1769,8 +1771,12 @@ func decimal128ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal128ToTime(source, rs, length, selectList)
 	case types.T_timestamp:
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return decimal128ToTimestamp(source, rs, length, selectList)
+		return decimal128ToTimestamp(source, rs, length, zone, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -4350,9 +4356,11 @@ func decimal64ToTimestamp(
 
 func decimal128ToTimestamp(
 	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Timestamp], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Timestamp], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
+	fromType := from.GetType()
+	toType := to.GetType()
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4360,7 +4368,10 @@ func decimal128ToTimestamp(
 				return err
 			}
 		} else {
-			ts := types.Timestamp(int64(v.B0_63))
+			ts, err := types.ParseTimestamp(zone, v.Format(fromType.Scale), toType.Scale)
+			if err != nil {
+				return err
+			}
 			if err := to.Append(ts, false); err != nil {
 				return err
 			}
