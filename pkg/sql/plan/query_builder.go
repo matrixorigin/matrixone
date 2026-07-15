@@ -462,10 +462,13 @@ func chooseRowCarrier(exprs []*plan.Expr, aggregate bool) int {
 	return best
 }
 
-func chooseTableRowCarrier(cols []*plan.ColDef) int {
+func chooseTableRowCarrier(nodeType plan.Node_NodeType, cols []*plan.ColDef) int {
 	best := -1
 	var bestCost rowCarrierCost
 	for i, col := range cols {
+		if col == nil || nodeType == plan.Node_EXTERNAL_SCAN && col.Hidden {
+			continue
+		}
 		cost := getRowCarrierCost(&plan.Expr{Typ: col.Typ}, false)
 		if best < 0 || rowCarrierCostLess(cost, bestCost) {
 			best = i
@@ -572,7 +575,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
-			carrier := chooseTableRowCarrier(node.TableDef.Cols)
+			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{tag, int32(carrier)})
 				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
@@ -701,7 +704,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
-			carrier := chooseTableRowCarrier(node.TableDef.Cols)
+			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{colTag, int32(carrier)})
 				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))

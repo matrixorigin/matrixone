@@ -77,7 +77,16 @@ func TestChooseRowCarrier(t *testing.T) {
 			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4096}},
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int8)}},
 		}
-		require.Equal(t, 1, chooseTableRowCarrier(cols))
+		require.Equal(t, 1, chooseTableRowCarrier(plan.Node_TABLE_SCAN, cols))
+	})
+
+	t.Run("external scan excludes hidden columns", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4096}},
+			{Name: "__mo_fake_pk_col", Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64)}},
+		}
+		require.Equal(t, 0, chooseTableRowCarrier(plan.Node_EXTERNAL_SCAN, cols))
+		require.Equal(t, 1, chooseTableRowCarrier(plan.Node_TABLE_SCAN, cols))
 	})
 
 	t.Run("internal and unknown types are conservative", func(t *testing.T) {
