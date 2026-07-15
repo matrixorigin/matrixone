@@ -60,9 +60,42 @@ type Job interface {
 	Execute()
 	WaitDone() any
 	GetType() int8
+}
+
+// TerminalJob is a Job that can publish an exactly-once failure when a worker
+// rejects or drains it. Worker pools require this additive contract at
+// admission so legacy Job implementations still compile and receive an
+// explicit error instead of hanging during shutdown.
+type TerminalJob interface {
+	Job
 	// Fail completes a job that cannot be executed. It is safe to race with
 	// Execute; exactly one terminal result is published.
 	Fail(error)
+}
+
+// acceptedJobBatch owns every job after successful admission. A caller must
+// join the batch before releasing resources shared by those jobs. Results are
+// consumed in admission order so each job's single terminal result is received
+// exactly once.
+type acceptedJobBatch[T Job] struct {
+	jobs   []T
+	joined int
+}
+
+func (b *acceptedJobBatch[T]) add(job T) {
+	b.jobs = append(b.jobs, job)
+}
+
+func (b *acceptedJobBatch[T]) waitNext() any {
+	result := b.jobs[b.joined].WaitDone()
+	b.joined++
+	return result
+}
+
+func (b *acceptedJobBatch[T]) join() {
+	for b.joined < len(b.jobs) {
+		b.waitNext()
+	}
 }
 
 // GetMetaJobResult holds the result of GetMetaJob

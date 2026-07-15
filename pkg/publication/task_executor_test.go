@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -149,11 +150,45 @@ func TestPublicationLiveReplayPreservesAdmittedIteration(t *testing.T) {
 	require.Equal(t, IterationStatePending, task.State)
 
 	require.NoError(t, exec.mergeReplayedTask(
+		"task", 6, IterationStateRunning, SubscriptionStateRunning, nil,
+	))
+	task, _ = exec.getTask("task")
+	require.Equal(t, uint64(6), task.LSN)
+	require.Equal(t, IterationStatePending, task.State)
+
+	require.NoError(t, exec.mergeReplayedTask(
 		"task", 7, IterationStateCompleted, SubscriptionStateRunning, nil,
 	))
 	task, _ = exec.getTask("task")
 	require.Equal(t, uint64(7), task.LSN)
 	require.Equal(t, IterationStateCompleted, task.State)
+}
+
+func TestPublicationLiveReplayAppliesEqualLSNTerminalState(t *testing.T) {
+	for _, localState := range []int8{IterationStatePending, IterationStateRunning} {
+		for _, durableState := range []int8{
+			IterationStateCompleted,
+			IterationStateError,
+			IterationStateCanceled,
+		} {
+			t.Run(fmt.Sprintf("local-%d/durable-%d", localState, durableState), func(t *testing.T) {
+				exec := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+				exec.setTask(TaskEntry{
+					TaskID:            "task",
+					LSN:               6,
+					State:             localState,
+					SubscriptionState: SubscriptionStateRunning,
+				})
+
+				require.NoError(t, exec.mergeReplayedTask(
+					"task", 6, durableState, SubscriptionStateRunning, nil,
+				))
+				task, _ := exec.getTask("task")
+				require.Equal(t, uint64(6), task.LSN)
+				require.Equal(t, durableState, task.State)
+			})
+		}
+	}
 }
 
 // ==== iteration.go: IterationContext ====

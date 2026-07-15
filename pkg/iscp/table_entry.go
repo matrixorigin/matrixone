@@ -70,7 +70,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobEntry, ok := t.jobs[key]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
-		jobEntry = NewJobEntry(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+		jobEntry = NewJobEntryWithStatus(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 		t.jobs[key] = jobEntry
 		return
 	}

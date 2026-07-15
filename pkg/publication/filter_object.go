@@ -429,16 +429,22 @@ var GetObjectFromUpstreamWithWorker = func(
 	}
 
 	totalChunks := metaResult.TotalChunks
+	chunkCtx, cancelChunks := context.WithCancel(ctx)
+	var acceptedChunks acceptedJobBatch[*GetChunkJob]
+	defer func() {
+		// Cancel first so an error or partial admission cannot leave an accepted
+		// sibling blocked in I/O, then join before the shared executor can close.
+		cancelChunks()
+		acceptedChunks.join()
+	}()
 
 	// Fetch data chunks starting from chunk 1
 	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
 	allChunks := make([][]byte, totalChunks)
 
 	// Submit all chunk jobs to worker pool
-	chunkJobs := make([]*GetChunkJob, totalChunks)
 	for i := int64(1); i <= totalChunks; i++ {
-		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
-		chunkJobs[i-1] = chunkJob
+		chunkJob := NewGetChunkJob(chunkCtx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
 			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
 				return nil, err
@@ -446,11 +452,12 @@ var GetObjectFromUpstreamWithWorker = func(
 		} else {
 			chunkJob.Execute()
 		}
+		acceptedChunks.add(chunkJob)
 	}
 
 	// Wait for all chunk jobs to complete, retry failed chunks
 	for i := int64(0); i < totalChunks; i++ {
-		chunkResult := chunkJobs[i].WaitDone().(*GetChunkJobResult)
+		chunkResult := acceptedChunks.waitNext().(*GetChunkJobResult)
 		if chunkResult.Err != nil {
 			// Retry failed chunk
 			chunkData, err := getChunkWithRetry(ctx, upstreamExecutor, objectName, i+1, getChunkWorker, subscriptionAccountName, pubName)

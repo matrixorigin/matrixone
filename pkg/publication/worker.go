@@ -366,10 +366,24 @@ func doneChan(ctx context.Context) <-chan struct{} {
 
 func rejectJob(job Job, workerName string) error {
 	err := moerr.NewInternalErrorNoCtxf("%s is closed", workerName)
-	if job != nil {
+	if job, ok := job.(TerminalJob); ok {
 		job.Fail(err)
 	}
 	return err
+}
+
+func validateTerminalJob(job Job, workerName string) error {
+	if _, ok := job.(TerminalJob); !ok {
+		return moerr.NewInternalErrorNoCtxf(
+			"%s requires a job with terminal failure completion", workerName,
+		)
+	}
+	return nil
+}
+
+func failAcceptedJob(job Job, err error) {
+	// Submit validates this contract before the job can enter a queue.
+	job.(TerminalJob).Fail(err)
 }
 
 func NewWorker(
@@ -805,7 +819,7 @@ func (w *filterObjectWorker) start() {
 					select {
 					case <-w.ctx.Done():
 						w.cancelPending()
-						job.Fail(moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
 						return
 					default:
 					}
@@ -838,6 +852,9 @@ func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
 	if job == nil {
 		return moerr.NewInternalErrorNoCtx("cannot submit a nil filter object job")
 	}
+	if err := validateTerminalJob(job, "FilterObjectWorker"); err != nil {
+		return err
+	}
 	globalJobStats.IncrementFilterObjectPending()
 	v2.CCPRFilterObjectQueueSizeGauge.Inc()
 	select {
@@ -858,7 +875,7 @@ func (w *filterObjectWorker) Stop() {
 			select {
 			case job := <-w.jobChan:
 				w.cancelPending()
-				job.Fail(moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
 			default:
 				return
 			}
@@ -905,7 +922,7 @@ func (w *getChunkWorker) start() {
 					select {
 					case <-w.ctx.Done():
 						w.cancelPending(jobType)
-						job.Fail(moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
 						return
 					default:
 					}
@@ -954,6 +971,9 @@ func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 	if job == nil {
 		return moerr.NewInternalErrorNoCtx("cannot submit a nil get chunk job")
 	}
+	if err := validateTerminalJob(job, "GetChunkWorker"); err != nil {
+		return err
+	}
 	jobType := job.GetType()
 	switch jobType {
 	case JobTypeGetMeta:
@@ -979,7 +999,7 @@ func (w *getChunkWorker) Stop() {
 			select {
 			case job := <-w.jobChan:
 				w.cancelPending(job.GetType())
-				job.Fail(moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
 			default:
 				return
 			}
@@ -1044,7 +1064,7 @@ func (w *simpleJobWorker) start(threadCount int) {
 					select {
 					case <-w.ctx.Done():
 						w.cancelPending()
-						job.Fail(moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
 						return
 					default:
 					}
@@ -1076,6 +1096,9 @@ func (w *simpleJobWorker) submit(job Job) error {
 	if job == nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot submit a nil job to %s", w.name)
 	}
+	if err := validateTerminalJob(job, w.name); err != nil {
+		return err
+	}
 	w.onPending()
 	select {
 	case w.jobChan <- job:
@@ -1095,7 +1118,7 @@ func (w *simpleJobWorker) stop() {
 			select {
 			case job := <-w.jobChan:
 				w.cancelPending()
-				job.Fail(moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
 			default:
 				return
 			}

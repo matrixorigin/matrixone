@@ -423,6 +423,14 @@ func ApplyObjects(
 	var collectedTombstoneInsertStats []*ObjectWithTableInfo
 	var collectedDataDeleteStats []*ObjectWithTableInfo
 	var collectedDataInsertStats []*ObjectWithTableInfo
+	filterCtx, cancelFilters := context.WithCancel(ctx)
+	var acceptedFilters acceptedJobBatch[*FilterObjectJob]
+	defer func() {
+		// ApplyObjects owns the executors, transaction, and leaf workers used by
+		// filter jobs. Do not let any accepted child outlive this ownership scope.
+		cancelFilters()
+		acceptedFilters.join()
+	}()
 
 	// Get txnID from txn operator for CCPR cache
 	var txnID []byte
@@ -453,7 +461,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Data objects don't need aobjectMap for rewriting, pass nil
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil, ttlChecker)
+			filterJob := NewFilterObjectJob(filterCtx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil, ttlChecker)
 			if filterObjectWorker != nil {
 				if err = filterObjectWorker.SubmitFilterObject(filterJob); err != nil {
 					return
@@ -461,6 +469,7 @@ func ApplyObjects(
 			} else {
 				filterJob.Execute()
 			}
+			acceptedFilters.add(filterJob)
 			info.FilterJob = filterJob
 		}
 	}
@@ -488,7 +497,7 @@ func ApplyObjects(
 					}
 				}
 			} else {
-				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+				filterResult := acceptedFilters.waitNext().(*FilterObjectJobResult)
 				if filterResult.Err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter data object: %v", filterResult.Err)
 					return
@@ -535,7 +544,7 @@ func ApplyObjects(
 					Delete:      true,
 				})
 			} else {
-				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+				filterResult := acceptedFilters.waitNext().(*FilterObjectJobResult)
 				if filterResult.Err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter data object: %v", filterResult.Err)
 					return
@@ -559,7 +568,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Tombstone objects need aobjectMap for rowid rewriting
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
+			filterJob := NewFilterObjectJob(filterCtx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
 			if filterObjectWorker != nil {
 				if err = filterObjectWorker.SubmitFilterObject(filterJob); err != nil {
 					return
@@ -567,6 +576,7 @@ func ApplyObjects(
 			} else {
 				filterJob.Execute()
 			}
+			acceptedFilters.add(filterJob)
 			info.FilterJob = filterJob
 		}
 	}
@@ -577,7 +587,7 @@ func ApplyObjects(
 		if info.Delete {
 			continue
 		}
-		filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+		filterResult := acceptedFilters.waitNext().(*FilterObjectJobResult)
 		if filterResult.Err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to filter tombstone object: %v", filterResult.Err)
 			return

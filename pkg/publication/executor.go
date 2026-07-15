@@ -778,9 +778,13 @@ func (exec *PublicationTaskExecutor) mergeReplayedTask(
 	current, ok := exec.getTask(taskID)
 	if ok &&
 		(current.State == IterationStatePending || current.State == IterationStateRunning) &&
-		lsn <= current.LSN {
+		(lsn < current.LSN ||
+			(lsn == current.LSN &&
+				(state == IterationStatePending || state == IterationStateRunning))) {
 		// A replay snapshot can lag an admitted iteration. Preserve its local
-		// ownership until normal logtail apply observes a newer durable LSN.
+		// ownership only for an older LSN or the same in-flight iteration. A
+		// terminal state at the same LSN is the durable completion of that exact
+		// iteration and must win before the replay watermark advances.
 		// Subscription/drop metadata remains authoritative independently.
 		current.SubscriptionState = subscriptionState
 		current.DropAt = dropAt

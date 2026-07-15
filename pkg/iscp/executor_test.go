@@ -119,6 +119,14 @@ func TestNewJobEntryRestoresPersistedLSN(t *testing.T) {
 	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
 	spec := &JobSpec{}
 	status := &JobStatus{LSN: 5}
+	legacy := NewJobEntry(
+		table, "legacy", spec, 3, types.BuildTS(9, 0), ISCPJobState_Completed, 0,
+	)
+	require.Zero(t, legacy.currentLSN)
+	restored := NewJobEntryWithStatus(
+		table, "restored", spec, status, 4, types.BuildTS(10, 0), ISCPJobState_Completed, 0,
+	)
+	require.Equal(t, uint64(5), restored.currentLSN)
 
 	table.AddOrUpdateSinker(
 		context.Background(),
