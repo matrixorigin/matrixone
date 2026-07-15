@@ -124,7 +124,13 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	require.Equal(t, uint64(1), summary.OutputPacketCount)
 	require.Equal(t, uint64(64), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.MissingMemoryDomainCount)
-	projected := statistic.FromResourceSummary(summary, 0)
+	withoutCU := statistic.FromResourceSummary(summary, 0)
+	cuCfg := config.NewOBCUConfig()
+	cuCfg.SetDefaultValues()
+	projected := statistic.FromResourceSummary(
+		summary,
+		motrace.CalculateCUWithCfg(withoutCU, int64(stmt.Duration), cuCfg),
+	)
 	var persisted statistic.StatsArray
 	require.NoError(t, json.Unmarshal(projected.ToJsonString(), &persisted))
 	require.Equal(t, float64(statistic.StatsArrayVersion6), persisted.GetVersion())
