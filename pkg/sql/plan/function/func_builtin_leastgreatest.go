@@ -376,10 +376,22 @@ func leastGreatestTemporalItemType(inputs []types.Type) types.Type {
 			best = inputs[i]
 		}
 	}
+	if best.Oid == types.T_date && leastGreatestHasTimeBearingTemporal(inputs) {
+		best = types.T_datetime.ToType()
+	}
 	if leastGreatestTemporalSupportsScale(best.Oid) {
 		best.Scale = leastGreatestTemporalMaxScale(inputs)
 	}
 	return best
+}
+
+func leastGreatestHasTimeBearingTemporal(inputs []types.Type) bool {
+	for i := range inputs {
+		if leastGreatestTemporalSupportsScale(inputs[i].Oid) {
+			return true
+		}
+	}
+	return false
 }
 
 func leastGreatestTemporalMaxScale(inputs []types.Type) int32 {

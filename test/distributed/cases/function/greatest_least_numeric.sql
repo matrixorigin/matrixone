@@ -138,6 +138,12 @@ select least(cast('2020-01-01 00:00:00.26' as datetime(2)), cast('2020-01-01 00:
 select greatest(cast('2020-01-01' as date), cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as datetime(6))) as greatest_all_temporal_max_fsp;
 select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as greatest_json_mixed_datetime_scale;
 
+-- DATE + TIME needs a DATETIME peer target so VARCHAR/JSON time components
+-- survive packed-date comparison and formatting. TIME uses the statement date.
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00.500000' as time(6)), concat(cast(current_date() as char), ' 13:00:00.250000')) as datetime) = cast(concat(cast(current_date() as char), ' 13:00:00.250000') as datetime) as greatest_date_time_varchar_preserves_time;
+select cast(least(cast('2999-01-01' as date), cast('12:00:00.500000' as time(6)), concat(cast(current_date() as char), ' 11:00:00.250000')) as datetime) = cast(concat(cast(current_date() as char), ' 11:00:00.250000') as datetime) as least_date_time_varchar_preserves_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00.500000' as time(6)), json_extract(concat('"', cast(current_date() as char), ' 13:00:00.250000"'), '$')) as datetime) = cast(concat(cast(current_date() as char), ' 13:00:00.250000') as datetime) as greatest_json_date_time_preserves_time;
+
 -- All T_any arguments return a VARCHAR NULL result, and any NULL argument
 -- makes the strict function result NULL.
 select greatest(null, null) as greatest_all_null, least(null, null) as least_all_null;
