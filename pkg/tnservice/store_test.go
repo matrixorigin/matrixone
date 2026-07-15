@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -32,8 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
@@ -46,6 +43,16 @@ var (
 	testTNStoreAddr      = "unix:///tmp/test-dnstore.sock"
 	testTNLogtailAddress = "127.0.0.1:22001"
 )
+
+type storeQueryClient struct {
+	client.QueryClient
+	closeCalls int
+}
+
+func (c *storeQueryClient) Close() error {
+	c.closeCalls++
+	return nil
+}
 
 func TestNewAndStartAndCloseService(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
@@ -131,7 +138,7 @@ func TestStartReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 		assert.Equal(t, newTestTNShard(1, 2, 3), r.shard)
 	})
 }
@@ -140,7 +147,7 @@ func TestRemoveReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 
 		thc := s.hakeeperClient.(*testHAKeeperClient)
 		thc.setCommandBatch(logservicepb.CommandBatch{
@@ -174,7 +181,7 @@ func TestCloseReplica(t *testing.T) {
 		shard := newTestTNShard(1, 2, 3)
 		assert.NoError(t, s.StartTNReplica(shard))
 		r := s.getReplica(1)
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 		assert.Equal(t, shard, r.shard)
 
 		assert.NoError(t, s.CloseTNReplica(shard))
@@ -182,63 +189,129 @@ func TestCloseReplica(t *testing.T) {
 	})
 }
 
-func TestStoreClosesSharedQueryClientAfterReplicas(t *testing.T) {
-	queryClient := new(recordingTNQueryClient)
-	runtime.SetupServiceBasedRuntime("u-query-client-owner", runtime.ServiceRuntime(""))
-	fsFactory := func(name string) (*fileservice.FileServices, error) {
-		local, err := fileservice.NewMemoryFS(
-			defines.LocalFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		shared, err := fileservice.NewMemoryFS(
-			defines.SharedFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return fileservice.NewFileServices(name, local, shared)
-	}
-	s := newTestStore(t, "u-query-client-owner", fsFactory,
-		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
-			return newTestHAKeeperClient(), nil
-		}),
-		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+func TestRemoveReplicaCancelsStorageCreation(t *testing.T) {
+	oldInterval := retryCreateStorageInterval
+	retryCreateStorageInterval = 10 * time.Millisecond
+	t.Cleanup(func() { retryCreateStorageInterval = oldInterval })
+
+	var allowCreate atomic.Bool
+	createAttempted := make(chan struct{}, 1)
+	runTNStoreTest(t, func(s *store) {
+		s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+			if !allowCreate.Load() {
+				select {
+				case createAttempted <- struct{}{}:
+				default:
+				}
+				return nil, errors.New("injected log client creation failure")
+			}
 			return mem.NewMemLog(), nil
-		}),
-		func(s *store) {
-			s.options.queryClientFactory = func(string, morpc.Config) (client.QueryClient, error) {
-				return queryClient, nil
-			}
-		},
-		WithConfigAdjust(func(c *Config) {
-			c.InStandalone = true
-			c.Txn.Storage.Backend = StorageMEMKV
-		}),
-	)
+		}
 
-	shard := newTestTNShard(11, 12, 13)
-	replicaClosed := atomic.Bool{}
-	r := newReplica(shard, s.rt)
-	require.NoError(t, r.start(&recordingTxnService{
-		shard: shard,
-		closeFunc: func(bool) error {
-			if queryClient.closes.Load() != 0 {
-				return errors.New("query client closed before replica")
-			}
-			replicaClosed.Store(true)
-			return nil
-		},
-	}))
-	s.replicas.Store(shard.ShardID, r)
+		shard := newTestTNShard(101, 201, 301)
+		require.NoError(t, s.StartTNReplica(shard))
+		removed := s.getReplica(shard.ShardID)
+		require.NotNil(t, removed)
+		select {
+		case <-createAttempted:
+		case <-time.After(time.Second):
+			t.Fatal("storage creation was not attempted")
+		}
 
-	require.NoError(t, s.Close())
-	require.True(t, replicaClosed.Load())
-	require.Equal(t, int32(1), queryClient.closes.Load())
-	require.Error(t, queryClient.ping(context.Background()))
+		require.NoError(t, s.CloseTNReplica(shard))
+		require.Nil(t, s.getReplica(shard.ShardID))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.ErrorIs(t, removed.waitStarted(ctx), context.Canceled)
+		removed.mu.RLock()
+		require.Nil(t, removed.service)
+		removed.mu.RUnlock()
+
+		require.NoError(t, s.StartTNReplica(shard))
+		replacement := s.getReplica(shard.ShardID)
+		require.NotNil(t, replacement)
+		require.NotSame(t, removed, replacement)
+		allowCreate.Store(true)
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, replacement.waitStarted(ctx))
+
+		time.Sleep(5 * retryCreateStorageInterval)
+		removed.mu.RLock()
+		require.Nil(t, removed.service)
+		removed.mu.RUnlock()
+	})
+}
+
+func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
+	sharedClient := &storeQueryClient{}
+	runTNStoreTest(t, func(s *store) {
+		realClient := s.queryClient
+		s.queryClient = sharedClient
+		require.NoError(t, realClient.Close())
+		t.Cleanup(func() {
+			require.Equal(t, 1, sharedClient.closeCalls)
+		})
+	})
+}
+
+func TestReplicaCreateRetryStopsPromptly(t *testing.T) {
+	oldInterval := retryCreateStorageInterval
+	retryCreateStorageInterval = time.Second
+	t.Cleanup(func() { retryCreateStorageInterval = oldInterval })
+
+	createAttempted := make(chan struct{}, 1)
+	runTNStoreTest(t, func(s *store) {
+		s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+			select {
+			case createAttempted <- struct{}{}:
+			default:
+			}
+			return nil, errors.New("injected log client creation failure")
+		}
+
+		require.NoError(t, s.StartTNReplica(newTestTNShard(102, 202, 302)))
+		select {
+		case <-createAttempted:
+		case <-time.After(time.Second):
+			t.Fatal("storage creation was not attempted")
+		}
+
+		start := time.Now()
+		s.stopper.Stop()
+		require.Less(t, time.Since(start), 500*time.Millisecond)
+	})
+}
+
+func TestConcurrentStartTNReplicaPersistsAllShards(t *testing.T) {
+	const replicaCount = 24
+	runTNStoreTest(t, func(s *store) {
+		var wg sync.WaitGroup
+		errs := make(chan error, replicaCount)
+		for i := 0; i < replicaCount; i++ {
+			shardID := uint64(1000 + i)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- s.StartTNReplica(newTestTNShard(shardID, shardID+1000, shardID+2000))
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err)
+		}
+
+		s.mu.RLock()
+		shards := append([]metadata.TNShard(nil), s.mu.metadata.Shards...)
+		s.mu.RUnlock()
+		require.Len(t, shards, replicaCount)
+		seen := make(map[uint64]struct{}, replicaCount)
+		for _, shard := range shards {
+			seen[shard.ShardID] = struct{}{}
+		}
+		require.Len(t, seen, replicaCount)
+	})
 }
 
 func runTNStoreTest(
@@ -329,7 +402,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 	for {
 		r := s.getReplica(1)
 		if r != nil {
-			r.waitStarted()
+			assert.NoError(t, r.waitStarted(context.Background()))
 			assert.Equal(t, newTestTNShard(shardID, replicaID, logShardID), r.shard)
 			return
 		}
@@ -436,96 +509,5 @@ func (thc *testHAKeeperClient) GetClusterState(ctx context.Context) (logservicep
 }
 
 func (c *testHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
-	return nil
-}
-
-type recordingTNQueryClient struct {
-	closed atomic.Bool
-	closes atomic.Int32
-}
-
-func (c *recordingTNQueryClient) ServiceID() string {
-	return "recording-tn-query-client"
-}
-
-func (c *recordingTNQueryClient) SendMessage(
-	context.Context,
-	string,
-	*querypb.Request,
-) (*querypb.Response, error) {
-	if c.closed.Load() {
-		return nil, errors.New("query client closed")
-	}
-	return &querypb.Response{}, nil
-}
-
-func (c *recordingTNQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
-	return &querypb.Request{CmdMethod: method}
-}
-
-func (c *recordingTNQueryClient) Release(*querypb.Response) {}
-
-func (c *recordingTNQueryClient) Close() error {
-	c.closes.Add(1)
-	c.closed.Store(true)
-	return nil
-}
-
-func (c *recordingTNQueryClient) ping(ctx context.Context) error {
-	req := c.NewRequest(querypb.CmdMethod_GetCacheInfo)
-	resp, err := c.SendMessage(ctx, "retry-address", req)
-	if err != nil {
-		return err
-	}
-	c.Release(resp)
-	return nil
-}
-
-type recordingTxnService struct {
-	shard     metadata.TNShard
-	closeFunc func(bool) error
-}
-
-func (s *recordingTxnService) Shard() metadata.TNShard { return s.shard }
-
-func (s *recordingTxnService) Start() error { return nil }
-
-func (s *recordingTxnService) Close(destroy bool) error {
-	return s.closeFunc(destroy)
-}
-
-func (s *recordingTxnService) Read(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) Write(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) Commit(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) Rollback(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) Prepare(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) GetStatus(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) CommitTNShard(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) RollbackTNShard(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
-	return nil
-}
-
-func (s *recordingTxnService) Debug(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
 	return nil
 }

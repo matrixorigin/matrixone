@@ -108,6 +108,11 @@ type waiter struct {
 	lockWaitMode        pb.LockMode
 	lockWaitTimer       atomic.Pointer[time.Timer]
 
+	// isRemoteSnapshot marks a waiter reconstructed from GetTxnLock. It is an
+	// active wait-for edge captured by the remote lock owner, not a local waiter
+	// that may enter the notification lifecycle.
+	isRemoteSnapshot bool
+
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
 }
@@ -156,6 +161,10 @@ func (w *waiter) close(
 
 func (w *waiter) getStatus() waiterStatus {
 	return waiterStatus(w.status.Load())
+}
+
+func (w *waiter) isBlocking() bool {
+	return w.isRemoteSnapshot || w.getStatus() == blocking
 }
 
 func (w *waiter) setStatus(
@@ -320,6 +329,7 @@ func (w *waiter) reset() {
 	w.lockWaitTimeoutErr = nil
 	w.lockWaitGranularity = pb.Granularity_Row
 	w.lockWaitMode = pb.LockMode_Exclusive
+	w.isRemoteSnapshot = false
 	w.stopLockWaitTimer()
 }
 

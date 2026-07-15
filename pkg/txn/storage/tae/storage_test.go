@@ -20,11 +20,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/stretchr/testify/require"
@@ -62,16 +61,11 @@ func (c *recordingQueryClient) Close() error {
 	return nil
 }
 
-type noopRPCServer struct{}
+type noopLogtailServer struct{}
 
-func (noopRPCServer) Start() error { return nil }
+func (noopLogtailServer) Start() error { return nil }
 
-func (noopRPCServer) Close() error { return nil }
-
-func (noopRPCServer) RegisterRequestHandler(
-	func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error,
-) {
-}
+func (noopLogtailServer) Close() error { return nil }
 
 func TestNewTAEStorageReturnsTAEOpenError(t *testing.T) {
 	rt := runtime.DefaultRuntime()
@@ -110,13 +104,17 @@ func TestNewTAEStorageClosesTAEWhenLogtailServerCreationFails(t *testing.T) {
 		options.NewDefaultLogtailServerCfg(),
 		nil,
 		queryClient,
-		func(
-			string,
-			string,
-			*service.LogtailServer,
-			...morpc.ServerOption,
-		) (morpc.RPCServer, error) {
-			return nil, expectedErr
+		taeStorageDependencies{
+			newTAEHandle: openTAEHandle,
+			newLogtailServer: func(
+				context.Context,
+				*db.DB,
+				string,
+				*options.LogtailServerCfg,
+				runtime.Runtime,
+			) (logtailServer, error) {
+				return nil, expectedErr
+			},
 		},
 	)
 	require.ErrorIs(t, err, expectedErr)
@@ -127,7 +125,7 @@ func TestNewTAEStorageClosesTAEWhenLogtailServerCreationFails(t *testing.T) {
 	require.NoError(t, err)
 	queryClient.Release(resp)
 
-	handle, err := rpc.NewTAEHandle(
+	handle, err := rpc.NewTAEHandleWithError(
 		ctx,
 		dataDir,
 		nil,
@@ -146,13 +144,17 @@ func TestNewTAEStorageClosesTAEWhenLogtailServerCreationFails(t *testing.T) {
 		options.NewDefaultLogtailServerCfg(),
 		nil,
 		queryClient,
-		func(
-			string,
-			string,
-			*service.LogtailServer,
-			...morpc.ServerOption,
-		) (morpc.RPCServer, error) {
-			return noopRPCServer{}, nil
+		taeStorageDependencies{
+			newTAEHandle: openTAEHandle,
+			newLogtailServer: func(
+				context.Context,
+				*db.DB,
+				string,
+				*options.LogtailServerCfg,
+				runtime.Runtime,
+			) (logtailServer, error) {
+				return noopLogtailServer{}, nil
+			},
 		},
 	)
 	require.NoError(t, err)

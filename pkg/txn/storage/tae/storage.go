@@ -19,13 +19,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	rpc2 "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
@@ -37,21 +35,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
 
+type logtailServer interface {
+	Start() error
+	Close() error
+}
+
+type taeHandle interface {
+	rpchandle.Handler
+	GetDB() *db.DB
+}
+
+type taeStorageDependencies struct {
+	newTAEHandle func(
+		context.Context,
+		string,
+		client.QueryClient,
+		*options.Options,
+	) (taeHandle, error)
+	newLogtailServer func(
+		context.Context,
+		*db.DB,
+		string,
+		*options.LogtailServerCfg,
+		runtime.Runtime,
+	) (logtailServer, error)
+}
+
 type taeStorage struct {
 	shard         metadata.TNShard
 	taeHandler    rpchandle.Handler
 	manifestDB    *db.DB
-	logtailServer *service.LogtailServer
+	logtailServer logtailServer
 }
 
 var _ storage.TxnStorage = (*taeStorage)(nil)
-
-type logtailServerFactory func(
-	string,
-	string,
-	*service.LogtailServer,
-	...morpc.ServerOption,
-) (morpc.RPCServer, error)
 
 func NewTAEStorage(
 	ctx context.Context,
@@ -74,7 +91,7 @@ func NewTAEStorage(
 		logtailServerCfg,
 		txnServer,
 		client,
-		nil,
+		defaultTAEStorageDependencies,
 	)
 }
 
@@ -88,33 +105,28 @@ func newTAEStorage(
 	logtailServerCfg *options.LogtailServerCfg,
 	txnServer rpc2.TxnServer,
 	client client.QueryClient,
-	rpcServerFactory logtailServerFactory,
-) (txnStorage storage.TxnStorage, err error) {
+	deps taeStorageDependencies,
+) (storage.TxnStorage, error) {
 	if rt.ServiceUUID() != opt.SID {
 		panic(fmt.Sprintf("service uuid mismatch, %s != %s", rt.ServiceUUID(), opt.SID))
 	}
-	taeHandler, err := rpc.NewTAEHandle(ctx, dataDir, client, opt)
+	taeHandler, err := deps.newTAEHandle(ctx, dataDir, client, opt)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, taeHandler.HandleClose(ctx))
-		}
-	}()
-
 	tae := taeHandler.GetDB()
 	tae.TxnServer = txnServer
-	logtailer := logtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
-	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt, rpcServerFactory)
+	server, err := deps.newLogtailServer(ctx, tae, logtailServerAddr, logtailServerCfg, rt)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, taeHandler.HandleClose(ctx))
 	}
 	rpc.RegisterManifestHTTP(tae)
 
 	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
 	if ok {
-		ss.(*status.Server).SetLogtailServer(server)
+		if logtailServer, ok := server.(*service.LogtailServer); ok {
+			ss.(*status.Server).SetLogtailServer(logtailServer)
+		}
 	}
 
 	return &taeStorage{
@@ -123,6 +135,31 @@ func newTAEStorage(
 		manifestDB:    tae,
 		logtailServer: server,
 	}, nil
+}
+
+var defaultTAEStorageDependencies = taeStorageDependencies{
+	newTAEHandle:     openTAEHandle,
+	newLogtailServer: newTAELogtailServer,
+}
+
+func openTAEHandle(
+	ctx context.Context,
+	dataDir string,
+	client client.QueryClient,
+	opt *options.Options,
+) (taeHandle, error) {
+	return rpc.NewTAEHandleWithError(ctx, dataDir, client, opt)
+}
+
+func newTAELogtailServer(
+	ctx context.Context,
+	tae *db.DB,
+	address string,
+	cfg *options.LogtailServerCfg,
+	rt runtime.Runtime,
+) (logtailServer, error) {
+	logtailer := logtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
+	return service.NewLogtailServer(address, cfg, logtailer, rt, nil)
 }
 
 // Start starts logtail push service.
@@ -153,7 +190,7 @@ func (s *taeStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error 
 
 // Destroy implements storage.TxnTAEStorage
 func (s *taeStorage) Destroy(ctx context.Context) error {
-	return s.taeHandler.HandleDestroy(ctx)
+	return errors.Join(s.Close(ctx), s.taeHandler.HandleDestroy(ctx))
 }
 
 // Prepare implements storage.TxnTAEStorage

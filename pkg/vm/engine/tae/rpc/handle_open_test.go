@@ -22,10 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewTAEHandleReturnsOpenError(t *testing.T) {
+func TestNewTAEHandleWithErrorReturnsOpenError(t *testing.T) {
 	var err error
 	require.NotPanics(t, func() {
-		_, err = NewTAEHandle(
+		_, err = NewTAEHandleWithError(
 			context.Background(),
 			"/dev/null/cannot-create-tae-store",
 			nil,

@@ -134,7 +134,6 @@ func TestCCPRTxnCache_OnTxnUnknownResultRemovesTrackingWithoutGC(t *testing.T) {
 
 func TestTransactionFinalizeCommitUnknownCleansCCPRCache(t *testing.T) {
 	ctx := context.Background()
-	colexec.NewServer(nil)
 	fs := newCleanFS(t)
 	gcPool, err := ants.NewPool(2)
 	require.NoError(t, err)
@@ -143,6 +142,7 @@ func TestTransactionFinalizeCommitUnknownCleansCCPRCache(t *testing.T) {
 	cache := NewCCPRTxnCache(gcPool, fs)
 	txnOp, closeFn := client.NewTestTxnOperator(ctx)
 	defer closeFn()
+	colexec.NewServer("")
 
 	objectName := "obj_unknown_finalize"
 	txnID := txnOp.Txn().ID
