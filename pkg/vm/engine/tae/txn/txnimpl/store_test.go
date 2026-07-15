@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -23,16 +24,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type trackingEntry struct {
+	entry.Entry
+	freed atomic.Bool
+}
+
+func (e *trackingEntry) Free() {
+	e.freed.Store(true)
+}
+
 func TestWaitWalAndTailFreesAllEntriesAfterError(t *testing.T) {
 	failed := entry.GetBase()
+	t.Cleanup(failed.Free)
 	failed.DoneWithErr(assert.AnError)
 	succeeded := entry.GetBase()
+	t.Cleanup(succeeded.Free)
 	succeeded.DoneWithErr(nil)
-	store := &txnStore{logs: []entry.Entry{failed, succeeded}}
+	failedTracked := &trackingEntry{Entry: failed}
+	succeededTracked := &trackingEntry{Entry: succeeded}
+	store := &txnStore{logs: []entry.Entry{failedTracked, succeededTracked}}
 
 	require.ErrorIs(t, store.WaitWalAndTail(context.Background()), assert.AnError)
-	// Free resets an entry before returning it to the pool. Both entries must
-	// be reset even though the first WaitDone returned an error.
-	require.NoError(t, failed.GetError())
-	require.NoError(t, succeeded.GetError())
+	require.True(t, failedTracked.freed.Load())
+	require.True(t, succeededTracked.freed.Load(),
+		"a prior WAL error must not retain ownership of later entries")
 }

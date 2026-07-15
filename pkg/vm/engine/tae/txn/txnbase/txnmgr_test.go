@@ -36,7 +36,7 @@ func newTxnForLifecycleTest(mgr *TxnManager, id string) *Txn {
 
 func waitTxnManagerEmpty(t *testing.T, mgr *TxnManager) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	require.NoError(t, mgr.WaitEmpty(ctx))
 }

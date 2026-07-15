@@ -51,7 +51,7 @@ const defaultSessionHeartbeatInterval = 10 * time.Second
 func WithServerHeartbeatInterval(interval time.Duration) ServerOption {
 	return func(s *LogtailServer) {
 		if interval > 0 {
-			s.heartbeatInterval = interval
+			s.transportProbeInterval = interval
 		}
 	}
 }
@@ -117,9 +117,8 @@ type LogtailServer struct {
 	rt     runtime.Runtime
 	logger *log.MOLogger
 
-	// FIXME: change s.cfg.LogtailCollectInterval as hearbeat interval
-	cfg               *options.LogtailServerCfg
-	heartbeatInterval time.Duration
+	cfg                    *options.LogtailServerCfg
+	transportProbeInterval time.Duration
 
 	ssmgr     *SessionManager
 	waterline *Waterliner
@@ -143,9 +142,10 @@ type LogtailServer struct {
 
 	rpc morpc.RPCServer
 
-	rootCtx    context.Context
-	cancelFunc context.CancelFunc
-	stopper    *stopper.Stopper
+	rootCtx     context.Context
+	cancelFunc  context.CancelFunc
+	stopper     *stopper.Stopper
+	pullWorkers sync.WaitGroup
 	// shutdownMu prevents a phase-1 worker from handing a batch to subTailChan
 	// after Close has drained it. It is held only around the channel hand-off,
 	// never while collecting logtail data.
@@ -193,17 +193,17 @@ func NewLogtailServer(
 	rpcServerFactory func(string, string, *LogtailServer, ...morpc.ServerOption) (morpc.RPCServer, error), opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
-		rt:                rt,
-		logger:            rt.Logger(),
-		cfg:               cfg,
-		heartbeatInterval: defaultSessionHeartbeatInterval,
-		ssmgr:             NewSessionManager(),
-		waterline:         NewWaterliner(),
-		errChan:           make(chan sessionError, 1),
-		subReqChan:        make(chan subscription, 100),
-		subTailChan:       make(chan *LogtailPhase, 300),
-		pullWorkerPool:    make(chan struct{}, cfg.PullWorkerPoolSize),
-		logtailer:         logtailer,
+		rt:                     rt,
+		logger:                 rt.Logger(),
+		cfg:                    cfg,
+		transportProbeInterval: defaultSessionHeartbeatInterval,
+		ssmgr:                  NewSessionManager(),
+		waterline:              NewWaterliner(),
+		errChan:                make(chan sessionError, 1),
+		subReqChan:             make(chan subscription, 100),
+		subTailChan:            make(chan *LogtailPhase, 300),
+		pullWorkerPool:         make(chan struct{}, cfg.PullWorkerPoolSize),
+		logtailer:              logtailer,
 	}
 
 	for _, opt := range opts {
@@ -313,7 +313,8 @@ func (s *LogtailServer) onSubscription(
 		s.rootCtx, logger, s.pool.responses, s, stream,
 		s.cfg.ResponseSendTimeout,
 		s.cfg.RPCStreamPoisonTime,
-		s.heartbeatInterval,
+		s.cfg.LogtailCollectInterval,
+		s.transportProbeInterval,
 	)
 
 	repeated, generation := session.RegisterWithGeneration(tableID, *req.Table)
@@ -321,6 +322,12 @@ func (s *LogtailServer) onSubscription(
 		logger.Info("repeated sub request", zap.String("table ID", string(tableID)))
 		return nil
 	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			session.unregisterGeneration(tableID, generation)
+		}
+	}()
 
 	sub := subscription{
 		timeout:    ContextTimeout(sendCtx, s.cfg.ResponseSendTimeout),
@@ -344,6 +351,7 @@ func (s *LogtailServer) onSubscription(
 				zap.Int("chan len", len(s.subReqChan)),
 			)
 		case s.subReqChan <- sub:
+			accepted = true
 			return nil
 		}
 	}
@@ -359,7 +367,8 @@ func (s *LogtailServer) onUnsubscription(
 		s.rootCtx, s.logger, s.pool.responses, s, stream,
 		s.cfg.ResponseSendTimeout,
 		s.cfg.RPCStreamPoisonTime,
-		s.heartbeatInterval,
+		s.cfg.LogtailCollectInterval,
+		s.transportProbeInterval,
 	)
 
 	state := session.Unregister(tableID)
@@ -425,8 +434,16 @@ func (s *LogtailServer) logtailPullWorker(ctx context.Context) {
 			// This ensures goroutines are limited to PullWorkerPoolSize, not subscription count.
 			select {
 			case s.pullWorkerPool <- struct{}{}:
+				if ctx.Err() != nil {
+					<-s.pullWorkerPool
+					return
+				}
+				s.pullWorkers.Add(1)
 				go func() {
-					defer func() { <-s.pullWorkerPool }()
+					defer func() {
+						<-s.pullWorkerPool
+						s.pullWorkers.Done()
+					}()
 					s.pullLogtailsPhase1(ctx, sub)
 				}()
 			case <-ctx.Done():
@@ -459,7 +476,6 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 			zap.String("table", string(sub.tableID)),
 			zap.Error(err),
 		)
-		sub.session.Unregister(sub.tableID)
 		return
 	}
 	v2.LogTailPullCollectionPhase1DurationHistogram.Observe(time.Since(start).Seconds())
@@ -496,6 +512,31 @@ func (s *LogtailServer) enqueuePhase1Tail(ctx context.Context, tail *LogtailPhas
 
 // logtailSender sends total or incremental logtail.
 func (s *LogtailServer) logtailSender(ctx context.Context) {
+	// The manager's first event is an ordering barrier, not wall-clock time:
+	// every later subscription snapshot and incremental event is ordered after
+	// this timestamp. Advancing from Logtailer.Now would skip accepted events
+	// that have not reached the publisher yet.
+	select {
+	case <-ctx.Done():
+		s.logger.Info("context done", zap.Error(ctx.Err()))
+		return
+	case e, ok := <-s.event.C:
+		if !ok {
+			s.logger.Info("publishment channel closed")
+			return
+		}
+		s.waterline.Advance(e.to)
+		s.logger.Info(
+			"logtail.service.init.waterline",
+			zap.String("ts", e.to.String()),
+		)
+		if e.closeCB != nil {
+			// The bootstrap event is expected to be metadata-only. Preserve
+			// ownership safety if a custom producer violates that contract.
+			e.closeCB()
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -519,7 +560,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			)
 			if err != nil {
 				releaseLogtailPhase(tailPhase1)
-				tailPhase1.sub.session.Unregister(tailPhase1.sub.tableID)
 				s.logger.Error("fail to send subscription response", zap.Error(err))
 			} else {
 				v2.LogTailPullCollectionPhase2DurationHistogram.Observe(time.Since(start).Seconds())
@@ -545,7 +585,7 @@ func (s *LogtailServer) getSubLogtailPhase(
 	var subErr error
 	defer func() {
 		if subErr != nil {
-			sub.session.Unregister(sub.tableID)
+			sub.session.unregisterGeneration(sub.tableID, sub.generation)
 		}
 	}()
 
@@ -608,15 +648,6 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 	// NOTE: there's gap between multiple (e.from, e.to], so we
 	// maintain waterline to make UpdateResponse monotonous.
 	from := s.waterline.Waterline()
-	if !from.Less(e.to) {
-		// The server snapshot barrier already includes this event. This can
-		// happen while the manager drains work queued before server startup;
-		// never roll waterline back, but still release the event's batches.
-		if e.closeCB != nil {
-			e.closeCB()
-		}
-		return
-	}
 	to := e.to
 
 	wraps := make([]wrapLogtail, 0, len(e.logtails))
@@ -697,6 +728,10 @@ func (s *LogtailServer) Close() error {
 
 	s.cancelFunc()
 	s.stopper.Stop()
+	// logtailPullWorker owns the Add side and is now stopped, so Wait cannot
+	// race a new worker. Every admitted phase-1 worker must finish before its
+	// logtailer dependency or queued ownership can be torn down.
+	s.pullWorkers.Wait()
 	// Session senders are not stopper tasks. Stop and drain every session so
 	// responses accepted before rootCtx cancellation release their closeCBs.
 	for _, session := range s.ssmgr.ListSession() {
@@ -728,9 +763,6 @@ func (s *LogtailServer) drainPhase1Tails() {
 // Start starts logtail publishment service.
 func (s *LogtailServer) Start() error {
 	s.logger.Info("start logtail service")
-	waterline, _ := s.logtailer.Now()
-	s.waterline.Advance(waterline)
-	s.logger.Info("logtail.service.init.waterline", zap.String("ts", waterline.String()))
 
 	if err := s.stopper.RunNamedTask("session error handler", s.sessionErrorHandler); err != nil {
 		s.logger.Error("fail to start session error handler", zap.Error(err))

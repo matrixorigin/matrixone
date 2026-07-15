@@ -81,7 +81,8 @@ func (sm *SessionManager) GetSession(
 	stream morpcStream,
 	sendTimeout time.Duration,
 	poisonTime time.Duration,
-	heartbeatInterval time.Duration,
+	progressInterval time.Duration,
+	transportProbeInterval time.Duration,
 ) *Session {
 	sm.Lock()
 	defer sm.Unlock()
@@ -89,7 +90,7 @@ func (sm *SessionManager) GetSession(
 	if _, ok := sm.clients[stream]; !ok {
 		sm.clients[stream] = NewSession(
 			rootCtx, logger, responses, notifier, stream,
-			sendTimeout, poisonTime, heartbeatInterval,
+			sendTimeout, poisonTime, progressInterval, transportProbeInterval,
 		)
 	}
 	return sm.clients[stream]
@@ -258,11 +259,12 @@ type Session struct {
 	tables         map[TableID]tableSubscription
 	nextGeneration uint64
 
-	heartbeatInterval time.Duration
-	heartbeatTimer    *time.Timer
-	publishMu         sync.Mutex
-	exactFrom         timestamp.Timestamp
-	publishInit       sync.Once
+	progressInterval       time.Duration
+	progressTimer          *time.Timer
+	transportProbeInterval time.Duration
+	publishMu              sync.Mutex
+	exactFrom              timestamp.Timestamp
+	publishInit            sync.Once
 
 	deletedAt time.Time
 	sendMu    struct {
@@ -285,22 +287,24 @@ func NewSession(
 	stream morpcStream,
 	sendTimeout time.Duration,
 	poisonTime time.Duration,
-	heartbeatInterval time.Duration,
+	progressInterval time.Duration,
+	transportProbeInterval time.Duration,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
 	ss := &Session{
-		sessionCtx:        ctx,
-		cancelFunc:        cancel,
-		logger:            logger.With(zap.Uint64("stream-id", stream.streamID), zap.String("remote", stream.remote)),
-		sendTimeout:       sendTimeout,
-		responses:         responses,
-		notifier:          notifier,
-		stream:            stream,
-		poisonTime:        poisonTime,
-		sendChan:          make(chan message, responseBufferSize), // buffer response for morpc client session
-		tables:            make(map[TableID]tableSubscription),
-		heartbeatInterval: heartbeatInterval,
-		heartbeatTimer:    time.NewTimer(heartbeatInterval),
+		sessionCtx:             ctx,
+		cancelFunc:             cancel,
+		logger:                 logger.With(zap.Uint64("stream-id", stream.streamID), zap.String("remote", stream.remote)),
+		sendTimeout:            sendTimeout,
+		responses:              responses,
+		notifier:               notifier,
+		stream:                 stream,
+		poisonTime:             poisonTime,
+		sendChan:               make(chan message, responseBufferSize), // buffer response for morpc client session
+		tables:                 make(map[TableID]tableSubscription),
+		progressInterval:       progressInterval,
+		progressTimer:          time.NewTimer(progressInterval),
+		transportProbeInterval: transportProbeInterval,
 	}
 
 	ss.logger.Info("initialize new session for morpc stream")
@@ -312,10 +316,19 @@ func NewSession(
 	}
 
 	sender := func() {
-		defer ss.wg.Done()
+		var notifyErr error
+		defer func() {
+			// A notifier is allowed to synchronously clean the session. Publish
+			// sender termination first so PostClean cannot wait on this goroutine.
+			ss.wg.Done()
+			if notifyErr != nil {
+				ss.notifier.NotifySessionError(ss, notifyErr)
+			}
+		}()
 
 		var cnt int64
-		timer := time.NewTimer(ss.heartbeatInterval)
+		timer := time.NewTimer(ss.transportProbeInterval)
+		defer timer.Stop()
 
 		for {
 			select {
@@ -330,20 +343,20 @@ func NewSession(
 				// it before notifying the server reaper so no publisher can enqueue
 				// more responses while the session is being removed.
 				ss.cancelFunc()
-				ss.notifier.NotifySessionError(ss, err)
+				notifyErr = err
 				return
 
 			case <-timer.C:
 				if ss.TableCount() == 0 {
 					ss.logger.Error("no tables are subscribed yet, close this session")
-					ss.notifier.NotifySessionError(ss, moerr.NewInternalError(ctx, "no tables are subscribed"))
+					notifyErr = moerr.NewInternalError(ctx, "no tables are subscribed")
 					return
 				}
 				if err := ss.sendHeartbeat(); err != nil {
-					ss.notifier.NotifySessionError(ss, err)
+					notifyErr = err
 					return
 				}
-				timer.Reset(ss.heartbeatInterval)
+				timer.Reset(ss.transportProbeInterval)
 
 			case msg, ok := <-ss.sendChan:
 				if !ok {
@@ -388,11 +401,11 @@ func NewSession(
 				}
 
 				if err := sendFunc(); err != nil {
-					ss.notifier.NotifySessionError(ss, err)
+					notifyErr = err
 					return
 				}
 				cnt++
-				timer.Reset(ss.heartbeatInterval)
+				timer.Reset(ss.transportProbeInterval)
 			}
 		}
 	}
@@ -426,11 +439,13 @@ func (ss *Session) PostClean() {
 		}
 
 		ss.cancelFunc()
-		// Wait for any in-flight response hand-off that began before cancel.
-		// Subsequent senders observe sessionCtx cancellation while holding the
-		// read lock and cannot add an item after this point.
+		ss.progressTimer.Stop()
+		// Wait for any in-flight response hand-off that began before cancel,
+		// then keep new hand-offs excluded until the sender and queue are fully
+		// drained. Subsequent senders observe sessionCtx cancellation after this
+		// critical section and release their response without enqueueing it.
 		ss.enqueueMu.Lock()
-		ss.enqueueMu.Unlock()
+		defer ss.enqueueMu.Unlock()
 		ss.wg.Wait()
 
 		left := len(ss.sendChan)
@@ -483,6 +498,20 @@ func (ss *Session) Unregister(id TableID) TableState {
 
 	entry, ok := ss.tables[id]
 	if !ok {
+		return TableNotFound
+	}
+	delete(ss.tables, id)
+	return entry.state
+}
+
+// unregisterGeneration cancels one asynchronous subscription attempt without
+// deleting a newer attempt for the same table.
+func (ss *Session) unregisterGeneration(id TableID, generation uint64) TableState {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	entry, ok := ss.tables[id]
+	if !ok || entry.generation != generation {
 		return TableNotFound
 	}
 	delete(ss.tables, id)
@@ -546,7 +575,7 @@ func (ss *Session) Publish(
 	// if there's no incremental logtail, heartbeat by interval
 	if len(qualified) == 0 {
 		select {
-		case <-ss.heartbeatTimer.C:
+		case <-ss.progressTimer.C:
 			break
 		default:
 			if closeCB != nil {
@@ -562,7 +591,7 @@ func (ss *Session) Publish(
 	beforeSend := time.Now()
 	err := ss.TrySendUpdateResponse(sendCtx, exactFrom, to, closeCB, qualified...)
 	if err == nil {
-		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
+		ss.progressTimer.Reset(ss.progressInterval)
 		ss.publishMu.Lock()
 		ss.exactFrom = to
 		ss.publishMu.Unlock()
@@ -662,11 +691,10 @@ func (ss *Session) SendUnsubscriptionResponse(
 func (ss *Session) CompleteUnsubscription(
 	sendCtx context.Context, table api.TableID, state TableState,
 ) error {
-	err := ss.SendUnsubscriptionResponse(sendCtx, table)
-	if err == nil && state == TableSubscribed {
+	if state == TableSubscribed {
 		atomic.AddInt32(&ss.active, -1)
 	}
-	return err
+	return ss.SendUnsubscriptionResponse(sendCtx, table)
 }
 
 // SendUpdateResponse sends publishment response.

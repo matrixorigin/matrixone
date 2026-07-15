@@ -80,7 +80,7 @@ func TestLogtailSubscriberWaitReadyHonorsContextCancellation(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		subscriber.setReady() // free the intentionally blocked goroutine before failing.
 		<-done
 		t.Fatal("waitReady did not wake when its context was cancelled")

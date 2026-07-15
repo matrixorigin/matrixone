@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -30,6 +31,9 @@ const (
 type Notifier struct {
 	ctx context.Context
 	C   chan event
+
+	mu     sync.RWMutex
+	closed bool
 }
 
 func NewNotifier(ctx context.Context, buffer int) *Notifier {
@@ -43,6 +47,11 @@ func NewNotifier(ctx context.Context, buffer int) *Notifier {
 func (n *Notifier) NotifyLogtail(
 	from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
 ) error {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.closed {
+		return context.Canceled
+	}
 	select {
 	case <-n.ctx.Done():
 		return n.ctx.Err()
@@ -55,13 +64,20 @@ func (n *Notifier) NotifyLogtail(
 // published because the server is shutting down. Call it only after all event
 // consumers have stopped, otherwise ownership would race with publication.
 func (n *Notifier) Drain() {
+	n.mu.Lock()
+	n.closed = true
+	callbacks := make([]func(), 0, len(n.C))
 	for {
 		select {
 		case event := <-n.C:
 			if event.closeCB != nil {
-				event.closeCB()
+				callbacks = append(callbacks, event.closeCB)
 			}
 		default:
+			n.mu.Unlock()
+			for _, callback := range callbacks {
+				callback()
+			}
 			return
 		}
 	}

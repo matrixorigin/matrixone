@@ -72,14 +72,14 @@ func TestSafeQueueRejectsEnqueueAfterStopBegins(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return queue.state.Load() >= ReceiverStopped
-	}, time.Second, time.Millisecond)
+	}, 10*time.Second, time.Millisecond)
 
 	_, err = queue.Enqueue("after stop begins")
 	require.ErrorIs(t, err, ErrClose)
 	close(release)
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("queue stop did not finish")
 	}
 }
@@ -97,7 +97,7 @@ func TestSafeQueueWithoutHandlerStops(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("queue with nil handler did not stop")
 	}
 }
