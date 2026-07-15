@@ -313,6 +313,19 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	execCtx.reqCtx = tenantCtx
 	ses.beginResponseAccounting()
+	responseAccountingOpen := true
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if responseAccountingOpen {
+				ses.finishResponseAccounting(
+					tenantCtx,
+					moerr.ConvertPanicError(tenantCtx, recovered),
+					true,
+				)
+			}
+			panic(recovered)
+		}
+	}()
 	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
 		err = moerr.AttachCause(tenantCtx, err)
 		if !skipClientQuit(err.Error()) {
@@ -351,6 +364,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		}
 	}
 	ses.finishResponseAccounting(tenantCtx, responseErr, responseFailed)
+	responseAccountingOpen = false
 
 	ses.Debugf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
 

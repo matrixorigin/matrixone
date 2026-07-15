@@ -490,6 +490,12 @@ func finishStatementAccounting(ctx context.Context, ses FeSession, err error) {
 }
 
 func (ses *Session) beginResponseAccounting() {
+	// Requests are serialized per session, so reset at the request boundary.
+	// This prevents handshake and statement-less responses from leaking into the
+	// next SQL statement's protocol counters.
+	if resper, ok := ses.GetResponser().(*MysqlResp); ok {
+		resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	}
 	ses.responseAccounting = true
 	ses.pendingStatementFailed = false
 	ses.pendingStatementError = nil
@@ -521,9 +527,8 @@ func (ses *Session) finishResponseAccounting(ctx context.Context, responseErr er
 	if err == nil && failed {
 		err = moerr.NewInternalError(ctx, "statement failed")
 	}
-	if ses.GetStmtInfo() == nil {
-		return
-	}
+	// Always consume the request counters, including requests that did not
+	// create a StatementInfo (PING, rewrite sidecars, and similar commands).
 	finishStatementAccounting(ctx, ses, err)
 }
 

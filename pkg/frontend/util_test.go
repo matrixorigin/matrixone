@@ -99,22 +99,39 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	memoryPool.Free(allocation)
 	ses.SetTStmt(stmt)
 
+	writer.bytes = 99
+	writer.packets = 9
 	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
 	execErr := moerr.NewInternalErrorNoCtx("failed")
 	require.True(t, ses.deferStatementCompletion(execErr))
 	require.Same(t, stmt, ses.GetStmtInfo())
-	require.Zero(t, writer.calls)
 
 	writer.bytes = 17
 	writer.packets = 1
 	ses.finishResponseAccounting(ctx, execErr, true)
 	require.Nil(t, ses.GetStmtInfo())
-	require.Equal(t, 1, writer.calls)
+	require.Equal(t, 2, writer.calls)
 	summary := root.PreResponseSummary()
 	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
 	require.Equal(t, uint64(1), summary.OutputPacketCount)
 	require.Equal(t, uint64(64), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.MissingMemoryDomainCount)
+}
+
+func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	writer.bytes = 7
+	writer.packets = 1
+	ses.finishResponseAccounting(context.Background(), nil, false)
+
+	require.Equal(t, 2, writer.calls)
+	require.Zero(t, writer.bytes)
+	require.Zero(t, writer.packets)
 }
 
 type testColumnWithoutDecimalScale struct {

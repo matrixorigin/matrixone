@@ -654,8 +654,24 @@ func (s *StatementInfo) SetResourceRoot(root *resource.Root) {
 // Nested work caused by the serialized session request is included. A pool
 // with pre-existing live bytes is explicitly missing rather than estimated.
 func (s *StatementInfo) SetResourceMemoryPool(pool *mpool.MPool) {
+	s.SetResourceMemoryPoolEpoch(pool, pool != nil && pool.ResetResourceEpoch())
+}
+
+// SetResourceMemoryPoolEpoch adopts an epoch established at the request root
+// boundary. This avoids resetting counters after parsing and statement setup
+// have already started.
+func (s *StatementInfo) SetResourceMemoryPoolEpoch(pool *mpool.MPool, exact bool) {
 	s.resourceMPool = pool
-	s.resourceMPExact = pool != nil && pool.ResetResourceEpoch()
+	s.resourceMPExact = exact
+	if s.resourceRoot != nil {
+		s.resourceRoot.SetMemoryDomainPreview(func() (resource.MemoryDomainSummary, bool) {
+			if pool == nil || !exact {
+				return resource.MemoryDomainSummary{}, false
+			}
+			domain, _ := pool.ResourceSnapshot()
+			return domain, true
+		})
+	}
 }
 
 // SetResourceSummary installs an already sealed summary for standalone
@@ -768,6 +784,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.resourceRoot.AddProtocolOutput(uint64(outBytes), uint64(outPacket))
 		}
 		if s.resourceMPool != nil {
+			s.resourceRoot.ClearMemoryDomainPreview()
 			if s.resourceMPExact {
 				domain, _ := s.resourceMPool.ResourceSnapshot()
 				s.resourceRoot.AddMemoryDomain(domain)

@@ -109,6 +109,22 @@ func TestRootLifecycle(t *testing.T) {
 	}
 }
 
+func TestRootMemoryPreviewDoesNotMutateTerminalSummary(t *testing.T) {
+	root := NewRoot(ConnExternal)
+	root.SetMemoryDomainPreview(func() (MemoryDomainSummary, bool) {
+		return MemoryDomainSummary{AllocatedBytes: 32, PeakLiveBytes: 32}, true
+	})
+
+	preview := root.PreResponseSummary()
+	if preview.Memory.MaxDomainPeakLiveBytes != 32 {
+		t.Fatalf("preview memory = %+v", preview.Memory)
+	}
+	root.ClearMemoryDomainPreview()
+	if terminal := root.Seal(1); terminal.Memory.MaxDomainPeakLiveBytes != 0 {
+		t.Fatalf("preview mutated terminal summary: %+v", terminal.Memory)
+	}
+}
+
 func TestUndispatchedSlotsAreNotMissing(t *testing.T) {
 	attempt := NewAttempt(1, 2, 1)
 	if got := attempt.MarkFragmentSendFailed(0); got != PublishAccepted {

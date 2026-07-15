@@ -4488,6 +4488,14 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 
 	_, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
+	assert.Nil(t, ses.GetStmtInfo())
+
+	ses.beginResponseAccounting()
+	_, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc"}, []string{constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	assert.Nil(t, err)
+	assert.NotNil(t, ses.GetStmtInfo())
+	ses.finishResponseAccounting(context.TODO(), moerr.NewInternalErrorNoCtx("test"), true)
+	assert.Nil(t, ses.GetStmtInfo())
 
 }
 

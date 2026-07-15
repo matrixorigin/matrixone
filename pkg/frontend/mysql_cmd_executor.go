@@ -180,6 +180,18 @@ func transferSessionConnType2ResourceConnType(c ConnType) resource.ConnType {
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) (context.Context, error) {
 	root := resource.NewRoot(transferSessionConnType2ResourceConnType(ses.connType))
 	ctx = resource.ContextWithRoot(ctx, root)
+	var resourceMPExact bool
+	if proc != nil {
+		pool := proc.Mp()
+		resourceMPExact = pool != nil && pool.ResetResourceEpoch()
+		root.SetMemoryDomainPreview(func() (resource.MemoryDomainSummary, bool) {
+			if pool == nil || !resourceMPExact {
+				return resource.MemoryDomainSummary{}, false
+			}
+			domain, _ := pool.ResourceSnapshot()
+			return domain, true
+		})
+	}
 	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
@@ -287,7 +299,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	stm.SetResourceRoot(root)
 	if proc != nil {
-		stm.SetResourceMemoryPool(proc.Mp())
+		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPExact)
 	}
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
@@ -347,9 +359,15 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	} else {
 		sqlType = constant.ExternSql
 	}
-	// [!WARNING]
-	// after Call EndStatement, MUST reset ses.tStmt = nil
-	// avoid call EndStatement again in logStatementStringStatus()
+	finishParseError := func(last bool) {
+		if last && ses.deferStatementCompletion(retErr) {
+			return
+		}
+		if ses.tStmt != nil {
+			ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
+		}
+		ses.SetTStmt(nil)
+	}
 	if len(envStmt) > 0 {
 		for i, sql := range envStmt {
 			if i < len(sqlTypes) {
@@ -359,16 +377,15 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
+			finishParseError(i == len(envStmt)-1)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
+		finishParseError(true)
 	}
-	ses.SetTStmt(nil) // see [!WARNING] above
 
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {

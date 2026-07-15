@@ -17,14 +17,36 @@ import (
 // request. Producers publish immutable child summaries; they never share its
 // counters in their hot paths.
 type Root struct {
-	mu      sync.Mutex
-	summary StatementResourceSummary
-	sealed  bool
+	mu            sync.Mutex
+	summary       StatementResourceSummary
+	memoryPreview func() (MemoryDomainSummary, bool)
+	sealed        bool
 }
 
 // NewRoot creates an empty request root.
 func NewRoot(conn ConnType) *Root {
 	return &Root{summary: StatementResourceSummary{ConnType: conn}}
+}
+
+// SetMemoryDomainPreview installs the statement allocator snapshot used by
+// pre-response consumers such as EXPLAIN ANALYZE. Terminal publication still
+// happens exactly once through AddMemoryDomain or MarkMemoryDomainMissing.
+func (r *Root) SetMemoryDomainPreview(preview func() (MemoryDomainSummary, bool)) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return false
+	}
+	r.memoryPreview = preview
+	return true
+}
+
+// ClearMemoryDomainPreview removes the non-authoritative preview before the
+// terminal memory domain is published.
+func (r *Root) ClearMemoryDomainPreview() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.memoryPreview = nil
 }
 
 // AddLocal merges quiescent frontend/root-local work.
@@ -94,8 +116,21 @@ func (r *Root) MarkMemoryDomainMissing() bool {
 // PreResponseSummary returns an immutable snapshot without sealing the root.
 func (r *Root) PreResponseSummary() StatementResourceSummary {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.summary
+	summary := r.summary
+	preview := r.memoryPreview
+	r.mu.Unlock()
+	if preview == nil {
+		return summary
+	}
+	if domain, exact := preview(); exact {
+		summary.Quality |= MergeMemoryDomain(&summary.Memory, domain)
+	} else {
+		summary.MissingMemoryDomainCount, summary.Quality = addChecked(
+			summary.MissingMemoryDomainCount, 1,
+			summary.Quality|QualityPartial|QualityMissingMemoryDomain,
+		)
+	}
+	return summary
 }
 
 // Seal sets the request wall duration and returns an immutable summary. It is
