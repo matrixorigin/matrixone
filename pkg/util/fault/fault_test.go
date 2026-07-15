@@ -243,6 +243,39 @@ func TestRemoveWaitFaultPointBeforeWaitRegistrationDoesNotHang(t *testing.T) {
 	}
 }
 
+func TestRemoveWaitFaultPointBeforeContextWaitRegistrationDoesNotHang(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	fm := enabled[DomainDefault].Load()
+	require.NotNil(t, fm)
+
+	fm.chIn <- &faultEntry{cmd: TRIGGER, name: "w"}
+	entry := <-fm.chOut
+	require.NotNil(t, entry)
+
+	removed, err := RemoveFaultPoint(ctx, "w")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		entry.doWithContext(waitCtx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("context-aware wait fault point blocked after it was removed before waiter registration")
+	}
+}
+
 func TestTriggerWaitFaultWithContextReturnsOnCancel(t *testing.T) {
 	ctx := context.Background()
 

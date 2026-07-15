@@ -223,6 +223,10 @@ func (e *faultEntry) doWithContext(ctx context.Context) (int64, string) {
 		return e.do()
 	}
 	e.mutex.Lock()
+	if e.removed {
+		e.mutex.Unlock()
+		return 0, ""
+	}
 	e.nWaiters += 1
 	done := make(chan struct{})
 	go func() {
