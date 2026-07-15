@@ -345,6 +345,34 @@ func TestDiskCacheSetFileRepairsStaleIndex(t *testing.T) {
 	readVector.Release()
 }
 
+func TestDiskCacheCanonicalizesFullFileKeys(t *testing.T) {
+	ctx := context.Background()
+	for _, filePath := range []string{"shared:/foo", "/foo"} {
+		t.Run(filePath, func(t *testing.T) {
+			cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+			require.NoError(t, err)
+			defer cache.Close(ctx)
+
+			err = cache.SetFile(ctx, filePath, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+			})
+			require.NoError(t, err)
+
+			vector := &IOVector{
+				FilePath: filePath,
+				Entries:  []IOEntry{{Offset: 0, Size: 3}},
+			}
+			defer vector.Release()
+			require.NoError(t, cache.Read(ctx, vector))
+			require.True(t, vector.Entries[0].done)
+			require.Equal(t, []byte("foo"), vector.Entries[0].Data)
+
+			require.NoError(t, cache.DeletePaths(ctx, []string{filePath}))
+			require.False(t, cache.cache.Contains(cache.pathForFile("foo")))
+		})
+	}
+}
+
 func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

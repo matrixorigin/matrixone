@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMemCacheLeak(t *testing.T) {
@@ -278,6 +279,34 @@ func TestMemCacheRetainsBeforeSetVisible(t *testing.T) {
 	close(data.unblockRetain)
 	assert.NoError(t, <-setDone)
 	assert.False(t, data.releaseBeforeRetain.Load())
+}
+
+func TestMemCacheCanonicalizesDeletePaths(t *testing.T) {
+	ctx := context.Background()
+	for _, filePath := range []string{"shared:/foo", "/foo"} {
+		t.Run(filePath, func(t *testing.T) {
+			cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+			defer cache.Close(ctx)
+
+			vector := &IOVector{
+				FilePath: filePath,
+				Entries: []IOEntry{{
+					Size:       3,
+					CachedData: DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte("foo")),
+				}},
+			}
+			require.NoError(t, cache.Update(ctx, vector, false))
+			vector.Release()
+
+			require.NoError(t, cache.DeletePaths(ctx, []string{filePath}))
+			readVector := &IOVector{
+				FilePath: filePath,
+				Entries:  []IOEntry{{Size: 3}},
+			}
+			require.NoError(t, cache.Read(ctx, readVector))
+			require.False(t, readVector.Entries[0].done)
+		})
+	}
 }
 
 func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
