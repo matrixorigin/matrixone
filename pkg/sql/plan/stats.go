@@ -16,10 +16,11 @@ package plan
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1070,10 +1071,18 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
-			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
-				return cost1 <= cost2
+			// Use a STABLE sort with a strict comparator, deliberately not a plain
+			// (unstable) sort. Filter evaluation order is semantically significant
+			// here: it decides which predicate a vector/IVF index probes with (see
+			// #25639) and which value a runtime bool error reports. A stable sort
+			// keeps equal-cost filters in their original, as-written relative order,
+			// which is a deterministic and well-defined tie order; an unstable sort
+			// would reorder equal-cost filters arbitrarily and make those results
+			// depend on the sort implementation's internals.
+			slices.SortStableFunc(node.FilterList, func(a, b *plan.Expr) int {
+				cost1 := estimateFilterWeight(a, 0) * a.Selectivity
+				cost2 := estimateFilterWeight(b, 0) * b.Selectivity
+				return cmp.Compare(cost1, cost2)
 			})
 		}
 	}
@@ -1906,15 +1915,23 @@ func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
 	return false
 }
 
-func compareStats(stats1, stats2 *Stats) bool {
-	// selectivity is first considered to reduce data
-	// when selectivity very close, we first join smaller table
-	if math.Abs(stats1.Selectivity-stats2.Selectivity) > 0.01 {
-		return stats1.Selectivity < stats2.Selectivity
-	} else {
-		// todo we need to calculate ndv of outcnt here
-		return stats1.Outcnt < stats2.Outcnt
+// compareStats orders join candidates: smaller selectivity first (to reduce
+// data), and when the selectivity is very close, smaller outcnt first (join the
+// smaller table first). It returns a three-way result (negative when stats1
+// sorts before stats2).
+//
+// "Very close" is defined by bucketing selectivity onto a fixed 0.01 grid rather
+// than a sliding |s1-s2| < 0.01 window. The window version is NOT transitive
+// (a~b and b~c does not imply a~c), which makes it an invalid comparator for
+// slices.SortFunc; the grid is a genuine strict weak ordering. See issue #25702.
+func compareStats(stats1, stats2 *Stats) int {
+	b1 := int64(math.Floor(stats1.Selectivity / 0.01))
+	b2 := int64(math.Floor(stats2.Selectivity / 0.01))
+	if b1 != b2 {
+		return cmp.Compare(b1, b2)
 	}
+	// todo we need to calculate ndv of outcnt here
+	return cmp.Compare(stats1.Outcnt, stats2.Outcnt)
 }
 
 func andSelectivity(s1, s2 float64) float64 {
