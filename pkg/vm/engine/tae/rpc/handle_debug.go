@@ -59,6 +59,20 @@ const (
 	DefaultTimeout = time.Minute * 3 / 2
 )
 
+func contextForBackupCheckpoint(
+	ctx context.Context,
+	timeout time.Duration,
+) (context.Context, context.CancelFunc) {
+	// The time needed to flush a backup checkpoint depends on the amount of
+	// dirty data. Do not impose the short timeout used by interactive debug
+	// commands when the caller did not request one. The request context still
+	// provides cancellation and the session-level deadline.
+	if timeout == 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 ///
 ///
 /// impls TxnStorage:Debug
@@ -684,7 +698,6 @@ func (h *Handle) HandleBackup(
 	resp *api.SyncLogTailResp,
 ) (cb func(), err error) {
 	var (
-		timeout = req.FlushDuration
 		// Use the engine's HLC clock for the checkpoint TS, not wall-clock.
 		// HLC can be ahead of wall clock (e.g. after replaying logtail entries
 		// with future-dated timestamps); a wall-clock currTs could fall behind
@@ -699,10 +712,7 @@ func (h *Handle) HandleBackup(
 
 	locations += backupTime.Format(time.DateTime) + ";"
 
-	if timeout == 0 {
-		timeout = DefaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := contextForBackupCheckpoint(ctx, req.FlushDuration)
 	defer cancel()
 
 	if location, err = h.db.ForceCheckpointForBackup(ctx, currTs); err != nil {

@@ -26,6 +26,21 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultForceICKPTimeout = 2 * time.Minute
+
+func contextForForceICKP(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	// A caller-provided deadline is part of the operation's contract. In
+	// particular, backup uses a longer request deadline because checkpoint
+	// duration scales with dirty data. Keep the historical timeout only as a
+	// safety net for callers that provide no deadline at all.
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, defaultForceICKPTimeout)
+}
+
 type TestRunner interface {
 	EnableCheckpoint(*CheckpointCfg)
 	DisableCheckpoint(ctx context.Context) (*CheckpointCfg, error)
@@ -208,7 +223,7 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 		)
 	}()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	ctx, cancel := contextForForceICKP(ctx)
 	defer cancel()
 
 	for {
