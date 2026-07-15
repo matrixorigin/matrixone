@@ -316,7 +316,6 @@ create table t0(a int primary key, b int);
 insert into t0 values(1,1),(2,2);
 data branch create table t1 from t0;
 begin;
-update t1 set b=11 where a=1;
 -- @regex("ALTER on a data-branch lineage is not supported inside an explicit transaction", true)
 alter table t1 add column c int default 0;
 rollback;
