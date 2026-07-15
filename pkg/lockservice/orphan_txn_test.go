@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -907,27 +908,159 @@ func TestValidTxnWithLocalTxn(t *testing.T) {
 		"s1",
 		getLogger(""),
 		newFixedSlicePool(16),
-		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
-		func(txn pb.WaitTxn) (bool, error) {
+		func(string) (bool, error) {
+			require.FailNow(t, "local txn should not validate a remote service")
+			return false, nil
+		},
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			require.FailNow(t, "local txn should not notify cannot commit")
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) {
+			require.FailNow(t, "local txn should not run a remote active-txn check")
 			return false, nil
 		},
 	).(*mapBasedTxnHolder)
+	defer hold.close()
 	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
 }
 
 func TestValidTxnWithValidRemoteTxn(t *testing.T) {
+	var checks atomic.Int32
 	hold := newMapBasedTxnHandler(
 		"s1",
 		getLogger(""),
 		newFixedSlicePool(16),
-		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(string) (bool, error) {
+			require.FailNow(t, "active-txn check should not validate a remote service")
+			return false, nil
+		},
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			require.FailNow(t, "active remote txn should not notify cannot commit")
+			return pb.CannotCommitResponse{}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) {
+			checks.Add(1)
+			require.Equal(t, "s0", txn.CreatedOn)
 			return true, nil
 		},
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
+	defer hold.close()
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.Equal(t, int32(1), checks.Load())
+}
+
+func TestValidTxnCheckErrorDoesNotFence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "backend closed", err: moerr.NewBackendClosedNoCtx()},
+		{name: "backend cannot connect", err: moerr.NewBackendCannotConnectNoCtx("target")},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+		{name: "unclassified error", err: moerr.NewInternalErrorNoCtx("active txn check failed")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var notified atomic.Int32
+			hold := newMapBasedTxnHandler(
+				"source",
+				getLogger(""),
+				newFixedSlicePool(16),
+				func(string) (bool, error) { return true, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+					notified.Add(1)
+					return pb.CannotCommitResponse{
+						FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+					}, nil
+				},
+				func(pb.WaitTxn) (bool, error) { return false, test.err },
+			).(*mapBasedTxnHolder)
+			defer hold.close()
+
+			require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("live"),
+				CreatedOn: "target",
+			}))
+			require.Zero(t, notified.Load(),
+				"an indeterminate check must not install a cannot-commit fence")
+		})
+	}
+}
+
+func TestValidTxnCheckErrorThenConfirmedInactive(t *testing.T) {
+	var checks atomic.Int32
+	var notified atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{
+				FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+			}, nil
+		},
+		func(pb.WaitTxn) (bool, error) {
+			if checks.Add(1) == 1 {
+				return false, moerr.NewBackendClosedNoCtx()
+			}
+			return false, nil
+		},
+	).(*mapBasedTxnHolder)
+	defer hold.close()
+	txn := pb.WaitTxn{TxnID: []byte("orphan"), CreatedOn: "target"}
+
+	require.True(t, hold.isValidRemoteTxn(txn),
+		"an indeterminate observation must keep the transaction live")
+	require.Zero(t, notified.Load())
+	require.False(t, hold.isValidRemoteTxn(txn),
+		"a later authoritative inactive result may be fenced")
+	require.Equal(t, int32(1), notified.Load())
+}
+
+func TestConcurrentValidTxnCheckErrorsDoNotFence(t *testing.T) {
+	const checks = 32
+	var notified atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{
+				FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+			}, nil
+		},
+		func(pb.WaitTxn) (bool, error) {
+			return false, moerr.NewBackendClosedNoCtx()
+		},
+	).(*mapBasedTxnHolder)
+	defer hold.close()
+
+	results := make(chan bool, checks)
+	var wg sync.WaitGroup
+	for i := 0; i < checks; i++ {
+		wg.Add(1)
+		go func(id byte) {
+			defer wg.Done()
+			results <- hold.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte{id},
+				CreatedOn: "target",
+			})
+		}(byte(i))
+	}
+	wg.Wait()
+	close(results)
+
+	for valid := range results {
+		require.True(t, valid)
+	}
+	require.Zero(t, notified.Load(),
+		"a burst of failed observations must not create any cannot-commit fences")
 }
 
 func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
