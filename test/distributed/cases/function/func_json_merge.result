@@ -52,6 +52,18 @@ null
 select json_merge_patch('{"a":"b"}', null, '[1,2,3]', '{"c":null,"d":"e"}');
 ➤ json_merge_patch({"a":"b"}, null, [1,2,3], {"c":null,"d":"e"})[-1,2147483647,0]  𝄀
 {"d": "e"}
+select json_merge_patch(null, '{}') is null,
+json_type(json_merge_patch(null, '{}'));
+➤ json_merge_patch(null, {}) is null[-7,1,0]  ¦  json_type(json_merge_patch(null, {}))[12,-1,0]  𝄀
+1  ¦  null
+select json_merge_patch('{"a":"b"}', null, '[1,2,3]') is null,
+json_type(json_merge_patch('{"a":"b"}', null, '[1,2,3]'));
+➤ json_merge_patch({"a":"b"}, null, [1,2,3]) is null[-7,1,0]  ¦  json_type(json_merge_patch({"a":"b"}, null, [1,2,3]))[12,-1,0]  𝄀
+0  ¦  ARRAY
+select json_merge_patch('{"a":"b"}', null, '{"c":"d"}') is null,
+json_type(json_merge_patch('{"a":"b"}', null, '{"c":"d"}'));
+➤ json_merge_patch({"a":"b"}, null, {"c":"d"}) is null[-7,1,0]  ¦  json_type(json_merge_patch({"a":"b"}, null, {"c":"d"}))[12,-1,0]  𝄀
+1  ¦  null
 select json_merge_preserve('[1,2]', '[true,false]');
 ➤ json_merge_preserve([1,2], [true,false])[-1,2147483647,0]  𝄀
 [1, 2, true, false]
@@ -79,6 +91,10 @@ select json_merge_preserve('null', '1');
 select json_merge_preserve('{"a":1}', null);
 ➤ json_merge_preserve({"a":1}, null)[-1,2147483647,0]  𝄀
 null
+select json_merge_preserve('{"a":1}', null) is null,
+json_type(json_merge_preserve('{"a":1}', null));
+➤ json_merge_preserve({"a":1}, null) is null[-7,1,0]  ¦  json_type(json_merge_preserve({"a":1}, null))[12,-1,0]  𝄀
+1  ¦  null
 select json_merge_preserve('true', '[1,2]');
 ➤ json_merge_preserve(true, [1,2])[-1,2147483647,0]  𝄀
 [true, 1, 2]
