@@ -53,6 +53,12 @@ const (
 	Rows = 10 // default rows
 )
 
+func TestCsvReaderRejectsZeroVectorBatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, err := (&CsvReader{}).makeBatchRows(proc, batch.NewWithSize(0))
+	require.ErrorContains(t, err, "external CSV reader requires at least one materialized column")
+}
+
 // add unit tests for cases
 type externalTestCase struct {
 	arg      *External

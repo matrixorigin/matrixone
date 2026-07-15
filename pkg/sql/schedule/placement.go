@@ -86,6 +86,7 @@ type QueryRequest struct {
 	Candidates          Workers
 	CandidateResolution CandidateResolution
 	CurrentCNPolicy     CurrentCNPolicy
+	CurrentCNFirst      bool
 }
 
 type QueryDecision struct {
@@ -233,9 +234,11 @@ func orderDecisionWorkers(req QueryRequest, workers Workers, reason string) Work
 	if req.ExecKind != QueryExecAPMultiCN || len(workers) < 2 {
 		return workers
 	}
-	if reason == ReasonPreferredCurrentCN {
-		sortWorkersByAddr(workers[1:])
-		return workers
+	if reason == ReasonPreferredCurrentCN || (reason == ReasonRequiredCurrentCN && req.CurrentCNFirst) {
+		if currentFirst, ok := preferCurrentWorker(workers, req.CurrentCN); ok {
+			sortWorkersByAddr(currentFirst[1:])
+			return currentFirst
+		}
 	}
 	sortWorkersByAddr(workers)
 	return workers
