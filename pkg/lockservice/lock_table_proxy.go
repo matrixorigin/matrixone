@@ -32,8 +32,10 @@ type localLockTableProxy struct {
 
 	mu struct {
 		sync.RWMutex
-		holders       map[string]*sharedOps // key: row
-		currentHolder map[string][]byte
+		holders                  map[string]*sharedOps // key: row
+		currentHolder            map[string][]byte
+		pendingRemoteHolders     map[string][]byte
+		pendingLastHolderUnlocks map[string]struct{}
 	}
 }
 
@@ -49,6 +51,8 @@ func newLockTableProxy(
 	}
 	lp.mu.holders = make(map[string]*sharedOps)
 	lp.mu.currentHolder = make(map[string][]byte)
+	lp.mu.pendingRemoteHolders = make(map[string][]byte)
+	lp.mu.pendingLastHolderUnlocks = make(map[string]struct{})
 	return lp
 }
 
@@ -69,6 +73,16 @@ func (lp *localLockTableProxy) lock(
 
 	lp.mu.Lock()
 	key := util.UnsafeBytesToString(rows[0])
+	if _, ok := lp.mu.pendingLastHolderUnlocks[key]; ok {
+		// The owner may already have applied the last-holder Unlock even
+		// though its response was lost. Until the retry confirms that
+		// transition, the stale local holder cannot safely represent a remote
+		// shared lock. Route new sharers through the owner so they observe any
+		// exclusive owner acquired in the meantime.
+		lp.mu.Unlock()
+		lp.remote.lock(ctx, txn, rows, options, cb)
+		return
+	}
 	v, ok := lp.mu.holders[key]
 	if !ok {
 		v = &sharedOps{
@@ -126,58 +140,154 @@ func (lp *localLockTableProxy) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
-	_ ...pb.ExtraMutation) {
+	mutations ...pb.ExtraMutation) {
+	_ = lp.unlockWithContext(context.Background(), txn, ls, commitTS, mutations...)
+}
+
+func (lp *localLockTableProxy) unlockWithContext(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	_ ...pb.ExtraMutation) error {
 	rows := ls.slice()
 	defer rows.unref()
 
+	type holderUpdate struct {
+		row                      string
+		replaceWith              []byte
+		keepRemoteHolder         bool
+		clearPendingRemoteHolder bool
+		nextPendingRemoteHolder  []byte
+	}
+
 	skipped := 0
 	n := rows.len()
-	var mutations []pb.ExtraMutation
+	var remoteMutations []pb.ExtraMutation
+	var updates []holderUpdate
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
 		row := util.UnsafeBytesToString(key)
 		if v, ok := lp.mu.holders[row]; ok {
 			isHolder := lp.isRemoteHolderLocked(row, txn.txnID)
-			if !v.remove(txn) {
+			replacement, found := v.lastExcept(txn)
+			if !found {
 				return true
 			}
 
 			// not the holder, no need to unlock
 			if !isHolder {
+				// A previous holder may have been replaced at the owner before its
+				// response was lost. Only the replacement selected by that
+				// unacknowledged handoff can be a remote holder too. Its ordinary
+				// unlock must conditionally transfer that remote holder instead of
+				// being skipped, otherwise the owner retains a finished txn until
+				// orphan cleanup.
+				if lp.isPendingRemoteHolderLocked(row, txn.txnID) {
+					remoteMutations = append(remoteMutations, pb.ExtraMutation{
+						Key:       key,
+						ReplaceTo: replacement,
+					})
+					nextPending := replacement
+					if bytes.Equal(nextPending, lp.mu.currentHolder[row]) {
+						nextPending = nil
+					}
+					updates = append(updates, holderUpdate{
+						row:                      row,
+						replaceWith:              lp.mu.currentHolder[row],
+						keepRemoteHolder:         true,
+						clearPendingRemoteHolder: len(nextPending) == 0,
+						nextPendingRemoteHolder:  nextPending,
+					})
+					return true
+				}
 				skipped++
 				if n > 1 {
-					mutations = append(mutations,
+					remoteMutations = append(remoteMutations,
 						pb.ExtraMutation{
 							Key:  key,
 							Skip: true,
 						})
 				}
+				updates = append(updates, holderUpdate{
+					row:              row,
+					replaceWith:      lp.mu.currentHolder[row],
+					keepRemoteHolder: true,
+				})
 				return true
 			}
 
-			// update holder to last txn
-			if !v.isEmpty() {
-				lp.mu.currentHolder[row] = v.last()
-				mutations = append(mutations,
-					pb.ExtraMutation{
-						Key:       key,
-						Skip:      false,
-						ReplaceTo: v.last(),
-					})
+			// Do not publish the replacement locally until the owner has
+			// acknowledged ReplaceTo. If the resolver context expires, the
+			// source txn stays active and a retry can safely converge both sides.
+			// Always send a mutation for the remote holder. Besides carrying a
+			// replacement, an empty ReplaceTo is an explicit proxy-handoff
+			// marker: if the response is lost after the owner released this last
+			// holder, a retry must not fail when another transaction already owns
+			// the row.
+			remoteReplacement := replacement
+			if pending, ok := lp.mu.pendingRemoteHolders[row]; ok {
+				// A response-lost handoff has already selected the only remote
+				// representative that can be safely retried. Later local sharers
+				// must stay behind that representative until the owner confirms a
+				// transition; otherwise the proxy and owner can publish different
+				// holders for the same shared lock.
+				remoteReplacement = pending
+			} else if _, ok := lp.mu.pendingLastHolderUnlocks[row]; ok {
+				// Preserve the already-selected empty replacement across retries.
+				remoteReplacement = nil
+			} else if len(remoteReplacement) > 0 {
+				lp.mu.pendingRemoteHolders[row] = remoteReplacement
 			} else {
-				delete(lp.mu.currentHolder, row)
+				lp.mu.pendingLastHolderUnlocks[row] = struct{}{}
 			}
+			remoteMutations = append(remoteMutations,
+				pb.ExtraMutation{
+					Key:       key,
+					Skip:      false,
+					ReplaceTo: remoteReplacement,
+				})
+			updates = append(updates, holderUpdate{
+				row:                      row,
+				replaceWith:              remoteReplacement,
+				clearPendingRemoteHolder: true,
+			})
 		}
 		return true
 	})
 
 	// all skipped
-	if skipped == rows.len() {
-		return
+	var err error
+	if unlocker, ok := lp.remote.(contextUnlocker); ok {
+		if skipped != rows.len() {
+			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
+		}
+	} else if skipped != rows.len() {
+		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
+	}
+	if err != nil {
+		return err
 	}
 
-	lp.remote.unlock(txn, ls, commitTS, mutations...)
+	for _, update := range updates {
+		v := lp.mu.holders[update.row]
+		if v == nil || !v.remove(txn) {
+			continue
+		}
+		if update.keepRemoteHolder || len(update.replaceWith) > 0 {
+			lp.mu.currentHolder[update.row] = update.replaceWith
+		} else {
+			delete(lp.mu.currentHolder, update.row)
+		}
+		if update.clearPendingRemoteHolder {
+			delete(lp.mu.pendingRemoteHolders, update.row)
+			delete(lp.mu.pendingLastHolderUnlocks, update.row)
+		} else if len(update.nextPendingRemoteHolder) > 0 {
+			lp.mu.pendingRemoteHolders[update.row] = update.nextPendingRemoteHolder
+		}
+	}
+	return nil
 }
 
 func (lp *localLockTableProxy) isRemoteHolderLocked(
@@ -193,6 +303,14 @@ func (lp *localLockTableProxy) isRemoteHolderLocked(
 func (lp *localLockTableProxy) hasRemoteHolderLocked(row string) bool {
 	_, ok := lp.mu.currentHolder[row]
 	return ok
+}
+
+func (lp *localLockTableProxy) isPendingRemoteHolderLocked(
+	row string,
+	txnID []byte,
+) bool {
+	pending, ok := lp.mu.pendingRemoteHolders[row]
+	return ok && bytes.Equal(pending, txnID)
 }
 
 func (lp *localLockTableProxy) getLock(
@@ -249,8 +367,19 @@ func (s *sharedOps) isEmpty() bool {
 	return len(s.txns) == 0
 }
 
-func (s *sharedOps) last() []byte {
-	return s.txns[len(s.txns)-1].txnID
+func (s *sharedOps) lastExcept(txn *activeTxn) ([]byte, bool) {
+	found := false
+	var replacement []byte
+	for idx := len(s.txns) - 1; idx >= 0; idx-- {
+		if s.txns[idx] == txn {
+			found = true
+			continue
+		}
+		if replacement == nil {
+			replacement = s.txns[idx].txnID
+		}
+	}
+	return replacement, found
 }
 
 func (s *sharedOps) add(
