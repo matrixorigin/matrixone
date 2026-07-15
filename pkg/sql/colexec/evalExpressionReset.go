@@ -115,6 +115,9 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 
 	expr.folded.needFoldingCheck = false
 	expr.folded.canFold = false
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		return nil
+	}
 
 	// fold parameters.
 	allParametersFolded := true

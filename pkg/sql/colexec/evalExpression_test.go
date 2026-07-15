@@ -454,6 +454,177 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 	}
 }
 
+func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	stringConst := func(value string) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: value},
+			}},
+		}
+	}
+	bindFunction := func(name string, args ...*plan.Expr) *plan.Expr {
+		argTypes := make([]types.Type, len(args))
+		for i := range args {
+			argTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
+		}
+		fn, err := function.GetFunctionByName(proc.Ctx, name, argTypes)
+		require.NoError(t, err)
+		retType := fn.GetReturnType()
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(retType.Oid), Width: retType.Width, Scale: retType.Scale},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+	invalidCast := func() *plan.Expr {
+		target := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		return bindFunction("cast", stringConst("bad"), target)
+	}
+
+	tests := []struct {
+		name string
+		expr *plan.Expr
+		want int64
+	}{
+		{
+			name: "if skips true branch",
+			expr: bindFunction("if", makePlan2BoolConstExprWithType(false), invalidCast(), makePlan2Int64ConstExprWithType(7)),
+			want: 7,
+		},
+		{
+			name: "case skips then branch",
+			expr: bindFunction("case", makePlan2BoolConstExprWithType(false), invalidCast(), makePlan2Int64ConstExprWithType(7)),
+			want: 7,
+		},
+		{
+			name: "coalesce skips later argument",
+			expr: bindFunction("coalesce", makePlan2Int64ConstExprWithType(5), invalidCast()),
+			want: 5,
+		},
+		{
+			name: "ifnull rewrite skips second argument",
+			expr: bindFunction("case",
+				bindFunction("isnull", makePlan2Int64ConstExprWithType(5)),
+				invalidCast(),
+				makePlan2Int64ConstExprWithType(5)),
+			want: 5,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, test.expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result)[0])
+		})
+	}
+
+	t.Run("if evaluates selected branch", func(t *testing.T) {
+		expr := bindFunction("if", makePlan2BoolConstExprWithType(true), invalidCast(), makePlan2Int64ConstExprWithType(7))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		_, err = executor.Eval(proc, nil, nil)
+		require.ErrorContains(t, err, "invalid argument cast to int")
+	})
+
+	t.Run("coalesce evaluates remaining argument", func(t *testing.T) {
+		nullInt64 := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
+		expr := bindFunction("coalesce", nullInt64, invalidCast())
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		_, err = executor.Eval(proc, nil, nil)
+		require.ErrorContains(t, err, "invalid argument cast to int")
+	})
+
+	t.Run("skipped varlen function preserves batch length", func(t *testing.T) {
+		input := batch.New(nil)
+		input.SetRowCount(2)
+		expr := bindFunction("concat", stringConst("a"), stringConst("b"))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false})
+		require.NoError(t, err)
+		require.Equal(t, 2, result.Length())
+		require.True(t, result.GetNulls().Contains(0))
+		require.True(t, result.GetNulls().Contains(1))
+	})
+
+	column := func(pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+	castToInt64 := func(source *plan.Expr) *plan.Expr {
+		target := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		return bindFunction("cast", source, target)
+	}
+
+	t.Run("if skips invalid rows within a batch", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"bad", "9"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			castToInt64(column(1, types.T_varchar.ToType())),
+			makePlan2Int64ConstExprWithType(7))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []int64{7, 9}, vector.MustFixedColWithTypeCheck[int64](result))
+	})
+
+	t.Run("coalesce skips invalid rows within a batch", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVectorWithNulls(2, types.T_int64.ToType(), proc.Mp(), false, []bool{false, true}, []int64{5, 0}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"bad", "9"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := bindFunction("coalesce",
+			column(0, types.T_int64.ToType()),
+			castToInt64(column(1, types.T_varchar.ToType())))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []int64{5, 9}, vector.MustFixedColWithTypeCheck[int64](result))
+	})
+}
+
 func TestExpressionReset(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

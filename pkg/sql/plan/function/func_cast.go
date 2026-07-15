@@ -5035,6 +5035,12 @@ func strToSigned[T constraints.Signed](
 
 	var result T
 	for i = 0; i < l; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {

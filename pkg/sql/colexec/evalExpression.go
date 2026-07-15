@@ -503,12 +503,19 @@ func (expr *FunctionExpressionExecutor) Init(
 	return err
 }
 
+func functionExpressionRowCount(batches []*batch.Batch) int {
+	if len(batches) > 0 {
+		return batches[0].RowCount()
+	}
+	return 1
+}
+
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
 	}
-	rowCount := batches[0].RowCount()
+	rowCount := functionExpressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -539,7 +546,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	rowCount := batches[0].RowCount()
+	rowCount := functionExpressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -577,7 +584,69 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 	return err
 }
 
+func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	rowCount := functionExpressionRowCount(batches)
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+	}
+	remaining := expr.selectList1[:rowCount]
+	if selectList != nil {
+		for i := range remaining {
+			remaining[i] = i < len(selectList) && selectList[i]
+		}
+	} else {
+		for i := range remaining {
+			remaining[i] = true
+		}
+	}
+
+	for i := range expr.parameterExecutor {
+		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, remaining)
+		if err != nil {
+			return err
+		}
+		for row := range remaining {
+			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
+				remaining[row] = false
+			}
+		}
+	}
+	return nil
+}
+
+func noRowsSelected(selectList []bool, rowCount int) bool {
+	if selectList == nil {
+		return false
+	}
+	if len(selectList) < rowCount {
+		return false
+	}
+	for i := 0; i < rowCount; i++ {
+		if selectList[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (expr *FunctionExpressionExecutor) makeNullResult(rowCount int) (*vector.Vector, error) {
+	if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
+		return nil, err
+	}
+	result := expr.resultVector.GetResultVector()
+	result.SetAllNulls(rowCount)
+	result.SetLength(rowCount)
+	return result, nil
+}
+
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	if len(batches) == 0 {
+		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
+	}
+	rowCount := functionExpressionRowCount(batches)
+	if !expr.folded.canFold && noRowsSelected(selectList, rowCount) {
+		return expr.makeNullResult(rowCount)
+	}
 	if expr.folded.needFoldingCheck {
 		if err := expr.doFold(proc, proc.GetBaseProcessRunningStatus()); err != nil {
 			return nil, err
@@ -601,6 +670,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		if err != nil {
 			return nil, err
 		}
+	} else if expr.fid == function.COALESCE {
+		err = expr.EvalCoalesce(proc, batches, selectList)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		for i := range expr.parameterExecutor {
 			expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, selectList)
@@ -610,12 +684,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
+	if err = expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}
 
-	if selectList != nil && len(expr.selectList.SelectList) < batches[0].RowCount() {
-		expr.selectList.SelectList = make([]bool, batches[0].RowCount())
+	if selectList != nil && len(expr.selectList.SelectList) < rowCount {
+		expr.selectList.SelectList = make([]bool, rowCount)
 	}
 	if selectList == nil {
 		expr.selectList.AnyNull = false
@@ -637,7 +711,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
+		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
 
