@@ -3557,26 +3557,24 @@ func rewriteRollupWindowSelect(
 	}
 
 	rewriteState := newRollupWindowRewriteState(selectClause.Exprs)
-	if selectClause.Having != nil && !rewriteState.addGroupedSourceExprs(selectClause.GroupBy) {
-		return nil, true
-	}
 	outerExprs, ok := buildRollupWindowSelectExprs(selectClause.Exprs, rewriteState)
 	if !ok {
 		return nil, true
 	}
 	var rewrittenHaving *tree.Where
 	if selectClause.Having != nil {
-		// HAVING uses AliasAfterColumn: a materialized source expression wins
-		// when its name collides with a SELECT alias.
-		havingExpr, ok := rewriteRollupWindowExprWithFallbackNameAliases(selectClause.Having.Expr, rewriteState, rewriteState.havingAliases)
+		// Keep HAVING in the original FROM scope so AliasAfterColumn can resolve
+		// source columns (including ambiguity) before SELECT aliases. Hidden
+		// projections retain the original non-window aliases for the fallback.
+		rewriteState.addHavingAliasExprs(selectClause.Exprs)
+		nextHaving := *selectClause.Having
+		normalizedHaving, ok := selectClause.Having.Expr.Accept(rollupWindowHavingNameNormalizer{})
 		if !ok {
 			return nil, true
 		}
-		rewrittenHaving = &tree.Where{
-			Type:         selectClause.Having.Type,
-			RollupHaving: true,
-			Expr:         havingExpr,
-		}
+		nextHaving.Expr = normalizedHaving
+		nextHaving.RollupHaving = true
+		rewrittenHaving = &nextHaving
 	}
 	rewrittenOrderBy, ok := rewriteRollupWindowOrderByWithNameAliases(astOrderBy, rewriteState, rewriteState.outputAliases)
 	if !ok {
@@ -3640,28 +3638,37 @@ func rewriteRollupWindowSelect(
 
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
 
+type rollupWindowHavingNameNormalizer struct{}
+
+func (rollupWindowHavingNameNormalizer) Enter(expr tree.Expr) (tree.Expr, bool) {
+	name, ok := expr.(*tree.UnresolvedName)
+	if !ok || name.Star || name.NumParts == 0 {
+		return expr, false
+	}
+	next := *name
+	next.CStrParts[0] = tree.NewCStr(name.ColName(), 1)
+	return &next, true
+}
+
+func (rollupWindowHavingNameNormalizer) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
 type rollupWindowRewriteState struct {
-	innerExprs           tree.SelectExprs
-	exprAliases          map[string]string
-	sourceNameAliases    map[string]string
-	ambiguousSourceNames map[string]struct{}
-	havingAliases        map[string]string
-	outputAliases        map[string]string
-	activeNameAliases    map[string]string
-	nameAliasesAfterExpr bool
-	usedAliases          map[string]struct{}
-	nextAlias            int
+	innerExprs        tree.SelectExprs
+	exprAliases       map[string]string
+	outputAliases     map[string]string
+	activeNameAliases map[string]string
+	usedAliases       map[string]struct{}
+	nextAlias         int
 }
 
 func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
 	state := &rollupWindowRewriteState{
-		innerExprs:           make(tree.SelectExprs, 0, len(selectExprs)),
-		exprAliases:          make(map[string]string),
-		sourceNameAliases:    make(map[string]string),
-		ambiguousSourceNames: make(map[string]struct{}),
-		havingAliases:        make(map[string]string),
-		outputAliases:        make(map[string]string),
-		usedAliases:          make(map[string]struct{}),
+		innerExprs:    make(tree.SelectExprs, 0, len(selectExprs)),
+		exprAliases:   make(map[string]string),
+		outputAliases: make(map[string]string),
+		usedAliases:   make(map[string]struct{}),
 	}
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As != nil && !selectExpr.As.Empty() {
@@ -3679,20 +3686,16 @@ func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewr
 	return state
 }
 
-func (state *rollupWindowRewriteState) addGroupedSourceExprs(groupBy *tree.GroupByClause) bool {
-	// A grouped column may only be referenced by HAVING. Materialize grouped
-	// names so AliasAfterColumn can still choose their terminal column name
-	// ahead of SELECT aliases.
-	for _, groupByExprs := range groupBy.GroupByExprsList {
-		for _, expr := range groupByExprs {
-			if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star {
-				if _, ok := state.ensureInnerExpr(expr); !ok {
-					return false
-				}
-			}
+func (state *rollupWindowRewriteState) addHavingAliasExprs(selectExprs tree.SelectExprs) {
+	for _, selectExpr := range selectExprs {
+		if selectExpr.As == nil || selectExpr.As.Empty() || rollupWindowExprContainsWindow(selectExpr.Expr) {
+			continue
 		}
+		state.innerExprs = append(state.innerExprs, tree.SelectExpr{
+			Expr: selectExpr.Expr,
+			As:   selectExpr.As,
+		})
 	}
-	return true
 }
 
 func (state *rollupWindowRewriteState) newInternalAlias() string {
@@ -3730,25 +3733,6 @@ func (state *rollupWindowRewriteState) addExprAlias(expr tree.Expr, alias string
 	if _, exists := state.exprAliases[key]; !exists {
 		state.exprAliases[key] = alias
 	}
-	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star {
-		state.addSourceNameAlias(unresolvedName.ColNameOrigin(), alias)
-	}
-}
-
-func (state *rollupWindowRewriteState) addSourceNameAlias(name, alias string) {
-	key := strings.ToLower(name)
-	if key == "" {
-		return
-	}
-	if _, ambiguous := state.ambiguousSourceNames[key]; ambiguous {
-		return
-	}
-	if existing, exists := state.sourceNameAliases[key]; exists && existing != alias {
-		delete(state.sourceNameAliases, key)
-		state.ambiguousSourceNames[key] = struct{}{}
-		return
-	}
-	state.sourceNameAliases[key] = alias
 }
 
 func addRollupWindowNameAlias(aliases map[string]string, name, alias string) {
@@ -3763,20 +3747,6 @@ func addRollupWindowNameAlias(aliases map[string]string, name, alias string) {
 
 func (state *rollupWindowRewriteState) lookupExprAlias(expr tree.Expr) (string, bool) {
 	exprKey := rollupWindowExprKey(expr)
-	if state.nameAliasesAfterExpr {
-		if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
-			name := strings.ToLower(unresolvedName.ColNameOrigin())
-			if _, ambiguous := state.ambiguousSourceNames[name]; ambiguous {
-				return "", false
-			}
-			if alias, exists := state.sourceNameAliases[name]; exists {
-				return alias, true
-			}
-		}
-		if alias, ok := state.exprAliases[exprKey]; ok {
-			return alias, true
-		}
-	}
 	if state.activeNameAliases != nil {
 		if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
 			if alias, exists := state.activeNameAliases[strings.ToLower(unresolvedName.ColNameOrigin())]; exists {
@@ -3807,9 +3777,6 @@ func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWin
 		alias, ok := state.ensureInnerExpr(selectExpr.Expr)
 		if !ok {
 			return nil, false
-		}
-		if selectExpr.As != nil && !selectExpr.As.Empty() {
-			addRollupWindowNameAlias(state.havingAliases, selectExpr.As.Origin(), alias)
 		}
 		aliasesByIndex[i] = alias
 	}
@@ -4097,27 +4064,9 @@ func rewriteRollupWindowExprWithNameAliases(
 	aliases map[string]string,
 ) (tree.Expr, bool) {
 	previousAliases := state.activeNameAliases
-	previousAfterExpr := state.nameAliasesAfterExpr
 	state.activeNameAliases = aliases
-	state.nameAliasesAfterExpr = false
 	rewritten, ok := rewriteRollupWindowExpr(expr, state)
 	state.activeNameAliases = previousAliases
-	state.nameAliasesAfterExpr = previousAfterExpr
-	return rewritten, ok
-}
-
-func rewriteRollupWindowExprWithFallbackNameAliases(
-	expr tree.Expr,
-	state *rollupWindowRewriteState,
-	aliases map[string]string,
-) (tree.Expr, bool) {
-	previousAliases := state.activeNameAliases
-	previousAfterExpr := state.nameAliasesAfterExpr
-	state.activeNameAliases = aliases
-	state.nameAliasesAfterExpr = true
-	rewritten, ok := rewriteRollupWindowExpr(expr, state)
-	state.activeNameAliases = previousAliases
-	state.nameAliasesAfterExpr = previousAfterExpr
 	return rewritten, ok
 }
 
@@ -4230,12 +4179,9 @@ func rewriteRollupWindowOrderByWithNameAliases(
 	aliases map[string]string,
 ) (tree.OrderBy, bool) {
 	previousAliases := state.activeNameAliases
-	previousAfterExpr := state.nameAliasesAfterExpr
 	state.activeNameAliases = aliases
-	state.nameAliasesAfterExpr = false
 	rewritten, ok := rewriteRollupWindowOrderBy(orderBy, state)
 	state.activeNameAliases = previousAliases
-	state.nameAliasesAfterExpr = previousAfterExpr
 	return rewritten, ok
 }
 

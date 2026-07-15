@@ -1061,23 +1061,62 @@ func TestRollupWindowHavingAliasCollisionWithHiddenGroup(t *testing.T) {
 	require.True(t, foundHaving)
 }
 
-func TestRollupWindowSourceNameAliasAmbiguity(t *testing.T) {
-	state := newRollupWindowRewriteState(nil)
-	state.addSourceNameAlias("n_regionkey", "left_alias")
-	state.addSourceNameAlias("N_REGIONKEY", "right_alias")
+func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name      string
+		sql       string
+		wantError string
+	}{
+		{
+			name: "ambiguous source without window",
+			sql: `
+				select n1.n_regionkey
+				from nation n1
+				join nation n2 on n1.n_nationkey = n2.n_nationkey
+				group by n1.n_regionkey with rollup
+				having n_regionkey > 0`,
+			wantError: "ambiguous column reference",
+		},
+		{
+			name: "ambiguous source with window",
+			sql: `
+				select n1.n_regionkey,
+				       row_number() over (order by n1.n_regionkey) as rn
+				from nation n1
+				join nation n2 on n1.n_nationkey = n2.n_nationkey
+				group by n1.n_regionkey with rollup
+				having n_regionkey > 0`,
+			wantError: "ambiguous column reference",
+		},
+		{
+			name: "non-grouped source without window",
+			sql: `
+				select sum(n_nationkey) as n_name
+				from nation
+				group by n_regionkey with rollup
+				having n_name <> ''`,
+			wantError: "must appear in the GROUP BY clause",
+		},
+		{
+			name: "non-grouped source with window",
+			sql: `
+				select sum(n_nationkey) as n_name,
+				       row_number() over (order by sum(n_nationkey)) as rn
+				from nation
+				group by n_regionkey with rollup
+				having n_name <> ''`,
+			wantError: "must appear in the GROUP BY clause",
+		},
+	}
 
-	_, exists := state.sourceNameAliases["n_regionkey"]
-	require.False(t, exists)
-	_, ambiguous := state.ambiguousSourceNames["n_regionkey"]
-	require.True(t, ambiguous)
-
-	state.havingAliases["n_regionkey"] = "aggregate_alias"
-	rewritten, ok := rewriteRollupWindowExprWithFallbackNameAliases(
-		tree.NewUnresolvedColName("n_regionkey"), state, state.havingAliases)
-	require.True(t, ok)
-	require.NotEqual(t, "aggregate_alias", tree.String(rewritten, dialect.MYSQL))
-	require.Len(t, state.innerExprs, 1)
-	require.Equal(t, "n_regionkey", tree.String(state.innerExprs[0].Expr, dialect.MYSQL))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, test.sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.wantError)
+		})
+	}
 }
 
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
@@ -1118,18 +1157,12 @@ func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
 	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
 	require.False(t, ok)
-	rewrittenFlag, ok := rewriteRollupWindowExprWithNameAliases(
-		tree.NewUnresolvedColName("flag"), state, state.havingAliases)
-	require.True(t, ok)
-	require.Equal(t, alias, tree.String(rewrittenFlag, dialect.MYSQL))
-	rewrittenFlag, ok = rewriteRollupWindowExprWithNameAliases(
-		tree.NewUnresolvedColName("FLAG"), state, state.havingAliases)
-	require.True(t, ok)
-	require.Equal(t, alias, tree.String(rewrittenFlag, dialect.MYSQL))
-	rewrittenTotal, ok := rewriteRollupWindowExprWithNameAliases(
-		tree.NewUnresolvedColName("total_qty"), state, state.havingAliases)
-	require.True(t, ok)
-	require.True(t, strings.HasPrefix(tree.String(rewrittenTotal, dialect.MYSQL), rollupWindowInternalAliasPrefix))
+
+	state.addHavingAliasExprs(clause.Exprs)
+	require.Len(t, state.innerExprs, 6)
+	require.Equal(t, "flag", state.innerExprs[3].As.Origin())
+	require.Equal(t, "status", state.innerExprs[4].As.Origin())
+	require.Equal(t, "total_qty", state.innerExprs[5].As.Origin())
 }
 
 func TestRewriteRollupWindowSelectGuards(t *testing.T) {
