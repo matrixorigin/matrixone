@@ -80,6 +80,19 @@ type cloneReceipt struct {
 
 type dataBranchCloneLockCtxKey struct{}
 
+func withDataBranchCloneLockContext(
+	proc *process.Process,
+	ctx context.Context,
+	lockRows func() error,
+) error {
+	oldCtx := proc.Ctx
+	proc.Ctx = ctx
+	defer func() {
+		proc.Ctx = oldCtx
+	}()
+	return lockRows()
+}
+
 func lockDataBranchCloneSource(
 	ctx context.Context,
 	ses *Session,
@@ -118,18 +131,20 @@ func lockDataBranchCloneSource(
 	// ALTER locks this exact mo_tables composite key exclusively. A shared
 	// catalog-row lock serializes source-ID/snapshot selection with ALTER while
 	// allowing source-table DML and sibling branch clones to continue.
-	return lockop.LockRows(
-		eng,
-		ses.proc,
-		rel,
-		rel.GetTableID(sourceCtx),
-		lockBat,
-		0,
-		*lockBat.Vecs[0].GetType(),
-		lock.LockMode_Shared,
-		lock.Sharding_None,
-		fromAccountID,
-	)
+	return withDataBranchCloneLockContext(ses.proc, sourceCtx, func() error {
+		return lockop.LockRows(
+			eng,
+			ses.proc,
+			rel,
+			rel.GetTableID(sourceCtx),
+			lockBat,
+			0,
+			*lockBat.Vecs[0].GetType(),
+			lock.LockMode_Shared,
+			lock.Sharding_None,
+			fromAccountID,
+		)
+	})
 }
 
 func dataBranchCloneCatalogLockBatch(
