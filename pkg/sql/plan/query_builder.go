@@ -3735,16 +3735,6 @@ func (state *rollupWindowRewriteState) addExprAlias(expr tree.Expr, alias string
 	}
 }
 
-func addRollupWindowNameAlias(aliases map[string]string, name, alias string) {
-	key := strings.ToLower(name)
-	if key == "" {
-		return
-	}
-	if _, exists := aliases[key]; !exists {
-		aliases[key] = alias
-	}
-}
-
 func (state *rollupWindowRewriteState) lookupExprAlias(expr tree.Expr) (string, bool) {
 	exprKey := rollupWindowExprKey(expr)
 	if state.activeNameAliases != nil {
