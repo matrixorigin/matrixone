@@ -82,6 +82,38 @@ func TestAlterAutoIncrementResetCleanupDiscardsEveryTrackedTableAndJoinsErrors(t
 	require.Contains(t, statementErr.Error(), "statement failed")
 }
 
+func TestAlterAutoIncrementResetCleanupPreservesRetryMoError(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cleanupErr error
+	}{
+		{name: "successful cleanup"},
+		{name: "failed cleanup", cleanupErr: errors.New("discard failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = context.Background()
+			_, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnOperator = txnOp
+
+			autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+			autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), txnOp).Return(tc.cleanupErr)
+			incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+			cleanup := newAlterAutoIncrementResetCleanup(&Compile{proc: proc})
+			cleanup.track(11)
+			originalErr := moerr.NewTxnNeedRetryWithDefChanged(proc.Ctx)
+			var statementErr error = originalErr
+			cleanup.finish(&statementErr)
+
+			require.Same(t, originalErr, statementErr)
+			require.IsType(t, (*moerr.Error)(nil), statementErr)
+			require.True(t, moerr.IsMoErrCode(statementErr, moerr.ErrTxnNeedRetryWithDefChanged))
+		})
+	}
+}
+
 type alterCopyInsertSpyExecutor struct {
 	insertSQL    string
 	insertErr    error

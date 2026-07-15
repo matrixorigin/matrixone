@@ -102,6 +102,20 @@ func (cleanup *alterAutoIncrementResetCleanup) finish(statementErr *error) {
 			svc.DiscardOffsetReset(ctx, tableID, cleanup.c.proc.GetTxnOperator()),
 		)
 	}
+	if cleanupErr == nil {
+		return
+	}
+	if _, ok := (*statementErr).(*moerr.Error); ok {
+		// moerr.IsMoErrCode intentionally relies on the concrete *moerr.Error
+		// type. Preserve statement retry/error classification and record the
+		// secondary cleanup failure instead of wrapping the primary error.
+		cleanup.c.proc.Error(
+			ctx,
+			"alter.table.discard.auto.increment.reset",
+			zap.Error(cleanupErr),
+		)
+		return
+	}
 	*statementErr = errors.Join(*statementErr, cleanupErr)
 }
 
