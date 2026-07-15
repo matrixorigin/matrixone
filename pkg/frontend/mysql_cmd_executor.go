@@ -1207,6 +1207,9 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 			cols = resolved
 		}
 		sql := buildAnalyzeDerivedSQL(entry, cols)
+		if execCtx.input != nil {
+			sql = inheritAnalyzeRewriteHint(execCtx.input.getSql(), sql)
+		}
 		result, err := executeAnalyzeDerivedQuery(ses, execCtx, sql)
 		if err != nil {
 			return err
@@ -1215,6 +1218,14 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	}
 	execCtx.results = results
 	return nil
+}
+
+func inheritAnalyzeRewriteHint(outerSQL, derivedSQL string) string {
+	content, ok := leadingHintContent(outerSQL)
+	if !ok || !strings.HasPrefix(strings.TrimSpace(content), "{") {
+		return derivedSQL
+	}
+	return "/*+" + content + "*/ " + derivedSQL
 }
 
 func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) (*MysqlResultSet, error) {

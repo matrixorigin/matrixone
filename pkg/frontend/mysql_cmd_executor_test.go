@@ -1592,6 +1592,46 @@ func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 	)
 }
 
+func TestInheritAnalyzeRewriteHint(t *testing.T) {
+	jsonHint := ` {"rewrites":{"src.t":"select * from dst.t where keep = 1"},"remapdb":{"src":"dst"}} `
+	tests := []struct {
+		name, outer, derived, want string
+	}{
+		{"merged json", "/*+" + jsonHint + "*/ analyze table src.t(a)", "select approx_count_distinct(`a`) from `dst`.`t`", "/*+" + jsonHint + "*/ select approx_count_distinct(`a`) from `dst`.`t`"},
+		{"mysql json", "/*!+" + jsonHint + "*/ analyze table src.t(a)", "select 1", "/*+" + jsonHint + "*/ select 1"},
+		{"optimizer hint ignored", "/*+ force_index(t) */ analyze table t(a)", "select 1", "select 1"},
+		{"no hint", "analyze table t(a)", "select 1", "select 1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, inheritAnalyzeRewriteHint(tt.outer, tt.derived))
+		})
+	}
+
+	t.Run("merged rewrite chain is parser consumable", func(t *testing.T) {
+		chainHint := ` {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1","select * from dst.t where inline_keep = 1"]},"remapdb":{"src":"dst"}} `
+		derived := "select approx_count_distinct(`a`) from `dst`.`t`"
+		inherited := inheritAnalyzeRewriteHint("/*+"+chainHint+"*/ analyze table src.t(a)", derived)
+		require.Equal(t, "/*+"+chainHint+"*/ "+derived, inherited)
+		require.Equal(t, 1, strings.Count(inherited, "/*+"))
+
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, inherited, 1)
+		require.NoError(t, err)
+		require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, inherited))
+		require.Len(t, stmts, 1)
+		sel, ok := stmts[0].(*tree.Select)
+		require.True(t, ok)
+		require.NotNil(t, sel.RewriteOption)
+		chain := sel.RewriteOption.Rewrites["src.t"]
+		require.Len(t, chain, 3)
+		for _, rewrite := range chain {
+			require.Equal(t, "src", rewrite.DbName)
+			require.Equal(t, "t", rewrite.TableName)
+		}
+		require.Equal(t, "dst", sel.RewriteOption.RemapDb["src"])
+	})
+}
+
 func TestResolveAnalyzeDatabaseUsesRemappedDefault(t *testing.T) {
 	tcc := &TxnCompilerContext{
 		dbName: "dbxxx",
