@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -222,6 +223,33 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.ErrorIs(t, err, assert.AnError)
 	require.Equal(t, before, cw.proc.Mp().CurrNB())
+}
+
+func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 104)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVar("v1", "session-binary", "", true))
+	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
+	scopes := []map[string]interface{}{
+		{"v1": int64(10)},
+		{"v1": int64(20), "inner": int64(30)},
+	}
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
+
+	value, err := ses.txnCompileCtx.ResolveVariable("V1", false, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(20), value)
+	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("V1", false, false)
+	require.NoError(t, err)
+	require.False(t, isBin)
+
+	value, err = ses.txnCompileCtx.ResolveVariable("session_only", false, false)
+	require.NoError(t, err)
+	require.Equal(t, "session-binary", value)
+	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("session_only", false, false)
+	require.NoError(t, err)
+	require.True(t, isBin)
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

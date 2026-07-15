@@ -42,4 +42,10 @@ execute scanned_lookup using @binary_value, @scanned_label;
 
 deallocate prepare indexed_lookup;
 deallocate prepare scanned_lookup;
+
+set @v1 = 0x41420000;
+create procedure local_scope_binary_shadow() 'begin declare v1 int default 10; if v1 > 5 then set v1 = v1 + 1; end if; select v1; end';
+call local_scope_binary_shadow();
+drop procedure local_scope_binary_shadow;
+
 drop database prepare_binary_param;

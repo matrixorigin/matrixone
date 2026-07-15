@@ -760,14 +760,8 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
-		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
-		for i := len(*tmpScope) - 1; i >= 0; i-- {
-			curScope := (*tmpScope)[i]
-			if val, ok := curScope[strings.ToLower(varName)]; ok {
-				return val, nil
-			}
-		}
+	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
+		return val, nil
 	}
 
 	if isSystemVar {
@@ -793,6 +787,9 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 }
 
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
+	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		return false, nil
+	}
 	if isSystemVar {
 		return false, nil
 	}
@@ -801,6 +798,24 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 		return false, err
 	}
 	return udVar.IsBin, nil
+}
+
+func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {
+	inSp, _ := ctx.Value(defines.InSp{}).(bool)
+	if !inSp {
+		return nil, false
+	}
+	tmpScope, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	name := strings.ToLower(varName)
+	for i := len(*tmpScope) - 1; i >= 0; i-- {
+		if val, ok := (*tmpScope)[i][name]; ok {
+			return val, true
+		}
+	}
+	return nil, false
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {
