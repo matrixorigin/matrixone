@@ -54,11 +54,35 @@ type TableEntry struct {
 	tableData data.Table
 	rows      atomic.Uint64
 
+	// latestKnownDMLPrepare is the greatest prepare timestamp of a user DML
+	// carrying a known table-definition version that passed the TN schema
+	// fence. AUTO_INCREMENT ALTER uses it to detect rows serialized after the
+	// ALTER snapshot but before the ALTER prepare point.
+	latestKnownDMLPrepare atomic.Pointer[types.TS]
+
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 
 	dataObjects      *ObjectList
 	tombstoneObjects *ObjectList
+}
+
+// RecordKnownDMLPrepare advances the accepted known-version DML watermark.
+func (entry *TableEntry) RecordKnownDMLPrepare(ts types.TS) {
+	for old := entry.latestKnownDMLPrepare.Load(); old == nil || ts.GT(old); old = entry.latestKnownDMLPrepare.Load() {
+		candidate := ts
+		if entry.latestKnownDMLPrepare.CompareAndSwap(old, &candidate) {
+			return
+		}
+	}
+}
+
+// GetLatestKnownDMLPrepare returns the accepted known-version DML watermark.
+func (entry *TableEntry) GetLatestKnownDMLPrepare() types.TS {
+	if ts := entry.latestKnownDMLPrepare.Load(); ts != nil {
+		return *ts
+	}
+	return types.TS{}
 }
 
 func genTblFullName(tenantID uint32, name string) string {

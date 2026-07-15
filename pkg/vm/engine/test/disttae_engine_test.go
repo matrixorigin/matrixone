@@ -1576,6 +1576,13 @@ func TestTableDefVersionFenceAcrossCNTxnModes(t *testing.T) {
 				require.NoError(t, testutil.WriteToRelation(
 					p.Ctx, txnOp, rel, containers.ToCNBatch(input), false, true))
 			}
+			writeGenerated := func(txnOp client.TxnOperator, rel engine.Relation, value int) {
+				input := containers.MockBatchWithAttrsAndOffset(
+					schema.Types(), schema.Attrs(), 1, value)
+				defer input.Close()
+				require.NoError(t, testutil.WriteToRelation(
+					p.Ctx, txnOp, rel, containers.ToCNBatch(input), false, true))
+			}
 
 			staleTxn := newModeTxn()
 			require.Equal(t, tc.mode, staleTxn.Txn().Mode)
@@ -1610,6 +1617,36 @@ func TestTableDefVersionFenceAcrossCNTxnModes(t *testing.T) {
 			require.Greater(t, retryRel.GetTableDef(p.Ctx).Version, staleVersion)
 			writeOne(retryTxn, retryRel)
 			require.NoError(t, retryTxn.Commit(p.Ctx))
+
+			// Reverse the serialization order. The ALTER snapshot predates a
+			// known V8 DML that commits value 5000, above the requested 999.
+			// The TN must retry the ALTER so its next snapshot can recompute MAX.
+			dmlFirstAlterTxn := newModeTxn()
+			dmlFirstAlterRel := openRelation(dmlFirstAlterTxn)
+			dmlFirstTxn := newModeTxn()
+			dmlFirstRel := openRelation(dmlFirstTxn)
+			writeGenerated(dmlFirstTxn, dmlFirstRel, 5000)
+			require.NoError(t, dmlFirstTxn.Commit(p.Ctx))
+
+			require.NoError(t, dmlFirstAlterRel.AlterTable(p.Ctx, nil, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(
+					dmlFirstAlterRel.GetDBID(p.Ctx), dmlFirstAlterRel.GetTableID(p.Ctx), 999),
+			}))
+			err = dmlFirstAlterTxn.Commit(p.Ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+			retryAlterTxn := newModeTxn()
+			retryAlterRel := openRelation(retryAlterTxn)
+			require.NoError(t, retryAlterRel.AlterTable(p.Ctx, nil, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(
+					retryAlterRel.GetDBID(p.Ctx), retryAlterRel.GetTableID(p.Ctx), 5000),
+			}))
+			require.NoError(t, retryAlterTxn.Commit(p.Ctx))
+
+			freshTxn := newModeTxn()
+			freshRel := openRelation(freshTxn)
+			writeGenerated(freshTxn, freshRel, 5001)
+			require.NoError(t, freshTxn.Commit(p.Ctx))
 		})
 	}
 }

@@ -6624,9 +6624,9 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 	const (
 		oldVersion      = uint32(7)
 		newVersion      = uint32(8)
-		staleGenerated  = 202
+		staleGenerated  = 5000
 		effectiveOffset = 999
-		retryGenerated  = 1100
+		retryGenerated  = 5001
 	)
 
 	newVersionedTable := func(t *testing.T) (*db.DB, *catalog.Schema, uint32) {
@@ -6813,7 +6813,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 			t, tae, schema, retryGenerated, newVersion).Commit(ctx))
 	})
 
-	t.Run("dml prepared first may commit before alter", func(t *testing.T) {
+	t.Run("dml prepared first forces alter to recompute max", func(t *testing.T) {
 		tae, schema, version := newVersionedTable(t)
 		defer tae.Close()
 		dmlTxn := appendGeneratedWithVersion(t, tae, schema, staleGenerated, version)
@@ -6841,7 +6841,18 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 
 		close(releaseDML)
 		require.NoError(t, <-dmlResult)
-		require.NoError(t, <-alterResult)
+		err := <-alterResult
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+		// A retry starts after the accepted V7 DML is visible, so the CN-side
+		// MAX query reconciles the requested offset with the committed 5000.
+		retryAlterTxn, retryAlterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, retryAlterRel.AlterTable(ctx,
+			api.NewUpdateAutoIncrementReq(0, retryAlterRel.ID(), staleGenerated)))
+		require.NoError(t, retryAlterTxn.Commit(ctx))
+
+		freshTxn := appendGeneratedWithVersion(t, tae, schema, retryGenerated, newVersion)
+		require.NoError(t, freshTxn.Commit(ctx))
 	})
 }
 

@@ -25,6 +25,28 @@ Add transaction-private reset caches to incrservice.
 - If an ALTER statement fails after installing a reset cache, compile explicitly discards it before the explicit transaction can execute another statement.
 - The existing TN table-version fence remains the cross-CN and optimistic-mode serialization barrier.
 
+### DML-first serialization
+
+The version fence must cover both prepare orders. When ALTER prepares first,
+the existing fence rejects a later old-version DML. When a known-version DML
+prepares first, TAE records its accepted prepare timestamp on the table. An
+AUTO_INCREMENT ALTER whose snapshot start precedes that watermark retries, so
+the CN repeats the MAX query from a snapshot that includes the earlier DML.
+
+This watermark is a TN-local serialization fact, not persisted allocator
+metadata. TAE's pre-WAL prepare stage is ordered, so an accepted DML publishes
+before a later ALTER checks; an ALTER ordered first checks before the DML and
+the schema fence rejects that DML. A rejected stale DML never publishes. A
+same-transaction DML plus AUTO_INCREMENT ALTER is one serialization unit and
+does not fence against itself.
+
+The watermark advances monotonically. If an accepted/prepared DML later
+aborts, it can conservatively retry each older ALTER snapshot, but cannot admit
+an unsafe lowering. It needs no restart persistence: active transactions do not survive
+a TAE restart, and every post-restart ALTER snapshot is after all replayed
+commits. Legacy unknown-version writes do not publish and remain the documented
+rolling-upgrade compatibility boundary.
+
 The allocator continues to serialize old local allocations, force-reset, and private-cache allocation through its existing FIFO. Private-cache construction occurs only after the force-reset action completes.
 
 ## COPY behavior

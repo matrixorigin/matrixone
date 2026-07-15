@@ -142,6 +142,116 @@ func TestTableDefVersionDependencyRecordsMultipleExpectations(t *testing.T) {
 	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedTableDefVersions)
 }
 
+func newPreparingTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {
+	t.Helper()
+	txn := txnbase.NewTxn(nil, nil, []byte(id), start, types.TS{})
+	txn.Lock()
+	assert.NoError(t, txn.ToPreparingLocked(prepare))
+	txn.Unlock()
+	return txn
+}
+
+func TestAutoIncrementAlterDetectsAcceptedDMLAfterSnapshot(t *testing.T) {
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	var wg sync.WaitGroup
+	for _, ts := range []types.TS{
+		types.BuildTS(5, 0),
+		types.BuildTS(3, 0),
+		types.BuildTS(7, 0),
+		types.BuildTS(7, 0),
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			entry.RecordKnownDMLPrepare(ts)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, types.BuildTS(7, 0), entry.GetLatestKnownDMLPrepare())
+
+	t.Run("post snapshot dml retries alter", func(t *testing.T) {
+		txn := newPreparingTestTxn(t, "alter-retry", types.BuildTS(6, 0), types.BuildTS(8, 0))
+		tbl := &txnTable{
+			store:              &txnStore{txn: txn},
+			entry:              entry,
+			autoIncrementAlter: true,
+		}
+		err := tbl.validateAutoIncrementDMLOrder()
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("equal prepare timestamp conservatively retries", func(t *testing.T) {
+		txn := newPreparingTestTxn(t, "alter-equal", types.BuildTS(6, 0), types.BuildTS(7, 0))
+		tbl := &txnTable{
+			store:              &txnStore{txn: txn},
+			entry:              entry,
+			autoIncrementAlter: true,
+		}
+		err := tbl.validateAutoIncrementDMLOrder()
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("watermark visible to snapshot does not retry", func(t *testing.T) {
+		txn := newPreparingTestTxn(t, "alter-safe", types.BuildTS(7, 0), types.BuildTS(8, 0))
+		tbl := &txnTable{
+			store:              &txnStore{txn: txn},
+			entry:              entry,
+			autoIncrementAlter: true,
+		}
+		assert.NoError(t, tbl.validateAutoIncrementDMLOrder())
+	})
+}
+
+func TestTableDefVersionFencePublishesOnlyAcceptedDML(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Version = 7
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+	})
+
+	t.Run("accepted known dml publishes", func(t *testing.T) {
+		txn := newPreparingTestTxn(t, "accepted", types.BuildTS(2, 0), types.BuildTS(3, 0))
+		tbl := &txnTable{
+			store:                    &txnStore{txn: txn},
+			entry:                    entry,
+			expectedTableDefVersions: map[uint32]struct{}{7: {}},
+		}
+		assert.NoError(t, tbl.validateTableDefVersion())
+		assert.NoError(t, tbl.validateAutoIncrementDMLOrder())
+		assert.Equal(t, types.BuildTS(3, 0), entry.GetLatestKnownDMLPrepare())
+	})
+
+	t.Run("rejected stale dml does not publish", func(t *testing.T) {
+		other := catalog.MockTableEntryWithDB(nil, 43)
+		other.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+			Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+		})
+		txn := newPreparingTestTxn(t, "rejected", types.BuildTS(2, 0), types.BuildTS(4, 0))
+		tbl := &txnTable{
+			store:                    &txnStore{txn: txn},
+			entry:                    other,
+			expectedTableDefVersions: map[uint32]struct{}{6: {}},
+		}
+		err := tbl.PrepareCommit()
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+		watermark := other.GetLatestKnownDMLPrepare()
+		assert.True(t, watermark.IsEmpty())
+	})
+}
+
+func TestAutoIncrementDMLWatermarkIsTableScoped(t *testing.T) {
+	txn := newPreparingTestTxn(t, "multi-table-alter", types.BuildTS(5, 0), types.BuildTS(8, 0))
+	changed := catalog.MockTableEntryWithDB(nil, 42)
+	unchanged := catalog.MockTableEntryWithDB(nil, 43)
+	changed.RecordKnownDMLPrepare(types.BuildTS(7, 0))
+
+	unsafe := &txnTable{store: &txnStore{txn: txn}, entry: changed, autoIncrementAlter: true}
+	safe := &txnTable{store: &txnStore{txn: txn}, entry: unchanged, autoIncrementAlter: true}
+	assert.Error(t, unsafe.validateAutoIncrementDMLOrder())
+	assert.NoError(t, safe.validateAutoIncrementDMLOrder())
+}
+
 func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7

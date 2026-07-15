@@ -124,6 +124,7 @@ type txnTable struct {
 	// legitimately use both the committed version and the version created by
 	// its own ALTER TABLE.
 	expectedTableDefVersions map[uint32]struct{}
+	autoIncrementAlter       bool
 }
 
 func (tbl *txnTable) setExpectedTableDefVersion(version uint32) error {
@@ -183,6 +184,25 @@ func (tbl *txnTable) validateTableDefVersion() error {
 		}
 		return nil
 	}
+}
+
+func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
+	if tbl.autoIncrementAlter {
+		startTS := tbl.store.txn.GetStartTS()
+		latestDML := tbl.entry.GetLatestKnownDMLPrepare()
+		if latestDML.GT(&startTS) {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return nil
+	}
+
+	// SetTableDefVersion is registered only for known-version user writes.
+	// Publish after the schema fence accepts the write; rejected stale writes
+	// must not force a later ALTER retry.
+	if len(tbl.expectedTableDefVersions) > 0 {
+		tbl.entry.RecordKnownDMLPrepare(tbl.store.txn.GetPrepareTS())
+	}
+	return nil
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
@@ -1098,6 +1118,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 			return err
 		}
 	}
+	if req.Kind == apipb.AlterKind_UpdateAutoIncrement {
+		tbl.autoIncrementAlter = true
+	}
 
 	tbl.dataTable.schema = newSchema // update new schema to txn local schema
 	//TODO(aptend): handle written data in localobj, keep the batch aligned with the new schema
@@ -1510,6 +1533,9 @@ func (tbl *txnTable) dumpCore(errMsg string) {
 
 func (tbl *txnTable) PrepareCommit() (err error) {
 	if err = tbl.validateTableDefVersion(); err != nil {
+		return err
+	}
+	if err = tbl.validateAutoIncrementDMLOrder(); err != nil {
 		return err
 	}
 	nodeCount := len(tbl.txnEntries.entries)
