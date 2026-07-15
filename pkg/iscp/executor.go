@@ -108,6 +108,7 @@ func ISCPTaskExecutorFactory(
 		if err != nil {
 			return
 		}
+		defer exec.terminateLifetime()
 		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
 			return
 		}
@@ -172,10 +173,11 @@ func NewISCPTaskExecutor(
 		)
 	}()
 	option = fillDefaultOption(option)
+	ownerCtx, terminate := context.WithCancel(ctx)
 	exec = &ISCPTaskExecutor{
-		ownerCtx:    ctx,
-		terminated:  make(chan struct{}),
-		ctx:         ctx,
+		ownerCtx:    ownerCtx,
+		terminate:   terminate,
+		ctx:         ownerCtx,
 		packer:      types.NewPacker(),
 		tables:      newISCPTableTree(),
 		cnUUID:      cdUUID,
@@ -238,9 +240,12 @@ func (exec *ISCPTaskExecutor) Pause() error {
 	return nil
 }
 func (exec *ISCPTaskExecutor) Cancel() error {
+	// Broadcast lifetime termination before waiting for the state lock. Start
+	// may hold the lock while doing recovery I/O; its generation context is
+	// derived from ownerCtx and must remain cancelable during that wait.
+	exec.terminateLifetime()
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
-	exec.terminate()
 	exec.stopLocked()
 	return nil
 }
@@ -274,28 +279,24 @@ func (exec *ISCPTaskExecutor) Start() error {
 }
 
 func (exec *ISCPTaskExecutor) waitForTermination(ctx context.Context) {
+	var ownerDone <-chan struct{}
+	if exec.ownerCtx != nil {
+		ownerDone = exec.ownerCtx.Done()
+	}
 	select {
 	case <-ctx.Done():
-	case <-exec.terminated:
+	case <-ownerDone:
 	}
 }
 
-func (exec *ISCPTaskExecutor) terminate() {
-	if exec.terminated != nil {
-		exec.terminateOnce.Do(func() { close(exec.terminated) })
+func (exec *ISCPTaskExecutor) terminateLifetime() {
+	if exec.terminate != nil {
+		exec.terminate()
 	}
 }
 
 func (exec *ISCPTaskExecutor) isTerminated() bool {
-	if exec.terminated == nil {
-		return false
-	}
-	select {
-	case <-exec.terminated:
-		return true
-	default:
-		return false
-	}
+	return exec.ownerCtx != nil && exec.ownerCtx.Err() != nil
 }
 
 func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error) {
@@ -562,6 +563,21 @@ func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, 
 	}
 	watermark, ok = table.GetWatermark(jobName)
 	return
+}
+
+// GetJobState returns the scheduler's in-memory LSN and state. It is used by
+// diagnostics and lifecycle tests to distinguish admitted work from durable
+// progress.
+func (exec *ISCPTaskExecutor) GetJobState(
+	accountID uint32,
+	srcTableID uint64,
+	jobName string,
+) (lsn uint64, state int8, ok bool) {
+	table, ok := exec.getTable(accountID, srcTableID)
+	if !ok {
+		return 0, ISCPJobState_Invalid, false
+	}
+	return table.getJobState(jobName)
 }
 
 // For UT

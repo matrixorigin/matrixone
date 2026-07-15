@@ -93,6 +93,17 @@ func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) 
 	return types.TS{}, false
 }
 
+func (t *TableEntry) getJobState(jobName string) (lsn uint64, state int8, ok bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, job := range t.jobs {
+		if job.jobName == jobName && job.dropAt == 0 {
+			return job.currentLSN, job.state, true
+		}
+	}
+	return 0, ISCPJobState_Invalid, false
+}
+
 func (t *TableEntry) IsEmpty() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

@@ -46,7 +46,8 @@ func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
 }
 
 func TestExecutorLifetimeSurvivesPauseAndEndsOnCancel(t *testing.T) {
-	exec := &ISCPTaskExecutor{terminated: make(chan struct{})}
+	ownerCtx, terminate := context.WithCancel(context.Background())
+	exec := &ISCPTaskExecutor{ownerCtx: ownerCtx, terminate: terminate}
 	returned := make(chan struct{})
 	started := make(chan struct{})
 	go func() {
@@ -73,8 +74,8 @@ func TestExecutorLifetimeSurvivesPauseAndEndsOnCancel(t *testing.T) {
 }
 
 func TestExecutorLifetimeEndsWithOwnerContext(t *testing.T) {
-	exec := &ISCPTaskExecutor{terminated: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
+	exec := &ISCPTaskExecutor{ownerCtx: ctx}
 	returned := make(chan struct{})
 	go func() {
 		exec.waitForTermination(ctx)
@@ -86,5 +87,36 @@ func TestExecutorLifetimeEndsWithOwnerContext(t *testing.T) {
 	case <-returned:
 	case <-time.After(time.Second):
 		t.Fatal("owner cancellation did not terminate the daemon executor lifetime")
+	}
+}
+
+func TestCancelSignalsLifetimeBeforeWaitingForStateLock(t *testing.T) {
+	ownerCtx, terminate := context.WithCancel(context.Background())
+	exec := &ISCPTaskExecutor{ownerCtx: ownerCtx, terminate: terminate}
+	exec.runningMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			exec.runningMu.Unlock()
+		}
+	}()
+
+	returned := make(chan struct{})
+	go func() {
+		_ = exec.Cancel()
+		close(returned)
+	}()
+
+	select {
+	case <-ownerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cancel waited for the state lock before signaling termination")
+	}
+	exec.runningMu.Unlock()
+	locked = false
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not finish after the state lock was released")
 	}
 }

@@ -121,6 +121,7 @@ func PublicationTaskExecutorFactory(
 		if err != nil {
 			return
 		}
+		defer exec.terminateLifetime()
 		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
 			return
 		}
@@ -187,10 +188,11 @@ func NewPublicationTaskExecutor(
 		)
 	}()
 	option = fillDefaultOption(option)
+	ownerCtx, terminate := context.WithCancel(ctx)
 	exec = &PublicationTaskExecutor{
-		ownerCtx:                 ctx,
-		terminated:               make(chan struct{}),
-		ctx:                      ctx,
+		ownerCtx:                 ownerCtx,
+		terminate:                terminate,
+		ctx:                      ownerCtx,
 		tasks:                    newPublicationTaskTree(),
 		cnUUID:                   cdUUID,
 		txnEngine:                txnEngine,
@@ -231,11 +233,10 @@ type PublicationTaskExecutor struct {
 
 	option *PublicationExecutorOption
 
-	ctx           context.Context
-	cancel        context.CancelFunc
-	ownerCtx      context.Context
-	terminated    chan struct{}
-	terminateOnce sync.Once
+	ctx       context.Context
+	cancel    context.CancelFunc
+	ownerCtx  context.Context
+	terminate context.CancelFunc
 
 	worker Worker
 	wg     sync.WaitGroup
@@ -258,9 +259,12 @@ func (exec *PublicationTaskExecutor) Pause() error {
 }
 
 func (exec *PublicationTaskExecutor) Cancel() error {
+	// Start can hold runningMu while recovery is blocked in storage. Signal the
+	// lifetime context first so that work is interruptible before cleanup joins
+	// the generation under the state lock.
+	exec.terminateLifetime()
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
-	exec.terminate()
 	exec.stopLocked()
 	return nil
 }
@@ -296,28 +300,24 @@ func (exec *PublicationTaskExecutor) Start() error {
 }
 
 func (exec *PublicationTaskExecutor) waitForTermination(ctx context.Context) {
+	var ownerDone <-chan struct{}
+	if exec.ownerCtx != nil {
+		ownerDone = exec.ownerCtx.Done()
+	}
 	select {
 	case <-ctx.Done():
-	case <-exec.terminated:
+	case <-ownerDone:
 	}
 }
 
-func (exec *PublicationTaskExecutor) terminate() {
-	if exec.terminated != nil {
-		exec.terminateOnce.Do(func() { close(exec.terminated) })
+func (exec *PublicationTaskExecutor) terminateLifetime() {
+	if exec.terminate != nil {
+		exec.terminate()
 	}
 }
 
 func (exec *PublicationTaskExecutor) isTerminated() bool {
-	if exec.terminated == nil {
-		return false
-	}
-	select {
-	case <-exec.terminated:
-		return true
-	default:
-		return false
-	}
+	return exec.ownerCtx != nil && exec.ownerCtx.Err() != nil
 }
 
 func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) error {
