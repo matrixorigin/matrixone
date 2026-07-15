@@ -1314,7 +1314,7 @@ select * from test05;
 2  ¦  39304  𝄀
 3  ¦  372
 insert into test05 values (2, 39304.3424);
-Duplicate entry '(2,39304)' for key '(col1,col2)'
+Duplicate entry ('\d\w\d{38}'|'\(2\,39304\)') for key '(.*)'
 alter table test01 rename column col1 to newCol;
 show create table test01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
@@ -1671,7 +1671,7 @@ test01  ¦  CREATE TABLE `test01` (
 create publication publication01 database test account all;
 show publications;
 ➤ publication[12,0,0]  ¦  database[12,0,0]  ¦  tables[1111,0,0]  ¦  sub_account[1111,0,0]  ¦  subscribed_accounts[1111,0,0]  ¦  create_time[93,0,0]  ¦  update_time[93,0,0]  ¦  comments[1111,0,0]  𝄀
-publication01  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 10:54:53  ¦  null  ¦  
+publication01  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 16:27:45  ¦  null  ¦  
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1693,7 +1693,7 @@ select * from sys_tbl_1;
 3  ¦  4  ¦  c  ¦  324243243
 show publications;
 ➤ publication[12,0,0]  ¦  database[12,0,0]  ¦  tables[1111,0,0]  ¦  sub_account[1111,0,0]  ¦  subscribed_accounts[1111,0,0]  ¦  create_time[93,0,0]  ¦  update_time[93,0,0]  ¦  comments[1111,0,0]  𝄀
-sys_pub_1  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 10:54:53  ¦  null  ¦  
+sys_pub_1  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 16:27:45  ¦  null  ¦  
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 ➤ pub_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  account_list[12,0,0]  𝄀
 sys_pub_1  ¦  test  ¦  all
