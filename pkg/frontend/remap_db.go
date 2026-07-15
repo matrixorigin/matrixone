@@ -22,16 +22,17 @@ import (
 // parsed statements (db.table -> remap[db].table). It runs after parsing and
 // before privilege checks / planning, which otherwise resolve the original
 // database and would reject a remapped-away database before the planner sees it.
-// It covers SELECT and INSERT/UPDATE/DELETE (including their target tables,
-// read sources, INSERT ... SELECT bodies and CTE bodies).
+// It covers SELECT, INSERT/UPDATE/DELETE (including their target tables, read
+// sources, INSERT ... SELECT bodies and CTE bodies), table-level DDL, and
+// ANALYZE TABLE.
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
-// could change its meaning; the current-database case is instead handled by
-// remapping USE (the session lands on the target database and unqualified names
-// resolve there naturally). Sub-selects nested in expressions (e.g. WHERE id IN
-// (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections, GROUP/HAVING) are
-// also walked so their qualified references are remapped.
+// could change its meaning. USE is intentionally not remapped; unqualified
+// names are resolved through TxnCompilerContext.DefaultDatabase(), which applies
+// the active database remap. Sub-selects nested in expressions (e.g. WHERE id
+// IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
+// GROUP/HAVING) are also walked so their qualified references are remapped.
 func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
 	if len(remap) == 0 {
 		return
