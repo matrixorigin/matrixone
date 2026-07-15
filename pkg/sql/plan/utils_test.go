@@ -135,6 +135,27 @@ func TestHasTrailingZeros(t *testing.T) {
 	}
 }
 
+func TestFillValuesOfParamsInPlanPreservesBinaryFlag(t *testing.T) {
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{
+			Steps: []int32{0},
+			Nodes: []*plan.Node{{
+				NodeType: plan.Node_VALUE_SCAN,
+				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+			}},
+		}},
+	}
+
+	_, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+		ParamValue{Value: "AB\x00\x00", IsBin: true},
+	})
+	require.NoError(t, err)
+	literal := queryPlan.GetQuery().Nodes[0].Limit.GetLit()
+	require.NotNil(t, literal)
+	require.True(t, literal.GetIsBin())
+	require.Equal(t, "AB\x00\x00", literal.GetSval())
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string

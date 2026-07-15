@@ -93,6 +93,30 @@ func TestListExpressionExecutor(t *testing.T) {
 	require.Equal(t, curr, proc.Mp().CurrNB())
 }
 
+func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
+	proc.SetPrepareParamsWithIsBin(params, []bool{true, false})
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
+	binaryExpr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
+	textExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	t.Cleanup(binaryExpr.Free)
+	t.Cleanup(textExpr.Free)
+
+	binaryVec, err := binaryExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.True(t, binaryVec.GetIsBin())
+	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
+
+	textVec, err := textExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, textVec.GetIsBin())
+	require.Equal(t, "text", textVec.GetStringAt(0))
+}
+
 func TestFixedExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

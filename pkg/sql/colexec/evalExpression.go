@@ -302,6 +302,9 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batc
 	} else {
 		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
+	if err == nil {
+		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+	}
 	return expr.vec, err
 }
 

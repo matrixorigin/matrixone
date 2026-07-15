@@ -77,6 +77,7 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
+			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
 		}
 	}
 	{ // session info
@@ -230,6 +231,7 @@ func (c *codecService) Decode(
 				proc.Base.prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
+		proc.Base.prepareParamsIsBin = append(proc.Base.prepareParamsIsBin, value.PrepareParams.IsBin...)
 	}
 	return proc, nil
 }

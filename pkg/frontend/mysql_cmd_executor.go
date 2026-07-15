@@ -828,6 +828,7 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
+	var userVarIsBin bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -864,7 +865,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				}
 			}
 		} else {
-			err = ses.SetUserDefinedVar(name, value, sql)
+			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
 			if err != nil {
 				return err
 			}
@@ -875,8 +876,9 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 	for _, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
+		userVarIsBin = false
 
-		value, err = getExprValue(assign.Value, ses, execCtx)
+		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
 		if err != nil {
 			return err
 		}

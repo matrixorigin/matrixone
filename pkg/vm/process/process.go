@@ -153,6 +153,12 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
 	proc.Base.prepareParams = prepareParams
+	proc.Base.prepareParamsIsBin = nil
+}
+
+func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.Base.prepareParams = prepareParams
+	proc.Base.prepareParamsIsBin = isBin
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

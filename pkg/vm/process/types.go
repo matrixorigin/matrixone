@@ -328,6 +328,7 @@ type BaseProcess struct {
 	Aicm                *defines.AutoIncrCacheManager
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	prepareParams       *vector.Vector
+	prepareParamsIsBin  []bool
 	QueryClient         qclient.QueryClient
 	Hakeeper            logservice.CNHAKeeperClient
 	UdfService          udf.Service
@@ -460,6 +461,10 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 		val := proc.Base.prepareParams.GetRawBytesAt(i)
 		return val, nil
 	}
+}
+
+func (proc *Process) GetPrepareParamIsBin(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process

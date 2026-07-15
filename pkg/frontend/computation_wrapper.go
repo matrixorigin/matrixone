@@ -579,7 +579,14 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		params := vector.NewVec(types.T_text.ToType())
+		paramsOwned := true
+		defer func() {
+			if paramsOwned {
+				params.Free(cwft.proc.Mp())
+			}
+		}()
 		paramVals := make([]any, numParams)
+		paramIsBin := make([]bool, numParams)
 		for i, arg := range execPlan.Args {
 			exprImpl := arg.Expr.(*plan.Expr_V)
 			param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
@@ -590,9 +597,17 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			if err != nil {
 				return nil, nil, nil, originSQL, err
 			}
-			paramVals[i] = param
+			if !exprImpl.V.System {
+				udVar, getErr := ses.GetUserDefinedVar(exprImpl.V.Name)
+				if getErr != nil {
+					return nil, nil, nil, originSQL, getErr
+				}
+				paramIsBin[i] = udVar.IsBin
+			}
+			paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
 		}
-		cwft.proc.SetPrepareParams(params)
+		cwft.proc.SetPrepareParamsWithIsBin(params, paramIsBin)
+		paramsOwned = false
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
