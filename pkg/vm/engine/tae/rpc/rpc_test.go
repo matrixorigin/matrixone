@@ -46,55 +46,51 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTableDefVersionFenceIsModeIndependent(t *testing.T) {
+func TestTableDefVersionFenceAtTNConvergence(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
-		t.Run(mode.String(), func(t *testing.T) {
-			ctx := context.Background()
-			h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
-			defer h.HandleClose(ctx)
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
 
-			schema := catalog.MockSchemaAll(3, 1)
-			schema.Name = "mode_fence"
-			_, createdRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
-			tableID := createdRel.ID()
-			databaseID := createdRel.GetMeta().(*catalog.TableEntry).GetDB().ID
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Name = "tn_fence"
+	_, createdRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+	tableID := createdRel.ID()
+	databaseID := createdRel.GetMeta().(*catalog.TableEntry).GetDB().ID
 
-			alterTxn, alterRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
-			require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, tableID, 10)))
-			require.NoError(t, alterTxn.Commit(ctx))
+	alterTxn, alterRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
+	require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, tableID, 10)))
+	require.NoError(t, alterTxn.Commit(ctx))
 
-			insertBatch := catalog.MockBatch(schema, 1)
-			defer insertBatch.Close()
-			entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
-				schema.Name, "", containers.ToCNBatch(insertBatch))
-			require.NoError(t, err)
-			entry.TableDefVersion = 0
-			entry.TableDefVersionKnown = true
-			payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
-			require.NoError(t, err)
-			commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
-				CNRequest: &txnpb.CNOpRequest{OpCode: uint32(api.OpCode_OpPreCommit), Payload: payload},
-			}}}
-			meta := mock1PCTxn(h.db)
-			meta.Mode = mode
+	insertBatch := catalog.MockBatch(schema, 1)
+	defer insertBatch.Close()
+	entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
+		schema.Name, "", containers.ToCNBatch(insertBatch))
+	require.NoError(t, err)
+	entry.TableDefVersion = 0
+	entry.TableDefVersionKnown = true
+	payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+	require.NoError(t, err)
+	commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+		CNRequest: &txnpb.CNOpRequest{OpCode: uint32(api.OpCode_OpPreCommit), Payload: payload},
+	}}}
+	meta := mock1PCTxn(h.db)
 
-			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	// CN modes have already converged before this TN handler: HandleCommit
+	// consumes the transaction ID/snapshot and the precommit payload, not Mode.
+	_, err = h.HandleCommit(ctx, meta, nil, commitReq)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 
-			// Rolling-upgrade compatibility boundary: the same raw V0 from a
-			// legacy CN has no presence bit and remains accepted after ALTER.
-			// Strict fencing requires all CN writers to send Known=true.
-			entry.TableDefVersionKnown = false
-			payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
-			require.NoError(t, err)
-			commitReq.Payload[0].CNRequest.Payload = payload
-			meta = mock1PCTxn(h.db)
-			meta.Mode = mode
-			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
-			require.NoError(t, err)
-		})
-	}
+	// Rolling-upgrade compatibility boundary: the same raw V0 from a legacy CN
+	// has no presence bit and remains accepted after ALTER. Strict fencing
+	// requires all CN writers to send Known=true.
+	entry.TableDefVersionKnown = false
+	payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+	require.NoError(t, err)
+	commitReq.Payload[0].CNRequest.Payload = payload
+	meta = mock1PCTxn(h.db)
+	_, err = h.HandleCommit(ctx, meta, nil, commitReq)
+	require.NoError(t, err)
 }
 
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {

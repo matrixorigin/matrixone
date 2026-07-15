@@ -715,6 +715,69 @@ func TestS3WorkspaceEntryCarriesTableDefVersion(t *testing.T) {
 	txn.writes[0].bat.Clean(proc.Mp())
 }
 
+func TestWorkspaceFileOutputCarriesVersionForFlushAndCompaction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  int
+	}{
+		{name: "insert flush", typ: INSERT},
+		{name: "delete flush", typ: DELETE},
+		{name: "dirty compaction", typ: INSERT},
+		{name: "clean compaction", typ: INSERT},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			colexec.NewServer("")
+			txn := &Transaction{
+				proc:          proc,
+				engine:        &Engine{},
+				cnObjsSummary: make(map[types.Objectid]Summary),
+				cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+			}
+			txn.op = newTxnOperatorForTest(t)
+			stats := mockStatsList(t, 1)
+			input := cloneObjectStatsBatchForTest(t, proc.Mp(), stats...)
+			if tc.typ == DELETE {
+				input.Clean(proc.Mp())
+				input = batch.New([]string{catalog.ObjectMeta_ObjectStats})
+				input.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], stats[0].Marshal(), false, proc.Mp()))
+				input.SetRowCount(1)
+			}
+			key := workspaceTableKey{
+				tableKey: tableKey{
+					accountId: 1, databaseId: 7, dbName: "db", name: "tbl",
+				},
+				tableDefVersion:      7,
+				tableDefVersionKnown: true,
+			}
+
+			require.NoError(t, txn.writeFileLockedWithWorkspaceKey(
+				tc.typ,
+				key.accountId,
+				key.databaseId,
+				42,
+				key.dbName,
+				key.name,
+				tc.name,
+				input,
+				DNStore{},
+				key,
+			))
+			require.Len(t, txn.writes, 1)
+			require.Equal(t, key.tableDefVersion, txn.writes[0].tableDefVersion)
+			require.Equal(t, key.tableDefVersionKnown, txn.writes[0].tableDefVersionKnown)
+			pbEntry, err := toPBEntry(txn.writes[0])
+			require.NoError(t, err)
+			require.Equal(t, key.tableDefVersion, pbEntry.TableDefVersion)
+			require.Equal(t, key.tableDefVersionKnown, pbEntry.TableDefVersionKnown)
+
+			input.Clean(proc.Mp())
+			txn.writes[0].bat.Clean(proc.Mp())
+		})
+	}
+}
+
 func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
 	return newTxnOperatorForTestWithWorkspace(t, nil)
 }

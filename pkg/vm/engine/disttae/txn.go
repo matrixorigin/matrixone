@@ -950,7 +950,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			table = tbl.(*txnTable)
 		}
 
-		if err = table.getTxn().writeFileLockedWithVersionKnown(
+		if err = table.getTxn().writeFileLockedWithWorkspaceKey(
 			INSERT,
 			table.accountId,
 			table.db.databaseId,
@@ -960,8 +960,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			fileName,
 			bat,
 			table.getTxn().tnStores[0],
-			tbKey.tableDefVersion,
-			tbKey.tableDefVersionKnown,
+			tbKey,
 		); err != nil {
 			return err
 		}
@@ -1086,7 +1085,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			table = tbl.(*txnTable)
 		}
 
-		if err = table.getTxn().writeFileLockedWithVersionKnown(
+		if err = table.getTxn().writeFileLockedWithWorkspaceKey(
 			DELETE,
 			table.accountId,
 			table.db.databaseId,
@@ -1096,8 +1095,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			fileName,
 			bat,
 			table.getTxn().tnStores[0],
-			tbKey.tableDefVersion,
-			tbKey.tableDefVersionKnown,
+			tbKey,
 		); err != nil {
 			return err
 		}
@@ -1357,6 +1355,37 @@ func (txn *Transaction) writeFileLockedWithVersion(
 ) (err error) {
 	return txn.writeFileLockedWithVersionKnown(typ, accountId, databaseId, tableId,
 		databaseName, tableName, fileName, inputBat, tnStore, tableDefVersion, true)
+}
+
+// writeFileLockedWithWorkspaceKey is the convergence seam for workspace flush
+// and object compaction. Keeping the version and its presence bit in one value
+// prevents either field from being dropped while an in-memory entry is
+// transformed into an S3 entry.
+func (txn *Transaction) writeFileLockedWithWorkspaceKey(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	tableKey workspaceTableKey,
+) error {
+	return txn.writeFileLockedWithVersionKnown(
+		typ,
+		accountId,
+		databaseId,
+		tableId,
+		databaseName,
+		tableName,
+		fileName,
+		inputBat,
+		tnStore,
+		tableKey.tableDefVersion,
+		tableKey.tableDefVersionKnown,
+	)
 }
 
 func (txn *Transaction) writeFileLockedWithVersionKnown(
@@ -2100,7 +2129,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		locker.Lock()
 		defer locker.Unlock()
-		if err = txn.writeFileLockedWithVersionKnown(
+		if err = txn.writeFileLockedWithWorkspaceKey(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -2110,8 +2139,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			fileName,
 			bat,
 			txn.tnStores[0],
-			tbKey.tableDefVersion,
-			tbKey.tableDefVersionKnown,
+			tbKey,
 		); err != nil {
 			bat.Clean(txn.proc.Mp())
 			panicWhenFailed(err, "write txn file failed")
@@ -2160,7 +2188,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				bat.SetRowCount(bat.Vecs[0].Length())
 				tbKey := entry.workspaceTableKey()
 
-				if err := txn.writeFileLockedWithVersionKnown(
+				if err := txn.writeFileLockedWithWorkspaceKey(
 					INSERT,
 					entry.accountId,
 					entry.databaseId,
@@ -2170,8 +2198,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					stats.ObjectName().String(),
 					bat,
 					entry.tnStore,
-					tbKey.tableDefVersion,
-					tbKey.tableDefVersionKnown,
+					tbKey,
 				); err != nil {
 					bat.Clean(txn.proc.Mp())
 					return err

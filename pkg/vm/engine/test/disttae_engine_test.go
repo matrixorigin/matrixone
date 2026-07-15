@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -1528,6 +1530,88 @@ func TestCacheNotServing(t *testing.T) {
 	t.Log(err)
 
 	require.NoError(t, staleTxn.Commit(p.Ctx))
+}
+
+func TestTableDefVersionFenceAcrossCNTxnModes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      pbtxn.TxnMode
+		isolation pbtxn.TxnIsolation
+	}{
+		{name: "optimistic-si", mode: pbtxn.TxnMode_Optimistic, isolation: pbtxn.TxnIsolation_SI},
+		{name: "pessimistic-rc", mode: pbtxn.TxnMode_Pessimistic, isolation: pbtxn.TxnIsolation_RC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := testutil.InitEnginePack(testutil.TestOptions{
+				TaeEngineOptions: config.WithLongScanAndCKPOpts(nil),
+			}, t)
+			defer p.Close()
+
+			const (
+				databaseName = "mode_fence_db"
+				tableName    = "mode_fence_tbl"
+			)
+			schema := catalog2.MockSchemaAll(3, 1)
+			schema.Name = tableName
+			createTxn := p.StartCNTxn()
+			p.CreateDBAndTable(createTxn, databaseName, schema)
+			require.NoError(t, createTxn.Commit(p.Ctx))
+
+			newModeTxn := func() client.TxnOperator {
+				return p.StartCNTxn(
+					client.WithTxnMode(tc.mode),
+					client.WithTxnIsolation(tc.isolation),
+				)
+			}
+			openRelation := func(txnOp client.TxnOperator) engine.Relation {
+				db, err := p.D.Engine.Database(p.Ctx, databaseName, txnOp)
+				require.NoError(t, err)
+				rel, err := db.Relation(p.Ctx, tableName, nil)
+				require.NoError(t, err)
+				return rel
+			}
+			writeOne := func(txnOp client.TxnOperator, rel engine.Relation) {
+				input := catalog2.MockBatch(schema, 1)
+				defer input.Close()
+				require.NoError(t, testutil.WriteToRelation(
+					p.Ctx, txnOp, rel, containers.ToCNBatch(input), false, true))
+			}
+
+			staleTxn := newModeTxn()
+			require.Equal(t, tc.mode, staleTxn.Txn().Mode)
+			require.Equal(t, tc.isolation, staleTxn.Txn().Isolation)
+			staleRel := openRelation(staleTxn)
+			staleVersion := staleRel.GetTableDef(p.Ctx).Version
+			// Mode is consumed at the CN transaction/lock layer. The workspace
+			// write below then converges for both modes and records the version
+			// of the relation opened by this transaction.
+			if tc.mode == pbtxn.TxnMode_Optimistic {
+				require.Panics(t, func() { staleTxn.HasLockTable(staleRel.GetTableID(p.Ctx)) })
+			} else {
+				require.NotPanics(t, func() {
+					require.False(t, staleTxn.HasLockTable(staleRel.GetTableID(p.Ctx)))
+				})
+			}
+			writeOne(staleTxn, staleRel)
+
+			alterTxn := newModeTxn()
+			alterRel := openRelation(alterTxn)
+			require.NoError(t, alterRel.AlterTable(p.Ctx, nil, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(
+					alterRel.GetDBID(p.Ctx), alterRel.GetTableID(p.Ctx), 999),
+			}))
+			require.NoError(t, alterTxn.Commit(p.Ctx))
+
+			err := staleTxn.Commit(p.Ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+			retryTxn := newModeTxn()
+			retryRel := openRelation(retryTxn)
+			require.Greater(t, retryRel.GetTableDef(p.Ctx).Version, staleVersion)
+			writeOne(retryTxn, retryRel)
+			require.NoError(t, retryTxn.Commit(p.Ctx))
+		})
+	}
 }
 
 func TestInvalidTxnOp(t *testing.T) {
