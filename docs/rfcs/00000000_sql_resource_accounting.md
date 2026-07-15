@@ -315,15 +315,13 @@ hold. Any cross-pool free makes attribution invalid and sets an invariant.
 `spill_bytes` is separately additive and comes from the operator spill boundary,
 not from MPool or a peak-derived estimate.
 
-These values may only come from an allocator domain backed by one actual MPool
-exclusively attributable to one execution attempt. A domain is not synthesized
-per CN: one local execution MPool shared by local fragments is one domain, while
-independent remote compile/pipeline MPools register independent domains even on
-the same CN. MatrixOne must not take before/after deltas or reset a high-water
-mark on the session pool, because it contains longer-lived and potentially
-overlapping allocations. A retry starts a new zero-live epoch only after the
-prior epoch has sealed; otherwise it records an invariant and may not reuse the
-epoch.
+These values may only come from an allocator domain backed by one actual MPool.
+The local statement root establishes one epoch on the serialized session MPool
+only when it is zero-live at statement registration. That epoch includes plan,
+all retries, local fragments, and nested work caused by the statement; retries
+never reset it. If the pool already contains live allocations, local memory is
+marked missing instead of estimated. Independent remote pipeline MPools remain
+isolated domains and publish their terminal summaries with the fragment.
 
 The MPool high-water update is a real atomic-max CAS loop. `peak_live_bytes`
 advances only after an allocation succeeds; a failed capacity reservation does
@@ -331,12 +329,15 @@ not appear as live memory. If reservation pressure is useful, it is separately
 named `peak_reserved_bytes` and is diagnostic only. The adapter adds no clock
 read or second independent accounting vector per allocation.
 
-A domain may be recycled for the next attempt only after quiescence and
-`CurrNB()==0`, when all epoch counters can be reset together. The normal path
-reuses a zero-live epoch instead of invoking a registry-heavy NewMPool/DeleteMPool
-cycle per attempt. A non-zero domain is snapshotted, flagged, destroyed after its
-last writer exits, and replaced by a fresh domain rather than normalized with a
-baseline delta.
+The session epoch can be reset for the next statement only when
+`CurrNB()==0`. A non-zero start is never normalized with a baseline delta,
+because overlap makes such a delta unattributable.
+
+Pre-response consumers such as `EXPLAIN PHYPLAN ANALYZE` read a non-mutating
+snapshot of the same open epoch. That preview is never merged into the root;
+response completion clears it and publishes the terminal domain exactly once.
+An exact peak of zero is valid when the statement performs no chargeable MPool
+allocation after the epoch begins.
 
 Peaks are not additive. Attempt and root summaries expose
 `max_domain_peak_live_bytes` and
@@ -355,6 +356,12 @@ total-byte caps.
 The event is best effort and may be dropped or lost with the process. A
 coordinator-observed CN disappearance and missing-domain flag are reliable; a
 pre-OOM high-water event is additional evidence, not a guarantee.
+
+The initial cutover removes the synchronous full-MPool report from the
+allocation CAS path and relies on the terminal statement snapshot plus existing
+CN memory metrics/profiles. A per-statement pre-OOM scalar event is a follow-up;
+until then, a hard process OOM can prevent the statement memory row from being
+written. No boolean or fabricated zero hides that limitation.
 
 The persisted `MemorySize` position stores only
 `max_domain_peak_live_bytes`. It does not persist an `oom` boolean: a process
@@ -453,12 +460,12 @@ type MemoryDomainSummary struct {
 }
 ```
 
-An execution attempt pre-registers one memory-domain slot per actual isolated
-MPool before that pool begins attributable work. One CN may own several slots;
-several local fragments may share one slot when they share the same execution
-MPool. The MPool owner publishes this immutable summary exactly once after all
-its local users quiesce. Duplicate/stale domain reports are rejected like
-fragment terminals; a missing dispatched domain marks the attempt partial.
+An execution attempt pre-registers one memory-domain slot per remote isolated
+MPool before that pool begins attributable work. The local serialized session
+epoch belongs directly to the statement root and is published once at response
+completion. Remote MPool owners publish exactly once after local users quiesce;
+duplicate/stale reports are rejected like fragment terminals, and a missing
+remote terminal marks both fragment and memory data partial.
 Allocation/free/spill and live-at-seal values sum at the root. Peak is exposed
 internally only as max and sum upper bound.
 Wall time, outcome, state, and partialness also live in envelopes because they
@@ -518,9 +525,12 @@ independent retry lifecycle. A retryable error is returned to the parent and
 retries the parent attempt. Any logical child that needs independent retry uses
 `ChildExecution`.
 
-`Attempt` represents one stable compile/run generation. Attempt 0 begins before
-the first build-plan. A retry attempt begins before retry build-plan, so a retry
-plan-build failure still has a finalized attempt.
+`Attempt` represents one dispatched run generation. Parse, initial plan, and
+initial compile are root-owned phase facts. Attempt 0 begins at the execution
+handoff. Retry cancellation, rollback, and cleanup close the failed attempt;
+the next attempt begins before its generation-specific rebuild. A retry rebuild
+failure is therefore a real finalized attempt, while a failure to quiesce the
+old generation does not create an empty one.
 
 `Fragment` represents one local or remote execution fragment. Fragment details
 are discarded after attempt sealing.
@@ -624,8 +634,8 @@ partial.
 ### 8.2 Required order
 
 ```text
-BeginAttempt before build-plan
-  -> build / compile / prepare / execute
+Begin attempt 0 at execution handoff, or retry attempt before retry build
+  -> retry build / compile when applicable, then prepare / execute
   -> remember primary/root error
   -> enter closing; reject new fragments and leases
   -> stop/cancel pipelines
@@ -635,44 +645,39 @@ BeginAttempt before build-plan
   -> consume remote terminal envelopes through one attempt-level deadline
   -> complete rollback workspace, cache cleanup, and retry transition work
   -> publish immutable non-memory deltas from recorders/analyzers
-  -> release/reset Compile, Process, analyzers, counters, and batches
-  -> publish local memory domain after those releases
-  -> mark disconnected/missing fragments or memory domains partial
+  -> release/reset attempt-local analyzers, counters, and batches
+  -> mark disconnected/missing remote fragments or memory domains partial
   -> seal and create immutable summary
   -> merge summary into Execution only
-  -> destroy or recycle the quiescent execution MPool
   -> retry or return
 ```
 
 Non-memory deltas are copied before `Compile.Reset` or `Release` clears their
-producer state. The memory domain is copied after those releases, so
-`live_bytes_at_seal` describes memory that truly survived attempt cleanup. The
-attempt seals only after both immutable inputs exist. No producer state is read
-after seal.
+producer state. Remote isolated memory arrives in the same terminal envelope.
+The statement-owned local MPool epoch is snapshotted later by the root after all
+attempts and protocol output complete. No producer state is read after seal.
 
-Remote cancel/wait, `RollbackLastStatement`, cache cleanup, and other retry
-transition work belong to the failed attempt's closing phase. The next attempt
-begins before rebuilding its plan. No transition work is left outside an
-attempt.
+Remote cancel/wait, `RollbackLastStatement`, and cache cleanup belong to the
+failed attempt's closing phase. After that attempt seals, the next attempt owns
+its rebuild and compile work, including terminal rebuild failures. No retry
+transition or build work is left outside an attempt.
 
-Attempt owns an `AttemptLocal` recorder from build-plan through closing. It
-contains build/compile/prepare/rollback and other coordinator work that does not
-belong to a fragment. A build-plan failure with no fragment therefore still has
-an attributable summary.
+Attempt owns an `AttemptLocal` recorder from its boundary through closing. It
+contains retry build/compile, prepare, rollback, and other coordinator work that
+does not belong to a fragment. Initial parse/plan/compile remain root phases;
+a retry build failure with no fragment still has an attributable attempt.
 
 ### 8.3 Panic-safe helper
 
-The retry loop must not reproduce finalize logic in many branches. The helper
-installs an outer MPool destruction defer before running any work. It captures
-the original panic, then executes stop, remote finish, transition cleanup,
-non-memory harvest, object release/reset, memory-domain publication, seal, and
-merge as individually panic-contained steps. Cleanup panics become cleanup
-errors and cannot skip later steps or overwrite the original panic.
+The retry loop must not reproduce finalize logic in many branches. Its outer
+panic defer captures the original panic, publishes the open generation's
+immutable analyzer and remote state, and rethrows. Statement-owned memory is
+not reset per attempt; it is published once at the response boundary. Cleanup
+errors cannot overwrite the original panic.
 
 `Seal` and checked merge are non-panicking total functions: invariant failures
-produce a partial summary plus flags. MPool destruction always runs after its
-last exact snapshot, then the original panic is rethrown. The outer retry loop
-only decides whether to start another attempt.
+produce a partial summary plus flags. The outer retry loop only decides whether
+to start another attempt.
 
 ### 8.4 Error precedence
 
