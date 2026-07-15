@@ -1195,9 +1195,9 @@ func genParentSideReplaceFKSqls(
 	parentRef *plan.ObjectRef,
 	parent *plan.TableDef,
 	stmt *tree.Replace,
-) ([]string, []string, error) {
+) (string, []string, []string, error) {
 	if stmt.Rows == nil || len(parent.RefChildTbls) == 0 {
-		return nil, nil, nil
+		return "", nil, nil, nil
 	}
 	hasNonSelfReference := false
 	for _, childID := range parent.RefChildTbls {
@@ -1207,11 +1207,11 @@ func genParentSideReplaceFKSqls(
 		}
 	}
 	if !hasNonSelfReference {
-		return nil, nil, nil
+		return "", nil, nil, nil
 	}
 	values, ok := stmt.Rows.Select.(*tree.ValuesClause)
 	if !ok {
-		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE SELECT/TABLE on a referenced parent table")
+		return "", nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE SELECT/TABLE on a referenced parent table")
 	}
 	positions := make(map[string]int)
 	if len(stmt.Columns) > 0 {
@@ -1263,7 +1263,7 @@ func genParentSideReplaceFKSqls(
 		}
 		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idx.IndexAlgoParams)
 		if err != nil {
-			return nil, nil, err
+			return "", nil, nil, err
 		}
 		uniqueKeys = append(uniqueKeys, uniqueKey{parts: parts, prefixLengths: prefixLengths})
 	}
@@ -1357,6 +1357,32 @@ func genParentSideReplaceFKSqls(
 		}
 		return formatted, isNull, nil
 	}
+	sqlTypeForColumn := func(col *plan.ColDef) string {
+		typ := types.T(col.Typ.Id)
+		switch typ {
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			if col.Typ.Scale > 0 {
+				return fmt.Sprintf("%s(%d)", makeTypeByPlan2Type(col.Typ).String(), col.Typ.Scale)
+			}
+		case types.T_enum:
+			values := strings.Split(col.Typ.Enumvalues, ",")
+			for i := range values {
+				values[i] = formatStringLiteral(values[i])
+			}
+			return "ENUM(" + strings.Join(values, ",") + ")"
+		}
+		if isSetPlanType(&col.Typ) {
+			values := strings.Split(col.Typ.Enumvalues, ",")
+			for i := range values {
+				values[i] = formatStringLiteral(values[i])
+			}
+			return "SET(" + strings.Join(values, ",") + ")"
+		}
+		return makeTypeByPlan2Type(col.Typ).DescString()
+	}
+	castForColumn := func(value string, col *plan.ColDef) string {
+		return fmt.Sprintf("cast(%s as %s)", value, sqlTypeForColumn(col))
+	}
 	conflictPredicates := make([]string, 0, len(values.Rows)*len(uniqueKeys))
 	for _, row := range values.Rows {
 		for _, key := range uniqueKeys {
@@ -1368,7 +1394,7 @@ func genParentSideReplaceFKSqls(
 				if !supplied || pos >= len(row) {
 					col, found := findParentCol(colName)
 					if !found {
-						return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
+						return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
 							"REPLACE conflict column %s not found", colName)
 					}
 					if col.Typ.AutoIncr {
@@ -1379,7 +1405,7 @@ func genParentSideReplaceFKSqls(
 					var err error
 					incomingExpr, isNull, err = materializeDefault(colName)
 					if err != nil {
-						return nil, nil, err
+						return "", nil, nil, err
 					}
 					if isNull {
 						keyCannotConflict = true
@@ -1396,19 +1422,25 @@ func genParentSideReplaceFKSqls(
 						var err error
 						incomingExpr, isNull, err = materializeDefault(colName)
 						if err != nil {
-							return nil, nil, err
+							return "", nil, nil, err
 						}
 						if isNull {
 							keyCannotConflict = true
 							break
 						}
 					default:
-						return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
+						return "", nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
 					}
 				}
 				if keyCannotConflict {
 					break
 				}
+				col, found := findParentCol(colName)
+				if !found {
+					return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
+						"REPLACE conflict column %s not found", colName)
+				}
+				incomingExpr = castForColumn(incomingExpr, col)
 				parentExpr := qualifiedCol(parentAlias, colName)
 				if length := key.prefixLengths[colName]; length > 0 {
 					parentExpr = fmt.Sprintf("substring(%s, 1, %d)", parentExpr, length)
@@ -1423,10 +1455,12 @@ func genParentSideReplaceFKSqls(
 		}
 	}
 	if len(conflictPredicates) == 0 {
-		return nil, nil, nil
+		return "", nil, nil, nil
 	}
 	conflictPredicate := "(" + strings.Join(conflictPredicates, " or ") + ")"
 	parentTable := quoteIdentifier(parentRef.SchemaName) + "." + quoteIdentifier(parent.Name)
+	parentLock := fmt.Sprintf("select 1 from %s as %s where %s for update",
+		parentTable, quoteIdentifier(parentAlias), conflictPredicate)
 
 	var checks, actions []string
 	seen := make(map[uint64]bool)
@@ -1437,25 +1471,25 @@ func genParentSideReplaceFKSqls(
 		seen[childID] = true
 		childRef, child, err := ctx.ResolveById(childID, nil)
 		if err != nil {
-			return nil, nil, err
+			return "", nil, nil, err
 		}
 		if child == nil {
-			return nil, nil, moerr.NewInternalError(ctx.GetContext(), fmt.Sprintf("referencing table %d not found", childID))
+			return "", nil, nil, moerr.NewInternalError(ctx.GetContext(), fmt.Sprintf("referencing table %d not found", childID))
 		}
 		for _, fk := range child.Fkeys {
 			if fk.ForeignTbl != parent.TblId {
 				continue
 			}
 			if len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
-				return nil, nil, moerr.NewInternalError(ctx.GetContext(), "invalid parent foreign key definition")
+				return "", nil, nil, moerr.NewInternalError(ctx.GetContext(), "invalid parent foreign key definition")
 			}
 			parentCols, err := colIdsToNames(ctx.GetContext(), fk.ForeignCols, parent.Cols)
 			if err != nil {
-				return nil, nil, err
+				return "", nil, nil, err
 			}
 			childCols, err := colIdsToNames(ctx.GetContext(), fk.Cols, child.Cols)
 			if err != nil {
-				return nil, nil, err
+				return "", nil, nil, err
 			}
 			childTable := quoteIdentifier(childRef.SchemaName) + "." + quoteIdentifier(child.Name)
 			joinParts := make([]string, len(childCols))
@@ -1480,7 +1514,7 @@ func genParentSideReplaceFKSqls(
 			}
 		}
 	}
-	return checks, actions, nil
+	return parentLock, checks, actions, nil
 }
 
 func cleanHint(originSql string) string {

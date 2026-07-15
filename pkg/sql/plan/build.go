@@ -187,10 +187,13 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		return nil, err
 	}
 	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
-		parentChecks, parentActions, err := genParentSideReplaceFKSqls(
+		parentLock, parentChecks, parentActions, err := genParentSideReplaceFKSqls(
 			ctx, tblInfo.objRef[0], tblInfo.tableDefs[0], stmt)
 		if err != nil {
 			return nil, err
+		}
+		if parentLock != "" {
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_LOCK:"+parentLock)
 		}
 		for _, sql := range parentChecks {
 			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)

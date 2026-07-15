@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1061,6 +1062,25 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			ObjRef:       parentObjRef,
 			BindingTags:  []int32{parentTag},
 			ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+		pkPos, pkTyp := getPkPos(parentTableDef, false)
+		if pkPos < 0 {
+			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
+				"foreign-key parent table %s has no lockable primary key", parentTableDef.Name)
+		}
+		parentScanID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_LOCK_OP,
+			Children: []int32{parentScanID},
+			TableDef: parentTableDef,
+			LockTargets: []*plan.LockTarget{{
+				TableId:            parentTableDef.TblId,
+				ObjRef:             parentObjRef,
+				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColRelPos:   parentTag,
+				PrimaryColTyp:      pkTyp,
+				Mode:               lockpb.LockMode_Shared,
+			}},
+			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindCtx)
 
 		parentColId2Pos := make(map[uint64]int, len(parentTableDef.Cols))

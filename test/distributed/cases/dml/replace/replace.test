@@ -409,6 +409,17 @@ select * from fk_temporal_default_c;
 drop table fk_temporal_default_c;
 drop table fk_temporal_default_p;
 
+create table fk_decimal_cast_p(id int primary key, u decimal(5,2) unique);
+create table fk_decimal_cast_c(id int primary key, pid int,
+  foreign key(pid) references fk_decimal_cast_p(id) on delete cascade);
+insert into fk_decimal_cast_p values (1, 1.23);
+insert into fk_decimal_cast_c values (1, 1);
+replace into fk_decimal_cast_p values (2, 1.234);
+select * from fk_decimal_cast_p;
+select * from fk_decimal_cast_c;
+drop table fk_decimal_cast_c;
+drop table fk_decimal_cast_p;
+
 create table fk_param_p(id int primary key, v int);
 create table fk_param_c(id int primary key, pid int,
   foreign key(pid) references fk_param_p(id) on delete restrict);

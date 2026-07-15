@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -3000,6 +3002,9 @@ func TestReplaceParentSideFKRestrict(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
+	require.NotEmpty(t, query.DetectSqls)
+	assert.True(t, strings.HasPrefix(query.DetectSqls[0], "REPLACE_PARENT_LOCK:"),
+		"parent row lock must run before the RESTRICT check")
 
 	var preCheck string
 	for _, sql := range query.DetectSqls {
@@ -3012,7 +3017,7 @@ func TestReplaceParentSideFKRestrict(t *testing.T) {
 		"RESTRICT parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
 	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
 	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
-	assert.Contains(t, preCheck, "`id` = 1", "pre-check SQL should match the supplied PK value")
+	assert.Contains(t, preCheck, "`id` = cast(1 as INT)", "pre-check SQL should assignment-cast the supplied PK value")
 	assert.Contains(t, preCheck, "exists (select 1", "pre-check should resolve the actual conflicting parent row")
 
 	// No CASCADE/SET NULL action SQL should be produced for RESTRICT.
@@ -3035,6 +3040,9 @@ func TestReplaceParentSideFKCascade(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
+	require.NotEmpty(t, query.DetectSqls)
+	assert.True(t, strings.HasPrefix(query.DetectSqls[0], "REPLACE_PARENT_LOCK:"),
+		"parent row lock must run before the CASCADE action")
 
 	var action string
 	for _, sql := range query.DetectSqls {
@@ -3048,7 +3056,7 @@ func TestReplaceParentSideFKCascade(t *testing.T) {
 	assert.Contains(t, action, "delete from", "CASCADE action should be a DELETE on the child")
 	assert.Contains(t, action, "replace_fk_cc", "CASCADE action should target the child table")
 	assert.Contains(t, action, "`pid`", "CASCADE action should filter on the child FK column")
-	assert.Contains(t, action, "`id` = 1", "CASCADE action should match the supplied PK value")
+	assert.Contains(t, action, "`id` = cast(1 as INT)", "CASCADE action should assignment-cast the supplied PK value")
 	assert.Contains(t, action, "exists (select 1", "CASCADE should resolve the actual conflicting parent row")
 
 	// CASCADE must NOT generate a parent-child RESTRICT pre-check.
@@ -3083,7 +3091,7 @@ func TestReplaceParentSideFKExplicitColumns(t *testing.T) {
 		"parent-side pre-check should be generated with an explicit, mixed-case column list")
 	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
 	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
-	assert.Contains(t, preCheck, "`id` = 1", "pre-check SQL should match the supplied PK value")
+	assert.Contains(t, preCheck, "`id` = cast(1 as INT)", "pre-check SQL should assignment-cast the supplied PK value")
 }
 
 func TestReplaceParentSideFKNoAction(t *testing.T) {
@@ -3206,7 +3214,7 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 	assert.Contains(t, action, "update", "SET NULL action should be an UPDATE on the child")
 	assert.Contains(t, action, "replace_fk_sc", "SET NULL action should target the child table")
 	assert.Contains(t, action, "null", "SET NULL action should set the child FK column to null")
-	assert.Contains(t, action, "`id` = 1", "SET NULL action should match the supplied PK value")
+	assert.Contains(t, action, "`id` = cast(1 as INT)", "SET NULL action should assignment-cast the supplied PK value")
 
 	// SET NULL must NOT generate a parent-child RESTRICT pre-check.
 	for _, sql := range query.DetectSqls {
@@ -3249,12 +3257,51 @@ func TestReplaceParentSideFKUniquePrefixConflict(t *testing.T) {
 		"REPLACE INTO replace_fk_cp VALUES (2, 'abcdyyyy')", 1)
 	require.NoError(t, err)
 
-	_, actions, err := genParentSideReplaceFKSqls(
+	_, _, actions, err := genParentSideReplaceFKSqls(
 		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
 	require.NoError(t, err)
 	require.Len(t, actions, 1)
 	assert.Contains(t, actions[0], "substring(`__mo_replace_parent`.`v`, 1, 4)")
-	assert.Contains(t, actions[0], `substring("abcdyyyy", 1, 4)`)
+	assert.Contains(t, actions[0], `substring(cast("abcdyyyy" as VARCHAR(20)), 1, 4)`)
+}
+
+func TestReplaceParentSideFKAssignmentCastAndLock(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+	for _, col := range parent.Cols {
+		if col.Name == "v" {
+			col.Typ = plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}
+		}
+	}
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"v"}})
+	stmt, err := mysql.ParseOne(context.Background(),
+		"REPLACE INTO replace_fk_cp VALUES (2, 1.234)", 1)
+	require.NoError(t, err)
+
+	lockSQL, _, actions, err := genParentSideReplaceFKSqls(
+		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
+	require.NoError(t, err)
+	require.Len(t, actions, 1)
+	assert.Contains(t, lockSQL, "`__mo_replace_parent`.`v` = cast(1.234 as DECIMAL(5,2))")
+	assert.Contains(t, lockSQL, "for update")
+	assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = cast(1.234 as DECIMAL(5,2))")
+}
+
+func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1)")
+	require.NoError(t, err)
+
+	parentID := mock.ctxt.tables["replace_fk_p"].TblId
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId == parentID && target.Mode == lockpb.LockMode_Shared {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "child FK validation must hold a shared lock on its parent row")
 }
 
 func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
@@ -3290,12 +3337,12 @@ func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
 		v := parentCol(t, parent, "v")
 		v.Default = &plan.Default{NullAbility: true}
 
-		_, actions, err := genParentSideReplaceFKSqls(
+		_, _, actions, err := genParentSideReplaceFKSqls(
 			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
 			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
 		require.NoError(t, err)
 		require.Len(t, actions, 1)
-		assert.Contains(t, actions[0], "`__mo_replace_parent`.`id` = 1")
+		assert.Contains(t, actions[0], "`__mo_replace_parent`.`id` = cast(1 as INT)")
 		assert.NotContains(t, actions[0], "`__mo_replace_parent`.`v` =")
 	})
 
@@ -3308,13 +3355,13 @@ func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
 			Expr:        makeStringConstExpr(v.Typ, "abcdyyyy"),
 		}
 
-		_, actions, err := genParentSideReplaceFKSqls(
+		_, _, actions, err := genParentSideReplaceFKSqls(
 			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
 			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
 		require.NoError(t, err)
 		require.Len(t, actions, 1)
 		assert.Contains(t, actions[0], "substring(`__mo_replace_parent`.`v`, 1, 4)")
-		assert.Contains(t, actions[0], `substring("abcdyyyy", 1, 4)`)
+		assert.Contains(t, actions[0], `substring(cast("abcdyyyy" as VARCHAR(20)), 1, 4)`)
 	})
 
 	t.Run("dynamic default fails closed", func(t *testing.T) {
@@ -3328,10 +3375,67 @@ func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
 			},
 		}
 
-		_, _, err := genParentSideReplaceFKSqls(
+		_, _, _, err := genParentSideReplaceFKSqls(
 			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
 			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
 		require.ErrorContains(t, err, "non-literal default conflict key")
+	})
+
+	t.Run("numeric literal defaults participate", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			typ      plan.Type
+			literal  *plan.Expr_Lit
+			expected string
+		}{
+			{name: "int8", typ: plan.Type{Id: int32(types.T_int8)}, literal: makePlan2Int8ConstExpr(-8), expected: "cast(-8 as TINYINT)"},
+			{name: "int16", typ: plan.Type{Id: int32(types.T_int16)}, literal: makePlan2Int16ConstExpr(-16), expected: "cast(-16 as SMALLINT)"},
+			{name: "int32", typ: plan.Type{Id: int32(types.T_int32)}, literal: makePlan2Int32ConstExpr(-32), expected: "cast(-32 as INT)"},
+			{name: "int64", typ: plan.Type{Id: int32(types.T_int64)}, literal: makePlan2Int64ConstExpr(-64), expected: "cast(-64 as BIGINT)"},
+			{name: "uint8", typ: plan.Type{Id: int32(types.T_uint8)}, literal: makePlan2Uint8ConstExpr(8), expected: "cast(8 as TINYINT UNSIGNED)"},
+			{name: "uint16", typ: plan.Type{Id: int32(types.T_uint16)}, literal: makePlan2Uint16ConstExpr(16), expected: "cast(16 as SMALLINT UNSIGNED)"},
+			{name: "uint32", typ: plan.Type{Id: int32(types.T_uint32)}, literal: makePlan2Uint32ConstExpr(32), expected: "cast(32 as INT UNSIGNED)"},
+			{name: "uint64", typ: plan.Type{Id: int32(types.T_uint64)}, literal: makePlan2Uint64ConstExpr(64), expected: "cast(64 as BIGINT UNSIGNED)"},
+			{name: "float32", typ: plan.Type{Id: int32(types.T_float32)}, literal: makePlan2Float32ConstExpr(1.25), expected: "cast(1.25 as FLOAT)"},
+			{name: "float64", typ: plan.Type{Id: int32(types.T_float64)}, literal: makePlan2Float64ConstExpr(2.5), expected: "cast(2.5 as DOUBLE)"},
+			{name: "bool", typ: plan.Type{Id: int32(types.T_bool)}, literal: makePlan2BoolConstExpr(true), expected: "cast(true as BOOL)"},
+			{
+				name: "enum", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
+				literal:  &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: 2}}},
+				expected: `cast(2 as ENUM("small","medium","large"))`,
+			},
+			{
+				name: "decimal64", typ: plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2},
+				literal: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{
+					Decimal64Val: &plan.Decimal64{A: 123},
+				}}}, expected: "cast(1.23 as DECIMAL(5,2))",
+			},
+			{
+				name: "decimal128", typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2},
+				literal: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{A: 123},
+				}}}, expected: "cast(1.23 as DECIMAL(20,2))",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				mock, parent := newParent(t)
+				v := parentCol(t, parent, "v")
+				v.Typ = tc.typ
+				v.Default = &plan.Default{NullAbility: false, Expr: &plan.Expr{Typ: tc.typ, Expr: tc.literal}}
+
+				lockSQL, _, actions, err := genParentSideReplaceFKSqls(
+					&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
+					parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
+				require.NoError(t, err)
+				require.Len(t, actions, 1)
+				assert.Contains(t, lockSQL, tc.expected)
+				assert.Contains(t, actions[0], tc.expected)
+				_, err = mysql.ParseOne(context.Background(), lockSQL, 1)
+				require.NoError(t, err, "generated parent lock SQL must be parseable")
+			})
+		}
 	})
 
 	t.Run("temporal defaults participate", func(t *testing.T) {
@@ -3392,12 +3496,16 @@ func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
 					Expr:        &plan.Expr{Typ: tc.typ, Expr: tc.literal},
 				}
 
-				_, actions, err := genParentSideReplaceFKSqls(
+				_, _, actions, err := genParentSideReplaceFKSqls(
 					&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
 					parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
 				require.NoError(t, err)
 				require.Len(t, actions, 1)
-				assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = "+tc.expected)
+				expectedType := strings.ToUpper(types.T(tc.typ.Id).String())
+				if tc.typ.Scale > 0 && types.T(tc.typ.Id) != types.T_date {
+					expectedType += fmt.Sprintf("(%d)", tc.typ.Scale)
+				}
+				assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = cast("+tc.expected+" as "+expectedType+")")
 			})
 		}
 	})

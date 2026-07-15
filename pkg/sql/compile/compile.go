@@ -528,7 +528,11 @@ func (c *Compile) runOnce() (err error) {
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
 					// Only translate the "check returned false" signal into the
 					// parent-row-referenced error; pass through real execution
@@ -640,7 +644,8 @@ func (c *Compile) runOnce() (err error) {
 		// the main operation.
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
+			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				continue
 			}

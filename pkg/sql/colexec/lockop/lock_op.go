@@ -248,7 +248,7 @@ func performLock(
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
-				WithLockMode(lock.LockMode_Exclusive).
+				WithLockMode(target.mode).
 				WithFetchLockRowsFunc(lockOp.ctr.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
