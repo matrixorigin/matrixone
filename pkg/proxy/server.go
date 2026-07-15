@@ -105,20 +105,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 
-	if err := s.stopper.RunNamedTask("proxy bootstrap", func(taskCtx context.Context) {
-		bootstrapCtx, cancel := context.WithCancelCause(ctx)
-		stopCancelPropagation := context.AfterFunc(taskCtx, func() {
-			cancel(context.Cause(taskCtx))
-		})
-		defer func() {
-			stopCancelPropagation()
-			cancel(nil)
-		}()
-
-		if err := h.bootstrap(bootstrapCtx); err != nil && ctx.Err() == nil && taskCtx.Err() == nil {
-			h.logger.Error("proxy bootstrap failed", zap.Error(err))
-		}
-	}); err != nil {
+	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
 
@@ -140,6 +127,23 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 	s.app = app
 	return s, nil
+}
+
+func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) error {
+	return st.RunNamedTask("proxy bootstrap", func(taskCtx context.Context) {
+		bootstrapCtx, cancel := context.WithCancelCause(ctx)
+		stopCancelPropagation := context.AfterFunc(taskCtx, func() {
+			cancel(context.Cause(taskCtx))
+		})
+		defer func() {
+			stopCancelPropagation()
+			cancel(nil)
+		}()
+
+		if err := h.bootstrap(bootstrapCtx); err != nil && ctx.Err() == nil && taskCtx.Err() == nil {
+			h.logger.Error("proxy bootstrap failed", zap.Error(err))
+		}
+	})
 }
 
 // Start starts the proxy server.

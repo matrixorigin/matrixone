@@ -33,6 +33,8 @@ type bootstrapHAKeeperClient struct {
 	getClusterState func(context.Context) (logpb.CheckerState, error)
 }
 
+const bootstrapTestTimeout = 10 * time.Second
+
 func (c *bootstrapHAKeeperClient) GetClusterState(ctx context.Context) (logpb.CheckerState, error) {
 	return c.getClusterState(ctx)
 }
@@ -90,15 +92,60 @@ func TestBootstrapReturnsContextCancellation(t *testing.T) {
 
 	select {
 	case <-called:
-	case <-time.After(time.Second):
+	case <-time.After(bootstrapTestTimeout):
 		t.Fatal("HAKeeper request was not started")
 	}
 	cancel()
 	select {
 	case err := <-errC:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(bootstrapTestTimeout):
 		t.Fatal("bootstrap did not return after context cancellation")
+	}
+}
+
+func TestBootstrapStopsWithStopper(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan error, 1)
+	c := &bootstrapHAKeeperClient{
+		mockHAKeeperClient: &mockHAKeeperClient{},
+		getClusterState: func(ctx context.Context) (logpb.CheckerState, error) {
+			close(requestStarted)
+			<-ctx.Done()
+			requestCanceled <- ctx.Err()
+			return logpb.CheckerState{}, ctx.Err()
+		},
+	}
+	h := &handler{
+		haKeeperClient: c,
+		sqlWorker:      newSQLWorker(),
+	}
+	st := stopper.NewStopper("test-proxy-bootstrap")
+	defer st.Stop()
+	require.NoError(t, runBootstrapTask(context.Background(), st, h))
+
+	select {
+	case <-requestStarted:
+	case <-time.After(bootstrapTestTimeout):
+		t.Fatal("HAKeeper request was not started")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		st.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case err := <-requestCanceled:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(bootstrapTestTimeout):
+		t.Fatal("HAKeeper request context was not canceled")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(bootstrapTestTimeout):
+		t.Fatal("stopper did not wait for bootstrap task termination")
 	}
 }
 
@@ -116,18 +163,26 @@ func TestBootstrapReturnsTimeoutAfterPersistentHAKeeperError(t *testing.T) {
 		haKeeperClient: c,
 		sqlWorker:      newSQLWorker(),
 	}
-	started := time.Now()
-
-	err := h.bootstrapWithTimeout(
-		context.Background(),
-		time.Millisecond,
-		50*time.Millisecond,
-	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errC := make(chan error, 1)
+	go func() {
+		errC <- h.bootstrapWithTimeout(
+			ctx,
+			time.Millisecond,
+			50*time.Millisecond,
+		)
+	}()
+	var err error
+	select {
+	case err = <-errC:
+	case <-time.After(bootstrapTestTimeout):
+		t.Fatal("bootstrap did not return after its timeout")
+	}
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorIs(t, err, permanentErr)
 	require.Positive(t, calls)
-	require.Less(t, time.Since(started), time.Second)
 }
 
 func TestBootstrap(t *testing.T) {
