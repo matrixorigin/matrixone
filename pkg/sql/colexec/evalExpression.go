@@ -520,28 +520,30 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+	trueBranch := expr.selectList1[:rowCount]
+	falseBranch := expr.selectList2[:rowCount]
 
 	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
 		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
-			expr.selectList1[i] = selectList[i]
-			expr.selectList2[i] = selectList[i]
+			trueBranch[i] = selectList[i]
+			falseBranch[i] = selectList[i]
 		} else {
-			expr.selectList1[i] = true
-			expr.selectList2[i] = true
+			trueBranch[i] = true
+			falseBranch[i] = true
 		}
 		if !null && b {
-			expr.selectList2[i] = false
+			falseBranch[i] = false
 		} else {
-			expr.selectList1[i] = false
+			trueBranch[i] = false
 		}
 	}
-	expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, expr.selectList1)
+	expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
 	if err != nil {
 		return err
 	}
-	expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, expr.selectList2)
+	expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
 	return err
 }
 
@@ -551,15 +553,17 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+	remaining := expr.selectList1[:rowCount]
+	selectedBranch := expr.selectList2[:rowCount]
 	if selectList != nil {
-		copy(expr.selectList1, selectList)
+		copy(remaining, selectList)
 	} else {
-		for i := range expr.selectList1 {
-			expr.selectList1[i] = true
+		for i := range remaining {
+			remaining[i] = true
 		}
 	}
 	for i := 0; i < len(expr.parameterExecutor); i += 2 {
-		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, expr.selectList1)
+		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, remaining)
 		if err != nil {
 			return err
 		}
@@ -569,13 +573,13 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			for j := 0; j < rowCount; j++ {
 				b, null := bs.GetValue(uint64(j))
 				if !null && b {
-					expr.selectList1[j] = false
-					expr.selectList2[j] = true
+					remaining[j] = false
+					selectedBranch[j] = true
 				} else {
-					expr.selectList2[j] = false
+					selectedBranch[j] = false
 				}
 			}
-			expr.parameterResults[i+1], err = expr.parameterExecutor[i+1].Eval(proc, batches, expr.selectList2)
+			expr.parameterResults[i+1], err = expr.parameterExecutor[i+1].Eval(proc, batches, selectedBranch)
 			if err != nil {
 				return err
 			}

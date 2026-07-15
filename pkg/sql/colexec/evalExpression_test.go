@@ -623,6 +623,62 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{5, 9}, vector.MustFixedColWithTypeCheck[int64](result))
 	})
+
+	for _, test := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{
+			name: "if",
+			expr: bindFunction("if",
+				column(0, types.T_bool.ToType()),
+				castToInt64(column(1, types.T_varchar.ToType())),
+				makePlan2Int64ConstExprWithType(7)),
+		},
+		{
+			name: "case",
+			expr: bindFunction("case",
+				column(0, types.T_bool.ToType()),
+				castToInt64(column(1, types.T_varchar.ToType())),
+				makePlan2Int64ConstExprWithType(7)),
+		},
+	} {
+		t.Run(test.name+" reuses executor across shrinking batches", func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, test.expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			eval := func(conditions []bool, values []string, expected []int64) {
+				t.Helper()
+				require.Len(t, values, len(conditions))
+				input := testutil.NewBatchWithVectors([]*vector.Vector{
+					testutil.NewVector(len(conditions), types.T_bool.ToType(), proc.Mp(), false, conditions),
+					testutil.NewVector(len(values), types.T_varchar.ToType(), proc.Mp(), false, values),
+				}, nil)
+				defer input.Clean(proc.Mp())
+
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, expected, vector.MustFixedColWithTypeCheck[int64](result))
+			}
+
+			eval(
+				[]bool{false, false, false, false, false},
+				[]string{"bad", "bad", "bad", "bad", "bad"},
+				[]int64{7, 7, 7, 7, 7},
+			)
+			eval(
+				[]bool{true, true},
+				[]string{"8", "9"},
+				[]int64{8, 9},
+			)
+			eval(
+				[]bool{true, false, true},
+				[]string{"10", "bad", "12"},
+				[]int64{10, 7, 12},
+			)
+		})
+	}
 }
 
 func TestExpressionReset(t *testing.T) {
