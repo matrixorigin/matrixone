@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -461,6 +462,55 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
 		require.Len(t, restoredOp.OrderBySpecs, 1)
 		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
+	})
+
+	t.Run("HashBuild_SpillThreshold", func(t *testing.T) {
+		for _, threshold := range []int64{0, 4096} {
+			op := &hashbuild.HashBuild{SpillThreshold: threshold}
+			_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+			require.NoError(t, err)
+			require.Equal(t, threshold, pipeInstr.SpillMem)
+
+			restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+			require.NoError(t, err)
+			require.Equal(t, threshold, restored.(*hashbuild.HashBuild).SpillThreshold)
+		}
+	})
+
+	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
+		for name, op := range map[string]vm.Operator{
+			"hashjoin": &hashjoin.HashJoin{
+				EqConds:        [][]*planpb.Expr{{}, {}},
+				SpillThreshold: 4096,
+			},
+			"dedupjoin": &dedupjoin.DedupJoin{
+				Conditions:     [][]*planpb.Expr{{}, {}},
+				SpillThreshold: 4096,
+			},
+			"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
+				Conditions:     [][]*planpb.Expr{{}, {}},
+				SpillThreshold: 4096,
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+				require.NoError(t, err)
+				require.Equal(t, int64(4096), pipeInstr.SpillMem)
+
+				restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+				require.NoError(t, err)
+				switch join := restored.(type) {
+				case *hashjoin.HashJoin:
+					require.Zero(t, join.SpillThreshold)
+				case *dedupjoin.DedupJoin:
+					require.Zero(t, join.SpillThreshold)
+				case *rightdedupjoin.RightDedupJoin:
+					require.Zero(t, join.SpillThreshold)
+				default:
+					t.Fatalf("unexpected restored operator %T", restored)
+				}
+			})
+		}
 	})
 
 	t.Run("Deletion_Engine", func(t *testing.T) {

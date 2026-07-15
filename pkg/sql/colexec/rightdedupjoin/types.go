@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,6 +34,7 @@ var _ vm.Operator = new(RightDedupJoin)
 const (
 	Build = iota
 	Probe
+	Finalize
 	End
 )
 
@@ -58,6 +60,10 @@ type container struct {
 
 	groupCount      uint64
 	buildGroupCount uint64
+
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
+	resultBatch    *batch.Batch
 }
 
 type RightDedupJoin struct {
@@ -74,6 +80,7 @@ type RightDedupJoin struct {
 
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
+	SpillThreshold    int64
 	DedupColTypes     []plan.Type
 	DelColIdx         int32
 	UpdateColIdxList  []int32
@@ -120,18 +127,30 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	}
 	ctr.maxAllocSize = 0
 	ctr.itr = nil
+	ctr.groupCount = 0
+	ctr.buildGroupCount = 0
 
-	ctr.cleanBitmap(proc)
+	ctr.cleanBitmap()
 	ctr.cleanHashMap()
+	ctr.resetResultBatch()
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.state = Build
 }
 
 func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightDedupJoin.ctr
-	ctr.cleanBitmap(proc)
+	ctr.cleanBitmap()
 	ctr.cleanHashMap()
+	ctr.cleanResultBatch(proc)
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
 }
@@ -154,14 +173,33 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
 	}
 }
 
-func (ctr *container) cleanBitmap(proc *process.Process) {
+func (ctr *container) cleanBitmap() {
 	ctr.matched = nil
+}
+
+func (ctr *container) resetResultBatch() {
+	if ctr.resultBatch == nil {
+		return
+	}
+	ctr.resultBatch.CleanOnlyData()
+	for _, vec := range ctr.resultBatch.Vecs {
+		vec.SetClass(vector.FLAT)
+		vec.SetLength(0)
+	}
+}
+
+func (ctr *container) cleanResultBatch(proc *process.Process) {
+	if ctr.resultBatch != nil {
+		ctr.resultBatch.Clean(proc.Mp())
+		ctr.resultBatch = nil
+	}
 }
 
 func (ctr *container) cleanEvalVectors() {
