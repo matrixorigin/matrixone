@@ -825,6 +825,45 @@ func TestLeastGreatestTemporalResolution(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestMixedTemporalResolutionPreservesMaxScale(t *testing.T) {
+	datetimeScale1 := types.New(types.T_datetime, 64, 1)
+	datetimeScale2 := types.New(types.T_datetime, 64, 2)
+	datetimeScale6 := types.New(types.T_datetime, 64, 6)
+	timestampScale6 := types.New(types.T_timestamp, 64, 6)
+
+	for _, tc := range []struct {
+		inputs    []types.Type
+		wantScale int32
+	}{
+		{[]types.Type{datetimeScale1, datetimeScale2, types.T_varchar.ToType()}, 2},
+		{[]types.Type{types.T_varchar.ToType(), datetimeScale2, datetimeScale1}, 2},
+		{[]types.Type{timestampScale6, datetimeScale1, types.T_varchar.ToType()}, 6},
+	} {
+		resolution, ok := resolveLeastGreatestType(tc.inputs)
+		require.True(t, ok)
+		require.Equal(t, types.T_varchar, resolution.resultType.Oid)
+		require.Equal(t, types.T_datetime, resolution.temporalItemType.Oid)
+		require.Equal(t, tc.wantScale, resolution.temporalItemType.Scale)
+	}
+
+	resolution, ok := resolveLeastGreatestType([]types.Type{
+		types.T_date.ToType(), datetimeScale1, datetimeScale6,
+	})
+	require.True(t, ok)
+	require.Equal(t, types.T_datetime, resolution.resultType.Oid)
+	require.Equal(t, int32(6), resolution.resultType.Scale)
+	require.Equal(t, types.T_datetime, resolution.temporalItemType.Oid)
+	require.Equal(t, int32(6), resolution.temporalItemType.Scale)
+
+	resolution, ok = resolveLeastGreatestType([]types.Type{
+		types.T_json.ToType(), datetimeScale1, datetimeScale6,
+	})
+	require.True(t, ok)
+	require.Equal(t, types.T_varchar, resolution.resultType.Oid)
+	require.Equal(t, types.T_datetime, resolution.temporalItemType.Oid)
+	require.Equal(t, int32(6), resolution.temporalItemType.Scale)
+}
+
 func TestLeastGreatestHighPriorityResolution(t *testing.T) {
 	decimalScale1 := types.New(types.T_decimal64, 10, 1)
 	decimalScale2 := types.New(types.T_decimal64, 12, 2)
@@ -1195,6 +1234,109 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		greatestJSONTemporalFn)
 	ok, info = tcJSONGreatest.Run()
 	require.True(t, ok, info)
+}
+
+func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	datetimeScale1 := types.New(types.T_datetime, 64, 1)
+	datetimeScale2 := types.New(types.T_datetime, 64, 2)
+	timestampScale6 := types.New(types.T_timestamp, 64, 6)
+	varcharType := types.T_varchar.ToType()
+
+	parseDatetime := func(value string, scale int32) types.Datetime {
+		datetime, err := types.ParseDatetime(value, scale)
+		require.NoError(t, err)
+		return datetime
+	}
+	parseTimestamp := func(value string, scale int32) types.Timestamp {
+		timestamp, err := types.ParseTimestamp(time.Local, value, scale)
+		require.NoError(t, err)
+		return timestamp
+	}
+
+	type testCase struct {
+		name     string
+		fn       fEvalFn
+		first    FunctionTestInput
+		second   FunctionTestInput
+		text     string
+		expected string
+	}
+
+	for _, tc := range []testCase{
+		{
+			name: "greatest keeps varchar peer precision",
+			fn:   greatestTemporalFn,
+			first: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.1", 1)}, nil),
+			second: NewFunctionTestInput(datetimeScale2,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.24", 2)}, nil),
+			text:     "2020-01-01 00:00:00.25",
+			expected: "2020-01-01 00:00:00.25",
+		},
+		{
+			name: "greatest is permutation invariant",
+			fn:   greatestTemporalFn,
+			first: NewFunctionTestInput(datetimeScale2,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.24", 2)}, nil),
+			second: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.1", 1)}, nil),
+			text:     "2020-01-01 00:00:00.25",
+			expected: "2020-01-01 00:00:00.25",
+		},
+		{
+			name: "greatest json temporal overload keeps peer precision",
+			fn:   greatestJSONTemporalFn,
+			first: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.1", 1)}, nil),
+			second: NewFunctionTestInput(datetimeScale2,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.24", 2)}, nil),
+			text:     "2020-01-01 00:00:00.25",
+			expected: "2020-01-01 00:00:00.25",
+		},
+		{
+			name: "greatest mixed datetime timestamp uses max scale",
+			fn:   greatestTemporalFn,
+			first: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.1", 1)}, nil),
+			second: NewFunctionTestInput(timestampScale6,
+				[]types.Timestamp{parseTimestamp("2020-01-01 00:00:00.123456", 6)}, nil),
+			text:     "2020-01-01 00:00:00.123457",
+			expected: "2020-01-01 00:00:00.123457",
+		},
+		{
+			name: "least keeps varchar peer precision",
+			fn:   leastTemporalFn,
+			first: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.3", 1)}, nil),
+			second: NewFunctionTestInput(datetimeScale2,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.26", 2)}, nil),
+			text:     "2020-01-01 00:00:00.25",
+			expected: "2020-01-01 00:00:00.25",
+		},
+		{
+			name: "least is permutation invariant",
+			fn:   leastTemporalFn,
+			first: NewFunctionTestInput(datetimeScale2,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.26", 2)}, nil),
+			second: NewFunctionTestInput(datetimeScale1,
+				[]types.Datetime{parseDatetime("2020-01-01 00:00:00.3", 1)}, nil),
+			text:     "2020-01-01 00:00:00.25",
+			expected: "2020-01-01 00:00:00.25",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ftc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					tc.first,
+					tc.second,
+					NewFunctionTestInput(varcharType, []string{tc.text}, nil),
+				},
+				NewFunctionTestResult(varcharType, false, []string{tc.expected}, nil), tc.fn)
+			ok, info := ftc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestLeastGreatestPackedDateRejectsTimeFallback(t *testing.T) {

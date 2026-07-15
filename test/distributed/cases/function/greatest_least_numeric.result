@@ -221,6 +221,24 @@ select greatest(cast('10:00:00' as time), cast(2 as bit(4))) as greatest_time_bi
 select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2))) as greatest_time_scale;
 ➤ greatest_time_scale[92,64,0]  𝄀
 10:00:00.990000000
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale;
+➤ greatest_mixed_datetime_scale[12,-1,0]  𝄀
+2020-01-01 00:00:00.25
+select greatest(cast('2020-01-01 00:00:00.24' as datetime(2)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale_reordered;
+➤ greatest_mixed_datetime_scale_reordered[12,-1,0]  𝄀
+2020-01-01 00:00:00.25
+select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale;
+➤ least_mixed_datetime_scale[12,-1,0]  𝄀
+2020-01-01 00:00:00.25
+select least(cast('2020-01-01 00:00:00.26' as datetime(2)), cast('2020-01-01 00:00:00.3' as datetime(1)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale_reordered;
+➤ least_mixed_datetime_scale_reordered[12,-1,0]  𝄀
+2020-01-01 00:00:00.25
+select greatest(cast('2020-01-01' as date), cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as datetime(6))) as greatest_all_temporal_max_fsp;
+➤ greatest_all_temporal_max_fsp[93,64,0]  𝄀
+2020-01-01 00:00:00.123456000
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as greatest_json_mixed_datetime_scale;
+➤ greatest_json_mixed_datetime_scale[12,-1,0]  𝄀
+2020-01-01 00:00:00.25
 select greatest(null, null) as greatest_all_null, least(null, null) as least_all_null;
 ➤ greatest_all_null[12,-1,0]  ¦  least_all_null[12,-1,0]  𝄀
 null  ¦  null

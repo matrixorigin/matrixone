@@ -376,7 +376,24 @@ func leastGreatestTemporalItemType(inputs []types.Type) types.Type {
 			best = inputs[i]
 		}
 	}
+	if leastGreatestTemporalSupportsScale(best.Oid) {
+		best.Scale = leastGreatestTemporalMaxScale(inputs)
+	}
 	return best
+}
+
+func leastGreatestTemporalMaxScale(inputs []types.Type) int32 {
+	var maxScale int32
+	for i := range inputs {
+		if leastGreatestTemporalSupportsScale(inputs[i].Oid) && inputs[i].Scale > maxScale {
+			maxScale = inputs[i].Scale
+		}
+	}
+	return maxScale
+}
+
+func leastGreatestTemporalSupportsScale(oid types.T) bool {
+	return oid == types.T_time || oid == types.T_datetime || oid == types.T_timestamp
 }
 
 func leastGreatestTemporalRank(oid types.T) int {
@@ -438,7 +455,9 @@ func leastGreatestDateTemporalMixedType(inputs []types.Type) (types.Type, bool) 
 	}
 	switch {
 	case allTemporal:
-		return types.T_datetime.ToType(), true
+		target := types.T_datetime.ToType()
+		target.Scale = leastGreatestTemporalMaxScale(inputs)
+		return target, true
 	case hasText:
 		return types.T_text.ToType(), true
 	case hasNonBinary || hasNumeric:

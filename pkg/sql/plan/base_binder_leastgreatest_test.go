@@ -41,6 +41,20 @@ func TestBindLeastGreatestTemporalScale(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("mixed temporal oids preserve max scale", func(t *testing.T) {
+		args := []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_date), Width: 64}},
+			{Typ: planpb.Type{Id: int32(types.T_datetime), Width: 64, Scale: 1}},
+			{Typ: planpb.Type{Id: int32(types.T_datetime), Width: 64, Scale: 6}},
+		}
+		for _, name := range []string{"greatest", "least"} {
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+			require.NoError(t, err, name)
+			require.Equal(t, int32(types.T_datetime), expr.Typ.Id, name)
+			require.Equal(t, int32(6), expr.Typ.Scale, name)
+		}
+	})
 }
 
 func TestBuildLeastGreatestTemporalScale(t *testing.T) {

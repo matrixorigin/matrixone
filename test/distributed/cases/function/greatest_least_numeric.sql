@@ -129,6 +129,15 @@ select greatest(cast('10:00:00' as time), cast(2 as bit(4))) as greatest_time_bi
 -- Same-Oid temporal metadata aligns scale before comparison.
 select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2))) as greatest_time_scale;
 
+-- Mixed temporal comparisons derive a permutation-invariant common FSP from
+-- all temporal inputs before parsing string or JSON peers.
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale;
+select greatest(cast('2020-01-01 00:00:00.24' as datetime(2)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale_reordered;
+select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale;
+select least(cast('2020-01-01 00:00:00.26' as datetime(2)), cast('2020-01-01 00:00:00.3' as datetime(1)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale_reordered;
+select greatest(cast('2020-01-01' as date), cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as datetime(6))) as greatest_all_temporal_max_fsp;
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as greatest_json_mixed_datetime_scale;
+
 -- All T_any arguments return a VARCHAR NULL result, and any NULL argument
 -- makes the strict function result NULL.
 select greatest(null, null) as greatest_all_null, least(null, null) as least_all_null;
