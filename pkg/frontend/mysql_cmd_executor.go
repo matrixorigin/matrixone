@@ -3783,6 +3783,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_PING:
+		setRowCount(ses, ses.GetProc(), 0)
 		resp = NewGeneralOkResponse(COM_PING, ses.GetTxnHandler().GetServerStatus())
 
 		return resp, nil
@@ -3808,9 +3809,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
+		savedRowCount := ses.GetLastAffectedRows()
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		}
 		return resp, nil
 
@@ -3910,19 +3914,17 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		sql = fmt.Sprintf("%sreset prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
-		// reset prepare is a protocol-only side effect; on success it must not
-		// overwrite the preceding statement's ROW_COUNT().
-		savedRowCount := ses.GetLastAffectedRows()
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
 		} else {
-			restoreRowCount(ses, ses.GetProc(), savedRowCount)
+			setRowCount(ses, ses.GetProc(), 0)
 		}
 		return resp, nil
 
 	case COM_SET_OPTION:
 		err = handleSetOption(ses, execCtx, req.GetData().([]byte))
+		setRowCount(ses, ses.GetProc(), -1)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
 		}

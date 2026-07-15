@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -646,6 +647,23 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, 2, len(s.prepareStmts))
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+
+		execCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ec := &ExecCtx{reqCtx: execCtx, ses: s}
+		resp, err := ExecRequest(s, ec, &Request{cmd: COM_STMT_PREPARE, data: []byte("select row_count()")})
+		assert.NoError(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, int64(7), s.GetLastAffectedRows())
+		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+
+		stmtID := s.GetLastStmtId()
+		data := make([]byte, 4)
+		binary.LittleEndian.PutUint32(data, stmtID)
+		resp, err = ExecRequest(s, ec, &Request{cmd: COM_STMT_RESET, data: data})
+		assert.NoError(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, int64(0), s.GetLastAffectedRows())
+		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
 	t.Run("db dropped", func(t *testing.T) {

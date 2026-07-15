@@ -593,6 +593,13 @@ func Test_mce_selfhandle(t *testing.T) {
 		resp, err := ExecRequest(ses, ec, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
+		setRowCount(ses, ses.GetProc(), 7)
+
+		resp, err = ExecRequest(ses, ec, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldBeNil)
+		convey.So(ses.GetLastAffectedRows(), convey.ShouldEqual, int64(7))
+		convey.So(ses.GetProc().GetAffectedRows(), convey.ShouldEqual, int64(7))
 	})
 }
 
@@ -2979,6 +2986,29 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 		})
 	}
+}
+
+func TestExecRequestProtocolCommandRowCount(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	ec := newTestExecCtx(ctx, ctrl)
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err := ExecRequest(ses, ec, &Request{cmd: COM_PING})
+	require.NoError(t, err)
+	require.Equal(t, OkResponse, resp.category)
+	require.Equal(t, int64(0), ses.GetLastAffectedRows())
+	require.Equal(t, int64(0), ses.GetProc().GetAffectedRows())
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err = ExecRequest(ses, ec, &Request{cmd: COM_SET_OPTION, data: []byte{0, 0}})
+	require.NoError(t, err)
+	require.Equal(t, OkResponse, resp.category)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 }
 
 func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
