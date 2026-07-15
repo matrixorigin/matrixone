@@ -82,8 +82,9 @@ func TestTableDefVersionFenceIsModeIndependent(t *testing.T) {
 			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 
-			// The same raw V0 from an old CN has no presence bit and therefore
-			// remains wire-compatible after the ALTER.
+			// Rolling-upgrade compatibility boundary: the same raw V0 from a
+			// legacy CN has no presence bit and remains accepted after ALTER.
+			// Strict fencing requires all CN writers to send Known=true.
 			entry.TableDefVersionKnown = false
 			payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
 			require.NoError(t, err)

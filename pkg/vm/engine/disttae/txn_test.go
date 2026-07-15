@@ -56,6 +56,8 @@ func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
 	}{
 		{name: "known", version: 7, known: true},
 		{name: "known zero", version: 0, known: true},
+		// Rolling-upgrade compatibility boundary: false means the legacy CN did
+		// not send a version dependency. Strict fencing requires known=true.
 		{name: "old cn compatibility", version: 0, known: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,10 +84,25 @@ func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
 func TestWorkspaceFlushKeySeparatesTableDefVersions(t *testing.T) {
 	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
 	batches := map[workspaceTableKey]int{
-		{tableKey: base, tableDefVersion: 0, tableDefVersionKnown: false}: 1,
-		{tableKey: base, tableDefVersion: 0, tableDefVersionKnown: true}:  1,
+		(Entry{accountId: 1, databaseId: 7, databaseName: "db", tableName: "tbl"}).workspaceTableKey(): 1,
+		(Entry{accountId: 1, databaseId: 7, databaseName: "db", tableName: "tbl",
+			tableDefVersion: 0, tableDefVersionKnown: true}).workspaceTableKey(): 1,
 	}
 	require.Len(t, batches, 2)
+	require.Contains(t, batches, workspaceTableKey{
+		tableKey: base, tableDefVersion: 0, tableDefVersionKnown: true,
+	})
+}
+
+func TestCompactionKeyCarriesTableDefVersion(t *testing.T) {
+	oid := objectio.NewObjectid()
+	txn := &Transaction{cnObjsSummary: make(map[types.Objectid]Summary)}
+	txn.registerCNObjects(oid, 1, nil, "db", "tbl", 7, true)
+	key := txn.cnObjsSummary[oid].workspaceTableKey()
+	require.Equal(t, workspaceTableKey{
+		tableKey:        tableKey{accountId: 1, dbName: "db", name: "tbl"},
+		tableDefVersion: 7, tableDefVersionKnown: true,
+	}, key)
 }
 
 func Test_GetUncommittedS3Tombstone(t *testing.T) {
@@ -265,6 +282,10 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.Len(t, txn.writes, 1)
 		require.Equal(t, uint32(7), txn.writes[0].tableDefVersion)
 		require.True(t, txn.writes[0].tableDefVersionKnown)
+		encoded, err := toPBEntry(txn.writes[0])
+		require.NoError(t, err)
+		require.Equal(t, uint32(7), encoded.TableDefVersion)
+		require.True(t, encoded.TableDefVersionKnown)
 
 		bat.Clean(txn.proc.Mp())
 	})
@@ -670,6 +691,25 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 	require.Len(t, txn.writes, 1)
 	require.True(t, txn.writes[0].pkCheckReady)
 	require.Equal(t, -1, txn.writes[0].pkCheckPos)
+
+	bat.Clean(proc.Mp())
+	txn.writes[0].bat.Clean(proc.Mp())
+}
+
+func TestS3WorkspaceEntryCarriesTableDefVersion(t *testing.T) {
+	proc := testutil.NewProc(t)
+	txn := &Transaction{proc: proc}
+	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
+
+	require.NoError(t, txn.writeFileLockedWithVersionKnown(
+		ALTER, 1, 7, 42, "db", "tbl", "s3-file", bat, DNStore{}, 7, true))
+	require.Len(t, txn.writes, 1)
+	require.Equal(t, uint32(7), txn.writes[0].tableDefVersion)
+	require.True(t, txn.writes[0].tableDefVersionKnown)
+	encoded, err := toPBEntry(txn.writes[0])
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), encoded.TableDefVersion)
+	require.True(t, encoded.TableDefVersionKnown)
 
 	bat.Clean(proc.Mp())
 	txn.writes[0].bat.Clean(proc.Mp())

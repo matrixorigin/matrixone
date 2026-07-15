@@ -877,16 +877,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 		keepElement := true
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbKey := workspaceTableKey{
-				tableKey: tableKey{
-					accountId:  txn.writes[i].accountId,
-					databaseId: txn.writes[i].databaseId,
-					dbName:     txn.writes[i].databaseName,
-					name:       txn.writes[i].tableName,
-				},
-				tableDefVersion:      txn.writes[i].tableDefVersion,
-				tableDefVersionKnown: txn.writes[i].tableDefVersionKnown,
-			}
+			tbKey := txn.writes[i].workspaceTableKey()
 			// Tables not resolved in the pre-resolution pass were appended
 			// to the workspace while the lock was released; keep them in
 			// memory for the next dump instead of calling getTable with
@@ -1018,16 +1009,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 		keepElement := true
 		if txn.writes[i].typ == DELETE && txn.writes[i].fileName == "" {
-			tbKey := workspaceTableKey{
-				tableKey: tableKey{
-					accountId:  txn.writes[i].accountId,
-					databaseId: txn.writes[i].databaseId,
-					dbName:     txn.writes[i].databaseName,
-					name:       txn.writes[i].tableName,
-				},
-				tableDefVersion:      txn.writes[i].tableDefVersion,
-				tableDefVersionKnown: txn.writes[i].tableDefVersionKnown,
-			}
+			tbKey := txn.writes[i].workspaceTableKey()
 			// Tables not resolved in the pre-resolution pass were appended
 			// to the workspace while the lock was released; keep them in
 			// memory for the next dump instead of calling getTable with
@@ -2063,15 +2045,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			blkDel[*blkId] = offsets
 
 			if _, ok := objTables[*blkId.Object()]; !ok {
-				objTables[*blkId.Object()] = workspaceTableKey{
-					tableKey: tableKey{
-						accountId: summary.accountId,
-						dbName:    summary.dbName,
-						name:      summary.tbName,
-					},
-					tableDefVersion:      summary.tableDefVersion,
-					tableDefVersionKnown: summary.tableDefVersionKnown,
-				}
+				objTables[*blkId.Object()] = summary.workspaceTableKey()
 			}
 
 			return true
@@ -2184,6 +2158,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				}
 
 				bat.SetRowCount(bat.Vecs[0].Length())
+				tbKey := entry.workspaceTableKey()
 
 				if err := txn.writeFileLockedWithVersionKnown(
 					INSERT,
@@ -2195,8 +2170,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					stats.ObjectName().String(),
 					bat,
 					entry.tnStore,
-					entry.tableDefVersion,
-					entry.tableDefVersionKnown,
+					tbKey.tableDefVersion,
+					tbKey.tableDefVersionKnown,
 				); err != nil {
 					bat.Clean(txn.proc.Mp())
 					return err

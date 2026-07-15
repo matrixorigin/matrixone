@@ -928,43 +928,66 @@ func TestInsertValuesReplacesCacheOnTableVersionChange(t *testing.T) {
 	})
 }
 
-func TestInsertValuesVersionChangeReloadsBothServices(t *testing.T) {
+func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
 
-		store := NewMemStore()
+		store := NewMemStore().(*memStore)
 		cn1 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
 		cn2 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
 		defer cn1.Close()
 		defer cn2.Close()
 
-		op, err := tc.New(ctx, timestamp.Timestamp{})
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 		def := newTestTableDef(1)
-		require.NoError(t, cn1.Create(ctx, 0, def, op))
-		require.NoError(t, op.Commit(ctx))
+		require.NoError(t, cn1.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		const (
+			oldVersion      = uint32(7)
+			newVersion      = uint32(8)
+			effectiveOffset = uint64(999)
+		)
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input1 := newTestVector[uint64](1, vecType, nil, nil)
-		last1, err := cn1.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input1}, 1, 0)
+		last1, err := cn1.InsertValues(ctx, 0, oldVersion, nil, []*vector.Vector{input1}, 1, 0)
 		require.NoError(t, err)
 		input2 := newTestVector[uint64](1, vecType, nil, nil)
-		last2, err := cn2.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input2}, 1, 0)
+		last2, err := cn2.InsertValues(ctx, 0, oldVersion, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
-		require.Less(t, last1, uint64(1000))
-		require.Less(t, last2, uint64(1000))
+		// Create reserves the first range in its transaction; the first V7
+		// committed caches therefore start at 101 and 201 respectively.
+		require.Equal(t, uint64(101), last1)
+		require.Equal(t, uint64(201), last2)
+		require.LessOrEqual(t, last1, effectiveOffset)
+		require.LessOrEqual(t, last2, effectiveOffset)
 
-		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
-		input1 = newTestVector[uint64](1, vecType, nil, nil)
-		last1, err = cn1.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input1}, 1, 0)
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
+		// The memory store models the ALTER transaction's private metadata row.
+		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
+		require.NoError(t, cn1.SetOffset(ctx, 0, def[0].ColName, effectiveOffset, alterTxn))
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		// CN2 is deliberately not reloaded. Its known-V7 cache can still generate
+		// a value below the effective offset; the TN fence test consumes this same
+		// stale-value/version shape and proves that it cannot commit after ALTER.
 		input2 = newTestVector[uint64](1, vecType, nil, nil)
-		last2, err = cn2.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input2}, 1, 0)
+		staleGenerated, err := cn2.InsertValues(ctx, 0, oldVersion, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
-		require.GreaterOrEqual(t, last1, uint64(1001))
-		require.GreaterOrEqual(t, last2, uint64(1001))
+		require.Equal(t, uint64(202), staleGenerated)
+		require.LessOrEqual(t, staleGenerated, effectiveOffset)
+
+		// A retry planned at V8 replaces CN2's stale cache from durable metadata.
+		input2 = newTestVector[uint64](1, vecType, nil, nil)
+		retryGenerated, err := cn2.InsertValues(ctx, 0, newVersion, nil, []*vector.Vector{input2}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1100), retryGenerated)
+		require.Greater(t, retryGenerated, effectiveOffset)
 	})
 }
 

@@ -1208,6 +1208,31 @@ type workspaceTableKey struct {
 	tableDefVersionKnown bool
 }
 
+func (e Entry) workspaceTableKey() workspaceTableKey {
+	return workspaceTableKey{
+		tableKey: tableKey{
+			accountId:  e.accountId,
+			databaseId: e.databaseId,
+			dbName:     e.databaseName,
+			name:       e.tableName,
+		},
+		tableDefVersion:      e.tableDefVersion,
+		tableDefVersionKnown: e.tableDefVersionKnown,
+	}
+}
+
+func (s Summary) workspaceTableKey() workspaceTableKey {
+	return workspaceTableKey{
+		tableKey: tableKey{
+			accountId: s.accountId,
+			dbName:    s.dbName,
+			name:      s.tbName,
+		},
+		tableDefVersion:      s.tableDefVersion,
+		tableDefVersionKnown: s.tableDefVersionKnown,
+	}
+}
+
 func (k tableKey) String() string {
 	return fmt.Sprintf("%v-%v-%v-%v", k.accountId, k.databaseId, k.dbName, k.name)
 }
