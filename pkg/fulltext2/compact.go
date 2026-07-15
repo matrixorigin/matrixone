@@ -1,0 +1,123 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package fulltext2
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+)
+
+// CompactSegments folds the tag=1 CdcTail into the tag=0 base and reclaims dead
+// space: it loads base + tail + deletes, reconstructs the LIVE docs from their
+// positional postings (no re-tokenize), rebuilds capacity-bounded fresh tag=0
+// bases, and atomically replaces ALL prior bases + the whole tail — within the
+// caller's (TVF statement) transaction. This is a FULL compaction, simpler than
+// bm25's incremental tail-fold; an incremental variant is a later optimization.
+// Returns the live-doc count. No tail delta → nothing to reclaim (returns 0).
+func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int64) (int, error) {
+	bases, err := LoadAllBases(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+	tails, deletes, err := LoadTailSegments(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+	if len(tails) == 0 && len(deletes) == 0 {
+		return 0, nil // no CDC delta since the last build/compaction
+	}
+
+	// Recency for the fresh base: above every existing base + tail chunk_id, so a
+	// later tail append (NextTailChunkId = base+1) stays monotonic and newer.
+	recency, err := NextTailChunkId(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+
+	segs := append(bases, tails...)
+	pkType := int32(0)
+	if len(segs) > 0 {
+		pkType = segs[0].PkType
+	}
+	idx := NewIndex(segs, deletes)
+	docs, err := idx.ReconstructLiveDocs()
+	if err != nil {
+		return 0, err
+	}
+
+	ts := time.Now().UnixMicro()
+	uid := fmt.Sprintf("%s:%d", cfg.IndexTable, ts)
+	var fresh []*Segment
+	if len(docs) > 0 {
+		b := NewBuilder(uid, pkType)
+		for _, d := range docs {
+			for _, w := range d.Terms {
+				if e := b.Add(w, d.Pk); e != nil {
+					return 0, e
+				}
+			}
+		}
+		if fresh, err = b.FinishSegments(capacity); err != nil {
+			return 0, err
+		}
+	}
+
+	// Atomic replace (one txn = the TVF statement): drop every prior base + the
+	// tail, then write the fresh base(s) at the new recency.
+	for _, s := range DeleteAllBasesSqls(cfg) {
+		if e := runCompactSql(sqlproc, s); e != nil {
+			return 0, e
+		}
+	}
+	for _, s := range DeleteTailSqls(cfg) {
+		if e := runCompactSql(sqlproc, s); e != nil {
+			return 0, e
+		}
+	}
+	for i, seg := range fresh {
+		seg.Id = SubIndexId(uid, i)
+		seg.Recency = recency
+		sqls, cleanup, e := seg.ToInsertSqls(cfg, ts, 0 /* tag=0 base */)
+		if e != nil {
+			return 0, e
+		}
+		e = runCompactSqls(sqlproc, sqls)
+		cleanup()
+		if e != nil {
+			return 0, e
+		}
+	}
+	return len(docs), nil
+}
+
+func runCompactSql(sqlproc *sqlexec.SqlProcess, sql string) error {
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	res.Close()
+	return nil
+}
+
+func runCompactSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
+	for _, s := range sqls {
+		if err := runCompactSql(sqlproc, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}

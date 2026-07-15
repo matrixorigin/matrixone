@@ -213,6 +213,57 @@ func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 	return idx.SearchBoolean(q, algo, k)
 }
 
+// ReconstructLiveDocs reconstructs each LIVE document as (pk, ordered terms) from
+// the positional postings across all loaded segments — the input to a MERGE
+// compaction that folds base + tail into a fresh dead-doc-free base WITHOUT
+// re-tokenizing the source. Per-doc term order is recovered from token positions;
+// docs are returned in ascending pk-key order (deterministic output).
+func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
+	type posTerm struct {
+		pos  int32
+		term string
+	}
+	// Bucket postings only for LIVE (si, ord) locations.
+	buckets := make(map[docLoc][]posTerm, len(idx.liveLoc))
+	for _, l := range idx.liveLoc {
+		buckets[l] = nil
+	}
+	for si, seg := range idx.segments {
+		err := seg.forEachPosting(func(term string, tp *termPostings) {
+			for i, ord := range tp.docIDs {
+				l := docLoc{si, ord}
+				if _, live := buckets[l]; !live {
+					continue
+				}
+				for _, pos := range tp.positions[i] {
+					buckets[l] = append(buckets[l], posTerm{pos, term})
+				}
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	keys := make([]string, 0, len(idx.liveLoc))
+	for k := range idx.liveLoc {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]TokenizedDoc, 0, len(keys))
+	for _, k := range keys {
+		l := idx.liveLoc[k]
+		b := buckets[l]
+		sort.SliceStable(b, func(i, j int) bool { return b[i].pos < b[j].pos })
+		terms := make([]string, len(b))
+		for i, pt := range b {
+			terms[i] = pt.term
+		}
+		out = append(out, TokenizedDoc{Pk: idx.segments[l.si].pks[l.ord], Terms: terms})
+	}
+	return out, nil
+}
+
 // NumDocs returns the number of live documents in the index.
 func (idx *Index) NumDocs() int64 { return idx.globalN }
 

@@ -182,16 +182,17 @@ func (Hooks) BuildFullTextIndexDefs(
 // algo_params (fulltext2 is always-async by algo, so no async/version params).
 func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 	res := make(map[string]string)
-	if idx.IndexOption != nil {
-		if idx.IndexOption.ParserName != "" {
-			res["parser"] = strings.ToLower(idx.IndexOption.ParserName)
-		}
-		if idx.IndexOption.MaxIndexCapacity > 0 {
-			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
-		}
+	// Always record the parser (default "ngram" when unspecified), so algo_params
+	// is never an empty string — every consumer IndexParamsStringToMaps it (incl.
+	// the ALTER REINDEX flow in ddl.go, which errors on ""), and it self-documents
+	// the parser. Mirrors classic fulltext storing "parser" when set.
+	parser := "ngram"
+	if idx.IndexOption != nil && idx.IndexOption.ParserName != "" {
+		parser = strings.ToLower(idx.IndexOption.ParserName)
 	}
-	if len(res) == 0 {
-		return "", nil
+	res["parser"] = parser
+	if idx.IndexOption != nil && idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 	return catalog.IndexParamsMapToJsonString(res)
 }

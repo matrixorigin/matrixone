@@ -87,14 +87,16 @@ func (CatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) {
 	return nil, moerr.NewNotSupportedNoCtx("fulltext2 index parses to *tree.FullTextIndex, not *tree.Index")
 }
 
-// SyncDescriptor — fulltext2 is ALWAYS async (CDC-maintained), a clean static
-// answer (no version branch). UsesCDC drives the ISCP consumer (RunFulltext2)
-// registered in pkg/fulltext2/plugin/iscp. The idxcron MERGE fields (like bm25's)
-// land with the compaction step.
+// SyncDescriptor — fulltext2 is ALWAYS async (CDC-maintained). UsesCDC drives the
+// ISCP consumer (RunFulltext2); the Idxcron fields drive the scheduled MERGE
+// compaction (ALTER … REINDEX … FULLTEXT2 MERGE FORCE_SYNC). Mirrors bm25.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:     true,
-		SinkerType:  catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync: true,
+		UsesCDC:              true,
+		SinkerType:          catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:         true,
+		IdxcronAction:       "fulltext2_reindex",
+		IdxcronAlgoToken:    "FULLTEXT2",
+		IdxcronReindexOption: "MERGE",
 	}
 }

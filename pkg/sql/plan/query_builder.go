@@ -5835,6 +5835,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, children)
 	case "bm25_compact":
 		nodeId = builder.buildBm25Compact(tbl, ctx, exprs, children)
+	case "fulltext2_compact":
+		nodeId = builder.buildFulltext2Compact(tbl, ctx, exprs, children)
 	case "stage_list":
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":

@@ -78,21 +78,37 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		return nil
 	}
 
-	// Synchronous build: the tag=0 base covers pre-create rows inline.
+	// Fresh CREATE has no prior tail; build the base + register CDC.
+	return buildAndRegisterCDC(ctx, storeDef, metaDef, origTable, db, false)
+}
+
+// buildAndRegisterCDC (re)builds the tag=0 base from source and registers the
+// ISCP CDC task from now (startFromNow=true, no InitSQL): the inline build covers
+// the current rows, so subsequent INSERT/UPDATE/DELETE flow into the tag=1 tail
+// via RunFulltext2. The CDC task is dropped+recreated so a REINDEX re-entry does
+// not replay history over the fresh base. On REBUILD (clearTail) the prior tag=1
+// tail is discarded first — the fresh base already reflects every committed row.
+func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
+	if clearTail {
+		cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+		for _, s := range fulltext2.DeleteTailSqls(cfg) {
+			if err := ctx.RunSql(s); err != nil {
+				return err
+			}
+		}
+	}
+	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
 		return err
 	}
-
-	// Register the ISCP CDC task from now (startFromNow=true, no InitSQL): the
-	// inline build covered the pre-create rows, so post-create INSERT/UPDATE/DELETE
-	// flow into the tag=1 tail via RunFulltext2. Drop any prior task first so a
-	// REINDEX re-entry doesn't replay history over the fresh base. Mirrors bm25's
-	// sync path.
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexFullText2Algo.ToString())
 	if err := ctx.DropIndexCdcTask(origTable, db, origTable.Name, storeDef.IndexName); err != nil {
 		return err
 	}
-	return ctx.CreateIndexCdcTask(db, origTable.Name, origTable.TblId, storeDef.IndexName, sinkerType, true, "", origTable)
+	if err := ctx.CreateIndexCdcTask(db, origTable.Name, origTable.TblId, storeDef.IndexName, sinkerType, true, "", origTable); err != nil {
+		return err
+	}
+	return registerFulltext2Idxcron(ctx, storeDef, db, origTable)
 }
 
 // DefaultMaxIndexCapacity caps each tag=0 sub-index's doc count when the
@@ -173,9 +189,39 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 	return sql, nil
 }
 
-// HandleReindex — rebuild lands with the maintenance step.
-func (Hooks) HandleReindex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef, _, _ bool) error {
-	return nil
+// HandleReindex runs ALTER … ALTER REINDEX: merge=true compacts the tag=1 tail
+// into the tag=0 base (dropping dead docs) via fulltext2_compact; merge=false
+// (REBUILD) discards the tail and rebuilds the base from source. Mirrors bm25.
+func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _, merge bool) error {
+	storeDef, ok := indexDefs[catalog.FullText2Index_TblType_Storage]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext2 storage index definition not found")
+	}
+	metaDef, ok := indexDefs[catalog.FullText2Index_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext2 metadata index definition not found")
+	}
+	if merge {
+		return handleMergeCompact(ctx, storeDef, metaDef)
+	}
+	return buildAndRegisterCDC(ctx, storeDef, metaDef, ctx.OriginalTableDef(), ctx.QryDatabase(), true /* clear tail */)
+}
+
+// handleMergeCompact folds the tag=1 CdcTail into the tag=0 base and drops dead
+// docs, via the fulltext2_compact TVF (execution-side, one txn) — no re-tokenize.
+// Capacity comes from the PERSISTED algo_params (pinned at CREATE) so a manual
+// MERGE never depends on the triggering session. Mirrors bm25's handleMergeCompact.
+func handleMergeCompact(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef) error {
+	capacity, err := resolveFulltext2Capacity(storeDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	sql := fmt.Sprintf("SELECT * FROM fulltext2_compact(%s, %s, %s, %s) AS f",
+		sqlquote.String(ctx.QryDatabase()),
+		sqlquote.String(storeDef.IndexTableName),
+		sqlquote.String(metaDef.IndexTableName),
+		sqlquote.String(strconv.FormatInt(capacity, 10)))
+	return ctx.RunSql(sql)
 }
 
 // RestoreInitSQL — the clone copies the storage+metadata rows; register CDC from
@@ -195,7 +241,30 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
-// IdxcronMetadata — no idxcron action yet.
-func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
-	return nil, nil
+// actionFulltext2Reindex is the idxcron action key for fulltext2's scheduled
+// compaction; must match the runtime plugin's SyncDescriptor.IdxcronAction.
+const actionFulltext2Reindex = "fulltext2_reindex"
+
+// IdxcronMetadata — the scheduled compaction reads max_index_capacity from the
+// PERSISTED algo_params, so the metadata blob carries no captured vars; it only
+// needs to be non-nil so the idxcron task registers. A background re-entry (not
+// frontend) returns nil so the existing task row persists. Mirrors bm25.
+func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	if !ctx.IsFrontend() {
+		return nil, nil
+	}
+	return []byte("{}"), nil
+}
+
+// registerFulltext2Idxcron registers the scheduled-compaction task (skipped on a
+// background re-entry so the existing task row persists). Mirrors bm25.
+func registerFulltext2Idxcron(ctx compileplugin.CompileContext, storeDef *plan.IndexDef, db string, origTable *plan.TableDef) error {
+	metadata, err := Hooks{}.IdxcronMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return ctx.RegisterIdxcronUpdate(origTable.TblId, db, origTable.Name, storeDef.IndexName, actionFulltext2Reindex, metadata)
 }

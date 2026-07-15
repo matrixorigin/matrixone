@@ -458,6 +458,38 @@ func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 	return 0, nil
 }
 
+// CountTailChunks returns the number of tag=1 CdcTail chunk rows — the idxcron
+// tail-growth gate (fold once the delta is large enough).
+func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = %s AND %s = %d",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	return scanInt64(sqlproc, sql)
+}
+
+// SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the
+// dead-doc estimate (compared to the live source row count).
+func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	sql := fmt.Sprintf("SELECT COALESCE(SUM(%s), 0) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	return scanInt64(sqlproc, sql)
+}
+
+func scanInt64(sqlproc *sqlexec.SqlProcess, sql string) (int64, error) {
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat != nil && bat.RowCount() > 0 {
+			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
+		}
+	}
+	return 0, nil
+}
+
 // FrameChunkCount is how many MaxChunkSize storage rows a frame of frameLen bytes
 // occupies (>= 1) — the streaming sinker advances chunk_id past each spilled
 // segment by this without holding the framed bytes. Mirrors bm25's FrameChunkCount.

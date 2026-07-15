@@ -172,6 +172,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "fulltext2_create":
 		tblArg.ctr.state, err = fulltext2CreatePrepare(proc, tblArg)
+	case "fulltext2_compact":
+		tblArg.ctr.state, err = fulltext2CompactPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	case "moplugin_table":

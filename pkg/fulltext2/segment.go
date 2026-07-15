@@ -118,6 +118,28 @@ func (s *Segment) Lookup(term string) (*termPostings, bool) {
 	return p, ok
 }
 
+// forEachPosting calls fn for every (term, posting-list) in the segment, whether
+// build-side (terms map) or loaded-side (FST dict + loaded slices). Used by MERGE
+// compaction to reconstruct each doc's terms from the positional postings.
+func (s *Segment) forEachPosting(fn func(term string, tp *termPostings)) error {
+	if s.dict == nil {
+		for term, tp := range s.terms {
+			fn(term, tp)
+		}
+		return nil
+	}
+	terms, err := s.dict.prefixTerms("") // every term, ascending
+	if err != nil {
+		return err
+	}
+	for _, term := range terms {
+		if tp, ok := s.LookupLoaded(term); ok {
+			fn(term, tp)
+		}
+	}
+	return nil
+}
+
 // PrefixRange returns the sorted terms of this segment that start with prefix,
 // in ascending order — the enumeration the `word*` boolean operator expands into
 // a disjunctive slot. An empty prefix returns all terms. O(log n) to locate the
