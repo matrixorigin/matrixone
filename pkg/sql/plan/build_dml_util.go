@@ -687,6 +687,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						builder.appendStep(lastNodeId)
 
 					case plan.ForeignKeyDef_SET_NULL:
+						builder.qry.HasForeignKeyAction = true
 						// plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & null] -> project -> sink   then + updatePlans
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
@@ -755,6 +756,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 						//skip cascade for fk self refer
 						if !fkSelfReferCond {
+							builder.qry.HasForeignKeyAction = true
 							if isUpdate {
 								// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
 								joinProjection := childForJoinProject

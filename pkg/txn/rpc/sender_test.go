@@ -663,6 +663,44 @@ func TestSendWithTxnUnknown(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestSendCommitDeadlineReturnsTxnUnknown(t *testing.T) {
+	s := newTestTxnServer(t, testTN2Addr, nil)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	s.RegisterRequestHandler(func(
+		context.Context,
+		morpc.RPCMessage,
+		uint64,
+		morpc.ClientSession,
+	) error {
+		// Accept the request but intentionally do not send a response.
+		return nil
+	})
+
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	txnMeta := txn.TxnMeta{
+		ID: []byte("commit-deadline"),
+		TNShards: []metadata.TNShard{{
+			Address: testTN2Addr,
+		}},
+	}
+	result, err := sd.Send(ctx, []txn.TxnRequest{{
+		Method:        txn.TxnMethod_Commit,
+		Txn:           txnMeta,
+		CommitRequest: &txn.TxnCommitRequest{},
+	}})
+	assert.Nil(t, result)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+}
+
 func newTestTxnServer(
 	t assert.TestingT,
 	addr string,

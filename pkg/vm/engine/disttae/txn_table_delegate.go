@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -85,6 +86,11 @@ func newTxnTableWithItem(
 type txnTableDelegate struct {
 	origin *txnTable
 	parent engine.Relation
+
+	// reusableHandle is true only for an operator-owned wrapper. The relation
+	// stored in Transaction.tableCache is shared and must never be reset.
+	reusableHandle bool
+	cacheKey       any
 
 	// sharding info
 	shard struct {
@@ -1102,11 +1108,120 @@ func (tbl *txnTableDelegate) GetFlushTS(
 	return tbl.origin.GetFlushTS(ctx)
 }
 
-func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
-	if tbl.combined.is {
-		return tbl.combined.tbl.Reset(op)
+func (tbl *txnTableDelegate) NewRelationHandle() engine.Relation {
+	handle := &txnTableDelegate{
+		reusableHandle: true,
+		isMock:         tbl.isMock,
+		cacheKey: genTableKey(
+			tbl.origin.accountId,
+			tbl.origin.tableName,
+			tbl.origin.db.databaseId,
+			tbl.origin.db.databaseName,
+		),
 	}
-	return tbl.origin.Reset(op)
+	handle.bindCanonical(tbl)
+	if tbl.isMock {
+		handle.isLocal = tbl.isLocal
+	} else {
+		handle.isLocal = handle.isLocalFunc
+	}
+	return handle
+}
+
+func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
+	if !tbl.reusableHandle {
+		return moerr.NewInternalErrorNoCtx("cannot reset a shared relation; use an exclusive relation handle")
+	}
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return err
+	}
+	if txn == nil {
+		return moerr.NewInternalErrorNoCtx("relation handle requires a disttae transaction workspace")
+	}
+	if txn.proc == nil {
+		return moerr.NewInternalErrorNoCtx("transaction process is nil when resetting relation handle")
+	}
+	key := genTableKey(
+		tbl.origin.accountId,
+		tbl.origin.tableName,
+		tbl.origin.db.databaseId,
+		tbl.origin.db.databaseName,
+	)
+	openSys := tbl.origin.db.databaseId == catalog.MO_CATALOG_ID &&
+		catalog.IsSystemTableByName(tbl.origin.tableName)
+	if !openSys && txn.tableOps != nil {
+		if txn.tableOps.existAndDeleted(key) {
+			return moerr.NewNoSuchTable(
+				txn.proc.Ctx,
+				tbl.origin.db.databaseName,
+				tbl.origin.tableName,
+			)
+		}
+		if created := txn.tableOps.existAndActive(key); created != nil {
+			created.proc.Store(txn.proc)
+			return tbl.bindRelation(created)
+		}
+	}
+	if txn.tableCache != nil {
+		if value, ok := txn.tableCache.Load(tbl.cacheKey); ok {
+			canonical := value.(*txnTableDelegate)
+			if canonical.origin.lastTS.Equal(op.SnapshotTS()) {
+				canonical.origin.proc.Store(txn.proc)
+				tbl.bindCanonical(canonical)
+				return nil
+			}
+		}
+		if canonical := txn.getCachedTableByKey(txn.proc.Ctx, key, tbl.cacheKey); canonical != nil {
+			canonical.origin.proc.Store(txn.proc)
+			tbl.bindCanonical(canonical)
+			return nil
+		}
+	}
+
+	return tbl.resetFromCatalog(op, txn)
+}
+
+// Keep the cache-miss path separate so its transaction-local database can
+// escape only when a new canonical relation actually has to be constructed.
+func (tbl *txnTableDelegate) resetFromCatalog(
+	op client.TxnOperator,
+	txn *Transaction,
+) error {
+	db := *tbl.origin.db
+	db.op = op
+	ctx := defines.AttachAccountId(txn.proc.Ctx, tbl.origin.accountId)
+	rel, err := db.relation(ctx, tbl.origin.tableName, txn.proc)
+	if err != nil {
+		return err
+	}
+	if rel == nil {
+		return moerr.NewNoSuchTable(
+			ctx,
+			tbl.origin.db.databaseName,
+			tbl.origin.tableName,
+		)
+	}
+	return tbl.bindRelation(rel)
+}
+
+func (tbl *txnTableDelegate) bindRelation(rel engine.Relation) error {
+	switch canonical := rel.(type) {
+	case *txnTableDelegate:
+		tbl.bindCanonical(canonical)
+	case *txnTable:
+		tbl.bindCanonical(&txnTableDelegate{origin: canonical})
+	default:
+		return moerr.NewInternalErrorNoCtxf("unexpected disttae relation type %T", rel)
+	}
+	return nil
+}
+
+func (tbl *txnTableDelegate) bindCanonical(canonical *txnTableDelegate) {
+	tbl.origin = canonical.origin
+	tbl.parent = canonical.parent
+	tbl.shard = canonical.shard
+	tbl.combined = canonical.combined
 }
 
 func (tbl *txnTableDelegate) isLocalFunc() (bool, error) {

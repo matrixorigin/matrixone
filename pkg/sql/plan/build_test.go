@@ -1162,6 +1162,133 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NATIONKEY = N_NATIONKEY + 1")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.JoinType == plan.Node_DEDUP {
+			found = true
+			require.Equal(t, plan.Node_IGNORE, node.OnDuplicateAction)
+		}
+	}
+	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
+func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sql              string
+		expectRecomputed bool
+	}{
+		{
+			name:             "first component",
+			sql:              "update constraint_test.products set pid = pid + 8 where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "last component",
+			sql:              "update constraint_test.products set pname = 'new' where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "all components",
+			sql:              "update constraint_test.products set pid = 9, pname = 'new' where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "non cluster column",
+			sql:              "update constraint_test.products set description = 'new' where pid = 1",
+			expectRecomputed: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			configureProductsAsCompositeClusterByTable(t, mock)
+
+			logicPlan, err := runOneStmt(mock, t, testCase.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var multiUpdate *plan.Node
+			var originUpdateCtx *plan.UpdateCtx
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_MULTI_UPDATE {
+					continue
+				}
+				multiUpdate = node
+				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "products" {
+						originUpdateCtx = updateCtx
+						break
+					}
+				}
+			}
+			require.NotNil(t, multiUpdate)
+			require.NotNil(t, originUpdateCtx)
+
+			clusterByName := originUpdateCtx.TableDef.ClusterBy.Name
+			clusterByPos := originUpdateCtx.TableDef.Name2ColIndex[clusterByName]
+			clusterByInsertCol := originUpdateCtx.InsertCols[clusterByPos]
+
+			require.Len(t, multiUpdate.Children, 1)
+			lockNode := query.Nodes[multiUpdate.Children[0]]
+			require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+			require.Len(t, lockNode.Children, 1)
+			finalProject := query.Nodes[lockNode.Children[0]]
+			require.Equal(t, plan.Node_PROJECT, finalProject.NodeType)
+			clusterByExpr := finalProject.ProjectList[clusterByInsertCol.ColPos]
+
+			if !testCase.expectRecomputed {
+				require.NotNil(t, clusterByExpr.GetCol())
+				return
+			}
+
+			clusterByFunc := clusterByExpr.GetF()
+			require.NotNil(t, clusterByFunc)
+			require.Equal(t, "serial_full", clusterByFunc.Func.ObjName)
+			require.Len(t, clusterByFunc.Args, 2)
+
+			for i, componentName := range []string{"pid", "pname"} {
+				componentPos := originUpdateCtx.TableDef.Name2ColIndex[componentName]
+				componentInsertCol := originUpdateCtx.InsertCols[componentPos]
+				componentExpr := finalProject.ProjectList[componentInsertCol.ColPos]
+				require.Equal(t, componentExpr.GetCol(), clusterByFunc.Args[i].GetCol())
+			}
+		})
+	}
+}
+
+func configureProductsAsCompositeClusterByTable(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["products"]
+	require.NotNil(t, tableDef)
+	require.Len(t, tableDef.Cols, 6)
+
+	clusterByCol := tableDef.Cols[4]
+	clusterByCol.Hidden = true
+	tableDef.ClusterBy.CompCbkeyCol = clusterByCol
+
+	fakePrimaryKey := DeepCopyColDef(mock.ctxt.tables["fake_pk_t"].Cols[2])
+	tableDef.Cols = append(tableDef.Cols, nil)
+	copy(tableDef.Cols[5:], tableDef.Cols[4:])
+	tableDef.Cols[4] = fakePrimaryKey
+	for i, col := range tableDef.Cols {
+		col.ColId = uint64(i)
+	}
+	tableDef.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.FakePrimaryKeyColName},
+		PkeyColName: catalog.FakePrimaryKeyColName,
+		Cols:        []uint64{4},
+		CompPkeyCol: fakePrimaryKey,
+	}
+}
+
 func TestDropIndexIfExistsMissingIndex(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -1531,6 +1658,89 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	if empnoRefs != 2 {
 		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
 	}
+}
+
+func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
+	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent update cascade marks prepare uncacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set deptno = deptno + 10 where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent delete set null marks prepare uncacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from delete from dept where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent delete restrict keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_RESTRICT)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from delete from dept where deptno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+}
+
+func buildPreparedQuery(t *testing.T, mock *MockOptimizer, sql string) *plan.Query {
+	t.Helper()
+
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(logicPlan)
+	require.NotNil(t, queryPlan.GetQuery())
+	return queryPlan.GetQuery()
+}
+
+func setMockEmpDeptForeignKeyAction(
+	t *testing.T,
+	mock *MockOptimizer,
+	onDelete plan.ForeignKeyDef_RefAction,
+	onUpdate plan.ForeignKeyDef_RefAction,
+) {
+	t.Helper()
+
+	const (
+		mockDeptTableID uint64 = 88888
+		mockEmpTableID  uint64 = 88889
+	)
+
+	empTable := mock.ctxt.tables["emp"]
+	require.NotNil(t, empTable)
+	require.NotEmpty(t, empTable.Fkeys)
+
+	deptTable := mock.ctxt.tables["dept"]
+	require.NotNil(t, deptTable)
+
+	delete(mock.ctxt.id2name, empTable.TblId)
+	delete(mock.ctxt.id2name, deptTable.TblId)
+	empTable.TblId = mockEmpTableID
+	deptTable.TblId = mockDeptTableID
+	mock.ctxt.id2name[mockEmpTableID] = "emp"
+	mock.ctxt.id2name[mockDeptTableID] = "dept"
+	require.NotNil(t, mock.ctxt.objects["emp"])
+	require.NotNil(t, mock.ctxt.objects["dept"])
+	mock.ctxt.objects["emp"].Obj = int64(mockEmpTableID)
+	mock.ctxt.objects["dept"].Obj = int64(mockDeptTableID)
+
+	empTable.Fkeys[0].ForeignTbl = deptTable.TblId
+	empTable.Fkeys[0].ForeignCols = []uint64{0}
+	empTable.Fkeys[0].OnDelete = onDelete
+	empTable.Fkeys[0].OnUpdate = onUpdate
+
+	deptTable.RefChildTbls = []uint64{empTable.TblId}
 }
 
 func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {

@@ -44,6 +44,8 @@ const (
 type container struct {
 	sp *pSpool.PipelineSpool
 
+	server *colexec.Server
+
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs
 	remoteInfo      process.RemotePipelineInformationChannel
@@ -249,7 +251,9 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			for i := range dispatch.RemoteRegs {
 				uuids = append(uuids, dispatch.RemoteRegs[i].Uuid)
 			}
-			colexec.Get().DeleteUuids(uuids)
+			if dispatch.ctr.server != nil {
+				dispatch.ctr.server.DeleteUuids(uuids)
+			}
 		}
 	}
 
@@ -265,11 +269,13 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		if terminalSignal.EventType == process.EventEnd && allTerminalSignalsDelivered(terminalDelivered) {
 			dispatch.cleanupSpool = sp
 		} else {
+			abortErr := terminalErr
 			if terminalSignal.EventType == process.EventEnd {
 				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
 				sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)
+				abortErr = fallbackErr
 			}
-			sp.Abort()
+			sp.Abort(abortErr)
 			dispatch.cleanupSpool = nil
 		}
 		dispatch.ctr.sp = nil

@@ -1,0 +1,48 @@
+drop database if exists column_pruning;
+create database column_pruning;
+use column_pruning;
+
+create table l(a int, b int, payload varchar(100));
+create table r(a int, b int, payload varchar(100));
+insert into l values (1, 10, 'x'), (1, 10, 'y'), (1, 20, 'w'), (2, 30, 'z');
+insert into r values (1, 10, 'u'), (3, 40, 'v');
+
+-- UNION ALL can prune unused positions but must preserve every input row.
+select a from (select a, b from l union all select a, b from r) u order by a;
+
+-- Retaining only a nonzero UNION ALL position must compact it to output slot 0.
+select b from (select a, b from l union all select a, b from r) u order by b;
+
+-- UNION DISTINCT must retain the unprojected b key: (1,10) and (1,20)
+-- remain two rows after the outer projection removes b.
+select a from (select a, b from l union select a, b from r) u order by a;
+
+-- count(payload) is unused and may be removed. sum(b), although not projected,
+-- is still required by HAVING and exercises aggregate slot compaction.
+select a from (select a, count(payload) as unused_count, sum(b) as total from l group by a having sum(b) > 0) g order by a;
+
+-- The retained aggregate starts at logical slot 1 and must be remapped to
+-- physical aggregate slot 0 after count(payload) is removed.
+select total from (select count(payload) as unused_count, sum(b) as total from l) g;
+
+-- An unused window result must not change rows; a used result must retain its
+-- partition/order inputs and keep the compact output slot correct.
+select a from (select a, row_number() over(partition by b order by payload) as rn from l) w order by a;
+select a, rn from (select a, row_number() over(partition by b order by payload) as rn from l) w order by a, rn;
+
+-- An order-sensitive aggregate observes its input sequence. The window result
+-- is unused, but its ordering cannot be removed without changing the JSON array.
+select a, json_arrayagg(payload) from (select a, payload, row_number() over(partition by a order by b desc, payload) as rn from l) w group by a order by a;
+
+-- A scalar aggregate with a discarded value still produces one row on empty
+-- input, so pruning must retain a row-producing aggregate carrier.
+create table empty_t(v int);
+select 1 from (select sum(v) as discarded from empty_t) s;
+
+-- _wstart is deliberately unprojected. Column pruning must continue and keep
+-- _wend instead of leaving the time-window remapping incomplete.
+create table tw(ts timestamp, v int);
+insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
+select _wend, max(v) from tw interval(ts, 1, day);
+
+drop database column_pruning;

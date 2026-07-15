@@ -47,9 +47,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -119,11 +122,85 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
+	catalog.SetupDefines("")
+	scope := generateScopeCases(t, []string{
+		"select uid from R order by uid limit 2 + 3 offset 0 + 2",
+	})[0]
+
+	var topLimits []uint64
+	var offsets []uint64
+	var opTypes []vm.OpType
+	var visitOperator func(vm.Operator)
+	visitOperator = func(operator vm.Operator) {
+		if operator == nil {
+			return
+		}
+		base := operator.GetOperatorBase()
+		for i := 0; i < base.NumChildren(); i++ {
+			visitOperator(base.GetChildren(i))
+		}
+		opTypes = append(opTypes, operator.OpType())
+		switch op := operator.(type) {
+		case *top.Top:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *mergetop.MergeTop:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *offset.Offset:
+			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+		}
+	}
+	var visitScope func(*Scope)
+	visitScope = func(current *Scope) {
+		visitOperator(current.RootOp)
+		for _, preScope := range current.PreScopes {
+			visitScope(preScope)
+		}
+	}
+	visitScope(scope)
+
+	require.NotEmpty(t, topLimits)
+	for _, candidateLimit := range topLimits {
+		require.Equal(t, uint64(7), candidateLimit)
+	}
+	require.Contains(t, offsets, uint64(2))
+	require.NotContains(t, opTypes, vm.Order)
+	require.NotContains(t, opTypes, vm.MergeOrder)
+}
+
 func checkScopeRoot(t *testing.T, s *Scope) {
 	require.NotEqual(t, nil, s.RootOp)
 	for i := range s.PreScopes {
 		checkScopeRoot(t, s.PreScopes[i])
 	}
+}
+
+func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
+	rel := &mockRelationForMembershipFilter{}
+	s := &Scope{
+		RootOp: colexec.NewMockOperator(),
+		DataSource: &Source{
+			R:   &struct{ engine.Reader }{},
+			Rel: rel,
+		},
+	}
+
+	require.NoError(t, s.Reset(NewMockCompile(t)))
+	require.Nil(t, s.DataSource.R)
+	require.Same(t, rel, s.DataSource.Rel)
+}
+
+func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
+	l := NewLockMeta()
+	databaseRel := &mockRelationForMembershipFilter{}
+	tableRel := &mockRelationForMembershipFilter{}
+	l.database_rel = databaseRel
+	l.table_rel = tableRel
+
+	l.reset(nil)
+
+	require.Same(t, databaseRel, l.database_rel)
+	require.Same(t, tableRel, l.table_rel)
 }
 
 func TestScopeSerialization2(t *testing.T) {
@@ -567,6 +644,53 @@ func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.errText)
 		})
+	}
+}
+
+// A prepared statement's cached compile reuses its scope tree across
+// executions. The previous run's cleanup delivers End into the pipeline edges
+// and marks them done; a done edge silently rejects both data and End, so
+// without clearing that state the next run's receivers would wait forever.
+// Scope.Reset must clear the terminal state on the whole scope tree.
+func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
+	testCompile := NewMockCompile(t)
+
+	child := &Scope{
+		Magic: Normal,
+		Proc:  testCompile.proc.NewNoContextChildProc(1),
+	}
+	s := &Scope{
+		Magic:     Merge,
+		Proc:      testCompile.proc.NewNoContextChildProc(2),
+		PreScopes: []*Scope{child},
+	}
+
+	var regs []*process.WaitRegister
+	regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	regs = append(regs, child.Proc.Reg.MergeReceivers...)
+	for _, reg := range regs {
+		require.True(t, reg.SendEnd())
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("edge should be done after SendEnd")
+		}
+	}
+
+	require.NoError(t, s.Reset(testCompile))
+
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+			t.Fatal("Reset must clear edge terminal state for reuse")
+		default:
+		}
+		select {
+		case <-reg.Ch2:
+			t.Fatal("Reset must drain stale buffered signals")
+		default:
+		}
+		require.True(t, reg.SendEnd(), "edge must accept End again after Reset")
 	}
 }
 
@@ -1565,6 +1689,7 @@ func TestScopeGetRelDataError(t *testing.T) {
 	}
 
 	// Create a mock compile with engine
+	catalog.SetupDefines("")
 	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	c := NewMockCompile(t)
 	c.proc = s.Proc

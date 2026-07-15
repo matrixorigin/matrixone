@@ -1225,7 +1225,10 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// OldColList identifies the row being updated.  Both FAIL and IGNORE
+		// must exclude that row from duplicate detection: an UPDATE that keeps
+		// a primary/unique key unchanged is not a duplicate of itself.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 			if len(node.DedupJoinCtx.OldColList) > 1 {
 				arg.DedupDeleteMarkerColIdx = node.DedupJoinCtx.OldColList[1].ColPos
@@ -1292,7 +1295,9 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	if node.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// See constructDedupJoin: UPDATE IGNORE also needs to exclude the
+		// target row's old key from duplicate detection.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
 	}
@@ -1398,14 +1403,12 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {
 	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(node.WinSpecList))
-	typs := make([]types.Type, len(node.WinSpecList))
 
 	for i, expr := range node.WinSpecList {
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var e *plan.Expr = nil
 		var cfg []byte = nil
 		var args = f.F.Args
 		if len(f.F.Args) > 0 {
@@ -1424,18 +1427,11 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 				args = f.F.Args[:len(f.F.Args)-1]
 			}
-
-			e = f.F.Args[0]
 		}
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
-
-		if e != nil {
-			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-		}
 	}
 	arg := window.NewArgument()
-	arg.Types = typs
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
 	return arg
@@ -1930,7 +1926,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
@@ -2007,7 +2003,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction

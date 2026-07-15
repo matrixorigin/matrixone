@@ -38,7 +38,23 @@ select id
 from t
 where user_id = 'u1'
   and is_active = 1
+  and id <= 'id_00000040'
+order by id desc
+limit 5;
+
+select id
+from t
+where user_id = 'u1'
+  and is_active = 1
   and id > 'id_00000010'
+order by id asc
+limit 5;
+
+select id
+from t
+where user_id = 'u1'
+  and is_active = 1
+  and id >= 'id_00000010'
 order by id asc
 limit 5;
 

@@ -132,6 +132,11 @@ func shouldLogPKPersistedChanged(tableID uint64) bool {
 
 var _ engine.Relation = new(txnTable)
 
+func (tbl *txnTable) NewRelationHandle() engine.Relation {
+	canonical := &txnTableDelegate{origin: tbl}
+	return canonical.NewRelationHandle()
+}
+
 func newTxnTable(
 	ctx context.Context,
 	db *txnDatabase,
@@ -2759,6 +2764,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	if err != nil {
 		return false, err
 	}
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		inner := LinearSearchOffsetByValFactory(keys)
@@ -3084,23 +3092,8 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	return objStats, nil
 }
 
-// Reset what?
-// TODO: txnTable should be stateless
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
-	ws := op.GetWorkspace()
-	if ws == nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("workspace is nil when reset relation %s:%s",
-			tbl.db.databaseName, tbl.tableName))
-	}
-	txn, ok := ws.(*Transaction)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("failed to assert txn")
-	}
-	tbl.db.op = op
-	tbl.proc.Store(txn.proc)
-	tbl.createdInTxn = false
-	tbl.lastTS = op.SnapshotTS()
-	return nil
+	return moerr.NewInternalErrorNoCtx("cannot reset a shared relation; use an exclusive relation handle")
 }
 
 func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
