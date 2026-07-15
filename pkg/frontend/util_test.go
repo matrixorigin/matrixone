@@ -91,6 +91,12 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	stmt := motrace.NewStatementInfo()
 	stmt.RequestAt = time.Now()
 	stmt.SetResourceRoot(root)
+	memoryPool := mpool.MustNew("statement-resource-test")
+	defer mpool.DeleteMPool(memoryPool)
+	stmt.SetResourceMemoryPool(memoryPool)
+	allocation, allocErr := memoryPool.Alloc(64, true)
+	require.NoError(t, allocErr)
+	memoryPool.Free(allocation)
 	ses.SetTStmt(stmt)
 
 	ses.beginResponseAccounting()
@@ -107,6 +113,8 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	summary := root.PreResponseSummary()
 	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
 	require.Equal(t, uint64(1), summary.OutputPacketCount)
+	require.Equal(t, uint64(64), summary.Memory.MaxDomainPeakLiveBytes)
+	require.Zero(t, summary.MissingMemoryDomainCount)
 }
 
 type testColumnWithoutDecimalScale struct {

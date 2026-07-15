@@ -145,9 +145,11 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		waitStart := time.Now()
-		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
-		analyzer.WaitStopKind(waitStart, resource.WaitFilesystem)
+		isEnd, err := func() (bool, error) {
+			waitStart := time.Now()
+			defer analyzer.WaitStopKind(waitStart, resource.WaitFilesystem)
+			return tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
+		}()
 		if err != nil {
 			e = err
 			return vm.CancelResult, err

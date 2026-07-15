@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -49,7 +48,6 @@ func TestExecutionResourceRecorder(t *testing.T) {
 		"local:6001",
 		resource.OutcomeSuccess,
 		false,
-		attemptMemoryRecorder{},
 	)
 	recorder.publish()
 
@@ -57,35 +55,8 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(1), summary.AttemptCount)
 	require.GreaterOrEqual(t, summary.Usage.ExclusiveActiveNS, uint64(35))
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
-	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
+	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
-}
-
-func TestAttemptMemoryRecorderDoesNotResetSharedPool(t *testing.T) {
-	pool, err := mpool.NewMPool("resource-attempt", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(pool)
-
-	memory := beginAttemptMemory(pool)
-	require.False(t, memory.exact)
-	buf, err := pool.Alloc(128, true)
-	require.NoError(t, err)
-	pool.Free(buf)
-
-	root := resource.NewRoot(resource.ConnExternal)
-	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
-	recorder.finishAttempt(
-		0, time.Now().Add(-time.Millisecond), 0, nil, nil, nil, "local:6001",
-		resource.OutcomeSuccess, false, memory,
-	)
-	recorder.publish()
-
-	summary := root.PreResponseSummary()
-	require.Zero(t, summary.Memory.AllocatedBytes)
-	require.Zero(t, summary.Memory.FreedBytes)
-	require.Zero(t, summary.Memory.MaxDomainPeakLiveBytes)
-	require.Equal(t, uint64(1), summary.MissingMemoryDomainCount)
-	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 }
 
 func TestRemoteTerminalEnvelope(t *testing.T) {

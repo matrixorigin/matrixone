@@ -84,6 +84,13 @@ func TestRootLifecycle(t *testing.T) {
 	if !root.AddProtocolOutput(30, 2) {
 		t.Fatal("protocol output rejected")
 	}
+	if !root.AddMemoryDomain(MemoryDomainSummary{
+		AllocatedBytes: 64,
+		FreedBytes:     64,
+		PeakLiveBytes:  64,
+	}) {
+		t.Fatal("memory domain rejected")
+	}
 	pre := root.PreResponseSummary()
 	if pre.StatementWallNS != 0 || pre.Usage.ClientEgressBytes != 30 {
 		t.Fatalf("unexpected pre-response summary: %+v", pre)
@@ -91,7 +98,7 @@ func TestRootLifecycle(t *testing.T) {
 	sealed := root.Seal(40)
 	if sealed.StatementWallNS != 40 || sealed.Usage.ExclusiveActiveNS != 10 ||
 		sealed.Usage.ClientEgressBytes != 30 || sealed.OutputPacketCount != 2 ||
-		sealed.AttemptCount != 1 {
+		sealed.AttemptCount != 1 || sealed.Memory.MaxDomainPeakLiveBytes != 64 {
 		t.Fatalf("unexpected sealed root: %+v", sealed)
 	}
 	if root.AddProtocolOutput(1, 1) || root.MergeExecution(ExecutionSummary{}) {

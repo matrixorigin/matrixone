@@ -86,13 +86,15 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		output.ctr.rowCount += int64(bat.RowCount())
 
 		crs := analyzer.GetOpCounterSet()
-		waitStart := time.Now()
-		if err = output.Func(bat, crs); err != nil {
-			analyzer.WaitStopKind(waitStart, resource.WaitOutput)
+		err = func() error {
+			waitStart := time.Now()
+			defer analyzer.WaitStopKind(waitStart, resource.WaitOutput)
+			return output.Func(bat, crs)
+		}()
+		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		analyzer.WaitStopKind(waitStart, resource.WaitOutput)
 
 		// TODO: analyzer.Output(result.Batch)
 		return result, nil
@@ -139,13 +141,15 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				output.ctr.currentIdx = output.ctr.currentIdx + 1
 
 				crs := analyzer.GetOpCounterSet()
-				waitStart := time.Now()
-				if err := output.Func(bat, crs); err != nil {
-					analyzer.WaitStopKind(waitStart, resource.WaitOutput)
+				err := func() error {
+					waitStart := time.Now()
+					defer analyzer.WaitStopKind(waitStart, resource.WaitOutput)
+					return output.Func(bat, crs)
+				}()
+				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
-				analyzer.WaitStopKind(waitStart, resource.WaitOutput)
 
 				result.Batch = bat
 				// same as nonBlock

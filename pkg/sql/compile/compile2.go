@@ -249,7 +249,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	attemptStart := time.Now()
-	attemptMemory := beginAttemptMemory(runC.proc.Mp())
 	attemptOpen := true
 	var attemptPreRunWall time.Duration
 	defer func() {
@@ -260,7 +259,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				}
 				resourceRecorder.finishAttempt(
 					uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
-					runC.scopes, runC.anal, c.addr, resource.OutcomePanic, false, attemptMemory,
+					runC.scopes, runC.anal, c.addr, resource.OutcomePanic, false,
 				)
 				attemptOpen = false
 			}
@@ -291,7 +290,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				}
 				resourceRecorder.finishAttempt(
 					uint64(retryTimes), attemptStart, preRunWall, stats,
-					runC.scopes, runC.anal, c.addr, resource.OutcomeSuccess, false, attemptMemory,
+					runC.scopes, runC.anal, c.addr, resource.OutcomeSuccess, false,
 				)
 				attemptOpen = false
 				break
@@ -325,7 +324,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, preRunWall, stats,
-				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false, attemptMemory,
+				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
 			return nil, err
@@ -362,14 +361,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			err = prepareErr
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
-				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false, attemptMemory,
+				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
 			return nil, err
 		}
 		resourceRecorder.finishAttempt(
 			uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
-			runC.scopes, runC.anal, c.addr, resourceOutcome(retryErr), true, attemptMemory,
+			runC.scopes, runC.anal, c.addr, resourceOutcome(retryErr), true,
 		)
 		attemptOpen = false
 		if runC != c {
@@ -380,7 +379,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		c.retryTimes = retryTimes
 		runC = nextRunC
 		attemptStart = time.Now()
-		attemptMemory = beginAttemptMemory(runC.proc.Mp())
 		attemptOpen = true
 		attemptPreRunWall = 0
 		carriedPreRunWall = 0

@@ -64,6 +64,33 @@ func (r *Root) AddProtocolOutput(bytes, packets uint64) bool {
 	return true
 }
 
+// AddMemoryDomain publishes one terminal allocator domain owned by the
+// statement root.
+func (r *Root) AddMemoryDomain(domain MemoryDomainSummary) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return false
+	}
+	r.summary.Quality |= MergeMemoryDomain(&r.summary.Memory, domain)
+	return true
+}
+
+// MarkMemoryDomainMissing records that an exclusive zero-live allocator epoch
+// could not be established for this statement.
+func (r *Root) MarkMemoryDomainMissing() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return false
+	}
+	r.summary.MissingMemoryDomainCount, r.summary.Quality = addChecked(
+		r.summary.MissingMemoryDomainCount, 1,
+		r.summary.Quality|QualityPartial|QualityMissingMemoryDomain,
+	)
+	return true
+}
+
 // PreResponseSummary returns an immutable snapshot without sealing the root.
 func (r *Root) PreResponseSummary() StatementResourceSummary {
 	r.mu.Lock()

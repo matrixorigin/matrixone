@@ -27,6 +27,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
@@ -244,6 +245,8 @@ type StatementInfo struct {
 	resourceRoot    *resource.Root
 	resourceSummary resource.StatementResourceSummary
 	resourceStated  bool
+	resourceMPool   *mpool.MPool
+	resourceMPExact bool
 
 	// disableAgg true, do NOT aggregate statement
 	// co-operate with Aggregator and StatementInfoFilter
@@ -282,6 +285,8 @@ func NewStatementInfo() *StatementInfo {
 	s.resourceRoot = nil
 	s.resourceSummary = resource.StatementResourceSummary{}
 	s.resourceStated = false
+	s.resourceMPool = nil
+	s.resourceMPExact = false
 	if s.Statement == nil {
 		s.Statement = make([]byte, 0, GetTracerProvider().MaxStatementSize)
 	}
@@ -455,6 +460,8 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.resourceRoot = nil
 	stmt.resourceSummary = s.resourceSummary
 	stmt.resourceStated = s.resourceStated
+	stmt.resourceMPool = nil
+	stmt.resourceMPExact = false
 	// part: disableAgg ctl
 	stmt.disableAgg = s.disableAgg
 	// part: skipTxn ctrl
@@ -643,6 +650,14 @@ func (s *StatementInfo) SetResourceRoot(root *resource.Root) {
 	s.resourceRoot = root
 }
 
+// SetResourceMemoryPool establishes one statement-scoped allocator epoch.
+// Nested work caused by the serialized session request is included. A pool
+// with pre-existing live bytes is explicitly missing rather than estimated.
+func (s *StatementInfo) SetResourceMemoryPool(pool *mpool.MPool) {
+	s.resourceMPool = pool
+	s.resourceMPExact = pool != nil && pool.ResetResourceEpoch()
+}
+
 // SetResourceSummary installs an already sealed summary for standalone
 // internal producers and deterministic tests.
 func (s *StatementInfo) SetResourceSummary(summary resource.StatementResourceSummary) {
@@ -751,6 +766,16 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.resourceRoot.AddLocal(resource.Delta{Quality: resource.QualityInvariantFailure})
 		} else {
 			s.resourceRoot.AddProtocolOutput(uint64(outBytes), uint64(outPacket))
+		}
+		if s.resourceMPool != nil {
+			if s.resourceMPExact {
+				domain, _ := s.resourceMPool.ResourceSnapshot()
+				s.resourceRoot.AddMemoryDomain(domain)
+			} else {
+				s.resourceRoot.MarkMemoryDomainMissing()
+			}
+			s.resourceMPool = nil
+			s.resourceMPExact = false
 		}
 		s.SetResourceSummary(s.resourceRoot.Seal(uint64(s.Duration)))
 		s.ExecPlan2Stats(ctx)

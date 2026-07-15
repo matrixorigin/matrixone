@@ -10,9 +10,9 @@ package compile
 
 import (
 	"context"
+	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -24,11 +24,6 @@ type executionResourceRecorder struct {
 	stats     *statistic.StatsInfo
 	execution resource.ExecutionSummary
 	published bool
-}
-
-type attemptMemoryRecorder struct {
-	pool  *mpool.MPool
-	exact bool
 }
 
 type remoteTerminalEnvelope struct {
@@ -60,17 +55,6 @@ func (r *executionResourceRecorder) publish() {
 	}
 }
 
-func beginAttemptMemory(pool *mpool.MPool) attemptMemoryRecorder {
-	// The coordinator uses the session MPool, which is shared by nested and
-	// background execution. Resetting its epoch here makes overlapping attempts
-	// erase each other's peaks. Until coordinator attempts own isolated pools,
-	// leave this domain explicitly missing instead of publishing a false peak.
-	return attemptMemoryRecorder{
-		pool:  pool,
-		exact: false,
-	}
-}
-
 func (r *executionResourceRecorder) finishAttempt(
 	generation uint64,
 	attemptStart time.Time,
@@ -81,17 +65,17 @@ func (r *executionResourceRecorder) finishAttempt(
 	localAddress string,
 	outcome resource.Outcome,
 	retried bool,
-	memory attemptMemoryRecorder,
 ) {
 	if r == nil {
 		return
 	}
-	attempt := resource.NewAttempt(generation, 0, 1)
-	requireMemoryReport := attempt.MarkMemoryDomainDispatched(0)
+	attempt := resource.NewAttempt(generation, 0, 0)
 	delta := collectScopeResourceDelta(scopes, localAddress)
 	remoteUsage, remoteMemory, remoteQuality, remoteReports := anal.remoteResourceSummary()
 	delta.Quality |= remoteQuality | resource.MergeUsage(&delta.Usage, remoteUsage)
+	var missingRemote uint64
 	if expected := countExpectedRemoteScopes(scopes, localAddress); remoteReports < expected {
+		missingRemote = expected - remoteReports
 		delta.Quality |= resource.QualityPartial | resource.QualityMissingFragment
 	}
 
@@ -109,17 +93,20 @@ func (r *executionResourceRecorder) finishAttempt(
 	coordinatorDelta := coordinator.Snapshot()
 	delta.Quality |= coordinatorDelta.Quality | resource.MergeUsage(&delta.Usage, coordinatorDelta.Usage)
 
-	if memory.exact && requireMemoryReport == resource.PublishAccepted {
-		domain, quality := memory.pool.ResourceSnapshot()
-		delta.Quality |= quality
-		attempt.PublishMemoryDomain(generation, 0, domain)
-	}
-
 	attempt.AddLocal(delta)
 	attempt.BeginClosing()
 	wallNS := durationNS(time.Since(attemptStart), &delta.Quality)
 	summary := attempt.Seal(wallNS, outcome)
 	summary.Quality |= delta.Quality | resource.MergeMemoryTotals(&summary.Memory, remoteMemory)
+	if missingRemote > 0 {
+		if summary.MissingMemoryDomainCount > math.MaxUint64-missingRemote {
+			summary.MissingMemoryDomainCount = math.MaxUint64
+			summary.Quality |= resource.QualityInvariantFailure
+		} else {
+			summary.MissingMemoryDomainCount += missingRemote
+		}
+		summary.Quality |= resource.QualityPartial | resource.QualityMissingMemoryDomain
+	}
 	r.execution.AddAttempt(summary, retried)
 }
 
