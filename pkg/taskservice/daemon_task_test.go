@@ -588,17 +588,26 @@ func waitStarted(started *atomic.Bool, timeout time.Duration) {
 }
 
 func TestPauseResumeDaemonTask(t *testing.T) {
-	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
-		mustAddTestDaemonTask(t, store, 1, dt)
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
-		waitStarted(&started, time.Second*5)
+	for _, code := range []task.TaskCode{
+		task.TaskCode_ConnectorKafkaSink,
+		task.TaskCode_ISCPExecutor,
+		task.TaskCode_PublicationExecutor,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+				dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+				dt.Metadata.Executor = code
+				mustAddTestDaemonTask(t, store, 1, dt)
+				var started atomic.Bool
+				r.testRegisterExecutor(t, code, &started)
+				waitStarted(&started, time.Second*5)
 
-		expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
-		expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
-	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Millisecond))
+				expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
+				expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
+			}, WithRunnerParallelism(1),
+				WithRunnerFetchInterval(time.Millisecond))
+		})
+	}
 }
 
 func TestPauseTaskHandleIdempotent(t *testing.T) {
