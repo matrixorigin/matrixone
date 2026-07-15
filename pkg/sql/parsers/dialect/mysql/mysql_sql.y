@@ -3205,6 +3205,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Ignore: $3 != "",
             Where: $7,
             OrderBy: $8,
             Limit: $9,
@@ -3216,6 +3217,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Ignore: $3 != "",
             Where: $7,
         }
     }
@@ -3228,6 +3230,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs:  $6,
+            Ignore: $3 != "",
             From:   &tree.From{Tables: tree.TableExprs{$8}},
             Where:  $9,
         }
@@ -5380,8 +5383,13 @@ quick_opt:
 |    QUICK
 
 ignore_opt:
-    {}
+    {
+        $$ = ""
+    }
 |    IGNORE
+    {
+        $$ = "ignore"
+    }
 
 // MySQL REPLACE only allows LOW_PRIORITY or DELAYED (not HIGH_PRIORITY). Both are
 // accepted for compatibility and ignored: MatrixOne has no corresponding scheduling,

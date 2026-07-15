@@ -32,7 +32,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	data []byte) ([]byte, error) {
 	switch opCode {
 	case uint32(api.OpCode_OpPing):
-		return s.handlePing(data), nil
+		return s.handlePing(data)
 	case uint32(api.OpCode_OpFlush):
 		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleFlushTable)
 		if err != nil {
@@ -107,7 +107,10 @@ func (s *taeStorage) Debug(ctx context.Context,
 		return []byte(ret), nil
 
 	case uint32(api.OpCode_OpStorageUsage):
-		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
+		if err != nil {
+			return nil, err
+		}
 		return resp.Read()
 	case uint32(api.OpCode_OpSnapshotRead):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleSnapshotRead)
@@ -154,14 +157,16 @@ func (s *taeStorage) Debug(ctx context.Context,
 	}
 }
 
-func (s *taeStorage) handlePing(data []byte) []byte {
+func (s *taeStorage) handlePing(data []byte) ([]byte, error) {
 	req := api.TNPingRequest{}
-	protoc.MustUnmarshal(&req, data)
+	if err := req.Unmarshal(data); err != nil {
+		return nil, err
+	}
 
-	return protoc.MustMarshal(&api.TNPingResponse{
+	return (&api.TNPingResponse{
 		ShardID:        s.shard.ShardID,
 		ReplicaID:      s.shard.ReplicaID,
 		LogShardID:     s.shard.LogShardID,
 		ServiceAddress: s.shard.Address,
-	})
+	}).Marshal()
 }
