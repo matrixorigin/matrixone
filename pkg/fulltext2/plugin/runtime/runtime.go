@@ -65,8 +65,14 @@ func (CatalogHooks) BuildSessionVars() []string { return nil }
 // DefaultOptions — no statement-level option JSON required.
 func (CatalogHooks) DefaultOptions() map[string]string { return nil }
 
-// ExperimentalFlag — not gated (yet).
-func (CatalogHooks) ExperimentalFlag() string { return "" }
+// Fulltext2IndexFlag gates CREATE FULLTEXT2 INDEX behind the
+// experimental_fulltext2_index session var (mirrors bm25's Bm25IndexFlag /
+// HNSW's HnswIndexFlag). Both the framework gate (pkg/sql/compile/util.go, via
+// ExperimentalFlag()) and the per-plugin HandleCreateIndex gate reference it.
+const Fulltext2IndexFlag = "experimental_fulltext2_index"
+
+// ExperimentalFlag — CREATE FULLTEXT2 INDEX is gated by experimental_fulltext2_index.
+func (CatalogHooks) ExperimentalFlag() string { return Fulltext2IndexFlag }
 
 // SupportedVectorTypes / SupportedOpTypes / SupportedIncludeColumnTypes —
 // fulltext2 has no vector/op-type/include concept.

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -53,6 +54,19 @@ type Hooks struct{}
 // tokenize → Segment → persist). Step-4 first cut: whole-table read + one base
 // segment; CDC-async incremental maintenance follows.
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	// Gate CREATE FULLTEXT2 INDEX behind experimental_fulltext2_index. Frontend-only:
+	// re-checking here (in addition to the framework gate in pkg/sql/compile/util.go
+	// via ExperimentalFlag()) catches a flag toggled off since the original CREATE;
+	// the background CDC/reindex context may not surface the user's session value, so
+	// skip the check there. Mirrors bm25's HandleCreateIndex gate.
+	if ctx.IsFrontend() {
+		if ok, err := ctx.IsExperimentalEnabled(fulltext2runtime.Fulltext2IndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("experimental_fulltext2_index is not enabled")
+		}
+	}
+
 	storeDef, ok := indexDefs[catalog.FullText2Index_TblType_Storage]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext2 storage index definition not found")
