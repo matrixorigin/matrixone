@@ -77,6 +77,10 @@ func newTableCache(
 			txnOp,
 		)
 		if err != nil {
+			for _, created := range c.mu.cols {
+				created.retire()
+				_ = created.close()
+			}
 			return nil, err
 		}
 		c.mu.cols[col.ColName] = cc

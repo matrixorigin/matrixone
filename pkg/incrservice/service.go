@@ -37,6 +37,20 @@ var (
 	lazyDeleteInterval = time.Second * 10
 )
 
+type privateResetKey struct {
+	txnID   string
+	tableID uint64
+}
+
+type privateResetRegistration struct {
+	ready chan struct{}
+}
+
+type privateResetCallback struct {
+	key          privateResetKey
+	registration *privateResetRegistration
+}
+
 type service struct {
 	sid       string
 	logger    *log.MOLogger
@@ -48,12 +62,14 @@ type service struct {
 
 	mu struct {
 		sync.Mutex
-		closed     bool
-		destroyed  map[uint64]deleteCtx
-		tables     map[uint64]incrTableCache
-		generation map[uint64]uint64
-		creates    map[string][]uint64
-		deletes    map[string][]deleteCtx
+		closed           bool
+		destroyed        map[uint64]deleteCtx
+		tables           map[uint64]incrTableCache
+		generation       map[uint64]uint64
+		private          map[privateResetKey]incrTableCache
+		privateCallbacks map[privateResetKey]*privateResetRegistration
+		creates          map[string][]uint64
+		deletes          map[string][]deleteCtx
 	}
 }
 
@@ -75,6 +91,8 @@ func NewIncrService(
 	s.mu.destroyed = make(map[uint64]deleteCtx)
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
 	s.mu.generation = make(map[uint64]uint64, 1024)
+	s.mu.private = make(map[privateResetKey]incrTableCache)
+	s.mu.privateCallbacks = make(map[privateResetKey]*privateResetRegistration)
 	s.mu.creates = make(map[string][]uint64, 1024)
 	s.mu.deletes = make(map[string][]deleteCtx, 1024)
 	if err := s.stopper.RunTask(s.destroyTables); err != nil {
@@ -213,12 +231,14 @@ func (s *service) GetLastAllocateTS(
 	ctx context.Context,
 	tableID uint64,
 	tableVersion uint32,
+	txnOp client.TxnOperator,
 	colName string,
 ) (timestamp.Timestamp, error) {
-	tc, err := s.getCommittedTableCacheForVersion(
+	tc, err := s.acquireTableCacheForVersion(
 		ctx,
 		tableID,
-		tableVersion)
+		tableVersion,
+		txnOp)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
@@ -235,14 +255,16 @@ func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
 	tableVersion uint32,
+	txnOp client.TxnOperator,
 	vecs []*vector.Vector,
 	rows int,
 	estimate int64,
 ) (uint64, error) {
-	ts, err := s.getCommittedTableCacheForVersion(
+	ts, err := s.acquireTableCacheForVersion(
 		ctx,
 		tableID,
-		tableVersion)
+		tableVersion,
+		txnOp)
 	if err != nil {
 		return 0, err
 	}
@@ -303,6 +325,15 @@ func (s *service) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
+	s.mu.Lock()
+	if s.mu.closed {
+		s.mu.Unlock()
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	s.builders.Add(1)
+	s.mu.Unlock()
+	defer s.builders.Done()
+
 	if err := s.Reload(ctx, tableID); err != nil {
 		return err
 	}
@@ -310,7 +341,63 @@ func (s *service) SetOffset(
 	// ALTER TABLE AUTO_INCREMENT explicitly resets the next value. The caller
 	// has already checked table data and holds the DDL lock, so bypass the
 	// store-level monotonic guard that protects normal pre-allocation updates.
-	return s.allocator.forceSetOffset(ctx, tableID, colName, offset, txnOp)
+	if err := s.allocator.forceSetOffset(ctx, tableID, colName, offset, txnOp); err != nil {
+		return err
+	}
+	if txnOp == nil {
+		return nil
+	}
+
+	cols, err := s.store.GetColumns(ctx, tableID, txnOp)
+	if err != nil {
+		return err
+	}
+	if len(cols) == 0 {
+		return moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+	}
+	private, err := newTableCache(
+		ctx,
+		s.sid,
+		tableID,
+		0,
+		cols,
+		s.cfg,
+		s.allocator,
+		txnOp,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if err := s.installPrivateReset(ctx, tableID, txnOp, private); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *service) DiscardOffsetReset(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) error {
+	if txnOp == nil {
+		return nil
+	}
+	key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: tableID}
+	s.mu.Lock()
+	registration := s.mu.privateCallbacks[key]
+	s.mu.Unlock()
+	if registration != nil {
+		<-registration.ready
+	}
+	s.mu.Lock()
+	private := s.mu.private[key]
+	delete(s.mu.private, key)
+	s.mu.Unlock()
+	if private != nil {
+		private.retire()
+	}
+	return nil
 }
 
 func (s *service) Close() {
@@ -326,15 +413,145 @@ func (s *service) Close() {
 	s.builders.Wait()
 
 	s.mu.Lock()
+	tables := make([]incrTableCache, 0, len(s.mu.tables)+len(s.mu.private))
 	for _, tc := range s.mu.tables {
-		if err := tc.close(); err != nil {
-			panic(err)
-		}
+		tables = append(tables, tc)
 	}
+	for _, tc := range s.mu.private {
+		tables = append(tables, tc)
+	}
+	s.mu.private = make(map[privateResetKey]incrTableCache)
+	s.mu.privateCallbacks = make(map[privateResetKey]*privateResetRegistration)
 	s.mu.Unlock()
+	for _, tc := range tables {
+		tc.retire()
+	}
 
 	s.allocator.close()
 	s.store.Close()
+}
+
+func (s *service) acquireTableCacheForVersion(
+	ctx context.Context,
+	tableID uint64,
+	tableVersion uint32,
+	txnOp client.TxnOperator,
+) (incrTableCache, error) {
+	if txnOp != nil {
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: tableID}
+		s.mu.Lock()
+		if s.mu.closed {
+			s.mu.Unlock()
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if private, ok := s.mu.private[key]; ok {
+			// A reset cache is transaction-private and authoritative while it
+			// exists. Never mask a private-cache error by falling back to a
+			// committed table-version cache.
+			private.acquire()
+			s.mu.Unlock()
+			return private, nil
+		}
+		s.mu.Unlock()
+	}
+	return s.getCommittedTableCacheForVersion(ctx, tableID, tableVersion)
+}
+
+func (s *service) installPrivateReset(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+	private incrTableCache,
+) error {
+	key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: tableID}
+	s.mu.Lock()
+	if s.mu.closed {
+		s.mu.Unlock()
+		private.retire()
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	registration := s.mu.privateCallbacks[key]
+	owner := registration == nil
+	if owner {
+		registration = &privateResetRegistration{ready: make(chan struct{})}
+		s.mu.privateCallbacks[key] = registration
+	}
+	s.mu.Unlock()
+
+	if owner {
+		if err := s.appendPrivateResetCallback(txnOp, privateResetCallback{
+			key:          key,
+			registration: registration,
+		}); err != nil {
+			s.mu.Lock()
+			if s.mu.privateCallbacks[key] == registration {
+				delete(s.mu.privateCallbacks, key)
+			}
+			s.mu.Unlock()
+			close(registration.ready)
+			private.retire()
+			return err
+		}
+	} else {
+		<-registration.ready
+	}
+
+	s.mu.Lock()
+	if s.mu.closed || s.mu.privateCallbacks[key] != registration {
+		s.mu.Unlock()
+		if owner {
+			close(registration.ready)
+		}
+		private.retire()
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	old := s.mu.private[key]
+	s.mu.private[key] = private
+	s.mu.Unlock()
+	if owner {
+		close(registration.ready)
+	}
+	if old != nil {
+		old.retire()
+	}
+	return nil
+}
+
+func (s *service) appendPrivateResetCallback(
+	txnOp client.TxnOperator,
+	callback privateResetCallback,
+) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = moerr.NewTxnNeedRetryWithDefChanged(context.Background())
+		}
+	}()
+	txnOp.AppendEventCallback(
+		client.ClosedEvent,
+		client.NewTxnEventCallbackWithValue(s.privateResetClosed, callback),
+	)
+	return nil
+}
+
+func (s *service) privateResetClosed(
+	_ context.Context,
+	_ client.TxnOperator,
+	_ client.TxnEvent,
+	v any,
+) error {
+	callback := v.(privateResetCallback)
+	<-callback.registration.ready
+	s.mu.Lock()
+	private := s.mu.private[callback.key]
+	delete(s.mu.private, callback.key)
+	if s.mu.privateCallbacks[callback.key] == callback.registration {
+		delete(s.mu.privateCallbacks, callback.key)
+	}
+	s.mu.Unlock()
+	if private != nil {
+		private.retire()
+	}
+	return nil
 }
 
 func (s *service) doCreateLocked(

@@ -597,7 +597,7 @@ func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input := newTestVector[uint64](1, vecType, nil, nil)
-		last, err := cn1.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
+		last, err := cn1.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), last)
 
@@ -605,7 +605,7 @@ func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
 		require.NoError(t, cn1.Reload(ctx, 0))
 
 		input = newTestVector[uint64](1, vecType, nil, nil)
-		last, err = cn1.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
+		last, err = cn1.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(101), last)
 	})
@@ -629,7 +629,7 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 
 		const tableVersion = 7
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		lastBeforeAlter, err := s.InsertValues(ctx, 0, tableVersion, []*vector.Vector{input}, 1, 0)
+		lastBeforeAlter, err := s.InsertValues(ctx, 0, tableVersion, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 
 		// Drain any background pre-allocation before recording the durable
@@ -651,7 +651,10 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 		store.Lock()
 		uncommittedCols := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
 		store.Unlock()
-		require.Equal(t, uint64(50), uncommittedCols[0].Offset)
+		// Building the transaction-private cache reserves its first range in
+		// the same transaction, so the staged high-water mark may advance past
+		// the requested reset while still remaining private.
+		require.GreaterOrEqual(t, uncommittedCols[0].Offset, uint64(50))
 		require.NoError(t, alterTxn.Rollback(ctx))
 
 		store.Lock()
@@ -660,10 +663,233 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 		require.Equal(t, committedOffset, committedCols[0].Offset)
 
 		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		lastAfterRollback, err := s.InsertValues(ctx, 0, tableVersion, []*vector.Vector{input}, 1, 0)
+		lastAfterRollback, err := s.InsertValues(ctx, 0, tableVersion, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Greater(t, lastAfterRollback, committedOffset)
 		require.Greater(t, lastAfterRollback, lastBeforeAlter)
+	})
+}
+
+func TestSetOffsetTransactionUsesPendingOffsetForInsert(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestOffsetResetCacheRetiredOnTransactionClose(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "rollback"
+		if commit {
+			name = "commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+				ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+				defer cancel()
+
+				store := NewMemStore().(*memStore)
+				s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+				defer s.Close()
+				def := newTestTableDef(1)
+				require.NoError(t, store.Create(ctx, 0, def, nil))
+
+				txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+				require.NoError(t, err)
+				require.NoError(t, store.Create(ctx, 0, def, txnOp))
+				require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+				key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+				s.mu.Lock()
+				private := s.mu.private[key]
+				s.mu.Unlock()
+				require.NotNil(t, private)
+
+				if commit {
+					require.NoError(t, txnOp.Commit(ctx))
+				} else {
+					require.NoError(t, txnOp.Rollback(ctx))
+				}
+
+				s.mu.Lock()
+				_, exists := s.mu.private[key]
+				s.mu.Unlock()
+				require.False(t, exists)
+				cache := private.(*tableCache)
+				cache.lifecycle.Lock()
+				require.True(t, cache.lifecycle.retired)
+				require.True(t, cache.lifecycle.closed)
+				cache.lifecycle.Unlock()
+			})
+		})
+	}
+}
+
+func TestDiscardOffsetResetRetiresPrivateCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		private := s.mu.private[key]
+		s.mu.Unlock()
+		require.NotNil(t, private)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, txnOp))
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, txnOp))
+
+		s.mu.Lock()
+		_, exists := s.mu.private[key]
+		s.mu.Unlock()
+		require.False(t, exists)
+		cache := private.(*tableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+	})
+}
+
+func TestServiceCloseRetiresPrivateOffsetResetCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		private := s.mu.private[key]
+		s.mu.Unlock()
+		require.NotNil(t, private)
+
+		s.Close()
+		cache := private.(*tableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+	})
+}
+
+func TestPrivateOffsetResetIsVisibleOnlyToOwningTransaction(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		owner, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, owner))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, owner))
+		other, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+
+		otherInput := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		otherLast, err := s.InsertValues(ctx, 0, 1, other, []*vector.Vector{otherInput}, 1, 0)
+		require.NoError(t, err)
+		require.Less(t, otherLast, uint64(1000))
+
+		key := privateResetKey{txnID: string(owner.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		private := s.mu.private[key].(*tableCache)
+		s.mu.Unlock()
+		privateTS := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
+		private.mu.Lock()
+		privateCol := private.mu.cols[def[0].ColName]
+		private.mu.Unlock()
+		privateCol.Lock()
+		privateCol.ranges.allocatedAt[0] = privateTS
+		privateCol.Unlock()
+		gotTS, err := s.GetLastAllocateTS(ctx, 0, 1, owner, def[0].ColName)
+		require.NoError(t, err)
+		require.Equal(t, privateTS, gotTS)
+
+		ownerInput := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		ownerLast, err := s.InsertValues(ctx, 0, 1, owner, []*vector.Vector{ownerInput}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), ownerLast)
+
+		privateCol.Lock()
+		privateCol.ranges.values = nil
+		privateCol.ranges.allocatedAt = nil
+		privateCol.overflow = true
+		privateCol.Unlock()
+		ownerInput = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 1, owner, []*vector.Vector{ownerInput}, 1, 0)
+		require.Error(t, err, "a present private cache must never fall back to the committed cache")
+	})
+}
+
+func TestFailedPrivateOffsetResetInstallRetiresCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+
+		private, err := newTableCache(ctx, s.sid, 0, 0, def, s.cfg, s.allocator, txnOp, false)
+		require.NoError(t, err)
+		s.Close()
+		require.Error(t, s.installPrivateReset(ctx, 0, txnOp, private))
+
+		cache := private.(*tableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
 	})
 }
 
@@ -685,13 +911,13 @@ func TestInsertValuesReplacesCacheOnTableVersionChange(t *testing.T) {
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input := newTestVector[uint64](1, vecType, nil, nil)
-		last, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		last, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(101), last)
 
 		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
 		input = newTestVector[uint64](1, vecType, nil, nil)
-		last, err = s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		last, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1001), last)
 
@@ -722,20 +948,20 @@ func TestInsertValuesVersionChangeReloadsBothServices(t *testing.T) {
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input1 := newTestVector[uint64](1, vecType, nil, nil)
-		last1, err := cn1.InsertValues(ctx, 0, 7, []*vector.Vector{input1}, 1, 0)
+		last1, err := cn1.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input1}, 1, 0)
 		require.NoError(t, err)
 		input2 := newTestVector[uint64](1, vecType, nil, nil)
-		last2, err := cn2.InsertValues(ctx, 0, 7, []*vector.Vector{input2}, 1, 0)
+		last2, err := cn2.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
 		require.Less(t, last1, uint64(1000))
 		require.Less(t, last2, uint64(1000))
 
 		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
 		input1 = newTestVector[uint64](1, vecType, nil, nil)
-		last1, err = cn1.InsertValues(ctx, 0, 8, []*vector.Vector{input1}, 1, 0)
+		last1, err = cn1.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input1}, 1, 0)
 		require.NoError(t, err)
 		input2 = newTestVector[uint64](1, vecType, nil, nil)
-		last2, err = cn2.InsertValues(ctx, 0, 8, []*vector.Vector{input2}, 1, 0)
+		last2, err = cn2.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, last1, uint64(1001))
 		require.GreaterOrEqual(t, last2, uint64(1001))
@@ -760,18 +986,18 @@ func TestInsertValuesFailedVersionReplacementPreservesOldCache(t *testing.T) {
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input := newTestVector[uint64](1, vecType, nil, nil)
-		last, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		last, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 
 		loadErr := errors.New("load version 8")
 		store.failWith(loadErr)
 		input = newTestVector[uint64](1, vecType, nil, nil)
-		_, err = s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.ErrorIs(t, err, loadErr)
 
 		store.failWith(nil)
 		input = newTestVector[uint64](1, vecType, nil, nil)
-		next, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		next, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, last+1, next)
 	})
@@ -800,11 +1026,11 @@ func TestInsertValuesRejectsOlderVersion(t *testing.T) {
 		require.NoError(t, ops[0].Commit(ctx))
 		vecType := types.New(types.T_uint64, 0, 0)
 		input := newTestVector[uint64](1, vecType, nil, nil)
-		_, err := s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		_, err := s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 
 		input = newTestVector[uint64](1, vecType, nil, nil)
-		_, err = s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
 		require.Equal(t, uint32(8), s.getTableCache(0).version())
 	})
@@ -826,12 +1052,12 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerVersion(t *testing.T)
 		oldErr := make(chan error, 1)
 		go func() {
 			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-			_, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+			_, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 			oldErr <- err
 		}()
 		<-started
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		_, err = s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		close(release)
 		require.True(t, moerr.IsMoErrCode(<-oldErr, moerr.ErrTxnNeedRetryWithDefChanged))
@@ -863,7 +1089,7 @@ func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
 		started, release := store.blockNext()
 		defer release()
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		last, err := s.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
+		last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), last)
 		<-started
@@ -877,7 +1103,7 @@ func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
 		require.NoError(t, <-setResult)
 
 		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		last, err = s.InsertValues(ctx, 0, 1, []*vector.Vector{input}, 1, 0)
+		last, err = s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(100), last)
 	})
@@ -897,10 +1123,10 @@ func TestGetLastAllocateTSUsesRequestedVersionCache(t *testing.T) {
 		require.NoError(t, op.Commit(ctx))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 99, nil))
 
-		_, err = s.GetLastAllocateTS(ctx, 0, 1, def[0].ColName)
+		_, err = s.GetLastAllocateTS(ctx, 0, 1, nil, def[0].ColName)
 		require.NoError(t, err)
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		last, err := s.InsertValues(ctx, 0, 1, []*vector.Vector{input}, 1, 0)
+		last, err := s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(100), last)
 	})
@@ -923,7 +1149,7 @@ func TestCanceledSetOffsetDoesNotRunQueuedForceUpdate(t *testing.T) {
 		started, release := store.blockNext()
 		defer release()
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		_, err = s.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
+		_, err = s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		<-started
 
@@ -995,7 +1221,7 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		result := make(chan error, 1)
 		go func() {
 			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-			_, err := s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+			_, err := s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 			result <- err
 		}()
 		<-started

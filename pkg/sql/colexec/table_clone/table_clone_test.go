@@ -28,6 +28,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -85,11 +86,12 @@ func TestUpdateDstAutoIncrColumnsReconcilesRequestedOffsetWithCopiedMaximum(t *t
 			}
 
 			incrSvc.EXPECT().InsertValues(
-				gomock.Any(), def.TblId, def.Version, gomock.Any(), 1, int64(1),
+				gomock.Any(), def.TblId, def.Version, gomock.Any(), gomock.Any(), 1, int64(1),
 			).DoAndReturn(func(
 				_ context.Context,
 				_ uint64,
 				_ uint32,
+				_ client.TxnOperator,
 				vecs []*vector.Vector,
 				_ int,
 				_ int64,
@@ -145,11 +147,12 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeEffectiveOffset(t *testing.T) 
 
 			insertCalls := 0
 			incrSvc.EXPECT().InsertValues(
-				gomock.Any(), def.TblId, def.Version, gomock.Any(), 1, int64(1),
+				gomock.Any(), def.TblId, def.Version, gomock.Any(), gomock.Any(), 1, int64(1),
 			).DoAndReturn(func(
 				_ context.Context,
 				_ uint64,
 				_ uint32,
+				_ client.TxnOperator,
 				vecs []*vector.Vector,
 				_ int,
 				_ int64,

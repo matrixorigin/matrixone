@@ -62,19 +62,21 @@ type AutoIncrementService interface {
 	// records to be deleted are recorded. When the delete table transaction is committed, the
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
-	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tableID uint64, tableVersion uint32, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
+	// InsertValues inserts auto-column values, using a reset cache owned by txn when present.
+	InsertValues(ctx context.Context, tableID uint64, tableVersion uint32, txn client.TxnOperator, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
 	Reload(ctx context.Context, tableID uint64) error
 	// SetOffset sets the offset of an auto-increment column and refreshes local cache.
 	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txn client.TxnOperator) error
+	// DiscardOffsetReset synchronously retires a transaction-private reset cache.
+	DiscardOffsetReset(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
 	Close()
 	// GetLastAllocateTS gets the oldest allocation timestamp that can still
-	// issue a value from the column cache.
-	GetLastAllocateTS(ctx context.Context, tableID uint64, tableVersion uint32, colName string) (timestamp.Timestamp, error)
+	// issue a value from the transaction-private or committed column cache.
+	GetLastAllocateTS(ctx context.Context, tableID uint64, tableVersion uint32, txn client.TxnOperator, colName string) (timestamp.Timestamp, error)
 }
 
 // incrTableCache a cache containing auto-incremented columns of a table, an incrCache may

@@ -115,6 +115,7 @@ func (m *MockAutoIncrementService) InsertValues(
 	ctx context.Context,
 	tableID uint64,
 	tableVersion uint32,
+	txnOp client.TxnOperator,
 	vecs []*vector.Vector,
 	rows int,
 	estimate int64,
@@ -219,6 +220,15 @@ func (m *MockAutoIncrementService) SetOffset(
 	return nil
 }
 
+// DiscardOffsetReset discards a transaction-private reset in the mock service.
+func (m *MockAutoIncrementService) DiscardOffsetReset(
+	ctx context.Context,
+	tableID uint64,
+	txn client.TxnOperator,
+) error {
+	return nil
+}
+
 // Close closes the service
 func (m *MockAutoIncrementService) Close() {
 	m.mu.Lock()
@@ -233,6 +243,7 @@ func (m *MockAutoIncrementService) GetLastAllocateTS(
 	ctx context.Context,
 	tableID uint64,
 	tableVersion uint32,
+	txnOp client.TxnOperator,
 	colName string,
 ) (timestamp.Timestamp, error) {
 	return timestamp.Timestamp{}, nil
