@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -345,6 +346,31 @@ func TestMergeStats(t *testing.T) {
 	wantBytes = []byte("[6,228296,1800.000,1,0,0,1,13,1.1234,1,1,128,0,0,0,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
+}
+
+func TestMergeStatsUsesTypedResourceSummary(t *testing.T) {
+	e := &StatementInfo{Duration: 5, RowsRead: 1, BytesScan: 2}
+	e.SetResourceSummary(resource.StatementResourceSummary{
+		Usage:           resource.Usage{ExclusiveActiveNS: 10},
+		Memory:          resource.MemoryTotals{MaxDomainPeakLiveBytes: 100},
+		StatementWallNS: 5,
+	})
+	n := &StatementInfo{Duration: 7, RowsRead: 3, BytesScan: 4}
+	n.SetResourceSummary(resource.StatementResourceSummary{
+		Usage:           resource.Usage{ExclusiveActiveNS: 20},
+		Memory:          resource.MemoryTotals{MaxDomainPeakLiveBytes: 80},
+		StatementWallNS: 7,
+	})
+	e.Duration += n.Duration
+	require.NoError(t, mergeStats(e, n))
+	require.Equal(t, uint64(30), e.resourceSummary.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(100), e.resourceSummary.Memory.MaxDomainPeakLiveBytes)
+	require.Equal(t, uint64(12), e.resourceSummary.StatementWallNS)
+	require.NotZero(t, e.resourceSummary.Quality&resource.QualityAggregated)
+	require.Equal(t, float64(30), e.statsArray.GetTimeConsumed())
+	require.Equal(t, float64(100), e.statsArray.GetMemorySize())
+	require.Equal(t, int64(4), e.RowsRead)
+	require.Equal(t, int64(6), e.BytesScan)
 }
 
 func TestCalculateAggrMemoryBytes(t *testing.T) {

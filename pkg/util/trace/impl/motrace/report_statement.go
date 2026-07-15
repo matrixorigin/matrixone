@@ -241,6 +241,10 @@ type StatementInfo struct {
 	stated     bool
 	cuStated   bool
 
+	resourceRoot    *resource.Root
+	resourceSummary resource.StatementResourceSummary
+	resourceStated  bool
+
 	// disableAgg true, do NOT aggregate statement
 	// co-operate with Aggregator and StatementInfoFilter
 	disableAgg bool
@@ -275,6 +279,9 @@ func NewStatementInfo() *StatementInfo {
 	s.statsArray.Reset()
 	s.stated = false
 	s.cuStated = false
+	s.resourceRoot = nil
+	s.resourceSummary = resource.StatementResourceSummary{}
+	s.resourceStated = false
 	if s.Statement == nil {
 		s.Statement = make([]byte, 0, GetTracerProvider().MaxStatementSize)
 	}
@@ -445,6 +452,9 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.statsArray = s.statsArray
 	stmt.stated = s.stated
 	stmt.cuStated = s.cuStated
+	stmt.resourceRoot = nil
+	stmt.resourceSummary = s.resourceSummary
+	stmt.resourceStated = s.resourceStated
 	// part: disableAgg ctl
 	stmt.disableAgg = s.disableAgg
 	// part: skipTxn ctrl
@@ -545,6 +555,17 @@ func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float6
 // - RowRead
 // - BytesScan
 func mergeStats(e, n *StatementInfo) error {
+	if e.resourceStated && n.resourceStated {
+		e.resourceSummary.Merge(n.resourceSummary)
+		e.resourceSummary.StatementWallNS = uint64(e.Duration)
+		withoutCU := statistic.FromResourceSummary(e.resourceSummary, 0)
+		cu := CalculateCU(withoutCU, int64(e.Duration))
+		e.statsArray = statistic.FromResourceSummary(e.resourceSummary, cu)
+		e.cuStated = true
+		e.RowsRead += n.RowsRead
+		e.BytesScan += n.BytesScan
+		return nil
+	}
 	e.statsArray.Add(&n.statsArray)
 	if e.statsArray.GetVersion() >= statistic.StatsArrayVersion6 {
 		e.statsArray.WithQualityFlags(e.statsArray.GetQualityFlags() | resource.QualityAggregated)
@@ -597,18 +618,38 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 				zap.String("statement_id", uuid.UUID(s.StatementID).String()),
 			)
 		}
-		s.statsArray.InitIfEmpty().Add(&statsArray)
-		s.statsArray.WithConnType(s.ConnType)
+		if !s.resourceStated {
+			s.statsArray.InitIfEmpty().Add(&statsArray)
+			s.statsArray.WithConnType(s.ConnType)
+		}
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
 		s.stated = true
 	}
-	if !s.cuStated {
+	if s.resourceStated && !s.cuStated {
+		withoutCU := statistic.FromResourceSummary(s.resourceSummary, 0)
+		cu := CalculateCU(withoutCU, int64(s.Duration))
+		s.statsArray = statistic.FromResourceSummary(s.resourceSummary, cu)
+		s.cuStated = true
+	} else if !s.cuStated {
 		cu := CalculateCU(s.statsArray, int64(s.Duration))
 		s.statsArray.WithCU(cu)
 		s.cuStated = true
 	}
 	return nil
+}
+
+// SetResourceRoot installs the single request accounting owner.
+func (s *StatementInfo) SetResourceRoot(root *resource.Root) {
+	s.resourceRoot = root
+}
+
+// SetResourceSummary installs an already sealed summary for standalone
+// internal producers and deterministic tests.
+func (s *StatementInfo) SetResourceSummary(summary resource.StatementResourceSummary) {
+	s.resourceSummary = summary
+	s.resourceStated = true
+	s.cuStated = false
 }
 
 func (s *StatementInfo) GetStatsArrayBytes() []byte {
@@ -676,14 +717,6 @@ func (s *StatementInfo) MarkResponseAt() {
 
 func (s *StatementInfo) DisableAgg() { s.disableAgg = true }
 
-// TcpIpv4HeaderSize default tcp header bytes.
-const TcpIpv4HeaderSize = 66
-
-// ResponseErrPacketSize avg prefix size for mysql packet response error.
-// 66: default tcp header bytes.
-// 13: avg payload prefix of err response
-const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
-
 func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
@@ -705,13 +738,18 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		incStatementCounter(s.Account, s.AccountID, s.QueryType)
 		addStatementDurationCounter(s.Account, s.AccountID, s.QueryType, s.Duration)
 		// --- END of metric part
-		if err != nil {
-			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
+		if s.resourceRoot == nil {
+			s.resourceRoot = resource.NewRoot(resource.ConnType(s.ConnType))
 		}
-		if GetTracerProvider().tcpPacket {
-			outBytes += TcpIpv4HeaderSize * outPacket
+		if phases, ok := statistic.StatsInfoFromContext(ctx).ClaimRootPhaseResource(); ok {
+			s.resourceRoot.AddLocal(phases)
 		}
-		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
+		if outBytes < 0 || outPacket < 0 {
+			s.resourceRoot.AddLocal(resource.Delta{Quality: resource.QualityInvariantFailure})
+		} else {
+			s.resourceRoot.AddProtocolOutput(uint64(outBytes), uint64(outPacket))
+		}
+		s.SetResourceSummary(s.resourceRoot.Seal(uint64(s.Duration)))
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
 			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())

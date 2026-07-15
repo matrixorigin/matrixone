@@ -510,6 +510,8 @@ var DefaultStatsArrayJsonString = initStatsArray.ToJsonString()
 type statsInfoKey struct{}
 
 type StatsInfo struct {
+	resourceClaimed uint32
+
 	ParseStage struct {
 		ParseDuration  time.Duration `json:"ParseDuration"`
 		ParseStartTime time.Time     `json:"ParseStartTime"`

@@ -9,6 +9,7 @@
 package resource
 
 import (
+	"context"
 	"sync"
 	"testing"
 )
@@ -62,6 +63,42 @@ func TestAttemptTerminalLifecycle(t *testing.T) {
 	}
 	if got := attempt.PublishFragment(7, 1, delta); got != PublishAfterSeal {
 		t.Fatalf("publish after seal: %v", got)
+	}
+}
+
+func TestRootLifecycle(t *testing.T) {
+	root := NewRoot(ConnExternal)
+	ctx := ContextWithRoot(context.Background(), root)
+	if RootFromContext(ctx) != root {
+		t.Fatal("root not found in context")
+	}
+	var execution ExecutionSummary
+	execution.AddAttempt(AttemptSummary{
+		Usage:   Usage{ExclusiveActiveNS: 10},
+		WallNS:  20,
+		Outcome: OutcomeSuccess,
+	}, false)
+	if !root.MergeExecution(execution) {
+		t.Fatal("execution rejected")
+	}
+	if !root.AddProtocolOutput(30, 2) {
+		t.Fatal("protocol output rejected")
+	}
+	pre := root.PreResponseSummary()
+	if pre.StatementWallNS != 0 || pre.Usage.ClientEgressBytes != 30 {
+		t.Fatalf("unexpected pre-response summary: %+v", pre)
+	}
+	sealed := root.Seal(40)
+	if sealed.StatementWallNS != 40 || sealed.Usage.ExclusiveActiveNS != 10 ||
+		sealed.Usage.ClientEgressBytes != 30 || sealed.OutputPacketCount != 2 ||
+		sealed.AttemptCount != 1 {
+		t.Fatalf("unexpected sealed root: %+v", sealed)
+	}
+	if root.AddProtocolOutput(1, 1) || root.MergeExecution(ExecutionSummary{}) {
+		t.Fatal("sealed root accepted publication")
+	}
+	if again := root.Seal(999); again != sealed {
+		t.Fatalf("seal is not idempotent: first=%+v second=%+v", sealed, again)
 	}
 }
 

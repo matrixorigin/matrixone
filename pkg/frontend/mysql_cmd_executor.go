@@ -74,6 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -165,7 +166,20 @@ func transferSessionConnType2StatisticConnType(c ConnType) statistic.ConnType {
 	}
 }
 
+func transferSessionConnType2ResourceConnType(c ConnType) resource.ConnType {
+	switch c {
+	case ConnTypeInternal:
+		return resource.ConnInternal
+	case ConnTypeExternal:
+		return resource.ConnExternal
+	default:
+		return resource.ConnUnknown
+	}
+}
+
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) (context.Context, error) {
+	root := resource.NewRoot(transferSessionConnType2ResourceConnType(ses.connType))
+	ctx = resource.ContextWithRoot(ctx, root)
 	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
@@ -271,6 +285,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
+	stm.SetResourceRoot(root)
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
 		stm.User = ""
@@ -5101,8 +5116,6 @@ type marshalPlanHandler struct {
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
 	buffer      *bytes.Buffer
-	// internal sub statements, such as sub statements of compound statements, is not user SQL requests,
-	isInternalSubStmt bool
 
 	persistSchedulingTrace bool
 
@@ -5151,30 +5164,6 @@ func (h *marshalPlanHandler) resolveSchedulingTrace(includeNormalLocal bool) {
 	}
 	// The recorder is only needed while constructing the synchronous handler.
 	h.schedulingTraceRecorder = nil
-}
-
-// NewMarshalPlanHandlerCompositeSubStmt MarshalHandler for child statements of composite statements
-func NewMarshalPlanHandlerCompositeSubStmt(ctx context.Context, plan *plan.Plan, opts ...marshalPlanOptions) *marshalPlanHandler {
-	if plan == nil || plan.GetQuery() == nil {
-		return &marshalPlanHandler{
-			query:             nil,
-			marshalPlan:       nil,
-			buffer:            nil,
-			isInternalSubStmt: true,
-		}
-	}
-	query := plan.GetQuery()
-	h := &marshalPlanHandler{
-		query:             query,
-		buffer:            nil,
-		isInternalSubStmt: true,
-	}
-
-	// SET options
-	for _, opt := range opts {
-		opt(&h.marshalPlanConfig)
-	}
-	return h
 }
 
 // needMarshalPlan return true if statement.duration - waitActive > longQueryTime && NOT mo_logger query
@@ -5326,86 +5315,17 @@ func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
-func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+	statsByte.Reset()
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
-		statsByte.Reset()
 		for _, node := range h.query.Nodes {
-			// part 1: for statistic.StatsArray
-			s := explain.GetStatistic4Trace(ctx, node, options)
-			statsByte.Add(&s)
-			// part 2: for motrace.Statistic
 			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
 				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
 				stats.RowsRead += rows
 				stats.BytesScan += bytes
 			}
 		}
-	} else {
-		statsByte = statistic.DefaultStatsArray
-	}
-	statsInfo := statistic.StatsInfoFromContext(ctx)
-	if statsInfo != nil {
-		operatorTimeConsumed := int64(statsByte.GetTimeConsumed())
-		totalTime := operatorTimeConsumed +
-			int64(statsInfo.ParseStage.ParseDuration) +
-			int64(statsInfo.PlanStage.PlanDuration) +
-			int64(statsInfo.CompileStage.CompileDuration) +
-			statsInfo.PrepareRunStage.ScopePrepareDuration +
-			statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
-			statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
-			statsInfo.PlanStage.BuildPlanStatsIOConsumption -
-			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-
-		if totalTime < 0 {
-			if !h.isInternalSubStmt {
-				ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
-					uuid.UUID(h.stmt.StatementID).String(),
-					h.stmt.StatementType,
-					statsInfo.ParseStage.ParseDuration,
-					statsInfo.PlanStage.PlanDuration,
-					statsInfo.CompileStage.CompileDuration,
-					operatorTimeConsumed,
-					statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
-					statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
-					statsInfo.PlanStage.BuildPlanStatsIOConsumption,
-					statsInfo.IOAccessTimeConsumption,
-					statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
-					totalTime,
-				)
-			}
-			v2.GetTraceNegativeCUCounter("cpu").Inc()
-		} else {
-			statsByte.WithTimeConsumed(float64(totalTime))
-		}
-
-		planS3Input := statsInfo.PlanStage.BuildPlanS3Request.CountPUT()
-		planS3Output := statsInfo.PlanStage.BuildPlanS3Request.CountGET()
-		planS3List := statsInfo.PlanStage.BuildPlanS3Request.CountLIST()
-		planS3Delete := statsInfo.PlanStage.BuildPlanS3Request.CountDELETE()
-
-		compileS3Input := statsInfo.CompileStage.CompileS3Request.CountPUT()
-		compileS3Output := statsInfo.CompileStage.CompileS3Request.CountGET()
-		compileS3List := statsInfo.CompileStage.CompileS3Request.CountLIST()
-		compileS3Delete := statsInfo.CompileStage.CompileS3Request.CountDELETE()
-
-		preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountPUT()
-		preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountGET()
-		preRunS3List := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountLIST()
-		preRunS3Delete := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountDELETE()
-
-		totalS3Input := statsByte.GetS3IOInputCount() + float64(planS3Input+compileS3Input+preRunS3Input)
-		totalS3Output := statsByte.GetS3IOOutputCount() + float64(planS3Output+compileS3Output+preRunS3Output)
-		totalS3List := statsByte.GetS3IOListCount() + float64(planS3List+compileS3List+preRunS3List)
-		totalS3Delete := statsByte.GetS3IODeleteCount() + float64(planS3Delete+compileS3Delete+preRunS3Delete)
-
-		statsByte.WithS3IOInputCount(totalS3Input)
-		statsByte.WithS3IOOutputCount(totalS3Output)
-		statsByte.WithS3IOListCount(totalS3List)
-		statsByte.WithS3IODeleteCount(totalS3Delete)
-
-		// Additional permission authentication SQL statistics
-		statsByte.Add(&statsInfo.PermissionAuth)
 	}
 	return
 }

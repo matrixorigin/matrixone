@@ -500,20 +500,6 @@ func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, stats
 	return nil
 }
 
-func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
-	waitActiveCost := time.Duration(0)
-	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
-		txn := handler.GetTxn()
-		if txn != nil {
-			waitActiveCost = txn.GetWaitActiveCost()
-		}
-	}
-
-	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
-	statsByte, _ = h.Stats(ctx, cwft.ses)
-	return statsByte
-}
-
 func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
 	cwft.explainBuffer = buf
 }

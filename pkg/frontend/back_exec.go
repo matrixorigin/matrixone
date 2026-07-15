@@ -645,10 +645,7 @@ func executeStmtInBack(backSes *backSession,
 	}
 
 	defer func() {
-		if c, ok := ret.(*compile.Compile); ok && statsArr != nil {
-			statsByte := execCtx.cw.StatsCompositeSubStmtResource(execCtx.reqCtx)
-			statsArr.Reset()
-			statsArr.Add(&statsByte)
+		if c, ok := ret.(*compile.Compile); ok {
 			c.Release()
 		}
 	}()
