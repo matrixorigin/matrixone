@@ -16,10 +16,10 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync/atomic"
-
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -75,6 +75,10 @@ type ISCPExecutorOption struct {
 	RetryTimes             int
 }
 
+func newISCPTableTree() *btree.BTreeG[*TableEntry] {
+	return btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true})
+}
+
 func ISCPTaskExecutorFactory(
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
@@ -90,6 +94,7 @@ func ISCPTaskExecutorFactory(
 			logutil.Error("ISCPTaskExecutor is already running")
 			return moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
 		}
+		defer running.Store(false)
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		exec, err = NewISCPTaskExecutor(
@@ -103,19 +108,16 @@ func ISCPTaskExecutorFactory(
 		if err != nil {
 			return
 		}
-		attachToTask(ctx, task.GetID(), exec)
+		defer exec.terminateLifetime()
+		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
+			return
+		}
 
-		exec.runningMu.Lock()
-		defer exec.runningMu.Unlock()
-		if exec.running {
+		if err = exec.Start(); err != nil {
 			return
 		}
-		err = exec.initStateLocked()
-		if err != nil {
-			return
-		}
-		exec.run(ctx)
-		<-ctx.Done()
+		exec.waitForTermination(ctx)
+		exec.Stop()
 		return
 	}
 }
@@ -171,10 +173,13 @@ func NewISCPTaskExecutor(
 		)
 	}()
 	option = fillDefaultOption(option)
+	ownerCtx, terminate := context.WithCancel(ctx)
 	exec = &ISCPTaskExecutor{
-		ctx:         ctx,
+		ownerCtx:    ownerCtx,
+		terminate:   terminate,
+		ctx:         ownerCtx,
 		packer:      types.NewPacker(),
-		tables:      btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
+		tables:      newISCPTableTree(),
 		cnUUID:      cdUUID,
 		txnEngine:   txnEngine,
 		cnTxnClient: cnTxnClient,
@@ -239,7 +244,13 @@ func (exec *ISCPTaskExecutor) Pause() error {
 	return nil
 }
 func (exec *ISCPTaskExecutor) Cancel() error {
-	exec.Stop()
+	// Broadcast lifetime termination before waiting for the state lock. Start
+	// may hold the lock while doing recovery I/O; its generation context is
+	// derived from ownerCtx and must remain cancelable during that wait.
+	exec.terminateLifetime()
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	exec.stopLocked()
 	return nil
 }
 func (exec *ISCPTaskExecutor) Restart() error {
@@ -253,42 +264,64 @@ func (exec *ISCPTaskExecutor) Restart() error {
 func (exec *ISCPTaskExecutor) Start() error {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	if exec.isTerminated() {
+		return moerr.NewInternalErrorNoCtx("ISCP-Task Executor is canceled")
+	}
 	if exec.running {
 		return nil
 	}
-	err := exec.initStateLocked()
+	parent := exec.ownerCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	err := exec.initStateLocked(parent)
 	if err != nil {
 		return err
 	}
-	go exec.run(context.Background())
+	go exec.run(exec.ctx, exec.worker)
 	return nil
 }
 
-func (exec *ISCPTaskExecutor) initStateLocked() error {
-	exec.running = true
-	logutil.Info(
-		"ISCP-Task Start",
-	)
-	ctx, cancel := context.WithCancel(context.Background())
-	worker := NewWorker(exec, exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
-	exec.worker = worker
+func (exec *ISCPTaskExecutor) waitForTermination(ctx context.Context) {
+	var ownerDone <-chan struct{}
+	if exec.ownerCtx != nil {
+		ownerDone = exec.ownerCtx.Done()
+	}
+	select {
+	case <-ctx.Done():
+	case <-ownerDone:
+	}
+}
+
+func (exec *ISCPTaskExecutor) terminateLifetime() {
+	if exec.terminate != nil {
+		exec.terminate()
+	}
+}
+
+func (exec *ISCPTaskExecutor) isTerminated() bool {
+	return exec.ownerCtx != nil && exec.ownerCtx.Err() != nil
+}
+
+func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error) {
+	ctx, cancel := context.WithCancel(parent)
 	exec.ctx = ctx
 	exec.cancel = cancel
-	initialized := false
 	defer func() {
-		if initialized {
-			return
+		if err != nil {
+			cancel()
+			exec.ctx, exec.cancel = nil, nil
 		}
-		worker.Stop()
-		cancel()
-		exec.running = false
-		exec.ctx, exec.cancel = nil, nil
-		exec.worker = nil
 	}()
-	err := retry(
+
+	// Repair abandoned durable states before loading the next generation.
+	// A stopped generation may have persisted Running, or may only have
+	// advanced its in-memory LSN before cancellation. The database is the
+	// generation boundary's source of truth.
+	err = retry(
 		ctx,
 		func() error {
-			return exec.replay(exec.ctx)
+			return exec.repairAbandonedJobs(ctx)
 		},
 		exec.option.RetryTimes,
 		DefaultRetryInterval,
@@ -300,7 +333,7 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	err = retry(
 		ctx,
 		func() error {
-			return exec.initState()
+			return exec.rebuildState(ctx)
 		},
 		exec.option.RetryTimes,
 		DefaultRetryInterval,
@@ -309,15 +342,26 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 	if err != nil {
 		return err
 	}
+
+	// Publish a fully initialized generation only after replay and state repair
+	// have both succeeded. NewWorker seals all worker goroutines before return.
+	exec.worker = NewWorker(exec, exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
 	exec.wg.Add(1)
+	exec.running = true
 	RegisterExecutorRuntime(exec.cnUUID, exec)
-	initialized = true
+	logutil.Info(
+		"ISCP-Task Start",
+	)
 	return nil
 }
 
 func (exec *ISCPTaskExecutor) Stop() {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	exec.stopLocked()
+}
+
+func (exec *ISCPTaskExecutor) stopLocked() {
 	if !exec.running {
 		return
 	}
@@ -325,16 +369,16 @@ func (exec *ISCPTaskExecutor) Stop() {
 	logutil.Info(
 		"ISCP-Task Stop",
 	)
-	exec.worker.Stop()
 	exec.cancel()
+	exec.worker.Stop()
 	exec.wg.Wait()
 	UnregisterExecutorRuntime(exec.cnUUID, exec)
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
 }
 
-func (exec *ISCPTaskExecutor) initState() (err error) {
-	ctxWithTimeout, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	sql := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_iscp_log
@@ -353,7 +397,13 @@ func (exec *ISCPTaskExecutor) initState() (err error) {
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctxWithTimeout)
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, txnOp.Rollback(ctxWithTimeout))
+				return
+			}
+			err = txnOp.Commit(ctxWithTimeout)
+		}()
 	}
 	if err != nil {
 		return
@@ -376,7 +426,7 @@ func (exec *ISCPTaskExecutor) IsRunning() bool {
 	return exec.running
 }
 
-func (exec *ISCPTaskExecutor) run(ctx context.Context) {
+func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 	logutil.Info(
 		"ISCP-Task Run",
 	)
@@ -387,24 +437,25 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	}()
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
+	defer syncTaskTrigger.Stop()
 	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
+	defer flushWatermarkTrigger.Stop()
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
+	defer gcTrigger.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-exec.ctx.Done():
 			return
 		case <-syncTaskTrigger.C:
 			// apply iscp log
 			from := exec.iscpLogWm.Next()
 			to := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
-			err := exec.applyISCPLog(exec.ctx, from, to)
+			err := exec.applyISCPLog(ctx, from, to)
 			if err == nil {
 				exec.iscpLogWm = to
 			}
 			if err != nil && moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				err = exec.replay(exec.ctx)
+				err = exec.replay(ctx)
 			}
 			if err != nil {
 				logutil.Error(
@@ -421,7 +472,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				continue
 			}
 			// check if there are any dirty tables
-			tables, toTS, minTS, err := exec.getDirtyTables(exec.ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
+			tables, toTS, minTS, err := exec.getDirtyTables(ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
@@ -452,45 +503,38 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				} else {
 					_, ok = tables[iter.tableID]
 				}
-				table, ok2 := exec.getTable(iter.accountID, iter.tableID)
+				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
+				if !tableExists {
+					logutil.Error(
+						"ISCP-Task get table failed",
+						zap.Uint32("accountID", iter.accountID),
+						zap.Uint64("tableID", iter.tableID),
+					)
+					continue
+				}
 				if ok {
-					// The update on mo_iscp_log may not be available in the next applyISCPLog,
-					// so update the in-memory state directly to prevent repeated triggering of the iteration.
-					for i, jobName := range iter.jobNames {
-						job := table.jobs[JobKey{
-							JobName: jobName,
-							JobID:   iter.jobIDs[i],
-						}]
-						job.currentLSN++
-						job.state = ISCPJobState_Pending
-					}
-					onErrorFn := func(err error) {
-						for i, jobName := range iter.jobNames {
-							job := table.jobs[JobKey{
-								JobName: jobName,
-								JobID:   iter.jobIDs[i],
-							}]
-							job.currentLSN--
-							job.state = ISCPJobState_Completed
-						}
-						logutil.Error(
-							"ISCP-Task submit iteration failed",
-							zap.Error(err),
-						)
-					}
-					ok, err := CheckLeaseWithRetry(exec.ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
+					ok, err := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
 					if err != nil {
-						onErrorFn(err)
+						logutil.Error("ISCP-Task check lease failed", zap.Error(err))
 						continue
 					}
 					if !ok {
-						go exec.Stop()
+						go exec.Cancel()
 						break
 					}
-					err = exec.worker.Submit(iter)
+					err = worker.Submit(iter)
 					if err != nil {
-						onErrorFn(err)
+						logutil.Error("ISCP-Task submit iteration failed", zap.Error(err))
 						continue
+					}
+					// Admission is the linearization point. The worker now owns the
+					// iteration, so hide it from the next candidate scan.
+					if err = table.markIterationPending(iter); err != nil {
+						logutil.Error("ISCP-Task mark admitted iteration failed", zap.Error(err))
+						// The accepted iteration cannot be retracted safely. Cancel this
+						// generation; the next Start repairs and rebuilds its state.
+						go exec.Cancel()
+						return
 					}
 					if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterSubmit) {
 						logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelAfterSubmit)
@@ -499,14 +543,6 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
-					if !ok2 {
-						logutil.Error(
-							"ISCP-Task get table failed",
-							zap.Uint32("accountID", iter.accountID),
-							zap.Uint64("tableID", iter.tableID),
-						)
-						continue
-					}
 					table.UpdateWatermark(iter)
 				}
 			}
@@ -539,6 +575,21 @@ func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, 
 	}
 	watermark, ok = table.GetWatermark(jobName)
 	return
+}
+
+// GetJobState returns the scheduler's in-memory LSN and state. It is used by
+// diagnostics and lifecycle tests to distinguish admitted work from durable
+// progress.
+func (exec *ISCPTaskExecutor) GetJobState(
+	accountID uint32,
+	srcTableID uint64,
+	jobName string,
+) (lsn uint64, state int8, ok bool) {
+	table, ok := exec.getTable(accountID, srcTableID)
+	if !ok {
+		return 0, ISCPJobState_Invalid, false
+	}
+	return table.getJobState(jobName)
 }
 
 // For UT
@@ -714,7 +765,26 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 	return
 }
 
-func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
+type replayApplyFunc func(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	state int8,
+	watermarkStr string,
+	jobSpecStr []byte,
+	jobStatusStr []byte,
+	dropAt types.Timestamp,
+	notPrint bool,
+) error
+
+// loadReplay reads one authoritative storage snapshot. The caller decides
+// whether to merge it into the current generation or publish it as a fresh
+// generation state.
+func (exec *ISCPTaskExecutor) loadReplay(
+	ctx context.Context,
+	apply replayApplyFunc,
+) (tableID uint64, watermark types.TS, err error) {
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "replay" {
 		err = moerr.NewInternalErrorNoCtx(msg)
@@ -741,13 +811,18 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, txn.Rollback(ctx))
+			return
+		}
+		err = txn.Commit(ctx)
+	}()
 
-	tid, _, err := getTableID(ctx, exec.cnUUID, txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MO_ISCP_LOG)
+	tableID, _, err = getTableID(ctx, exec.cnUUID, txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MO_ISCP_LOG)
 	if err != nil {
 		return
 	}
-	exec.prevISCPTableID = tid
 
 	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
 	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
@@ -776,7 +851,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 			if !dropAtVector.IsNull(uint64(i)) {
 				dropAt = dropAts[i]
 			}
-			err = exec.addOrUpdateJob(
+			err = apply(
 				accountIDs[i],
 				tableIDs[i],
 				jobNameVector.GetStringAt(i),
@@ -794,9 +869,94 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 		}
 		return true
 	})
-	exec.iscpLogWm = types.TimestampToTS(txn.SnapshotTS())
+	if err != nil {
+		return
+	}
+	watermark = types.TimestampToTS(txn.SnapshotTS())
 
 	return
+}
+
+// replay incrementally merges a storage snapshot into the running generation.
+// Monotonic merge is required here so an older snapshot cannot overwrite an
+// iteration that is concurrently becoming durable.
+func (exec *ISCPTaskExecutor) replay(ctx context.Context) error {
+	tableID, watermark, err := exec.loadReplay(ctx, exec.addOrUpdateJob)
+	if err != nil {
+		return err
+	}
+	exec.prevISCPTableID = tableID
+	exec.iscpLogWm = watermark
+	return nil
+}
+
+func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	state int8,
+	watermarkStr string,
+	jobSpecStr []byte,
+	jobStatusStr []byte,
+	dropAt types.Timestamp,
+	notPrint bool,
+) error {
+	// The repair transaction may commit before its logtail is visible to the
+	// next read snapshot. Normalize the same states in memory so correctness
+	// does not depend on asynchronous logtail catch-up.
+	if state == ISCPJobState_Pending || state == ISCPJobState_Running {
+		state = ISCPJobState_Completed
+	}
+	return exec.addOrUpdateJob(
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		state,
+		watermarkStr,
+		jobSpecStr,
+		jobStatusStr,
+		dropAt,
+		notPrint,
+	)
+}
+
+// rebuildState closes the generation boundary by constructing state off to the
+// side and publishing it only after the complete storage snapshot succeeds.
+// Unlike replay, startup must not retain optimistic LSN/state from a stopped
+// generation: no worker from that generation remains that can make it durable.
+func (exec *ISCPTaskExecutor) rebuildState(ctx context.Context) error {
+	snapshot := &ISCPTaskExecutor{
+		ctx:         ctx,
+		tables:      newISCPTableTree(),
+		cnUUID:      exec.cnUUID,
+		txnEngine:   exec.txnEngine,
+		cnTxnClient: exec.cnTxnClient,
+		option:      exec.option,
+	}
+	tableID, watermark, err := exec.loadReplay(ctx, snapshot.addOrUpdateRecoveredJob)
+	if err != nil {
+		return err
+	}
+	exec.publishRebuiltState(snapshot, tableID, watermark)
+	return nil
+}
+
+func (exec *ISCPTaskExecutor) publishRebuiltState(
+	snapshot *ISCPTaskExecutor,
+	tableID uint64,
+	watermark types.TS,
+) {
+	for _, table := range snapshot.tables.Items() {
+		table.exec = exec
+	}
+
+	exec.tableMu.Lock()
+	exec.tables = snapshot.tables
+	exec.prevISCPTableID = tableID
+	exec.iscpLogWm = watermark
+	exec.tableMu.Unlock()
 }
 
 func (exec *ISCPTaskExecutor) addOrUpdateJob(
