@@ -21,9 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
@@ -299,6 +301,83 @@ func TestIcebergWriteUsesCoordinatorFactoryAndProcessAwareAppend(t *testing.T) {
 	require.Equal(t, 1, coord.commitCalls)
 }
 
+func TestIcebergWriteCachedExecutionCreatesIndependentCoordinators(t *testing.T) {
+	proc := testutil.NewProc(t)
+	firstID := uuid.New()
+	secondID := uuid.New()
+	profile := process.NewStmtProfile(uuid.Nil, firstID)
+	proc.SetStmtProfile(profile)
+	firstZone := time.FixedZone("first", 60*60)
+	secondZone := time.FixedZone("second", 2*60*60)
+	proc.GetSessionInfo().TimeZone = firstZone
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(11))
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RoleIDKey{}, uint32(12))
+	proc.Ctx = context.WithValue(proc.Ctx, defines.UserIDKey{}, uint32(13))
+
+	var requests []AppendRequest
+	var coordinators []*testCoordinator
+	op := NewArgument(AppendRequest{
+		Operation:      OperationAppend,
+		StatementID:    "prepare-statement-id",
+		IdempotencyKey: "prepare-statement-id",
+	}).WithCoordinatorFactory(CoordinatorFactoryFunc(func(ctx context.Context, req AppendRequest) (Coordinator, error) {
+		coord := &testCoordinator{}
+		requests = append(requests, req)
+		coordinators = append(coordinators, coord)
+		return coord, nil
+	}))
+	child := &stopWithDataOperator{bat: testBatchWithRows(proc, 1)}
+	child.OpAnalyzer = process.NewAnalyzer(0, false, false, "cached-iceberg-input")
+	op.AppendChild(child)
+
+	require.NoError(t, op.Prepare(proc))
+	_, err := op.Call(proc)
+	require.NoError(t, err)
+	op.Reset(proc, false, nil)
+	child.Reset(proc, false, nil)
+
+	profile.SetStmtId(secondID)
+	proc.GetSessionInfo().TimeZone = secondZone
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(21))
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RoleIDKey{}, uint32(22))
+	proc.Ctx = context.WithValue(proc.Ctx, defines.UserIDKey{}, uint32(23))
+	require.NoError(t, op.Prepare(proc))
+	_, err = op.Call(proc)
+	require.NoError(t, err)
+
+	require.Len(t, coordinators, 2)
+	require.NotSame(t, coordinators[0], coordinators[1])
+	require.Equal(t, 1, coordinators[0].commitCalls)
+	require.Equal(t, 1, coordinators[1].commitCalls)
+	require.Equal(t, firstID.String(), requests[0].StatementID)
+	require.Equal(t, firstID.String(), requests[0].IdempotencyKey)
+	require.Equal(t, secondID.String(), requests[1].StatementID)
+	require.Equal(t, secondID.String(), requests[1].IdempotencyKey)
+	require.Equal(t, uint32(11), requests[0].AccountID)
+	require.Equal(t, uint64(12), requests[0].RoleID)
+	require.Equal(t, uint64(13), requests[0].UserID)
+	require.Same(t, firstZone, requests[0].TimeZone)
+	require.Equal(t, uint32(21), requests[1].AccountID)
+	require.Equal(t, uint64(22), requests[1].RoleID)
+	require.Equal(t, uint64(23), requests[1].UserID)
+	require.Same(t, secondZone, requests[1].TimeZone)
+}
+
+func TestIcebergWriteReinvokesFactoryAfterNilCoordinatorFallback(t *testing.T) {
+	proc := testutil.NewProc(t)
+	factoryCalls := 0
+	op := NewArgument(AppendRequest{Operation: OperationAppend}).WithCoordinatorFactory(
+		CoordinatorFactoryFunc(func(context.Context, AppendRequest) (Coordinator, error) {
+			factoryCalls++
+			return nil, nil
+		}))
+
+	require.NoError(t, op.Prepare(proc))
+	op.Reset(proc, false, nil)
+	require.NoError(t, op.Prepare(proc))
+	require.Equal(t, 2, factoryCalls)
+}
+
 func TestIcebergWriteAbortsOpenCoordinatorAfterAppendFailure(t *testing.T) {
 	proc := testutil.NewProc(t)
 	appendErr := errors.New("append failed")
@@ -451,7 +530,9 @@ func (op *stopWithDataOperator) ExecProjection(proc *process.Process, input *bat
 	return input, nil
 }
 
-func (op *stopWithDataOperator) Reset(proc *process.Process, pipelineFailed bool, err error) {}
+func (op *stopWithDataOperator) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	op.done = false
+}
 
 func (op *stopWithDataOperator) Free(proc *process.Process, pipelineFailed bool, err error) {}
 

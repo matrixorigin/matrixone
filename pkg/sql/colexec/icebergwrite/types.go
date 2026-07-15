@@ -99,11 +99,12 @@ type container struct {
 }
 
 type IcebergWrite struct {
-	ctr         container
-	input       vm.CallResult
-	Request     AppendRequest
-	Coordinator Coordinator
-	Factory     CoordinatorFactory
+	ctr                    container
+	input                  vm.CallResult
+	Request                AppendRequest
+	Coordinator            Coordinator
+	Factory                CoordinatorFactory
+	coordinatorFromFactory bool
 
 	objectIORefRetained bool
 
@@ -118,6 +119,7 @@ func NewArgument(req AppendRequest) *IcebergWrite {
 
 func (w *IcebergWrite) WithCoordinator(coordinator Coordinator) *IcebergWrite {
 	w.Coordinator = coordinator
+	w.coordinatorFromFactory = false
 	return w
 }
 

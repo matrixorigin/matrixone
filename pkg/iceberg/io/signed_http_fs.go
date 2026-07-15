@@ -22,16 +22,21 @@ import (
 	"math"
 	"net/http"
 	pathpkg "path"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
+const maxSignedHTTPMaterializedReadBytes int64 = 512 << 20
+
 type SignedHTTPFileServiceBuilder struct {
-	HTTPClient *http.Client
+	HTTPClient               *http.Client
+	MaxMaterializedReadBytes int64
 }
 
 func (b SignedHTTPFileServiceBuilder) Build(ctx context.Context, scope ObjectScope, signed SignedRequest) (fileservice.ETLFileService, string, error) {
@@ -40,17 +45,23 @@ func (b SignedHTTPFileServiceBuilder) Build(ctx context.Context, scope ObjectSco
 	if client == nil {
 		client = http.DefaultClient
 	}
+	maxMaterializedReadBytes := b.MaxMaterializedReadBytes
+	if maxMaterializedReadBytes <= 0 || maxMaterializedReadBytes > maxSignedHTTPMaterializedReadBytes {
+		maxMaterializedReadBytes = maxSignedHTTPMaterializedReadBytes
+	}
 	return &signedHTTPFileService{
-		name:    name,
-		client:  client,
-		headers: cloneStringMap(signed.Headers),
+		name:                     name,
+		client:                   client,
+		headers:                  cloneStringMap(signed.Headers),
+		maxMaterializedReadBytes: maxMaterializedReadBytes,
 	}, strings.TrimSpace(signed.URL), nil
 }
 
 type signedHTTPFileService struct {
-	name    string
-	client  *http.Client
-	headers map[string]string
+	name                     string
+	client                   *http.Client
+	headers                  map[string]string
+	maxMaterializedReadBytes int64
 }
 
 func (s *signedHTTPFileService) Name() string {
@@ -124,12 +135,12 @@ func (s *signedHTTPFileService) Read(ctx context.Context, vector *fileservice.IO
 	if vector == nil || len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	remainingMaterializedBytes := s.maxMaterializedReadBytes
+	if remainingMaterializedBytes <= 0 || remainingMaterializedBytes > maxSignedHTTPMaterializedReadBytes {
+		remainingMaterializedBytes = maxSignedHTTPMaterializedReadBytes
+	}
 	for i := range vector.Entries {
-		data, err := s.readEntry(ctx, strings.TrimSpace(vector.FilePath), &vector.Entries[i])
-		if err != nil {
-			return err
-		}
-		if err := fillReadEntry(ctx, &vector.Entries[i], data); err != nil {
+		if err := s.readEntry(ctx, strings.TrimSpace(vector.FilePath), &vector.Entries[i], &remainingMaterializedBytes); err != nil {
 			return err
 		}
 	}
@@ -208,18 +219,18 @@ func (s *signedHTTPFileService) Close(ctx context.Context) {
 func (s *signedHTTPFileService) ETLCompatible() {
 }
 
-func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, entry *fileservice.IOEntry) ([]byte, error) {
+func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, entry *fileservice.IOEntry, remainingMaterializedBytes *int64) (err error) {
 	if target == "" {
-		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read requires URL", nil))
+		return api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read requires URL", nil))
 	}
 	if entry.Offset < 0 || entry.Size < -1 || (entry.Size > 0 && entry.Offset > math.MaxInt64-entry.Size) {
-		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read range is invalid", map[string]string{
+		return api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read range is invalid", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP request URL is invalid", map[string]string{
+		return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP request URL is invalid", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}, err))
 	}
@@ -229,14 +240,19 @@ func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, en
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP read failed", map[string]string{
+		return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP read failed", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}, err))
 	}
-	defer resp.Body.Close()
+	closeBody := true
+	defer func() {
+		if closeBody {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read returned non-success status", map[string]string{
+		return api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read returned non-success status", map[string]string{
 			"signed_url": RedactObjectPath(target),
 			"status":     strconv.Itoa(resp.StatusCode),
 			"body_hash":  api.PathHash(string(body)),
@@ -244,25 +260,89 @@ func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, en
 	}
 	if resp.StatusCode == http.StatusOK && entry.Offset > 0 {
 		if _, err := io.CopyN(io.Discard, resp.Body, entry.Offset); err != nil {
-			return nil, io.ErrUnexpectedEOF
+			return io.ErrUnexpectedEOF
 		}
 	}
 	reader := io.Reader(resp.Body)
 	if entry.Size >= 0 {
 		reader = io.LimitReader(reader, entry.Size)
 	}
+	// ReadCloserForRead means the caller has opted into streaming. Transfer
+	// response-body ownership instead of materializing the object in the CN.
+	// The combined writer/cache forms retain their historical eager semantics.
+	if entry.ReadCloserForRead != nil && entry.WriterForRead == nil && entry.ToCacheData == nil {
+		entry.Data = nil
+		stream := &signedHTTPResponseReadCloser{reader: reader, body: resp.Body}
+		runtime.SetFinalizer(stream, func(stream *signedHTTPResponseReadCloser) {
+			_ = stream.Close()
+		})
+		*entry.ReadCloserForRead = stream
+		closeBody = false
+		return nil
+	}
+	if entry.WriterForRead != nil && entry.ReadCloserForRead == nil && entry.ToCacheData == nil {
+		entry.Data = nil
+		n, err := io.Copy(entry.WriterForRead, reader)
+		if err != nil {
+			return err
+		}
+		if entry.Size >= 0 && n < entry.Size {
+			return io.ErrUnexpectedEOF
+		}
+		return nil
+	}
+
+	maxBytes := *remainingMaterializedBytes
+	if entry.Size > maxBytes {
+		return s.materializedReadTooLarge(ctx, target, maxBytes)
+	}
+	if entry.Size < 0 {
+		reader = io.LimitReader(reader, maxBytes+1)
+	}
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP response read failed", map[string]string{
+		return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP response read failed", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}, err))
 	}
+	if int64(len(data)) > maxBytes {
+		return s.materializedReadTooLarge(ctx, target, maxBytes)
+	}
 	if entry.Size >= 0 {
 		if int64(len(data)) < entry.Size {
-			return nil, io.ErrUnexpectedEOF
+			return io.ErrUnexpectedEOF
 		}
+	} else {
+		entry.Size = int64(len(data))
 	}
-	return data, nil
+	*remainingMaterializedBytes -= int64(len(data))
+	return fillReadEntry(ctx, entry, data)
+}
+
+func (s *signedHTTPFileService) materializedReadTooLarge(ctx context.Context, target string, maxBytes int64) error {
+	return api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP response is too large to materialize", map[string]string{
+		"signed_url": RedactObjectPath(target),
+		"max_bytes":  strconv.FormatInt(maxBytes, 10),
+	}))
+}
+
+type signedHTTPResponseReadCloser struct {
+	reader io.Reader
+	body   io.Closer
+	once   sync.Once
+	err    error
+}
+
+func (r *signedHTTPResponseReadCloser) Read(p []byte) (int, error) {
+	return r.reader.Read(p)
+}
+
+func (r *signedHTTPResponseReadCloser) Close() error {
+	r.once.Do(func() {
+		r.err = r.body.Close()
+		runtime.SetFinalizer(r, nil)
+	})
+	return r.err
 }
 
 func (s *signedHTTPFileService) addSignedHeaders(req *http.Request) {
@@ -284,7 +364,14 @@ func fillReadEntry(ctx context.Context, entry *fileservice.IOEntry, data []byte)
 	if entry.ReadCloserForRead != nil {
 		*entry.ReadCloserForRead = io.NopCloser(bytes.NewReader(data))
 	}
-	entry.Data = append(entry.Data[:0], data...)
+	if cap(entry.Data) >= len(data) {
+		entry.Data = entry.Data[:len(data)]
+		copy(entry.Data, data)
+	} else {
+		// data is freshly owned by this read. Transfer it directly to avoid a
+		// second full-response allocation at the materialization boundary.
+		entry.Data = data
+	}
 	if entry.ToCacheData != nil {
 		cacheData, err := entry.ToCacheData(ctx, bytes.NewReader(data), data, fileservice.DefaultCacheDataAllocator())
 		if err != nil {

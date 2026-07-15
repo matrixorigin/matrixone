@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"time"
@@ -51,8 +52,8 @@ func (e DMLActionExecutor) CommitDelete(ctx context.Context, req DMLDeleteAction
 	wrapDMLDeleteRequestWriters(&req, tracker)
 	stream, err := BuildDMLDeleteActionStream(ctx, req)
 	if err != nil {
-		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
-		return DMLCommitActionStreamResult{}, err
+		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
+			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
 }
@@ -69,8 +70,8 @@ func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateAction
 	wrapDMLUpdateRequestWriters(&req, tracker)
 	stream, err := BuildDMLUpdateActionStream(ctx, req)
 	if err != nil {
-		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
-		return DMLCommitActionStreamResult{}, err
+		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
+			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
 }
@@ -87,8 +88,8 @@ func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionSt
 	wrapDMLMergeRequestWriters(&req, tracker)
 	stream, err := BuildDMLMergeActionStream(ctx, req)
 	if err != nil {
-		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
-		return DMLCommitActionStreamResult{}, err
+		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
+			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
 }
@@ -105,10 +106,17 @@ func (e DMLActionExecutor) CommitOverwrite(ctx context.Context, req DMLOverwrite
 	wrapDMLOverwriteRequestWriters(&req, tracker)
 	stream, err := BuildDMLOverwriteActionStream(ctx, req)
 	if err != nil {
-		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
-		return DMLCommitActionStreamResult{}, err
+		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
+			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
+}
+
+func joinDMLBuildAndOrphanRecordErrors(buildErr, recordErr error) error {
+	if recordErr == nil {
+		return buildErr
+	}
+	return errors.Join(buildErr, recordErr)
 }
 
 func (e DMLActionExecutor) commit(ctx context.Context, tableLocation string, snapshotID int64, stream *dml.ActionStream) (DMLCommitActionStreamResult, error) {

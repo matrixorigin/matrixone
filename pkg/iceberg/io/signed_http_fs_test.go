@@ -125,6 +125,104 @@ func TestSignedHTTPFileServiceBoundsRangeReadWhenServerIgnoresRange(t *testing.T
 	}
 }
 
+func TestSignedHTTPFileServiceStreamsReadCloserWithoutMaterializing(t *testing.T) {
+	body := &countingReadCloser{reader: strings.NewReader("streamed-response")}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Body:          body,
+			Header:        make(http.Header),
+			ContentLength: int64(len("streamed-response")),
+			Request:       req,
+		}, nil
+	})}
+	fs, readPath, err := SignedHTTPFileServiceBuilder{HTTPClient: client}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{
+		URL: "https://signed.example.test/data.bin",
+	})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	var closer io.ReadCloser
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{
+		Offset:            0,
+		Size:              -1,
+		ReadCloserForRead: &closer,
+	}}}
+	if err := fs.Read(context.Background(), &vec); err != nil {
+		t.Fatalf("open signed response stream: %v", err)
+	}
+	if body.readBytes != 0 || len(vec.Entries[0].Data) != 0 {
+		t.Fatalf("response was materialized before caller read it: reads=%d data=%d", body.readBytes, len(vec.Entries[0].Data))
+	}
+	got := make([]byte, 8)
+	if _, err := io.ReadFull(closer, got); err != nil {
+		t.Fatalf("read signed response stream: %v", err)
+	}
+	if string(got) != "streamed" {
+		t.Fatalf("unexpected streamed prefix %q", got)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("close signed response stream: %v", err)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("close signed response stream twice: %v", err)
+	}
+	if body.closeCalls != 1 {
+		t.Fatalf("closing returned stream closed HTTP response body %d times", body.closeCalls)
+	}
+}
+
+func TestSignedHTTPFileServiceRejectsOversizedUnknownLengthRead(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "9")
+		_, _ = w.Write([]byte("123456789"))
+	}))
+	defer server.Close()
+
+	fs, readPath, err := SignedHTTPFileServiceBuilder{
+		HTTPClient:               server.Client(),
+		MaxMaterializedReadBytes: 8,
+	}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{URL: server.URL + "/data.bin"})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{Offset: 0, Size: -1}}}
+	err = fs.Read(context.Background(), &vec)
+	if err == nil || !strings.Contains(err.Error(), "too large to materialize") {
+		t.Fatalf("expected bounded materialized read failure, got %v", err)
+	}
+	if len(vec.Entries[0].Data) != 0 {
+		t.Fatalf("oversized response must not be returned, got %d bytes", len(vec.Entries[0].Data))
+	}
+}
+
+func TestSignedHTTPFileServiceBoundsTotalMaterializationAcrossVector(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+
+	fs, readPath, err := SignedHTTPFileServiceBuilder{
+		HTTPClient:               server.Client(),
+		MaxMaterializedReadBytes: 8,
+	}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{URL: server.URL + "/data.bin"})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{
+		{Offset: 0, Size: 5},
+		{Offset: 0, Size: 5},
+	}}
+	err = fs.Read(context.Background(), &vec)
+	if err == nil || !strings.Contains(err.Error(), "too large to materialize") {
+		t.Fatalf("expected aggregate materialization bound failure, got %v", err)
+	}
+	if string(vec.Entries[0].Data) != "12345" || len(vec.Entries[1].Data) != 0 {
+		t.Fatalf("unexpected vector data after aggregate bound: first=%q second=%q", vec.Entries[0].Data, vec.Entries[1].Data)
+	}
+}
+
 func TestSignedHTTPFileServiceStatsWithSignedRangeGET(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -391,4 +489,27 @@ func TestSignedHTTPFileServiceStatFallbacksAndHelpers(t *testing.T) {
 	if cloneStringMap(nil) != nil || clone["a"] != "c" {
 		t.Fatalf("cloneStringMap returned unexpected result")
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type countingReadCloser struct {
+	reader     io.Reader
+	readBytes  int
+	closeCalls int
+}
+
+func (r *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.readBytes += n
+	return n, err
+}
+
+func (r *countingReadCloser) Close() error {
+	r.closeCalls++
+	return nil
 }

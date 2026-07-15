@@ -464,7 +464,13 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		return op
 	case vm.IcebergWrite:
 		t := sourceOp.(*icebergwrite.IcebergWrite)
-		op := icebergwrite.NewArgument(t.Request).WithCoordinator(t.Coordinator).WithCoordinatorFactory(t.Factory)
+		op := icebergwrite.NewArgument(t.Request).WithCoordinatorFactory(t.Factory)
+		// Factory coordinators are execution state. A parallel clone must create
+		// its own scope from the factory instead of copying a possibly-open or
+		// terminal coordinator from the source operator.
+		if t.Factory == nil {
+			op.WithCoordinator(t.Coordinator)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.PartitionInsert:

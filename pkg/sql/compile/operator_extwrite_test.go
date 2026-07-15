@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -673,6 +674,36 @@ func TestIcebergAppendInsertRejectsInvalidCoordinatorFactoryRuntime(t *testing.T
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
 }
+
+func TestIcebergWriteDupOperatorDoesNotCopyFactoryRuntimeCoordinator(t *testing.T) {
+	coord := &compileTestIcebergCoordinator{}
+	factory := icebergwrite.CoordinatorFactoryFunc(func(context.Context, icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return &compileTestIcebergCoordinator{}, nil
+	})
+	src := icebergwrite.NewArgument(icebergwrite.AppendRequest{Operation: icebergwrite.OperationAppend}).
+		WithCoordinator(coord).
+		WithCoordinatorFactory(factory)
+
+	dup := dupOperator(src, 1, 2).(*icebergwrite.IcebergWrite)
+	require.Nil(t, dup.Coordinator)
+	require.NotNil(t, dup.Factory)
+	require.Equal(t, int32(1), dup.GetParalleID())
+	require.Equal(t, int32(2), dup.GetMaxParallel())
+
+	injected := icebergwrite.NewArgument(icebergwrite.AppendRequest{}).WithCoordinator(coord)
+	injectedDup := dupOperator(injected, 0, 1).(*icebergwrite.IcebergWrite)
+	require.Same(t, coord, injectedDup.Coordinator)
+}
+
+type compileTestIcebergCoordinator struct{}
+
+func (*compileTestIcebergCoordinator) Begin(context.Context, icebergwrite.AppendRequest) error {
+	return nil
+}
+
+func (*compileTestIcebergCoordinator) Append(context.Context, *batch.Batch) error { return nil }
+func (*compileTestIcebergCoordinator) Commit(context.Context) error               { return nil }
+func (*compileTestIcebergCoordinator) Abort(context.Context, error) error         { return nil }
 
 func icebergDMLTestColExpr(name string, typ types.T) *plan.Expr {
 	return &plan.Expr{

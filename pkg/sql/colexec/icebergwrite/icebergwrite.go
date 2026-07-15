@@ -17,9 +17,11 @@ package icebergwrite
 import (
 	"bytes"
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,15 +43,14 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 	if w.Coordinator == nil {
 		w.Request.ParallelID = w.GetParalleID()
 		w.Request.MaxParallel = w.GetMaxParallel()
-		if w.Request.TimeZone == nil && proc != nil && proc.GetSessionInfo() != nil {
-			w.Request.TimeZone = proc.GetSessionInfo().TimeZone
-		}
 		if w.Factory != nil {
+			w.refreshExecutionRequest(proc)
 			coordinator, err := w.Factory.NewCoordinator(proc.Ctx, w.Request)
 			if err != nil {
 				return err
 			}
 			w.Coordinator = coordinator
+			w.coordinatorFromFactory = true
 		}
 		if w.Coordinator == nil {
 			w.Coordinator = unsupportedCoordinator{operation: normalizedOperation(w.Request.Operation)}
@@ -58,6 +59,7 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 	if !w.ctr.opened {
 		if err := w.Coordinator.Begin(proc.Ctx, w.Request); err != nil {
 			_ = w.Coordinator.Abort(proc.Ctx, err)
+			w.discardFactoryCoordinator()
 			return err
 		}
 		w.ctr.opened = true
@@ -111,6 +113,7 @@ func (w *IcebergWrite) appendBatch(proc *process.Process, bat *batch.Batch) erro
 
 func (w *IcebergWrite) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	w.abortOpen(proc, err)
+	w.discardFactoryCoordinator()
 	w.input = vm.CallResult{}
 	w.ctr = container{}
 }
@@ -120,6 +123,7 @@ func (w *IcebergWrite) Free(proc *process.Process, pipelineFailed bool, err erro
 	w.ReleaseObjectIORef()
 	w.input = vm.CallResult{}
 	w.Coordinator = nil
+	w.coordinatorFromFactory = false
 }
 
 func (w *IcebergWrite) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -132,6 +136,48 @@ func (w *IcebergWrite) abortOpen(proc *process.Process, cause error) {
 	}
 	_ = w.Coordinator.Abort(proc.Ctx, cause)
 	w.ctr.finished = true
+}
+
+func (w *IcebergWrite) discardFactoryCoordinator() {
+	if w == nil || !w.coordinatorFromFactory {
+		return
+	}
+	w.Coordinator = nil
+	w.coordinatorFromFactory = false
+}
+
+func (w *IcebergWrite) refreshExecutionRequest(proc *process.Process) {
+	if w == nil || proc == nil {
+		return
+	}
+	if sessionInfo := proc.GetSessionInfo(); sessionInfo != nil && sessionInfo.TimeZone != nil {
+		w.Request.TimeZone = sessionInfo.TimeZone
+	}
+	if proc.Ctx != nil {
+		if accountID, ok := proc.Ctx.Value(defines.TenantIDKey{}).(uint32); ok {
+			w.Request.AccountID = accountID
+		}
+		if roleID, ok := proc.Ctx.Value(defines.RoleIDKey{}).(uint32); ok {
+			w.Request.RoleID = uint64(roleID)
+		}
+		if userID, ok := proc.Ctx.Value(defines.UserIDKey{}).(uint32); ok {
+			w.Request.UserID = uint64(userID)
+		}
+	}
+	statementID := ""
+	if profile := proc.GetStmtProfile(); profile != nil {
+		if id := strings.TrimSpace(profile.GetStmtId().String()); id != "" && strings.Trim(id, "0-") != "" {
+			statementID = id
+		}
+	}
+	if statementID == "" {
+		statementID = strings.TrimSpace(proc.QueryId())
+	}
+	if statementID == "" {
+		return
+	}
+	w.Request.StatementID = statementID
+	w.Request.IdempotencyKey = statementID
 }
 
 type unsupportedCoordinator struct {

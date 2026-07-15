@@ -421,7 +421,8 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 
 func TestDMLActionExecutorRecordsMaterializedObjectsWhenActionBuildFails(t *testing.T) {
 	deleteWriter := &recordingDMLDeleteObjectWriter{}
-	orphanRecorder := &recordingSQLOrphanRecorder{}
+	recordErr := moerr.NewInternalErrorNoCtx("orphan recorder unavailable")
+	orphanRecorder := &recordingSQLOrphanRecorder{err: recordErr}
 	executor := DMLActionExecutor{
 		Workflow: dml.CommitWorkflow{
 			ManifestWriter: &fakeSQLManifestWriter{},
@@ -467,6 +468,9 @@ func TestDMLActionExecutorRecordsMaterializedObjectsWhenActionBuildFails(t *test
 	if err == nil || !strings.Contains(err.Error(), "cannot be materialized") {
 		t.Fatalf("expected action build failure after replacement write, got %v", err)
 	}
+	if !errors.Is(err, recordErr) {
+		t.Fatalf("expected recorder failure to be preserved with build failure, got %v", err)
+	}
 	if len(deleteWriter.objects) != 1 {
 		t.Fatalf("expected replacement object write before build failure, got %#v", deleteWriter.objects)
 	}
@@ -477,6 +481,13 @@ func TestDMLActionExecutorRecordsMaterializedObjectsWhenActionBuildFails(t *test
 		orphanRecorder.candidates[0].AccountID != 9 ||
 		orphanRecorder.candidates[0].CatalogID != 8 {
 		t.Fatalf("unexpected orphan candidate: %+v", orphanRecorder.candidates[0])
+	}
+}
+
+func TestJoinDMLBuildAndOrphanRecordErrorsPreservesBuildErrorWithoutRecorderFailure(t *testing.T) {
+	buildErr := moerr.NewInternalErrorNoCtx("build failed")
+	if got := joinDMLBuildAndOrphanRecordErrors(buildErr, nil); got != buildErr {
+		t.Fatalf("build error identity changed without recorder failure: got %T %v", got, got)
 	}
 }
 

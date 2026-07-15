@@ -1088,11 +1088,12 @@ func (c *fakeDMLWorkflowCommitter) ReportMetrics(ctx context.Context, req api.Me
 
 type recordingSQLOrphanRecorder struct {
 	candidates []icebergwrite.OrphanCandidate
+	err        error
 }
 
 func (r *recordingSQLOrphanRecorder) RecordOrphans(ctx context.Context, candidates []icebergwrite.OrphanCandidate) error {
 	r.candidates = append(r.candidates, candidates...)
-	return nil
+	return r.err
 }
 
 type fakeSQLDMLVerifier struct {
