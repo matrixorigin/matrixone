@@ -357,7 +357,7 @@ test-resource-accounting: cgo thirdparties
 		./pkg/util/trace/impl/motrace/statistic ./pkg/util/trace/impl/motrace \
 		./pkg/vm/process ./pkg/sql/compile ./pkg/sql/models ./pkg/sql/plan/explain
 	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
-		-run='Test(ConnCountsCompletedOutputPackets|ConnCountsPartialWriteFacts|FailedStatementSealsAfterTerminalResponse)' \
+		-run='Test(ConnCountsCompletedOutputPackets|ConnCountsPartialWriteFacts|FailedStatementSealsAfterTerminalResponse|StatementlessRequestConsumesResponseCounters|RecordParseErrorStatement)' \
 		./pkg/frontend
 
 .PHONY: test-resource-accounting-race
@@ -375,6 +375,13 @@ bench-resource-accounting: cgo thirdparties
 	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -run=^$$ \
 		-bench='Benchmark(Resource|MPoolAtomicMax)' -benchmem \
 		./pkg/util/resource ./pkg/common/mpool
+
+.PHONY: bvt-resource-accounting
+bvt-resource-accounting: cgo thirdparties
+	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
+		-run='^TestResourceAccountingBVTSingleCN$$' ./pkg/embed
+	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
+		-run='^TestResourceAccountingBVTMultiCN$$' ./pkg/embed
 
 ###############################################################################
 # bvt and unit test
