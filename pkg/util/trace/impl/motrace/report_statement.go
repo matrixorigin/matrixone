@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -107,7 +108,9 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 		//e.Error = nil /* keep the Error msg */
 		e.Database = ""
 		duration := e.Duration
-		e.AggrMemoryTime = safeDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
+		if e.statsArray.GetVersion() < statistic.StatsArrayVersion6 {
+			e.AggrMemoryTime = safeDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
+		}
 		e.RequestAt = e.ResponseAt.Truncate(windowSize)
 		e.ResponseAt = e.RequestAt.Add(windowSize)
 		e.AggrCount = 1
@@ -236,6 +239,7 @@ type StatementInfo struct {
 	jsonByte   []byte
 	statsArray statistic.StatsArray
 	stated     bool
+	cuStated   bool
 
 	// disableAgg true, do NOT aggregate statement
 	// co-operate with Aggregator and StatementInfoFilter
@@ -270,6 +274,7 @@ func NewStatementInfo() *StatementInfo {
 	s := stmtPool.Get().(*StatementInfo)
 	s.statsArray.Reset()
 	s.stated = false
+	s.cuStated = false
 	if s.Statement == nil {
 		s.Statement = make([]byte, 0, GetTracerProvider().MaxStatementSize)
 	}
@@ -439,6 +444,7 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.jsonByte = nil // without ExecPlan
 	stmt.statsArray = s.statsArray
 	stmt.stated = s.stated
+	stmt.cuStated = s.cuStated
 	// part: disableAgg ctl
 	stmt.disableAgg = s.disableAgg
 	// part: skipTxn ctrl
@@ -500,7 +506,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
 	execPlan := s.ExecPlan2Json(ctx)
-	if s.AggrCount > 0 {
+	if s.AggrCount > 0 && s.statsArray.GetVersion() < statistic.StatsArrayVersion6 {
 		float64Val := calculateAggrMemoryBytes(s.AggrMemoryTime, float64(s.Duration))
 		s.statsArray.WithMemorySize(float64Val)
 	}
@@ -540,6 +546,12 @@ func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float6
 // - BytesScan
 func mergeStats(e, n *StatementInfo) error {
 	e.statsArray.Add(&n.statsArray)
+	if e.statsArray.GetVersion() >= statistic.StatsArrayVersion6 {
+		e.statsArray.WithQualityFlags(e.statsArray.GetQualityFlags() | resource.QualityAggregated)
+		e.RowsRead += n.RowsRead
+		e.BytesScan += n.BytesScan
+		return nil
+	}
 	val, _, err := e.AggrMemoryTime.Add(
 		safeDecimal128(convertFloat64ToDecimal128(n.statsArray.GetMemorySize()*float64(n.Duration))),
 		Decimal128Scale,
@@ -591,8 +603,11 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 		s.BytesScan = stats.BytesScan
 		s.stated = true
 	}
-	cu := CalculateCU(s.statsArray, int64(s.Duration))
-	s.statsArray.WithCU(cu)
+	if !s.cuStated {
+		cu := CalculateCU(s.statsArray, int64(s.Duration))
+		s.statsArray.WithCU(cu)
+		s.cuStated = true
+	}
 	return nil
 }
 

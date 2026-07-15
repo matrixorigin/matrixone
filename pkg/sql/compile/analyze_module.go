@@ -656,7 +656,7 @@ func explainResourceOverview(
 				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-			fmt.Fprintf(buffer, "\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth)
+			fmt.Fprintf(buffer, "\t\t- Permission Authentication Stats Array: %v\n", statsInfo.PermissionAuth)
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {

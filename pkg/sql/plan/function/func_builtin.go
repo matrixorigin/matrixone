@@ -3825,10 +3825,22 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 
 		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
 			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+			continue
 		}
 
-		switch util.UnsafeBytesToString(target) {
+		targetName := util.UnsafeBytesToString(target)
+		if stats.GetVersion() >= statistic.StatsArrayVersion6 {
+			if stats.IsAggregated() && (targetName != "total" || cfg != nil) {
+				rs.Append(float64(0), true)
+				continue
+			}
+			if targetName == "total" && cfg == nil {
+				rs.Append(stats.GetCU(), false)
+				continue
+			}
+		}
+
+		switch targetName {
 		case "cpu":
 			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":
