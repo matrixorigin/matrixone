@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,75 @@ type checkLockTableBindLockService struct {
 	err    error
 	calls  int
 	cancel context.CancelFunc
+}
+
+type unknownCommitResolverLockService struct {
+	lockservice.LockService
+	mu               sync.Mutex
+	resolvedTxnID    []byte
+	resolvedDeadline time.Time
+	resolvedSequence uint64
+	nextSequence     uint64
+	unlockedTxnID    []byte
+	onResolved       func()
+	resolveInline    bool
+	resolveErr       error
+}
+
+func (s *unknownCommitResolverLockService) GetServiceID() string {
+	return "unknown-commit-resolver"
+}
+
+func (s *unknownCommitResolverLockService) ResolveCommitUnknown(
+	txnID []byte,
+	deadline time.Time,
+	sequence uint64,
+	onResolved func(),
+) error {
+	s.mu.Lock()
+	s.resolvedTxnID = append(s.resolvedTxnID[:0], txnID...)
+	s.resolvedDeadline = deadline
+	s.resolvedSequence = sequence
+	if s.resolveErr != nil {
+		err := s.resolveErr
+		s.mu.Unlock()
+		return err
+	}
+	if s.resolveInline {
+		s.mu.Unlock()
+		if onResolved != nil {
+			onResolved()
+		}
+	} else {
+		s.onResolved = onResolved
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *unknownCommitResolverLockService) completeResolution() {
+	s.mu.Lock()
+	fn := s.onResolved
+	s.onResolved = nil
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func (s *unknownCommitResolverLockService) NextCommitSequence() uint64 {
+	s.nextSequence++
+	return s.nextSequence
+}
+
+func (s *unknownCommitResolverLockService) Unlock(
+	_ context.Context,
+	txnID []byte,
+	_ timestamp.Timestamp,
+	_ ...lock.ExtraMutation,
+) error {
+	s.unlockedTxnID = append(s.unlockedTxnID[:0], txnID...)
+	return nil
 }
 
 func (s *checkLockTableBindLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
@@ -1090,18 +1160,329 @@ func newTNRequest(op uint32, tn uint64) txn.TxnRequest {
 	})
 }
 
-func TestCommitSendErrorSetsCommitTSWorkaround(t *testing.T) {
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	runOperatorTestsWithOptions(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+		err := tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Equal(t, tc.mu.txn.ID, resolver.resolvedTxnID)
+		require.False(t, resolver.resolvedDeadline.IsZero())
+		require.Equal(t, tc.reset.commitDeadline, resolver.resolvedDeadline)
+		require.Equal(t, tc.reset.commitSequence, resolver.resolvedSequence)
+		require.NotEmpty(t, ts.lastRequests)
+		commitReq := ts.lastRequests[len(ts.lastRequests)-1]
+		require.NotNil(t, commitReq.CommitRequest)
+		require.Equal(t, resolver.resolvedDeadline.UnixNano(), commitReq.CommitRequest.DeadlineUnixNano)
+		require.Equal(t, resolver.resolvedSequence, commitReq.CommitRequest.CommitSequence)
+		require.True(t, tc.mu.txn.CommitTS.IsEmpty())
+		require.Equal(t, 1, ws.unknownCount)
+		require.Zero(t, ws.rollbackCount)
+		require.True(t, tc.reset.cannotCleanWorkspace.Load())
+		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
+	}, timestamp.Timestamp{}, []TxnOption{WithTxnMode(txn.TxnMode_Pessimistic)}, WithLockService(resolver))
+}
+
+func TestCommitUnknownRetainsAdmissionUntilResolution(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Equal(t, 1, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+
+		type newResult struct {
+			op  TxnOperator
+			err error
+		}
+		newC := make(chan newResult, 1)
+		go func() {
+			op, err := c.New(ctx, newTestTimestamp(0), WithUserTxn())
+			newC <- newResult{op: op, err: err}
+		}()
+
+		// Leaving the resolver incomplete models an allocator outage. The
+		// resolver-owned txn must continue consuming the only admission slot.
+		require.Eventually(t, func() bool {
+			_, _, waiting := txnAdmissionCounts(c)
+			return waiting == 1
+		}, time.Second, 10*time.Millisecond)
+		select {
+		case result := <-newC:
+			require.FailNow(t, "new user txn bypassed unknown commit admission", result.err)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		resolver.completeResolution()
+		result := <-newC
+		require.NoError(t, result.err)
+		require.NoError(t, result.op.Rollback(ctx))
+		require.Eventually(t, func() bool {
+			users, active, waiting := txnAdmissionCounts(c)
+			return users == 0 && active == 0 && waiting == 0
+		}, time.Second, 10*time.Millisecond)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestCommitUnknownResolvedBeforeCloseReleasesAdmissionOnce(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{resolveInline: true}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestOptimisticCommitUnknownReleasesAdmission(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Optimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+		require.Empty(t, resolver.resolvedTxnID)
+
+		next, err := c.New(ctx, newTestTimestamp(0), WithUserTxn())
+		require.NoError(t, err)
+		require.NoError(t, next.Rollback(ctx))
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestCommitUnknownScheduleFailureReleasesAdmission(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{resolveErr: assert.AnError}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestInternalCommitUnknownAdmissionIsBounded(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+
+		newInternal := func() *txnOperator {
+			op, err := c.New(
+				ctx,
+				newTestTimestamp(0),
+				WithTxnMode(txn.TxnMode_Pessimistic),
+			)
+			require.NoError(t, err)
+			tc := op.(*txnOperator)
+			tc.AddWorkspace(&trackingWorkspace{
+				commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+			})
+			tc.mu.txn.TNShards = append(
+				tc.mu.txn.TNShards,
+				metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+			)
+			return tc
+		}
+
+		first := newInternal()
+		err := first.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Len(t, c.(*txnClient).internalUnknownCommitC, 1)
+		firstResolvedTxn := append([]byte(nil), resolver.resolvedTxnID...)
+
+		second := newInternal()
+		err = second.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrAllCNServersBusy))
+		require.Equal(t, 1, second.reset.workspace.(*trackingWorkspace).rollbackCount)
+		require.Equal(t, second.mu.txn.ID, resolver.unlockedTxnID)
+		require.Equal(t, firstResolvedTxn, resolver.resolvedTxnID)
+		require.Len(t, c.(*txnClient).internalUnknownCommitC, 1)
+
+		resolver.completeResolution()
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return result, err
+		})
+		third := newInternal()
+		require.NoError(t, third.Commit(ctx))
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+
+		prepareFailure := newInternal()
+		prepareFailure.reset.workspace.(*trackingWorkspace).commitErr = assert.AnError
+		require.ErrorIs(t, prepareFailure.Commit(ctx), assert.AnError)
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+
+		resolver.mu.Lock()
+		resolver.resolveErr = assert.AnError
+		resolver.mu.Unlock()
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, resp := range result.Responses {
+				if resp.Method == txn.TxnMethod_Commit {
+					return nil, moerr.NewTxnUnknown(ctx, "test")
+				}
+			}
+			return result, err
+		})
+		scheduleFailure := newInternal()
+		err = scheduleFailure.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Empty(t, c.(*txnClient).internalUnknownCommitC)
+	},
+		WithLockService(resolver),
+		func(client *txnClient) { client.maxInternalUnknownCommitTxn = 1 },
+	)
+}
+
+func txnAdmissionCounts(c TxnClient) (int, int64, int) {
+	client := c.(*txnClient)
+	client.mu.RLock()
+	users := client.mu.users
+	waiting := len(client.mu.waitActiveTxns)
+	client.mu.RUnlock()
+	return users, client.atomic.activeTxnCount.Load(), waiting
+}
+
+func TestRollbackSendErrorDoesNotScheduleUnknownCommitResolution(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	runOperatorTestsWithOptions(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			return nil, assert.AnError
 		})
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
-		start := time.Now().UnixNano()
-		err := tc.Commit(ctx)
-		assert.Error(t, err)
-		commitTS := tc.mu.txn.CommitTS.PhysicalTime
-		assert.InDelta(t, start+10000000000, commitTS, 1e9, "CommitTS should be set to now+10s on send error")
-	})
+
+		err := tc.Rollback(ctx)
+		require.Error(t, err)
+		require.Empty(t, resolver.resolvedTxnID)
+		require.Equal(t, tc.mu.txn.ID, resolver.unlockedTxnID)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+	}, timestamp.Timestamp{}, []TxnOption{WithTxnMode(txn.TxnMode_Pessimistic)}, WithLockService(resolver))
 }
 
 func TestCancelAndWaitRunningSQL(t *testing.T) {
