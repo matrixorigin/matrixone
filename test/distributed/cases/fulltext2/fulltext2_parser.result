@@ -1,0 +1,78 @@
+drop database if exists fulltext2_parser;
+create database fulltext2_parser;
+use fulltext2_parser;
+drop table if exists zh;
+create table zh(id bigint primary key, body text);
+insert into zh values
+(0,'遠東兒童中文學習教材'),
+(1,'中文短篇小說適合初學者'),
+(2,'兒童學習樂趣'),
+(3,'教學指引與生字卡'),
+(4,'中文學習中文學習');
+create fulltext2 index ft on zh(body) with parser ngram;
+show create table zh;
+Table    Create Table
+zh    CREATE TABLE `zh` (\n  `id` bigint NOT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ft`(`body`) WITH PARSER ngram\n)
+select id from zh where match(body) against('中文學習') order by id;
+id
+0
+4
+select id from zh where match(body) against('兒童') order by id;
+id
+0
+2
+select id from zh where match(body) against('+中文 +學習' in boolean mode) order by id;
+id
+0
+4
+select id from zh where match(body) against('+兒童 -中文' in boolean mode) order by id;
+id
+2
+drop table if exists zj;
+create table zj(id bigint primary key, body text);
+insert into zj values
+(0,'我来到北京清华大学'),
+(1,'苹果香蕉都好吃'),
+(2,'我爱北京天安门'),
+(3,'清华大学在北京'),
+(4,'香蕉和苹果');
+create fulltext2 index ft on zj(body) with parser gojieba;
+select id from zj where match(body) against('北京') order by id;
+id
+0
+2
+3
+select id from zj where match(body) against('清华大学') order by id;
+id
+0
+3
+select id from zj where match(body) against('北京清华大学') order by id;
+id
+0
+select id from zj where match(body) against('+苹果 +香蕉' in boolean mode) order by id;
+id
+1
+4
+select id from zj where match(body) against('+北京 -苹果' in boolean mode) order by id;
+id
+0
+2
+3
+drop table if exists js;
+create table js(id bigint primary key, doc json);
+insert into js values
+(0,'{"a":1,"b":"red apple"}'),
+(1,'{"a":2,"b":"中文學習教材"}'),
+(2,'{"a":3,"b":"red blue"}');
+create fulltext2 index ft on js(doc) with parser json;
+select id from js where match(doc) against('red' in boolean mode) order by id;
+id
+0
+2
+select id from js where match(doc) against('+red +apple' in boolean mode) order by id;
+id
+0
+select id from js where match(doc) against('中文學習') order by id;
+id
+1
+drop database fulltext2_parser;
