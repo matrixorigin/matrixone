@@ -191,8 +191,25 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 		parser = strings.ToLower(idx.IndexOption.ParserName)
 	}
 	res["parser"] = parser
-	if idx.IndexOption != nil && idx.IndexOption.MaxIndexCapacity > 0 {
-		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
+	if idx.IndexOption != nil {
+		if idx.IndexOption.MaxIndexCapacity > 0 {
+			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
+		}
+		// auto_update + day/hour/second drive the idxcron scheduled compaction
+		// cadence (read from algo_params by the idxcron executor). Mirrors bm25's
+		// ParamsFromTree.
+		if idx.IndexOption.AutoUpdate {
+			res[catalog.AutoUpdate] = "true"
+		}
+		if idx.IndexOption.Day > 0 {
+			res[catalog.Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
+		}
+		if idx.IndexOption.Hour > 0 {
+			res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+		}
+		if idx.IndexOption.Second > 0 {
+			res[catalog.Second] = strconv.FormatInt(idx.IndexOption.Second, 10)
+		}
 	}
 	return catalog.IndexParamsMapToJsonString(res)
 }
