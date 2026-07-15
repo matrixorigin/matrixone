@@ -134,22 +134,39 @@ func NewCompile(
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
-	if c.proc.GetTxnOperator() != nil {
-		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
-		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
-		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-	} else {
-		c.TxnOffset = 0
-	}
+	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
+	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
+	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	return c
+}
+
+// txnOffsetOfCompile returns the workspace write offset a new compile reads
+// with. Compiling a user statement advances the statement boundary of the
+// workspace and reads with it. An internal sub-sql of the current statement
+// (DisableIncrStatement, marked on the process) instead captures the current
+// end of the workspace — it reads everything its caller has written so far,
+// but it opens no statement, so it must not advance the shared boundary:
+// moving the boundary mid-statement breaks the positional visibility of the
+// caller's workspace entries (issue #25557).
+func txnOffsetOfCompile(proc *process.Process) int {
+	op := proc.GetTxnOperator()
+	if op == nil {
+		return 0
+	}
+	ws := op.GetWorkspace()
+	if proc.IncrStatementDisabled() {
+		return int(ws.WriteOffset())
+	}
+	ws.UpdateSnapshotWriteOffset()
+	return ws.GetSnapshotWriteOffset()
 }
 
 func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
@@ -214,9 +231,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		f.reset()
 	}
 	c.startAt = startAt
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	if c.proc.GetTxnOperator() != nil {
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -224,8 +240,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
 			}
 		}
-	} else {
-		c.TxnOffset = 0
+	}
+
+	// A reused prepared pipeline runs directly after Reset. Only retries compile
+	// again, so the cached placement is this execution's first real attempt.
+	c.beginSchedulingTraceAttempt()
+	if c.queryPlacement.Reason != "" {
+		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
 }
 
@@ -262,11 +283,18 @@ func (c *Compile) clear() {
 	c.anal = nil
 	c.e = nil
 
+	if c.lockMeta != nil {
+		c.lockMeta.clear(c.proc)
+		c.lockMeta = nil
+	}
+
 	c.proc.Free()
 	c.proc = nil
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
+	c.schedulingTrace = nil
+	c.schedulingAttempt = 0
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -279,11 +307,6 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
-
-	if c.lockMeta != nil {
-		c.lockMeta.clear(c.proc)
-		c.lockMeta = nil
-	}
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -521,6 +544,15 @@ func (c *Compile) runOnce() (err error) {
 			}
 		}
 	}
+
+	// Publish every dispatch receiver that will execute on this CN before any
+	// scope goroutine starts. Remote consumers can otherwise notify while a
+	// local source is still blocked before vm.Prepare reaches its Dispatch.
+	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
+	if err != nil {
+		return err
+	}
+	defer registrations.cleanup()
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -1393,6 +1425,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 func (c *Compile) constructScopeForExternalNode(node engine.Node, parallel bool) *Scope {
 	scope := c.constructScopeForExternal(node.Addr, parallel)
 	scope.NodeInfo.Id = node.Id
+	scope.NodeInfo.WorkState = node.WorkState
 	return scope
 }
 
@@ -1890,7 +1923,7 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
-	scope := c.constructScopeForExternal("", false)
+	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	parallelLoad := true
@@ -1912,7 +1945,10 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
-	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, scope)
+	dispatchOp, err := constructLocalDispatchFromScopes(0, ss, scope)
+	if err != nil {
+		return nil, err
+	}
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	scope.setRootOperator(dispatchOp)
@@ -2958,17 +2994,13 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 		rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 		if err != nil {
-			if txnOp.IsSnapOp() {
-				return err
-			}
 			return err
 		}
-		tblDef = rel.GetTableDef(ctx)
-		s.DataSource.Rel = rel
-	} else {
-		s.DataSource.Rel.Reset(txnOp)
-		tblDef = s.DataSource.Rel.GetTableDef(ctx)
+		s.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if err = s.DataSource.Rel.Reset(txnOp); err != nil {
+		return err
 	}
+	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
@@ -4269,13 +4301,19 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			}
 		}
 		if c.anal.qry.LoadTag && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
-			_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			arg, err := constructLocalDispatchFromScopes(0, scopes, dataScope)
+			if err != nil {
+				return nil, err
+			}
 			arg.FuncId = dispatch.ShuffleToAllFunc
 			arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(arg)
 		} else {
-			_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			dispatchArg, err := constructLocalDispatchFromScopes(0, scopes, dataScope)
+			if err != nil {
+				return nil, err
+			}
 			dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(dispatchArg)
@@ -4349,7 +4387,10 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 					ss[i].Proc = c.proc.NewNoContextChildProc(1)
 					ss[i].NodeInfo = scopeNodeWithMcpu(oldScope.NodeInfo, 1)
 				}
-				_, dispatchOp := constructDispatchLocalAndRemote(0, ss, oldScope)
+				dispatchOp, err := constructLocalDispatchFromScopes(0, ss, oldScope)
+				if err != nil {
+					return nil, err
+				}
 				dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 				dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 				oldScope.setRootOperator(dispatchOp)
@@ -4653,7 +4694,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
+		arg.SegmentMap = colexec.MustGetServer(c.proc.GetService()).GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
@@ -4713,26 +4754,36 @@ func (c *Compile) newScopeListOnSingleWorkerStage(childrenCount int, mcpu int) [
 }
 
 func (c *Compile) singleWorkerStageNode() engine.Node {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideSingleWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordSingleWorkerStage(c.schedulingAttempt, queryWorkers, decision)
 	return c.materializeScheduledWorker(decision.Worker)
 }
 
 func (c *Compile) queryWorkerStageNodes() engine.Nodes {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideQueryWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordStage(
+		c.schedulingAttempt,
+		schedule.StageKindQueryWorkerSet,
+		queryWorkers,
+		decision,
+	)
 	return c.materializeScheduledWorkers(decision.Workers)
 }
 
 func scopeNodeWithMcpu(node engine.Node, mcpu int) engine.Node {
 	return engine.Node{
-		Id:   node.Id,
-		Addr: node.Addr,
-		Mcpu: normalizeMcpu(mcpu),
+		Id:        node.Id,
+		Addr:      node.Addr,
+		Mcpu:      normalizeMcpu(mcpu),
+		WorkState: node.WorkState,
 	}
 }
 
@@ -5610,21 +5661,6 @@ func sameExecutionAddr(addr string, currentCNAddr string) bool {
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
 
-func isSameCN(addr string, currentCNAddr string) bool {
-	// just a defensive judgment. In fact, we shouldn't have received such data.
-	parts1 := strings.Split(addr, ":")
-	if len(parts1) != 2 {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
-		return true
-	}
-	parts2 := strings.Split(currentCNAddr, ":")
-	if len(parts2) != 2 {
-		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
-		return true
-	}
-	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
-}
-
 func (s *Scope) affectedRows() uint64 {
 	op := s.RootOp
 	affectedRows := uint64(0)
@@ -5844,6 +5880,9 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 }
 
 func getEngineNode(c *Compile) engine.Node {
+	// getEngineNode only describes the local execution identity and capacity.
+	// Runtime work state is intentionally left Unknown here; callers that make
+	// AP multi-CN placement decisions must enrich it from cluster metadata.
 	if c.IsTpQuery() {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
 	} else {

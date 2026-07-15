@@ -200,12 +200,13 @@ func (c *engineNodesClusterClient) GetClusterDetails(context.Context) (logpb.Clu
 	return c.details, nil
 }
 
-func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
+func TestEngineNodesExposesRuntimeStateToScheduler(t *testing.T) {
 	t.Run("default discovery", func(t *testing.T) {
 		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
 			CNStores: []logpb.CNStore{
 				newEngineNodesCNStore("working-cn", "working-pipeline", nil, metadata.WorkState_Working, version.CommitID),
 				newEngineNodesCNStore("draining-cn", "draining-pipeline", nil, metadata.WorkState_Draining, version.CommitID),
+				newEngineNodesCNStore("drained-cn", "drained-pipeline", nil, metadata.WorkState_Drained, version.CommitID),
 				newEngineNodesCNStore("unknown-cn", "unknown-pipeline", nil, metadata.WorkState_Unknown, version.CommitID),
 				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", nil, metadata.WorkState_Working, "different-commit"),
 			},
@@ -215,25 +216,32 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{
 			"working-pipeline",
+			"draining-pipeline",
+			"drained-pipeline",
 			"unknown-pipeline",
 		}, nodeAddresses(nodes))
-		require.True(t, nodes[0].HasMixedCommit)
-		require.True(t, nodes[1].HasMixedCommit)
+		require.Equal(t, map[string]metadata.WorkState{
+			"working-pipeline":  metadata.WorkState_Working,
+			"draining-pipeline": metadata.WorkState_Draining,
+			"drained-pipeline":  metadata.WorkState_Drained,
+			"unknown-pipeline":  metadata.WorkState_Unknown,
+		}, nodeWorkStates(nodes))
+		for _, node := range nodes {
+			require.True(t, node.HasMixedCommit)
+		}
 	})
 
 	t.Run("common tenant label route", func(t *testing.T) {
 		accountLabel := map[string]metadata.LabelList{
 			"account": {Labels: []string{"app"}},
 		}
-		otherAccountLabel := map[string]metadata.LabelList{
-			"account": {Labels: []string{"other"}},
-		}
 		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
 			CNStores: []logpb.CNStore{
 				newEngineNodesCNStore("working-cn", "working-pipeline", accountLabel, metadata.WorkState_Working, version.CommitID),
 				newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+				newEngineNodesCNStore("drained-cn", "drained-pipeline", accountLabel, metadata.WorkState_Drained, version.CommitID),
 				newEngineNodesCNStore("unknown-cn", "unknown-pipeline", accountLabel, metadata.WorkState_Unknown, version.CommitID),
-				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", otherAccountLabel, metadata.WorkState_Working, "different-commit"),
+				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", accountLabel, metadata.WorkState_Working, "different-commit"),
 			},
 		})
 
@@ -241,10 +249,26 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{
 			"working-pipeline",
+			"draining-pipeline",
+			"drained-pipeline",
 			"unknown-pipeline",
 		}, nodeAddresses(nodes))
-		require.True(t, nodes[0].HasMixedCommit)
-		require.True(t, nodes[1].HasMixedCommit)
+	})
+
+	t.Run("runtime-ineligible labeled CN does not replace working fallback", func(t *testing.T) {
+		accountLabel := map[string]metadata.LabelList{
+			"account": {Labels: []string{"app"}},
+		}
+		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+			CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("fallback-cn", "fallback-pipeline", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+			},
+		})
+
+		nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"fallback-pipeline", "draining-pipeline"}, nodeAddresses(nodes))
 	})
 
 	t.Run("super tenant label route", func(t *testing.T) {
@@ -265,6 +289,7 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 					CNStores: []logpb.CNStore{
 						newEngineNodesCNStore("working-cn", "working-pipeline", accountLabel, metadata.WorkState_Working, version.CommitID),
 						newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+						newEngineNodesCNStore("drained-cn", "drained-pipeline", accountLabel, metadata.WorkState_Drained, version.CommitID),
 						newEngineNodesCNStore("unknown-cn", "unknown-pipeline", accountLabel, metadata.WorkState_Unknown, version.CommitID),
 						newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", accountLabel, metadata.WorkState_Working, "different-commit"),
 					},
@@ -274,50 +299,166 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 				require.NoError(t, err)
 				require.ElementsMatch(t, []string{
 					"working-pipeline",
+					"draining-pipeline",
+					"drained-pipeline",
 					"unknown-pipeline",
 				}, nodeAddresses(nodes))
-				require.True(t, nodes[0].HasMixedCommit)
-				require.True(t, nodes[1].HasMixedCommit)
 			})
 		}
 	})
 }
 
-func TestEngineNodesRollingUpgradeReturnsOnlyCurrentCommit(t *testing.T) {
+func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
+	appLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"app"}},
+	}
+	sysLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"sys"}},
+	}
 	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
 		CNStores: []logpb.CNStore{
-			newEngineNodesCNStore("current-cn", "current-pipeline", nil, metadata.WorkState_Working, version.CommitID),
-			newEngineNodesCNStore("old-cn-1", "old-pipeline-1", nil, metadata.WorkState_Working, "old-commit"),
-			newEngineNodesCNStore("old-cn-2", "old-pipeline-2", nil, metadata.WorkState_Working, "old-commit"),
+			newEngineNodesCNStore("app-working", "app-working:6001", appLabel, metadata.WorkState_Working, version.CommitID),
+			newEngineNodesCNStore("app-draining", "app-draining:6001", appLabel, metadata.WorkState_Draining, version.CommitID),
+			newEngineNodesCNStore("sys-working", "sys-working:6001", sysLabel, metadata.WorkState_Working, version.CommitID),
+			newEngineNodesCNStore("old-app", "old-app:6001", appLabel, metadata.WorkState_Working, "different-commit"),
 		},
 	})
 
-	nodes, err := e.Nodes(false, "", "", nil)
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{"current-pipeline"}, nodeAddresses(nodes))
+	require.Len(t, candidates, 3)
+	require.ElementsMatch(t,
+		[]string{"app-working", "app-draining", "sys-working"},
+		queryCandidateServiceIDs(candidates))
+	for _, candidate := range candidates {
+		require.True(t, candidate.HasMixedCommit)
+	}
+
+	labels := map[string]string{"account": "app"}
+	nodes, err := e.ResolveQueryCandidatePool(
+		context.Background(),
+		candidates,
+		engine.QueryCandidatePoolRequest{
+			Tenant:  "app",
+			CNLabel: labels,
+		},
+	)
+	require.NoError(t, err)
+	require.ElementsMatch(t,
+		[]string{"app-working:6001", "app-draining:6001"},
+		nodeAddresses(nodes))
+	for _, node := range nodes {
+		require.True(t, node.HasMixedCommit)
+	}
+	require.Equal(t, map[string]string{"account": "app"}, labels)
 }
 
-func TestEngineNodesRollingUpgradeMarksOldCommitOutsideWorkingSet(t *testing.T) {
+func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *testing.T) {
+	appLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"app"}},
+	}
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+		CNStores: []logpb.CNStore{
+			newEngineNodesCNStore("old-app", "old-app:6001", appLabel, metadata.WorkState_Working, "different-commit"),
+			newEngineNodesCNStore("compatible-fallback", "fallback:6001", nil, metadata.WorkState_Working, version.CommitID),
+		},
+	})
+
+	nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"fallback:6001"}, nodeAddresses(nodes))
+	require.True(t, nodes[0].HasMixedCommit)
+}
+
+func TestEngineCandidateDiscoveryMarksOldCommitOutsideWorkingSet(t *testing.T) {
 	for _, state := range []metadata.WorkState{
 		metadata.WorkState_Draining,
 		metadata.WorkState_Drained,
 	} {
 		t.Run(state.String(), func(t *testing.T) {
-			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
-				CNStores: []logpb.CNStore{
-					newEngineNodesCNStore("current-cn-1", "current-pipeline-1", nil, metadata.WorkState_Working, version.CommitID),
-					newEngineNodesCNStore("current-cn-2", "current-pipeline-2", nil, metadata.WorkState_Working, version.CommitID),
-					newEngineNodesCNStore("old-cn", "old-pipeline", nil, state, "old-commit"),
-				},
-			})
+			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("current-cn", "current:6001", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("old-cn", "old:6001", nil, state, "old-commit"),
+			}})
 
-			nodes, err := e.Nodes(false, "", "", nil)
+			candidates, err := e.DiscoverQueryCandidates(context.Background())
 			require.NoError(t, err)
-			require.Equal(t, []string{"current-pipeline-1", "current-pipeline-2"}, nodeAddresses(nodes))
+			require.Len(t, candidates, 1)
+			require.True(t, candidates[0].HasMixedCommit)
+
+			nodes, err := e.ResolveQueryCandidatePool(
+				context.Background(), candidates, engine.QueryCandidatePoolRequest{})
+			require.NoError(t, err)
+			require.Len(t, nodes, 1)
 			require.True(t, nodes[0].HasMixedCommit)
-			require.True(t, nodes[1].HasMixedCommit)
 		})
 	}
+}
+
+func TestEngineQueryCandidateProvidersHonorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e := &Engine{service: "missing-runtime"}
+
+	_, err := e.DiscoverQueryCandidates(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = e.ResolveQueryCandidatePool(ctx, nil, engine.QueryCandidatePoolRequest{})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+type cancelAfterChecksContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelAfterChecksContext(checks int) *cancelAfterChecksContext {
+	return &cancelAfterChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (c *cancelAfterChecksContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	if c.remaining > 0 {
+		c.remaining--
+		if c.remaining == 0 {
+			close(c.done)
+		}
+	}
+	if c.remaining == 0 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestEngineQueryCandidatePoolHonorsCancellationDuringIteration(t *testing.T) {
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{ServiceID: "cn-1", WorkState: metadata.WorkState_Working}},
+		{Service: metadata.CNService{ServiceID: "cn-2", WorkState: metadata.WorkState_Working}},
+		{Service: metadata.CNService{ServiceID: "cn-3", WorkState: metadata.WorkState_Working}},
+	}
+	e := new(Engine)
+
+	t.Run("without labels", func(t *testing.T) {
+		ctx := newCancelAfterChecksContext(3)
+		_, err := e.ResolveQueryCandidatePool(ctx, candidates, engine.QueryCandidatePoolRequest{})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("while building labeled route input", func(t *testing.T) {
+		ctx := newCancelAfterChecksContext(5)
+		_, err := e.ResolveQueryCandidatePool(ctx, candidates, engine.QueryCandidatePoolRequest{
+			Tenant:  "app",
+			CNLabel: map[string]string{"account": "app"},
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
 }
 
 func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {
@@ -357,6 +498,22 @@ func nodeAddresses(nodes []engine.Node) []string {
 		addrs = append(addrs, node.Addr)
 	}
 	return addrs
+}
+
+func nodeWorkStates(nodes []engine.Node) map[string]metadata.WorkState {
+	states := make(map[string]metadata.WorkState, len(nodes))
+	for _, node := range nodes {
+		states[node.Addr] = node.WorkState
+	}
+	return states
+}
+
+func queryCandidateServiceIDs(candidates engine.QueryCandidates) []string {
+	ids := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.Service.ServiceID)
+	}
+	return ids
 }
 
 func TestFilterDeleteDatabaseRelationsSkipsAlreadyDeletedRelation(t *testing.T) {

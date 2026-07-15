@@ -389,9 +389,10 @@ func TestIVFObjectIDHashUUIDv7Distribution(t *testing.T) {
 
 func TestDetermineShuffleForDedupJoin(t *testing.T) {
 	cases := []struct {
-		name        string
-		dedupCtx    *plan.DedupJoinCtx
-		wantShuffle bool
+		name              string
+		dedupCtx          *plan.DedupJoinCtx
+		onDuplicateAction plan.Node_OnDuplicateAction
+		wantShuffle       bool
 	}{
 		{
 			name:        "plain_dedup_join_large_build_side_can_shuffle",
@@ -403,6 +404,13 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 			dedupCtx: &plan.DedupJoinCtx{
 				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
 			},
+		},
+		{
+			name: "ignore_old_col_list_disables_shuffle",
+			dedupCtx: &plan.DedupJoinCtx{
+				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
+			},
+			onDuplicateAction: plan.Node_IGNORE,
 		},
 		{
 			name: "old_col_capture_list_disables_shuffle",
@@ -431,7 +439,7 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 				NodeType:          plan.Node_JOIN,
 				JoinType:          plan.Node_DEDUP,
 				Children:          []int32{0, 1},
-				OnDuplicateAction: plan.Node_FAIL,
+				OnDuplicateAction: c.onDuplicateAction,
 				DedupJoinCtx:      c.dedupCtx,
 				Stats:             DefaultStats(),
 			}

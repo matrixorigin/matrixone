@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,10 +98,14 @@ func CnServerMessageHandler(
 	if msg.DebugMsg != "" {
 		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
+	colexecServer := colexec.GetServer(lockService.GetConfig().ServiceID)
+	if colexecServer == nil {
+		return moerr.NewInternalErrorf(ctx, "colexec server is not initialized for CN %s", lockService.GetConfig().ServiceID)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver := newMessageReceiverOnServer(ctx, serverAddress, msg,
-		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM)
+		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM, colexecServer)
 
 	// how to handle the *pipeline.Message.
 	err = handlePipelineMessage(&receiver)
@@ -121,7 +126,7 @@ func CnServerMessageHandler(
 		if err == nil {
 			receiver.waitUntilDisconnectedOrCancelled()
 		}
-		colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
+		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
 }
@@ -154,7 +159,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
 		}
-		colexec.Get().RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
+		receiver.colexecServer.RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
 		succeed := false
 		select {
@@ -213,10 +218,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
 
-		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
+		registrations, err := registerRemoteDispatchReceivers(s)
+		if err != nil {
 			return err
 		}
-		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
+		defer registrations.cleanup()
+		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
 		MarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator())
@@ -232,7 +239,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_StopSending:
-		colexec.Get().CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
@@ -240,27 +247,168 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 	return nil
 }
 
-func registerRemoteDispatchReceivers(s *Scope, proc *process.Process) error {
-	if s == nil {
-		return nil
+type remoteDispatchReceiverRegistrations struct {
+	once          sync.Once
+	registrations []*dispatch.RemoteReceiverRegistration
+}
+
+func (r *remoteDispatchReceiverRegistrations) cleanup() {
+	if r == nil {
+		return
 	}
-	if s.RootOp != nil {
-		if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			d, ok := op.(*dispatch.Dispatch)
-			if !ok {
+	r.once.Do(func() {
+		for i := len(r.registrations) - 1; i >= 0; i-- {
+			r.registrations[i].Cleanup()
+		}
+	})
+}
+
+func (r *remoteDispatchReceiverRegistrations) rollback(err error) {
+	if r == nil {
+		return
+	}
+	for i := range r.registrations {
+		registration := r.registrations[i]
+		if registration != nil {
+			registration.Cancel(err)
+		}
+	}
+	r.cleanup()
+}
+
+func registerRemoteDispatchReceivers(s *Scope) (*remoteDispatchReceiverRegistrations, error) {
+	return registerDispatchReceivers([]*Scope{s}, func(*Scope) dispatchReceiverRegistrationMode {
+		return registerDispatchReceiverTree
+	})
+}
+
+func registerLocalDispatchReceivers(scopes []*Scope, localAddr string) (*remoteDispatchReceiverRegistrations, error) {
+	return registerDispatchReceivers(scopes, func(s *Scope) dispatchReceiverRegistrationMode {
+		if s.Magic != Remote || s.ipAddrMatch(localAddr) {
+			return registerDispatchReceiverTree
+		}
+		if validateRemoteRunAddress(s.NodeInfo.Addr, localAddr) != nil || s.holdAnyCannotRemoteOperator() != nil {
+			return skipDispatchReceivers
+		}
+		if !checkPipelineStandaloneExecutableAtRemote(s) {
+			return registerDispatchReceiverTree
+		}
+		if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
+			return registerDispatchReceiverRoot
+		}
+		// The tree runs on another CN, so its own operators must not be
+		// registered here. Its descendants can still RemoteRun back to this CN;
+		// visit them to publish those local return dispatches early.
+		return traverseDispatchReceiverChildren
+	})
+}
+
+type dispatchReceiverRegistrationMode uint8
+
+const (
+	skipDispatchReceivers dispatchReceiverRegistrationMode = iota
+	registerDispatchReceiverRoot
+	registerDispatchReceiverTree
+	traverseDispatchReceiverChildren
+)
+
+func registerDispatchReceivers(
+	scopes []*Scope,
+	registrationMode func(*Scope) dispatchReceiverRegistrationMode,
+) (*remoteDispatchReceiverRegistrations, error) {
+	registrations := &remoteDispatchReceiverRegistrations{}
+	visitedScopes := make(map[*Scope]struct{})
+	visitedDispatches := make(map[*dispatch.Dispatch]struct{})
+
+	var registerScope func(*Scope) error
+	registerScope = func(s *Scope) error {
+		if s == nil {
+			return nil
+		}
+		if _, ok := visitedScopes[s]; ok {
+			return nil
+		}
+		visitedScopes[s] = struct{}{}
+		mode := registrationMode(s)
+		if mode == skipDispatchReceivers {
+			return nil
+		}
+
+		registerDispatch := func(d *dispatch.Dispatch) error {
+			if d == nil || len(d.RemoteRegs) == 0 {
 				return nil
 			}
-			return d.RegisterRemoteReceivers(proc)
-		}); err != nil {
-			return err
+			if _, ok := visitedDispatches[d]; ok {
+				return nil
+			}
+			visitedDispatches[d] = struct{}{}
+			if s.Proc == nil {
+				return moerr.NewInternalErrorNoCtx("cannot register remote receiver without its scope process")
+			}
+			registration, err := d.RegisterRemoteReceiversWithHandle(s.Proc)
+			if err != nil {
+				return err
+			}
+			if registration != nil {
+				registrations.registrations = append(registrations.registrations, registration)
+			}
+			return nil
+		}
+
+		if mode == registerDispatchReceiverRoot {
+			if err := registerDispatch(s.RootOp.(*dispatch.Dispatch)); err != nil {
+				return err
+			}
+		} else if mode == registerDispatchReceiverTree && s.RootOp != nil {
+			if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				d, ok := op.(*dispatch.Dispatch)
+				if !ok {
+					return nil
+				}
+				return registerDispatch(d)
+			}); err != nil {
+				return err
+			}
+		}
+		for _, pre := range s.PreScopes {
+			if err := registerScope(pre); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, s := range scopes {
+		if err := registerScope(s); err != nil {
+			cancelScopeProcesses(scopes, err)
+			registrations.rollback(err)
+			return nil, err
 		}
 	}
-	for _, pre := range s.PreScopes {
-		if err := registerRemoteDispatchReceivers(pre, proc); err != nil {
-			return err
+	return registrations, nil
+}
+
+func cancelScopeProcesses(scopes []*Scope, err error) {
+	visited := make(map[*Scope]struct{})
+	var cancelScope func(*Scope)
+	cancelScope = func(s *Scope) {
+		if s == nil {
+			return
+		}
+		if _, ok := visited[s]; ok {
+			return
+		}
+		visited[s] = struct{}{}
+		if s.Proc != nil && s.Proc.Cancel != nil {
+			s.Proc.Cancel(err)
+		}
+		for _, pre := range s.PreScopes {
+			cancelScope(pre)
 		}
 	}
-	return nil
+	for _, s := range scopes {
+		cancelScope(s)
+	}
 }
 
 const (
@@ -314,6 +462,7 @@ type messageReceiverOnServer struct {
 	needNotReply bool
 
 	waitRegistrationTimeout time.Duration
+	colexecServer           *colexec.Server
 
 	// result.
 	phyPlan *models.PhyPlan
@@ -332,7 +481,8 @@ func newMessageReceiverOnServer(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	txnClient client.TxnClient,
-	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
+	aicm *defines.AutoIncrCacheManager,
+	colexecServer *colexec.Server) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
 		messageCtx:      ctx,
@@ -343,6 +493,7 @@ func newMessageReceiverOnServer(
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  maxMessageSizeToMoRpc,
 		needNotReply:    m.NeedNotReply,
+		colexecServer:   colexecServer,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,
@@ -577,17 +728,14 @@ func isRemoteDispatchNotRegisteredYetError(err error) bool {
 }
 
 func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, false)
+	dispatchProc, notifyChannel, ok := receiver.colexecServer.GetProcByUuid(uid, false)
 	if ok {
 		return dispatchProc, notifyChannel, nil
 	}
-	select {
-	case <-contextDone(receiver.connectionCtx):
-		colexec.Get().GetProcByUuid(uid, true)
-		return nil, nil, nil
-	default:
-		return nil, nil, newRemoteDispatchNotRegisteredYetError(receiver.getMessageContext(), uid)
-	}
+	// A PrepareDoneNotify stream is one retry attempt. Its connection can be
+	// closed after a NotRegistered response, so it must not own or tombstone the
+	// query-wide receiver UUID while registration is still pending.
+	return nil, nil, newRemoteDispatchNotRegisteredYetError(receiver.getMessageContext(), uid)
 }
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
@@ -598,7 +746,7 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	connectionDone := contextDone(receiver.connectionCtx)
 	messageDone := contextDone(receiver.messageCtx)
 	for {
-		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
+		dispatchProc, notifyChannel, ok, changed := receiver.colexecServer.GetProcByUuidOrWait(uid)
 		if ok {
 			return dispatchProc, notifyChannel, nil
 		}
@@ -641,7 +789,7 @@ func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
 }
 
 func (receiver *messageReceiverOnServer) cancelPendingDispatchRegistration(uid uuid.UUID, err error) {
-	dispatchProc, _, ok := colexec.Get().GetProcByUuid(uid, true)
+	dispatchProc, _, ok := receiver.colexecServer.GetProcByUuid(uid, true)
 	if !ok || dispatchProc == nil || dispatchProc.Cancel == nil {
 		return
 	}

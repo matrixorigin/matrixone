@@ -76,32 +76,6 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
-func hasParam(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_P:
-		return true
-
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	case *plan.Expr_List:
-		for _, arg := range exprImpl.List.List {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	default:
-		return false
-	}
-}
-
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -2791,6 +2765,21 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
 		schemas = getParamRule.schemas
+		for _, dependency := range getParamRule.indexDependencies {
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			if err != nil {
+				return nil, nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+			}
+			ref := DeepCopyObjectRef(objRef)
+			ref.Server = int64(tableDef.Version)
+			ref.Db = int64(tableDef.DbId)
+			ref.Schema = int64(tableDef.DbId)
+			ref.Obj = int64(tableDef.TblId)
+			schemas = append(schemas, ref)
+		}
 		paramTypes = getParamRule.paramTypes
 
 		// reset arg order

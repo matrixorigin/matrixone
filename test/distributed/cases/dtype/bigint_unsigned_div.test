@@ -1,0 +1,23 @@
+-- @suite
+-- @case
+-- @desc:test unsigned bigint division with signed integer operands
+-- @label:bvt
+
+drop table if exists t_unsigned_div_25551;
+create table t_unsigned_div_25551 (id int primary key, u bigint unsigned, s bigint);
+insert into t_unsigned_div_25551 values
+(1, 5000000000, 1000000000),
+(2, 18446744073709551615, 3);
+select u / 1000000000 as sec from t_unsigned_div_25551 where id = 1;
+select u / s as div_result from t_unsigned_div_25551 where id = 1;
+select s / u as div_result from t_unsigned_div_25551 where id = 1;
+select u / 3 as div_result from t_unsigned_div_25551 where id = 2;
+select u / 3.0 as div_result from t_unsigned_div_25551 where id = 2;
+
+drop table if exists t_statement_info_duration_25551;
+create table t_statement_info_duration_25551 (statement varchar(32), duration bigint unsigned);
+insert into t_statement_info_duration_25551 values ('slow query', 5000000000);
+select statement, duration / 1000000000 as duration_sec from t_statement_info_duration_25551;
+
+drop table t_statement_info_duration_25551;
+drop table t_unsigned_div_25551;

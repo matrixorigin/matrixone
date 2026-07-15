@@ -491,7 +491,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		if len(dedupJoinCtx.GetOldColCaptureList()) > 0 {
 			return
 		}
-		if node.OnDuplicateAction == plan.Node_FAIL && len(dedupJoinCtx.GetOldColList()) > 0 {
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(dedupJoinCtx.GetOldColList()) > 0 {
 			return
 		}
 

@@ -155,6 +155,46 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBoundedHnswSearchLimits(t *testing.T) {
+	// requested >= every file: each file returns its full cardinality, result = total.
+	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
+	require.Equal(t, []uint{3, 7}, perIndex)
+	require.Equal(t, uint(10), resultLimit)
+
+	// requested caps each per-file limit and the result; the heap bound is this resultLimit
+	// (5), NOT the sum of per-file limits (8) — that was the shard_count*LIMIT bug (#25637).
+	perIndex, resultLimit = boundedHnswSearchLimits([]uint{3, 7}, 5)
+	require.Equal(t, []uint{3, 5}, perIndex)
+	require.Equal(t, uint(5), resultLimit)
+
+	// total overflows to saturate; resultLimit is capped by requested.
+	_, resultLimit = boundedHnswSearchLimits([]uint{^uint(0), ^uint(0)}, ^uint(0))
+	require.Equal(t, ^uint(0), resultLimit)
+}
+
+func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
+	s := NewHnswSearch[float32](vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{ThreadsSearch: 1})
+	s.Concurrency.Store(1)
+	s.Cond.L.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		s.unlock()
+		close(done)
+	}()
+	<-started
+
+	select {
+	case <-done:
+		t.Fatal("unlock changed the predicate without acquiring the condition lock")
+	case <-time.After(20 * time.Millisecond):
+	}
+	s.Cond.L.Unlock()
+	<-done
+	require.Zero(t, s.Concurrency.Load())
+}
+
 func TestHnswSearchUpdateConfig(t *testing.T) {
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	tblcfg := vectorindex.IndexTableConfig{}

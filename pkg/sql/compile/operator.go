@@ -555,6 +555,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Action = t.Action
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.CountDeleteAffectRows = t.CountDeleteAffectRows
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -805,6 +806,13 @@ func constructMultiUpdate(
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+
+	for _, updateCtx := range node.UpdateCtxList {
+		if updateCtx.CountDeleteAffectRows {
+			arg.CountDeleteAffectRows = true
+			break
+		}
+	}
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {
@@ -1217,7 +1225,10 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// OldColList identifies the row being updated.  Both FAIL and IGNORE
+		// must exclude that row from duplicate detection: an UPDATE that keeps
+		// a primary/unique key unchanged is not a duplicate of itself.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 			if len(node.DedupJoinCtx.OldColList) > 1 {
 				arg.DedupDeleteMarkerColIdx = node.DedupJoinCtx.OldColList[1].ColPos
@@ -1284,7 +1295,9 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	if node.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// See constructDedupJoin: UPDATE IGNORE also needs to exclude the
+		// target row's old key from duplicate detection.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
 	}
@@ -1390,14 +1403,12 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {
 	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(node.WinSpecList))
-	typs := make([]types.Type, len(node.WinSpecList))
 
 	for i, expr := range node.WinSpecList {
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var e *plan.Expr = nil
 		var cfg []byte = nil
 		var args = f.F.Args
 		if len(f.F.Args) > 0 {
@@ -1416,18 +1427,11 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 				args = f.F.Args[:len(f.F.Args)-1]
 			}
-
-			e = f.F.Args[0]
 		}
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
-
-		if e != nil {
-			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-		}
 	}
 	arg := window.NewArgument()
-	arg.Types = typs
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
 	return arg
@@ -1512,8 +1516,53 @@ func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*pro
 	return arg
 }
 
-// This function do not setting funcId.
-// PLEASE SETTING FuncId AFTER YOU CALL IT.
+// constructLocalDispatchFromScopes builds a dispatch whose receivers must all be
+// on the source scope's execution node. Use it for local-only dispatch FuncIds;
+// mixed local/remote registrations belong in constructDispatchLocalAndRemote.
+func constructLocalDispatchFromScopes(idx int, target []*Scope, source *Scope) (*dispatch.Dispatch, error) {
+	if source == nil {
+		return nil, moerr.NewInternalErrorNoCtx("local dispatch source scope is nil")
+	}
+	if len(target) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("local dispatch requires at least one target scope")
+	}
+	for i, s := range target {
+		if s == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d is nil", i)
+		}
+		if !sameExecutionNode(s.NodeInfo, source.NodeInfo) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"local dispatch target scope %d is on a different CN, source id %q addr %q target id %q addr %q",
+				i, source.NodeInfo.Id, source.NodeInfo.Addr, s.NodeInfo.Id, s.NodeInfo.Addr)
+		}
+		if s.Proc == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d has no process", i)
+		}
+		if idx < 0 || idx >= len(s.Proc.Reg.MergeReceivers) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"local dispatch target scope %d has no merge receiver at index %d", i, idx)
+		}
+	}
+
+	arg := dispatch.NewArgument()
+	arg.LocalRegs = make([]*process.WaitRegister, 0, len(target))
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0)
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(target))
+	arg.ShuffleRegIdxRemote = make([]int, 0)
+	for i, s := range target {
+		s.Proc.Reg.MergeReceivers[idx].SetNilBatchCntForReuse(source.NodeInfo.Mcpu)
+		arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+		arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
+	}
+	return arg, nil
+}
+
+// constructDispatchLocalAndRemote wires local and remote receivers. It may
+// populate RemoteRegs, so callers must not assign local-only FuncIds unless
+// hasRemote is false. Non-shuffle callers use hasRemote to choose SendToAllFunc
+// vs SendToAllLocalFunc; shuffle callers may use ShuffleToAllFunc for either
+// local-only or mixed registrations. For guaranteed local-only dispatch, prefer
+// constructLocalDispatchFromScopes.
 func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (bool, *dispatch.Dispatch) {
 	arg := dispatch.NewArgument()
 	scopeLen := len(target)
@@ -1877,7 +1926,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
@@ -1954,7 +2003,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction

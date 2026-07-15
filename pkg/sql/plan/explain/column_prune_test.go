@@ -500,7 +500,7 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "customer",
-					colNames:  []string{"c_custkey", "c_nationkey"},
+					colNames:  []string{"c_custkey"},
 				},
 				{
 					tableName: "nation",
@@ -553,6 +553,363 @@ func TestDerivedTableQueryPrune(t *testing.T) {
 		})
 	}
 
+}
+
+func TestColumnPruneSemanticBoundaries(t *testing.T) {
+	cases := []struct {
+		name         string
+		sql          string
+		wantTableCol []Entry[string, []string]
+	}{
+		{
+			name: "derived distinct keeps unprojected dedup keys",
+			sql:  "select n_name from (select distinct n_name, n_comment from nation) d",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_comment"}},
+			},
+		},
+		{
+			name: "union all prunes unprojected columns",
+			sql:  "select n_name from (select n_name, n_comment from nation union all select r_name, r_comment from region) u",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name"}},
+				{tableName: "region", colNames: []string{"r_name"}},
+			},
+		},
+		{
+			name: "union all compacts a retained nonzero position",
+			sql:  "select n_comment from (select n_name, n_comment from nation union all select r_name, r_comment from region) u",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_comment"}},
+				{tableName: "region", colNames: []string{"r_comment"}},
+			},
+		},
+		{
+			name: "union distinct keeps unprojected dedup keys",
+			sql:  "select n_name from (select n_name, n_comment from nation union select r_name, r_comment from region) u",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_comment"}},
+				{tableName: "region", colNames: []string{"r_name", "r_comment"}},
+			},
+		},
+		{
+			name: "intersect keeps unprojected set keys",
+			sql:  "select n_name from (select n_name, n_comment from nation intersect select r_name, r_comment from region) u",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_comment"}},
+				{tableName: "region", colNames: []string{"r_name", "r_comment"}},
+			},
+		},
+		{
+			name: "grouped aggregate prunes unused aggregate input",
+			sql:  "select c_custkey from (select c_custkey, count(c_comment) as cnt from customer group by c_custkey) g",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "customer", colNames: []string{"c_custkey"}},
+			},
+		},
+		{
+			name: "scalar aggregate compacts a retained nonzero position",
+			sql:  "select total from (select count(c_comment) as cnt, sum(c_acctbal) as total from customer) g",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "customer", colNames: []string{"c_acctbal"}},
+			},
+		},
+		{
+			name: "grouped aggregate keeps unprojected grouping keys",
+			sql:  "select n_regionkey from (select n_regionkey, n_name from nation group by n_regionkey, n_name) g",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_regionkey"}},
+			},
+		},
+		{
+			name: "unused window output prunes window-only inputs",
+			sql:  "select n_name from (select n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name"}},
+			},
+		},
+		{
+			name: "used window output keeps partition and order inputs",
+			sql:  "select rn from (select row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_regionkey", "n_comment"}},
+			},
+		},
+		{
+			name: "order sensitive aggregate retains input window order",
+			sql:  "select n_regionkey, json_arrayagg(n_name) from (select n_regionkey, n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w group by n_regionkey",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_regionkey", "n_comment"}},
+			},
+		},
+		{
+			name: "having keeps only its aggregate input",
+			sql:  "select c_custkey from (select c_custkey, count(c_comment) as cnt, sum(c_acctbal) as total from customer group by c_custkey having sum(c_acctbal) > 0) g",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "customer", colNames: []string{"c_custkey", "c_acctbal"}},
+			},
+		},
+		{
+			name: "scalar aggregate keeps a row-producing carrier",
+			sql:  "select 1 from (select sum(c_acctbal) as total from customer) g",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "customer", colNames: []string{"c_acctbal"}},
+			},
+		},
+		{
+			name: "having without aggregate keeps row semantics",
+			sql:  "select 1 from nation having true",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_nationkey"}},
+			},
+		},
+		{
+			name: "window post filter keeps window inputs",
+			sql:  "select n_name from (select n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w where rn = 1",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_regionkey", "n_comment"}},
+			},
+		},
+		{
+			name: "unused first window does not retain its inputs",
+			sql:  "select rn2 from (select row_number() over (partition by n_regionkey order by n_comment) as rn1, row_number() over (order by n_name) as rn2 from nation) w",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name"}},
+			},
+		},
+		{
+			name: "union all constant projection keeps one row carrier",
+			sql:  "select 1 from (select n_name, n_comment from nation union all select r_name, r_comment from region) u",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name"}},
+				{tableName: "region", colNames: []string{"r_name"}},
+			},
+		},
+		{
+			name: "order by below limit retains its input",
+			sql:  "select n_name from (select n_name, n_comment from nation order by n_comment limit 10) d",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_comment"}},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mock := plan2.NewMockOptimizer(false)
+			logicPlan, err := buildOneStmt(mock, t, c.sql)
+			require.NoError(t, err)
+			columns, err := getPrunedTableColumns(logicPlan)
+			require.NoError(t, err)
+			require.Equal(t, c.wantTableCol, columns)
+		})
+	}
+}
+
+func TestColumnPruneOperatorShape(t *testing.T) {
+	t.Run("union all compacts output positions", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_name from (select n_name, n_comment from nation union all select r_name, r_comment from region) u",
+		)
+		require.NoError(t, err)
+
+		var unionAll *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_UNION_ALL {
+				unionAll = node
+				break
+			}
+		}
+		require.NotNil(t, unionAll)
+		require.Len(t, unionAll.ProjectList, 1)
+	})
+
+	t.Run("union all retains side-effecting positions", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select a from (select n_name as a, sleep(0) as side_effect from nation union all select r_name, sleep(0) from region) u",
+		)
+		require.NoError(t, err)
+
+		var unionAll *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_UNION_ALL {
+				unionAll = node
+				break
+			}
+		}
+		require.NotNil(t, unionAll)
+		require.Len(t, unionAll.ProjectList, 2)
+	})
+
+	t.Run("aggregate compacts having slots", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select c_custkey from (select c_custkey, count(c_comment) as cnt, sum(c_acctbal) as total from customer group by c_custkey having sum(c_acctbal) > 0) g",
+		)
+		require.NoError(t, err)
+
+		var agg *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_AGG && len(node.FilterList) > 0 {
+				agg = node
+				break
+			}
+		}
+		require.NotNil(t, agg)
+		require.Len(t, agg.AggList, 1)
+		require.Equal(t, "sum", agg.AggList[0].GetF().Func.ObjName)
+		col := agg.FilterList[0].GetF().Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, int32(-2), col.RelPos)
+		require.Equal(t, int32(1), col.ColPos, "group column occupies slot 0; compacted sum occupies slot 1")
+	})
+
+	t.Run("aggregate retains side-effecting inputs", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select c_custkey from (select c_custkey, sum(sleep(0)) as side_effect from customer group by c_custkey) g",
+		)
+		require.NoError(t, err)
+
+		var agg *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_AGG {
+				agg = node
+				break
+			}
+		}
+		require.NotNil(t, agg)
+		require.Len(t, agg.AggList, 1)
+	})
+
+	t.Run("unused window operators are unreachable", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_name from (select n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w",
+		)
+		require.NoError(t, err)
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			require.NotEqual(t, plan.Node_WINDOW, node.NodeType)
+			require.NotEqual(t, plan.Node_PARTITION, node.NodeType)
+		}
+	})
+
+	t.Run("unused window with side effects remains reachable", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_name from (select n_name, row_number() over (order by sleep(0)) as rn from nation) w",
+		)
+		require.NoError(t, err)
+
+		windowFound := false
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_WINDOW {
+				windowFound = true
+				break
+			}
+		}
+		require.True(t, windowFound)
+	})
+
+	t.Run("order sensitive aggregate retains window without exposing its output", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_regionkey, json_arrayagg(n_name) from (select n_regionkey, n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w group by n_regionkey",
+		)
+		require.NoError(t, err)
+
+		windowFound := false
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_WINDOW {
+				windowFound = true
+			}
+			if node.NodeType == plan.Node_AGG {
+				require.Len(t, node.ProjectList, 2)
+			}
+		}
+		require.True(t, windowFound)
+	})
+
+	t.Run("discarded order sensitive carrier does not retain window order", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select json_arrayagg(n_name) from (select n_name, row_number() over (order by n_comment) as rn from nation) w) g",
+		)
+		require.NoError(t, err)
+
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			require.NotEqual(t, plan.Node_WINDOW, node.NodeType)
+			require.NotEqual(t, plan.Node_PARTITION, node.NodeType)
+		}
+	})
+
+	t.Run("order sensitive aggregate retains stacked windows", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select json_arrayagg(n_name) from (select n_name, row_number() over (order by n_regionkey) as rn1, row_number() over (order by n_comment) as rn2 from nation) w",
+		)
+		require.NoError(t, err)
+
+		windowCount := 0
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_WINDOW {
+				windowCount++
+			}
+		}
+		require.Equal(t, 2, windowCount)
+	})
+
+	t.Run("cte consumers expose only referenced columns", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"with c as (select n_name, n_comment from nation) select x.n_name from c x join c y on x.n_name = y.n_name",
+		)
+		require.NoError(t, err)
+
+		scanCount := 0
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType != plan.Node_TABLE_SCAN {
+				continue
+			}
+			scanCount++
+			require.Len(t, node.TableDef.Cols, 1)
+			require.Equal(t, "n_name", node.TableDef.Cols[0].Name)
+		}
+		require.Equal(t, 2, scanCount)
+	})
+}
+
+func reachablePlanNodes(query *plan.Query) []*plan.Node {
+	visited := make(map[int32]struct{}, len(query.Nodes))
+	nodes := make([]*plan.Node, 0, len(query.Nodes))
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		nodes = append(nodes, node)
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+	return nodes
 }
 
 func buildOneStmt(opt plan2.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {

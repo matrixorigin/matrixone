@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"sync"
@@ -30,16 +31,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
 	testTNStoreAddr      = "unix:///tmp/test-dnstore.sock"
 	testTNLogtailAddress = "127.0.0.1:22001"
 )
+
+type storeQueryClient struct {
+	client.QueryClient
+	closeCalls int
+}
+
+func (c *storeQueryClient) Close() error {
+	c.closeCalls++
+	return nil
+}
 
 func TestNewAndStartAndCloseService(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
@@ -125,7 +138,7 @@ func TestStartReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 		assert.Equal(t, newTestTNShard(1, 2, 3), r.shard)
 	})
 }
@@ -134,7 +147,7 @@ func TestRemoveReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 
 		thc := s.hakeeperClient.(*testHAKeeperClient)
 		thc.setCommandBatch(logservicepb.CommandBatch{
@@ -168,11 +181,136 @@ func TestCloseReplica(t *testing.T) {
 		shard := newTestTNShard(1, 2, 3)
 		assert.NoError(t, s.StartTNReplica(shard))
 		r := s.getReplica(1)
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 		assert.Equal(t, shard, r.shard)
 
 		assert.NoError(t, s.CloseTNReplica(shard))
 		assert.Nil(t, s.getReplica(1))
+	})
+}
+
+func TestRemoveReplicaCancelsStorageCreation(t *testing.T) {
+	oldInterval := retryCreateStorageInterval
+	retryCreateStorageInterval = 10 * time.Millisecond
+	t.Cleanup(func() { retryCreateStorageInterval = oldInterval })
+
+	var allowCreate atomic.Bool
+	createAttempted := make(chan struct{}, 1)
+	runTNStoreTest(t, func(s *store) {
+		s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+			if !allowCreate.Load() {
+				select {
+				case createAttempted <- struct{}{}:
+				default:
+				}
+				return nil, errors.New("injected log client creation failure")
+			}
+			return mem.NewMemLog(), nil
+		}
+
+		shard := newTestTNShard(101, 201, 301)
+		require.NoError(t, s.StartTNReplica(shard))
+		removed := s.getReplica(shard.ShardID)
+		require.NotNil(t, removed)
+		select {
+		case <-createAttempted:
+		case <-time.After(time.Second):
+			t.Fatal("storage creation was not attempted")
+		}
+
+		require.NoError(t, s.CloseTNReplica(shard))
+		require.Nil(t, s.getReplica(shard.ShardID))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.ErrorIs(t, removed.waitStarted(ctx), context.Canceled)
+		removed.mu.RLock()
+		require.Nil(t, removed.service)
+		removed.mu.RUnlock()
+
+		require.NoError(t, s.StartTNReplica(shard))
+		replacement := s.getReplica(shard.ShardID)
+		require.NotNil(t, replacement)
+		require.NotSame(t, removed, replacement)
+		allowCreate.Store(true)
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, replacement.waitStarted(ctx))
+
+		time.Sleep(5 * retryCreateStorageInterval)
+		removed.mu.RLock()
+		require.Nil(t, removed.service)
+		removed.mu.RUnlock()
+	})
+}
+
+func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
+	sharedClient := &storeQueryClient{}
+	runTNStoreTest(t, func(s *store) {
+		realClient := s.queryClient
+		s.queryClient = sharedClient
+		require.NoError(t, realClient.Close())
+		t.Cleanup(func() {
+			require.Equal(t, 1, sharedClient.closeCalls)
+		})
+	})
+}
+
+func TestReplicaCreateRetryStopsPromptly(t *testing.T) {
+	oldInterval := retryCreateStorageInterval
+	retryCreateStorageInterval = time.Second
+	t.Cleanup(func() { retryCreateStorageInterval = oldInterval })
+
+	createAttempted := make(chan struct{}, 1)
+	runTNStoreTest(t, func(s *store) {
+		s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+			select {
+			case createAttempted <- struct{}{}:
+			default:
+			}
+			return nil, errors.New("injected log client creation failure")
+		}
+
+		require.NoError(t, s.StartTNReplica(newTestTNShard(102, 202, 302)))
+		select {
+		case <-createAttempted:
+		case <-time.After(time.Second):
+			t.Fatal("storage creation was not attempted")
+		}
+
+		start := time.Now()
+		s.stopper.Stop()
+		require.Less(t, time.Since(start), 500*time.Millisecond)
+	})
+}
+
+func TestConcurrentStartTNReplicaPersistsAllShards(t *testing.T) {
+	const replicaCount = 24
+	runTNStoreTest(t, func(s *store) {
+		var wg sync.WaitGroup
+		errs := make(chan error, replicaCount)
+		for i := 0; i < replicaCount; i++ {
+			shardID := uint64(1000 + i)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- s.StartTNReplica(newTestTNShard(shardID, shardID+1000, shardID+2000))
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err)
+		}
+
+		s.mu.RLock()
+		shards := append([]metadata.TNShard(nil), s.mu.metadata.Shards...)
+		s.mu.RUnlock()
+		require.Len(t, shards, replicaCount)
+		seen := make(map[uint64]struct{}, replicaCount)
+		for _, shard := range shards {
+			seen[shard.ShardID] = struct{}{}
+		}
+		require.Len(t, seen, replicaCount)
 	})
 }
 
@@ -264,7 +402,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 	for {
 		r := s.getReplica(1)
 		if r != nil {
-			r.waitStarted()
+			assert.NoError(t, r.waitStarted(context.Background()))
 			assert.Equal(t, newTestTNShard(shardID, replicaID, logShardID), r.shard)
 			return
 		}

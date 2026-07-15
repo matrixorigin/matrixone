@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -115,6 +117,18 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if s.DataSource != nil && !s.DataSource.isConst {
 		s.DataSource.R = nil
+	}
+
+	// The previous execution's cleanup delivered terminal signals into this
+	// scope's pipeline edges and marked them done (doneClosed/endDelivered).
+	// A done edge silently rejects both data and End signals, so a reused
+	// pipeline would leave its receivers waiting forever. Clear the terminal
+	// state so the edges can carry the next execution's signals.
+	// See: https://github.com/matrixorigin/matrixone/issues/25614
+	if s.Proc != nil {
+		for _, reg := range s.Proc.Reg.MergeReceivers {
+			reg.ResetTerminalStateForReuse()
+		}
 	}
 
 	if s.ScopeAnalyzer != nil {
@@ -397,11 +411,14 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
+		return s.failRemoteRunBeforeStart(c, err)
+	}
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
 	if err := s.holdAnyCannotRemoteOperator(); err != nil {
-		return err
+		return s.failRemoteRunBeforeStart(c, err)
 	}
 
 	// In fact, it's not a safe way to convert this pipeline to run at local.
@@ -427,6 +444,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	runErr := err
 	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
+	if err != nil && s.Proc.Cancel != nil {
+		cancelErr := runErr
+		if cancelErr == nil {
+			cancelErr = err
+		}
+		s.Proc.Cancel(cancelErr)
+	}
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
 	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
@@ -436,6 +460,29 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		sender.close()
 	}
 	return runErr
+}
+
+func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	return err
+}
+
+func validateRemoteRunAddress(scopeAddr, localAddr string) error {
+	if scopeAddr == "" || scopeAddr == localAddr {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(scopeAddr)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: %v", scopeAddr, err)
+	}
+	if host == "" {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: host is empty", scopeAddr)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: invalid port %q", scopeAddr, port)
+	}
+	return nil
 }
 
 // ParallelRun run a pipeline in parallel.

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -79,7 +80,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 					}
 					// convert to uint64 instead of CAST
 					expr = makePlan2Uint64ConstExprWithType(uint64(c.I64Val))
-					return expr, nil
+					return b.foldConstant(expr)
 				}
 			}
 		}
@@ -96,7 +97,10 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		} else if expr.GetP() != nil {
 			targetType := types.T_uint64.ToType()
 			planTargetType := makePlan2Type(&targetType)
-			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			if err != nil {
+				return nil, err
+			}
 		} else if expr.GetV() != nil {
 			// SELECT IFNULL(CAST(@var AS BIGINT), 1) => CASE( ISNULL(@var), 1, CAST(@var AS BIGINT))
 			arg0, err := BindFuncExprImplByPlanExpr(b.GetContext(), "isnull", []*plan.Expr{
@@ -115,11 +119,14 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 
-			return BindFuncExprImplByPlanExpr(b.GetContext(), "case", []*plan.Expr{
+			expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "case", []*plan.Expr{
 				arg0,
 				arg1,
 				arg2,
 			})
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			clause := "LIMIT"
 			if b.isOffset {
@@ -130,7 +137,22 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		}
 	}
 
-	return expr, nil
+	return b.foldConstant(expr)
+}
+
+func (b *LimitBinder) foldConstant(expr *plan.Expr) (*plan.Expr, error) {
+	proc := b.builder.compCtx.GetProcess()
+	if proc == nil || expr == nil || expr.GetF() == nil || containsDynamicParam(expr) {
+		return expr, nil
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+	if err != nil {
+		return nil, err
+	}
+	if folded == nil {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "invalid LIMIT/OFFSET expression")
+	}
+	return folded, nil
 }
 
 func (b *LimitBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
