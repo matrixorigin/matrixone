@@ -208,10 +208,13 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	return err
 }
 
-// cleanForPrepare releases resources from a previous prepared execution before
-// rebuilding the table function's argument executors and state.
+// cleanForPrepare releases resources that Prepare rebuilds. Optimized
+// generate_series state is injected by the compiler and must survive Prepare.
 func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
 	tableFunction.ctr.cleanExecutors()
+	if tableFunction.FuncName == "generate_series" && tableFunction.CanOpt {
+		return
+	}
 	if tableFunction.ctr.state != nil {
 		tableFunction.ctr.state.free(tableFunction, proc, false, nil)
 		tableFunction.ctr.state = nil

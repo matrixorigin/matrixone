@@ -241,6 +241,27 @@ func TestPrepareReleasesPreviousExecutorsAndState(t *testing.T) {
 	require.Nil(t, arg.ctr.state)
 }
 
+func TestPreparePreservesOptimizedGenerateSeriesState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := &TableFunction{
+		FuncName: "generate_series",
+		CanOpt:   true,
+		Attrs:    []string{"result"},
+		Rets: []*plan.ColDef{{
+			Name: "result",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	arg.GenerateSeriesCtrNumState(1, 3, 1, 1)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 3, result.Batch.RowCount())
+	arg.Free(proc, false, nil)
+}
+
 func TestSourceTableFunctionResetAfterStartError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	state := &startErrorState{startErr: moerr.NewInvalidInputNoCtx("invalid argument")}
