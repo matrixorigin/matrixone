@@ -15,11 +15,78 @@
 package plan
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+var errDistinctOrderNotProjected = errors.New("DISTINCT ORDER BY expression is not available from the projection")
+
+// distinctOrderBinder binds an ORDER BY expression against the output of a
+// DISTINCT projection. It deliberately exposes only select-list aliases and
+// directly selected columns; it never falls back to the input-table scope.
+type distinctOrderBinder struct {
+	baseBinder
+}
+
+var _ Binder = (*distinctOrderBinder)(nil)
+
+func newDistinctOrderBinder(projectionBinder *ProjectionBinder) *distinctOrderBinder {
+	b := &distinctOrderBinder{}
+	b.sysCtx = projectionBinder.sysCtx
+	b.builder = projectionBinder.builder
+	b.ctx = projectionBinder.ctx
+	b.impl = b
+	return b
+}
+
+func (b *distinctOrderBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return b.baseBindExpr(astExpr, depth, isRoot)
+}
+
+func (b *distinctOrderBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	if astExpr.NumParts == 1 {
+		name := astExpr.ColName()
+		if b.ctx.aliasFrequency[name] > 1 {
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
+		}
+		if selectItem, ok := b.ctx.aliasMap[name]; ok {
+			return makeProjectColRef(b.ctx, selectItem.idx), nil
+		}
+	}
+
+	qualified, err := b.ctx.qualifyColumnNames(astExpr, NoAlias)
+	if err != nil {
+		return nil, err
+	}
+	if pos, ok := b.ctx.projectColByAst[windowExprAstKey(qualified)]; ok {
+		return makeProjectColRef(b.ctx, pos), nil
+	}
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindSubquery(*tree.Subquery, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindTimeWindowFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func makeProjectColRef(ctx *BindContext, pos int32) *plan.Expr {
+	return GetColExpr(ctx.projects[pos].Typ, ctx.projectTag, pos)
+}
 
 func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectExprs) *OrderBinder {
 	return &OrderBinder{
@@ -119,6 +186,21 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		}
 	}
 
+	var distinctExpr *plan.Expr
+	if b.ctx.isDistinct {
+		if b.distinctBinder == nil {
+			b.distinctBinder = newDistinctOrderBinder(b.ProjectionBinder)
+		}
+		var distinctErr error
+		distinctExpr, distinctErr = b.distinctBinder.BindExpr(astExpr, 0, true)
+		if distinctErr != nil && !errors.Is(distinctErr, errDistinctOrderNotProjected) {
+			return nil, distinctErr
+		}
+		if distinctErr != nil {
+			distinctExpr = nil
+		}
+	}
+
 	astExpr, err := b.ctx.qualifyColumnNames(astExpr, AliasBeforeColumn)
 	if err != nil {
 		return nil, err
@@ -139,6 +221,9 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 
 	if colPos, ok = b.ctx.projectByExpr[exprKey]; !ok {
 		if b.ctx.isDistinct {
+			if distinctExpr != nil {
+				return distinctExpr, nil
+			}
 			return nil, moerr.NewSyntaxError(b.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		}
 

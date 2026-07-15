@@ -222,3 +222,11 @@ SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.
 
 drop table t14;
 drop table t15;
+
+drop table if exists t_order;
+create table t_order(grp int, label varchar(10));
+insert into t_order values (2, 'b'), (1, 'b'), (2, 'a'), (1, 'a'), (1, 'a');
+select distinct grp, label from t_order order by concat(label, 'x'), grp;
+select distinct grp from t_order order by grp + 0 desc;
+select distinct grp + 1 as g from t_order order by g + 1 desc;
+drop table t_order;
