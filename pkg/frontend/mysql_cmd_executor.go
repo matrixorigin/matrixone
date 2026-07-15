@@ -3851,6 +3851,9 @@ func sqlForRecordByStatement(sql string) []string {
 			byStatement = append(byStatement, records[i])
 		}
 	}
+	if len(byStatement) == 0 {
+		return []string{""}
+	}
 	return byStatement
 }
 

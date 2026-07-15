@@ -635,6 +635,12 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	t.Run("single synthetic blank record stays available", func(t *testing.T) {
 		require.Equal(t, []string{""}, sqlForRecordByStatement(""))
 	})
+
+	t.Run("multi blank and comment fragments keep empty statement record", func(t *testing.T) {
+		for _, sql := range []string{";;", "/* comment */; -- another comment"} {
+			require.Equal(t, []string{""}, sqlForRecordByStatement(sql), sql)
+		}
+	})
 }
 
 func TestValidateRewriteRuleSQL(t *testing.T) {
