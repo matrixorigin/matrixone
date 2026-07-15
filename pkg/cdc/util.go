@@ -660,19 +660,48 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
-var EnterRunSql = func(ctx context.Context, txnOp client.TxnOperator, sql string) func() {
+func enterRunSQL(
+	ctx context.Context,
+	txnOp client.TxnOperator,
+	sql string,
+	rejectionAware bool,
+) (func(), error) {
 	if txnOp == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	var (
+		token uint64
+		err   error
+	)
+	if rejectionAware {
+		token, err = client.TryEnterRunSqlWithTokenAndSQL(txnOp, cancel, sql)
+	} else {
+		token = txnOp.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	}
+	if err != nil {
+		cancel()
+		return func() {}, err
+	}
 	return func() {
 		txnOp.ExitRunSqlWithToken(token)
 		cancel()
-	}
+	}, nil
+}
+
+// EnterRunSql preserves the original, non-rejecting API contract. Callers that
+// need an admission error should use TryEnterRunSql.
+var EnterRunSql = func(ctx context.Context, txnOp client.TxnOperator, sql string) func() {
+	finish, _ := enterRunSQL(ctx, txnOp, sql, false)
+	return finish
+}
+
+// TryEnterRunSql registers one SQL execution and reports admission rejection.
+var TryEnterRunSql = func(ctx context.Context, txnOp client.TxnOperator, sql string) (func(), error) {
+	return enterRunSQL(ctx, txnOp, sql, true)
 }
 
 var GetTableDef = func(
