@@ -137,6 +137,28 @@ func parserSQLModeFromContext(ctx CompilerContext) *string {
 	return &sqlMode
 }
 
+func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+	fmtCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	stmt.Format(fmtCtx)
+	// CreateTable.Format does not include ClusterByOption, but rel_createsql is
+	// also consumed when a table is recreated on another node.
+	if stmt.ClusterByOption != nil {
+		fmtCtx.WriteString(" cluster by (")
+		for i, col := range stmt.ClusterByOption.ColumnList {
+			if i > 0 {
+				fmtCtx.WriteString(", ")
+			}
+			col.Format(fmtCtx)
+		}
+		fmtCtx.WriteByte(')')
+	}
+	return fmtCtx.String()
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
@@ -873,12 +895,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = tree.StringWithOpts(
-			stmt,
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithSingleQuoteString(),
-		)
+		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -1046,8 +1063,10 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		stmt.Format(fmtCtx)
+		createSQL := ctx.GetRootSql()
+		if stmt.PartitionOption != nil {
+			createSQL = canonicalPartitionedCreateTableSQL(stmt)
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -1055,7 +1074,7 @@ func buildCreateTable(
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: ctx.GetRootSql(),
+				Value: createSQL,
 			},
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
@@ -4644,15 +4663,17 @@ func constructAddedPartitionDefs(
 	tableDef *plan.TableDef,
 	clause *tree.AlterPartitionAddPartitionClause,
 ) ([]*plan.PartitionDef, error) {
-	originTableStmt, err := parsers.ParseOne(
+	originTableStmt, err := parsers.ParseOneWithSQLMode(
 		ctx.GetContext(),
 		dialect.MYSQL,
 		tableDef.Createsql,
 		ctx.GetLowerCaseTableNames(),
+		"PIPES_AS_CONCAT",
 	)
 	if err != nil {
 		return nil, err
 	}
+	defer originTableStmt.Free()
 
 	ct, ok := originTableStmt.(*tree.CreateTable)
 	if !ok {

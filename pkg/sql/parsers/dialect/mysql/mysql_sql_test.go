@@ -4087,6 +4087,25 @@ func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
 	require.Contains(t, formatted, "'FAIL'")
 }
 
+func TestCreateSQLTaskCanonicalizesANSIQuotedIdentifiers(t *testing.T) {
+	stmt, err := ParseOneWithSQLMode(
+		context.Background(),
+		`create task task_ansi as begin select "select" from "table"; end`,
+		1,
+		"ANSI_QUOTES",
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Equal(t, "select `select` from `table`", createStmt.SQLBody)
+
+	bodyStmt, err := ParseOne(context.Background(), createStmt.SQLBody, 1)
+	require.NoError(t, err)
+	bodyStmt.Free()
+}
+
 func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
 	require.NoError(t, err)
@@ -4133,16 +4152,16 @@ end`, 1)
 	require.True(t, ok)
 	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
 	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
-	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(offline_start), max(offline_end))")
-	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
-	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(`offline_start`), max(`offline_end`))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, `s`.`session_start`, `wo`.`dtm_date_created`)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, `s`.`session_start`, `wo`.`dtm_date_created`)")
 
 	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
 	require.NotContains(t, formatted, "timestampdiff('hour'")
 	require.NotContains(t, formatted, "timestampdiff('minute'")
-	require.Contains(t, formatted, "timestampdiff(hour, min(offline_start), max(offline_end))")
-	require.Contains(t, formatted, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
-	require.Contains(t, formatted, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, formatted, "timestampdiff(hour, min(`offline_start`), max(`offline_end`))")
+	require.Contains(t, formatted, "timestampdiff(minute, `s`.`session_start`, `wo`.`dtm_date_created`)")
+	require.Contains(t, formatted, "timestampdiff(hour, `s`.`session_start`, `wo`.`dtm_date_created`)")
 }
 
 var (

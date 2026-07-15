@@ -24,7 +24,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
 	if node == nil {
 		return ""
 	}
-	return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
+	return tree.StringWithOpts(node, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString())
 }
 
 // makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
@@ -46,7 +46,7 @@ func sqlTaskBodyString(stmt tree.Statement) string {
 	parts := make([]string, 0, len(compound.Stmts))
 	for _, s := range compound.Stmts {
 		if s != nil {
-			parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithSingleQuoteString()))
+			parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
 		}
 	}
 	return strings.Join(parts, "; ")

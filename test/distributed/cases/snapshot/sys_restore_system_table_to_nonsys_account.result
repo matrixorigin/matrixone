@@ -54,23 +54,23 @@ udf_dsp03    2025-07-19 05:52:41.738562    account    acc01
 udf_dsp02    2025-07-19 05:52:41.609162    account    acc01        
 udf_dsp01    2025-07-19 05:52:41.560453    account    acc01        
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 restore account acc01{snapshot="udf_dsp03"};
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 restore account acc01{snapshot="udf_dsp02"};
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:41    2025-07-19 05:52:41    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop database udf_db;
 drop snapshot udf_dsp01;
 drop snapshot udf_dsp02;
@@ -82,17 +82,17 @@ create function `addab`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-10001    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:43    2025-07-19 05:52:43    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+10001    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:43    2025-07-19 05:52:43    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop snapshot if exists udf_sp04;
 create snapshot udf_sp04 for account acc01;
 drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
 restore account acc01{snapshot="udf_sp04"};
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-10001    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:43    2025-07-19 05:52:43    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+10001    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:43    2025-07-19 05:52:43    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop database udf_db2;
 drop snapshot udf_sp04;
 drop database if exists procedure_test;
