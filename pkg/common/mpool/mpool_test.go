@@ -597,3 +597,18 @@ func TestMPoolReallocZeroUsesRecordedSourceProvenance(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkMPoolAtomicMax(b *testing.B) {
+	mp, err := NewMPool("benchmark-resource-peak", 0, NoFixed)
+	require.NoError(b, err)
+	defer DeleteMPool(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buf, allocErr := mp.Alloc(64, true)
+		if allocErr != nil {
+			b.Fatal(allocErr)
+		}
+		mp.Free(buf)
+	}
+}
