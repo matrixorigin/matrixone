@@ -40,7 +40,7 @@ func TestRootPhaseResource(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestResetRetryBuildResource(t *testing.T) {
+func TestResetRetryAttemptResource(t *testing.T) {
 	stats := NewStatsInfo()
 	stats.PlanStage.PlanDuration = time.Second
 	stats.PlanStage.PlanStartTime = time.Now()
@@ -50,8 +50,9 @@ func TestResetRetryBuildResource(t *testing.T) {
 	stats.CompileStage.CompileStartTime = time.Now()
 	stats.CompileStage.CompileIOConsumption = 5
 	stats.CompileStage.CompileS3Request = S3Request{Put: 3, DeleteMul: 4}
+	stats.PrepareRunStage.ScopePrepareS3Request = S3Request{Head: 5}
 
-	stats.ResetRetryBuildResource()
+	stats.ResetRetryAttemptResource()
 
 	require.Zero(t, stats.PlanStage.PlanDuration)
 	require.True(t, stats.PlanStage.PlanStartTime.IsZero())
@@ -61,4 +62,5 @@ func TestResetRetryBuildResource(t *testing.T) {
 	require.True(t, stats.CompileStage.CompileStartTime.IsZero())
 	require.Zero(t, stats.CompileStage.CompileIOConsumption)
 	require.Equal(t, S3Request{}, stats.CompileStage.CompileS3Request)
+	require.Equal(t, S3Request{}, stats.PrepareRunStage.ScopePrepareS3Request)
 }

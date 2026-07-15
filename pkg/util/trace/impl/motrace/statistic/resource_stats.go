@@ -64,9 +64,9 @@ func (stats *StatsInfo) RootPhaseResource() resource.Delta {
 	return delta
 }
 
-// ResetRetryBuildResource starts a fresh generation-specific plan/compile
-// interval after the initial root phases have been claimed.
-func (stats *StatsInfo) ResetRetryBuildResource() {
+// ResetRetryAttemptResource starts fresh generation-specific build and prepare
+// counters after the previous attempt has consumed them.
+func (stats *StatsInfo) ResetRetryAttemptResource() {
 	if stats == nil {
 		return
 	}
@@ -78,6 +78,7 @@ func (stats *StatsInfo) ResetRetryBuildResource() {
 	stats.CompileStage.CompileStartTime = time.Time{}
 	resetS3Request(&stats.CompileStage.CompileS3Request)
 	atomic.StoreInt64(&stats.CompileStage.CompileIOConsumption, 0)
+	resetS3Request(&stats.PrepareRunStage.ScopePrepareS3Request)
 }
 
 func resetS3Request(request *S3Request) {

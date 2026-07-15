@@ -281,6 +281,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseBase = 0
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
+		coordinatorPhaseStart = preRunOnceStart
+		coordinatorPhaseBase = carriedPreRunWall
 		var preRunWall time.Duration
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 		if statsPrepared {
@@ -298,6 +300,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
+			coordinatorPhaseStart = time.Time{}
+			coordinatorPhaseBase = 0
 
 			if err = runC.runOnce(); err == nil {
 				err = runC.proc.GetQueryContextError()
@@ -318,6 +322,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 		}
 		attemptPreRunWall = preRunWall
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
@@ -408,7 +414,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptAnal = nil
 		coordinatorPhaseStart = attemptStart
 		coordinatorPhaseBase = 0
-		stats.ResetRetryBuildResource()
+		stats.ResetRetryAttemptResource()
 		resetStatsInfoPreRun(stats, isInExecutor)
 		statsPrepared = true
 

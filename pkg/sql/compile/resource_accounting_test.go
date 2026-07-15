@@ -95,6 +95,29 @@ func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
 	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3Put])
 }
 
+func TestRetryScopePrepareRequestsAreGenerationLocal(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
+	stats := statistic.NewStatsInfo()
+	stats.PrepareRunStage.ScopePrepareS3Request = statistic.S3Request{Get: 2}
+	recorder.finishAttempt(
+		0, time.Now(), 0, 0, stats, nil, nil, "local:6001",
+		resource.OutcomeError, true,
+	)
+
+	stats.ResetRetryAttemptResource()
+	stats.PrepareRunStage.ScopePrepareS3Request = statistic.S3Request{Get: 3}
+	recorder.finishAttempt(
+		1, time.Now(), 0, 0, stats, nil, nil, "local:6001",
+		resource.OutcomeSuccess, false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(5), summary.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(2), summary.AttemptCount)
+}
+
 func TestRemoteTerminalEnvelope(t *testing.T) {
 	anal := &AnalyzeModule{}
 	sender := &messageSenderOnClient{anal: anal}
