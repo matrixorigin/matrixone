@@ -86,3 +86,42 @@ func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
 	require.Nil(t, builder.qry.Nodes[scanID].Limit)
 	require.Nil(t, builder.qry.Nodes[scanID].Offset)
 }
+
+func TestMasterIndexRejectsMixedExactNumericStringFilter(t *testing.T) {
+	compCtx := NewEmptyCompilerContext()
+	builder := NewQueryBuilder(planpb.Query_SELECT, compCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	baseTag := builder.genNewBindTag()
+	baseDef := &planpb.TableDef{
+		Name: "t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "s": 1},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*planpb.IndexDef{{
+			IndexName:      "idx_master_s",
+			IndexAlgo:      catalog.MOIndexMasterAlgo.ToString(),
+			IndexTableName: "__mo_master_idx",
+			Parts:          []string{"s"},
+			TableExist:     true,
+		}},
+	}
+	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(baseDef.Cols[1].Typ, baseTag, 1),
+		makePlan2Int64ConstExprWithType(1),
+	})
+	require.NoError(t, err)
+	scanID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		TableDef:    baseDef,
+		BindingTags: []int32{baseTag},
+		FilterList:  []*planpb.Expr{filter},
+	}, ctx)
+
+	got := builder.applyIndicesForFilters(scanID, builder.qry.Nodes[scanID], nil, nil)
+	require.Equal(t, scanID, got)
+	require.Len(t, builder.qry.Nodes, 1, "mixed predicate must not create an index scan")
+}

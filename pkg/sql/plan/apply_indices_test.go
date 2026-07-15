@@ -4099,6 +4099,98 @@ func TestCheckIndexFilter_RangeOps(t *testing.T) {
 	}
 }
 
+func TestCheckIndexFilterRejectsMixedExactNumericString(t *testing.T) {
+	stringCol := makeSpatialColExpr(5)
+	stringCol.Typ = planpb.Type{Id: int32(types.T_varchar)}
+	stringConst := makePlan2StringConstExprWithType("1", false)
+	numericConst := makePlan2Int64ConstExprWithType(1)
+	floatConst := makePlan2Float64ConstExprWithType(1)
+	dynamicParam := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_any)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+
+	tests := []struct {
+		name string
+		fn   *planpb.Function
+		want int
+	}{
+		{
+			name: "equal",
+			fn:   makeComparisonExpr("=", stringCol, numericConst).GetF(),
+			want: UnsupportedIndexCondition,
+		},
+		{
+			name: "reverse range",
+			fn:   makeComparisonExpr("<", numericConst, stringCol).GetF(),
+			want: UnsupportedIndexCondition,
+		},
+		{
+			name: "between",
+			fn: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "between"},
+				Args: []*planpb.Expr{stringCol, numericConst, makePlan2Int64ConstExprWithType(2)},
+			},
+			want: UnsupportedIndexCondition,
+		},
+		{
+			name: "in",
+			fn: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{stringCol, numericConst},
+			},
+			want: UnsupportedIndexCondition,
+		},
+		{
+			name: "prepared parameter",
+			fn:   makeComparisonExpr("=", stringCol, dynamicParam).GetF(),
+			want: UnsupportedIndexCondition,
+		},
+		{
+			name: "string equality remains supported",
+			fn:   makeComparisonExpr("=", stringCol, stringConst).GetF(),
+			want: EqualIndexCondition,
+		},
+		{
+			name: "float string equality keeps existing path",
+			fn:   makeComparisonExpr("=", stringCol, floatConst).GetF(),
+			want: EqualIndexCondition,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := checkIndexFilter(tt.fn)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCompositeIndexLeadingFiltersStopBeforeMixedExactNumericString(t *testing.T) {
+	stringCol := func(pos int32) *planpb.Expr {
+		expr := makeSpatialColExpr(pos)
+		expr.Typ = planpb.Type{Id: int32(types.T_varchar)}
+		return expr
+	}
+	node := &planpb.Node{
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: "a", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+				{Name: "b", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+			},
+			Name2ColIndex: map[string]int32{"a": 0, "b": 1},
+		},
+		FilterList: []*planpb.Expr{
+			makeComparisonExpr("=", stringCol(0), makePlan2StringConstExprWithType("same", false)),
+			makeComparisonExpr("=", stringCol(1), makePlan2Int64ConstExprWithType(1)),
+		},
+	}
+	idxDef := &planpb.IndexDef{Parts: []string{"a", "b"}}
+
+	leading := tryMatchMoreLeadingFilters(idxDef, node, 0)
+	require.Equal(t, []int32{0}, leading)
+}
+
 func TestCanonicalRangeOp(t *testing.T) {
 	colExpr := makeSpatialColExpr(1)
 	constExpr := makeInt64LiteralExpr(5)
