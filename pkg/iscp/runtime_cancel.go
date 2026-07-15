@@ -16,8 +16,9 @@ package iscp
 
 import (
 	"context"
-	"errors"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var iscpExecutors sync.Map // map[cnUUID]*ISCPTaskExecutor
@@ -94,7 +95,7 @@ func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
 		return nil
 	}
 	key := NewJobRuntimeKey(accountID, tableID, jobName)
-	cancelErr := errors.New("iscp job consumer canceled")
+	cancelErr := moerr.NewInternalErrorNoCtx("iscp job consumer canceled")
 
 	exec.runtimeMu.Lock()
 	exec.ensureRuntimeMapsLocked()

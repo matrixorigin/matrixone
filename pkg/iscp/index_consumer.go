@@ -181,11 +181,8 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
-						if waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeExec, indexName) {
-							logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", objectio.FJ_ISCPCancelLongBeforeExec, indexName)
-							if err := ctx.Err(); err != nil {
-								return err
-							}
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeExec, indexName); err != nil {
+							return err
 						}
 						if objectio.ISCPIndexExecErrorInjected() {
 							return injectedISCPIndexErr("exec")
@@ -237,11 +234,8 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 
 						// update SQL
 						var res executor.Result
-						if waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeExec, indexName) {
-							logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", objectio.FJ_ISCPCancelLongBeforeExec, indexName)
-							if err := ctx.Err(); err != nil {
-								return err
-							}
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeExec, indexName); err != nil {
+							return err
 						}
 						if objectio.ISCPIndexExecErrorInjected() {
 							return injectedISCPIndexErr("exec")
@@ -345,11 +339,8 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 						if objectio.WaitInjected(objectio.FJ_ISCPCancelHnswBeforeSave) {
 							logutil.Infof("ISCP-Task cancel fault wait %s index=%s", objectio.FJ_ISCPCancelHnswBeforeSave, indexName)
 						}
-						if waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongHnswBeforeSave, indexName) {
-							logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", objectio.FJ_ISCPCancelLongHnswBeforeSave, indexName)
-							if err := ctx.Err(); err != nil {
-								return err
-							}
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongHnswBeforeSave, indexName); err != nil {
+							return err
 						}
 						if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:hnsw-before-save:"+indexName {
 							logutil.Infof("ISCP-Task injected hook %s", msg)
@@ -367,11 +358,8 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 							if objectio.WaitInjected(objectio.FJ_ISCPCancelBeforeUpdateWatermark) {
 								logutil.Infof("ISCP-Task cancel fault wait %s index=%s", objectio.FJ_ISCPCancelBeforeUpdateWatermark, indexName)
 							}
-							if waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeWatermark, indexName) {
-								logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", objectio.FJ_ISCPCancelLongBeforeWatermark, indexName)
-								if err := ctx.Err(); err != nil {
-									return err
-								}
+							if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeWatermark, indexName); err != nil {
+								return err
 							}
 							if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:before-update-watermark:"+indexName {
 								logutil.Infof("ISCP-Task injected hook %s", msg)
@@ -403,11 +391,8 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
 			err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
 				func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
-					if waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongHnswBeforeUpdate, indexName) {
-						logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", objectio.FJ_ISCPCancelLongHnswBeforeUpdate, indexName)
-						if err := ctx.Err(); err != nil {
-							return err
-						}
+					if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongHnswBeforeUpdate, indexName); err != nil {
+						return err
 					}
 					if objectio.ISCPIndexHnswUpdateErrInjected() {
 						return injectedISCPIndexErr("hnsw update")
@@ -448,11 +433,18 @@ func reportIndexConsumerErr(errch chan error, err error) {
 	}
 }
 
-func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) bool {
+func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) error {
+	injected := false
 	if indexName != "" && objectio.WaitInjectedCtx(ctx, key+":"+indexName) {
-		return true
+		injected = true
+	} else if objectio.WaitInjectedCtx(ctx, key) {
+		injected = true
 	}
-	return objectio.WaitInjectedCtx(ctx, key)
+	if !injected {
+		return nil
+	}
+	logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", key, indexName)
+	return ctx.Err()
 }
 
 func (c *IndexConsumer) indexName() string {
@@ -721,11 +713,8 @@ func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer In
 		return err
 	}
 	indexName := c.indexName()
-	if waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeSend, indexName) {
-		logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", objectio.FJ_ISCPCancelLongBeforeSend, indexName)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeSend, indexName); err != nil {
+		return err
 	}
 
 	// generate sql from cdc

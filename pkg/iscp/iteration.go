@@ -515,7 +515,7 @@ func runISCPTaskIterationConsumers(
 					dataRetrievers[i].Cancel,
 				)
 				if !ok {
-					dataRetrievers[i].Cancel(errors.New("iscp job consumer canceled"))
+					dataRetrievers[i].Cancel(moerr.NewInternalErrorNoCtx("iscp job consumer canceled"))
 					return
 				}
 				if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterRegisterConsumer) {
