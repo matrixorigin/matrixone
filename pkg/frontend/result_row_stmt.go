@@ -414,7 +414,8 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	} else {
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt
+			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

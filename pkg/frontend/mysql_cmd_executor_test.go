@@ -1829,9 +1829,10 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	first := makeAnalyzeCountResult("approx_count_distinct(a)", 2)
 	second := makeAnalyzeCountResult("approx_count_distinct(x)", 4)
 	execCtx := &ExecCtx{
-		reqCtx:  context.Background(),
-		ses:     ses,
-		results: []ExecResult{first, second},
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		results:    []ExecResult{first, second},
 	}
 	require.NoError(t, resper.respBySituation(ses, execCtx))
 	require.Len(t, writer.responses, 2)
@@ -1840,6 +1841,28 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	require.Same(t, first, writer.responses[0].GetData().(*MysqlExecutionResult).Mrs())
 	require.Same(t, second, writer.responses[1].GetData().(*MysqlExecutionResult).Mrs())
 	require.Nil(t, execCtx.results)
+}
+
+func TestAnalyzeSituationResponsePreservesOuterMoreResults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: false,
+		results: []ExecResult{
+			makeAnalyzeCountResult("approx_count_distinct(a)", 2),
+			makeAnalyzeCountResult("approx_count_distinct(x)", 4),
+		},
+	}
+
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+	require.NotZero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 }
 
 func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
