@@ -371,7 +371,7 @@ SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
 ➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
--719162
+10101
 select cast('1.2' as decimal(3,2));
 ➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
 1.20
@@ -388,8 +388,7 @@ set time_zone="+00:00";
 create table t1(s1 timestamp);
 insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
-➤ cast(s1 as decimal(7, 2))[3,7,2]  𝄀
-1606993871.00
+invalid input: 20201203111111.000000 beyond the range, can't be converted to Decimal64(7,2).
 drop table t1;
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
@@ -404,11 +403,11 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL), ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT cast(date(d1) as signed) FROM t1;
 ➤ cast(date(d1) as signed)[-5,64,0]  𝄀
-13713  𝄀
+20070719  𝄀
 null  𝄀
-13713  𝄀
+20070719  𝄀
 null  𝄀
-13713
+20070719
 drop table t1;
 select convert(_binary x'ff' using utf8mb4) is null,
 hex(convert(_binary x'ff' using utf8mb4)),
