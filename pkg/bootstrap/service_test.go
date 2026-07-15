@@ -412,7 +412,7 @@ func newBootstrapStringResult(values ...string) executor.Result {
 	memRes := executor.NewMemResult(
 		[]types.Type{types.New(types.T_varchar, 2, 0)},
 		mpool.MustNewZero())
-	memRes.NewBatch()
+	memRes.NewBatchWithRowCount(len(values))
 	executor.AppendStringRows(memRes, 0, values)
 	return memRes.GetResult()
 }
@@ -455,7 +455,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						[]types.Type{types.New(types.T_varchar, 2, 0)},
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
 					return memRes.GetResult(), nil
 				}
@@ -470,7 +470,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						typs,
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{"1.2.3"})
 					executor.AppendFixedRows(memRes, 1, []uint32{10})
 					executor.AppendFixedRows(memRes, 2, []int32{0})
@@ -517,7 +517,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						[]types.Type{types.New(types.T_varchar, 2, 0)},
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
 					return memRes.GetResult(), nil
 				}
@@ -532,7 +532,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						typs,
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{"2.0.0"})
 					executor.AppendFixedRows(memRes, 1, []uint32{1})
 					executor.AppendFixedRows(memRes, 2, []int32{0})

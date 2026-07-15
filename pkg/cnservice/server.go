@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -152,6 +153,7 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
