@@ -1283,7 +1283,7 @@ desc test03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col2  ¦  DECIMAL(38,0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
 insert into test03 values (372.324);
-Duplicate entry '372' for key 'col2'
+Duplicate entry '372' for key '(.*)'
 drop table if exists test04;
 create table test04 (col1 int, col2 varchar(50), key(col1, col2)) as select col1, col3 from test01;
 show create table test04;
