@@ -748,6 +748,73 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	require.Equal(t, [][]any{{int64(7), "before", "base"}}, got["DELETE-2"])
 }
 
+func TestDiffDataHelper_ConflictAcceptExpandUpdateWithSparseCommonIdxes(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"id", "target_only", "name"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 2}
+	tblStuff.def.commonVisibleIdxes = []int{0, 2}
+	tblStuff.def.tarOnlyIdxes = []int{1}
+
+	// Both sides changed the same PK after branching. The target-only value is
+	// identical, while the trailing common column differs; conflict detection
+	// must therefore compare target physical index 2, not dense ordinal 1.
+	tarHashmap := buildTestBranchHashmap(
+		t, mp, tblStuff.def.colTypes,
+		[][]any{{int64(7), "same-extra", "target-update"}},
+	)
+	defer func() {
+		require.NoError(t, tarHashmap.Close())
+	}()
+	baseHashmap := buildTestBranchHashmap(
+		t, mp, tblStuff.def.colTypes,
+		[][]any{{int64(7), "same-extra", "base-update"}},
+	)
+	defer func() {
+		require.NoError(t, baseHashmap.Close())
+	}()
+
+	got := make(map[string][][]any)
+	var mu sync.Mutex
+	err := diffDataHelper(
+		context.Background(),
+		ses,
+		compositeOption{
+			conflictOpt:  &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT},
+			expandUpdate: true,
+		},
+		tblStuff,
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			if len(rows) == 0 {
+				return false, nil
+			}
+
+			mu.Lock()
+			key := fmt.Sprintf("%s-%d", w.kind, w.side)
+			got[key] = append(got[key], rows...)
+			mu.Unlock()
+			return false, nil
+		},
+		tarHashmap,
+		baseHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, [][]any{{int64(7), "same-extra", "target-update"}}, got["INSERT-1"])
+	require.Equal(t, [][]any{{int64(7), "same-extra", "base-update"}}, got["DELETE-2"])
+}
+
 type closeTrackingBranchHashmap struct {
 	migrated           databranchutils.BranchHashmap
 	migrateCalls       int
