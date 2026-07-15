@@ -167,6 +167,7 @@ type JobRuntimeKey struct {
 	AccountID uint32
 	TableID   uint64
 	JobName   string
+	JobID     uint64
 }
 
 type RunningJobConsumer struct {

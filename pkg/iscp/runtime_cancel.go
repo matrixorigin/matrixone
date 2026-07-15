@@ -42,28 +42,19 @@ func UnregisterExecutorRuntime(cnUUID string, exec *ISCPTaskExecutor) {
 func GetExecutorRuntime(cnUUID string) (*ISCPTaskExecutor, bool) {
 	v, ok := iscpExecutors.Load(cnUUID)
 	if !ok {
-		var found *ISCPTaskExecutor
-		count := 0
-		iscpExecutors.Range(func(_, v any) bool {
-			exec, ok := v.(*ISCPTaskExecutor)
-			if !ok {
-				return true
-			}
-			found = exec
-			count++
-			return count < 2
-		})
-		if count == 1 {
-			return found, true
-		}
 		return nil, false
 	}
 	exec, ok := v.(*ISCPTaskExecutor)
 	return exec, ok
 }
 
-func NewJobRuntimeKey(accountID uint32, tableID uint64, jobName string) JobRuntimeKey {
-	return JobRuntimeKey{AccountID: accountID, TableID: tableID, JobName: jobName}
+func NewJobRuntimeKey(accountID uint32, tableID uint64, jobName string, jobID uint64) JobRuntimeKey {
+	return JobRuntimeKey{AccountID: accountID, TableID: tableID, JobName: jobName, JobID: jobID}
+}
+
+func (key JobRuntimeKey) consumerGroupKey() JobRuntimeKey {
+	key.JobID = 0
+	return key
 }
 
 func (exec *ISCPTaskExecutor) ensureRuntimeMapsLocked() {
@@ -90,24 +81,31 @@ func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
+	jobID uint64,
 ) error {
 	if exec == nil {
 		return nil
 	}
-	key := NewJobRuntimeKey(accountID, tableID, jobName)
+	key := NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	groupKey := key.consumerGroupKey()
 	cancelErr := moerr.NewInternalErrorNoCtx("iscp job consumer canceled")
 
 	exec.runtimeMu.Lock()
 	exec.ensureRuntimeMapsLocked()
 	exec.fencedJobs[key] = struct{}{}
-	handles := make([]*RunningJobConsumer, 0, len(exec.runningConsumers[key]))
-	for _, h := range exec.runningConsumers[key] {
-		handles = append(handles, h)
-		if h.cancel != nil {
-			h.cancel()
-		}
-		if h.cancelRetriever != nil {
-			h.cancelRetriever(cancelErr)
+	handles := make([]*RunningJobConsumer, 0, 1)
+	if byJobID := exec.runningConsumers[groupKey]; byJobID != nil {
+		for runningJobID, h := range byJobID {
+			if jobID != 0 && runningJobID != jobID {
+				continue
+			}
+			handles = append(handles, h)
+			if h.cancel != nil {
+				h.cancel()
+			}
+			if h.cancelRetriever != nil {
+				h.cancelRetriever(cancelErr)
+			}
 		}
 	}
 	exec.runtimeMu.Unlock()
@@ -120,6 +118,15 @@ func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
 		}
 	}
 	return nil
+}
+
+func (exec *ISCPTaskExecutor) RemoveJobFence(key JobRuntimeKey) {
+	if exec == nil {
+		return
+	}
+	exec.runtimeMu.Lock()
+	delete(exec.fencedJobs, key)
+	exec.runtimeMu.Unlock()
 }
 
 func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
@@ -138,6 +145,7 @@ func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
 	if _, fenced := exec.fencedJobs[key]; fenced {
 		return nil, false
 	}
+	groupKey := key.consumerGroupKey()
 	h := &RunningJobConsumer{
 		key:             key,
 		jobID:           jobID,
@@ -146,10 +154,10 @@ func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
 		cancelRetriever: cancelRetriever,
 		done:            make(chan struct{}),
 	}
-	byJobID := exec.runningConsumers[key]
+	byJobID := exec.runningConsumers[groupKey]
 	if byJobID == nil {
 		byJobID = make(map[uint64]*RunningJobConsumer)
-		exec.runningConsumers[key] = byJobID
+		exec.runningConsumers[groupKey] = byJobID
 	}
 	byJobID[jobID] = h
 	return h, true
@@ -160,12 +168,13 @@ func (exec *ISCPTaskExecutor) UnregisterRunningConsumer(h *RunningJobConsumer) {
 		return
 	}
 	exec.runtimeMu.Lock()
-	if byJobID := exec.runningConsumers[h.key]; byJobID != nil {
+	groupKey := h.key.consumerGroupKey()
+	if byJobID := exec.runningConsumers[groupKey]; byJobID != nil {
 		if byJobID[h.jobID] == h {
 			delete(byJobID, h.jobID)
 		}
 		if len(byJobID) == 0 {
-			delete(exec.runningConsumers, h.key)
+			delete(exec.runningConsumers, groupKey)
 		}
 	}
 	exec.runtimeMu.Unlock()
@@ -180,7 +189,7 @@ func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *Ite
 	keepJobIDs := make([]uint64, 0, len(iter.jobIDs))
 	keepLSN := make([]uint64, 0, len(iter.lsn))
 	for i, jobName := range iter.jobNames {
-		key := NewJobRuntimeKey(iter.accountID, iter.tableID, jobName)
+		key := NewJobRuntimeKey(iter.accountID, iter.tableID, jobName, iter.jobIDs[i])
 		if exec.IsJobFenced(key) {
 			continue
 		}

@@ -139,7 +139,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if sinker.dropAt != 0 {
 			continue
 		}
-		if t.exec != nil && t.exec.IsJobFenced(NewJobRuntimeKey(t.accountID, t.tableID, sinker.jobName)) {
+		if t.exec != nil && t.exec.IsJobFenced(NewJobRuntimeKey(t.accountID, t.tableID, sinker.jobName, sinker.jobID)) {
 			continue
 		}
 		candidates = append(candidates, sinker)

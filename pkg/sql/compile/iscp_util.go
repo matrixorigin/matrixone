@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -32,6 +33,7 @@ import (
 var (
 	iscpRegisterJobFunc   = iscp.RegisterJob
 	iscpUnregisterJobFunc = iscp.UnregisterJob
+	iscpLookupJobLogFunc  = iscp.LookupJobLog
 	iscpGetExecutorFunc   = iscp.GetExecutorRuntime
 	isTableInCCPRFunc     = isTableInCCPRImpl
 )
@@ -194,7 +196,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	return nil
 }
 
-func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, indexname string) error {
+func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
 	valid, err := checkValidIndexCdc(tableDef, indexname)
 	if err != nil {
 		return err
@@ -202,18 +204,56 @@ func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, indexname st
 	if !valid {
 		return nil
 	}
-	exec, ok := iscpGetExecutorFunc(c.proc.GetService())
-	if !ok || exec == nil {
-		logutil.Infof("skip draining index cdc task consumer, iscp executor not found: tableID=%d index=%s", tableDef.TblId, indexname)
-		return nil
-	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
 	jobName := genCdcTaskJobID(indexname)
-	logutil.Infof("drain index cdc task consumer: accountID=%d tableID=%d jobName=%s", accountID, tableDef.TblId, jobName)
-	return exec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableDef.TblId, jobName)
+	_, tableID, jobID, exists, _, err := iscpLookupJobLogFunc(
+		c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		&iscp.JobID{DBName: dbname, TableName: tablename, JobName: jobName},
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		logutil.Infof("skip draining index cdc task consumer, iscp job not found: tableID=%d index=%s", tableDef.TblId, indexname)
+		return nil
+	}
+	if tableID == 0 {
+		tableID = tableDef.TblId
+	}
+	exec, ok := iscpGetExecutorFunc(c.proc.GetService())
+	if !ok || exec == nil {
+		return moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+			c.proc.GetService(),
+			tableID,
+			jobName,
+			jobID,
+		)
+	}
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	logutil.Infof("drain index cdc task consumer: accountID=%d tableID=%d jobName=%s jobID=%d", accountID, tableID, jobName, jobID)
+	if err := exec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID); err != nil {
+		exec.RemoveJobFence(key)
+		return err
+	}
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			if !event.CostEvent {
+				return nil
+			}
+			exec.RemoveJobFence(key)
+			return nil
+		})
+		txnOp.AppendEventCallback(client.CommitEvent, cleanup)
+		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+	}
+	return nil
 }
 
 // drop all cdc tasks according to tableDef
@@ -236,6 +276,9 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 			//hasindex = true
 			_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(idx.IndexName)})
 			if e != nil {
+				return e
+			}
+			if e = DrainIndexCdcTaskConsumer(c, tabledef, dbname, tablename, idx.IndexName); e != nil {
 				return e
 			}
 		}

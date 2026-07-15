@@ -84,6 +84,7 @@ type faultEntry struct {
 	constant         bool
 
 	nWaiters int
+	removed  bool
 	mutex    sync.Mutex
 	cond     *sync.Cond
 	scope    Domain
@@ -117,7 +118,10 @@ func (fm *faultMap) run() {
 			if e.name == "all" {
 				for _, v := range fm.faultPoints {
 					if v.action == WAIT && v.cond != nil {
+						v.mutex.Lock()
+						v.removed = true
 						v.cond.Broadcast()
+						v.mutex.Unlock()
 					}
 				}
 				fm.faultPoints = make(map[string]*faultEntry)
@@ -126,7 +130,10 @@ func (fm *faultMap) run() {
 			}
 			if v, ok := fm.faultPoints[e.name]; ok {
 				if v.action == WAIT && v.cond != nil {
+					v.mutex.Lock()
+					v.removed = true
 					v.cond.Broadcast()
+					v.mutex.Unlock()
 				}
 				delete(fm.faultPoints, e.name)
 				fm.chOut <- v
@@ -168,9 +175,11 @@ func (e *faultEntry) do() (int64, string) {
 		}
 	case WAIT:
 		e.mutex.Lock()
-		e.nWaiters += 1
-		e.cond.Wait()
-		e.nWaiters -= 1
+		if !e.removed {
+			e.nWaiters += 1
+			e.cond.Wait()
+			e.nWaiters -= 1
+		}
 		e.mutex.Unlock()
 	case GETWAITERS:
 		if ee := lookup(e.scope, e.sarg); ee != nil {

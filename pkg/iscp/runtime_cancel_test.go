@@ -33,9 +33,23 @@ func newRuntimeTestExecutor() *ISCPTaskExecutor {
 	}
 }
 
+func TestGetExecutorRuntimeRequiresExactCN(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	RegisterExecutorRuntime("runner-cn", exec)
+	defer UnregisterExecutorRuntime("runner-cn", exec)
+
+	found, ok := GetExecutorRuntime("ddl-cn")
+	require.False(t, ok)
+	require.Nil(t, found)
+
+	found, ok = GetExecutorRuntime("runner-cn")
+	require.True(t, ok)
+	require.Same(t, exec, found)
+}
+
 func TestCancelAndDrainJobConsumerFencesAndWaitsForRunningConsumer(t *testing.T) {
 	exec := newRuntimeTestExecutor()
-	key := NewJobRuntimeKey(1, 2, "index_idx01")
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 7)
 	consumerCtx, consumerCancel := context.WithCancel(context.Background())
 	defer consumerCancel()
 	retrieverCanceled := make(chan error, 1)
@@ -54,7 +68,7 @@ func TestCancelAndDrainJobConsumerFencesAndWaitsForRunningConsumer(t *testing.T)
 	}()
 
 	start := time.Now()
-	err := exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName)
+	err := exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
 	require.True(t, exec.IsJobFenced(key))
@@ -64,9 +78,9 @@ func TestCancelAndDrainJobConsumerFencesAndWaitsForRunningConsumer(t *testing.T)
 
 func TestRegisterRunningConsumerRejectsFencedJob(t *testing.T) {
 	exec := newRuntimeTestExecutor()
-	key := NewJobRuntimeKey(1, 2, "index_idx01")
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
 
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
 	_, ok := exec.RegisterRunningConsumer(key, 1, 1, func() {}, nil)
 
 	require.False(t, ok)
@@ -74,8 +88,8 @@ func TestRegisterRunningConsumerRejectsFencedJob(t *testing.T) {
 
 func TestCancelAndDrainJobConsumerOnlyCancelsMatchingJob(t *testing.T) {
 	exec := newRuntimeTestExecutor()
-	key1 := NewJobRuntimeKey(1, 2, "index_idx01")
-	key2 := NewJobRuntimeKey(1, 2, "index_idx02")
+	key1 := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	key2 := NewJobRuntimeKey(1, 2, "index_idx02", 2)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
@@ -89,7 +103,7 @@ func TestCancelAndDrainJobConsumerOnlyCancelsMatchingJob(t *testing.T) {
 		exec.UnregisterRunningConsumer(h1)
 	}()
 
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key1.AccountID, key1.TableID, key1.JobName))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key1.AccountID, key1.TableID, key1.JobName, key1.JobID))
 
 	select {
 	case <-ctx2.Done():
@@ -97,7 +111,7 @@ func TestCancelAndDrainJobConsumerOnlyCancelsMatchingJob(t *testing.T) {
 	default:
 	}
 	exec.runtimeMu.Lock()
-	_, stillRunning := exec.runningConsumers[key2][uint64(2)]
+	_, stillRunning := exec.runningConsumers[key2.consumerGroupKey()][uint64(2)]
 	exec.runtimeMu.Unlock()
 	require.True(t, stillRunning)
 }
@@ -113,7 +127,7 @@ func TestFilterFencedIterationRemovesOnlyFencedJobs(t *testing.T) {
 		types.BuildTS(1, 0),
 		types.BuildTS(2, 0),
 	)
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01"))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 10))
 
 	filtered := exec.filterFencedIteration(iter)
 
@@ -136,7 +150,7 @@ func TestFilterFencedIterationDropsAllJobs(t *testing.T) {
 		types.BuildTS(1, 0),
 		types.BuildTS(2, 0),
 	)
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01"))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 10))
 
 	require.Nil(t, exec.filterFencedIteration(iter))
 }
@@ -147,7 +161,7 @@ func TestTableEntryGetCandidateSkipsFencedJob(t *testing.T) {
 	spec := &JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Default}}
 	table.jobs[JobKey{JobName: "index_idx01", JobID: 1}] = NewJobEntry(table, "index_idx01", spec, 1, types.BuildTS(1, 0), ISCPJobState_Completed, 0)
 	table.jobs[JobKey{JobName: "index_idx02", JobID: 2}] = NewJobEntry(table, "index_idx02", spec, 2, types.BuildTS(1, 0), ISCPJobState_Completed, 0)
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01"))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 1))
 
 	iters, _ := table.getCandidate()
 
@@ -155,16 +169,30 @@ func TestTableEntryGetCandidateSkipsFencedJob(t *testing.T) {
 	require.Equal(t, []string{"index_idx02"}, iters[0].jobNames)
 }
 
+func TestTableEntryGetCandidateDoesNotSkipRecreatedSameNameJob(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	table := NewTableEntry(exec, 1, 10, 2, "db", "tbl")
+	spec := &JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Default}}
+	table.jobs[JobKey{JobName: "index_idx01", JobID: 1}] = NewJobEntry(table, "index_idx01", spec, 1, types.BuildTS(1, 0), ISCPJobState_Completed, 0)
+	table.jobs[JobKey{JobName: "index_idx01", JobID: 2}] = NewJobEntry(table, "index_idx01", spec, 2, types.BuildTS(1, 0), ISCPJobState_Completed, 0)
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), 1, 2, "index_idx01", 1))
+
+	iters, _ := table.getCandidate()
+
+	require.Len(t, iters, 1)
+	require.Equal(t, []uint64{2}, iters[0].jobIDs)
+}
+
 func TestCancelAndDrainJobConsumerHonorsCallerContext(t *testing.T) {
 	exec := newRuntimeTestExecutor()
-	key := NewJobRuntimeKey(1, 2, "index_idx01")
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
 	consumerCancelCalled := make(chan struct{})
 	_, ok := exec.RegisterRunningConsumer(key, 1, 1, func() { close(consumerCancelCalled) }, nil)
 	require.True(t, ok)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := exec.CancelAndDrainJobConsumer(ctx, key.AccountID, key.TableID, key.JobName)
+	err := exec.CancelAndDrainJobConsumer(ctx, key.AccountID, key.TableID, key.JobName, key.JobID)
 
 	require.True(t, errors.Is(err, context.Canceled))
 	<-consumerCancelCalled

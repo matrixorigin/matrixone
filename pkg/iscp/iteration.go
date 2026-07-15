@@ -311,7 +311,7 @@ func ExecuteIterationWithRuntime(
 		delCompositedPkColIdx,
 	)
 	for i, status := range statuses {
-		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i])) {
+		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
 			continue
 		}
 		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
@@ -504,7 +504,7 @@ func runISCPTaskIterationConsumers(
 			defer consumerCancel()
 			consumerCtx = context.WithValue(consumerCtx, defines.TenantIDKey{}, catalog.System_Account)
 			var handle *RunningJobConsumer
-			key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i])
+			key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])
 			if runtime != nil {
 				var ok bool
 				handle, ok = runtime.RegisterRunningConsumer(

@@ -216,6 +216,33 @@ func TestRemoveWaitFaultPointNotifiesWaiters(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestRemoveWaitFaultPointBeforeWaitRegistrationDoesNotHang(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	entry := lookup(DomainDefault, "w")
+	require.NotNil(t, entry)
+
+	removed, err := RemoveFaultPoint(ctx, "w")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	done := make(chan struct{})
+	go func() {
+		entry.do()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wait fault point blocked after it was removed before waiter registration")
+	}
+}
+
 func TestTriggerWaitFaultWithContextReturnsOnCancel(t *testing.T) {
 	ctx := context.Background()
 

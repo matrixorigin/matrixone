@@ -726,7 +726,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				hasUpdateConstraints = true
 				var notDroppedIndex []*plan.IndexDef
 				var newIndexes []uint64
-				if err = DrainIndexCdcTaskConsumer(c, oTableDef, constraintName); err != nil {
+				if err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName); err != nil {
+					return err
+				}
+				if err = DrainIndexCdcTaskConsumer(c, oTableDef, dbName, tblName, constraintName); err != nil {
 					return err
 				}
 				for idx, indexdef := range oTableDef.Indexes {
@@ -2504,7 +2507,11 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	err = DrainIndexCdcTaskConsumer(c, oldTableDef, qry.IndexName)
+	err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
+	if err != nil {
+		return err
+	}
+	err = DrainIndexCdcTaskConsumer(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
 	if err != nil {
 		return err
 	}
@@ -2534,13 +2541,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		}
 	}
 
-	//3. delete iscp job for vector, fulltext index
-	err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
-	if err != nil {
-		return err
-	}
-
-	// 4. unregister index update
+	// 3. unregister index update
 	err = idxcron.UnregisterUpdate(c.proc.Ctx,
 		c.proc.GetService(),
 		c.proc.GetTxnOperator(),
@@ -2551,7 +2552,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	//5. delete index object from mo_catalog.mo_indexes
+	// 4. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
 	err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),

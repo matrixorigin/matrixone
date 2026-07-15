@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -323,8 +325,12 @@ func TestDrainIndexCdcTaskConsumerFencesRuntimeJob(t *testing.T) {
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
 		return exec, true
 	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
 	defer func() {
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
 	c := &Compile{}
@@ -341,18 +347,22 @@ func TestDrainIndexCdcTaskConsumerFencesRuntimeJob(t *testing.T) {
 		},
 	}
 
-	err := DrainIndexCdcTaskConsumer(c, tbldef, "idx1")
+	err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
 
 	require.NoError(t, err)
-	require.True(t, exec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1")))
+	require.True(t, exec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)))
 }
 
-func TestDrainIndexCdcTaskConsumerNoExecutorIsNoop(t *testing.T) {
+func TestDrainIndexCdcTaskConsumerNoExecutorFailsClosed(t *testing.T) {
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
 		return nil, false
 	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
 	defer func() {
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
 	c := &Compile{}
@@ -369,7 +379,58 @@ func TestDrainIndexCdcTaskConsumerNoExecutorIsNoop(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "idx1"))
+	require.ErrorContains(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"), "cannot confirm ISCP consumer quiescence")
+}
+
+func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
+	exec := &iscp.ISCPTaskExecutor{}
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return exec, true
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+	}()
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	var rollbackCleanup client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).Times(1)
+	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			rollbackCleanup = cb
+		},
+	).Times(1)
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	c.proc.Base.TxnOperator = txnOp
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
+	require.True(t, exec.IsJobFenced(key))
+	require.NotNil(t, rollbackCleanup.Func)
+
+	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{}, nil))
+	require.True(t, exec.IsJobFenced(key))
+	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{CostEvent: true}, nil))
+	require.False(t, exec.IsJobFenced(key))
+	_, ok := exec.RegisterRunningConsumer(key, 7, 1, func() {}, nil)
+	require.True(t, ok)
 }
 
 func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {
@@ -378,8 +439,17 @@ func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {
 		dropCount++
 		return true, nil
 	}
+	exec := &iscp.ISCPTaskExecutor{}
+	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		return exec, true
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, uint64(dropCount), true, true, nil
+	}
 	defer func() {
 		iscpUnregisterJobFunc = iscp.UnregisterJob
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
 	c := &Compile{}
@@ -413,8 +483,17 @@ func TestCoverage_DropAllIndexCdcTasks_MixedIndexes(t *testing.T) {
 		dropCount++
 		return true, nil
 	}
+	exec := &iscp.ISCPTaskExecutor{}
+	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		return exec, true
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, uint64(dropCount), true, true, nil
+	}
 	defer func() {
 		iscpUnregisterJobFunc = iscp.UnregisterJob
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
 	c := &Compile{}
