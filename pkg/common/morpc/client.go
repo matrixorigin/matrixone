@@ -916,7 +916,10 @@ func (c *client) getBackendForOperation(
 	}
 
 	c.mu.Lock()
-	b, err := c.getBackendLocked(backend, lock)
+	// Selection and create admission must use the same client-state snapshot.
+	// Otherwise a backend can be published after selection returns nil but
+	// before creation is queued, causing a stale lookup to overgrow the pool.
+	b, err := c.getBackendLockedWithCreate(backend, lock, false)
 	poolSize := len(c.mu.backends[backend])
 	if err != nil {
 		c.mu.Unlock()
@@ -935,51 +938,60 @@ func (c *client) getBackendForOperation(
 	if canCreate && enableAutoCreate {
 		generation = c.backendGenerationLocked(backend)
 	}
-	c.mu.Unlock() // Release lock before any potentially blocking operation
 
 	// If pool has backends but all are busy, wait for one to become available
 	// This applies regardless of enableAutoCreate setting
 	if hasBackends && !canCreate {
 		c.metrics.backendUnavailableCounter.Inc()
+		c.mu.Unlock()
 		return nil, nil, ErrBackendCreating // Triggers wait/retry logic
 	}
 
 	// Strictly gate creation on enableAutoCreate flag
 	if !enableAutoCreate {
 		// No backends exist and auto-create is disabled - fail fast
+		c.mu.Unlock()
 		return nil, nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
-	creationQueued := false
-	var backendCreate *backendCreateState
 	if canCreate {
-		// Try to enqueue creation task with backpressure handling
-		var queued bool
-		backendCreate, queued = globalClientGC.triggerCreateAtGenerationState(
+		// Admit creation while the lookup snapshot is still protected by c.mu.
+		// The non-blocking queue send is safe under the lock; factory I/O remains
+		// outside the lock in both the worker and synchronous-fallback paths.
+		backendCreate, queued := globalClientGC.triggerCreateAtGenerationLocked(
 			c,
 			backend,
 			generation,
 		)
-		if !queued {
-			// Queue is full - fallback to existing creation path with proper bookkeeping
-			b, err := c.createBackendWithBookkeepingAtGeneration(backend, lock, generation)
-			if isErrBackendCreating(err) {
-				return nil, c.backendCreateForGeneration(backend, generation), err
-			}
-			return b, nil, err
+		if queued {
+			c.mu.Unlock()
+			return nil, backendCreate, ErrBackendCreating
 		}
-		creationQueued = true
-	}
 
-	if creationQueued {
-		return nil, backendCreate, ErrBackendCreating
+		// The async queue is full. Claim the same observed demand before
+		// releasing c.mu, then perform only the factory I/O outside the lock.
+		// No successful publication can slip between observation and claim.
+		backendCreate = newBackendCreateState(generation)
+		c.mu.creating[backend] = backendCreate
+		c.mu.Unlock()
+		b, err = c.createBackendForClaimedGeneration(backend, lock, generation)
+		return b, nil, err
 	}
 
 	// Pool is empty and cannot create - return ErrNoAvailableBackend to trigger wait logic
+	c.mu.Unlock()
 	return nil, nil, moerr.NewNoAvailableBackendNoCtx()
 }
 
 func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
+	return c.getBackendLockedWithCreate(backend, lock, true)
+}
+
+func (c *client) getBackendLockedWithCreate(
+	backend string,
+	lock bool,
+	create bool,
+) (Backend, error) {
 	if c.mu.closing {
 		return nil, ErrClientClosing
 	}
@@ -1028,7 +1040,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 			b.Lock()
 		}
 		// Only try to create when no available backend was found; avoid unbounded growth when backends are locked.
-		if b == nil {
+		if create && b == nil {
 			c.maybeCreateLocked(backend)
 		}
 		return b, nil
@@ -1265,24 +1277,6 @@ func (c *client) invalidateBackendCreateLocked(backend string) {
 	delete(c.mu.creating, backend)
 	close(state.done)
 }
-
-func (c *client) backendCreateForGeneration(
-	backend string,
-	generation *backendGeneration,
-) *backendCreateState {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if state := c.mu.creating[backend]; state != nil && state.generation == generation {
-		return state
-	}
-	return completedBackendCreateState
-}
-
-var completedBackendCreateState = func() *backendCreateState {
-	state := &backendCreateState{done: make(chan struct{})}
-	close(state.done)
-	return state
-}()
 
 func (c *client) backendGenerationLocked(remote string) *backendGeneration {
 	if c.mu.backendGeneration == nil {
