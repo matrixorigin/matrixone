@@ -139,9 +139,17 @@ func (w *Fulltext2SqlWriter) Delete(ctx context.Context, row []any) error {
 }
 
 // rowText joins the indexed columns with '\n' (matching fulltext2_create's build
-// tokenization). datalink columns are NOT resolved here — CDC of a datalink
-// column indexes the URL string; file-content datalink is build-only.
+// tokenization). If ANY indexed column is NULL the doc yields no tokens — the
+// whole-doc-skip the create-TVF's rowTerms does — so CREATE and CDC tokenize a
+// row identically (a doc's searchability must not depend on which path indexed
+// it). datalink columns are NOT resolved here — CDC of a datalink column indexes
+// the URL string; file-content datalink is build-only.
 func (w *Fulltext2SqlWriter) rowText(row []any) string {
+	for _, pos := range w.textPos {
+		if row[pos] == nil {
+			return ""
+		}
+	}
 	var b strings.Builder
 	for i, pos := range w.textPos {
 		if i > 0 {
