@@ -311,7 +311,11 @@ func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment,
 			seg.Recency = f.ChunkId
 			segs = append(segs, seg)
 		case nDeletes > 0:
-			// TODO(step 5): decode the delete log and fold into `deletes`.
+			recs, derr := DecodeDeleteLog(records)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			deletes = foldDeleteFrame(deletes, recs, f.ChunkId)
 		}
 	}
 	return segs, deletes, nil
@@ -421,14 +425,26 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 	return written, nchunks, nil
 }
 
-// NextTailChunkId returns COALESCE(MAX(chunk_id)+1, 0) of the tag=1 CdcTail — the
-// next append position for the CDC sinker.
-func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT COALESCE(MAX(%s)+1, 0) FROM %s WHERE %s = %s AND %s = %d",
+// NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id —
+// the monotonic append position (= recency) the sinker frames at. It is
+// GREATEST(MAX tail chunk_id, MAX tag=0 base recency) + 1, so an appended tail is
+// always newer than every base under Index liveness, and the sequence never
+// resets after a compaction folds the tail into a base. Mirrors bm25's
+// NextTailChunkIdSql.
+func NextTailChunkIdSql(cfg TableConfig) string {
+	tailMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s WHERE %s = %s AND %s = %d), 0)",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	baseMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s), 0)",
+		catalog.FullText2Index_TblCol_Metadata_Recency, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	return fmt.Sprintf("SELECT GREATEST(%s, %s) + 1", tailMax, baseMax)
+}
+
+// NextTailChunkId runs NextTailChunkIdSql — the next append position for the CDC
+// sinker.
+func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	res, err := sqlexec.RunSql(sqlproc, NextTailChunkIdSql(cfg))
 	if err != nil {
 		return 0, err
 	}
@@ -440,4 +456,15 @@ func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
 	}
 	return 0, nil
+}
+
+// FrameChunkCount is how many MaxChunkSize storage rows a frame of frameLen bytes
+// occupies (>= 1) — the streaming sinker advances chunk_id past each spilled
+// segment by this without holding the framed bytes. Mirrors bm25's FrameChunkCount.
+func FrameChunkCount(frameLen int) int64 {
+	n := int64((frameLen + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
+	if n < 1 {
+		n = 1
+	}
+	return n
 }

@@ -154,6 +154,40 @@ func IsJSONParser(parser string) bool {
 	return p == ParserJSON || p == ParserJSONValue
 }
 
+// CdcTokenizer returns the parser-aware tokenize closure the CDC consumer feeds
+// to TailBuilder — ordered words per parser (json text flattened to its values
+// first). It mirrors the create-TVF's row tokenization so CDC tail tokens match
+// the base build and the query side.
+func CdcTokenizer(parser string) (func(string) []string, error) {
+	if IsJSONParser(parser) {
+		simple := tokenizer.NewSimpleTokenizer()
+		return func(text string) []string {
+			ft, err := FlattenJSON([]byte(text), false)
+			if err != nil {
+				return nil
+			}
+			return tokenizeWords(simple, ft)
+		}, nil
+	}
+	tok, err := DocTokenizer(parser)
+	if err != nil {
+		return nil, err
+	}
+	return func(text string) []string { return tokenizeWords(tok, []byte(text)) }, nil
+}
+
+// tokenizeWords flattens a tokenizer stream into ordered words.
+func tokenizeWords(tok tokenizer.Tokenizer, text []byte) []string {
+	var words []string
+	for tk, err := range tok.Tokenize(text) {
+		if err != nil {
+			break
+		}
+		words = append(words, tokenWord(tk))
+	}
+	return words
+}
+
 // BuildSegmentFromDocsParser builds a segment from docs under parser, selecting
 // the right document tokenizer and flattening json docs first. It is the
 // parser-aware build entry (compile-side build-from-source uses it).

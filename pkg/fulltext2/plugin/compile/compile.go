@@ -77,7 +77,22 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(origTable) {
 		return nil
 	}
-	return buildFromSource(ctx, storeDef, metaDef, origTable, db)
+
+	// Synchronous build: the tag=0 base covers pre-create rows inline.
+	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
+		return err
+	}
+
+	// Register the ISCP CDC task from now (startFromNow=true, no InitSQL): the
+	// inline build covered the pre-create rows, so post-create INSERT/UPDATE/DELETE
+	// flow into the tag=1 tail via RunFulltext2. Drop any prior task first so a
+	// REINDEX re-entry doesn't replay history over the fresh base. Mirrors bm25's
+	// sync path.
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexFullText2Algo.ToString())
+	if err := ctx.DropIndexCdcTask(origTable, db, origTable.Name, storeDef.IndexName); err != nil {
+		return err
+	}
+	return ctx.CreateIndexCdcTask(db, origTable.Name, origTable.TblId, storeDef.IndexName, sinkerType, true, "", origTable)
 }
 
 // DefaultMaxIndexCapacity caps each tag=0 sub-index's doc count when the

@@ -41,6 +41,17 @@ func FrameSegment(seg *Segment) ([]byte, error) {
 	return cuvscdc.FrameCdcChunk(blob, nil, uint32(seg.N), 0, 0), nil
 }
 
+// FrameDeletes encodes a delete batch as one delete-log frame (nDeletes carries
+// the tombstone count so a header scan can distinguish it from an insert frame).
+// Mirrors bm25's FrameDeletes.
+func FrameDeletes(pkType int32, recs []DeleteRecord) ([]byte, error) {
+	blob, err := EncodeDeleteLog(pkType, recs)
+	if err != nil {
+		return nil, err
+	}
+	return cuvscdc.FrameCdcChunk(blob, nil, 0, uint32(len(recs)), 0), nil
+}
+
 // UnframeSegment decodes an insert-segment frame back into a loaded Segment
 // (id set to id).
 func UnframeSegment(id string, framed []byte) (*Segment, error) {
@@ -52,6 +63,26 @@ func UnframeSegment(id string, framed []byte) (*Segment, error) {
 		return nil, moerr.NewInternalErrorNoCtx("fulltext2: frame carries no insert segment")
 	}
 	return Deserialize(id, bytes.NewReader(records))
+}
+
+// UnframeTail decodes a tag=1 tail frame into EITHER an insert Segment (id set to
+// id, exactly one non-nil) or a delete batch — the same per-frame dispatch
+// LoadTailSegments does, exposed for callers/tests that already hold the framed
+// bytes (e.g. TailBuilder's spilled files).
+func UnframeTail(id string, framed []byte) (*Segment, []DeleteRecord, error) {
+	records, _, nInserts, nDeletes, _, err := cuvscdc.UnframeCdcChunk(framed)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch {
+	case nInserts > 0:
+		seg, derr := Deserialize(id, bytes.NewReader(records))
+		return seg, nil, derr
+	case nDeletes > 0:
+		recs, derr := DecodeDeleteLog(records)
+		return nil, recs, derr
+	}
+	return nil, nil, nil
 }
 
 // TailChunk is one raw tag=1 storage row: a MaxChunkSize-bounded piece of a frame

@@ -88,11 +88,12 @@ func (CatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) {
 }
 
 // SyncDescriptor — fulltext2 is ALWAYS async (CDC-maintained), a clean static
-// answer (no version branch). UsesCDC is disabled until the iscp consumer is
-// registered (step 5); it flips to true then, alongside idxcron.
+// answer (no version branch). UsesCDC drives the ISCP consumer (RunFulltext2)
+// registered in pkg/fulltext2/plugin/iscp. The idxcron MERGE fields (like bm25's)
+// land with the compaction step.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:     false, // TODO(step 5): true once the fulltext2 CDC consumer is registered
+		UsesCDC:     true,
 		SinkerType:  catalogplugin.SinkerType_IndexSync,
 		AlwaysAsync: true,
 	}
