@@ -49,7 +49,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,6 +59,54 @@ import (
 
 func init() {
 	testutil.SetupAutoIncrService("")
+}
+
+type accountingMysqlWriter struct {
+	testMysqlWriter
+	bytes   int64
+	packets int64
+	calls   int
+}
+
+func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) {
+	w.calls++
+	bytes, packets := w.bytes, w.packets
+	if reset {
+		w.bytes = 0
+		w.packets = 0
+	}
+	return bytes, packets
+}
+
+func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ctx := context.Background()
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	root := resource.NewRoot(resource.ConnExternal)
+	stmt := motrace.NewStatementInfo()
+	stmt.RequestAt = time.Now()
+	stmt.SetResourceRoot(root)
+	ses.SetTStmt(stmt)
+
+	ses.beginResponseAccounting()
+	execErr := moerr.NewInternalErrorNoCtx("failed")
+	require.True(t, ses.deferStatementCompletion(execErr))
+	require.Same(t, stmt, ses.GetStmtInfo())
+	require.Zero(t, writer.calls)
+
+	writer.bytes = 17
+	writer.packets = 1
+	ses.finishResponseAccounting(ctx, execErr, true)
+	require.Nil(t, ses.GetStmtInfo())
+	require.Equal(t, 1, writer.calls)
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
+	require.Equal(t, uint64(1), summary.OutputPacketCount)
 }
 
 type testColumnWithoutDecimalScale struct {

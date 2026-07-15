@@ -580,11 +580,7 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 	if ses == nil {
 		return 0, 0
 	}
-	// Case 1: send data as ResultSet
-	resultSetPart := int64(ses.GetOutputBytes())
-	// Case 2: send data as CSV
-	csvPart := ses.writeCsvBytes.Load()
-	bytes = resultSetPart + csvPart
+	bytes = int64(ses.GetOutputBytes())
 	packets = ses.GetOutputPacketCnt()
 	if reset {
 		ses.ResetPacketCounter()

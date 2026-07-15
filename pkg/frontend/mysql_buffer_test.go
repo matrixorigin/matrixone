@@ -163,6 +163,34 @@ func TestConnCountsCompletedOutputPackets(t *testing.T) {
 	assert.Equal(t, int64(3), ses.GetOutputPacketCnt())
 }
 
+type partialWriteConn struct {
+	testConn
+	limit int
+}
+
+func (c *partialWriteConn) Write(buf []byte) (int, error) {
+	n := min(c.limit, len(buf))
+	c.data = append(c.data, buf[:n]...)
+	return n, io.ErrUnexpectedEOF
+}
+
+func TestConnCountsPartialWriteFacts(t *testing.T) {
+	underlying := &partialWriteConn{limit: 5}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.NoError(t, err)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
+	assert.NoError(t, err)
+	defer conn.Close()
+	ses := &Session{}
+	conn.SetSession(ses)
+
+	data := append(makePacket([]byte("a"), 0), makePacket([]byte("b"), 1)...)
+	assert.ErrorIs(t, conn.WriteToConn(data), io.ErrUnexpectedEOF)
+	assert.Equal(t, 5, ses.GetOutputBytes())
+	assert.Equal(t, int64(1), ses.GetOutputPacketCnt())
+}
+
 func TestMySQLProtocolRead(t *testing.T) {
 	var err error
 	tConn := &testConn{}

@@ -435,7 +435,6 @@ func logStatementStringStatus(
 	status statementStatus,
 	err error,
 ) {
-	var outBytes, outPacket int64
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -449,12 +448,6 @@ func logStatementStringStatus(
 		str = commonutil.Abbreviate(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		return str
 	}
-	switch resper := ses.GetResponser().(type) {
-	case *MysqlResp:
-		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
-	default:
-	}
-
 	if status == success {
 		if ses.LogDebug() {
 			str := getFormatedSqlStr()
@@ -472,7 +465,20 @@ func logStatementStringStatus(
 			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
 		)
 	}
+	if status == fail {
+		if concrete, ok := ses.(*Session); ok && concrete.deferStatementCompletion(err) {
+			return
+		}
+	}
+	finishStatementAccounting(ctx, ses, err)
+}
 
+func finishStatementAccounting(ctx context.Context, ses FeSession, err error) {
+	var outBytes, outPacket int64
+	switch resper := ses.GetResponser().(type) {
+	case *MysqlResp:
+		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	}
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
 		if stmt := ses.GetStmtInfo(); stmt != nil {
@@ -481,6 +487,44 @@ func logStatementStringStatus(
 	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
+}
+
+func (ses *Session) beginResponseAccounting() {
+	ses.responseAccounting = true
+	ses.pendingStatementFailed = false
+	ses.pendingStatementError = nil
+}
+
+func (ses *Session) deferStatementCompletion(err error) bool {
+	if !ses.responseAccounting {
+		return false
+	}
+	ses.pendingStatementFailed = true
+	if ses.pendingStatementError == nil {
+		ses.pendingStatementError = err
+	}
+	return true
+}
+
+func (ses *Session) finishResponseAccounting(ctx context.Context, responseErr error, responseFailed bool) {
+	if !ses.responseAccounting {
+		return
+	}
+	ses.responseAccounting = false
+	err := ses.pendingStatementError
+	failed := ses.pendingStatementFailed
+	ses.pendingStatementFailed = false
+	ses.pendingStatementError = nil
+	if err == nil && (failed || responseFailed) {
+		err = responseErr
+	}
+	if err == nil && failed {
+		err = moerr.NewInternalError(ctx, "statement failed")
+	}
+	if ses.GetStmtInfo() == nil {
+		return
+	}
+	finishStatementAccounting(ctx, ses, err)
 }
 
 func getLogger(sid string) *log.MOLogger {

@@ -4375,7 +4375,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
-		ses.writeCsvBytes.Store(int64(0))
 		resper.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		// ExecCtx is reused across statements in a multi-statement COM_QUERY;
 		// clear the previous statement's run result so a statement that does not

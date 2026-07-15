@@ -312,6 +312,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	})
 
 	execCtx.reqCtx = tenantCtx
+	ses.beginResponseAccounting()
 	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
 		err = moerr.AttachCause(tenantCtx, err)
 		if !skipClientQuit(err.Error()) {
@@ -341,6 +342,15 @@ func (rt *Routine) handleRequest(req *Request) error {
 			ses.Infof(tenantCtx, "load local '%s' exec failed. response error success", resp.loadLocalFile)
 		}
 	}
+	responseFailed := err != nil
+	responseErr := err
+	if resp != nil && resp.category == ErrorResponse {
+		responseFailed = true
+		if execErr, ok := resp.data.(error); ok && execErr != nil {
+			responseErr = execErr
+		}
+	}
+	ses.finishResponseAccounting(tenantCtx, responseErr, responseFailed)
 
 	ses.Debugf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
 

@@ -173,6 +173,12 @@ type Session struct {
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
 	tStmt *motrace.StatementInfo
+	// responseAccounting keeps failed statement completion open until the
+	// terminal protocol response has actually been written. It is owned by the
+	// routine goroutine and deliberately does not participate in session locks.
+	responseAccounting     bool
+	pendingStatementFailed bool
+	pendingStatementError  error
 
 	ast tree.Statement
 
@@ -194,8 +200,6 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeBytes count of bytes send back to client.
 	writeBytes int
-	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
-	writeCsvBytes atomic.Int64
 	// packetCounter count the tcp packet send to client.
 	packetCounter atomic.Int64
 	// payloadCounter count the payload send by `load data LOCAL infile`

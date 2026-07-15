@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -228,6 +229,9 @@ type Conn struct {
 	timeout           time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
+	outputHeader      [HeaderLengthOfTheProtocol]byte
+	outputHeaderBytes int
+	outputPayloadLeft int
 	// loadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations
 	loadLocalReadTimeout time.Duration
 	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
@@ -878,7 +882,6 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
-	c.CountOutputPackets(int64(c.packetInBuf))
 	c.packetInBuf = 0
 	return err
 }
@@ -897,11 +900,7 @@ func (c *Conn) Write(payload []byte) error {
 		}
 		header[3] = c.sequenceId
 		c.sequenceId += 1
-		err = c.WriteToConn(append(header[:], payload...))
-		if err == nil {
-			c.CountOutputPackets(1)
-		}
-		return err
+		return c.WriteToConn(append(header[:], payload...))
 	}
 	header[3] = c.sequenceId
 	c.sequenceId += 1
@@ -922,13 +921,46 @@ func (c *Conn) WriteToConn(buf []byte) error {
 	sendLength := 0
 	for sendLength < len(buf) {
 		n, err := c.conn.Write(buf[sendLength:])
+		if n > 0 {
+			sendLength += n
+			c.CountOutputBytes(n)
+			c.countCompletedOutputPackets(buf[sendLength-n : sendLength])
+		}
 		if err != nil {
 			return err
 		}
-		sendLength += n
-		c.CountOutputBytes(n)
+		if n == 0 {
+			return io.ErrNoProgress
+		}
 	}
 	return nil
+}
+
+func (c *Conn) countCompletedOutputPackets(written []byte) {
+	for len(written) > 0 {
+		if c.outputPayloadLeft > 0 {
+			n := min(c.outputPayloadLeft, len(written))
+			c.outputPayloadLeft -= n
+			written = written[n:]
+			if c.outputPayloadLeft == 0 {
+				c.CountOutputPackets(1)
+			}
+			continue
+		}
+		n := min(HeaderLengthOfTheProtocol-c.outputHeaderBytes, len(written))
+		copy(c.outputHeader[c.outputHeaderBytes:], written[:n])
+		c.outputHeaderBytes += n
+		written = written[n:]
+		if c.outputHeaderBytes == HeaderLengthOfTheProtocol {
+			c.outputPayloadLeft = int(c.outputHeader[0]) |
+				int(c.outputHeader[1])<<8 |
+				int(c.outputHeader[2])<<16
+			c.outputHeaderBytes = 0
+			if c.outputPayloadLeft == 0 {
+				c.CountOutputPackets(1)
+			}
+		}
+	}
 }
 
 func (c *Conn) RemoteAddress() string {
