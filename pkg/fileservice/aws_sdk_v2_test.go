@@ -91,7 +91,7 @@ func TestAwsSDKv2BasicObjectOperations(t *testing.T) {
 	sdk := newTestAWSClient(t, server)
 	sdk.listMaxKeys = 2
 
-	var entries []DirEntry
+	entries := make([]DirEntry, 0, 3)
 	for entry, err := range sdk.List(context.Background(), "dir/") {
 		require.NoError(t, err)
 		entries = append(entries, *entry)

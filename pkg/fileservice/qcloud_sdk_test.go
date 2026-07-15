@@ -236,7 +236,7 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	sdk := newTestCOSClient(t, server)
 	sdk.listMaxKeys = 2
 
-	var entries []DirEntry
+	entries := make([]DirEntry, 0, 3)
 	for entry, err := range sdk.List(context.Background(), "dir/") {
 		if err != nil {
 			t.Fatalf("list: %v", err)

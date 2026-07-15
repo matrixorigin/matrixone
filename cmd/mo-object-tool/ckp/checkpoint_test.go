@@ -450,6 +450,9 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	parent := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "parent", TableID: 1}
 	child := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "child", TableID: 2}
 	other := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "other", TableID: 3}
+	base := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "z_table", TableID: 4, RelKind: "r"}
+	view := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "a_view", TableID: 5, RelKind: "v"}
+	view2 := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "b_view", TableID: 6, RelKind: "v"}
 	plans := []tableDumpPlan{
 		{table: child, data: &checkpointtool.TableDumpData{
 			TableID: child.TableID,
@@ -460,10 +463,17 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 		}},
 		{table: parent, data: &checkpointtool.TableDumpData{TableID: parent.TableID, Schema: &checkpointtool.TableSchema{}}},
 		{table: other, data: &checkpointtool.TableDumpData{TableID: other.TableID, Schema: &checkpointtool.TableSchema{}}},
+		{table: base, data: &checkpointtool.TableDumpData{TableID: base.TableID, Schema: &checkpointtool.TableSchema{}}},
+		{table: view, data: &checkpointtool.TableDumpData{TableID: view.TableID, Schema: &checkpointtool.TableSchema{
+			CreateSQL: "CREATE VIEW `db`.`a_view` AS SELECT * FROM `db`.`z_table`",
+		}}},
+		{table: view2, data: &checkpointtool.TableDumpData{TableID: view2.TableID, Schema: &checkpointtool.TableSchema{
+			CreateSQL: "CREATE VIEW `db`.`b_view` AS SELECT * FROM `db`.`a_view`",
+		}}},
 	}
 
 	byID := dumpDataByTableID(plans)
-	require.Len(t, byID, 3)
+	require.Len(t, byID, 6)
 	require.Equal(t, uint64(2), byID[2].TableID)
 	require.Nil(t, dumpDataByTableID(nil))
 
@@ -475,6 +485,9 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	byID[1].Schema.ForeignKeys = []checkpointtool.TableForeignKey{{ReferDatabase: child.DatabaseName, ReferTable: child.TableName}}
 	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, parent}, byID)
 	require.Len(t, ordered, 2)
+
+	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{view, view2, base}, byID)
+	require.Equal(t, []uint64{4, 5, 6}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
 }
 
 func TestWriteRestoreScriptForViewAndErrors(t *testing.T) {

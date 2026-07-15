@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -486,7 +487,8 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 		}
 	}
 
-	// Add ICKPs after GCKP.end and <= ts
+	// Add ICKPs from GCKP.end and <= ts. The checkpoint store uses the
+	// selected GCKP end as the start of the first following ICKP.
 	baseEnd := types.TS{}
 	if baseEntry != nil {
 		baseEnd = baseEntry.GetEnd()
@@ -498,7 +500,12 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 			tables, err := r.GetTables(e)
 			if err != nil {
 				if isDataFileNotFound(err) {
-					continue // GC'd entry; skip
+					return nil, moerr.NewFileNotFoundErrorf(
+						r.ctx,
+						"required incremental checkpoint data file not found (may have been GC'd): start=%s end=%s",
+						start.ToString(),
+						end.ToString(),
+					)
 				}
 				return nil, err
 			}
@@ -521,7 +528,7 @@ func shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts types.TS, hasBas
 		return false
 	}
 	if hasBase {
-		return start.GT(&baseEnd)
+		return start.GE(&baseEnd)
 	}
 	return start.GE(&baseEnd)
 }
@@ -549,7 +556,9 @@ func isDataFileNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) || os.IsNotExist(err)
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+		os.IsNotExist(err) ||
+		strings.Contains(err.Error(), " is not found")
 }
 
 // Close releases resources

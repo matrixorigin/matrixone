@@ -95,7 +95,11 @@ func (r *CheckpointReader) scanLogicalTable(
 		reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
 		if err != nil {
 			if isDataFileNotFound(err) {
-				continue
+				return stats, moerr.NewFileNotFoundErrorf(
+					ctx,
+					"visible data object not found (checkpoint snapshot is incomplete): %s",
+					objName,
+				)
 			}
 			return stats, err
 		}

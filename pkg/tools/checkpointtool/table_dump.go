@@ -1990,6 +1990,7 @@ func (r *CheckpointReader) streamTableCSVPipeline(
 	tombstoneStats := dedupeObjectStats(visibleTombEntries)
 	counters := &csvPipelineCounters{totalObjects: int64(len(visibleDataEntries))}
 	workerPlan := csvPipelineWorkerCount(len(visibleDataEntries))
+	workerPlan.processorWorkers = 1
 	counters.memoryFloor.Store(int64(workerPlan.memoryFloor))
 	counters.memoryAvailable.Store(int64(workerPlan.memoryFree))
 
@@ -2052,7 +2053,7 @@ func (r *CheckpointReader) produceCSVChunks(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	objectJobs := make(chan csvPipelineObjectJob, workerPlan.processorWorkers)
+	objectJobs := make(chan csvPipelineObjectJob)
 	var processorWG sync.WaitGroup
 	var errOnce sync.Once
 	var workerErr error
@@ -2066,22 +2067,24 @@ func (r *CheckpointReader) produceCSVChunks(
 		})
 	}
 
-	processorWG.Add(workerPlan.processorWorkers)
-	for workerID := 0; workerID < workerPlan.processorWorkers; workerID++ {
-		go func() {
-			defer processorWG.Done()
-			for job := range objectJobs {
-				if err := ctx.Err(); err != nil {
-					setErr(err)
-					return
-				}
-				if err := r.processCSVObjectChunks(ctx, chunks, counters, snapshotTS, tombstoneStats, columnSeqNums, job); err != nil {
-					setErr(err)
-					return
-				}
+	// Storage-order CSV requires object N to be emitted before object N+1.
+	// Process one object at a time so the writer never has to buffer an
+	// unbounded number of chunks for future objects while an earlier object is
+	// slow at the memory gate.
+	processorWG.Add(1)
+	go func() {
+		defer processorWG.Done()
+		for job := range objectJobs {
+			if err := ctx.Err(); err != nil {
+				setErr(err)
+				return
 			}
-		}()
-	}
+			if err := r.processCSVObjectChunks(ctx, chunks, counters, snapshotTS, tombstoneStats, columnSeqNums, job); err != nil {
+				setErr(err)
+				return
+			}
+		}
+	}()
 
 	for objectIdx, entry := range visibleDataEntries {
 		select {
@@ -2133,8 +2136,11 @@ func (r *CheckpointReader) processCSVObjectChunks(
 	reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
 	if err != nil {
 		if isDataFileNotFound(err) {
-			counters.processedObjects.Add(1)
-			return sendChunk(csvPipelineChunk{objectIdx: job.objectIdx, objectDone: true})
+			return moerr.NewFileNotFoundErrorf(
+				ctx,
+				"visible data object not found (checkpoint snapshot is incomplete): %s",
+				objName,
+			)
 		}
 		return err
 	}

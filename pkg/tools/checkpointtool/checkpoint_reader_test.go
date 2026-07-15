@@ -93,7 +93,8 @@ func TestShouldIncludeIncrementalCheckpointWithoutBase(t *testing.T) {
 	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, false))
 	assert.False(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts1, false))
 
-	assert.False(t, shouldIncludeIncrementalCheckpoint(zero, ts1, zero, ts1, true))
+	assert.True(t, shouldIncludeIncrementalCheckpoint(zero, ts1, zero, ts1, true))
+	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, ts1, ts2, true))
 	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, true))
 }
 

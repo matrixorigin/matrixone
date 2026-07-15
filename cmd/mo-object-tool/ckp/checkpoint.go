@@ -993,6 +993,39 @@ func orderTablesForRestore(
 		tableByKey[keyFor(table)] = table
 		orderByID[table.TableID] = i
 	}
+	isView := func(table checkpointtool.TableCatalogEntry) bool {
+		return isViewRelation(table)
+	}
+	viewDependsOn := func(view, dependency checkpointtool.TableCatalogEntry) bool {
+		if !isView(view) {
+			return false
+		}
+		dumpData := dumpDataByTable[view.TableID]
+		if dumpData == nil || dumpData.Schema == nil {
+			return false
+		}
+		sql := strings.ToLower(dumpData.Schema.CreateSQL)
+		if sql == "" {
+			return false
+		}
+		db := strings.ToLower(dependency.DatabaseName)
+		table := strings.ToLower(dependency.TableName)
+		quotedDB := strings.ToLower(quoteSQLIdent(dependency.DatabaseName))
+		quotedTable := strings.ToLower(quoteSQLIdent(dependency.TableName))
+		candidates := []string{
+			quotedDB + "." + quotedTable,
+			db + "." + table,
+		}
+		if view.DatabaseName == dependency.DatabaseName {
+			candidates = append(candidates, quotedTable, table)
+		}
+		for _, candidate := range candidates {
+			if candidate != "" && strings.Contains(sql, candidate) {
+				return true
+			}
+		}
+		return false
+	}
 	ordered := make([]checkpointtool.TableCatalogEntry, 0, len(tables))
 	visiting := make(map[uint64]bool, len(tables))
 	visited := make(map[uint64]bool, len(tables))
@@ -1005,6 +1038,16 @@ func orderTablesForRestore(
 			return
 		}
 		visiting[table.TableID] = true
+		if isView(table) {
+			for _, dependency := range tables {
+				if dependency.TableID == table.TableID {
+					continue
+				}
+				if !isView(dependency) || viewDependsOn(table, dependency) {
+					visit(dependency)
+				}
+			}
+		}
 		if dumpData := dumpDataByTable[table.TableID]; dumpData != nil && dumpData.Schema != nil {
 			refs := append([]checkpointtool.TableForeignKey(nil), dumpData.Schema.ForeignKeys...)
 			sort.SliceStable(refs, func(i, j int) bool {

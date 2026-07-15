@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -63,6 +64,40 @@ func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
 	assert.Equal(t, 0, view.BaseEntry.Index)
 	assert.Contains(t, view.Tables, uint64(20))
 	assert.NotContains(t, view.Tables, uint64(10))
+}
+
+func TestComposeAtIncludesBoundaryIncrementalAndFailsRequiredGap(t *testing.T) {
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	boundaryIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{baseEntry, boundaryIncr},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			switch entry {
+			case baseEntry:
+				return []*TableInfo{{TableID: 1}}, nil
+			case boundaryIncr:
+				return []*TableInfo{{TableID: 2}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(15, 0))
+	require.NoError(t, err)
+	require.Len(t, view.Incrementals, 1)
+	require.Contains(t, view.Tables, uint64(2))
+
+	reader.getTablesForTest = func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		if entry == boundaryIncr {
+			return nil, moerr.NewFileNotFoundNoCtx("missing-ickp")
+		}
+		return []*TableInfo{{TableID: 1}}, nil
+	}
+	_, err = reader.ComposeAt(types.BuildTS(15, 0))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "required incremental checkpoint")
 }
 
 func TestGetTableEntriesAtReturnsNonMissingObjectEntryError(t *testing.T) {
@@ -101,6 +136,32 @@ func TestWriteCSVChunksPreservesStorageOrder(t *testing.T) {
 
 	require.NoError(t, <-done)
 	assert.Equal(t, "a\nb\nc\n", buf.String())
+}
+
+func TestProcessCSVObjectChunksFailsMissingVisibleObject(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	chunks := make(chan csvPipelineChunk, 1)
+	err = reader.processCSVObjectChunks(
+		ctx,
+		chunks,
+		&csvPipelineCounters{},
+		types.BuildTS(10, 0),
+		nil,
+		nil,
+		csvPipelineObjectJob{objectIdx: 0, entry: newTestObjectEntryInfo(9, 1, 0)},
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "visible data object not found")
+	require.Empty(t, chunks)
 }
 
 func encodedSQLType(t *testing.T, typ types.Type) string {
