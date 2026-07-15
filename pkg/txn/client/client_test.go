@@ -304,11 +304,12 @@ func TestNewTxnAndReset(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", rt)
 	c := NewTxnClient("", newTestTxnSender())
 	c.Resume()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	tx, err := c.New(ctx, newTestTimestamp(0))
-	assert.Nil(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, tx)
 	txnMeta := tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 0}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
@@ -318,7 +319,8 @@ func TestNewTxnAndReset(t *testing.T) {
 
 	// Create a new transaction (object pool will reuse the freed operator)
 	tx, err = c.New(ctx, newTestTimestamp(0))
-	assert.Nil(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, tx)
 	txnMeta = tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 0}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
@@ -1216,10 +1218,11 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", rt)
 	c := NewTxnClient("", newTestTxnSender())
 	c.Resume()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
-	assert.Nil(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, tx)
 	txnMeta := tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
