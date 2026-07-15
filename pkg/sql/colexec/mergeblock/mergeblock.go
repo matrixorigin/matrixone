@@ -83,7 +83,9 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 		//batches in mp will be deeply copied into txn's workspace.
-		if err = mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0]); err != nil {
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0])
+		}); err != nil {
 			return input, err
 		}
 		analyzer.AddWrittenRows(int64(mergeBlock.container.mp[0].RowCount()))
@@ -93,7 +95,9 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		//batches in mp2 will be deeply copied into txn's workspace.
-		if err = mergeBlock.container.source.Write(newCtx, bat); err != nil {
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return mergeBlock.container.source.Write(newCtx, bat)
+		}); err != nil {
 			return input, err
 		}
 		analyzer.AddWrittenRows(int64(bat.RowCount()))

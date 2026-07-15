@@ -72,7 +72,9 @@ func (r *ZonemapReader) ReadBatch(
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 	// Load all block metadata
-	r.zoneparam.bs, err = r.blockReader.LoadAllBlocks(newCtx, proc.GetMPool())
+	r.zoneparam.bs, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.BlockObject, error) {
+		return r.blockReader.LoadAllBlocks(newCtx, proc.GetMPool())
+	})
 	if err != nil {
 		return false, err
 	}

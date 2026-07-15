@@ -16,11 +16,9 @@ package output
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -86,11 +84,9 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		output.ctr.rowCount += int64(bat.RowCount())
 
 		crs := analyzer.GetOpCounterSet()
-		err = func() error {
-			waitStart := time.Now()
-			defer analyzer.WaitStopKind(waitStart, resource.WaitOutput)
+		err = process.MeasureOutputWaitErr(analyzer, func() error {
 			return output.Func(bat, crs)
-		}()
+		})
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
@@ -141,11 +137,9 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				output.ctr.currentIdx = output.ctr.currentIdx + 1
 
 				crs := analyzer.GetOpCounterSet()
-				err := func() error {
-					waitStart := time.Now()
-					defer analyzer.WaitStopKind(waitStart, resource.WaitOutput)
+				err := process.MeasureOutputWaitErr(analyzer, func() error {
 					return output.Func(bat, crs)
-				}()
+				})
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err

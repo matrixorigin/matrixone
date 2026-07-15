@@ -404,6 +404,24 @@ func TestOperatorAnalyzerHarvestsTerminalCounterIntervals(t *testing.T) {
 	assert.Equal(t, int64(256), opAlyzr.opStats.S3WriteSize)
 }
 
+func TestMeasureFilesystemWaitRecordsTerminalPaths(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+
+	err := MeasureFilesystemWaitErr(opAlyzr, func() error {
+		return assert.AnError
+	})
+	assert.ErrorIs(t, err, assert.AnError)
+	first := opAlyzr.opStats.ResourceWaitNS[resource.WaitFilesystem]
+	assert.Positive(t, first)
+
+	assert.Panics(t, func() {
+		_ = MeasureFilesystemWaitErr(opAlyzr, func() error {
+			panic("storage panic")
+		})
+	})
+	assert.Greater(t, opAlyzr.opStats.ResourceWaitNS[resource.WaitFilesystem], first)
+}
+
 func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
 	opAlyzr := NewTempAnalyzer()
 	opAlyzr.AddParquetProfile(ParquetProfileStats{

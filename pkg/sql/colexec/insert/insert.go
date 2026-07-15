@@ -442,7 +442,9 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		}
 	}()
 
-	releaseFlushSlot, err := acquireFlushSlot(proc.Ctx)
+	releaseFlushSlot, err := process.MeasureFilesystemWait(analyzer, func() (func(), error) {
+		return acquireFlushSlot(proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}
@@ -451,7 +453,9 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-	blockInfoBat, err := insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+	blockInfoBat, err := process.MeasureFilesystemWait(analyzer, func() (*batch.Batch, error) {
+		return insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+	})
 	if err != nil {
 		return err
 	}
@@ -534,7 +538,9 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 	// insert into table, insertBat will be deeply copied into txn's workspace.
-	err := insert.ctr.source.Write(newCtx, insert.ctr.buf)
+	err := process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return insert.ctr.source.Write(newCtx, insert.ctr.buf)
+	})
 	if err != nil {
 		return input, err
 	}
@@ -563,7 +569,10 @@ func flushTailBatch(
 
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-	if _, err = writer.Sync(newCtx); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		_, syncErr := writer.Sync(newCtx)
+		return syncErr
+	}); err != nil {
 		return err
 	}
 

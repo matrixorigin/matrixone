@@ -141,7 +141,9 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname, visitTombstone)
+	metaInfos, err := process.MeasureFilesystemWait(analyzer, func() ([]*plan.MetadataScanInfo, error) {
+		return rel.GetColumMetadataScanInfo(newCtx, colname, visitTombstone)
+	})
 	if err != nil {
 		return err
 	}

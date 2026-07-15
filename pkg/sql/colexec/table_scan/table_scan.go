@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -145,11 +144,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		isEnd, err := func() (bool, error) {
-			waitStart := time.Now()
-			defer analyzer.WaitStopKind(waitStart, resource.WaitFilesystem)
+		isEnd, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
 			return tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
-		}()
+		})
 		if err != nil {
 			e = err
 			return vm.CancelResult, err

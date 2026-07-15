@@ -99,6 +99,29 @@ type ParquetProfileStats struct {
 	PeakBatchBytes                    int64
 }
 
+// MeasureFilesystemWait records the complete duration of a storage boundary,
+// including error and panic exits.
+func MeasureFilesystemWait[T any](analyzer Analyzer, fn func() (T, error)) (T, error) {
+	start := time.Now()
+	defer analyzer.WaitStopKind(start, resource.WaitFilesystem)
+	return fn()
+}
+
+// MeasureFilesystemWaitErr is the error-only form of MeasureFilesystemWait.
+func MeasureFilesystemWaitErr(analyzer Analyzer, fn func() error) error {
+	_, err := MeasureFilesystemWait(analyzer, func() (struct{}, error) {
+		return struct{}{}, fn()
+	})
+	return err
+}
+
+// MeasureOutputWaitErr records a protocol/output callback boundary.
+func MeasureOutputWaitErr(analyzer Analyzer, fn func() error) error {
+	start := time.Now()
+	defer analyzer.WaitStopKind(start, resource.WaitOutput)
+	return fn()
+}
+
 func (stats ParquetProfileStats) Empty() bool {
 	return stats == ParquetProfileStats{}
 }
