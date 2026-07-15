@@ -20,6 +20,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,6 +120,70 @@ func TestMP(t *testing.T) {
 	}
 	wg.Wait()
 
+}
+
+func TestMPoolConcurrentHighWater(t *testing.T) {
+	const writers = 64
+	var stats MPoolStats
+	stats.Init()
+
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		go func() {
+			defer wg.Done()
+			stats.RecordAlloc("concurrent-high-water", 1)
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int64(writers), stats.NumCurrBytes.Load())
+	require.Equal(t, int64(writers), stats.HighWaterMark.Load())
+}
+
+func TestMPoolFailedAllocationDoesNotAdvanceResourcePeak(t *testing.T) {
+	mp, err := NewMPool("failed-allocation-peak", 1<<20, NoFixed)
+	require.NoError(t, err)
+	defer DeleteMPool(mp)
+
+	_, err = mp.Alloc(2<<20, true)
+	require.Error(t, err)
+	summary, flags := mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Zero(t, summary.AllocatedBytes)
+	require.Zero(t, summary.FreedBytes)
+	require.Zero(t, summary.PeakLiveBytes)
+	require.Zero(t, summary.LiveBytesAtSeal)
+}
+
+func TestMPoolResourceEpoch(t *testing.T) {
+	mp := MustNew("resource-epoch")
+	defer DeleteMPool(mp)
+
+	first, err := mp.Alloc(100, true)
+	require.NoError(t, err)
+	second, err := mp.Alloc(200, true)
+	require.NoError(t, err)
+
+	summary, flags := mp.ResourceSnapshot()
+	require.Equal(t, resource.QualityNonZeroLiveAtSeal, flags)
+	require.Equal(t, uint64(300), summary.AllocatedBytes)
+	require.Equal(t, uint64(300), summary.PeakLiveBytes)
+	require.Equal(t, uint64(300), summary.LiveBytesAtSeal)
+	require.False(t, mp.ResetResourceEpoch())
+
+	mp.Free(first)
+	mp.Free(second)
+	summary, flags = mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Equal(t, uint64(300), summary.AllocatedBytes)
+	require.Equal(t, uint64(300), summary.FreedBytes)
+	require.Equal(t, uint64(300), summary.PeakLiveBytes)
+	require.Zero(t, summary.LiveBytesAtSeal)
+	require.True(t, mp.ResetResourceEpoch())
+
+	summary, flags = mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Equal(t, resource.MemoryDomainSummary{}, summary)
 }
 
 func TestMpoolReAllocate(t *testing.T) {

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
@@ -99,14 +100,49 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAlloc.Add(1)
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
-	hwm := s.HighWaterMark.Load()
-	if curr > hwm {
-		swapped := s.HighWaterMark.CompareAndSwap(hwm, curr)
-		if swapped && curr/GB != hwm/GB {
-			logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+	s.recordHighWater(tag, curr)
+	return curr
+}
+
+func (s *MPoolStats) recordHighWater(tag string, curr int64) {
+	for {
+		hwm := s.HighWaterMark.Load()
+		if curr <= hwm {
+			return
+		}
+		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
+			if curr/GB != hwm/GB {
+				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+			}
+			return
 		}
 	}
-	return curr
+}
+
+// reserve adds sz to the live-byte reservation without declaring a successful
+// allocation. The caller must commitReservedAlloc or cancelReserve exactly
+// once. A quiescent resource snapshot therefore never includes failed
+// allocations in allocated bytes or the high-water mark.
+func (s *MPoolStats) reserve(sz, limit int64) (int64, bool) {
+	for {
+		curr := s.NumCurrBytes.Load()
+		if sz < 0 || curr > limit || sz > limit-curr {
+			return curr, false
+		}
+		if s.NumCurrBytes.CompareAndSwap(curr, curr+sz) {
+			return curr + sz, true
+		}
+	}
+}
+
+func (s *MPoolStats) cancelReserve(sz int64) {
+	s.NumCurrBytes.Add(-sz)
+}
+
+func (s *MPoolStats) commitReservedAlloc(tag string, sz, curr int64) {
+	s.NumAlloc.Add(1)
+	s.NumAllocBytes.Add(sz)
+	s.recordHighWater(tag, curr)
 }
 
 // Update free stats, return curr bytes.
@@ -449,6 +485,45 @@ func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
 }
 
+// ResourceSnapshot returns exact allocator-domain facts for a quiescent MPool
+// epoch. Negative counters are flagged instead of being converted to uint64.
+func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.QualityFlags) {
+	allocated := mp.stats.NumAllocBytes.Load()
+	freed := mp.stats.NumFreeBytes.Load()
+	peak := mp.stats.HighWaterMark.Load()
+	live := mp.stats.NumCurrBytes.Load()
+	cross := mp.stats.NumCrossPoolFree.Load()
+	if allocated < 0 || freed < 0 || peak < 0 || live < 0 || cross < 0 {
+		return resource.MemoryDomainSummary{}, resource.QualityInvariantFailure
+	}
+	summary := resource.MemoryDomainSummary{
+		AllocatedBytes:     uint64(allocated),
+		FreedBytes:         uint64(freed),
+		PeakLiveBytes:      uint64(peak),
+		LiveBytesAtSeal:    uint64(live),
+		CrossPoolFreeCount: uint64(cross),
+	}
+	return summary, summary.Validate()
+}
+
+// ResetResourceEpoch clears allocator facts only after the owner has quiesced
+// all users and returned live bytes to zero.
+func (mp *MPool) ResetResourceEpoch() bool {
+	if mp.stats.NumCurrBytes.Load() != 0 {
+		return false
+	}
+	mp.stats.NumAlloc.Store(0)
+	mp.stats.NumFree.Store(0)
+	mp.stats.NumAllocBytes.Store(0)
+	mp.stats.NumFreeBytes.Store(0)
+	mp.stats.HighWaterMark.Store(0)
+	mp.stats.NumCrossPoolFree.Store(0)
+	mp.stats.mu.Lock()
+	clear(mp.stats.xpoolFree)
+	mp.stats.mu.Unlock()
+	return true
+}
+
 func DeleteMPool(mp *MPool) {
 	start := time.Now()
 	defer func() {
@@ -541,23 +616,29 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	hdr.SetGuard()
 
 	if offHeap {
-		gcurr := globalStats.RecordAlloc("global", sz)
-		if gcurr > GlobalCap() {
-			// compensate global
-			globalStats.RecordFree("global", sz)
+		gcurr, ok := globalStats.reserve(sz, GlobalCap())
+		if !ok {
 			return nil, moerr.NewOOMNoCtx()
 		}
-		mycurr := mp.stats.RecordAlloc(mp.tag, sz)
-		if mycurr > mp.Cap() {
-			// compensate both global and my
-			mp.stats.RecordFree(mp.tag, sz)
-			globalStats.RecordFree("global", sz)
+		mycurr, ok := mp.stats.reserve(sz, mp.Cap())
+		if !ok {
+			globalStats.cancelReserve(sz)
 			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 		}
+		reserved := true
+		defer func() {
+			if reserved {
+				mp.stats.cancelReserve(sz)
+				globalStats.cancelReserve(sz)
+			}
+		}()
 		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
 			panic(err)
 		}
+		globalStats.commitReservedAlloc("global", sz, gcurr)
+		mp.stats.commitReservedAlloc(mp.tag, sz, mycurr)
+		reserved = false
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
 		}
