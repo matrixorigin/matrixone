@@ -1765,17 +1765,8 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
 	resper := NewMysqlResp(writer)
-	makeResult := func(name string, value uint64) *MysqlResultSet {
-		mrs := &MysqlResultSet{}
-		col := &MysqlColumn{}
-		col.SetName(name)
-		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-		mrs.AddColumn(col)
-		mrs.AddRow([]any{value})
-		return mrs
-	}
-	first := makeResult("approx_count_distinct(a)", 2)
-	second := makeResult("approx_count_distinct(x)", 4)
+	first := makeAnalyzeCountResult("approx_count_distinct(a)", 2)
+	second := makeAnalyzeCountResult("approx_count_distinct(x)", 4)
 	execCtx := &ExecCtx{
 		reqCtx:  context.Background(),
 		ses:     ses,
@@ -1788,6 +1779,115 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	require.Same(t, first, writer.responses[0].GetData().(*MysqlExecutionResult).Mrs())
 	require.Same(t, second, writer.responses[1].GetData().(*MysqlExecutionResult).Mrs())
 	require.Nil(t, execCtx.results)
+}
+
+func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+
+	firstSQL := "select approx_count_distinct(`a`) from first_table"
+	secondSQL := "select approx_count_distinct(`x`) from second_table"
+	results := map[string]*result{
+		firstSQL:  {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
+		secondSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(x)", 4) }},
+	}
+	var derivedSQL []string
+	stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
+		sql := innerExecCtx.input.getSql()
+		derivedSQL = append(derivedSQL, sql)
+		stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, sql, stmts[0], proc)}, nil
+	})
+	defer stub.Reset()
+
+	stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{
+		{Table: tree.NewTableName("first_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"a"}},
+		{Table: tree.NewTableName("second_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"x"}},
+	}}
+	require.NoError(t, handleAnalyzeStmt(ses, execCtx, stmt))
+	require.Equal(t, []string{firstSQL, secondSQL}, derivedSQL)
+	require.Len(t, execCtx.results, 2)
+	requireAnalyzeCountValue(t, execCtx.reqCtx, execCtx.results[0], 2)
+	requireAnalyzeCountValue(t, execCtx.reqCtx, execCtx.results[1], 4)
+}
+
+func TestHandleAnalyzeStmtDoesNotPublishPartialResultsOnDerivedError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+
+	firstSQL := "select approx_count_distinct(`a`) from first_table"
+	secondSQL := "select approx_count_distinct(`x`) from second_table"
+	results := map[string]*result{
+		firstSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
+	}
+	var derivedSQL []string
+	stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
+		sql := innerExecCtx.input.getSql()
+		derivedSQL = append(derivedSQL, sql)
+		if sql == secondSQL {
+			return nil, moerr.NewInternalError(innerExecCtx.reqCtx, "second derived query failed")
+		}
+		stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, sql, stmts[0], proc)}, nil
+	})
+	defer stub.Reset()
+
+	stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{
+		{Table: tree.NewTableName("first_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"a"}},
+		{Table: tree.NewTableName("second_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"x"}},
+	}}
+	err := handleAnalyzeStmt(ses, execCtx, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "second derived query failed")
+	require.Equal(t, []string{firstSQL, secondSQL}, derivedSQL)
+	require.Nil(t, execCtx.results)
+}
+
+func newAnalyzeHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Session, *ExecCtx) {
+	t.Helper()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOperator
+	ses.txnHandler.txnCtx = ctx
+	return ses, execCtx
+}
+
+func makeAnalyzeCountResult(name string, value uint64) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	col := &MysqlColumn{}
+	col.SetName(name)
+	col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col)
+	mrs.AddRow([]any{value})
+	return mrs
+}
+
+func requireAnalyzeCountValue(t *testing.T, ctx context.Context, result ExecResult, expected uint64) {
+	t.Helper()
+	mrs := result.(*MysqlResultSet)
+	require.Equal(t, uint64(1), mrs.GetColumnCount())
+	require.Equal(t, uint64(1), mrs.GetRowCount())
+	value, err := mrs.GetValue(ctx, 0, 0)
+	require.NoError(t, err)
+	require.EqualValues(t, expected, value)
 }
 
 func Test_convert_type(t *testing.T) {
