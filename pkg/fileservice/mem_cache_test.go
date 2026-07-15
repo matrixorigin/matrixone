@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -295,18 +296,47 @@ func TestMemCacheCanonicalizesDeletePaths(t *testing.T) {
 					CachedData: DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte("foo")),
 				}},
 			}
+			defer vector.Release()
 			require.NoError(t, cache.Update(ctx, vector, false))
-			vector.Release()
 
-			require.NoError(t, cache.DeletePaths(ctx, []string{filePath}))
+			require.NoError(t, cache.DeletePaths(ctx, []string{"foo"}))
 			readVector := &IOVector{
-				FilePath: filePath,
+				FilePath: "foo",
 				Entries:  []IOEntry{{Size: 3}},
 			}
+			defer readVector.Release()
 			require.NoError(t, cache.Read(ctx, readVector))
 			require.False(t, readVector.Entries[0].done)
 		})
 	}
+}
+
+func TestMemCacheDeletePathsRejectsInvalidListAtomically(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+	defer cache.Close(ctx)
+
+	vector := &IOVector{
+		FilePath: "shared:/foo",
+		Entries: []IOEntry{{
+			Size:       3,
+			CachedData: DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte("foo")),
+		}},
+	}
+	defer vector.Release()
+	require.NoError(t, cache.Update(ctx, vector, false))
+
+	err := cache.DeletePaths(ctx, []string{"foo", "foo#bar"})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "unexpected error: %v", err)
+
+	readVector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Size: 3}},
+	}
+	defer readVector.Release()
+	require.NoError(t, cache.Read(ctx, readVector))
+	require.True(t, readVector.Entries[0].done)
+	require.Equal(t, []byte("foo"), readVector.Entries[0].CachedData.Bytes())
 }
 
 func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -359,7 +360,7 @@ func TestDiskCacheCanonicalizesFullFileKeys(t *testing.T) {
 			require.NoError(t, err)
 
 			vector := &IOVector{
-				FilePath: filePath,
+				FilePath: "foo",
 				Entries:  []IOEntry{{Offset: 0, Size: 3}},
 			}
 			defer vector.Release()
@@ -367,10 +368,49 @@ func TestDiskCacheCanonicalizesFullFileKeys(t *testing.T) {
 			require.True(t, vector.Entries[0].done)
 			require.Equal(t, []byte("foo"), vector.Entries[0].Data)
 
-			require.NoError(t, cache.DeletePaths(ctx, []string{filePath}))
+			require.NoError(t, cache.DeletePaths(ctx, []string{"foo"}))
 			require.False(t, cache.cache.Contains(cache.pathForFile("foo")))
 		})
 	}
+}
+
+func TestDiskCacheRejectsInvalidFullFilePath(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	openReaderCalled := false
+	err = cache.SetFile(ctx, "foo#bar", func(context.Context) (io.ReadCloser, error) {
+		openReaderCalled = true
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "unexpected error: %v", err)
+	require.False(t, openReaderCalled)
+}
+
+func TestDiskCacheDeletePathsRejectsInvalidListAtomically(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "shared:/foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	err = cache.DeletePaths(ctx, []string{"foo", "foo#bar"})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "unexpected error: %v", err)
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 3}},
+	}
+	defer vector.Release()
+	require.NoError(t, cache.Read(ctx, vector))
+	require.True(t, vector.Entries[0].done)
+	require.Equal(t, []byte("foo"), vector.Entries[0].Data)
 }
 
 func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
