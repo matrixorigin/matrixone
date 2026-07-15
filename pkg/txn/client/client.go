@@ -222,6 +222,19 @@ type activeTxnShard struct {
 	txns map[string]*txnOperator
 }
 
+// activeTxnGeneration is a stable reference to one operator generation.
+// txnOperator pointers are reused by RestartTxn, so a pointer alone is not a
+// sufficient identity for work that is collected now and applied later.
+type activeTxnGeneration struct {
+	op       *txnOperator
+	txnID    string
+	createAt time.Time
+}
+
+func (g activeTxnGeneration) markAborted() bool {
+	return g.op.addFlagIfGeneration(g.txnID, g.createAt, AbortedFlag)
+}
+
 type txnClient struct {
 	sid                        string
 	stopper                    *stopper.Stopper
@@ -383,6 +396,32 @@ func (client *txnClient) collectActiveTxns() []*txnOperator {
 		shard.RUnlock()
 	}
 	return ops
+}
+
+// collectActiveTxnGenerationsBefore snapshots generation identity while each
+// active-map shard is read-locked. Restart cannot reinitialize an operator
+// until its old generation is removed from that shard, so txnID/createAt are
+// stable for the duration of the snapshot. The later mutation must still
+// revalidate both fields because the shard lock is released before it runs.
+func (client *txnClient) collectActiveTxnGenerationsBefore(
+	cutoff time.Time,
+) []activeTxnGeneration {
+	generations := make([]activeTxnGeneration, 0)
+	for i := range client.activeTxns {
+		shard := &client.activeTxns[i]
+		shard.RLock()
+		for txnID, op := range shard.txns {
+			if op.reset.createAt.Before(cutoff) {
+				generations = append(generations, activeTxnGeneration{
+					op:       op,
+					txnID:    txnID,
+					createAt: op.reset.createAt,
+				})
+			}
+		}
+		shard.RUnlock()
+	}
+	return generations
 }
 
 func (client *txnClient) GetState() TxnState {
@@ -1243,17 +1282,9 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 				client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
 				client.mu.Unlock()
 
-				// Collect ops from sharded map
-				ops := make([]*txnOperator, 0)
-				client.forEachActiveTxn(func(op *txnOperator) bool {
-					if op.reset.createAt.Before(from) {
-						ops = append(ops, op)
-					}
-					return true
-				})
-
-				for _, op := range ops {
-					op.addFlag(AbortedFlag)
+				generations := client.collectActiveTxnGenerationsBefore(from)
+				for _, generation := range generations {
+					generation.markAborted()
 				}
 
 				client.mu.Lock()

@@ -880,6 +880,40 @@ func TestRestartTxnDoesNotRetainAbortFlag(t *testing.T) {
 	})
 }
 
+func TestAbortScanDoesNotMarkRestartedGeneration(t *testing.T) {
+	RunTxnTests(func(tc TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := tc.(*txnClient)
+
+		op, err := client.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		old := op.(*txnOperator)
+
+		// Split the real worker path at its ownership boundary: collect the old
+		// generation, then delay the mutation until the same operator pointer has
+		// been reused by RestartTxn.
+		collected := client.collectActiveTxnGenerationsBefore(
+			old.reset.createAt.Add(time.Nanosecond))
+		require.Len(t, collected, 1)
+		require.Same(t, old, collected[0].op)
+
+		require.NoError(t, old.Rollback(ctx))
+		restarted, err := client.RestartTxn(ctx, old, timestamp.Timestamp{})
+		require.NoError(t, err)
+		current := restarted.(*txnOperator)
+		require.Same(t, old, current)
+
+		require.False(t, collected[0].markAborted())
+		require.False(t, txnMarkedAborted(current))
+		result, err := current.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+		require.NoError(t, err)
+		if result != nil {
+			result.Release()
+		}
+	})
+}
+
 func TestRestartTxnAdmissionFailureLeavesOperatorClosed(t *testing.T) {
 	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

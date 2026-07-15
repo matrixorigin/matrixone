@@ -2447,6 +2447,26 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	}
 }
 
+// addFlagIfGeneration applies flags only if tc still represents the generation
+// captured by a delayed caller. RestartTxn reuses the txnOperator pointer, so
+// checking the pointer without checking generation identity permits stale work
+// from the old transaction to mutate the restarted transaction.
+func (tc *txnOperator) addFlagIfGeneration(
+	txnID string,
+	createAt time.Time,
+	flags ...uint32,
+) bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if string(tc.reset.txnID) != txnID || !tc.reset.createAt.Equal(createAt) {
+		return false
+	}
+	for _, flag := range flags {
+		tc.mu.flag |= flag
+	}
+	return true
+}
+
 func (tc *txnOperator) markAbortedLocked() bool {
 	return tc.mu.flag&AbortedFlag != 0
 }
