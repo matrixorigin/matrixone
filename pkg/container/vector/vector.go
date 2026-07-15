@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sort"
 	"time"
 	"unsafe"
 
@@ -4456,8 +4455,14 @@ func (v *Vector) InplaceSortAndCompact() {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedColNoTypeCheck[bool](v)
-		sort.Slice(col, func(i, j int) bool {
-			return !col[i] && col[j]
+		slices.SortFunc(col, func(a, b bool) int {
+			if a == b {
+				return 0
+			}
+			if !a { // false sorts before true
+				return -1
+			}
+			return 1
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
@@ -4468,9 +4473,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_bit:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4480,9 +4483,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int8:
 		col := MustFixedColNoTypeCheck[int8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4492,9 +4493,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int16:
 		col := MustFixedColNoTypeCheck[int16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4504,9 +4503,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int32:
 		col := MustFixedColNoTypeCheck[int32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4516,9 +4513,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int64:
 		col := MustFixedColNoTypeCheck[int64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4528,9 +4523,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint8:
 		col := MustFixedColNoTypeCheck[uint8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4540,9 +4533,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint16:
 		col := MustFixedColNoTypeCheck[uint16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4552,9 +4543,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint32:
 		col := MustFixedColNoTypeCheck[uint32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4564,9 +4553,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint64:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4576,9 +4563,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_float32:
 		col := MustFixedColNoTypeCheck[float32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4588,9 +4573,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4600,9 +4583,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4612,9 +4593,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_year:
 		col := MustFixedColNoTypeCheck[types.MoYear](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4624,9 +4603,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4636,9 +4613,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_time:
 		col := MustFixedColNoTypeCheck[types.Time](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4648,9 +4623,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_timestamp:
 		col := MustFixedColNoTypeCheck[types.Timestamp](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4660,9 +4633,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_enum:
 		col := MustFixedColNoTypeCheck[types.Enum](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4672,8 +4643,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_decimal64:
 		col := MustFixedColNoTypeCheck[types.Decimal64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal64) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Decimal64) bool {
 			return a.Compare(b) == 0
@@ -4686,8 +4663,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_decimal128:
 		col := MustFixedColNoTypeCheck[types.Decimal128](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal128) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Decimal128) bool {
 			return a.Compare(b) == 0
@@ -4700,8 +4683,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_decimal256:
 		col := MustFixedColNoTypeCheck[types.Decimal256](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal256) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Decimal256) bool {
 			return a.Compare(b) == 0
@@ -4714,8 +4703,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.TS) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
 			return a.Equal(&b)
@@ -4728,8 +4723,8 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uuid:
 		col := MustFixedColNoTypeCheck[types.Uuid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Lt(col[j])
+		slices.SortFunc(col, func(a, b types.Uuid) int {
+			return a.Compare(b)
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Uuid) bool {
 			return a.Compare(b) == 0
@@ -4741,8 +4736,14 @@ func (v *Vector) InplaceSortAndCompact() {
 		}
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.Rowid) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Rowid) bool {
 			return a.EQ(&b)
@@ -4755,8 +4756,8 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
@@ -4769,11 +4770,11 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
+		slices.SortFunc(col, func(a, b types.Varlena) int {
 			return types.ArrayCompare[float32](
-				types.GetArray[float32](&col[i], area),
-				types.GetArray[float32](&col[j], area),
-			) < 0
+				types.GetArray[float32](&a, area),
+				types.GetArray[float32](&b, area),
+			)
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return types.ArrayCompare[float32](
@@ -4788,11 +4789,11 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
+		slices.SortFunc(col, func(a, b types.Varlena) int {
 			return types.ArrayCompare[float64](
-				types.GetArray[float64](&col[i], area),
-				types.GetArray[float64](&col[j], area),
-			) < 0
+				types.GetArray[float64](&a, area),
+				types.GetArray[float64](&b, area),
+			)
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return types.ArrayCompare[float64](
@@ -4804,176 +4805,183 @@ func (v *Vector) InplaceSortAndCompact() {
 			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
+	default:
+		return
 	}
+	// Sorting happened even when compaction did not change the vector length.
+	// Keep the metadata invariant aligned with the physical ordering.
+	v.SetSorted(true)
 }
 
 func (v *Vector) InplaceSort() {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedColNoTypeCheck[bool](v)
-		sort.Slice(col, func(i, j int) bool {
-			return !col[i] && col[j]
+		slices.SortFunc(col, func(a, b bool) int {
+			if a == b {
+				return 0
+			}
+			if !a { // false sorts before true
+				return -1
+			}
+			return 1
 		})
 
 	case types.T_bit:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int8:
 		col := MustFixedColNoTypeCheck[int8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int16:
 		col := MustFixedColNoTypeCheck[int16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int32:
 		col := MustFixedColNoTypeCheck[int32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int64:
 		col := MustFixedColNoTypeCheck[int64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint8:
 		col := MustFixedColNoTypeCheck[uint8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint16:
 		col := MustFixedColNoTypeCheck[uint16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint32:
 		col := MustFixedColNoTypeCheck[uint32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint64:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_float32:
 		col := MustFixedColNoTypeCheck[float32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_year:
 		col := MustFixedColNoTypeCheck[types.MoYear](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_time:
 		col := MustFixedColNoTypeCheck[types.Time](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_timestamp:
 		col := MustFixedColNoTypeCheck[types.Timestamp](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_enum:
 		col := MustFixedColNoTypeCheck[types.Enum](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_decimal64:
 		col := MustFixedColNoTypeCheck[types.Decimal64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal64) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_decimal128:
 		col := MustFixedColNoTypeCheck[types.Decimal128](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal128) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_decimal256:
 		col := MustFixedColNoTypeCheck[types.Decimal256](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal256) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.TS) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_uuid:
 		col := MustFixedColNoTypeCheck[types.Uuid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Lt(col[j])
+		slices.SortFunc(col, func(a, b types.Uuid) int {
+			return a.Compare(b)
 		})
 
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.Rowid) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
+		slices.SortFunc(col, func(a, b types.Varlena) int {
 			return types.ArrayCompare[float32](
-				types.GetArray[float32](&col[i], area),
-				types.GetArray[float32](&col[j], area),
-			) < 0
+				types.GetArray[float32](&a, area),
+				types.GetArray[float32](&b, area),
+			)
 		})
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
+		slices.SortFunc(col, func(a, b types.Varlena) int {
 			return types.ArrayCompare[float64](
-				types.GetArray[float64](&col[i], area),
-				types.GetArray[float64](&col[j], area),
-			) < 0
+				types.GetArray[float64](&a, area),
+				types.GetArray[float64](&b, area),
+			)
 		})
 	}
 }

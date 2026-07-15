@@ -379,6 +379,7 @@ func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Res
 		ctx,
 		req.LogRequest.ShardID,
 		req.LogRequest.IncludeExpiredReplicaAddresses,
+		req.LogRequest.ExcludeHardDownReplicaAddresses,
 	); !ok {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(dragonboat.ErrShardNotFound)
 	} else {

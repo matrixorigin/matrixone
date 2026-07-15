@@ -96,6 +96,87 @@ func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
 	}
 }
 
+func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	hex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_ScoreBinaryHexnum)
+
+	rawExpr, err := binder.bindNumVal(hex, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "12", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	testCases := []struct {
+		name  string
+		typ   plan.Type
+		isBin bool
+	}{
+		{name: "integer numeric cast parses text", typ: plan.Type{Id: int32(types.T_uint64)}, isBin: false},
+		{name: "decimal numeric cast parses text", typ: plan.Type{Id: int32(types.T_decimal128)}, isBin: false},
+		{name: "float numeric cast parses text", typ: plan.Type{Id: int32(types.T_float64)}, isBin: false},
+		{name: "binary cast keeps binary string type", typ: plan.Type{Id: int32(types.T_binary)}, isBin: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			castExpr, err := binder.bindNumVal(hex, tc.typ)
+			require.NoError(t, err)
+			castFunc := castExpr.GetF()
+			require.NotNil(t, castFunc)
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, "12", castFunc.Args[0].GetLit().GetSval())
+			require.Equal(t, tc.isBin, castFunc.Args[0].GetLit().GetIsBin())
+		})
+	}
+
+	target := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+	explicitCast, err := BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{rawExpr, target})
+	require.NoError(t, err)
+	explicitCastFunc := explicitCast.GetF()
+	require.NotNil(t, explicitCastFunc)
+	require.Equal(t, int32(types.T_varbinary), explicitCastFunc.Args[0].Typ.Id)
+	require.False(t, explicitCastFunc.Args[0].GetLit().GetIsBin())
+
+	plainHex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_hexnum)
+	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
+	require.NoError(t, err)
+	require.True(t, plainHexExpr.GetLit().GetIsBin())
+
+	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varbinary), bitOrExpr.Typ.Id)
+
+	bitCountExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "bit_count", []*plan.Expr{rawExpr})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), bitCountExpr.Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), bitCountExpr.GetF().Args[0].Typ.Id)
+}
+
+func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	binStr := tree.NewNumVal("1", "1", false, tree.P_ScoreBinary)
+
+	rawExpr, err := binder.bindNumVal(binStr, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "1", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	castExpr, err := binder.bindNumVal(binStr, plan.Type{Id: int32(types.T_uint64)})
+	require.NoError(t, err)
+	castFunc := castExpr.GetF()
+	require.NotNil(t, castFunc)
+	require.Len(t, castFunc.Args, 2)
+	require.Equal(t, "1", castFunc.Args[0].GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), castFunc.Args[0].Typ.Id)
+	require.False(t, castFunc.Args[0].GetLit().GetIsBin())
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 
@@ -197,6 +278,81 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 		f := result.GetF()
 		require.NotNil(t, f)
 		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+	})
+}
+
+func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
+	ctx := context.Background()
+
+	makeJsonExpr := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_json)},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: 0, Name: "j"},
+			},
+		}
+	}
+	makeParamExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{
+				P: &plan.ParamRef{Pos: pos},
+			},
+		}
+	}
+	requireExactJSONParam := func(t *testing.T, expr *plan.Expr) *plan.Expr {
+		t.Helper()
+		require.Equal(t, int32(types.T_json), expr.Typ.Id)
+		normalize := expr.GetF()
+		require.NotNil(t, normalize)
+		require.Equal(t, function.JsonOrderingParamFunctionName, normalize.GetFunc().GetObjName())
+		require.Len(t, normalize.GetArgs(), 1)
+		return normalize.GetArgs()[0]
+	}
+
+	t.Run("json on left", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), param})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		require.Equal(t, int32(types.T_json), args[0].Typ.Id)
+		require.NotNil(t, args[0].GetCol())
+		paramArg := requireExactJSONParam(t, args[1])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	t.Run("json on right", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{param, makeJsonExpr()})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		paramArg := requireExactJSONParam(t, args[0])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+		require.Equal(t, int32(types.T_json), args[1].Typ.Id)
+		require.NotNil(t, args[1].GetCol())
+	})
+
+	t.Run("string literal remains rejected", func(t *testing.T) {
+		_, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
+		require.Error(t, err)
+	})
+
+	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
+		require.NoError(t, err)
+	})
+
+	t.Run("non-ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, "=", []*plan.Expr{makeJsonExpr(), makeParamExpr(0)})
+		require.NoError(t, err)
 	})
 }
 

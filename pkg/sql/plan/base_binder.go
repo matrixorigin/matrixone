@@ -55,18 +55,10 @@ var kAlwaysFalseExpr = &plan.Expr{
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(exprImpl, d.typ)
-		} else {
-			expr, err = b.bindNumVal(exprImpl, plan.Type{})
-		}
+		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(numVal, d.typ)
-		} else {
-			expr, err = b.bindNumVal(numVal, plan.Type{})
-		}
+		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -1694,6 +1686,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
+		if err := adjustJsonOrderingDynamicParamType(ctx, name, args); err != nil {
+			return nil, err
+		}
 
 		// Early detection for decimal comparisons
 		if len(args) == 2 {
@@ -1931,11 +1926,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			var tp = types.T_date
+			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
 				sval := exprC.Value.(*plan.Literal_Sval)
-				tp, _ = ExtractToDateReturnType(sval.Sval)
+				tp, fsp = ExtractToDateReturnType(sval.Sval)
 			}
-			args = append(args, makePlan2DateConstNullExpr(tp))
+			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
 
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
@@ -2406,6 +2402,34 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	}, nil
 }
 
+func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "<", "<=", ">", ">=":
+	default:
+		return nil
+	}
+	if len(args) != 2 {
+		return nil
+	}
+
+	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
+		var err error
+		args[1], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[1]})
+		return err
+	}
+	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
+		var err error
+		args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[0]})
+		return err
+	}
+	return nil
+}
+
+func isDirectDynamicParam(expr *Expr) bool {
+	_, ok := expr.Expr.(*plan.Expr_P)
+	return ok
+}
+
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// over_int64_err := moerr.NewInternalError(b.GetContext(), "", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
@@ -2562,8 +2586,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		bytes, _ := hex.DecodeString(s)
 		return returnHexNumExpr(string(bytes), true)
+	case tree.P_ScoreBinaryHexnum:
+		s := astExpr.String()[2:]
+		if len(s)%2 != 0 {
+			s = string('0') + s
+		}
+		bytes, _ := hex.DecodeString(s)
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(string(bytes)), typ)
+		}
+		return makePlan2VarBinaryConstExprWithType(string(bytes)), nil
 	case tree.P_ScoreBinary:
-		return returnHexNumExpr(astExpr.String(), true)
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(astExpr.String()), typ)
+		}
+		return makePlan2VarBinaryConstExprWithType(astExpr.String()), nil
 	case tree.P_bit:
 		s := astExpr.String()[2:]
 		bytes, _ := util.DecodeBinaryString(s)
@@ -3128,4 +3165,17 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// defaultValueBindType returns the target column type carried by a
+// DefaultBinder or ReplaceValueBinder. For other binder implementations it
+// returns an empty Type so literal binding falls back to the generic path.
+func (b *baseBinder) defaultValueBindType() plan.Type {
+	if d, ok := b.impl.(*DefaultBinder); ok {
+		return d.typ
+	}
+	if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		return r.typ
+	}
+	return plan.Type{}
 }

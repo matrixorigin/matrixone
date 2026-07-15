@@ -75,6 +75,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -132,22 +133,39 @@ func NewCompile(
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
-	if c.proc.GetTxnOperator() != nil {
-		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
-		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
-		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-	} else {
-		c.TxnOffset = 0
-	}
+	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
+	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
+	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	return c
+}
+
+// txnOffsetOfCompile returns the workspace write offset a new compile reads
+// with. Compiling a user statement advances the statement boundary of the
+// workspace and reads with it. An internal sub-sql of the current statement
+// (DisableIncrStatement, marked on the process) instead captures the current
+// end of the workspace — it reads everything its caller has written so far,
+// but it opens no statement, so it must not advance the shared boundary:
+// moving the boundary mid-statement breaks the positional visibility of the
+// caller's workspace entries (issue #25557).
+func txnOffsetOfCompile(proc *process.Process) int {
+	op := proc.GetTxnOperator()
+	if op == nil {
+		return 0
+	}
+	ws := op.GetWorkspace()
+	if proc.IncrStatementDisabled() {
+		return int(ws.WriteOffset())
+	}
+	ws.UpdateSnapshotWriteOffset()
+	return ws.GetSnapshotWriteOffset()
 }
 
 func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
@@ -212,9 +230,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		f.reset()
 	}
 	c.startAt = startAt
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	if c.proc.GetTxnOperator() != nil {
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -222,8 +239,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
 			}
 		}
-	} else {
-		c.TxnOffset = 0
+	}
+
+	// A reused prepared pipeline runs directly after Reset. Only retries compile
+	// again, so the cached placement is this execution's first real attempt.
+	c.beginSchedulingTraceAttempt()
+	if c.queryPlacement.Reason != "" {
+		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
 }
 
@@ -260,10 +282,18 @@ func (c *Compile) clear() {
 	c.anal = nil
 	c.e = nil
 
+	if c.lockMeta != nil {
+		c.lockMeta.clear(c.proc)
+		c.lockMeta = nil
+	}
+
 	c.proc.Free()
 	c.proc = nil
 
 	c.cnList = c.cnList[:0]
+	c.queryPlacement = schedule.QueryDecision{}
+	c.schedulingTrace = nil
+	c.schedulingAttempt = 0
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -276,11 +306,6 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
-
-	if c.lockMeta != nil {
-		c.lockMeta.clear(c.proc)
-		c.lockMeta = nil
-	}
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -518,6 +543,15 @@ func (c *Compile) runOnce() (err error) {
 			}
 		}
 	}
+
+	// Publish every dispatch receiver that will execute on this CN before any
+	// scope goroutine starts. Remote consumers can otherwise notify while a
+	// local source is still blocked before vm.Prepare reaches its Dispatch.
+	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
+	if err != nil {
+		return err
+	}
+	defer registrations.cleanup()
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -1387,6 +1421,13 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	return ds
 }
 
+func (c *Compile) constructScopeForExternalNode(node engine.Node, parallel bool) *Scope {
+	scope := c.constructScopeForExternal(node.Addr, parallel)
+	scope.NodeInfo.Id = node.Id
+	scope.NodeInfo.WorkState = node.WorkState
+	return scope
+}
+
 func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := c.newEmptyMergeScope()
 	ds.Proc = c.proc.NewNoContextChildProc(1)
@@ -1881,7 +1922,7 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
-	scope := c.constructScopeForExternal("", false)
+	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	parallelLoad := true
@@ -1903,7 +1944,10 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
-	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, scope)
+	dispatchOp, err := constructLocalDispatchFromScopes(0, ss, scope)
+	if err != nil {
+		return nil, err
+	}
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	scope.setRootOperator(dispatchOp)
@@ -1972,6 +2016,7 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 	}
 
 	ss := make([]*Scope, 0, len(shards))
+	stageNodes := c.queryWorkerStageNodes()
 	currentFirstFlag := c.anal.isFirst
 	for i := range shards {
 		shard := shards[i]
@@ -1982,8 +2027,8 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 		// preserving Extern.Filepath as the Hive base path for partition fills.
 		shardParam.Parallel = false
 
-		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
-		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		remote := param.ScanType == tree.S3 && len(stageNodes) > 0
+		scope := c.constructScopeForExternalNode(shard.node, remote)
 		scope.NodeInfo.Mcpu = 1
 		scope.IsLoad = true
 		op := constructExternal(
@@ -2020,6 +2065,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 	}
 
 	ss := make([]*Scope, 0, len(shards))
+	stageNodes := c.queryWorkerStageNodes()
 	currentFirstFlag := c.anal.isFirst
 	for i := range shards {
 		shard := shards[i]
@@ -2027,8 +2073,8 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 		*shardParam = *param
 		shardParam.Parallel = false
 
-		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
-		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		remote := param.ScanType == tree.S3 && len(stageNodes) > 0
+		scope := c.constructScopeForExternalNode(shard.node, remote)
 		scope.NodeInfo.Mcpu = 1
 		scope.IsLoad = true
 		op := constructExternal(
@@ -2233,9 +2279,10 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 	if fileCount <= 0 {
 		return nil
 	}
-	if param.ScanType == tree.S3 && len(c.cnList) > 0 {
+	stageNodes := c.queryWorkerStageNodes()
+	if param.ScanType == tree.S3 && len(stageNodes) > 0 {
 		nodes := make([]engine.Node, 0, fileCount)
-		for _, node := range c.cnList {
+		for _, node := range stageNodes {
 			mcpu := node.Mcpu
 			if mcpu <= 0 {
 				mcpu = 1
@@ -2474,21 +2521,25 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("external scan stage has no query workers")
+	}
 
 	if param.ScanType == tree.S3 {
-		for i := 0; i < len(c.cnList); i++ {
+		for i := 0; i < len(stageNodes); i++ {
 			tmp := mcpu
-			if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
+			if stageNodes[i].Mcpu > external.S3ParallelMaxnum {
 				mcpu += external.S3ParallelMaxnum
 			} else {
-				mcpu += c.cnList[i].Mcpu
+				mcpu += stageNodes[i].Mcpu
 			}
 			ID2Addr[i] = mcpu - tmp
 		}
 	} else {
-		for i := 0; i < len(c.cnList); i++ {
+		for i := 0; i < len(stageNodes); i++ {
 			tmp := mcpu
-			mcpu += c.cnList[i].Mcpu
+			mcpu += stageNodes[i].Mcpu
 			ID2Addr[i] = mcpu - tmp
 		}
 	}
@@ -2508,8 +2559,8 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	var ss []*Scope
 	pre := 0
 	currentFirstFlag := c.anal.isFirst
-	for i := 0; i < len(c.cnList); i++ {
-		scope := c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+	for i := 0; i < len(stageNodes); i++ {
+		scope := c.constructScopeForExternalNode(stageNodes[i], param.Parallel)
 		ss = append(ss, scope)
 		scope.IsLoad = true
 		count := min(parallelSize, ID2Addr[i])
@@ -2531,7 +2582,7 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
 			}
 		}
-		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(c.cnList), c.cnList[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
+		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(stageNodes), stageNodes[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
 		logutil.Infof("compileExternScanParallelReadWrite, %v\n", fileOffsetTmp)
 		op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -2882,17 +2933,13 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 		rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 		if err != nil {
-			if txnOp.IsSnapOp() {
-				return err
-			}
 			return err
 		}
-		tblDef = rel.GetTableDef(ctx)
-		s.DataSource.Rel = rel
-	} else {
-		s.DataSource.Rel.Reset(txnOp)
-		tblDef = s.DataSource.Rel.GetTableDef(ctx)
+		s.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if err = s.DataSource.Rel.Reset(txnOp); err != nil {
+		return err
 	}
+	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
@@ -3040,7 +3087,7 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 }
 
 func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newScopeListOnCurrentCN(2, 1)
+	rs := c.newScopeListOnSingleWorkerStage(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
 	connectLeftArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[0])
@@ -3082,7 +3129,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
-	rs := c.newScopeListOnCurrentCN(2, int(node.Stats.Dop))
+	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
 
 	c.hasMergeOp = true
@@ -3137,7 +3184,8 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
-		if len(c.cnList) == 1 {
+		stageNodes := c.queryWorkerStageNodes()
+		if len(stageNodes) == 1 {
 			if node.JoinType == plan.Node_DEDUP && node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash {
 				logutil.Infof("not support shuffle v2 for dedup join now")
 			} else if probeScopes[0].NodeInfo.Mcpu != int(left.Stats.Dop) || buildScopes[0].NodeInfo.Mcpu != int(right.Stats.Dop) {
@@ -3162,7 +3210,7 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	}
 
 	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
-	bucketNum := len(c.cnList) * int(node.Stats.Dop)
+	bucketNum := len(c.queryWorkerStageNodes()) * int(node.Stats.Dop)
 	for i := range leftscopes {
 		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
 		if !reuse {
@@ -3425,7 +3473,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 
 	buildScopeAttached := false
 	for i := range rs {
-		if isSameCN(rs[i].NodeInfo.Addr, buildScopes[0].NodeInfo.Addr) {
+		if sameExecutionNode(rs[i].NodeInfo, buildScopes[0].NodeInfo) {
 			rs[i].PreScopes = append(rs[i].PreScopes, buildScopes[0])
 			buildScopeAttached = true
 			break
@@ -3435,13 +3483,14 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	}
 
-	buildOpScopes := make([]*Scope, 0, len(c.cnList))
-	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs)
+	stageNodes := c.queryWorkerStageNodes()
+	buildOpScopes := make([]*Scope, 0, len(stageNodes))
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
-	if len(rs) > len(c.cnList) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
 		for _, tmp := range probeScopeGroups {
 			bs := newScope(Remote)
-			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
+			bs.NodeInfo = scopeNodeWithMcpu(tmp[0].NodeInfo, 1)
 			bs.Proc = c.proc.NewNoContextChildProc(0)
 			edge := process.NewPipelineEdge(10, 0)
 			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
@@ -3464,7 +3513,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 
 	for i := range rs {
 		bs := newScope(Remote)
-		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
+		bs.NodeInfo = scopeNodeWithMcpu(rs[i].NodeInfo, 1)
 		bs.Proc = c.proc.NewNoContextChildProc(0)
 		edge := process.NewPipelineEdge(10, 0)
 		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
@@ -3484,14 +3533,14 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope) [][]*Scope {
+func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope, stageNodes engine.Nodes) [][]*Scope {
 	groups := make([][]*Scope, 0, len(rs))
 	used := make([]bool, len(rs))
 
-	for _, cn := range c.cnList {
+	for _, cn := range stageNodes {
 		var group []*Scope
 		for i := range rs {
-			if !used[i] && isSameCN(cn.Addr, rs[i].NodeInfo.Addr) {
+			if !used[i] && sameExecutionNode(cn, rs[i].NodeInfo) {
 				group = append(group, rs[i])
 				used[i] = true
 			}
@@ -3508,7 +3557,7 @@ func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope) [][]*Scope {
 		group := []*Scope{rs[i]}
 		used[i] = true
 		for j := i + 1; j < len(rs); j++ {
-			if !used[j] && isSameCN(rs[i].NodeInfo.Addr, rs[j].NodeInfo.Addr) {
+			if !used[j] && sameExecutionNode(rs[i].NodeInfo, rs[j].NodeInfo) {
 				group = append(group, rs[j])
 				used[j] = true
 			}
@@ -3983,7 +4032,8 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 }
 
 func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
-	if len(c.cnList) == 1 {
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) == 1 {
 		return c.compileShuffleGroupV2(node, inputSS, nodes)
 	}
 
@@ -3999,7 +4049,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 	}
 
 	inputSS = c.mergeShuffleScopesIfNeeded(inputSS, true)
-	if len(c.cnList) > 1 {
+	if len(stageNodes) > 1 {
 		// merge here to avoid bugs, delete this in the future
 		for i := range inputSS {
 			if inputSS[i].NodeInfo.Mcpu > 1 {
@@ -4008,10 +4058,10 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		}
 	}
 
-	shuffleGroups := make([]*Scope, 0, len(c.cnList))
+	shuffleGroups := make([]*Scope, 0, len(stageNodes))
 	dop := int(node.Stats.Dop)
-	for _, cn := range c.cnList {
-		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
+	for _, cn := range stageNodes {
+		scopes := c.newScopeListWithNode(dop, len(inputSS), cn)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
@@ -4025,7 +4075,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		shuffleArg := constructShuffleArgForGroup(shuffleGroups, node)
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		inputSS[i].setRootOperator(shuffleArg)
-		if len(c.cnList) > 1 && inputSS[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+		if len(stageNodes) > 1 && inputSS[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 			inputSS[i] = c.newMergeScopeByCN([]*Scope{inputSS[i]}, inputSS[i].NodeInfo)
 		}
 		dispatchArg := constructDispatch(j, shuffleGroups, inputSS[i], node, false)
@@ -4044,22 +4094,22 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 	c.anal.isFirst = false
 
 	//append prescopes
-	c.appendPrescopes(shuffleGroups, inputSS)
+	c.appendPrescopes(shuffleGroups, inputSS, stageNodes)
 	return shuffleGroups
 
 }
 
-func (c *Compile) appendPrescopes(parents, children []*Scope) {
-	for _, cn := range c.cnList {
+func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.Nodes) {
+	for _, cn := range stageNodes {
 		index := 0
 		for i := range parents {
-			if isSameCN(cn.Addr, parents[i].NodeInfo.Addr) {
+			if sameExecutionNode(cn, parents[i].NodeInfo) {
 				index = i
 				break
 			}
 		}
 		for i := range children {
-			if isSameCN(cn.Addr, children[i].NodeInfo.Addr) {
+			if sameExecutionNode(cn, children[i].NodeInfo) {
 				parents[index].PreScopes = append(parents[index].PreScopes, children[i])
 			}
 		}
@@ -4100,8 +4150,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			// use unique filename directives (%U / %<n>N), so they are safe
 			// to keep unmerged.
 			var localSS, remoteSS []*Scope
+			currentNode := toEngineNode(c.currentCNWorker())
 			for _, s := range ss {
-				if isSameCN(s.NodeInfo.Addr, c.addr) {
+				if sameExecutionNode(s.NodeInfo, currentNode) {
 					localSS = append(localSS, s)
 				} else {
 					remoteSS = append(remoteSS, s)
@@ -4189,13 +4240,19 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			}
 		}
 		if c.anal.qry.LoadTag && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
-			_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			arg, err := constructLocalDispatchFromScopes(0, scopes, dataScope)
+			if err != nil {
+				return nil, err
+			}
 			arg.FuncId = dispatch.ShuffleToAllFunc
 			arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(arg)
 		} else {
-			_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			dispatchArg, err := constructLocalDispatchFromScopes(0, scopes, dataScope)
+			if err != nil {
+				return nil, err
+			}
 			dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(dispatchArg)
@@ -4267,9 +4324,12 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 					mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					ss[i].setRootOperator(mergeArg)
 					ss[i].Proc = c.proc.NewNoContextChildProc(1)
-					ss[i].NodeInfo = engine.Node{Addr: oldScope.NodeInfo.Addr, Mcpu: 1}
+					ss[i].NodeInfo = scopeNodeWithMcpu(oldScope.NodeInfo, 1)
 				}
-				_, dispatchOp := constructDispatchLocalAndRemote(0, ss, oldScope)
+				dispatchOp, err := constructLocalDispatchFromScopes(0, ss, oldScope)
+				if err != nil {
+					return nil, err
+				}
 				dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 				dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 				oldScope.setRootOperator(dispatchOp)
@@ -4553,7 +4613,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 	rs := make([]*Scope, len(ss))
 	for i := 0; i < len(ss); i++ {
 		rs[i] = newScope(Remote)
-		rs[i].NodeInfo = engine.Node{Addr: ss[i].NodeInfo.Addr, Mcpu: 1}
+		rs[i].NodeInfo = scopeNodeWithMcpu(ss[i].NodeInfo, 1)
 		rs[i].PreScopes = append(rs[i].PreScopes, ss[i])
 		rs[i].Proc = c.proc.NewNoContextChildProc(len(ss))
 		mergeOp := merge.NewArgument()
@@ -4573,7 +4633,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
+		arg.SegmentMap = colexec.MustGetServer(c.proc.GetService()).GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
@@ -4583,7 +4643,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 
 func (c *Compile) newEmptyMergeScope() *Scope {
 	rs := newScope(Merge)
-	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1} //merge scope is single parallel by default
+	rs.NodeInfo = scopeNodeWithMcpu(toEngineNode(c.currentCNWorker()), 1) //merge scope is single parallel by default
 	return rs
 }
 
@@ -4606,7 +4666,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	j := 0
 	for i := range ss {
 		nilBatchCnt := 1
-		if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
+		if sameExecutionNode(rs.NodeInfo, ss[i].NodeInfo) {
 			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
 		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(ss[i].NodeInfo.Mcpu, nilBatchCnt)
@@ -4620,20 +4680,56 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-// newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
-// waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
+// newScopeListOnSingleWorkerStage builds a single-worker stage. If query
+// placement already collapsed to one worker, inherit that worker; otherwise
+// keep the legacy current-CN coordinator for multi-CN stages.
+//
+// waing: newScopeListOnSingleWorkerStage result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListOnCurrentCN(childrenCount int, mcpu int) []*Scope {
-	node := getEngineNode(c)
-	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
+func (c *Compile) newScopeListOnSingleWorkerStage(childrenCount int, mcpu int) []*Scope {
+	node := c.singleWorkerStageNode()
+	ss := c.newScopeListWithNode(mcpu, childrenCount, node)
 	return ss
+}
+
+func (c *Compile) singleWorkerStageNode() engine.Node {
+	queryWorkers := c.scheduledQueryWorkers()
+	decision := schedule.DecideSingleWorkerStagePlacement(schedule.StageRequest{
+		QueryWorkers: queryWorkers,
+		CurrentCN:    c.currentCNWorker(),
+	})
+	c.schedulingTrace.RecordSingleWorkerStage(c.schedulingAttempt, queryWorkers, decision)
+	return c.materializeScheduledWorker(decision.Worker)
+}
+
+func (c *Compile) queryWorkerStageNodes() engine.Nodes {
+	queryWorkers := c.scheduledQueryWorkers()
+	decision := schedule.DecideQueryWorkerStagePlacement(schedule.StageRequest{
+		QueryWorkers: queryWorkers,
+		CurrentCN:    c.currentCNWorker(),
+	})
+	c.schedulingTrace.RecordStage(
+		c.schedulingAttempt,
+		schedule.StageKindQueryWorkerSet,
+		queryWorkers,
+		decision,
+	)
+	return c.materializeScheduledWorkers(decision.Workers)
+}
+
+func scopeNodeWithMcpu(node engine.Node, mcpu int) engine.Node {
+	return engine.Node{
+		Id:        node.Id,
+		Addr:      node.Addr,
+		Mcpu:      normalizeMcpu(mcpu),
+		WorkState: node.WorkState,
+	}
 }
 
 // all scopes in ss are on the same CN
 func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs := newScope(Remote)
-	rs.NodeInfo.Addr = nodeinfo.Addr
-	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
+	rs.NodeInfo = scopeNodeWithMcpu(nodeinfo, 1) // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
 	nilBatchCnt := 0
@@ -4661,13 +4757,12 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 
 // waing: newScopeListWithNode only used to build Scope with cpuNum and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*Scope {
+func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, node engine.Node) []*Scope {
 	ss := make([]*Scope, mcpu)
 	for i := range ss {
 		ss[i] = newScope(Remote)
 		ss[i].Magic = Remote
-		ss[i].NodeInfo.Addr = addr
-		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
+		ss[i].NodeInfo = scopeNodeWithMcpu(node, 1) // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = c.proc.NewNoContextChildProc(childrenCount)
 
 		// The merge operator does not act as First/Last, It needs to handle its analyze status
@@ -4702,10 +4797,11 @@ func (c *Compile) newScopeListForMinusAndIntersect(rs, left, right []*Scope, nod
 }
 
 func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
-	if len(c.cnList) == 1 && !force {
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) == 1 && !force {
 		return ss
 	}
-	if len(ss) <= len(c.cnList) {
+	if len(ss) <= len(stageNodes) {
 		return ss
 	}
 	for i := range ss {
@@ -4713,7 +4809,7 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 			return ss
 		}
 	}
-	rs := c.mergeScopesByCN(ss)
+	rs := c.mergeScopesByStageNodes(ss, stageNodes)
 	for i := range rs {
 		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
 			rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
@@ -4770,7 +4866,8 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
 // semantics, so the caller's operator is preserved as the connector's child, not replaced.
 func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
-	if len(c.cnList) <= 1 || len(ss) <= len(c.cnList) {
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) <= 1 || len(ss) <= len(stageNodes) {
 		return ss
 	}
 	hasCrossCNDispatch := false
@@ -4783,16 +4880,16 @@ func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 	if !hasCrossCNDispatch {
 		return ss
 	}
-	return c.mergeScopesByCN(ss)
+	return c.mergeScopesByStageNodes(ss, stageNodes)
 }
 
-func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
-	rs := make([]*Scope, 0, len(c.cnList))
-	for i := range c.cnList {
-		cn := c.cnList[i]
+func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) []*Scope {
+	rs := make([]*Scope, 0, len(stageNodes))
+	for i := range stageNodes {
+		cn := stageNodes[i]
 		currentSS := make([]*Scope, 0, cn.Mcpu)
 		for j := range ss {
-			if isSameCN(ss[j].NodeInfo.Addr, cn.Addr) {
+			if sameExecutionNode(ss[j].NodeInfo, cn) {
 				currentSS = append(currentSS, ss[j])
 			}
 		}
@@ -4806,7 +4903,7 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 }
 
 func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, node *plan.Node) []*Scope {
-	cnlist := c.cnList
+	cnlist := c.queryWorkerStageNodes()
 	if len(cnlist) <= 1 {
 		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
@@ -4840,8 +4937,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 			builds := make([]*Scope, dop)
 			for i := range probes {
 				probes[i] = newScope(Remote)
-				probes[i].NodeInfo.Addr = cn.Addr
-				probes[i].NodeInfo.Mcpu = 1
+				probes[i].NodeInfo = scopeNodeWithMcpu(cn, 1)
 				probes[i].Proc = c.proc.NewNoContextChildProc(lenLeft)
 
 				builds[i] = newScope(Remote)
@@ -4893,7 +4989,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 			probeScopes[i].IsEnd = true
 
 			for _, js := range shuffleProbes {
-				if isSameCN(js.NodeInfo.Addr, probeScopes[i].NodeInfo.Addr) {
+				if sameExecutionNode(js.NodeInfo, probeScopes[i].NodeInfo) {
 					js.PreScopes = append(js.PreScopes, probeScopes[i])
 					break
 				}
@@ -4918,7 +5014,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		buildScopes[i].IsEnd = true
 
 		for _, js := range shuffleBuilds {
-			if isSameCN(js.NodeInfo.Addr, buildScopes[i].NodeInfo.Addr) {
+			if sameExecutionNode(js.NodeInfo, buildScopes[i].NodeInfo) {
 				js.PreScopes = append(js.PreScopes, buildScopes[i])
 				break
 			}
@@ -5476,17 +5572,30 @@ func dupType(typ *plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
-func isSameCN(addr string, currentCNAddr string) bool {
-	// just a defensive judgment. In fact, we shouldn't have received such data.
-	parts1 := strings.Split(addr, ":")
-	if len(parts1) != 2 {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
+func sameExecutionNode(left, right engine.Node) bool {
+	if left.Id != "" && right.Id != "" && left.Id == right.Id {
 		return true
 	}
-	parts2 := strings.Split(currentCNAddr, ":")
-	if len(parts2) != 2 {
-		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
+	if left.Addr == "" || right.Addr == "" {
+		if left.Addr != "" || right.Addr != "" {
+			return false
+		}
+		if left.Id != "" && right.Id != "" {
+			return left.Id == right.Id
+		}
 		return true
+	}
+	return sameExecutionAddr(left.Addr, right.Addr)
+}
+
+func sameExecutionAddr(addr string, currentCNAddr string) bool {
+	if addr == "" || currentCNAddr == "" {
+		return addr == currentCNAddr
+	}
+	parts1 := strings.Split(addr, ":")
+	parts2 := strings.Split(currentCNAddr, ":")
+	if len(parts1) != 2 || len(parts2) != 2 {
+		return addr == currentCNAddr
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
@@ -5710,6 +5819,9 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 }
 
 func getEngineNode(c *Compile) engine.Node {
+	// getEngineNode only describes the local execution identity and capacity.
+	// Runtime work state is intentionally left Unknown here; callers that make
+	// AP multi-CN placement decisions must enrich it from cluster metadata.
 	if c.IsTpQuery() {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
 	} else {

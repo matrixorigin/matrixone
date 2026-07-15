@@ -30,7 +30,7 @@ func (p *Path) init(subs []subPath) {
 		if sub.tp == subPathDoubleStar {
 			p.flag |= pathFlagDoubleStar
 		}
-		if sub.tp == subPathKey && sub.key == "*" {
+		if sub.tp == subPathKeyWildcard {
 			p.flag |= pathFlagSingleStar
 		}
 		if sub.tp == subPathIdx && sub.idx.num == subPathIdxALL && sub.idx.tp == numberIndices {
@@ -59,8 +59,7 @@ func (p *Path) IsSimple() bool {
 	}
 
 	for _, sub := range p.paths {
-		if (sub.tp == subPathKey && sub.key != "*") ||
-			sub.tp == subPathIdx {
+		if sub.tp == subPathKey || sub.tp == subPathIdx {
 			continue
 		} else {
 			return false
@@ -92,6 +91,8 @@ func (p *Path) String() string {
 			s.WriteString(".")
 			//TODO check here is ok
 			s.WriteString(strconv.Quote(sub.key))
+		case subPathKeyWildcard:
+			s.WriteString(".*")
 		case subPathDoubleStar:
 			s.WriteString("**")
 		}
@@ -312,7 +313,7 @@ func (pg *pathGenerator) generateKey(legs []subPath) ([]subPath, bool) {
 	if pg.front() == '*' {
 		pg.next()
 		legs = append(legs, subPath{
-			tp:  subPathKey,
+			tp:  subPathKeyWildcard,
 			key: "*",
 		})
 	} else {
@@ -384,4 +385,10 @@ func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
 	}
 	ret[0], ret[1] = mdf1, mdf2
 	return
+}
+
+func (pe subPathRangeExpr) matchesIndex(index, cnt int) bool {
+	start, _, _ := pe.start.genIndex(cnt)
+	end, _, _ := pe.end.genIndex(cnt)
+	return start <= end && start <= index && index <= end
 }

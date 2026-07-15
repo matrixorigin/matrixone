@@ -121,6 +121,10 @@ func (txn *testWorkspace) IncrStatementID(ctx context.Context, commit bool) erro
 	return nil
 }
 
+func (txn *testWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	return nil
+}
+
 func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
@@ -786,8 +790,8 @@ func Test_commit(t *testing.T) {
 	})
 }
 
-func TestCommitTxnUnknownPreservesTxnOperatorForLaterCleanup(t *testing.T) {
-	convey.Convey("commit ErrTxnUnknown keeps txn operator reachable", t, func() {
+func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
+	convey.Convey("commit ErrTxnUnknown invalidates the frontend txn operator", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -818,7 +822,8 @@ func TestCommitTxnUnknownPreservesTxnOperatorForLaterCleanup(t *testing.T) {
 		convey.So(moerr.IsMoErrCode(err, moerr.ErrTxnUnknown), convey.ShouldBeTrue)
 		convey.So(txnOp.commitCalls, convey.ShouldEqual, 1)
 		convey.So(txnOp.rollbackCalls, convey.ShouldEqual, 0)
-		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldEqual, txnOp)
+		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().InActiveTxn(), convey.ShouldBeFalse)
 	})
 }
 

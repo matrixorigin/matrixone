@@ -139,13 +139,8 @@ func (s *sqlStore) Allocate(
 				if err != nil {
 					return err
 				}
-				rows := 0
-				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-					current = executor.GetFixedRows[uint64](cols[0])[0]
-					step = executor.GetFixedRows[uint64](cols[1])[0]
-					rows++
-					return true
-				})
+				var rows int
+				current, step, rows = readSingleOffsetStep(res)
 				res.Close()
 
 				if rows != 1 {
@@ -254,6 +249,23 @@ func (s *sqlStore) Allocate(
 		commitTs = snapshotTs
 	}
 	return from, to, commitTs, nil
+}
+
+func readSingleOffsetStep(res executor.Result) (current, step uint64, rows int) {
+	res.ReadRows(func(batchRows int, cols []*vector.Vector) bool {
+		if batchRows == 0 {
+			return true
+		}
+		offsets := executor.GetFixedRows[uint64](cols[0])
+		steps := executor.GetFixedRows[uint64](cols[1])
+		if rows == 0 {
+			current = offsets[0]
+			step = steps[0]
+		}
+		rows += batchRows
+		return rows < 2
+	})
+	return
 }
 
 func (s *sqlStore) UpdateMinValue(
