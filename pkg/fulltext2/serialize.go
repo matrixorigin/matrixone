@@ -263,20 +263,54 @@ func (s *Segment) decodePostings(data []byte) error {
 	return nil
 }
 
-// deriveTermStats fills tp.maxTf and tp.minDocLen from its postings (df >= 1).
+// deriveTermStats fills tp's raw, scorer-agnostic score-UB fields from its
+// postings + docLen: the term-level maxTf/minDocLen AND the per-block Block-Max
+// skip metadata (blockLastDoc/blockMaxTf/blockMinDocLn), one entry per
+// ceil(df/BlockSize). Both are idf/avgdl-free so one segment serves BM25 and
+// TF-IDF; the active scorer derives its impact bound at query time. Computed in a
+// single pass (the term-level max/min is the max/min over the block stats), and
+// called from BOTH the builder and Deserialize — the direct analogue of bm25's
+// WandModel.finalizeScoring. Assumes df >= 1 (a term with no postings is never
+// stored).
 func deriveTermStats(tp *termPostings, docLen []int32) {
-	var maxTf uint8
-	minDL := int32(math.MaxInt32)
-	for i, ord := range tp.docIDs {
-		if tp.tfs[i] > maxTf {
-			maxTf = tp.tfs[i]
+	df := len(tp.docIDs)
+	if df == 0 {
+		return
+	}
+	nblk := (df + BlockSize - 1) / BlockSize
+	tp.blockLastDoc = make([]int64, nblk)
+	tp.blockMaxTf = make([]uint8, nblk)
+	tp.blockMinDocLn = make([]int32, nblk)
+	var termMaxTf uint8
+	termMinDL := int32(math.MaxInt32)
+	for b := 0; b < nblk; b++ {
+		lo := b * BlockSize
+		hi := lo + BlockSize
+		if hi > df {
+			hi = df
 		}
-		if dl := docLen[ord]; dl < minDL {
-			minDL = dl
+		var maxTf uint8
+		minDL := int32(math.MaxInt32)
+		for i := lo; i < hi; i++ {
+			if tp.tfs[i] > maxTf {
+				maxTf = tp.tfs[i]
+			}
+			if dl := docLen[tp.docIDs[i]]; dl < minDL {
+				minDL = dl
+			}
+		}
+		tp.blockLastDoc[b] = tp.docIDs[hi-1] // ascending → last is the block's max ord
+		tp.blockMaxTf[b] = maxTf
+		tp.blockMinDocLn[b] = minDL
+		if maxTf > termMaxTf {
+			termMaxTf = maxTf
+		}
+		if minDL < termMinDL {
+			termMinDL = minDL
 		}
 	}
-	tp.maxTf = maxTf
-	tp.minDocLen = minDL
+	tp.maxTf = termMaxTf
+	tp.minDocLen = termMinDL
 }
 
 // LookupLoaded resolves a term to its posting list on a LOADED segment (via the

@@ -15,8 +15,6 @@
 package fulltext2
 
 import (
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
@@ -82,8 +80,6 @@ func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tok
 			tfs:       make([]uint8, len(entries)),
 			positions: make([][]int32, len(entries)),
 		}
-		maxTf := 0
-		minDocLen := int32(math.MaxInt32)
 		for i, e := range entries {
 			tp.docIDs[i] = e.ord
 			tf := len(e.positions)
@@ -92,15 +88,10 @@ func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tok
 			}
 			tp.tfs[i] = uint8(tf)
 			tp.positions[i] = e.positions
-			if tf > maxTf {
-				maxTf = tf
-			}
-			if dl := s.docLen[e.ord]; dl < minDocLen {
-				minDocLen = dl
-			}
 		}
-		tp.maxTf = uint8(maxTf)
-		tp.minDocLen = minDocLen
+		// Derive the raw term-level + Block-Max score-UB fields (mirrors the load
+		// path), so a build-side segment gets the same WAND block-skip bounds.
+		deriveTermStats(tp, s.docLen)
 		terms[w] = tp
 	}
 
@@ -163,8 +154,6 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc) (*S
 			tfs:       make([]uint8, len(entries)),
 			positions: make([][]int32, len(entries)),
 		}
-		maxTf := 0
-		minDocLen := int32(math.MaxInt32)
 		for i, e := range entries {
 			tp.docIDs[i] = e.ord
 			tf := len(e.positions)
@@ -173,15 +162,10 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc) (*S
 			}
 			tp.tfs[i] = uint8(tf)
 			tp.positions[i] = e.positions
-			if tf > maxTf {
-				maxTf = tf
-			}
-			if dl := s.docLen[e.ord]; dl < minDocLen {
-				minDocLen = dl
-			}
 		}
-		tp.maxTf = uint8(maxTf)
-		tp.minDocLen = minDocLen
+		// Derive the raw term-level + Block-Max score-UB fields (mirrors the load
+		// path), so a build-side segment gets the same WAND block-skip bounds.
+		deriveTermStats(tp, s.docLen)
 		terms[w] = tp
 	}
 
