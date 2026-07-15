@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -2084,9 +2085,13 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// We detect this by inspecting the actual join condition expression: if either side of
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
+	hasForceOneCN := false
 	for _, node := range qry.GetNodes() {
 		if node == nil {
 			continue
+		}
+		if node.GetStats().GetForceOneCN() {
+			hasForceOneCN = true
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -2113,7 +2118,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
-	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
+	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		if node == nil {
@@ -2125,33 +2130,31 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
-			if txnHaveDDL {
-				return ExecTypeAP_ONECN
-			} else if stats != nil && hasExprBasedShuffle {
+			if !canUseMultiCN {
 				return ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}
 		if isPrepare {
-			if stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4 {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4) {
 				ret = ExecTypeAP_ONECN
 			}
 		} else {
-			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery) {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
-			if IsIvfSearchEntriesInternalScan(node) {
-				execType := ExecTypeAP_MULTICN
-				if !canUseMultiCN {
-					execType = ExecTypeAP_ONECN
-				}
-				if execType > ret {
-					ret = execType
-				}
+		if IsIvfSearchEntriesInternalScan(node) {
+			execType := ExecTypeAP_MULTICN
+			if stats.GetForceOneCN() || !canUseMultiCN {
+				execType = ExecTypeAP_ONECN
 			}
+			if execType > ret {
+				ret = execType
+			}
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
 			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
 				stats.Rowsize > RowSizeThreshold &&
@@ -2165,7 +2168,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				}
 			}
 		}
-		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle && ret != ExecTypeAP_MULTICN {
 			ret = ExecTypeAP_ONECN
 		}
 	}
@@ -2178,17 +2181,30 @@ func isIvfSearchEntriesTableScan(node *plan.Node) bool {
 		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
 }
 
+func isIvfSearchFunctionScan(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
+		return false
+	}
+	tblDef := node.GetTableDef()
+	if tblDef == nil || tblDef.GetTblFunc() == nil {
+		return false
+	}
+	return tblDef.GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
+}
+
 // IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
+// It recognizes both the FUNCTION_SCAN form produced by the production ivf_search planner
+// path and the legacy TABLE_SCAN form used by unit tests.
 func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
+	if isIvfSearchFunctionScan(node) {
+		return isIvfEntriesIndexReaderScan(node)
+	}
 	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
 }
 
 func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
 	param := node.GetIndexReaderParam()
-	if param.GetLimit() == nil {
-		return false
-	}
-	return param.GetOrigFuncName() != "" || len(param.GetOrderBy()) > 0
+	return param.GetOrigFuncName() != ""
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {

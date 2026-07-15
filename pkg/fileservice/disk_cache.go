@@ -307,7 +307,10 @@ func (d *DiskCache) Read(
 		if f, ok := openedFiles[diskPath]; ok {
 			// use opened file
 			LogEvent(ctx, str_disk_cache_file_seek_begin)
-			_, err = f.Seek(entry.Offset, io.SeekStart)
+			// An IOEntry cache file contains only this range, so its content
+			// always starts at file offset zero. entry.Offset is only valid for
+			// a full-object cache file.
+			_, err = f.Seek(0, io.SeekStart)
 			LogEvent(ctx, str_disk_cache_file_seek_end)
 			if err == nil {
 				file = f
