@@ -69,48 +69,27 @@ func (s *store) handleDebug(ctx context.Context, request *txn.TxnRequest, respon
 }
 
 func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.Read(ctx, request, response)
 }
 
 func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.Write(ctx, request, response)
 }
 
 func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.Debug(ctx, request, response)
@@ -121,96 +100,54 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.Commit(ctx, request, response)
 }
 
 func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.Rollback(ctx, request, response)
 }
 
 func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.Prepare(ctx, request, response)
 }
 
 func (s *store) handleCommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.CommitTNShard(ctx, request, response)
 }
 
 func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.RollbackTNShard(ctx, request, response)
 }
 
 func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validTNShard(ctx, request, response)
-	if r == nil {
-		return nil
-	}
-	started, err := s.waitTNReplicaStarted(ctx, r, response)
-	if err != nil {
+	r, err := s.startedTNReplica(ctx, request, response)
+	if err != nil || r == nil {
 		return err
-	}
-	if !started {
-		return nil
 	}
 	prepareResponse(request, response)
 	return r.service.GetStatus(ctx, request, response)
@@ -227,22 +164,26 @@ func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, respo
 	return r
 }
 
-func (s *store) waitTNReplicaStarted(
+func (s *store) startedTNReplica(
 	ctx context.Context,
-	r *replica,
+	request *txn.TxnRequest,
 	response *txn.TxnResponse,
-) (bool, error) {
+) (*replica, error) {
+	r := s.validTNShard(ctx, request, response)
+	if r == nil {
+		return nil, nil
+	}
 	if err := r.waitStarted(ctx); err != nil {
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return nil, ctx.Err()
 		}
 		response.TxnError = txn.WrapError(
 			moerr.NewTNShardNotFound(ctx, s.cfg.UUID, r.shard.ShardID),
 			0,
 		)
-		return false, nil
+		return nil, nil
 	}
-	return true, nil
+	return r, nil
 }
 
 func prepareResponse(request *txn.TxnRequest, response *txn.TxnResponse) {

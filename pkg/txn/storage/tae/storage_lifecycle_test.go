@@ -19,7 +19,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	logtailservice "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,11 +44,14 @@ func (s *lifecycleTestLogtailServer) Close() error {
 
 type lifecycleTestHandler struct {
 	rpchandle.Handler
+	db           *db.DB
 	closeErr     error
 	destroyErr   error
 	closeCalls   int
 	destroyCalls int
 }
+
+func (h *lifecycleTestHandler) GetDB() *db.DB { return h.db }
 
 func (h *lifecycleTestHandler) HandleClose(context.Context) error {
 	h.closeCalls++
@@ -66,4 +76,91 @@ func TestDestroyClosesTAEStorage(t *testing.T) {
 	require.Equal(t, 1, server.closeCalls)
 	require.Equal(t, 1, handler.closeCalls)
 	require.Equal(t, 1, handler.destroyCalls)
+}
+
+func TestNewTAEStorageHandleCreationFailure(t *testing.T) {
+	primaryErr := errors.New("handle creation failed")
+	handleCalls := 0
+	serverCalls := 0
+	deps := taeStorageDependencies{
+		newTAEHandle: func(
+			context.Context,
+			string,
+			client.QueryClient,
+			*options.Options,
+		) (taeHandle, error) {
+			handleCalls++
+			return nil, primaryErr
+		},
+		newLogtailServer: func(
+			context.Context,
+			*db.DB,
+			string,
+			*options.LogtailServerCfg,
+			runtime.Runtime,
+		) (*logtailservice.LogtailServer, error) {
+			serverCalls++
+			return nil, nil
+		},
+	}
+
+	storage, err := newTAEStorageForTest(t, deps)
+	require.Nil(t, storage)
+	require.ErrorIs(t, err, primaryErr)
+	require.Equal(t, 1, handleCalls)
+	require.Equal(t, 0, serverCalls)
+}
+
+func TestNewTAEStorageLogtailServerFailureClosesHandle(t *testing.T) {
+	primaryErr := errors.New("logtail server creation failed")
+	cleanupErr := errors.New("handle close failed")
+	handler := &lifecycleTestHandler{db: &db.DB{}, closeErr: cleanupErr}
+	serverCalls := 0
+	deps := taeStorageDependencies{
+		newTAEHandle: func(
+			context.Context,
+			string,
+			client.QueryClient,
+			*options.Options,
+		) (taeHandle, error) {
+			return handler, nil
+		},
+		newLogtailServer: func(
+			context.Context,
+			*db.DB,
+			string,
+			*options.LogtailServerCfg,
+			runtime.Runtime,
+		) (*logtailservice.LogtailServer, error) {
+			serverCalls++
+			return nil, primaryErr
+		},
+	}
+
+	storage, err := newTAEStorageForTest(t, deps)
+	require.Nil(t, storage)
+	require.ErrorIs(t, err, primaryErr)
+	require.ErrorIs(t, err, cleanupErr)
+	require.Equal(t, 1, serverCalls)
+	require.Equal(t, 1, handler.closeCalls)
+}
+
+func newTAEStorageForTest(
+	t *testing.T,
+	deps taeStorageDependencies,
+) (txnstorage.TxnStorage, error) {
+	t.Helper()
+	rt := runtime.DefaultRuntime()
+	return newTAEStorage(
+		context.Background(),
+		t.TempDir(),
+		&options.Options{SID: rt.ServiceUUID()},
+		metadata.TNShard{},
+		rt,
+		"",
+		&options.LogtailServerCfg{},
+		nil,
+		nil,
+		deps,
+	)
 }
