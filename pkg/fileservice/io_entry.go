@@ -127,10 +127,18 @@ func (i *IOEntry) prepareData(ctx context.Context) (finally func(err *error)) {
 		i.releaseData = func() {
 			dec.Deallocate()
 		}
+		released := false
 		finally = func(err *error) {
-			if err != nil && *err != nil {
-				dec.Deallocate()
+			if err == nil || *err == nil || released {
+				return
 			}
+			released = true
+			i.Data = nil
+			i.releaseData = nil
+			if i.ReadCloserForRead != nil {
+				*i.ReadCloserForRead = nil
+			}
+			dec.Deallocate()
 		}
 
 	} else {
