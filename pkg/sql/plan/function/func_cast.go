@@ -245,7 +245,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_datetime, types.T_timestamp,
 		types.T_year,
 	},
 
@@ -257,7 +257,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_timestamp,
+		types.T_datetime, types.T_timestamp,
 		types.T_year,
 	},
 
@@ -1701,6 +1701,9 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal64ToTimestamp(source, rs, length, selectList)
+	case types.T_datetime:
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		return decimal64ToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal64ToTime(source, rs, length, selectList)
@@ -1770,6 +1773,9 @@ func decimal128ToOthers(proc *process.Process,
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal128ToTime(source, rs, length, selectList)
+	case types.T_datetime:
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		return decimal128ToDatetime(source, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
@@ -4322,6 +4328,58 @@ func decimal128ToTime(
 			}
 		} else {
 			result, err := types.ParseDecimal128ToTime(v, fromtype.Scale, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal64ToDatetime(
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := types.ParseDatetime(v.Format(fromtype.Scale), totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128ToDatetime(
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := types.ParseDatetime(v.Format(fromtype.Scale), totype.Scale)
 			if err != nil {
 				return err
 			}

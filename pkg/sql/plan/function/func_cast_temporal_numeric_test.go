@@ -175,6 +175,8 @@ func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 		{name: "date to decimal128", source: types.T_date, target: types.T_decimal128},
 		{name: "year to decimal64", source: types.T_year, target: types.T_decimal64},
 		{name: "year to decimal128", source: types.T_year, target: types.T_decimal128},
+		{name: "decimal64 to datetime", source: types.T_decimal64, target: types.T_datetime},
+		{name: "decimal128 to datetime", source: types.T_decimal128, target: types.T_datetime},
 		{name: "decimal128 to timestamp", source: types.T_decimal128, target: types.T_timestamp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +185,48 @@ func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 				tc.source.ToType(), tc.target.ToType(),
 			})
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestCastDecimalPackedDatetimeToDatetime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	packed64, err := types.ParseDecimal64("20220102000101", 14, 0)
+	require.NoError(t, err)
+	packed128, err := types.ParseDecimal128("20240102030405.123456", 20, 6)
+	require.NoError(t, err)
+	expected64, err := types.ParseDatetime("2022-01-02 00:01:01", 0)
+	require.NoError(t, err)
+	expected128, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "decimal64 packed datetime",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal64, 14, 0), []types.Decimal64{packed64}, nil),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{expected64}, nil),
+		},
+		{
+			name: "decimal128 packed datetime preserves fractional seconds",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal128, 20, 6), []types.Decimal128{packed128}, nil),
+				NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{expected128}, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }
