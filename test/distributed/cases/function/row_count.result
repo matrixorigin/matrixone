@@ -64,11 +64,11 @@ create table odku(id int primary key, v int);
 insert into odku values (1,1) on duplicate key update v=v+1;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
-2
+1
 insert into odku values (1,1) on duplicate key update v=v+1;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
-1
+2
 insert into odku values (1,100) on duplicate key update v=v;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
