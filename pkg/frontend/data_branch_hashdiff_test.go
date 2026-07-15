@@ -2453,6 +2453,15 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalFakePrimaryKeyDrift(t *t
 	require.Contains(t, err.Error(), "historical data branch fake primary key schema differs")
 }
 
+func TestDataBranchNeedsHistoricalProjection(t *testing.T) {
+	require.False(t, dataBranchNeedsHistoricalProjection([]int{0, 1}, 2),
+		"a lineage ancestor with the endpoint layout must keep its raw change rows")
+	require.True(t, dataBranchNeedsHistoricalProjection([]int{0, 2}, 3),
+		"a target-only column requires projection and endpoint hydration")
+	require.True(t, dataBranchNeedsHistoricalProjection([]int{1, 0}, 2),
+		"a reordered layout requires projection")
+}
+
 func TestOverlayDataBranchProbeResultHydratesTargetDefaults(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()

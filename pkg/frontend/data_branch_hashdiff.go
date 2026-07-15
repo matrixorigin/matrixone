@@ -2668,6 +2668,23 @@ func dataBranchSourceColToTargetIdx(
 	return mapping, nil
 }
 
+// dataBranchNeedsHistoricalProjection reports whether change rows from an
+// older physical table generation have a different data-column layout from
+// the endpoint. A different table ID alone can also mean an ordinary branch
+// ancestor with an identical schema; projecting and hydrating those rows would
+// collapse intermediate UPDATE versions to endpoint values.
+func dataBranchNeedsHistoricalProjection(sourceToTarget []int, targetColCount int) bool {
+	if len(sourceToTarget) != targetColCount {
+		return true
+	}
+	for sourceIdx, targetIdx := range sourceToTarget {
+		if sourceIdx != targetIdx {
+			return true
+		}
+	}
+	return false
+}
+
 func dataBranchTargetLayoutAttrs(tblStuff *tableStuff, hasCommitTS bool) []string {
 	attrs := make([]string, 0, len(tblStuff.def.colNames)+2)
 	attrs = append(attrs, catalog.Row_ID)
