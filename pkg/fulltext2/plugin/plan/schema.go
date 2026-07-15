@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -177,12 +178,17 @@ func (Hooks) BuildFullTextIndexDefs(
 	}, []*plan.TableDef{storeTbl, metaTbl}, nil
 }
 
-// buildFullText2Params records the parser name in algo_params (fulltext2 is
-// always-async by algo, so no async/version params).
+// buildFullText2Params records the parser name and max_index_capacity in
+// algo_params (fulltext2 is always-async by algo, so no async/version params).
 func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 	res := make(map[string]string)
-	if idx.IndexOption != nil && idx.IndexOption.ParserName != "" {
-		res["parser"] = strings.ToLower(idx.IndexOption.ParserName)
+	if idx.IndexOption != nil {
+		if idx.IndexOption.ParserName != "" {
+			res["parser"] = strings.ToLower(idx.IndexOption.ParserName)
+		}
+		if idx.IndexOption.MaxIndexCapacity > 0 {
+			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
+		}
 	}
 	if len(res) == 0 {
 		return "", nil

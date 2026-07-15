@@ -15,15 +15,17 @@
 package table_function
 
 import (
+	"fmt"
+
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
-	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -155,9 +157,15 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if k <= 0 {
 		k = int(idx.NumDocs())
 	}
-	results, serr := idx.SearchText([]byte(pattern), fulltext2Tokenizer(u.tblcfg.Parser), fulltext2.TfIdf, k)
-	if serr != nil {
-		return serr
+	// mode (argVecs[2], a query const): boolean → operator query, else NL phrase.
+	var mode int64
+	if mv := tf.ctr.argVecs[2]; mv != nil && mv.Length() > 0 {
+		mode = vector.GetFixedAtNoTypeCheck[int64](mv, 0)
+	}
+	algo := fulltext2ScoreAlgo(proc)
+	results, err := idx.SearchQuery([]byte(pattern), mode == int64(tree.FULLTEXT_BOOLEAN), u.tblcfg.Parser, algo, k)
+	if err != nil {
+		return err
 	}
 	u.keys = make([]any, len(results))
 	u.distances = make([]float64, len(results))
@@ -168,8 +176,18 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	return nil
 }
 
-// fulltext2Tokenizer picks the tokenizer for the index's parser. Step-4 supports
-// the dict-free SimpleTokenizer (default/ngram); gojieba wiring follows.
-func fulltext2Tokenizer(parser string) tokenizer.Tokenizer {
-	return tokenizer.NewSimpleTokenizer()
+// fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session
+// variable ft2_relevancy_algorithm, which defaults to BM25 (distinct from classic
+// fulltext's ft_relevancy_algorithm, default TF-IDF). Only an explicit
+// SET ft2_relevancy_algorithm='TF-IDF' drops to TF-IDF; on any resolve error the
+// BM25 default stands.
+func fulltext2ScoreAlgo(proc *process.Process) fulltext2.ScoreAlgo {
+	algo := fulltext2.BM25
+	val, err := proc.GetResolveVariableFunc()(fulltext2.Fulltext2RelevancyAlgo, true, false)
+	if err == nil && val != nil {
+		if fmt.Sprintf("%v", val) == fulltext2.Fulltext2RelevancyAlgo_tfidf {
+			algo = fulltext2.TfIdf
+		}
+	}
+	return algo
 }

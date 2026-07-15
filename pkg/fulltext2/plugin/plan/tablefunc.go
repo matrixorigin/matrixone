@@ -32,8 +32,51 @@ var fulltext2SearchColDefs = []*plan.ColDef{
 	{Name: "score", Typ: plan.Type{Id: int32(types.T_float64), Width: 8}},
 }
 
+// FullText2CreateFuncName is the build TVF: CROSS APPLY'd over the source table
+// at CREATE INDEX / REINDEX time, it tokenizes each row (datalink/json/parser
+// resolved in execution), builds capacity-bounded tag=0 base segments, and
+// persists them. Args: [param, TableConfig(JSON), pk, cols...]. Output: a single
+// discarded status row.
+const FullText2CreateFuncName = "fulltext2_create"
+
+var fulltext2CreateColDefs = []*plan.ColDef{
+	{Name: "status", Typ: plan.Type{Id: int32(types.T_int32), Width: 4}},
+}
+
 func init() {
 	planplugin.RegisterTableFunc(FullText2SearchFuncName, buildFullText2Search)
+	planplugin.RegisterTableFunc(FullText2CreateFuncName, buildFullText2Create)
+}
+
+// buildFullText2Create — arg list: [param, TableConfig(JSON), pk, cols...].
+func buildFullText2Create(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	if len(exprs) < 4 {
+		return 0, moerr.NewInvalidInput(pb.GetContext(), "fulltext2_create: invalid number of arguments (NARGS < 4)")
+	}
+	colDefs := planplugin.DeepCopyColDefList(fulltext2CreateColDefs)
+	params, err := getFullText2Params(pb, tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	exprs = exprs[1:]
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc: &plan.TableFunction{
+				Name:     FullText2CreateFuncName,
+				Param:    []byte(params),
+				IsSingle: true,
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{pb.GenNewBindTag()},
+		TblFuncExprList: exprs,
+		Children:        children,
+	}
+	return pb.AppendNode(node, ctx), nil
 }
 
 func getFullText2Params(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
@@ -43,11 +86,11 @@ func getFullText2Params(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, e
 	return "", moerr.NewNoConfig(pb.GetContext(), "first parameter must be string")
 }
 
-// buildFullText2Search — arg list: [param, TableConfig(JSON), pattern]. param is
-// stripped; the exec side (fulltext2_search.go) reads [cfg, pattern].
+// buildFullText2Search — arg list: [param, TableConfig(JSON), pattern, mode].
+// param is stripped; the exec side (fulltext2_search.go) reads [cfg, pattern, mode].
 func buildFullText2Search(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "fulltext2_search: invalid number of arguments (NARGS != 3)")
+	if len(exprs) != 4 {
+		return 0, moerr.NewInvalidInput(pb.GetContext(), "fulltext2_search: invalid number of arguments (NARGS != 4)")
 	}
 	colDefs := planplugin.DeepCopyColDefList(fulltext2SearchColDefs)
 	params, err := getFullText2Params(pb, tbl.Func)

@@ -28,6 +28,16 @@ const (
 	BM25                   // w·idf²·bm25Factor(tf, docLen, avgDocLen)
 )
 
+// fulltext2 has its OWN relevance session variable, distinct from classic
+// fulltext's ft_relevancy_algorithm, and defaults to BM25 (the better ranked-
+// retrieval default) rather than TF-IDF. Users opt into TF-IDF explicitly with
+// SET ft2_relevancy_algorithm='TF-IDF'.
+const (
+	Fulltext2RelevancyAlgo       = "ft2_relevancy_algorithm"
+	Fulltext2RelevancyAlgo_bm25  = "BM25"
+	Fulltext2RelevancyAlgo_tfidf = "TF-IDF"
+)
+
 const (
 	bm25K1 = 1.5
 	bm25B  = 0.75

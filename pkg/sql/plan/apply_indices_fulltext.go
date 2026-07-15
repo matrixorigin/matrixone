@@ -293,7 +293,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			}
 		} else if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
 			var berr error
-			tmpTableFunc, berr = builder.buildFulltext2SearchTableFunc(scanNode, idxdef, pattern, alias_name)
+			tmpTableFunc, berr = builder.buildFulltext2SearchTableFunc(scanNode, idxdef, pattern, mode, alias_name)
 			if berr != nil {
 				return -1, nil, nil, berr
 			}

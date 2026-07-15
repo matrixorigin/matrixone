@@ -43,7 +43,10 @@ type TableConfig struct {
 	MetadataTable string `json:"metadata"` // metadata (FullText2Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
 	Parser        string `json:"parser,omitempty"`
-	FromSource    bool   `json:"from_source,omitempty"`
+	// Capacity is max_index_capacity: the create build splits the tag=0 base into
+	// sub-indexes of at most Capacity docs each (0 => a single unbounded base).
+	Capacity   int64 `json:"capacity,omitempty"`
+	FromSource bool  `json:"from_source,omitempty"`
 }
 
 // SubIndexId is the index_id for the i-th tag=0 base sub-index of a build

@@ -16,17 +16,33 @@
 package compile
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
-	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+// parserFromParams extracts the "parser" field from an index's IndexAlgoParams
+// JSON (empty → default parser).
+func parserFromParams(params string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var p struct {
+		Parser string `json:"parser"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return ""
+	}
+	return p.Parser
+}
 
 var _ compileplugin.Hooks = Hooks{}
 
@@ -64,97 +80,82 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	return buildFromSource(ctx, storeDef, metaDef, origTable, db)
 }
 
-// buildFromSource reads (pk, indexed-col) from the source table, tokenizes each
-// row into a positional segment, and persists it as the tag=0 base.
+// DefaultMaxIndexCapacity caps each tag=0 sub-index's doc count when the
+// WITH max_index_capacity option is omitted.
+const DefaultMaxIndexCapacity = int64(1000000)
+
+// buildFromSource builds the index straight from the SOURCE table in one
+// statement: SELECT f.* FROM src CROSS APPLY fulltext2_create(params, cfg, pk,
+// cols…). The create TVF tokenizes each row in execution (datalink → plain text,
+// json → values, ngram/gojieba parser), Add's the tokens to a builder, and at
+// end() splits into capacity-bounded tag=0 bases and persists the chunk rows. No
+// segment assembly happens in this (compile) layer.
 func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string) error {
 	if len(storeDef.Parts) == 0 {
 		return moerr.NewInternalErrorNoCtx("fulltext2 index has no indexed column")
 	}
-	col := storeDef.Parts[0]
-	pkName := origTable.Pkey.PkeyColName
-	if len(origTable.Pkey.Names) == 1 {
-		pkName = origTable.Pkey.Names[0]
-	}
-	var pkType int32 = -1
-	for _, c := range origTable.Cols {
-		if c.Name == pkName {
-			pkType = c.Typ.Id
-			break
-		}
-	}
-	if pkType < 0 {
-		return moerr.NewInternalErrorNoCtx("fulltext2: primary key column not found")
-	}
-
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s`", pkName, col, db, origTable.Name)
-	res, err := ctx.RunSqlWithResult(sql)
+	capacity, err := resolveFulltext2Capacity(storeDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	defer res.Close()
-
-	var docs []fulltext2.Doc
-	for _, bat := range res.Batches {
-		if bat == nil {
-			continue
-		}
-		for i := 0; i < bat.RowCount(); i++ {
-			if bat.Vecs[1].IsNull(uint64(i)) {
-				continue // NULL text → nothing to index for this row
-			}
-			pk := extractPk(bat.Vecs[0], i, pkType)
-			if pk == nil {
-				return moerr.NewNotSupportedNoCtxf("fulltext2: unsupported primary key type %s", types.T(pkType).String())
-			}
-			text := append([]byte(nil), []byte(bat.Vecs[1].GetStringAt(i))...)
-			docs = append(docs, fulltext2.Doc{Pk: pk, Text: text})
-		}
-	}
-	if len(docs) == 0 {
-		return nil // empty table → no tag=0 base (index is CDC-only)
-	}
-
-	seg, err := fulltext2.BuildSegmentFromDocs(fulltext2.SubIndexId("base", 0), pkType, docs, tokenizer.NewSimpleTokenizer())
+	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity)
 	if err != nil {
 		return err
 	}
+	return ctx.RunSql(sql)
+}
+
+// resolveFulltext2Capacity reads max_index_capacity from the index's algo_params,
+// defaulting when the WITH option was omitted.
+func resolveFulltext2Capacity(algoParams string) (int64, error) {
+	if algoParams == "" {
+		return DefaultMaxIndexCapacity, nil // no WITH options
+	}
+	flat, err := catalog.IndexParamsStringToMap(algoParams)
+	if err != nil {
+		return 0, err
+	}
+	if v, ok := flat[catalog.IndexAlgoParamMaxIndexCapacity]; ok && v != "" {
+		n, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			return 0, perr
+		}
+		if n > 0 {
+			return n, nil
+		}
+	}
+	return DefaultMaxIndexCapacity, nil
+}
+
+// genFulltext2BuildFromSourceSQL emits the CROSS APPLY fulltext2_create build SQL.
+func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity int64) (string, error) {
+	const srcAlias = "src"
 	cfg := fulltext2.TableConfig{
 		DbName:        db,
 		SrcTable:      origTable.Name,
 		IndexTable:    storeDef.IndexTableName,
 		MetadataTable: metaDef.IndexTableName,
-		PKey:          pkName,
+		PKey:          origTable.Pkey.PkeyColName,
+		Parser:        parserFromParams(storeDef.IndexAlgoParams),
+		Capacity:      capacity,
+		FromSource:    true,
 	}
-	sqls, cleanup, err := seg.ToInsertSqls(cfg, 0, 0 /* tag=0 base */)
+	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer cleanup()
-	for _, s := range sqls {
-		if err := ctx.RunSql(s); err != nil {
-			return err
-		}
+	cols := make([]string, 0, len(storeDef.Parts))
+	for _, p := range storeDef.Parts {
+		cols = append(cols, sqlquote.QualifiedIdent(srcAlias, p))
 	}
-	return nil
-}
-
-// extractPk reads the source pk value into the Go type the segment codec expects.
-func extractPk(vec *vector.Vector, i int, pkType int32) any {
-	switch types.T(pkType) {
-	case types.T_int64:
-		return vector.GetFixedAtNoTypeCheck[int64](vec, i)
-	case types.T_int32:
-		return vector.GetFixedAtNoTypeCheck[int32](vec, i)
-	case types.T_uint64:
-		return vector.GetFixedAtNoTypeCheck[uint64](vec, i)
-	case types.T_uint32:
-		return vector.GetFixedAtNoTypeCheck[uint32](vec, i)
-	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
-		return append([]byte(nil), []byte(vec.GetStringAt(i))...)
-	default:
-		return nil
-	}
+	sql := fmt.Sprintf("SELECT f.* FROM %s AS %s CROSS APPLY fulltext2_create(%s, %s, %s, %s) AS f",
+		sqlquote.QualifiedIdent(db, origTable.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(storeDef.IndexAlgoParams),
+		sqlquote.String(string(cfgbytes)),
+		sqlquote.QualifiedIdent(srcAlias, origTable.Pkey.PkeyColName),
+		strings.Join(cols, ", "))
+	return sql, nil
 }
 
 // HandleReindex — rebuild lands with the maintenance step.

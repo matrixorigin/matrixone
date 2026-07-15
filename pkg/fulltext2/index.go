@@ -158,6 +158,61 @@ func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 	return idx.SearchPhrase(terms, algo, k), nil
 }
 
+// SearchBoolean runs a parsed boolean-mode query across the index: each segment
+// is searched, only the LIVE copy of a pk contributes, and the merged matches
+// are returned as the global top-k (score desc, ties by ascending pk key).
+//
+// Scoring uses each segment's local stats. For the common single-base index that
+// is exact (the one segment's stats ARE the global stats); across many segments
+// the per-clause global df is an approximation — a cross-segment global-stats
+// boolean pass is a follow-up (as for the delete-frame folding).
+func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
+	if k <= 0 || idx.globalN == 0 {
+		return nil, nil
+	}
+	matched := make(map[string]Result)
+	for si, seg := range idx.segments {
+		res, err := seg.SearchBoolean(q, algo, k)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range res {
+			key := keyOf(r.Pk)
+			if loc, ok := idx.liveLoc[key]; ok && loc.si == si {
+				matched[key] = r
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(matched))
+	for key := range matched {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	results := make([]Result, len(keys))
+	for i, key := range keys {
+		results[i] = matched[key]
+	}
+	sort.SliceStable(results, func(a, b int) bool { return results[a].Score > results[b].Score })
+	if len(results) > k {
+		results = results[:k]
+	}
+	return results, nil
+}
+
+// SearchBooleanText tokenizes+parses query in boolean mode with tok, then
+// evaluates it across the index — the convenience entry mirroring
+// MATCH(col) AGAINST('query' IN BOOLEAN MODE) with a fixed tokenizer.
+func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int) ([]Result, error) {
+	q, err := ParseBoolean(query, tok)
+	if err != nil {
+		return nil, err
+	}
+	return idx.SearchBoolean(q, algo, k)
+}
+
 // NumDocs returns the number of live documents in the index.
 func (idx *Index) NumDocs() int64 { return idx.globalN }
 

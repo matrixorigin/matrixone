@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -3754,6 +3755,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
 		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
+	},
+	"ft2_relevancy_algorithm": {
+		Name:              fulltext2.Fulltext2RelevancyAlgo,
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(fulltext2.Fulltext2RelevancyAlgo),
+		Default:           fulltext2.Fulltext2RelevancyAlgo_bm25,
 	},
 	"experimental_hnsw_index": {
 		Name:              "experimental_hnsw_index",

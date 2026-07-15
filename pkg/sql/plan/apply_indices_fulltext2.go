@@ -23,6 +23,7 @@ package plan
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,9 +35,9 @@ const fulltext2_search_func_name = "fulltext2_search"
 
 // buildFulltext2SearchTableFunc builds the fulltext2_search TVF AST for a MATCH
 // resolved to a fulltext2 index. Args: [param="", cfg{db,index,metadata} JSON,
-// pattern]. The TVF loads the index segments, runs the WAND positional query, and
-// emits (doc_id, score).
-func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, idxdef *plan.IndexDef, pattern string, aliasName string) (*tree.AliasedTableExpr, error) {
+// pattern, mode]. The TVF loads the index segments, runs the WAND positional
+// query (NL phrase or boolean per mode), and emits (doc_id, score).
+func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, idxdef *plan.IndexDef, pattern string, mode int64, aliasName string) (*tree.AliasedTableExpr, error) {
 	storeTbl, metaTbl, ok := builder.findFulltext2IndexTables(scanNode, idxdef)
 	if !ok {
 		return nil, moerr.NewInternalErrorf(builder.GetContext(),
@@ -44,11 +45,15 @@ func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, 
 			idxdef.IndexName)
 	}
 
-	cfgBytes, err := json.Marshal(map[string]string{
+	cfgMap := map[string]string{
 		"db":       scanNode.ObjRef.SchemaName,
 		"index":    storeTbl,
 		"metadata": metaTbl,
-	})
+	}
+	if parser := fulltext2ParserFromParams(idxdef.IndexAlgoParams); parser != "" {
+		cfgMap["parser"] = parser
+	}
+	cfgBytes, err := json.Marshal(cfgMap)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +64,7 @@ func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, 
 	exprs = append(exprs, tree.NewNumVal[string]("", "", false, tree.P_char))
 	exprs = append(exprs, tree.NewNumVal[string](cfg, cfg, false, tree.P_char))
 	exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
 	name := tree.NewUnresolvedName(ftFunc)
 
 	return &tree.AliasedTableExpr{
@@ -72,6 +78,21 @@ func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, 
 		},
 		As: tree.AliasClause{Alias: tree.Identifier(aliasName)},
 	}, nil
+}
+
+// fulltext2ParserFromParams extracts the "parser" field from an index's
+// IndexAlgoParams JSON (empty → default parser at the TVF).
+func fulltext2ParserFromParams(params string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var p struct {
+		Parser string `json:"parser"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return ""
+	}
+	return p.Parser
 }
 
 // findFulltext2IndexTables resolves the storage + metadata hidden tables of a
