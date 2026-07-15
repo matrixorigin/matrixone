@@ -205,6 +205,30 @@ func (immediateTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
 func (immediateTimestampWaiter) Close()                                   {}
 func (immediateTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
 
+type snapshotTimestampWaiter struct {
+	called         int
+	got            timestamp.Timestamp
+	err            error
+	waitForContext bool
+}
+
+func (w *snapshotTimestampWaiter) GetTimestamp(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	w.called++
+	w.got = ts
+	if w.waitForContext {
+		<-ctx.Done()
+		return timestamp.Timestamp{}, ctx.Err()
+	}
+	return ts, w.err
+}
+
+func (*snapshotTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*snapshotTimestampWaiter) Close()                                   {}
+func (*snapshotTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
@@ -215,6 +239,109 @@ func TestAdjustClient(t *testing.T) {
 	for i := range c.activeTxns {
 		assert.NotNil(t, c.activeTxns[i].txns)
 	}
+}
+
+func TestNewWithSnapshotWaitsForLocalLogtail(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+
+	target := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	waitErr := errors.New("wait logtail failed")
+
+	tests := []struct {
+		name       string
+		snapshotTS timestamp.Timestamp
+		waiter     *snapshotTimestampWaiter
+		wantErr    error
+		wantCalls  int
+	}{
+		{
+			name:       "waits through snapshot timestamp",
+			snapshotTS: target,
+			waiter:     &snapshotTimestampWaiter{},
+			wantCalls:  1,
+		},
+		{
+			name:       "propagates wait failure",
+			snapshotTS: target,
+			waiter:     &snapshotTimestampWaiter{err: waitErr},
+			wantErr:    waitErr,
+			wantCalls:  1,
+		},
+		{
+			name:      "skips empty snapshot timestamp",
+			waiter:    &snapshotTimestampWaiter{err: waitErr},
+			wantCalls: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewTxnClient(
+				"",
+				newTestTxnSender(),
+				WithTimestampWaiter(tt.waiter),
+			)
+			op, err := c.NewWithSnapshot(context.Background(), txn.CNTxnSnapshot{
+				Txn: txn.TxnMeta{
+					ID:         []byte("remote-txn"),
+					SnapshotTS: tt.snapshotTS,
+				},
+			})
+
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				require.Nil(t, op)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, op)
+			}
+			require.Equal(t, tt.wantCalls, tt.waiter.called)
+			if tt.wantCalls > 0 {
+				require.Equal(t, tt.snapshotTS.Prev(), tt.waiter.got)
+			}
+		})
+	}
+}
+
+func TestNewWithSnapshotWithoutTimestampWaiter(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+
+	c := NewTxnClient("", newTestTxnSender())
+	op, err := c.NewWithSnapshot(context.Background(), txn.CNTxnSnapshot{
+		Txn: txn.TxnMeta{
+			ID:         []byte("remote-txn"),
+			SnapshotTS: timestamp.Timestamp{PhysicalTime: 100},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, op)
+}
+
+func TestNewWithSnapshotPropagatesContextCancellation(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+
+	waiter := &snapshotTimestampWaiter{waitForContext: true}
+	c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	op, err := c.NewWithSnapshot(ctx, txn.CNTxnSnapshot{
+		Txn: txn.TxnMeta{
+			ID:         []byte("remote-txn"),
+			SnapshotTS: timestamp.Timestamp{PhysicalTime: 100},
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, op)
+	require.Equal(t, 1, waiter.called)
 }
 
 func TestZeroValueClientShardedMaps(t *testing.T) {
@@ -2356,7 +2483,7 @@ func TestClosedClientRejectsNewAndSnapshot(t *testing.T) {
 
 	_, err := c.New(context.Background(), timestamp.Timestamp{})
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
-	_, err = c.NewWithSnapshot(txn.CNTxnSnapshot{})
+	_, err = c.NewWithSnapshot(context.Background(), txn.CNTxnSnapshot{})
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
 }
 

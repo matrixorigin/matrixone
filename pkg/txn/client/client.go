@@ -756,10 +756,21 @@ func (client *txnClient) abortCreatedTxn(
 }
 
 func (client *txnClient) NewWithSnapshot(
+	ctx context.Context,
 	snapshot txn.CNTxnSnapshot,
 ) (TxnOperator, error) {
 	if client.isClosed() {
 		return nil, moerr.NewClientClosedNoCtx()
+	}
+	// A snapshot transferred from a coordinator can be ahead of this CN's
+	// locally applied logtail. Rebuilding the operator without this barrier can
+	// expose a partially updated catalog or partition state to remote execution.
+	// SnapshotTS itself is exclusive, so all logtails through SnapshotTS.Prev()
+	// must be applied locally before the mirror transaction can execute.
+	if !snapshot.Txn.SnapshotTS.IsEmpty() {
+		if _, err := client.WaitLogTailAppliedAt(ctx, snapshot.Txn.SnapshotTS.Prev()); err != nil {
+			return nil, err
+		}
 	}
 	op := newTxnOperatorWithSnapshot(
 		client.logger,
