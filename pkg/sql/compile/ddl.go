@@ -737,6 +737,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				hasUpdateConstraints = true
 				var notDroppedIndex []*plan.IndexDef
 				var newIndexes []uint64
+				if err = DrainIndexCdcTaskConsumer(c, oTableDef, constraintName); err != nil {
+					return err
+				}
 				for idx, indexdef := range oTableDef.Indexes {
 					if indexdef.IndexName == constraintName {
 						dropIndexMap[indexdef.IndexName] = true
@@ -2512,6 +2515,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	err = DrainIndexCdcTaskConsumer(c, oldTableDef, qry.IndexName)
+	if err != nil {
+		return err
+	}
 	err = r.UpdateConstraint(c.proc.Ctx, newCt)
 	if err != nil {
 		return err
@@ -2582,7 +2589,12 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
 				if index.IndexName == dropName && len(index.IndexTableName) > 0 {
-					dropIndexTableNames = append(dropIndexTableNames, index.IndexTableName)
+					if catalog.ToLower(index.IndexAlgo) == "hnsw" &&
+						catalog.ToLower(index.IndexAlgoTableType) == catalog.Hnsw_TblType_Storage {
+						dropIndexTableNames = append([]string{index.IndexTableName}, dropIndexTableNames...)
+					} else {
+						dropIndexTableNames = append(dropIndexTableNames, index.IndexTableName)
+					}
 				}
 				return index.IndexName == dropName
 			}

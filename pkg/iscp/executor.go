@@ -182,6 +182,10 @@ func NewISCPTaskExecutor(
 		tableMu:     sync.RWMutex{},
 		option:      option,
 		mp:          mp,
+		fencedJobs:  make(map[JobRuntimeKey]struct{}),
+		runningConsumers: make(
+			map[JobRuntimeKey]map[uint64]*RunningJobConsumer,
+		),
 	}
 	return exec, nil
 }
@@ -266,10 +270,21 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 		"ISCP-Task Start",
 	)
 	ctx, cancel := context.WithCancel(context.Background())
-	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
+	worker := NewWorker(exec, exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
 	exec.worker = worker
 	exec.ctx = ctx
 	exec.cancel = cancel
+	initialized := false
+	defer func() {
+		if initialized {
+			return
+		}
+		worker.Stop()
+		cancel()
+		exec.running = false
+		exec.ctx, exec.cancel = nil, nil
+		exec.worker = nil
+	}()
 	err := retry(
 		ctx,
 		func() error {
@@ -295,6 +310,8 @@ func (exec *ISCPTaskExecutor) initStateLocked() error {
 		return err
 	}
 	exec.wg.Add(1)
+	RegisterExecutorRuntime(exec.cnUUID, exec)
+	initialized = true
 	return nil
 }
 
@@ -311,6 +328,7 @@ func (exec *ISCPTaskExecutor) Stop() {
 	exec.worker.Stop()
 	exec.cancel()
 	exec.wg.Wait()
+	UnregisterExecutorRuntime(exec.cnUUID, exec)
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
 }
@@ -473,6 +491,12 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					if err != nil {
 						onErrorFn(err)
 						continue
+					}
+					if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterSubmit) {
+						logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelAfterSubmit)
+					}
+					if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-submit" {
+						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
 					if !ok2 {

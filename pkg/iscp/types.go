@@ -157,6 +157,26 @@ type ISCPTaskExecutor struct {
 
 	running   bool
 	runningMu sync.Mutex
+
+	runtimeMu        sync.Mutex
+	fencedJobs       map[JobRuntimeKey]struct{}
+	runningConsumers map[JobRuntimeKey]map[uint64]*RunningJobConsumer
+}
+
+type JobRuntimeKey struct {
+	AccountID uint32
+	TableID   uint64
+	JobName   string
+}
+
+type RunningJobConsumer struct {
+	key    JobRuntimeKey
+	jobID  uint64
+	iterID uint64
+
+	cancel          context.CancelFunc
+	cancelRetriever func(error)
+	done            chan struct{}
 }
 
 // Intra-System Change Propagation Job Entry

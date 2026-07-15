@@ -115,11 +115,19 @@ func (fm *faultMap) run() {
 			}
 		case REMOVE:
 			if e.name == "all" {
+				for _, v := range fm.faultPoints {
+					if v.action == WAIT && v.cond != nil {
+						v.cond.Broadcast()
+					}
+				}
 				fm.faultPoints = make(map[string]*faultEntry)
 				fm.chOut <- e
 				continue
 			}
 			if v, ok := fm.faultPoints[e.name]; ok {
+				if v.action == WAIT && v.cond != nil {
+					v.cond.Broadcast()
+				}
 				delete(fm.faultPoints, e.name)
 				fm.chOut <- v
 			} else {
@@ -189,6 +197,38 @@ func (e *faultEntry) do() (int64, string) {
 	case ECHO:
 		return e.iarg, e.sarg
 	}
+	return 0, ""
+}
+
+func (e *faultEntry) doWithContext(ctx context.Context) (int64, string) {
+	if e.action == SLEEP {
+		timer := time.NewTimer(time.Duration(e.iarg) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+		}
+		return 0, ""
+	}
+	if e.action != WAIT {
+		return e.do()
+	}
+	e.mutex.Lock()
+	e.nWaiters += 1
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			e.mutex.Lock()
+			e.cond.Broadcast()
+			e.mutex.Unlock()
+		case <-done:
+		}
+	}()
+	e.cond.Wait()
+	e.nWaiters -= 1
+	close(done)
+	e.mutex.Unlock()
 	return 0, ""
 }
 
@@ -276,7 +316,19 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return TriggerFaultInDomain(DomainDefault, name)
 }
 
+func TriggerFaultWithContext(ctx context.Context, name string) (iret int64, sret string, exist bool) {
+	return TriggerFaultInDomainWithContext(ctx, DomainDefault, name)
+}
+
 func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, exist bool) {
+	return triggerFaultInDomain(context.Background(), domain, name, false)
+}
+
+func TriggerFaultInDomainWithContext(ctx context.Context, domain Domain, name string) (iret int64, sret string, exist bool) {
+	return triggerFaultInDomain(ctx, domain, name, true)
+}
+
+func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCtx bool) (iret int64, sret string, exist bool) {
 	fm := enabled[domain].Load()
 	if fm == nil {
 		return
@@ -296,7 +348,11 @@ func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, 
 		return
 	}
 	exist = true
-	iret, sret = out.do()
+	if useCtx {
+		iret, sret = out.doWithContext(ctx)
+	} else {
+		iret, sret = out.do()
+	}
 	return
 }
 

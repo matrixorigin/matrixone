@@ -29,11 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
@@ -419,6 +421,38 @@ func TestIndexConsumerSendSqlReturnsContextErrorWhenBlocked(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestIndexConsumerSendSqlCtxFaultReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_ISCPCancelLongBeforeSend, ":::", "wait", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, "get-send-waiters", ":::", "getwaiters", 0, objectio.FJ_ISCPCancelLongBeforeSend, false))
+
+	consumer := &IndexConsumer{
+		info:         newTestIvfConsumerInfo(),
+		sqlBufSendCh: make(chan []byte),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := fault.TriggerFault("get-send-waiters")
+		return ok && cnt == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendSql stayed blocked in ctx-aware fault wait after context cancellation")
+	}
+}
+
 func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -626,7 +660,7 @@ func TestIndexConsumerTailFinalizationUsesParentContext(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestDataRetrieverSetNextBatchReleasesRejectedData(t *testing.T) {
+func TestDataRetrieverSetNextBatchRejectsCanceledRetriever(t *testing.T) {
 	ctx := context.Background()
 	status := &JobStatus{}
 	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, status, 0, ISCPDataType_Snapshot)
@@ -639,8 +673,35 @@ func TestDataRetrieverSetNextBatchReleasesRejectedData(t *testing.T) {
 	}
 	data.Set(1)
 
-	retriever.SetNextBatch(data)
+	accepted := retriever.SetNextBatch(data)
+	require.False(t, accepted)
+	data.Done()
 	require.Nil(t, data.insertBatch)
+}
+
+func TestDataRetrieverSetNextBatchDoesNotQueueAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	status := &JobStatus{}
+	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, status, 0, ISCPDataType_Snapshot)
+	cancel()
+
+	data := &ISCPData{
+		insertBatch: &AtomicBatch{
+			Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+		},
+	}
+	data.Set(1)
+
+	accepted := retriever.SetNextBatch(data)
+
+	require.False(t, accepted)
+	data.Done()
+	require.Nil(t, data.insertBatch)
+	select {
+	case queued := <-retriever.insertDataCh:
+		require.Nil(t, queued)
+	default:
+	}
 }
 
 func TestIndexConsumerTerminalFlushErrorDoesNotCloseChannel(t *testing.T) {

@@ -144,6 +144,7 @@ func runIterationConsumersWithStatusesForTest(
 		defer packer.Close()
 		runISCPTaskIterationConsumers(
 			ctx,
+			nil,
 			iterCtx,
 			changes,
 			consumers,

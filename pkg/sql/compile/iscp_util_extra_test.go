@@ -318,6 +318,60 @@ func TestCoverage_DropIndexCdcTask_InvalidIndex(t *testing.T) {
 	require.Nil(t, err)
 }
 
+func TestDrainIndexCdcTaskConsumerFencesRuntimeJob(t *testing.T) {
+	exec := &iscp.ISCPTaskExecutor{}
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return exec, true
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	err := DrainIndexCdcTaskConsumer(c, tbldef, "idx1")
+
+	require.NoError(t, err)
+	require.True(t, exec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1")))
+}
+
+func TestDrainIndexCdcTaskConsumerNoExecutorIsNoop(t *testing.T) {
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "idx1"))
+}
+
 func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {
 	dropCount := 0
 	iscpUnregisterJobFunc = func(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {

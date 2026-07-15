@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -180,6 +181,99 @@ func TestWait(t *testing.T) {
 	require.Equal(t, int64(0), cnt)
 
 	Disable()
+}
+
+func TestRemoveWaitFaultPointNotifiesWaiters(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	require.NoError(t, AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w", false))
+
+	done := make(chan struct{})
+	go func() {
+		TriggerFault("w")
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := TriggerFault("gw")
+		return ok && cnt == 1
+	}, time.Second, 10*time.Millisecond)
+
+	removed, err := RemoveFaultPoint(ctx, "w")
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestTriggerWaitFaultWithContextReturnsOnCancel(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	require.NoError(t, AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w", false))
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		TriggerFaultWithContext(waitCtx, "w")
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := TriggerFault("gw")
+		return ok && cnt == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestTriggerSleepFaultWithContextReturnsOnCancel(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "s", ":::", "sleep", 30, "", false))
+
+	sleepCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		TriggerFaultWithContext(sleepCtx, "s")
+		close(done)
+	}()
+
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Less(t, time.Since(start), 5*time.Second)
 }
 
 func Test_panic(t *testing.T) {

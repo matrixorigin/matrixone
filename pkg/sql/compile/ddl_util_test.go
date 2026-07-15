@@ -20,14 +20,44 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMakeNewDropConstraintDropsHnswStorageBeforeMetadata(t *testing.T) {
+	oldCt := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.IndexDef{
+				Indexes: []*plan.IndexDef{
+					{
+						IndexName:          "idx01",
+						IndexTableName:     "__meta",
+						IndexAlgo:          "hnsw",
+						IndexAlgoTableType: catalog.Hnsw_TblType_Metadata,
+					},
+					{
+						IndexName:          "idx01",
+						IndexTableName:     "__storage",
+						IndexAlgo:          "hnsw",
+						IndexAlgoTableType: catalog.Hnsw_TblType_Storage,
+					},
+				},
+			},
+		},
+	}
+
+	_, dropIndexTableNames, err := makeNewDropConstraint(oldCt, "idx01")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"__storage", "__meta"}, dropIndexTableNames)
+}
 
 // TestAlterIndexVisibleEscaping is a regression for the ALTER TABLE ... ALTER
 // INDEX ... VISIBLE/INVISIBLE catalog write (ddl.go, updateMoIndexesVisibleFormat).
