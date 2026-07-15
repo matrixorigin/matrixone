@@ -189,8 +189,8 @@ func (tbl *txnTable) validateTableDefVersion() error {
 func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
 	if tbl.autoIncrementAlter {
 		startTS := tbl.store.txn.GetStartTS()
-		latestDML := tbl.entry.GetLatestKnownDMLPrepare()
-		if latestDML.GT(&startTS) {
+		prepareTS := tbl.store.txn.GetPrepareTS()
+		if tbl.entry.ShouldRetryAutoIncrementAlter(startTS, prepareTS) {
 			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
 		return nil

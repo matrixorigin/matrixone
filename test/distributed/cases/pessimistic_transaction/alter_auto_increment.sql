@@ -24,4 +24,27 @@ select count(*) = 2 as rollback_removed_row,
        max(id) > 10 and max(id) < 50000 as reset_did_not_leak
 from ai_rollback;
 
+-- Start the transaction before a concurrent explicit-id DML commits. In
+-- pessimistic RC mode the ALTER statement refreshes its snapshot, so its real
+-- MAX path must see 5000 and must not lower the allocator to the requested
+-- 1000. The deterministic RC prepare-retry interleaving is covered by the
+-- EnginePack barrier test, where the ALTER MAX snapshot can be held open.
+create table ai_dml_first_retry(id bigint primary key auto_increment, v int);
+insert into ai_dml_first_retry values (1, 1);
+begin;
+select max(id) as max_before_concurrent_dml from ai_dml_first_retry;
+-- @session:id=1{
+use ai_alter_txn_pessimistic;
+insert into ai_dml_first_retry values (5000, 2);
+-- @session}
+alter table ai_dml_first_retry auto_increment = 1000;
+commit;
+
+-- Repeating the real ALTER is idempotent and again reconciles requested
+-- AUTO_INCREMENT=1000 with MAX(id)=5000. Omitting id verifies the real
+-- allocator observes the reconciled value.
+alter table ai_dml_first_retry auto_increment = 1000;
+insert into ai_dml_first_retry(v) values (3);
+select id, v from ai_dml_first_retry order by id;
+
 drop database ai_alter_txn_pessimistic;

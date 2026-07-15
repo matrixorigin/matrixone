@@ -6856,6 +6856,94 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 	})
 }
 
+func TestPreparedDMLReplayRestoresAutoIncrementFence(t *testing.T) {
+	for _, resolution := range []string{"commit", "rollback"} {
+		t.Run(resolution, func(t *testing.T) {
+			ctx := context.Background()
+			wOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+			wTae := testutil.NewTestEngine(ctx, ModuleName, t, wOpts)
+
+			schema := catalog.MockSchemaAll(3, 1)
+			schema.Version = 6
+			testutil.CreateRelation(t, wTae.DB, testutil.DefaultTestDB, schema, true)
+			initTxn, initRel := testutil.GetDefaultRelation(t, wTae.DB, schema.Name)
+			require.NoError(t, initRel.AlterTable(ctx,
+				api.NewUpdateAutoIncrementReq(0, initRel.ID(), 10)))
+			require.NoError(t, initTxn.Commit(ctx))
+
+			dmlTxn, dmlRel := testutil.GetDefaultRelation(t, wTae.DB, schema.Name)
+			require.NoError(t, dmlRel.(tableDefVersionSetter).SetTableDefVersion(7))
+			bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 5000)
+			defer bat.Close()
+			require.NoError(t, dmlRel.Append(ctx, bat))
+			dbID, tableID := dmlRel.GetMeta().(*catalog.TableEntry).GetDB().ID, dmlRel.ID()
+			require.NoError(t, dmlTxn.SetParticipants([]uint64{1, 2}))
+			_, err := dmlTxn.Prepare(ctx)
+			require.NoError(t, err)
+			txnID := append([]byte(nil), dmlTxn.GetCtx()...)
+
+			rOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(wOpts.WalClientFactory))
+			// Open a second write-mode engine over the durable WAL. This models a
+			// crashed process being replaced without gracefully closing the writer,
+			// while still allowing the recovered state to accept real transactions.
+			rTae := testutil.NewTestEngine(ctx, ModuleName, t, rOpts)
+			defer func() {
+				rTae.Close()
+				// The writer models the crashed process. Remove its in-memory copy so
+				// test shutdown cannot append a duplicate (or opposite) decision to
+				// the shared WAL after the recovered transaction has resolved.
+				dmlTxn.(interface{ DoneWithErr(error, bool) }).DoneWithErr(
+					nil, resolution == "rollback")
+				require.NoError(t, wTae.TxnMgr.DeleteTxn(dmlTxn.GetID()))
+				wTae.Close()
+			}()
+
+			var recovered txnif.AsyncTxn
+			testutils.WaitExpect(5000, func() bool {
+				recovered, err = rTae.DB.GetTxnByID(txnID)
+				return err == nil && recovered.GetTxnState(false) == txnif.TxnStatePrepared
+			})
+			dbEntry, err := rTae.Catalog.GetDatabaseByID(dbID)
+			require.NoError(t, err)
+			tableEntry, err := dbEntry.GetTableEntryByID(tableID)
+			require.NoError(t, err)
+
+			// Stage a real AUTO_INCREMENT ALTER from a post-replay snapshot before
+			// the recovered transaction resolves. This is the old MAX snapshot
+			// whose TN prepare must still retry after the active count is cleared.
+			alterTxn, alterRel := testutil.GetDefaultRelation(t, rTae.DB, schema.Name)
+			require.NoError(t, alterRel.AlterTable(ctx,
+				api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 999)))
+			oldStart := alterTxn.GetStartTS()
+
+			if resolution == "commit" {
+				commitTS := recovered.GetPrepareTS()
+				recovered.SetCommitTS(commitTS.Next())
+				require.NoError(t, recovered.Commit(ctx))
+			} else {
+				require.NoError(t, recovered.Rollback(ctx))
+			}
+
+			err = alterTxn.Commit(ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+			// The real ALTER consumed pending resolution into its prepareTS. A
+			// second already-started ALTER remains fenced by that watermark.
+			barrier := alterTxn.GetPrepareTS()
+			require.True(t, tableEntry.ShouldRetryAutoIncrementAlter(oldStart, barrier.Next()))
+
+			resolvedOffset := uint64(999)
+			if resolution == "commit" {
+				resolvedOffset = 5000
+			}
+			retryTxn, retryRel := testutil.GetDefaultRelation(t, rTae.DB, schema.Name)
+			require.NoError(t, retryRel.AlterTable(ctx,
+				api.NewUpdateAutoIncrementReq(0, retryRel.ID(), resolvedOffset)))
+			require.NoError(t, retryTxn.Commit(ctx))
+		})
+	}
+}
+
 func TestAlterColumnAndFreeze(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

@@ -41,6 +41,45 @@ func TestTableObjectStats(t *testing.T) {
 	require.Equal(t, "TOMBSTONES\n\n000000000000_0 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQAAAAAAAAAAA==\n", detail.String())
 }
 
+func TestReplayedPreparedDMLFenceLifecycle(t *testing.T) {
+	table := MockTableEntryWithDB(nil, 1)
+	other := MockTableEntryWithDB(nil, 2)
+	oldStart := types.BuildTS(10, 0)
+
+	// Registration is idempotent per transaction and scoped per table.
+	table.RegisterReplayedPreparedDML("txn-1")
+	table.RegisterReplayedPreparedDML("txn-1")
+	table.RegisterReplayedPreparedDML("txn-2")
+	require.False(t, other.ShouldRetryAutoIncrementAlter(
+		oldStart, types.BuildTS(19, 0)))
+	other.RegisterReplayedPreparedDML("other")
+	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(20, 0)))
+	require.True(t, other.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(20, 1)))
+
+	// Resolving one transaction cannot release the other blocker. Duplicate
+	// resolution is harmless and cannot create another pending generation.
+	table.ResolveReplayedPreparedDML("txn-1")
+	table.ResolveReplayedPreparedDML("txn-1")
+	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(21, 0)))
+
+	// This is the critical old-MAX interleaving: ALTER has an old snapshot,
+	// the final recovered transaction resolves, and only then ALTER prepares.
+	// The pending decision is consumed into the ordinary watermark and retries.
+	table.ResolveReplayedPreparedDML("txn-2")
+	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(22, 0)))
+
+	// A second already-started ALTER is rejected by the published watermark,
+	// while a causally fresh retry can proceed. Unknown replayed writes use the
+	// same bounded lifecycle and therefore cannot leave a permanent blocker.
+	require.True(t, table.ShouldRetryAutoIncrementAlter(
+		types.BuildTS(11, 0), types.BuildTS(23, 0)))
+	require.False(t, table.ShouldRetryAutoIncrementAlter(
+		types.BuildTS(22, 0), types.BuildTS(24, 0)))
+	table.ResolveReplayedPreparedDML("missing")
+	require.False(t, table.ShouldRetryAutoIncrementAlter(
+		types.BuildTS(22, 0), types.BuildTS(25, 0)))
+}
+
 func TestObjectList(t *testing.T) {
 	ll := NewObjectList(false)
 	nobjid := objectio.NewObjectid()

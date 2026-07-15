@@ -32,10 +32,12 @@ var ErrDebugReplay = moerr.NewInternalErrorNoCtx("debug")
 
 type replayTxnStore struct {
 	txnbase.NoopTxnStore
-	Cmd      *txnbase.TxnCmd
-	Observer wal.ReplayObserver
-	catalog  *catalog.Catalog
-	ctx      context.Context
+	Cmd            *txnbase.TxnCmd
+	Observer       wal.ReplayObserver
+	catalog        *catalog.Catalog
+	ctx            context.Context
+	preparedTables map[uint64]*catalog.TableEntry
+	preparedTxnID  string
 }
 
 func MakeReplayTxn(
@@ -79,17 +81,53 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 		command.SetReplayTxn(txn)
 		store.prepareCmd(command)
 	}
+	if txn.Is2PC() {
+		store.registerPreparedDMLTables(txn)
+	}
 	return
 }
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
+	store.resolvePreparedDMLTables()
 	return
 }
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyRollback()
+	store.resolvePreparedDMLTables()
 	return
+}
+
+func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
+	// TxnMemo's dirty tree is serialized in TxnCtx and covers every user-table
+	// data mutation shape (append, update/delete, persisted object, and future
+	// commands) without coupling recovery safety to individual WAL commands.
+	dirty := txn.GetMemo().GetDirty()
+	if dirty == nil || dirty.IsEmpty() {
+		return
+	}
+	store.preparedTxnID = txn.GetID()
+	store.preparedTables = make(map[uint64]*catalog.TableEntry, dirty.TableCount())
+	for _, record := range dirty.Tables {
+		db, err := store.catalog.GetDatabaseByID(record.DbID)
+		if err != nil {
+			panic(err)
+		}
+		table, err := db.GetTableEntryByID(record.ID)
+		if err != nil {
+			panic(err)
+		}
+		table.RegisterReplayedPreparedDML(store.preparedTxnID)
+		store.preparedTables[record.ID] = table
+	}
+}
+
+func (store *replayTxnStore) resolvePreparedDMLTables() {
+	for _, table := range store.preparedTables {
+		table.ResolveReplayedPreparedDML(store.preparedTxnID)
+	}
+	store.preparedTables = nil
 }
 
 func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {

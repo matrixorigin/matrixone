@@ -24,4 +24,27 @@ select count(*) = 2 as rollback_removed_row,
        max(id) > 10 and max(id) < 50000 as reset_did_not_leak
 from ai_rollback;
 
+-- The ALTER transaction starts before an explicit-id DML commits. Its first
+-- AUTO_INCREMENT attempt must fail optimistic validation and be retried from a
+-- fresh snapshot, so MAX(id) is reconciled through the SQL ALTER path instead
+-- of by injecting an incrservice offset in a unit test. The focused EnginePack
+-- barrier test asserts the more specific TN definition-changed retry code.
+create table ai_dml_first_retry(id bigint primary key auto_increment, v int);
+insert into ai_dml_first_retry values (1, 1);
+begin;
+select max(id) as max_before_concurrent_dml from ai_dml_first_retry;
+-- @session:id=1{
+use ai_alter_txn_optimistic;
+insert into ai_dml_first_retry values (5000, 2);
+-- @session}
+alter table ai_dml_first_retry auto_increment = 1000;
+commit;
+
+-- Retry the real ALTER statement.  The requested value (1000) is below the
+-- committed MAX(id), and the following omitted-column INSERT exercises the
+-- real auto-increment allocator.  It must allocate MAX(id) + 1, not 1000.
+alter table ai_dml_first_retry auto_increment = 1000;
+insert into ai_dml_first_retry(v) values (3);
+select id, v from ai_dml_first_retry order by id;
+
 drop database ai_alter_txn_optimistic;

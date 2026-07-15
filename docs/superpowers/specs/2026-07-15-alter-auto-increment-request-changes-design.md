@@ -42,10 +42,40 @@ does not fence against itself.
 
 The watermark advances monotonically. If an accepted/prepared DML later
 aborts, it can conservatively retry each older ALTER snapshot, but cannot admit
-an unsafe lowering. It needs no restart persistence: active transactions do not survive
-a TAE restart, and every post-restart ALTER snapshot is after all replayed
-commits. Legacy unknown-version writes do not publish and remain the documented
-rolling-upgrade compatibility boundary.
+an unsafe lowering.
+
+Prepared 2PC transactions are a separate recovery case: their prepare records
+survive a TAE restart and their final commit or rollback may arrive later. WAL
+replay therefore reconstructs a table-scoped set of unresolved prepared DML
+transaction IDs from the serialized `TxnMemo` dirty-table tree. The replay
+format does not retain `table_def_version_known`, so all replayed prepared DML
+tables are registered conservatively. Registration is idempotent and the set is
+bounded by the unresolved prepared transactions touching that table.
+
+Commit or rollback removes the transaction only after its replay command has
+successfully applied. Removal also leaves a one-bit pending-resolution fence.
+At AUTO_INCREMENT ALTER prepare:
+
+1. any unresolved prepared DML forces retry;
+2. if the last decision raced after ALTER's MAX snapshot, ALTER consumes the
+   pending bit, publishes its own prepare timestamp into the ordinary
+   watermark, and retries;
+3. later already-started ALTERs are rejected by that published watermark,
+   while the CN retry starts from a causally later global transaction snapshot
+   and can proceed after repeating MAX reconciliation.
+
+This protocol does not compare clocks from separate domains. MatrixOne's TN
+transaction manager assigns start/prepare timestamps from the same monotonic
+HLC timeline, and a retry begun after receipt of the prepare error receives a
+snapshot after the failed ALTER's prepare timestamp. Multiple resolution
+events coalesce safely in the pending bit; while another recovered transaction
+is unresolved, the set remains the stronger fence. Once the decision and one
+retry consume that bit, unknown replay compatibility cannot leave a permanent
+blocker.
+
+Legacy live writers with `table_def_version_known=false` remain the documented
+rolling-upgrade compatibility boundary. Recovery is deliberately more
+conservative because the known bit is absent from durable replay context.
 
 The allocator continues to serialize old local allocations, force-reset, and private-cache allocation through its existing FIFO. Private-cache construction occurs only after the force-reset action completes.
 

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,6 +60,11 @@ type TableEntry struct {
 	// fence. AUTO_INCREMENT ALTER uses it to detect rows serialized after the
 	// ALTER snapshot but before the ALTER prepare point.
 	latestKnownDMLPrepare atomic.Pointer[types.TS]
+	replayedPreparedDML   struct {
+		sync.Mutex
+		txns              map[string]struct{}
+		resolutionPending bool
+	}
 
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
@@ -83,6 +89,54 @@ func (entry *TableEntry) GetLatestKnownDMLPrepare() types.TS {
 		return *ts
 	}
 	return types.TS{}
+}
+
+// RegisterReplayedPreparedDML fences AUTO_INCREMENT ALTER while a DML
+// transaction reconstructed from durable WAL remains unresolved. Replay WAL
+// does not retain the CN's table-version-known bit, so recovery conservatively
+// registers every replayed user-table DML and removes it on either decision.
+func (entry *TableEntry) RegisterReplayedPreparedDML(txnID string) {
+	entry.replayedPreparedDML.Lock()
+	defer entry.replayedPreparedDML.Unlock()
+	if entry.replayedPreparedDML.txns == nil {
+		entry.replayedPreparedDML.txns = make(map[string]struct{})
+	}
+	entry.replayedPreparedDML.txns[txnID] = struct{}{}
+}
+
+// ResolveReplayedPreparedDML removes one replay fence. The pending bit closes
+// the race in which the decision lands after ALTER's MAX snapshot but before
+// TN prepare validation.
+func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string) {
+	entry.replayedPreparedDML.Lock()
+	defer entry.replayedPreparedDML.Unlock()
+	if _, ok := entry.replayedPreparedDML.txns[txnID]; !ok {
+		return
+	}
+	entry.replayedPreparedDML.resolutionPending = true
+	delete(entry.replayedPreparedDML.txns, txnID)
+}
+
+// ShouldRetryAutoIncrementAlter atomically consumes recovered-prepare state at
+// the TN prepare serialization point. Consuming a resolution publishes the
+// current ALTER prepare timestamp before returning retry; subsequent ALTERs
+// with older snapshots are then rejected by the ordinary DML watermark.
+func (entry *TableEntry) ShouldRetryAutoIncrementAlter(startTS, prepareTS types.TS) bool {
+	entry.replayedPreparedDML.Lock()
+	if len(entry.replayedPreparedDML.txns) > 0 {
+		entry.replayedPreparedDML.Unlock()
+		return true
+	}
+	if entry.replayedPreparedDML.resolutionPending {
+		entry.replayedPreparedDML.resolutionPending = false
+		entry.RecordKnownDMLPrepare(prepareTS)
+		entry.replayedPreparedDML.Unlock()
+		return true
+	}
+	entry.replayedPreparedDML.Unlock()
+
+	latestDML := entry.GetLatestKnownDMLPrepare()
+	return latestDML.GT(&startTS)
 }
 
 func genTblFullName(tenantID uint32, name string) string {

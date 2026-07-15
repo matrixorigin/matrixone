@@ -28,4 +28,21 @@ max(id) > 10 and max(id) < 50000 as reset_did_not_leak
 from ai_rollback;
 rollback_removed_row    kept_pre_rollback_state    reset_did_not_leak
 1    1    1
+create table ai_dml_first_retry(id bigint primary key auto_increment, v int);
+insert into ai_dml_first_retry values (1, 1);
+begin;
+select max(id) as max_before_concurrent_dml from ai_dml_first_retry;
+max_before_concurrent_dml
+1
+use ai_alter_txn_pessimistic;
+insert into ai_dml_first_retry values (5000, 2);
+alter table ai_dml_first_retry auto_increment = 1000;
+commit;
+alter table ai_dml_first_retry auto_increment = 1000;
+insert into ai_dml_first_retry(v) values (3);
+select id, v from ai_dml_first_retry order by id;
+id    v
+1    1
+5000    2
+5001    3
 drop database ai_alter_txn_pessimistic;
