@@ -35,6 +35,18 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 	})
 }
 
+func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
+	convey.Convey("lock_wait_timeout default should fail fast", t, func() {
+		sv, ok := gSysVarsDefs["lock_wait_timeout"]
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Default, convey.ShouldEqual, defaultLockWaitTimeoutSeconds)
+
+		got, err := sv.Type.Convert(sv.Default)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(got, convey.ShouldEqual, defaultLockWaitTimeoutSeconds)
+	})
+}
+
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)
