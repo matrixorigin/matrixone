@@ -7,6 +7,9 @@ drop database if exists fulltext2_parser;
 create database fulltext2_parser;
 use fulltext2_parser;
 
+-- CREATE FULLTEXT2 INDEX is gated behind experimental_fulltext2_index (default off).
+set experimental_fulltext2_index = 1;
+
 -- ================= ngram parser: CJK bag-of-words =================
 drop table if exists zh;
 create table zh(id bigint primary key, body text);

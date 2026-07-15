@@ -4,6 +4,9 @@
 -- into the tag=1 CdcTail via ISCP CDC. sleep() waits for CDC to settle, then MATCH
 -- reflects the mutations.
 
+-- CREATE FULLTEXT2 INDEX is gated behind experimental_fulltext2_index (default off).
+set experimental_fulltext2_index = 1;
+
 -- create src async (multi-column body+title)
 create table src (id bigint primary key, body varchar, title text, FULLTEXT2 ftidx (body, title));
 

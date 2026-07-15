@@ -1,9 +1,7 @@
-drop database if exists fulltext2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " fulltext2;";
-create database fulltext2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " fulltext2;";
-use fulltext2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " fulltext2;";
+drop database if exists test_fulltext2;
+create database test_fulltext2;
+use test_fulltext2;
+set experimental_fulltext2_index = 1;
 select @@ft2_relevancy_algorithm;
 @@ft2_relevancy_algorithm
 BM25
@@ -89,5 +87,4 @@ id
 3
 2
 set ft2_relevancy_algorithm='BM25';
-drop database fulltext2;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 23 near " fulltext2;";
+drop database test_fulltext2;

@@ -4,9 +4,12 @@
 -- pessimistic_transaction/fulltext2. NL mode is EXACT PHRASE (fulltext2's
 -- distinguishing semantics); boolean supports the full +/-/~/</>/()/*/"..." surface.
 
-drop database if exists fulltext2;
-create database fulltext2;
-use fulltext2;
+drop database if exists test_fulltext2;
+create database test_fulltext2;
+use test_fulltext2;
+
+-- CREATE FULLTEXT2 INDEX is gated behind experimental_fulltext2_index (default off).
+set experimental_fulltext2_index = 1;
 
 -- fulltext2 has its own relevance var (default BM25, distinct from classic
 -- ft_relevancy_algorithm = TF-IDF).
@@ -65,4 +68,4 @@ set ft2_relevancy_algorithm='TF-IDF';
 select id from docs where match(body) against('+lazy ~fox' in boolean mode);
 set ft2_relevancy_algorithm='BM25';
 
-drop database fulltext2;
+drop database test_fulltext2;

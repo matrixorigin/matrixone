@@ -1,6 +1,7 @@
 drop database if exists fulltext2_parser;
 create database fulltext2_parser;
 use fulltext2_parser;
+set experimental_fulltext2_index = 1;
 drop table if exists zh;
 create table zh(id bigint primary key, body text);
 insert into zh values
