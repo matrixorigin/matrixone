@@ -226,6 +226,9 @@ func TestEngineNodesExposesRuntimeStateToScheduler(t *testing.T) {
 			"drained-pipeline":  metadata.WorkState_Drained,
 			"unknown-pipeline":  metadata.WorkState_Unknown,
 		}, nodeWorkStates(nodes))
+		for _, node := range nodes {
+			require.True(t, node.HasMixedCommit)
+		}
 	})
 
 	t.Run("common tenant label route", func(t *testing.T) {
@@ -327,6 +330,9 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 	require.ElementsMatch(t,
 		[]string{"app-working", "app-draining", "sys-working"},
 		queryCandidateServiceIDs(candidates))
+	for _, candidate := range candidates {
+		require.True(t, candidate.HasMixedCommit)
+	}
 
 	labels := map[string]string{"account": "app"}
 	nodes, err := e.ResolveQueryCandidatePool(
@@ -341,6 +347,9 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 	require.ElementsMatch(t,
 		[]string{"app-working:6001", "app-draining:6001"},
 		nodeAddresses(nodes))
+	for _, node := range nodes {
+		require.True(t, node.HasMixedCommit)
+	}
 	require.Equal(t, map[string]string{"account": "app"}, labels)
 }
 
@@ -358,6 +367,32 @@ func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *tes
 	nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"fallback:6001"}, nodeAddresses(nodes))
+	require.True(t, nodes[0].HasMixedCommit)
+}
+
+func TestEngineCandidateDiscoveryMarksOldCommitOutsideWorkingSet(t *testing.T) {
+	for _, state := range []metadata.WorkState{
+		metadata.WorkState_Draining,
+		metadata.WorkState_Drained,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("current-cn", "current:6001", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("old-cn", "old:6001", nil, state, "old-commit"),
+			}})
+
+			candidates, err := e.DiscoverQueryCandidates(context.Background())
+			require.NoError(t, err)
+			require.Len(t, candidates, 1)
+			require.True(t, candidates[0].HasMixedCommit)
+
+			nodes, err := e.ResolveQueryCandidatePool(
+				context.Background(), candidates, engine.QueryCandidatePoolRequest{})
+			require.NoError(t, err)
+			require.Len(t, nodes, 1)
+			require.True(t, nodes[0].HasMixedCommit)
+		})
+	}
 }
 
 func TestEngineQueryCandidateProvidersHonorCancellation(t *testing.T) {
