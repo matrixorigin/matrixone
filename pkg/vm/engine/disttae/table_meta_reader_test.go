@@ -343,7 +343,6 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 
 func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 	ctx := context.Background()
-	colexec.NewServer(nil)
 	fs := newCleanFS(t)
 
 	gcPool, err := ants.NewPool(1)
@@ -352,6 +351,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 
 	txnOp, closeFn := client.NewTestTxnOperator(ctx)
 	defer closeFn()
+	colexec.NewServer("")
 
 	proc := testutil.NewProc(t)
 	txn := &Transaction{

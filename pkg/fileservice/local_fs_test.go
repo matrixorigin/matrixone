@@ -22,13 +22,27 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file"), []byte("data"), 0644))
+	fs, err := NewLocalFS(ctx, "local", root, DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	_, err = fs.StatFile(ctx, "file/child")
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+}
 
 func TestLocalFS(t *testing.T) {
 

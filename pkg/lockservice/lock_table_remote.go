@@ -392,6 +392,11 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		lock.holders.add(txn)
 		for _, v := range resp.GetTxnLock.WaitingList {
 			w := acquireWaiter(v, "doGetLock", l.logger)
+			// WaitingList is filtered by the remote owner to active wait-for
+			// edges. Keep that snapshot semantics separate from the normal
+			// waiter status machine: remoteLockTable.getLock closes this
+			// synthetic lock immediately after the callback.
+			w.isRemoteSnapshot = true
 			lock.addWaiter(l.logger, w)
 			w.close("doGetLock", l.logger)
 		}
