@@ -3718,7 +3718,7 @@ func TestTransformIntoHours(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			if got := transformIntoHours(tt.input); got != tt.want {
-				t.Errorf("transformIntoHours(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("transformIntoHours(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
 	}

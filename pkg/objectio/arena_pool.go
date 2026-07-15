@@ -127,11 +127,9 @@ func PutArena(a *WriteArena) {
 	}
 }
 
-// arenaDrainDelay is how long to wait after the last checkpoint before
-// draining the arena pools.  Using 2× the default incremental checkpoint
-// interval ensures the timer is always reset during active operation,
-// so pools stay warm.  Draining only happens during genuine idle periods.
-const arenaDrainDelay = 2 * time.Minute
+// DefaultArenaDrainDelay is the objectio-local debounce used by callers
+// without a workload-specific idle horizon.
+const DefaultArenaDrainDelay = 2 * time.Minute
 
 var (
 	arenaDrainMu    sync.Mutex
@@ -139,21 +137,23 @@ var (
 )
 
 // ScheduleArenaDrain debounces arena pool draining.  Each call resets the
-// timer to arenaDrainDelay from now.  During steady-state checkpointing
-// (every ~60 s), the timer never fires and pools stay warm.  Once
-// activity ceases, the timer fires and RSS is reclaimed.
-func ScheduleArenaDrain() {
+// timer to delay from now.  Once activity ceases, the timer fires and RSS
+// is reclaimed.
+func ScheduleArenaDrain(delay time.Duration) {
+	if delay <= 0 {
+		delay = DefaultArenaDrainDelay
+	}
 	arenaDrainMu.Lock()
 	defer arenaDrainMu.Unlock()
 	if arenaDrainTimer != nil {
 		arenaDrainTimer.Stop()
 	}
-	arenaDrainTimer = time.AfterFunc(arenaDrainDelay, drainArenaPools)
+	arenaDrainTimer = time.AfterFunc(delay, drainArenaPools)
 }
 
 // drainArenaPools empties both arena free lists, freeing the off-heap
 // backing buffers.  Called by the debounce timer when merge and flush
-// have been idle for arenaDrainDelay.
+// have been idle for the caller-provided delay.
 func drainArenaPools() {
 	for i := range arenaPools {
 		pool := &arenaPools[i]

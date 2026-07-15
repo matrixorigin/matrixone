@@ -289,7 +289,7 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 	}
 	for i, stmt := range stmts {
 		switch stmt.(type) {
-		case *tree.Select, *tree.ParenSelect:
+		case *tree.Select, *tree.ParenSelect, *tree.Insert:
 			// ok
 		default:
 			continue
@@ -350,6 +350,13 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 			case *tree.ParenSelect:
 				if s.Select != nil {
 					s.Select.RewriteOption = rewriteOption
+				}
+			case *tree.Insert:
+				if s.Rows != nil {
+					s.Rows.RewriteOption = rewriteOption
+					if ps, ok := s.Rows.Select.(*tree.ParenSelect); ok && ps.Select != nil {
+						ps.Select.RewriteOption = rewriteOption
+					}
 				}
 			}
 		}

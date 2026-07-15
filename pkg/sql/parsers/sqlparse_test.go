@@ -390,17 +390,67 @@ func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	}
 }
 
-func TestAddRewriteHints_IgnoresNonSelectStatements(t *testing.T) {
+func TestAddRewriteHints_InsertValues(t *testing.T) {
 	sql := "/*+ {\"rewrites\": {\"db3.t3\": \"select 1\"}} */ insert into db3.t3 values (1)"
 	stmts, err := parseAndApply(t, sql)
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
-	// Should be ignored; no panic or error and no rewrite option
-	_, isSelect := stmts[0].(*tree.Select)
-	if isSelect {
-		sel := stmts[0].(*tree.Select)
-		require.Nil(t, sel.RewriteOption)
-	}
+	// INSERT...VALUES: hint is attached to Rows but never read (bindSelect not called for VALUES)
+	ins, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.RewriteOption)
+}
+
+func TestAddRewriteHints_InsertSelect(t *testing.T) {
+	sql := "/*+ {\"rewrites\": {\"db4.t4\": \"select 1\"}} */ insert into db4.t4 select * from db4.t4"
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	ins, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.RewriteOption)
+	require.Contains(t, ins.Rows.RewriteOption.Rewrites, "db4.t4")
+}
+
+func TestAddRewriteHints_InsertParenSelect(t *testing.T) {
+	sql := "/*+ {\"rewrites\": {\"db5.t5\": \"select 1\"}} */ insert into db5.t5 (select * from db5.t5)"
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	ins, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.Rows)
+	ps, ok := ins.Rows.Select.(*tree.ParenSelect)
+	require.True(t, ok)
+	require.NotNil(t, ps.Select)
+	require.NotNil(t, ps.Select.RewriteOption)
+	require.Contains(t, ps.Select.RewriteOption.Rewrites, "db5.t5")
+}
+
+func TestAddRewriteHints_InsertSelect_ON_DUPLICATE_KEY(t *testing.T) {
+	sql := "/*+ {\"rewrites\": {\"db6.t6\": \"select 1\"}} */ insert into db6.t6 select * from db6.t6 on duplicate key update a=1"
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	ins, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.RewriteOption)
+	require.Contains(t, ins.Rows.RewriteOption.Rewrites, "db6.t6")
+}
+
+func TestAddRewriteHints_InsertSelect_WithCTE(t *testing.T) {
+	sql := "/*+ {\"rewrites\": {\"db7.t7\": \"select 1\"}} */ with cte as (select 1) insert into db7.t7 select * from cte"
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	ins, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.RewriteOption)
+	require.Contains(t, ins.Rows.RewriteOption.Rewrites, "db7.t7")
 }
 
 func TestAddRewriteHints_NoJsonObjectHint_IsIgnored(t *testing.T) {
