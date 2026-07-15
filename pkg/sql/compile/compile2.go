@@ -251,15 +251,21 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	attemptStart := time.Now()
 	attemptOpen := true
 	var attemptPreRunWall time.Duration
+	attemptScopes := runC.scopes
+	attemptAnal := runC.anal
+	var coordinatorPhaseStart time.Time
+	var coordinatorPhaseBase time.Duration
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			if attemptOpen {
-				if attemptPreRunWall == 0 {
+				if !coordinatorPhaseStart.IsZero() {
+					attemptPreRunWall = coordinatorPhaseBase + time.Since(coordinatorPhaseStart)
+				} else if attemptPreRunWall == 0 {
 					attemptPreRunWall = time.Since(attemptStart)
 				}
 				resourceRecorder.finishAttempt(
 					uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
-					runC.scopes, runC.anal, c.addr, resource.OutcomePanic, false,
+					attemptScopes, attemptAnal, c.addr, resource.OutcomePanic, false,
 				)
 				attemptOpen = false
 			}
@@ -267,12 +273,19 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 	}()
 	var carriedPreRunWall time.Duration
+	statsPrepared := false
 	for {
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
 		var preRunWall time.Duration
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
-		resetStatsInfoPreRun(stats, isInExecutor)
+		if statsPrepared {
+			statsPrepared = false
+		} else {
+			resetStatsInfoPreRun(stats, isInExecutor)
+		}
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
@@ -285,12 +298,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 
 			if err = runC.runOnce(); err == nil {
+				err = runC.proc.GetQueryContextError()
+			}
+			if err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
 				}
 				resourceRecorder.finishAttempt(
 					uint64(retryTimes), attemptStart, preRunWall, stats,
-					runC.scopes, runC.anal, c.addr, resource.OutcomeSuccess, false,
+					attemptScopes, attemptAnal, c.addr, resource.OutcomeSuccess, false,
 				)
 				attemptOpen = false
 				break
@@ -324,7 +340,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, preRunWall, stats,
-				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false,
+				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
 			return nil, err
@@ -353,44 +369,70 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 		}
 
-		retryPrepareStart := time.Now()
-		nextRunC, prepareErr := c.prepareRetry(defChanged || forcePreMode)
-		transitionWall := time.Since(retryPrepareStart)
+		retryTransitionStart := time.Now()
+		coordinatorPhaseStart = retryTransitionStart
+		coordinatorPhaseBase = preRunWall
+		transitionErr := c.prepareRetryTransition()
+		transitionWall := time.Since(retryTransitionStart)
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 		attemptPreRunWall = preRunWall + transitionWall
-		if prepareErr != nil {
-			err = prepareErr
+		if transitionErr != nil {
+			err = transitionErr
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
-				runC.scopes, runC.anal, c.addr, resourceOutcome(err), false,
+				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
 			return nil, err
 		}
 		resourceRecorder.finishAttempt(
 			uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
-			runC.scopes, runC.anal, c.addr, resourceOutcome(retryErr), true,
+			attemptScopes, attemptAnal, c.addr, resourceOutcome(retryErr), true,
 		)
 		attemptOpen = false
 		if runC != c {
 			releaseRetryCompile(runC)
 		}
+		runC = c
 
 		retryTimes++
 		c.retryTimes = retryTimes
-		runC = nextRunC
 		attemptStart = time.Now()
 		attemptOpen = true
 		attemptPreRunWall = 0
-		carriedPreRunWall = 0
+		attemptScopes = nil
+		attemptAnal = nil
+		coordinatorPhaseStart = attemptStart
+		coordinatorPhaseBase = 0
+		resetStatsInfoPreRun(stats, isInExecutor)
+		statsPrepared = true
+
+		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
+		carriedPreRunWall = time.Since(attemptStart)
+		attemptPreRunWall = carriedPreRunWall
+		if buildErr != nil {
+			err = buildErr
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
+			)
+			attemptOpen = false
+			return nil, err
+		}
+		runC = nextRunC
+		attemptScopes = runC.scopes
+		attemptAnal = runC.anal
 
 		// rebuild context for the retry.
 		runC.InitPipelineContextToRetryQuery()
+		carriedPreRunWall = time.Since(attemptStart)
+		attemptPreRunWall = carriedPreRunWall
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 	}
 	resourceRecorder.publish()
 
-	if err = runC.proc.GetQueryContextError(); err != nil {
-		return nil, err
-	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
 		strings.Contains(strings.ToLower(c.sql), "insert") &&
@@ -615,8 +657,9 @@ func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
 	}
 }
 
-// prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+// prepareRetryTransition quiesces the failed generation and advances its
+// transaction workspace. It is charged to the attempt that requested retry.
+func (c *Compile) prepareRetryTransition() error {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
@@ -628,29 +671,37 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 				sqlText = c.sql
 			}
 			if err := coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText); err != nil {
-				return nil, err
+				return err
 			}
 		} else if coordinator, ok := txnOp.(runSQLCoordinator); ok {
 			if err := coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 
 	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
-		return nil, e
+		return e
 	}
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
-		return nil, e
+		return e
 	}
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
 	// clear stage cache
 	c.proc.GetStageCache().Clear()
+	return nil
+}
+
+// buildRetryCompile starts the next generation. A build or compile failure is
+// therefore a terminal outcome of that new attempt instead of disappearing
+// into the previous attempt's closing phase.
+func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
+	topContext := c.proc.GetTopContext()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.

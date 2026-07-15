@@ -100,3 +100,29 @@ func TestCountExpectedRemoteScopes(t *testing.T) {
 	}
 	require.Equal(t, uint64(2), countExpectedRemoteScopes(scopes, "local:6001"))
 }
+
+func TestMissingRemoteCountsFragmentAndMemoryDomain(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx := resource.ContextWithRoot(context.Background(), root)
+	recorder := newExecutionResourceRecorder(ctx)
+	scopes := []*Scope{{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}}}
+
+	recorder.finishAttempt(
+		0,
+		time.Now(),
+		0,
+		nil,
+		scopes,
+		nil,
+		"local:6001",
+		resource.OutcomeError,
+		false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(1), summary.MissingFragmentCount)
+	require.Equal(t, uint64(1), summary.MissingMemoryDomainCount)
+	require.NotZero(t, summary.Quality&resource.QualityMissingFragment)
+	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
+}

@@ -71,7 +71,15 @@ func (r *executionResourceRecorder) finishAttempt(
 	}
 	attempt := resource.NewAttempt(generation, 0, 0)
 	delta := collectScopeResourceDelta(scopes, localAddress)
-	remoteUsage, remoteMemory, remoteQuality, remoteReports := anal.remoteResourceSummary()
+	var (
+		remoteUsage   resource.Usage
+		remoteMemory  resource.MemoryTotals
+		remoteQuality resource.QualityFlags
+		remoteReports uint64
+	)
+	if anal != nil {
+		remoteUsage, remoteMemory, remoteQuality, remoteReports = anal.remoteResourceSummary()
+	}
 	delta.Quality |= remoteQuality | resource.MergeUsage(&delta.Usage, remoteUsage)
 	var missingRemote uint64
 	if expected := countExpectedRemoteScopes(scopes, localAddress); remoteReports < expected {
@@ -99,12 +107,16 @@ func (r *executionResourceRecorder) finishAttempt(
 	summary := attempt.Seal(wallNS, outcome)
 	summary.Quality |= delta.Quality | resource.MergeMemoryTotals(&summary.Memory, remoteMemory)
 	if missingRemote > 0 {
-		if summary.MissingMemoryDomainCount > math.MaxUint64-missingRemote {
-			summary.MissingMemoryDomainCount = math.MaxUint64
-			summary.Quality |= resource.QualityInvariantFailure
-		} else {
-			summary.MissingMemoryDomainCount += missingRemote
+		addMissing := func(value *uint64) {
+			if *value > math.MaxUint64-missingRemote {
+				*value = math.MaxUint64
+				summary.Quality |= resource.QualityInvariantFailure
+				return
+			}
+			*value += missingRemote
 		}
+		addMissing(&summary.MissingFragmentCount)
+		addMissing(&summary.MissingMemoryDomainCount)
 		summary.Quality |= resource.QualityPartial | resource.QualityMissingMemoryDomain
 	}
 	r.execution.AddAttempt(summary, retried)
