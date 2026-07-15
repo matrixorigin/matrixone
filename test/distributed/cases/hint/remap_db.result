@@ -157,6 +157,28 @@ select * from rdb_dst.t order by id;
 1  ¦  10
 set remap_rewrites = '';
 insert into rdb_dst.t values (2,20),(3,30);
+create database if not exists rdb_src;
+drop table if exists rdb_src.t;
+create table rdb_src.t(src_only int);
+insert into rdb_src.t values (100),(200);
+drop table if exists rdb_dst.t;
+create table rdb_dst.t(id int, keep int);
+insert into rdb_dst.t values (1,1),(2,1),(3,0),(3,0);
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
+analyze table rdb_src.t(id);
+➔ approx_count_distinct(id)[-5,64,0]  𝄀
+3
+use rdb_src;
+analyze table t(id);
+➔ approx_count_distinct(id)[-5,64,0]  𝄀
+3
+analyze table t;
+➔ approx_count_distinct(id)[-5,64,0]  ¦  approx_count_distinct(keep)[-5,64,0]  𝄀
+3  ¦  2
+/*+ {"rewrites": {"rdb_dst.t": "select * from rdb_dst.t where keep = 1"}} */ analyze table t(id);
+➔ approx_count_distinct(id)[-5,64,0]  𝄀
+2
+use mysql;
 set remap_rewrites = '';
 set enable_remap_hint = 0;
 drop database if exists rdb_src;

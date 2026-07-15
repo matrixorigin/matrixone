@@ -27,7 +27,7 @@ insert into t_analyze_02 values
 
 drop table if exists quoted_cols;
 create table quoted_cols(`select` int, `a-b` int, `tick``name` int);
-insert into quoted_cols values (1, 2, 3), (1, 3, 4);
+insert into quoted_cols values (1, 2, 3), (2, 3, 4);
 
 -- ANALYZE TABLE single table (existing behavior)
 analyze table t_analyze_01(a, b);
@@ -40,6 +40,16 @@ analyze table quoted_cols(`select`, `a-b`, `tick``name`);
 select 'AFTER_EXPLICIT_QUOTED';
 analyze table quoted_cols;
 select 'AFTER_EXPANDED_QUOTED';
+
+-- quoted database, table, and column identifiers
+create database `select-db`;
+create table `select-db`.`tick``table`(`a-b` int);
+insert into `select-db`.`tick``table` values (1),(1),(2);
+analyze table `select-db`.`tick``table`(`a-b`);
+analyze table `select-db`.`tick``table`;
+select 'AFTER_QUOTED_TABLE';
+drop table `select-db`.`tick``table`;
+drop database `select-db`;
 
 -- persistent connection after single-table, multi-table, and mid-list error
 analyze table t_analyze_01;
