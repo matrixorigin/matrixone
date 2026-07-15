@@ -50,10 +50,10 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 		"Proxy Connection",
 		c.withMultiGraph(
 			"Connect Counter",
-			6,
+			4,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="accepted"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="current"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="closed"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="success"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="route-fail"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="common-fail"`) + `[$interval]))`,
@@ -63,7 +63,7 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 			},
 			[]string{
 				"accepted",
-				"current",
+				"closed",
 				"success",
 				"route-fail",
 				"common-fail",
@@ -72,9 +72,15 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 				"reject",
 			},
 		),
+		c.withGraph(
+			"Current Connections",
+			4,
+			`sum(`+c.getMetricWithFilter("mo_proxy_connections_current", "")+`)`,
+			"current",
+			axis.Min(0)),
 		c.withMultiGraph(
 			"Disconnect Counter",
-			6,
+			4,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_disconnect_counter", `type="server"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_disconnect_counter", `type="client"`) + `[$interval]))`,
