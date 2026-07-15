@@ -656,6 +656,45 @@ func TestFanoutParquetDataWriterAbortsSinkWhenWriterInitializationFails(t *testi
 	require.Empty(t, writer.OrphanPaths(), "successful abort guarantees no object was published")
 }
 
+func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"id", "region"})
+	idVec := vector.NewVec(types.T_int64.ToType())
+	regionVec := vector.NewVec(types.T_varchar.ToType())
+	for idx, region := range []string{"a", "b", "c"} {
+		require.NoError(t, vector.AppendFixed[int64](idVec, int64(idx+1), false, mp))
+		require.NoError(t, vector.AppendBytes(regionVec, []byte(region), false, mp))
+	}
+	bat.Vecs[0] = idVec
+	bat.Vecs[1] = regionVec
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	factory := &memoryDataFileFactory{objects: make(map[string]*bytes.Buffer)}
+	writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+		Schema: api.Schema{Fields: []api.SchemaField{
+			{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeLong}},
+			{ID: 2, Name: "region", Type: api.IcebergType{Kind: api.TypeString}},
+		}},
+		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
+			SourceID: 2, FieldID: 1000, Name: "region", Transform: "identity",
+		}}},
+		TableLocation:       "s3://warehouse/accounts",
+		TargetFileSizeBytes: 1024 * 1024,
+		MaxOpenFiles:        2,
+	}, factory)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.Len(t, writer.active, 2)
+	require.Len(t, writer.files, 1, "opening the third partition should close the least-recently-used writer")
+
+	files, err := writer.Close(ctx)
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+	require.Empty(t, writer.active)
+}
+
 func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path string) {
 	t.Helper()
 	for _, rowGroup := range file.Metadata().RowGroups {

@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -71,6 +72,10 @@ func ValidateP1DeleteFile(file api.DataFile) error {
 }
 
 func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, credentialScope string) ([]api.DeleteFileTask, error) {
+	return pairDeleteTasksBounded(context.Background(), dataTasks, deleteEntries, credentialScope, 0, api.ServerPlanningAuto)
+}
+
+func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, credentialScope string, maxTasks int, mode api.ServerPlanningMode) ([]api.DeleteFileTask, error) {
 	if len(deleteEntries) == 0 {
 		return nil, nil
 	}
@@ -83,14 +88,17 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 		}
 	}
 	seen := make(map[string]struct{})
-	appendDeleteTask := func(entry deleteManifestEntry, file api.DataFile, dataPath string) {
+	appendDeleteTask := func(entry deleteManifestEntry, file api.DataFile, dataPath string) error {
 		dataPath = strings.TrimSpace(dataPath)
 		if dataPath == "" {
-			return
+			return nil
 		}
 		key := deleteTaskIdentity(entry.manifestPath, file.FilePath, dataPath)
 		if _, ok := seen[key]; ok {
-			return
+			return nil
+		}
+		if maxTasks > 0 && len(out) >= maxTasks {
+			return planningLimitExceeded("delete_tasks", len(out)+1, maxTasks, mode)
 		}
 		seen[key] = struct{}{}
 		out = append(out, api.DeleteFileTask{
@@ -101,8 +109,12 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 			DeleteSchemaID:  file.DeleteSchemaID,
 			SequenceNumber:  file.SequenceNumber,
 		})
+		return nil
 	}
 	for _, entry := range deleteEntries {
+		if err := checkPlanningContext(ctx); err != nil {
+			return nil, err
+		}
 		file := normalizeDataFile(entry.file)
 		switch file.Content {
 		case api.DataFileContentPositionDelete:
@@ -111,10 +123,15 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 				if !ok || !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
-				appendDeleteTask(entry, file, referenced)
+				if err := appendDeleteTask(entry, file, referenced); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			for _, dataTask := range dataTasks {
+				if err := checkPlanningContext(ctx); err != nil {
+					return nil, err
+				}
 				if !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
@@ -124,10 +141,15 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 				if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
 					continue
 				}
-				appendDeleteTask(entry, file, dataTask.DataFile.FilePath)
+				if err := appendDeleteTask(entry, file, dataTask.DataFile.FilePath); err != nil {
+					return nil, err
+				}
 			}
 		case api.DataFileContentEqualityDelete:
 			for _, dataTask := range dataTasks {
+				if err := checkPlanningContext(ctx); err != nil {
+					return nil, err
+				}
 				if !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
@@ -137,7 +159,9 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 				if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
 					continue
 				}
-				appendDeleteTask(entry, file, dataTask.DataFile.FilePath)
+				if err := appendDeleteTask(entry, file, dataTask.DataFile.FilePath); err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, ValidateP1DeleteFile(file)

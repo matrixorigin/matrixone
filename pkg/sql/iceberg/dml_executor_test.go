@@ -17,10 +17,12 @@ package iceberg
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -492,8 +494,8 @@ func TestDMLMaterializedObjectTrackerWrapsDataFileOutputFactory(t *testing.T) {
 	if _, err := wc.Write([]byte("payload")); err != nil {
 		t.Fatalf("write data file: %v", err)
 	}
-	if paths := tracker.paths(); len(paths) != 0 {
-		t.Fatalf("path should be tracked only after close, got %#v", paths)
+	if paths := tracker.paths(); len(paths) != 1 || paths[0] != "s3://warehouse/gold/orders/data/replacement.parquet" {
+		t.Fatalf("created path should be tracked before write or close can fail, got %#v", paths)
 	}
 	if err := wc.Close(); err != nil {
 		t.Fatalf("close data file: %v", err)
@@ -514,6 +516,55 @@ func TestDMLMaterializedObjectTrackerWrapsDataFileOutputFactory(t *testing.T) {
 		t.Fatalf("expected missing object writer error, got %v", err)
 	}
 }
+
+func TestDMLMaterializedObjectTrackerRetainsAttemptedPathsOnWriteFailure(t *testing.T) {
+	tracker := newDMLMaterializedObjectTracker()
+	sentinel := moerr.NewInternalErrorNoCtx("remote write result unknown")
+	writer := wrapDMLDeleteObjectWriter(testDeleteObjectWriterFunc(func(context.Context, string, []byte) error {
+		return sentinel
+	}), tracker)
+	location := "s3://warehouse/gold/orders/delete/pos.parquet"
+	if err := writer.WriteObject(context.Background(), location, []byte("payload")); !errors.Is(err, sentinel) {
+		t.Fatalf("expected write failure, got %v", err)
+	}
+	if paths := tracker.paths(); len(paths) != 1 || paths[0] != location {
+		t.Fatalf("attempted object path was not retained: %#v", paths)
+	}
+
+	factory := wrapDMLDataFileOutputFactory(testDataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) {
+		return closeErrorWriteCloser{closeErr: sentinel}, nil
+	}), tracker)
+	dataLocation := "s3://warehouse/gold/orders/data/replacement.parquet"
+	wc, err := factory.CreateDataFile(context.Background(), dataLocation)
+	if err != nil {
+		t.Fatalf("create tracked data file: %v", err)
+	}
+	if err := wc.Close(); !errors.Is(err, sentinel) {
+		t.Fatalf("expected close failure, got %v", err)
+	}
+	if paths := tracker.paths(); len(paths) != 2 || paths[0] != location || paths[1] != dataLocation {
+		t.Fatalf("failed-close data path was not retained: %#v", paths)
+	}
+}
+
+type testDeleteObjectWriterFunc func(context.Context, string, []byte) error
+
+func (f testDeleteObjectWriterFunc) WriteObject(ctx context.Context, location string, payload []byte) error {
+	return f(ctx, location, payload)
+}
+
+type testDataFileOutputFactoryFunc func(context.Context, string) (io.WriteCloser, error)
+
+func (f testDataFileOutputFactoryFunc) CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error) {
+	return f(ctx, location)
+}
+
+type closeErrorWriteCloser struct {
+	closeErr error
+}
+
+func (closeErrorWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (w closeErrorWriteCloser) Close() error              { return w.closeErr }
 
 func TestDMLActionExecutorCommitMergeCombinesMatchedAndUnmatchedActions(t *testing.T) {
 	deleteWriter := &recordingDMLDeleteObjectWriter{}

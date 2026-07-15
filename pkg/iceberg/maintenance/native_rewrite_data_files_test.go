@@ -135,6 +135,25 @@ func TestRewriteDataFilesSelectorChunksByMaxGroupSize(t *testing.T) {
 	require.Len(t, selection.Groups[1].Candidates, 1)
 }
 
+func TestRewriteDataFilesSelectorBoundsTotalMaterializedInput(t *testing.T) {
+	groups := []RewriteDataFileGroup{
+		{PartitionKey: "a", TotalSizeBytes: 90},
+		{PartitionKey: "b", TotalSizeBytes: 80},
+		{PartitionKey: "c", TotalSizeBytes: 70},
+	}
+	require.Equal(t, groups[:1], boundRewriteDataFileGroups(groups, 160))
+	require.Equal(t, groups, boundRewriteDataFileGroups(groups, 240))
+}
+
+func TestBoundedRewriteBufferRejectsOversizedOutput(t *testing.T) {
+	buffer := boundedRewriteBuffer{maxBytes: 3}
+	n, err := buffer.Write([]byte("four"))
+	require.Zero(t, n)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+	require.Empty(t, buffer.Bytes())
+}
+
 func TestRewriteDataFilesPartitionKeyNormalizesIntegerWidths(t *testing.T) {
 	left := rewriteDataFilesPartitionKey(map[string]any{"day": int32(1), "region": "ksa"})
 	right := rewriteDataFilesPartitionKey(map[string]any{"day": int64(1), "region": "ksa"})
@@ -775,6 +794,13 @@ func TestRewriteDataFilesSelectorValidatesOptionsAndManifestList(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "min_input_files must be positive")
+
+	_, err = parseRewriteDataFilesSelectionOptions(map[string]string{
+		"target_file_size":  "101",
+		"max_rewrite_bytes": "100",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must not exceed max_rewrite_bytes")
 }
 
 func rewriteDataFileEntry(path string, size int64, partition map[string]any, status api.ManifestEntryStatus) api.ManifestEntry {

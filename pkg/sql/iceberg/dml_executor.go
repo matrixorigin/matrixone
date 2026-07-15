@@ -232,11 +232,11 @@ func (w trackingDMLDeleteObjectWriter) WriteObject(ctx context.Context, location
 	if w.inner == nil {
 		return api.NewError(api.ErrConfigInvalid, "Iceberg DML object tracker requires object writer", nil)
 	}
-	if err := w.inner.WriteObject(ctx, location, payload); err != nil {
-		return err
-	}
+	// Object stores can report an error after accepting some or all of the
+	// payload. Conservatively remember the attempted location before the call;
+	// the tracker is persisted only when action construction fails.
 	w.tracker.track(location)
-	return nil
+	return w.inner.WriteObject(ctx, location, payload)
 }
 
 type trackingDMLDataFileOutputFactory struct {
@@ -252,21 +252,10 @@ func (f trackingDMLDataFileOutputFactory) CreateDataFile(ctx context.Context, lo
 	if err != nil {
 		return nil, err
 	}
-	return trackingDMLDataFile{WriteCloser: wc, location: location, tracker: f.tracker}, nil
-}
-
-type trackingDMLDataFile struct {
-	io.WriteCloser
-	location string
-	tracker  *dmlMaterializedObjectTracker
-}
-
-func (w trackingDMLDataFile) Close() error {
-	if err := w.WriteCloser.Close(); err != nil {
-		return err
-	}
-	w.tracker.track(w.location)
-	return nil
+	// A successfully-created sink may publish an object even when a later write
+	// or close reports failure, so retain its location for orphan recovery.
+	f.tracker.track(location)
+	return wc, nil
 }
 
 func wrapDMLDeleteObjectWriter(writer dml.DeleteObjectWriter, tracker *dmlMaterializedObjectTracker) dml.DeleteObjectWriter {

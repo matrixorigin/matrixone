@@ -62,6 +62,10 @@ func (c ParquetConcatRewriteDataFilesCompactor) CompactRewriteDataFiles(ctx cont
 	if len(req.Selection.Groups) == 0 {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor requires selected file groups", nil)
 	}
+	opts, err := parseRewriteDataFilesSelectionOptions(req.Options)
+	if err != nil {
+		return nil, err
+	}
 	deleteFilters, err := c.buildDeleteFilters(ctx, req)
 	if err != nil {
 		return nil, err
@@ -70,11 +74,18 @@ func (c ParquetConcatRewriteDataFilesCompactor) CompactRewriteDataFiles(ctx cont
 		Rewrites: make([]RewriteDataFileRewrite, 0, len(req.Selection.Groups)),
 		Objects:  make([]ObjectWrite, 0, len(req.Selection.Groups)),
 	}
+	remaining := opts.maxRewriteBytes
 	for idx, group := range req.Selection.Groups {
-		rewrite, object, err := c.compactGroup(ctx, req, group, idx, deleteFilters)
+		rewrite, object, err := c.compactGroup(ctx, req, group, idx, deleteFilters, remaining)
 		if err != nil {
 			return nil, err
 		}
+		if uint64(len(object.Payload)) > remaining {
+			return nil, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg rewrite-data-files materialized output exceeded its byte budget", map[string]string{
+				"limit": strconv.FormatUint(opts.maxRewriteBytes, 10),
+			})
+		}
+		remaining -= uint64(len(object.Payload))
 		out.Rewrites = append(out.Rewrites, rewrite)
 		out.Objects = append(out.Objects, object)
 		out.OrphanPaths = append(out.OrphanPaths, object.Location)
@@ -317,11 +328,11 @@ func rewriteDataFilesPartitionScopeUint(value uint64) string {
 	return "u:" + strconv.FormatUint(value, 10)
 }
 
-func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context, req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int, deleteFilters rewriteDataFilesDeleteFilters) (RewriteDataFileRewrite, ObjectWrite, error) {
+func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context, req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int, deleteFilters rewriteDataFilesDeleteFilters, maxOutputBytes uint64) (RewriteDataFileRewrite, ObjectWrite, error) {
 	if len(group.Candidates) == 0 {
 		return RewriteDataFileRewrite{}, ObjectWrite{}, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor received an empty group", nil)
 	}
-	var output bytes.Buffer
+	output := boundedRewriteBuffer{maxBytes: maxOutputBytes}
 	var writer *parquet.Writer
 	var writerSchema *parquet.Schema
 	var totalRows int64
@@ -384,8 +395,22 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 			ReplacementFiles: []api.DataFile{replacement},
 		}, ObjectWrite{
 			Location: location,
-			Payload:  append([]byte(nil), output.Bytes()...),
+			Payload:  output.Bytes(),
 		}, nil
+}
+
+type boundedRewriteBuffer struct {
+	bytes.Buffer
+	maxBytes uint64
+}
+
+func (b *boundedRewriteBuffer) Write(p []byte) (int, error) {
+	if uint64(b.Len()) > b.maxBytes || uint64(len(p)) > b.maxBytes-uint64(b.Len()) {
+		return 0, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg rewrite-data-files output exceeded its byte budget", map[string]string{
+			"limit": strconv.FormatUint(b.maxBytes, 10),
+		})
+	}
+	return b.Buffer.Write(p)
 }
 
 func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int) (string, error) {

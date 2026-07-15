@@ -30,6 +30,7 @@ const (
 	defaultRewriteDataFilesTargetSizeBytes = 128 * 1024 * 1024
 	defaultRewriteDataFilesMinInputFiles   = 2
 	defaultRewriteDataFilesMaxGroupFactor  = 4
+	defaultRewriteDataFilesMaxRewriteBytes = 512 * 1024 * 1024
 )
 
 type RewriteDataFilesSelector struct {
@@ -153,6 +154,7 @@ type rewriteDataFilesSelectionOptions struct {
 	targetFileSizeBytes uint64
 	minInputFiles       uint64
 	maxGroupSizeBytes   uint64
+	maxRewriteBytes     uint64
 }
 
 func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Context, req Request) (*CommitPlan, error) {
@@ -499,7 +501,7 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 			selection.CandidateSizeBytes += file.FileSizeInBytes
 		}
 	}
-	selection.Groups = buildRewriteDataFileGroups(grouped, opts)
+	selection.Groups = boundRewriteDataFileGroups(buildRewriteDataFileGroups(grouped, opts), opts.maxRewriteBytes)
 	return selection, nil
 }
 
@@ -507,6 +509,7 @@ func parseRewriteDataFilesSelectionOptions(options map[string]string) (rewriteDa
 	out := rewriteDataFilesSelectionOptions{
 		targetFileSizeBytes: defaultRewriteDataFilesTargetSizeBytes,
 		minInputFiles:       defaultRewriteDataFilesMinInputFiles,
+		maxRewriteBytes:     defaultRewriteDataFilesMaxRewriteBytes,
 	}
 	if value, ok, err := UintOption(options, "target_file_size"); err != nil {
 		return out, err
@@ -540,7 +543,41 @@ func parseRewriteDataFilesSelectionOptions(options map[string]string) (rewriteDa
 	if out.maxGroupSizeBytes < out.targetFileSizeBytes {
 		out.maxGroupSizeBytes = out.targetFileSizeBytes
 	}
+	if value, ok, err := UintOption(options, "max_rewrite_bytes"); err != nil {
+		return out, err
+	} else if ok {
+		if value == 0 {
+			return out, api.NewError(api.ErrConfigInvalid, "Iceberg rewrite-data-files max_rewrite_bytes must be positive", map[string]string{"option": "max_rewrite_bytes"})
+		}
+		out.maxRewriteBytes = value
+	}
+	if out.targetFileSizeBytes > out.maxRewriteBytes {
+		return out, api.NewError(api.ErrConfigInvalid, "Iceberg rewrite-data-files target_file_size must not exceed max_rewrite_bytes", map[string]string{"option": "target_file_size"})
+	}
+	if out.maxGroupSizeBytes > out.maxRewriteBytes {
+		out.maxGroupSizeBytes = out.maxRewriteBytes
+	}
 	return out, nil
+}
+
+func boundRewriteDataFileGroups(groups []RewriteDataFileGroup, maxBytes uint64) []RewriteDataFileGroup {
+	if len(groups) == 0 || maxBytes == 0 {
+		return nil
+	}
+	out := make([]RewriteDataFileGroup, 0, len(groups))
+	var selected uint64
+	for _, group := range groups {
+		if group.TotalSizeBytes <= 0 {
+			continue
+		}
+		size := uint64(group.TotalSizeBytes)
+		if size > maxBytes || selected > maxBytes-size {
+			break
+		}
+		out = append(out, group)
+		selected += size
+	}
+	return out
 }
 
 func isRewriteDataFilesCandidate(file api.DataFile, opts rewriteDataFilesSelectionOptions) bool {

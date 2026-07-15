@@ -160,6 +160,26 @@ func TestPairDeleteTasksTreatsZeroSpecAndSequenceAsValid(t *testing.T) {
 	}
 }
 
+func TestPairDeleteTasksStopsBeforeDeleteTaskFanoutExceedsLimit(t *testing.T) {
+	dataTasks := []api.DataFileTask{
+		{DataFile: api.DataFile{FilePath: "data-a.parquet", SpecID: 1, SequenceNumber: 1}},
+		{DataFile: api.DataFile{FilePath: "data-b.parquet", SpecID: 1, SequenceNumber: 1}},
+	}
+	deleteEntries := []deleteManifestEntry{{
+		manifestPath: "delete-manifest.avro",
+		file: api.DataFile{
+			Content:        api.DataFileContentEqualityDelete,
+			FilePath:       "delete.parquet",
+			SpecID:         1,
+			SequenceNumber: 2,
+			EqualityIDs:    []int{1},
+		},
+	}}
+
+	_, err := pairDeleteTasksBounded(context.Background(), dataTasks, deleteEntries, "", 1, api.ServerPlanningAuto)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+}
+
 func TestValidateP1DeleteFileRejectsInvalidDeleteMetadata(t *testing.T) {
 	valid := api.DataFile{
 		Content:          api.DataFileContentEqualityDelete,

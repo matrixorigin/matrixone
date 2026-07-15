@@ -29,7 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
-const defaultTargetFileSizeBytes int64 = 128 * 1024 * 1024
+const (
+	defaultTargetFileSizeBytes int64 = 128 * 1024 * 1024
+	defaultMaxOpenFiles              = 8
+)
 
 type DataFileOutputFactory interface {
 	CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error)
@@ -52,6 +55,7 @@ type FanoutWriterConfig struct {
 	DataDir             string
 	WriterID            string
 	TargetFileSizeBytes int64
+	MaxOpenFiles        int
 	TimeZone            *time.Location
 }
 
@@ -62,6 +66,7 @@ type FanoutParquetDataWriter struct {
 	files   []api.DataFile
 	orphans []string
 	seq     int64
+	useSeq  uint64
 	closed  bool
 }
 
@@ -69,6 +74,7 @@ type activeDataFileWriter struct {
 	location string
 	sink     io.WriteCloser
 	writer   *ParquetDataWriter
+	lastUsed uint64
 }
 
 func NewFanoutParquetDataWriter(ctx context.Context, cfg FanoutWriterConfig, factory DataFileOutputFactory) (*FanoutParquetDataWriter, error) {
@@ -80,6 +86,9 @@ func NewFanoutParquetDataWriter(ctx context.Context, cfg FanoutWriterConfig, fac
 	}
 	if cfg.TargetFileSizeBytes <= 0 {
 		cfg.TargetFileSizeBytes = defaultTargetFileSizeBytes
+	}
+	if cfg.MaxOpenFiles <= 0 {
+		cfg.MaxOpenFiles = defaultMaxOpenFiles
 	}
 	if cfg.TimeZone == nil {
 		cfg.TimeZone = time.UTC
@@ -209,7 +218,13 @@ func (w *FanoutParquetDataWriter) OrphanPaths() []string {
 
 func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key string, partition map[string]any) (*activeDataFileWriter, error) {
 	if active := w.active[key]; active != nil {
+		w.touch(active)
 		return active, nil
+	}
+	if len(w.active) >= w.cfg.MaxOpenFiles {
+		if err := w.closeLeastRecentlyUsed(ctx); err != nil {
+			return nil, err
+		}
 	}
 	partitionPath := partitionPathForSpec(partition, w.cfg.PartitionSpec)
 	location := w.nextDataFileLocation(partitionPath)
@@ -234,8 +249,29 @@ func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key stri
 		return nil, errors.Join(err, cleanupErr)
 	}
 	active := &activeDataFileWriter{location: location, sink: sink, writer: writer}
+	w.touch(active)
 	w.active[key] = active
 	return active, nil
+}
+
+func (w *FanoutParquetDataWriter) touch(active *activeDataFileWriter) {
+	w.useSeq++
+	active.lastUsed = w.useSeq
+}
+
+func (w *FanoutParquetDataWriter) closeLeastRecentlyUsed(ctx context.Context) error {
+	var oldestKey string
+	var oldestUse uint64
+	for key, active := range w.active {
+		if oldestKey == "" || active.lastUsed < oldestUse || active.lastUsed == oldestUse && key < oldestKey {
+			oldestKey = key
+			oldestUse = active.lastUsed
+		}
+	}
+	if oldestKey == "" {
+		return nil
+	}
+	return w.closeActive(ctx, oldestKey)
 }
 
 func abortDataFileSink(sink io.WriteCloser, location string) error {

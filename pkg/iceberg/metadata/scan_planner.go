@@ -192,6 +192,9 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 					manifestPath: manifestPath,
 					file:         file,
 				})
+				if len(deleteEntries) > cfg.maxDataFiles {
+					return nil, planningLimitExceeded("delete_files", len(deleteEntries), cfg.maxDataFiles, cfg.serverPlanningMode)
+				}
 				continue
 			}
 			if err := ValidateP0DataFile(file); err != nil {
@@ -221,7 +224,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		}
 	}
 	profile.DataFilesSelected = len(dataTasks)
-	deleteTasks, err := pairDeleteTasks(dataTasks, deleteEntries, p.CredentialScope)
+	deleteTasks, err := pairDeleteTasksBounded(planningCtx, dataTasks, deleteEntries, p.CredentialScope, cfg.maxDataFiles, cfg.serverPlanningMode)
 	if err != nil {
 		return nil, err
 	}
