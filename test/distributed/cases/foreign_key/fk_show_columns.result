@@ -140,8 +140,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 desc	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -461,8 +461,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 show columns from	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -773,8 +773,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 desc	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -1072,8 +1072,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 show columns from	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
