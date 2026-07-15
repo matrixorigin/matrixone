@@ -139,20 +139,13 @@ drop snapshot sp1;
 drop snapshot sp0;
 drop table t0;
 drop table t1;
-create table t0(a int primary key, b int) cluster by(a,b);
+create table t0(a int, b int) cluster by(a,b);
 insert into t0 values(1,1),(2,2);
-create snapshot sp0 for table test t0;
-data branch create table t1 from t0{snapshot="sp0"};
+data branch create table t1 from t0;
 alter table t1 add column c int default 0 after a;
-update t1 set b=11 where a=1;
-insert into t1(a,c,b) values(3,30,3);
-create snapshot sp1 for table test t1;
-data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
-diff t1 against t0    flag    a    c    b
-t1    UPDATE    1    0    11
-t1    INSERT    3    30    3
-drop snapshot sp1;
-drop snapshot sp0;
+data branch diff t1 against t0;
+-- @regex("schema compatibility check: target-only columns require an explicit primary key", true)
+internal error: schema compatibility check: target-only columns require an explicit primary key
 drop table t0;
 drop table t1;
 create table t0(a int, b int, primary key(a));
