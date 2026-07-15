@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -110,6 +111,53 @@ func (s *blockingAllocateStore) Allocate(
 type countingAllocator struct {
 	asyncCalls atomic.Int64
 	asyncErr   error
+}
+
+type observedDoneContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+type countingIncrTableCache struct {
+	tableID  uint64
+	acquires atomic.Int64
+	releases atomic.Int64
+	retires  atomic.Int64
+	closes   atomic.Int64
+	retired  atomic.Bool
+}
+
+func (c *countingIncrTableCache) table() uint64   { return c.tableID }
+func (c *countingIncrTableCache) version() uint32 { return 0 }
+func (c *countingIncrTableCache) acquire()        { c.acquires.Add(1) }
+func (c *countingIncrTableCache) release()        { c.releases.Add(1) }
+func (c *countingIncrTableCache) retire() {
+	if c.retired.CompareAndSwap(false, true) {
+		c.retires.Add(1)
+		_ = c.close()
+	}
+}
+func (c *countingIncrTableCache) commit()               {}
+func (c *countingIncrTableCache) columns() []AutoColumn { return nil }
+func (c *countingIncrTableCache) insertAutoValues(context.Context, uint64, []*vector.Vector, int, int64) (uint64, error) {
+	return 0, nil
+}
+func (c *countingIncrTableCache) currentValue(context.Context, uint64, string) (uint64, error) {
+	return 0, nil
+}
+func (c *countingIncrTableCache) getLastAllocateTS(context.Context, string) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
+}
+func (c *countingIncrTableCache) adjust(context.Context, []AutoColumn) error { return nil }
+func (c *countingIncrTableCache) close() error {
+	c.closes.Add(1)
+	return nil
 }
 
 func (a *countingAllocator) allocate(context.Context, uint64, string, int, client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
@@ -651,10 +699,9 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 		store.Lock()
 		uncommittedCols := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
 		store.Unlock()
-		// Building the transaction-private cache reserves its first range in
-		// the same transaction, so the staged high-water mark may advance past
-		// the requested reset while still remaining private.
-		require.GreaterOrEqual(t, uncommittedCols[0].Offset, uint64(50))
+		// The private cache is lazy, so ALTER without subsequent DML leaves the
+		// staged offset exactly at the requested reset value.
+		require.Equal(t, uint64(50), uncommittedCols[0].Offset)
 		require.NoError(t, alterTxn.Rollback(ctx))
 
 		store.Lock()
@@ -726,6 +773,204 @@ func TestSetOffsetWithoutInsertDoesNotReservePrivateRange(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(1000), last)
 	})
+}
+
+type lazyLoadResult struct {
+	cache incrTableCache
+	err   error
+}
+
+func TestLazyPrivateTableCacheCanceledWaiterDoesNotStealBuild(t *testing.T) {
+	buildStarted := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	var buildCalls atomic.Int64
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(context.Context) (incrTableCache, error) {
+		buildCalls.Add(1)
+		close(buildStarted)
+		<-releaseBuild
+		return candidate, nil
+	}).(*lazyPrivateTableCache)
+
+	builderResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		builderResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-buildStarted
+
+	waiterBase, cancelWaiter := context.WithCancel(context.Background())
+	waiterCtx := &observedDoneContext{Context: waiterBase, observed: make(chan struct{})}
+	waiterResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(waiterCtx)
+		waiterResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-waiterCtx.observed
+	cancelWaiter()
+
+	waiter := <-waiterResult
+	require.Nil(t, waiter.cache)
+	require.ErrorIs(t, waiter.err, context.Canceled)
+	require.Equal(t, int64(1), buildCalls.Load())
+	select {
+	case result := <-builderResult:
+		require.Failf(t, "builder returned before release", "result: %+v", result)
+	default:
+	}
+
+	close(releaseBuild)
+	builder := <-builderResult
+	require.NoError(t, builder.err)
+	require.Same(t, candidate, builder.cache)
+	builder.cache.release()
+	lazy.retire()
+	require.Equal(t, int64(1), candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.releases.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+}
+
+func TestLazyPrivateTableCacheBuildErrorWakesGenerationAndLaterRetries(t *testing.T) {
+	firstBuildStarted := make(chan struct{})
+	releaseFirstBuild := make(chan struct{})
+	buildErr := errors.New("first build failed")
+	var buildCalls atomic.Int64
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(context.Context) (incrTableCache, error) {
+		if buildCalls.Add(1) == 1 {
+			close(firstBuildStarted)
+			<-releaseFirstBuild
+			return nil, buildErr
+		}
+		return candidate, nil
+	}).(*lazyPrivateTableCache)
+
+	firstResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		firstResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-firstBuildStarted
+
+	waiterCtx := &observedDoneContext{Context: context.Background(), observed: make(chan struct{})}
+	waiterResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(waiterCtx)
+		waiterResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-waiterCtx.observed
+	close(releaseFirstBuild)
+
+	for _, result := range []lazyLoadResult{<-firstResult, <-waiterResult} {
+		require.Nil(t, result.cache)
+		require.ErrorIs(t, result.err, buildErr)
+	}
+	require.Equal(t, int64(1), buildCalls.Load(), "same-generation waiter must not retry")
+
+	cache, err := lazy.load(context.Background())
+	require.NoError(t, err)
+	require.Same(t, candidate, cache)
+	cache.release()
+	require.Equal(t, int64(2), buildCalls.Load())
+	lazy.retire()
+	require.Equal(t, int64(1), candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.releases.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+}
+
+func TestLazyPrivateTableCacheRetireRejectsBlockedCandidate(t *testing.T) {
+	buildStarted := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(context.Context) (incrTableCache, error) {
+		close(buildStarted)
+		<-releaseBuild
+		return candidate, nil
+	}).(*lazyPrivateTableCache)
+
+	resultC := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		resultC <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-buildStarted
+	lazy.retire()
+	close(releaseBuild)
+
+	result := <-resultC
+	require.Nil(t, result.cache)
+	require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.Nil(t, lazy.mu.cache)
+	lazy.retire()
+	require.Zero(t, candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+}
+
+func TestServiceCloseWaitsForAdmittedLazyBuilder(t *testing.T) {
+	s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+	buildAdmitted := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(ctx context.Context) (incrTableCache, error) {
+		return s.buildPrivateTableCache(ctx, func() (incrTableCache, error) {
+			close(buildAdmitted)
+			<-releaseBuild
+			return candidate, nil
+		})
+	}).(*lazyPrivateTableCache)
+	key := privateResetKey{txnID: "close-gate", tableID: 1}
+	s.mu.Lock()
+	s.mu.private[key] = lazy
+	s.mu.Unlock()
+
+	loadResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		loadResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-buildAdmitted
+
+	closeResult := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeResult)
+	}()
+	closedObserved := make(chan struct{})
+	go func() {
+		for {
+			s.mu.Lock()
+			closed := s.mu.closed
+			s.mu.Unlock()
+			if closed {
+				close(closedObserved)
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+	<-closedObserved
+	select {
+	case <-closeResult:
+		require.Fail(t, "Close returned while an admitted builder was blocked")
+	default:
+	}
+
+	close(releaseBuild)
+	result := <-loadResult
+	require.Nil(t, result.cache)
+	require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrTxnNeedRetryWithDefChanged))
+	<-closeResult
+	require.Nil(t, lazy.mu.cache)
+	require.Zero(t, candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+	s.mu.Lock()
+	_, exists := s.mu.private[key]
+	s.mu.Unlock()
+	require.False(t, exists)
 }
 
 func TestPrivateOffsetResetBuildsOneCacheForConcurrentUsers(t *testing.T) {

@@ -359,21 +359,44 @@ func (s *service) SetOffset(
 		tableID,
 		cols,
 		func(buildCtx context.Context) (incrTableCache, error) {
-			s.mu.Lock()
-			if s.mu.closed {
-				s.mu.Unlock()
-				return nil, moerr.NewTxnNeedRetryWithDefChanged(buildCtx)
-			}
-			s.builders.Add(1)
-			s.mu.Unlock()
-			defer s.builders.Done()
-			return newTableCache(
-				buildCtx, s.sid, tableID, 0, cols, s.cfg, s.allocator, txnOp, false)
+			return s.buildPrivateTableCache(
+				buildCtx,
+				func() (incrTableCache, error) {
+					return newTableCache(
+						buildCtx, s.sid, tableID, 0, cols, s.cfg, s.allocator, txnOp, false)
+				})
 		})
 	if err := s.installPrivateReset(ctx, tableID, txnOp, private); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *service) buildPrivateTableCache(
+	ctx context.Context,
+	build func() (incrTableCache, error),
+) (incrTableCache, error) {
+	s.mu.Lock()
+	if s.mu.closed {
+		s.mu.Unlock()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	s.builders.Add(1)
+	s.mu.Unlock()
+	defer s.builders.Done()
+
+	cache, err := build()
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	closed := s.mu.closed
+	s.mu.Unlock()
+	if closed {
+		cache.retire()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return cache, nil
 }
 
 func (s *service) DiscardOffsetReset(
