@@ -149,6 +149,7 @@ creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 modified_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -468,6 +469,7 @@ creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 modified_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -778,6 +780,7 @@ creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 modified_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1075,6 +1078,7 @@ creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 modified_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

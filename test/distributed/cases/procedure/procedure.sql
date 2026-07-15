@@ -118,5 +118,6 @@ create procedure test_sql_mode_pipes() 'begin select ''a''||''b'' as c; end';
 set sql_mode = '';
 call test_sql_mode_pipes();
 drop procedure test_sql_mode_pipes;
+set sql_mode = default;
 
 drop database if exists procedure_test;

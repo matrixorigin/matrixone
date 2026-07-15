@@ -102,5 +102,6 @@ call test_sql_mode_pipes();
 c
 ab
 drop procedure test_sql_mode_pipes;
+set sql_mode = default;
 
 drop database if exists procedure_test;
