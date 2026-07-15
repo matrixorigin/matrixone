@@ -158,10 +158,11 @@ function run_tests(){
 function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
+  local failed_output=""
 
   # Keep the workflow's always-run report steps well-defined even when the
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
-  mkdir -p "${report_path}/failed"
+  mkdir -p "${report_path}/failed/outputs"
 
   if ! go install github.com/matrixorigin/go-ut-analysis@latest; then
     analysis_status=1
@@ -179,9 +180,9 @@ function ut_summary(){
     tail -n 50 "${UT_REPORT}" | cut -c 1-4096
   fi
 
+  failed_output=$(find "${report_path}/failed/outputs" -type f -print -quit)
   if (( UT_TEST_STATUS == 0 && analysis_status == 0 )) &&
-     find "${report_path}" > /dev/null 2>&1 &&
-     ! find "${report_path}/failed/outputs" > /dev/null 2>&1; then
+     [[ -z "${failed_output}" ]]; then
     logger "INF" "UNIT TESTING SUCCEEDED !!!"
   else
     logger "ERR" "UNIT TESTING FAILED: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
