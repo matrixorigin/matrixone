@@ -1707,8 +1707,8 @@ MPool-domain leak, lease leak, or tombstone leak.
 The checked-in SQL gate is `pkg/embed/resource_accounting_bvt_test.go`. It runs
 real SQL and `EXPLAIN PHYPLAN ANALYZE` against an embedded single-CN service,
 then forces a multi-CN scan and requires resource overviews from at least two
-distinct CN addresses. `make bvt-resource-accounting` first runs the complete
-deterministic production-path gate, then both embedded SQL cases.
+distinct CN addresses. `make bvt-resource-accounting` first runs the focused
+package gate, then both embedded SQL success cases.
 
 The embedded service does not initialize the asynchronous statement exporter,
 so it must not pretend to validate `system.statement_info` persistence. That
@@ -1743,10 +1743,14 @@ order by response_at desc;
 ```
 
 This manual smoke check is supplementary, not part of the reproducible local
-gate. The deterministic suites cover success/error/cancel/panic/retry,
-partial/missing terminals, spill, protocol failures, projection, aggregation,
-and collector saturation through production recorders with controlled fault
-injection. Assertions include:
+gate. The repository gate is deliberately compositional rather than claiming a
+single synthetic end-to-end fixture: resource algebra tests cover terminal
+outcomes, partial/missing data and spill; compile tests cover generation-local
+retry attribution and remote terminals; trace tests cover projection,
+aggregation and collector saturation; frontend tests cover response completion
+and protocol failure; embedded SQL covers real single-CN and multi-CN plan
+execution. A deployment with the asynchronous exporter enabled remains the
+only end-to-end persistence check. Assertions for that smoke check include:
 
 - `json_length(stats) = 17`, index 0 is 6, and every persisted count, byte, and
   duration is non-negative;
