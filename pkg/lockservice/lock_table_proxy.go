@@ -32,9 +32,10 @@ type localLockTableProxy struct {
 
 	mu struct {
 		sync.RWMutex
-		holders              map[string]*sharedOps // key: row
-		currentHolder        map[string][]byte
-		pendingRemoteHolders map[string][]byte
+		holders                  map[string]*sharedOps // key: row
+		currentHolder            map[string][]byte
+		pendingRemoteHolders     map[string][]byte
+		pendingLastHolderUnlocks map[string]struct{}
 	}
 }
 
@@ -51,6 +52,7 @@ func newLockTableProxy(
 	lp.mu.holders = make(map[string]*sharedOps)
 	lp.mu.currentHolder = make(map[string][]byte)
 	lp.mu.pendingRemoteHolders = make(map[string][]byte)
+	lp.mu.pendingLastHolderUnlocks = make(map[string]struct{})
 	return lp
 }
 
@@ -71,6 +73,16 @@ func (lp *localLockTableProxy) lock(
 
 	lp.mu.Lock()
 	key := util.UnsafeBytesToString(rows[0])
+	if _, ok := lp.mu.pendingLastHolderUnlocks[key]; ok {
+		// The owner may already have applied the last-holder Unlock even
+		// though its response was lost. Until the retry confirms that
+		// transition, the stale local holder cannot safely represent a remote
+		// shared lock. Route new sharers through the owner so they observe any
+		// exclusive owner acquired in the meantime.
+		lp.mu.Unlock()
+		lp.remote.lock(ctx, txn, rows, options, cb)
+		return
+	}
 	v, ok := lp.mu.holders[key]
 	if !ok {
 		v = &sharedOps{
@@ -222,8 +234,13 @@ func (lp *localLockTableProxy) unlockWithContext(
 				// transition; otherwise the proxy and owner can publish different
 				// holders for the same shared lock.
 				remoteReplacement = pending
+			} else if _, ok := lp.mu.pendingLastHolderUnlocks[row]; ok {
+				// Preserve the already-selected empty replacement across retries.
+				remoteReplacement = nil
 			} else if len(remoteReplacement) > 0 {
 				lp.mu.pendingRemoteHolders[row] = remoteReplacement
+			} else {
+				lp.mu.pendingLastHolderUnlocks[row] = struct{}{}
 			}
 			remoteMutations = append(remoteMutations,
 				pb.ExtraMutation{
@@ -265,6 +282,7 @@ func (lp *localLockTableProxy) unlockWithContext(
 		}
 		if update.clearPendingRemoteHolder {
 			delete(lp.mu.pendingRemoteHolders, update.row)
+			delete(lp.mu.pendingLastHolderUnlocks, update.row)
 		} else if len(update.nextPendingRemoteHolder) > 0 {
 			lp.mu.pendingRemoteHolders[update.row] = update.nextPendingRemoteHolder
 		}
