@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 
@@ -54,6 +55,16 @@ type activeTxn struct {
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
+}
+
+type contextUnlocker interface {
+	unlockWithContext(
+		context.Context,
+		*activeTxn,
+		*cowSlice,
+		timestamp.Timestamp,
+		...pb.ExtraMutation,
+	) error
 }
 
 func newActiveTxn(
@@ -156,6 +167,63 @@ func (txn *activeTxn) close(
 	logger *log.MOLogger,
 	mutations ...pb.ExtraMutation,
 ) error {
+	return txn.closeWithContext(
+		context.Background(),
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		true,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithoutFreeWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		false,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithContextInternal(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	release bool,
+	mutations ...pb.ExtraMutation,
+) error {
 	logTxnReadyToClose(logger, txn)
 
 	// cancel all blocked waiters
@@ -172,7 +240,14 @@ func (txn *activeTxn) close(
 	}
 
 	n := len(txn.lockHolders)
+	// Unknown-commit cleanup can be retried after a bounded remote RPC attempt
+	// expires. Keep that path sequential and remove every table only after its
+	// unlock succeeds, so a retry never replays a successful local unlock.
+	// Normal transaction cleanup retains its existing parallel behavior.
+	parallelUnlock := release && n > parallelUnlockTables && ctx.Done() == nil
 	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
 	for group, h := range txn.lockHolders {
 		for table, cs := range h.tableKeys {
@@ -186,6 +261,9 @@ func (txn *activeTxn) close(
 				panic(err)
 			}
 			if l == nil || canSkipTable(isRemoteTable, l) {
+				if !release {
+					txn.removeClosedLockTable(group, table, cs)
+				}
 				continue
 			}
 
@@ -196,20 +274,34 @@ func (txn *activeTxn) close(
 						txn,
 						table,
 					)
-					l.unlock(txn, cs, commitTS, mutations...)
+					var err error
+					if unlocker, ok := l.(contextUnlocker); ok {
+						err = unlocker.unlockWithContext(ctx, txn, cs, commitTS, mutations...)
+					} else {
+						l.unlock(txn, cs, commitTS, mutations...)
+					}
+					if err != nil {
+						errMu.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						errMu.Unlock()
+					} else if !release {
+						txn.removeClosedLockTable(group, table, cs)
+					}
 					logTxnUnlockTableCompleted(
 						logger,
 						txn,
 						table,
 						cs,
 					)
-					if n > parallelUnlockTables {
+					if parallelUnlock {
 						wg.Done()
 					}
 				}
 			}
 
-			if n > parallelUnlockTables {
+			if parallelUnlock {
 				wg.Add(1)
 				ants.Submit(fn(table, cs, l))
 			} else {
@@ -218,12 +310,35 @@ func (txn *activeTxn) close(
 		}
 	}
 
-	if n > parallelUnlockTables {
+	if parallelUnlock {
 		wg.Wait()
 	}
 
-	reuse.Free(txn, nil)
-	return nil
+	if release {
+		reuse.Free(txn, nil)
+	}
+	return firstErr
+}
+
+// removeClosedLockTable forgets a successfully released table while an
+// unknown-commit cleanup is still retryable. activeTxn is held by the caller.
+func (txn *activeTxn) removeClosedLockTable(
+	group uint32,
+	table uint64,
+	cs *cowSlice,
+) {
+	h, ok := txn.lockHolders[group]
+	if !ok || h.tableKeys[table] != cs {
+		return
+	}
+	delete(h.tableKeys, table)
+	delete(h.tableBinds, table)
+	delete(h.tableBindIntents, table)
+	cs.close()
+	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
+		len(h.tableBindIntents) == 0 {
+		delete(txn.lockHolders, group)
+	}
 }
 
 func (txn *activeTxn) reset() {

@@ -33,6 +33,126 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type blockingUnlockClient struct {
+	unlockStarted chan struct{}
+}
+
+func (c *blockingUnlockClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	if req.Method != pb.Method_Unlock {
+		return nil, io.ErrClosedPipe
+	}
+	select {
+	case c.unlockStarted <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *blockingUnlockClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *blockingUnlockClient) Close() error { return nil }
+
+type blockingBindRefreshClient struct {
+	bindRefreshStarted chan struct{}
+}
+
+func (c *blockingBindRefreshClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Unlock:
+		return nil, io.ErrUnexpectedEOF
+	case pb.Method_GetBind:
+		select {
+		case c.bindRefreshStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *blockingBindRefreshClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *blockingBindRefreshClient) Close() error { return nil }
+
+func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1},
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	txnID := []byte("unknown-commit")
+	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
+	}()
+
+	select {
+	case <-client.unlockStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote unlock did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote unlock ignored cancellation")
+	}
+}
+
+func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1},
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	txnID := []byte("unknown-commit-bind-refresh")
+	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
+	}()
+
+	select {
+	case <-client.bindRefreshStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote unlock did not start bind refresh")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote bind refresh ignored cancellation")
+	}
+}
+
 func TestLockRemote(t *testing.T) {
 	runRemoteLockTableTests(
 		t,
