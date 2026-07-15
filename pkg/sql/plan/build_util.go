@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1269,6 +1270,12 @@ func genParentSideReplaceFKSqls(
 
 	const parentAlias = "__mo_replace_parent"
 	literalFmt := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	formatStringLiteral := func(value string) string {
+		tree.NewNumVal(value, value, false, tree.P_char).Format(literalFmt)
+		formatted := literalFmt.String()
+		literalFmt.Reset()
+		return formatted
+	}
 	formatLiteral := func(expr *plan.Expr) (string, bool, bool) {
 		lit := expr.GetLit()
 		if lit == nil {
@@ -1310,11 +1317,21 @@ func genParentSideReplaceFKSqls(
 				B64_127: uint64(val.Decimal128Val.B),
 			}
 			return decimal.Format(expr.Typ.Scale), false, true
+		case *plan.Literal_Dateval:
+			return formatStringLiteral(types.Date(val.Dateval).String()), false, true
+		case *plan.Literal_Timeval:
+			return formatStringLiteral(types.Time(val.Timeval).String2(expr.Typ.Scale)), false, true
+		case *plan.Literal_Datetimeval:
+			return formatStringLiteral(types.Datetime(val.Datetimeval).String2(expr.Typ.Scale)), false, true
+		case *plan.Literal_Timestampval:
+			location := time.UTC
+			if proc := ctx.GetProcess(); proc != nil && proc.GetSessionInfo().TimeZone != nil {
+				location = proc.GetSessionInfo().TimeZone
+			}
+			value := types.Timestamp(val.Timestampval).String2(location, expr.Typ.Scale)
+			return formatStringLiteral(value), false, true
 		case *plan.Literal_Sval:
-			tree.NewNumVal(val.Sval, val.Sval, false, tree.P_char).Format(literalFmt)
-			formatted := literalFmt.String()
-			literalFmt.Reset()
-			return formatted, false, true
+			return formatStringLiteral(val.Sval), false, true
 		default:
 			return "", false, false
 		}

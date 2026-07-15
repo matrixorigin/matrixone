@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -3331,6 +3332,74 @@ func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
 			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
 			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
 		require.ErrorContains(t, err, "non-literal default conflict key")
+	})
+
+	t.Run("temporal defaults participate", func(t *testing.T) {
+		dateValue, err := types.ParseDateCast("2026-07-15")
+		require.NoError(t, err)
+		timeValue, err := types.ParseTime("12:34:56.123", 3)
+		require.NoError(t, err)
+		datetimeValue, err := types.ParseDatetime("2026-07-15 12:34:56.123", 3)
+		require.NoError(t, err)
+
+		location := time.UTC
+		mockForLocation := NewMockOptimizer(true)
+		if sessionLocation := mockForLocation.ctxt.GetProcess().GetSessionInfo().TimeZone; sessionLocation != nil {
+			location = sessionLocation
+		}
+		timestampValue, err := types.ParseTimestamp(location, "2026-07-15 12:34:56.123", 3)
+		require.NoError(t, err)
+
+		cases := []struct {
+			name     string
+			typ      plan.Type
+			literal  *plan.Expr_Lit
+			expected string
+		}{
+			{
+				name:     "date",
+				typ:      plan.Type{Id: int32(types.T_date)},
+				literal:  makePlan2DateConstExpr(int32(dateValue)),
+				expected: `"2026-07-15"`,
+			},
+			{
+				name:     "time",
+				typ:      plan.Type{Id: int32(types.T_time), Scale: 3},
+				literal:  makePlan2TimeConstExpr(int64(timeValue)),
+				expected: `"12:34:56.123"`,
+			},
+			{
+				name:     "datetime",
+				typ:      plan.Type{Id: int32(types.T_datetime), Scale: 3},
+				literal:  makePlan2DateTimeConstExpr(int64(datetimeValue)),
+				expected: `"2026-07-15 12:34:56.123"`,
+			},
+			{
+				name:     "timestamp",
+				typ:      plan.Type{Id: int32(types.T_timestamp), Scale: 3},
+				literal:  makePlan2TimestampConstExpr(int64(timestampValue)),
+				expected: `"2026-07-15 12:34:56.123"`,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				mock, parent := newParent(t)
+				v := parentCol(t, parent, "v")
+				v.Typ = tc.typ
+				v.Default = &plan.Default{
+					NullAbility: true,
+					Expr:        &plan.Expr{Typ: tc.typ, Expr: tc.literal},
+				}
+
+				_, actions, err := genParentSideReplaceFKSqls(
+					&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
+					parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
+				require.NoError(t, err)
+				require.Len(t, actions, 1)
+				assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = "+tc.expected)
+			})
+		}
 	})
 }
 

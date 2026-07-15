@@ -389,6 +389,26 @@ select * from fk_omitted_uk_c;
 drop table fk_omitted_uk_c;
 drop table fk_omitted_uk_p;
 
+create table fk_temporal_default_p(
+  id int primary key,
+  d date unique default '2026-07-15',
+  t time unique default '12:34:56',
+  dt datetime unique default '2026-07-15 12:34:56',
+  ts timestamp unique default '2026-07-15 12:34:56'
+);
+create table fk_temporal_default_c(
+  id int primary key,
+  pid int,
+  foreign key(pid) references fk_temporal_default_p(id) on delete cascade
+);
+insert into fk_temporal_default_p(id) values (1);
+insert into fk_temporal_default_c values (1, 1);
+replace into fk_temporal_default_p(id) values (2);
+select * from fk_temporal_default_p;
+select * from fk_temporal_default_c;
+drop table fk_temporal_default_c;
+drop table fk_temporal_default_p;
+
 create table fk_param_p(id int primary key, v int);
 create table fk_param_c(id int primary key, pid int,
   foreign key(pid) references fk_param_p(id) on delete restrict);
