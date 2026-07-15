@@ -1207,9 +1207,7 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 			cols = resolved
 		}
 		sql := buildAnalyzeDerivedSQL(entry, cols)
-		if execCtx.input != nil {
-			sql = inheritAnalyzeRewriteHint(execCtx.input.getSql(), sql)
-		}
+		sql = inheritAnalyzeRewriteHint(execCtx.sqlOfStmt, sql)
 		result, err := executeAnalyzeDerivedQuery(ses, execCtx, sql)
 		if err != nil {
 			return err
@@ -3730,7 +3728,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 		}
 	}()
-	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	sqlRecord := sqlForRecordByStatement(input.getSql())
 
 	for i, cw := range cws {
 		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
@@ -3835,6 +3833,25 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}
 
 	return nil
+}
+
+// sqlForRecordByStatement keeps the sanitized per-statement text aligned with
+// the parser's AST list. HandleSqlForRecord intentionally preserves blank and
+// comment-only semicolon fragments for its existing callers; execution skips
+// those fragments, so filter them here before indexing by computation wrapper.
+func sqlForRecordByStatement(sql string) []string {
+	fragments := parsers.SplitSqlBySemicolon(sql)
+	records := parsers.HandleSqlForRecord(sql)
+	if len(fragments) == 1 {
+		return records
+	}
+	byStatement := make([]string, 0, len(records))
+	for i, fragment := range fragments {
+		if parsers.FragmentHasStatement(fragment) {
+			byStatement = append(byStatement, records[i])
+		}
+	}
+	return byStatement
 }
 
 func checkNodeCanCache(p *plan2.Plan) bool {

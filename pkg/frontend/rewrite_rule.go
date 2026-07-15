@@ -153,9 +153,10 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 	return payload.Rewrites, nil
 }
 
-// rewriteSQL checks the session's role rewrite rule cache and the
-// remap_rewrites session variable and, if rules exist, prepends a hint comment
-// to the SQL string.
+// rewriteSQL materializes the effective rewrite policy independently on every
+// statement in a request. Splitting is scanner-backed, so semicolons in strings
+// and comments do not create fragments. Blank and comment-only fragments remain
+// untouched to preserve alignment with the parser's statement list.
 // If ruleCache is nil (not yet loaded), it lazily loads rules via loadRuleCache.
 // Rules for the same table key are layered, not overridden: role -> session ->
 // inline are emitted as an ordered chain (stacked views), so a session/inline
@@ -197,6 +198,41 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 
 	// Session-variable rewrites and database remaps.
 	sessionRules, sessionRemapDb := getSessionRewriteRules(ctx, ses)
+	fragments := parsers.SplitSqlBySemicolon(sql)
+	if len(fragments) == 1 {
+		if !parsers.FragmentHasStatement(sql) {
+			return sql, nil
+		}
+		return rewriteSingleSQL(ctx, sql, cache, sessionRules, sessionRemapDb)
+	}
+
+	for i, fragment := range fragments {
+		if !parsers.FragmentHasStatement(fragment) {
+			continue
+		}
+		rewritten, err := rewriteSingleSQL(ctx, fragment, cache, sessionRules, sessionRemapDb)
+		if err != nil {
+			return sql, err
+		}
+		fragments[i] = rewritten
+	}
+	rewritten := strings.Join(fragments, ";")
+	if strings.HasSuffix(strings.TrimSpace(sql), ";") {
+		rewritten += ";"
+	}
+	return rewritten, nil
+}
+
+// rewriteSingleSQL merges a policy snapshot with one statement's own leading
+// inline JSON hint. The wrapper above loads/captures role and session policy
+// once per request and passes the same snapshot to every statement.
+func rewriteSingleSQL(
+	ctx context.Context,
+	sql string,
+	cache map[string]string,
+	sessionRules map[string]string,
+	sessionRemapDb map[string]string,
+) (string, error) {
 
 	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
 	// value must be a single SQL string; arrays/objects are rejected here. The

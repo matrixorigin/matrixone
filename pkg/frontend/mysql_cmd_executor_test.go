@@ -1638,6 +1638,55 @@ func TestInheritAnalyzeRewriteHint(t *testing.T) {
 	})
 }
 
+func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
+	jsonHint := ` {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"}} `
+	tests := []struct {
+		name, commandSQL, statementSQL, wantDerived string
+	}{
+		{
+			name:         "second statement inline is inherited",
+			commandSQL:   "select 1; /*+" + jsonHint + "*/ analyze table db.t(id)",
+			statementSQL: "/*+" + jsonHint + "*/ analyze table db.t(id)",
+			wantDerived:  "/*+" + jsonHint + "*/ select approx_count_distinct(`id`) from `db`.`t`",
+		},
+		{
+			name:         "first statement inline is not inherited by later analyze",
+			commandSQL:   "/*+" + jsonHint + "*/ select 1; analyze table db.t(id)",
+			statementSQL: "analyze table db.t(id)",
+			wantDerived:  "select approx_count_distinct(`id`) from `db`.`t`",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+			execCtx.input = &UserInput{sql: tt.commandSQL}
+			execCtx.sqlOfStmt = tt.statementSQL
+			var gotDerived string
+			stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
+				gotDerived = innerExecCtx.input.getSql()
+				stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, gotDerived, 1)
+				require.NoError(t, err)
+				results := map[string]*result{
+					gotDerived: {gen: func(*Session) *MysqlResultSet {
+						return makeAnalyzeCountResult("approx_count_distinct(id)", 2)
+					}},
+				}
+				return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, gotDerived, stmts[0], proc)}, nil
+			})
+			defer stub.Reset()
+
+			stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{{
+				Table: tree.NewTableName("t", tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil),
+				Cols:  tree.IdentifierList{"id"},
+			}}}
+			require.NoError(t, handleAnalyzeStmt(ses, execCtx, stmt))
+			require.Equal(t, tt.wantDerived, gotDerived)
+		})
+	}
+}
+
 func TestResolveAnalyzeDatabaseUsesRemappedDefault(t *testing.T) {
 	tcc := &TxnCompilerContext{
 		dbName: "dbxxx",

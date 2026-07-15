@@ -203,7 +203,7 @@ func SplitSqlBySemicolon(sql string) []string {
 	return ret
 }
 
-// fragmentHasStatement reports whether a semicolon-separated fragment carries an
+// FragmentHasStatement reports whether a semicolon-separated fragment carries an
 // actual statement rather than being blank or comment-only. The scanner skips
 // every comment form (-- , #, //, /* */, /*+ */) so the first token of a
 // comment-only or empty fragment is EOF. It is used to align the leading-hint
@@ -211,7 +211,7 @@ func SplitSqlBySemicolon(sql string) []string {
 // into two fragments but parses into one statement, and the comment-only tail
 // must not be counted as a statement (otherwise the hint/statement counts
 // mismatch and AddRewriteHints rejects an otherwise valid query).
-func fragmentHasStatement(fragment string) bool {
+func FragmentHasStatement(fragment string) bool {
 	if strings.TrimSpace(fragment) == "" {
 		return false
 	}
@@ -233,7 +233,7 @@ func extractLeadingHints(sql string) []string {
 	fragments := SplitSqlBySemicolon(sql)
 	stmts := make([]string, 0, len(fragments))
 	for _, f := range fragments {
-		if fragmentHasStatement(f) {
+		if FragmentHasStatement(f) {
 			stmts = append(stmts, f)
 		}
 	}
