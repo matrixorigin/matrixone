@@ -573,29 +573,8 @@ func (mp *MysqlProtocolImpl) SetUserName(s string) {
 	mp.username.Store(s)
 }
 
-const defaultTcp4PackageSize = 1<<14 - 66
-
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
-// return 0 value, if the connection is closed.
-//
-// packet cnt has 3 part:
-// 1st part: flush op cnt.
-// 2nd part: upload part, calculation = payload / 16KiB
-//
-// 3rd part
-// [mo 2.0]
-// 3.1: response part, calculation = sendByte / (16KiB - 66B)
-//   - use net.Listener raw api.
-//   - discard ioCopyBufferSize logic.
-//
-// 3.2: output csv
-//   - fill with ExportDataDefaultFlushSize size, do once flush.
-//
-// [mo 1.2, 1.1.*]
-// 3rd part: response part, calculation = sendByte / 4KiB
-//   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
-//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do Conn.Flush().
-//   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
+// CalculateOutTrafficBytes returns bytes accepted by the connection writer and
+// completed MySQL protocol packets. It does not estimate TCP/TLS overhead.
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
 	if ses == nil {
@@ -606,13 +585,7 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 	// Case 2: send data as CSV
 	csvPart := ses.writeCsvBytes.Load()
 	bytes = resultSetPart + csvPart
-	tcpPkgCnt := ses.GetFlushPacketCnt()
-	packets = tcpPkgCnt /*1st part*/ +
-		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*2nd part*/
-		resultSetPart/defaultTcp4PackageSize /*3rd part(3.1)*/
-	if csvPart > 0 {
-		packets += int64((csvPart >> 20) / getPu(ses.GetService()).SV.ExportDataDefaultFlushSize) /*3rd part (3.2)*/
-	}
+	packets = ses.GetOutputPacketCnt()
 	if reset {
 		ses.ResetPacketCounter()
 	}

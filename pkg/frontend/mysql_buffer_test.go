@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func ReadPacketForTest(c *Conn) ([]byte, error) {
@@ -142,6 +143,24 @@ func generateRandomBytes(n int) []byte {
 	randomIndex := rand.Intn(len(data))
 	data[randomIndex] = 1
 	return data
+}
+
+func TestConnCountsCompletedOutputPackets(t *testing.T) {
+	_, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+	ses := &Session{}
+	conn.SetSession(ses)
+
+	for range 2 {
+		assert.NoError(t, conn.BeginPacket())
+		assert.NoError(t, conn.Append([]byte("x")...))
+		assert.NoError(t, conn.FinishedPacket())
+	}
+	assert.NoError(t, conn.Flush())
+	assert.Equal(t, int64(2), ses.GetOutputPacketCnt())
+
+	assert.NoError(t, conn.Write([]byte{defines.OKHeader}))
+	assert.Equal(t, int64(3), ses.GetOutputPacketCnt())
 }
 
 func TestMySQLProtocolRead(t *testing.T) {

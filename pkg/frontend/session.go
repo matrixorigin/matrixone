@@ -541,14 +541,15 @@ func (ses *Session) CountPayload(length int) {
 	ses.payloadCounter += int64(length)
 }
 
-// CountFlushPackage count the raw conn flush op.
-func (ses *Session) CountFlushPackage(delta int64) {
+// CountOutputPackets records MySQL protocol packets whose bytes were fully
+// accepted by the connection writer.
+func (ses *Session) CountOutputPackets(delta int64) {
 	if ses == nil {
 		return
 	}
 	ses.packetCounter.Add(delta)
 }
-func (ses *Session) GetFlushPacketCnt() int64 {
+func (ses *Session) GetOutputPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}

@@ -866,7 +866,6 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-	c.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -879,6 +878,7 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
+	c.CountOutputPackets(int64(c.packetInBuf))
 	c.packetInBuf = 0
 	return err
 }
@@ -897,7 +897,11 @@ func (c *Conn) Write(payload []byte) error {
 		}
 		header[3] = c.sequenceId
 		c.sequenceId += 1
-		return c.WriteToConn(append(header[:], payload...))
+		err = c.WriteToConn(append(header[:], payload...))
+		if err == nil {
+			c.CountOutputPackets(1)
+		}
+		return err
 	}
 	header[3] = c.sequenceId
 	c.sequenceId += 1
@@ -905,6 +909,7 @@ func (c *Conn) Write(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	c.packetInBuf++
 	err = c.Flush()
 	if err != nil {
 		return err
@@ -961,12 +966,12 @@ func (c *Conn) Reset() {
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
 
-func (c *Conn) CountFlushPackage(n int64) {
+func (c *Conn) CountOutputPackets(n int64) {
 	hld := c.ses.Load()
 	if hld != nil {
 		val := hld.value
 		if val != nil {
-			val.CountFlushPackage(n)
+			val.CountOutputPackets(n)
 		}
 	}
 }
