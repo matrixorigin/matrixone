@@ -199,6 +199,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		node.OnList = splitPlanConjunctions(node.OnList)
 
+		getJoinSideForPushdown := getJoinSide
+		if separateNonEquiConds {
+			// After join ordering, conds can reference tags outside this join subtree.
+			// Keep those conds at this join instead of pushing them to one child.
+			getJoinSideForPushdown = getJoinSideWithOuterScope
+		}
+
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
 				filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
@@ -215,10 +222,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		for i, filter := range filters {
 			canTurnInner := true
 
-			joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
+			joinSides[i] = getJoinSideForPushdown(filter, leftTags, rightTags, markTag)
 			if f := filter.GetF(); f != nil {
 				for _, arg := range f.Args {
-					if getJoinSide(arg, leftTags, rightTags, markTag) == JoinSideBoth {
+					argSide := getJoinSideForPushdown(arg, leftTags, rightTags, markTag)
+					if argSide == JoinSideBoth || argSide&JoinSideOuter != 0 {
 						canTurnInner = false
 						break
 					}
@@ -244,14 +252,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			joinSides = make([]int8, len(filters))
 
 			for i, filter := range filters {
-				joinSides[i] = getJoinSide(filter, leftTags, rightTags, markTag)
+				joinSides[i] = getJoinSideForPushdown(filter, leftTags, rightTags, markTag)
 			}
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
 				for _, conjElem := range conj {
-					side := getJoinSide(conjElem, leftTags, rightTags, markTag)
+					side := getJoinSideForPushdown(conjElem, leftTags, rightTags, markTag)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
 					} else {
@@ -277,7 +285,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 							extraFilter := walkThroughDNF(builder.GetContext(), filter, key)
 							if extraFilter != nil {
 								extraFilters = append(extraFilters, DeepCopyExpr(extraFilter))
-								joinSides = append(joinSides, getJoinSide(extraFilter, leftTags, rightTags, markTag))
+								joinSides = append(joinSides, getJoinSideForPushdown(extraFilter, leftTags, rightTags, markTag))
 							}
 						}
 					}
@@ -287,6 +295,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 		for i, filter := range filters {
+			if joinSides[i]&JoinSideOuter != 0 {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
+
 			switch joinSides[i] {
 			case JoinSideNone:
 				if filter.GetLit().GetBval() {
@@ -324,8 +337,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					if separateNonEquiConds {
 						if f := filter.GetF(); f != nil {
 							if f.Func.ObjName == "=" {
-								if getJoinSide(f.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
-									if getJoinSide(f.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
+								if getJoinSideForPushdown(f.Args[0], leftTags, rightTags, markTag) != JoinSideBoth {
+									if getJoinSideForPushdown(f.Args[1], leftTags, rightTags, markTag) != JoinSideBoth {
 										node.OnList = append(node.OnList, filter)
 										break
 									}
@@ -384,7 +397,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				var newOnList []*plan.Expr
 
 				for _, cond := range node.OnList {
-					joinSide := getJoinSide(cond, leftTags, rightTags, markTag)
+					joinSide := getJoinSideForPushdown(cond, leftTags, rightTags, markTag)
 					if joinSide == JoinSideRight {
 						rightPushdown = append(rightPushdown, cond)
 					} else {
@@ -427,27 +440,34 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 		}
 
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown, separateNonEquiConds)
-
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
+		wrapChildFilters := func(childID int32, childFilters []*plan.Expr, childTags map[int32]bool) int32 {
+			var filtersForChild []*plan.Expr
+			for _, filter := range childFilters {
+				if containsOnlyTags(filter, childTags) {
+					filtersForChild = append(filtersForChild, filter)
+				} else {
+					cantPushdown = append(cantPushdown, filter)
+				}
+			}
+			if len(filtersForChild) == 0 {
+				return childID
+			}
+			return builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[0]},
-				FilterList: cantPushdownChild,
+				Children:   []int32{childID},
+				FilterList: filtersForChild,
 			}, nil)
 		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown, separateNonEquiConds)
+
+		childID = wrapChildFilters(childID, cantPushdownChild, leftTags)
 
 		node.Children[0] = childID
 
 		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], rightPushdown, separateNonEquiConds)
 
-		if len(cantPushdownChild) > 0 {
-			childID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{node.Children[1]},
-				FilterList: cantPushdownChild,
-			}, nil)
-		}
+		childID = wrapChildFilters(childID, cantPushdownChild, rightTags)
 
 		node.Children[1] = childID
 
@@ -533,8 +553,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.FilterList = append(node.FilterList, selfFilters...)
 		if len(node.Children) != 0 {
 			childId := node.Children[0]
-			childId, _ = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
+			var cantPushdownChild []*plan.Expr
+			childId, cantPushdownChild = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
 			node.Children[0] = childId
+			cantPushdown = append(cantPushdown, cantPushdownChild...)
+		} else {
+			cantPushdown = append(cantPushdown, downFilters...)
 		}
 
 	case plan.Node_APPLY:
@@ -606,12 +630,12 @@ func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	nodePushDown = DeepCopyNode(node)
 
 	if nodePushDown.Offset != nil {
-		newExpr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{nodePushDown.Limit, nodePushDown.Offset})
-		if err != nil {
+		candidateLimit, ok := buildCandidateLimit(nodePushDown.Limit, nodePushDown.Offset)
+		if !ok {
 			goto END
 		}
 		nodePushDown.Offset = nil
-		nodePushDown.Limit = newExpr
+		nodePushDown.Limit = candidateLimit
 	}
 	newNodeID = builder.appendNode(nodePushDown, nil)
 	nodePushDown.Children[0] = joinnode.Children[0]
@@ -638,24 +662,6 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
-
-			// if there is a limit, outcnt is limit number
-			if child.Limit != nil {
-				if cExpr, ok := child.Limit.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						child.Stats.Outcnt = float64(c.U64Val)
-						if child.Stats.Selectivity < 0.5 {
-							newblockNum := int32(c.U64Val / 2)
-							if newblockNum < child.Stats.BlockNum {
-								child.Stats.BlockNum = newblockNum
-							}
-						} else {
-							child.Stats.BlockNum = 1
-						}
-						child.Stats.Cost = float64(child.Stats.BlockNum * objectio.BlockMaxRows)
-					}
-				}
-			}
 		}
 	}
 }
@@ -697,8 +703,8 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.OrderBy != nil {
 		return
 	}
-	limitVal := node.Limit.GetLit().GetU64Val()
-	if limitVal == 0 {
+	limitVal, literal := getLiteralUint64(node.Limit)
+	if !literal || limitVal == 0 {
 		return
 	}
 	if limitVal > maxVectorIndexTopPushdownLimit {

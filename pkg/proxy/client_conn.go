@@ -583,6 +583,12 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	// migration (prevAdd != ""), we must build a fresh backend connection and
 	// migrate session state from the previous CN.
 	if c.connCache != nil && prevAdd == "" {
+		// Plugin routing decisions may depend on Username / OriginIP and other
+		// per-login context not captured by the connCache key. Never reuse a
+		// cached backend session in front of a plugin router.
+		if _, pluginMode := c.router.(*pluginRouter); pluginMode {
+			goto skipConnCache
+		}
 		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
 		if sc != nil {
 			// get the response from the cn server.
@@ -594,6 +600,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			return sc, nil
 		}
 	}
+skipConnCache:
 
 	badCNServers := make(map[string]struct{})
 	// timeoutCNServers tracks CN servers that failed due to timeout.
@@ -616,7 +623,13 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		// Select the best CN server from backend.
 		//
 		// NB: The selected CNServer must have label hash in it.
-		cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+		if prevAdd == "" {
+			cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+		} else if tr, ok := c.router.(transferRouter); ok {
+			cn, err = tr.RouteForTransfer(c.ctx, c.sid, c.clientInfo, filterFn)
+		} else {
+			cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+		}
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			// Check if all failed CN servers were due to timeout.
@@ -642,7 +655,21 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
-		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		// Route-selected new-session connects should feed timeout/overload
+		// feedback into the CN health breaker; internal/admin connects use
+		// plain Router.Connect and intentionally do not.
+		if prevAdd == "" {
+			if rr, ok := c.router.(routeSelectedConnector); ok {
+				sc, r, err = rr.ConnectRouteSelected(cn, c.handshakePack, c.tun)
+			} else {
+				sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+			}
+		} else {
+			// Session transfer / migration must not feed success/failure back
+			// into the global CN breaker. It is control-plane traffic, not a
+			// Route-selected new-session connect.
+			sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		}
 		if err != nil {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()

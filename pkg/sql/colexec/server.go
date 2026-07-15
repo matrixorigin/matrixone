@@ -15,34 +15,20 @@
 package colexec
 
 import (
-	"sync/atomic"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// FIXME: shit design
-var srv atomic.Pointer[Server]
-
-func Get() *Server {
-	return srv.Load()
-}
-
-func Set(s *Server) {
-	srv.Store(s)
-}
-
-func NewServer(client logservice.CNHAKeeperClient) *Server {
-	s := Get()
-	if s != nil {
-		return s
-	}
-	s = &Server{
-		hakeeper:      client,
+// NewServer creates and registers a colexec server owned by serviceID.
+// Different CN services in the same process must always use different servers.
+func NewServer(serviceID string) *Server {
+	s := &Server{
 		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024), changed: make(chan struct{})},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[string]int32, 1024)},
 		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
@@ -50,8 +36,35 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 			sessionCleanupWaiters:          make(map[morpc.ClientSession]struct{}, 128),
 		},
 	}
-	if !srv.CompareAndSwap(nil, s) {
-		return srv.Load()
+	rt := runtime.ServiceRuntime(serviceID)
+	if rt == nil {
+		panic("service runtime is not initialized for colexec server")
+	}
+	rt.SetGlobalVariables(runtime.ColexecServer, s)
+	return s
+}
+
+// GetServer returns the colexec server owned by serviceID.
+func GetServer(serviceID string) *Server {
+	rt := runtime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil
+	}
+	v, ok := rt.GetGlobalVariables(runtime.ColexecServer)
+	if !ok {
+		return nil
+	}
+	s, _ := v.(*Server)
+	return s
+}
+
+// MustGetServer returns the colexec server owned by serviceID and panics when
+// the CN has not initialized its execution service. Missing this component is
+// a programming error and must not silently fall back to another CN.
+func MustGetServer(serviceID string) *Server {
+	s := GetServer(serviceID)
+	if s == nil {
+		panic(fmt.Sprintf("colexec server is not initialized for CN %s", serviceID))
 	}
 	return s
 }
@@ -102,13 +115,22 @@ func (srv *Server) GetProcByUuidOrWait(u uuid.UUID) (*process.Process, process.R
 
 func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
 	srv.uuidCsChanMap.Lock()
-	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
-		delete(srv.uuidCsChanMap.mp, u)
+	if item, ok := srv.uuidCsChanMap.mp[u]; ok {
+		oldState := "live"
+		if item.proc == nil {
+			if item.ownerCh != nil {
+				oldState = "attached"
+			} else {
+				oldState = "tombstone"
+				delete(srv.uuidCsChanMap.mp, u)
+			}
+		}
 		srv.uuidCsChanMap.Unlock()
-		return moerr.NewInternalErrorNoCtx("remote receiver already done")
+		return moerr.NewInternalErrorNoCtxf(
+			"remote receiver %s already done (existing registry state: %s)", u.String(), oldState)
 	}
 
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch}
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch, ownerCh: ch}
 	old := srv.uuidCsChanMap.changed
 	srv.uuidCsChanMap.changed = make(chan struct{})
 	srv.uuidCsChanMap.Unlock()
@@ -131,6 +153,23 @@ func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 			p.proc = nil
 			p.ch = nil
 			srv.uuidCsChanMap.mp[uuids[i]] = p
+		}
+	}
+}
+
+// RemoveUuidsOwned performs final cleanup for one exact registration. The
+// owner check prevents a delayed rollback from deleting a later registration
+// that happens to use the same UUID.
+func (srv *Server) RemoveUuidsOwned(
+	uuids []uuid.UUID,
+	ownerCh process.RemotePipelineInformationChannel,
+) {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	for i := range uuids {
+		item, ok := srv.uuidCsChanMap.mp[uuids[i]]
+		if ok && item.ownerCh == ownerCh {
+			delete(srv.uuidCsChanMap.mp, uuids[i])
 		}
 	}
 }

@@ -114,7 +114,6 @@ func runValueWindowTest(t *testing.T, winSpec *plan.Expr, bat *batch.Batch, mp *
 
 	arg := &Window{
 		WinSpecList: []*plan.Expr{winSpec},
-		Types:       []types.Type{types.T_int32.ToType()},
 		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("")},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
@@ -1049,7 +1048,6 @@ func TestProcessValueFunc_Varchar(t *testing.T) {
 
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},
-		Types:       []types.Type{types.T_varchar.ToType()},
 		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("")},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{

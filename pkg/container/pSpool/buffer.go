@@ -102,5 +102,6 @@ func (b *spoolBuffer) clean(mp *mpool.MPool) {
 		for j := range b.bytesCache[i].bs {
 			mp.Free(b.bytesCache[i].bs[j])
 		}
+		b.bytesCache[i].bs = nil
 	}
 }

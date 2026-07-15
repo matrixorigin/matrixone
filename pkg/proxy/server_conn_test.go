@@ -65,6 +65,7 @@ type mockServerConn struct {
 	conn       net.Conn
 	createTime time.Time
 	returnErr  error
+	cn         *CNServer
 }
 
 var _ ServerConn = (*mockServerConn)(nil)
@@ -81,6 +82,10 @@ func (s *mockServerConn) setReturnErr(e error) {
 	s.returnErr = e
 }
 
+func (s *mockServerConn) setCN(cn *CNServer) {
+	s.cn = cn
+}
+
 func (s *mockServerConn) ConnID() uint32    { return 0 }
 func (s *mockServerConn) RawConn() net.Conn { return s.conn }
 func (s *mockServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
@@ -95,7 +100,7 @@ func (s *mockServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, 
 	}
 	return true, nil
 }
-func (s *mockServerConn) GetCNServer() *CNServer   { return nil }
+func (s *mockServerConn) GetCNServer() *CNServer   { return s.cn }
 func (s *mockServerConn) SetConnResponse(_ []byte) {}
 func (s *mockServerConn) GetConnResponse() []byte  { return nil }
 func (s *mockServerConn) CreateTime() time.Time    { return s.createTime }
@@ -135,6 +140,7 @@ type testCNServer struct {
 	tlsConfig  *tls.Config
 
 	beforeHandle func()
+	handle       func(*testHandler)
 	service      string
 }
 
@@ -166,6 +172,12 @@ type option func(s *testCNServer)
 func withBeforeHandle(f func()) option {
 	return func(s *testCNServer) {
 		s.beforeHandle = f
+	}
+}
+
+func withHandle(f func(*testHandler)) option {
+	return func(s *testCNServer) {
+		s.handle = f
 	}
 }
 
@@ -291,6 +303,10 @@ func (s *testCNServer) Start() error {
 					s.beforeHandle()
 				}
 				go func(h *testHandler) {
+					if s.handle != nil {
+						s.handle(h)
+						return
+					}
 					testHandle(h)
 				}(h)
 			}
@@ -574,6 +590,79 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	err = sc.Close()
 	require.NoError(t, err)
+}
+
+func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+	backendAccepted := make(chan struct{})
+	allowBackendClose := make(chan struct{})
+	backendClosed := make(chan struct{})
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil, withHandle(func(h *testHandler) {
+		// startTestCNServer probes readiness without sending ExtraInfo. The
+		// connection opened by newServerConn does send it, so decode the wire
+		// protocol instead of relying on handler goroutine scheduling order.
+		rawConn := h.conn.RawConn()
+		if err := rawConn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			h.close()
+			return
+		}
+		reader := bufio.NewReader(rawConn)
+		extraInfo := proxy.ExtraInfo{}
+		if err := extraInfo.Decode(reader); err != nil {
+			h.close()
+			return
+		}
+		if err := rawConn.SetReadDeadline(time.Time{}); err != nil {
+			h.close()
+			return
+		}
+
+		close(backendAccepted)
+		select {
+		case <-allowBackendClose:
+		case <-tp.ctx.Done():
+		}
+		h.close()
+		close(backendClosed)
+	}))
+	var releaseBackendOnce sync.Once
+	releaseBackend := func() {
+		releaseBackendOnce.Do(func() {
+			close(allowBackendClose)
+		})
+	}
+	defer func() {
+		releaseBackend()
+		require.NoError(t, stopFn())
+	}()
+	waitSignal := func(c <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, message)
+		}
+	}
+
+	sc, err := newServerConn(cn1, nil, tp.re, 0)
+	require.NoError(t, err)
+	require.NotNil(t, sc)
+	defer sc.Close()
+
+	// Close only after newServerConn has sent ExtraInfo successfully, then make
+	// HandleHandshake observe the intended pre-handshake backend failure.
+	waitSignal(backendAccepted, "timed out waiting for test CN connection")
+	releaseBackend()
+	waitSignal(backendClosed, "timed out closing test CN connection")
+	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second)
+	require.Error(t, err)
+	require.False(t, isTimeoutErr(err), "early backend close must not be reclassified as timeout/busy")
 }
 
 func TestFakeCNServer(t *testing.T) {

@@ -1388,54 +1388,78 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil && node.NodeType != plan.Node_TABLE_SCAN {
-		// Fast path: if Limit is already a literal, no need to deep copy
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				node.Stats.Outcnt = float64(c.U64Val)
-				node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-			}
+	// LIMIT caps the output cardinality. It never increases an estimate, and a
+	// fold failure must not turn into an optimizer panic.
+	if node.Limit != nil {
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			applyScanPaginationToStats(node.Stats, node.Limit, node.Offset, builder)
 		} else {
-			// Slow path: need to fold the expression
-			limitExpr := DeepCopyExpr(node.Limit)
-			if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
-				if !hasParam(limitExpr) {
-					limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
-				}
-			}
-			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					node.Stats.Outcnt = float64(c.U64Val)
-					node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-				}
-			}
+			applyLimitToStats(node.Stats, node.Limit, builder)
 		}
 	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
 		if node.IndexReaderParam.Limit != nil {
-			// Fast path: if Limit is already a literal, no need to deep copy
-			if cExpr, ok := node.IndexReaderParam.Limit.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					node.Stats.Outcnt = float64(c.U64Val)
-					node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-				}
-			} else {
-				// Slow path: need to fold the expression
-				limitExpr := DeepCopyExpr(node.IndexReaderParam.Limit)
-				if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
-					if !hasParam(limitExpr) {
-						limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
-					}
-				}
-				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						node.Stats.Outcnt = float64(c.U64Val)
-						node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-					}
-				}
+			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
+		}
+	}
+}
+
+func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {
+	if stats == nil {
+		return
+	}
+	originalOutcnt := stats.Outcnt
+	if limitValue, ok := literalUint64ForStats(limit, builder); ok && float64(limitValue) < stats.Outcnt {
+		stats.Outcnt = float64(limitValue)
+	}
+	if stats.Outcnt != originalOutcnt {
+		stats.Selectivity = safeSelectivityRatio(stats.Outcnt, stats.Cost)
+	}
+}
+
+func applyScanPaginationToStats(stats *Stats, limit, offset *plan.Expr, builder *QueryBuilder) {
+	if stats == nil {
+		return
+	}
+	limitValue, literalLimit := literalUint64ForStats(limit, builder)
+	if literalLimit && limitValue == 0 {
+		stats.BlockNum = 0
+		stats.Cost = 0
+		applyLimitToStats(stats, limit, builder)
+		return
+	}
+
+	if candidate, ok := buildCandidateLimit(limit, offset); ok {
+		if candidateValue, literal := getLiteralUint64(candidate); literal && stats.Selectivity > 0 {
+			rowsToScan := float64(candidateValue) / stats.Selectivity
+			blockEstimate := math.Min(math.Ceil(rowsToScan/objectio.BlockMaxRows), math.MaxInt32)
+			newBlockNum := max(int32(blockEstimate), int32(1))
+			if newBlockNum < stats.BlockNum {
+				stats.BlockNum = newBlockNum
+				stats.Cost = float64(stats.BlockNum) * objectio.BlockMaxRows
 			}
 		}
 	}
+	applyLimitToStats(stats, limit, builder)
+}
+
+func literalUint64ForStats(expr *plan.Expr, builder *QueryBuilder) (uint64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	value, ok := getLiteralUint64(expr)
+	if !ok && !containsDynamicParam(expr) {
+		folded, err := ConstantFold(
+			batch.EmptyForConstFoldBatch,
+			DeepCopyExpr(expr),
+			builder.compCtx.GetProcess(),
+			false,
+			true,
+		)
+		if err == nil && folded != nil {
+			value, ok = getLiteralUint64(folded)
+		}
+	}
+	return value, ok
 }
 
 func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
@@ -1637,6 +1661,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
 	var blockSel float64 = 1
+	var preservedCompositeFilters []*plan.Expr
+	if builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2 {
+		preservedCompositeFilters = existingCompositeBlockFilters(node)
+	}
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
@@ -1671,7 +1699,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
-	node.BlockFilterList = blockExprList
+	blockExprList = append(blockExprList, preservedCompositeFilters...)
+	node.BlockFilterList = deduplicateBlockFilterList(blockExprList)
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
@@ -1845,7 +1874,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 
@@ -2056,6 +2085,9 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	for _, node := range qry.GetNodes() {
+		if node == nil {
+			continue
+		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
 		}
@@ -2081,8 +2113,12 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
+	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
+		if node == nil {
+			continue
+		}
 		switch node.NodeType {
 		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
 			ret = ExecTypeAP_ONECN
@@ -2106,14 +2142,27 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN &&
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
+			if IsIvfSearchEntriesInternalScan(node) {
+				execType := ExecTypeAP_MULTICN
+				if !canUseMultiCN {
+					execType = ExecTypeAP_ONECN
+				}
+				if execType > ret {
+					ret = execType
+				}
+			}
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
-			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
-			stats.Rowsize > RowSizeThreshold &&
-			stats.BlockNum > LargeBlockThresholdForOneCN {
-			ret = ExecTypeAP_ONECN
-			if stats.BlockNum > LargeBlockThresholdForMultiCN {
-				ret = ExecTypeAP_MULTICN
+			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
+				stats.Rowsize > RowSizeThreshold &&
+				stats.BlockNum > LargeBlockThresholdForOneCN {
+				execType := ExecTypeAP_ONECN
+				if stats.BlockNum > LargeBlockThresholdForMultiCN && canUseMultiCN {
+					execType = ExecTypeAP_MULTICN
+				}
+				if execType > ret {
+					ret = execType
+				}
 			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
@@ -2121,6 +2170,25 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 	}
 	return ret
+}
+
+func isIvfSearchEntriesTableScan(node *plan.Node) bool {
+	return node != nil &&
+		node.NodeType == plan.Node_TABLE_SCAN &&
+		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
+}
+
+// IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
+func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
+	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
+}
+
+func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
+	param := node.GetIndexReaderParam()
+	if param.GetLimit() == nil {
+		return false
+	}
+	return param.GetOrigFuncName() != "" || len(param.GetOrderBy()) > 0
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {

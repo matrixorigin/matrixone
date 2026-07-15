@@ -16,6 +16,7 @@ package insert
 
 import (
 	"context"
+	"errors"
 	goruntime "runtime"
 	"testing"
 	"time"
@@ -38,6 +39,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type relationHandleFactory struct {
+	engine.Relation
+	handle         engine.Relation
+	newHandleCalls int
+}
+
+func (f *relationHandleFactory) NewRelationHandle() engine.Relation {
+	f.newHandleCalls++
+	return f.handle
+}
+
 func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -57,12 +69,13 @@ func TestInsertOperator(t *testing.T) {
 	}).AnyTimes()
 
 	database := mock_frontend.NewMockDatabase(ctrl)
-	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).Times(1)
 
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
-	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+	relation.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+	factory := &relationHandleFactory{Relation: relation, handle: relation}
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(factory, nil).Times(1)
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
@@ -103,24 +116,68 @@ func TestInsertOperator(t *testing.T) {
 	resetChildren(&argument1, batch1)
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
+	firstSource := argument1.ctr.source
+	require.Same(t, relation, firstSource)
+	require.Equal(t, 1, factory.newHandleCalls)
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
 	argument1.Reset(proc, false, nil)
+	require.Same(t, firstSource, argument1.ctr.source)
 
 	resetChildren(&argument1, batch1)
 	err = argument1.Prepare(proc)
 	require.NoError(t, err)
+	require.Same(t, firstSource, argument1.ctr.source)
+	require.Equal(t, 1, factory.newHandleCalls)
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
 	argument1.Reset(proc, false, nil)
 	argument1.Free(proc, false, nil)
+	require.Nil(t, argument1.ctr.source)
 	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestInsertPrepareRelationResetErrorKeepsHandle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	resetErr := errors.New("reset relation")
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	factory := &relationHandleFactory{Relation: relation, handle: relation}
+
+	eng.EXPECT().Database(gomock.Any(), "testDb", gomock.Any()).Return(database, nil).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "testTable", gomock.Any()).Return(factory, nil).Times(1)
+	relation.EXPECT().Reset(gomock.Any()).Return(resetErr).Times(1)
+
+	proc := testutil.NewProc(t)
+	arg := &Insert{
+		InsertCtx: &InsertCtx{
+			Engine: eng,
+			Ref: &plan.ObjectRef{
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
+		},
+	}
+
+	require.NoError(t, arg.Prepare(proc))
+	firstSource := arg.ctr.source
+	arg.Reset(proc, false, nil)
+	require.ErrorIs(t, arg.Prepare(proc), resetErr)
+	require.Same(t, firstSource, arg.ctr.source)
+	require.Equal(t, 1, factory.newHandleCalls)
+
+	arg.Free(proc, true, resetErr)
+	require.Nil(t, arg.ctr.source)
+	proc.Free()
 }
 
 func resetChildren(arg *Insert, bat *batch.Batch) {
@@ -176,12 +233,14 @@ type testS3MemThrottler struct {
 	acquired     []int64
 	released     int64
 	forceRefresh int
+	ops          []string
 }
 
 func (t *testS3MemThrottler) Refresh() {}
 
 func (t *testS3MemThrottler) ForceRefresh() {
 	t.forceRefresh++
+	t.ops = append(t.ops, "force-refresh")
 }
 
 func (t *testS3MemThrottler) PrintUsage() {}
@@ -198,11 +257,21 @@ func (t *testS3MemThrottler) Acquire(size int64) (int64, bool) {
 
 func (t *testS3MemThrottler) Release(size int64) int64 {
 	t.released += size
+	t.ops = append(t.ops, "release")
 	return 0
 }
 
 func (t *testS3MemThrottler) Available() int64 {
 	return 0
+}
+
+type testS3MemThrottlerWithDecision struct {
+	testS3MemThrottler
+	shouldRefresh bool
+}
+
+func (t *testS3MemThrottlerWithDecision) ShouldRefreshBeforeRelease() bool {
+	return t.shouldRefresh
 }
 
 type testRefreshOnlyThrottler struct {
@@ -391,8 +460,150 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
 	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
 	require.NotNil(t, insert.ctr.buf)
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
+}
+
+func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+			// Make the post-sync block-info append fail.
+			buf: batch.NewWithSize(1),
+		},
+	}
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	err = insert.flushS3WriterOnMemoryPressure(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.Error(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestInsertS3FinalFlushRefreshesBeforeReleaseOnSuccess(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			state:          vm.Eval,
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+		},
+	}
+	insert.initBufForS3()
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	_, err = insert.insert_s3(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestInsertS3FinalFlushRefreshesBeforeReleaseOnError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			state:          vm.Eval,
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+			buf:            batch.NewWithSize(1),
+		},
+	}
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	_, err = insert.insert_s3(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.Error(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestRefreshAndReleaseS3MemGrantSkipsRefreshWhenCoverageIsAlreadyEnough(t *testing.T) {
+	throttler := &testS3MemThrottlerWithDecision{shouldRefresh: false}
+	insert := &Insert{
+		ctr: container{
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+		},
+	}
+
+	insert.refreshAndReleaseS3MemGrant()
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"release"}, throttler.ops)
 }
 
 func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {

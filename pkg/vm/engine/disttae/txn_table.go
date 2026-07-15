@@ -132,6 +132,11 @@ func shouldLogPKPersistedChanged(tableID uint64) bool {
 
 var _ engine.Relation = new(txnTable)
 
+func (tbl *txnTable) NewRelationHandle() engine.Relation {
+	canonical := &txnTableDelegate{origin: tbl}
+	return canonical.NewRelationHandle()
+}
+
 func newTxnTable(
 	ctx context.Context,
 	db *txnDatabase,
@@ -1324,8 +1329,11 @@ func (tbl *txnTable) rangesOnePart(
 
 // Parameters:
 //   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
-//   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+//   - typ: Transaction write entry type to collect object stats from.
+func (tbl *txnTable) collectUnCommittedObjStats(
+	txnOffset int,
+	typ int,
+) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
 	var unCommittedObjects []objectio.ObjectStats
 	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
 
@@ -1338,22 +1346,35 @@ func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.Objec
 		txnOffset,
 		func(entry Entry) {
 			stats := objectio.ObjectStats{}
-			if entry.bat == nil || entry.bat.IsEmpty() {
+			if entry.typ != typ ||
+				entry.bat == nil ||
+				entry.bat.IsEmpty() {
 				return
 			}
-			if entry.typ != INSERT ||
-				len(entry.bat.Attrs) < 2 ||
-				entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+
+			// Data and tombstone write batches do not have to place object stats
+			// at the same column offset.
+			statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+			if statsIdx == -1 {
 				return
 			}
-			for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+
+			for i := 0; i < entry.bat.Vecs[statsIdx].Length(); i++ {
+				stats.UnMarshal(entry.bat.Vecs[statsIdx].GetBytesAt(i))
 				unCommittedObjects = append(unCommittedObjects, stats)
 				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
 			}
 		})
 
 	return unCommittedObjects, unCommittedObjNames
+}
+
+func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+	return tbl.collectUnCommittedObjStats(txnOffset, INSERT)
+}
+
+func (tbl *txnTable) collectUnCommittedTombstoneObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+	return tbl.collectUnCommittedObjStats(txnOffset, DELETE)
 }
 
 // the return defs has no rowid column
@@ -2483,8 +2504,22 @@ func (tbl *txnTable) getPartitionState(
 			return nil, err
 		}
 
-	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
-		return
+	} else {
+		var ok bool
+		ps, ok, err = eng.PushClient().waitCanServeTableSnapshot(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.db.databaseId,
+			tbl.tableId,
+			ps,
+			tbl.db.op.SnapshotTS(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return
+		}
 	}
 
 	//Try to create a snapshot partition state for the table through consume the history checkpoints.
@@ -2728,6 +2763,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	)
 	if err != nil {
 		return false, err
+	}
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
 	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
@@ -3054,23 +3092,8 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	return objStats, nil
 }
 
-// Reset what?
-// TODO: txnTable should be stateless
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
-	ws := op.GetWorkspace()
-	if ws == nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("workspace is nil when reset relation %s:%s",
-			tbl.db.databaseName, tbl.tableName))
-	}
-	txn, ok := ws.(*Transaction)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("failed to assert txn")
-	}
-	tbl.db.op = op
-	tbl.proc.Store(txn.proc)
-	tbl.createdInTxn = false
-	tbl.lastTS = op.SnapshotTS()
-	return nil
+	return moerr.NewInternalErrorNoCtx("cannot reset a shared relation; use an exclusive relation handle")
 }
 
 func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {

@@ -76,32 +76,6 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
-func hasParam(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_P:
-		return true
-
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	case *plan.Expr_List:
-		for _, arg := range exprImpl.List.List {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	default:
-		return false
-	}
-}
-
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -247,6 +221,37 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 	return
 }
 
+func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_Col:
+		tag := exprImpl.Col.RelPos
+		if leftTags[tag] {
+			side = JoinSideLeft
+		} else if rightTags[tag] {
+			side = JoinSideRight
+		} else if tag == markTag {
+			side = JoinSideMark
+		} else {
+			side = JoinSideOuter
+		}
+
+	case *plan.Expr_Corr:
+		side = JoinSideCorrelated
+	}
+
+	return
+}
+
 func containsTag(expr *plan.Expr, tag int32) bool {
 	if expr == nil {
 		return false
@@ -291,6 +296,36 @@ func containsTag(expr *plan.Expr, tag int32) bool {
 	}
 
 	return false
+}
+
+func containsOnlyTags(expr *plan.Expr, tags map[int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_Col:
+		return tags[exprImpl.Col.RelPos]
+
+	case *plan.Expr_Corr, *plan.Expr_Sub:
+		return false
+	}
+
+	return true
 }
 
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
@@ -925,6 +960,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		for _, arg := range exprImpl.F.Args {
 			increaseRefCnt(arg, inc, colRefCnt)
 		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			increaseRefCnt(arg, inc, colRefCnt)
+		}
 	case *plan.Expr_W:
 		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
 		//for _, arg := range exprImpl.W.PartitionBy {
@@ -1423,7 +1462,10 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		vec.InplaceSortAndCompact()
+		// Nullable IN-lists must keep their null bitmap aligned with values.
+		if !vec.IsConstNull() && !vec.GetNulls().Any() {
+			vec.InplaceSortAndCompact()
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -1934,6 +1976,9 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
@@ -1997,6 +2042,9 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
@@ -2024,6 +2072,44 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	}
 
 	return fpath
+}
+
+// ExternalWriteFilePatternKey is the external-table option that turns the table
+// into a writable external table. Its value is a strftime template (with the
+// %nN and %U MatrixOne extensions) that must resolve to a stage:// path.
+const ExternalWriteFilePatternKey = "write_file_pattern"
+
+// GetWriteFilePattern returns the WRITE_FILE_PATTERN option of an external table
+// and whether it was set. An external table is writable iff this returns ok.
+func GetWriteFilePattern(param *tree.ExternParam) (string, bool) {
+	if param == nil {
+		return "", false
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == ExternalWriteFilePatternKey {
+			return param.Option[i+1], true
+		}
+	}
+	return "", false
+}
+
+// CSVCommentKey is the external-table option that sets the CSV reader's comment
+// marker: a line whose raw prefix (before unquoting) equals it is skipped on
+// read. The default (option absent or empty) is no marker — every line is data.
+const CSVCommentKey = "comment"
+
+// GetCSVComment returns the COMMENT option of an external table (empty when
+// unset, meaning no comment marker).
+func GetCSVComment(param *tree.ExternParam) string {
+	if param == nil {
+		return ""
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == CSVCommentKey {
+			return param.Option[i+1]
+		}
+	}
+	return ""
 }
 
 func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
@@ -2105,6 +2191,9 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
@@ -2676,6 +2765,21 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
 		schemas = getParamRule.schemas
+		for _, dependency := range getParamRule.indexDependencies {
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			if err != nil {
+				return nil, nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+			}
+			ref := DeepCopyObjectRef(objRef)
+			ref.Server = int64(tableDef.Version)
+			ref.Db = int64(tableDef.DbId)
+			ref.Schema = int64(tableDef.DbId)
+			ref.Obj = int64(tableDef.TblId)
+			schemas = append(schemas, ref)
+		}
 		paramTypes = getParamRule.paramTypes
 
 		// reset arg order
@@ -3152,7 +3256,8 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			if err != nil {
 				return err
 			}
-			if !vec.IsConstNull() {
+			// Nullable folded lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
 				vec.InplaceSortAndCompact()
 			}
 			data, err = vec.MarshalBinary()

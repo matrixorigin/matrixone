@@ -128,6 +128,10 @@ type tunnel struct {
 	// for connection caching, so the follow-up client EOF should not tear down
 	// the backend session that is being cached.
 	expectedCacheQuit atomic.Bool
+	// expectedClientQuit indicates the client sent COM_QUIT. It covers both
+	// the conn-cache path above and the non-cache path where COM_QUIT is
+	// forwarded to CN.
+	expectedClientQuit atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -256,11 +260,39 @@ func (t *tunnel) getServerConn() ServerConn {
 func (t *tunnel) markExpectedCacheQuit() {
 	if t != nil {
 		t.expectedCacheQuit.Store(true)
+		t.markExpectedClientQuit()
 	}
 }
 
 func (t *tunnel) hasExpectedCacheQuit() bool {
 	return t != nil && t.expectedCacheQuit.Load()
+}
+
+func (t *tunnel) markExpectedClientQuit() {
+	if t != nil {
+		t.expectedClientQuit.Store(true)
+	}
+}
+
+func (t *tunnel) hasExpectedClientQuit() bool {
+	return t != nil && t.expectedClientQuit.Load()
+}
+
+func (t *tunnel) hasInFlightClientRequest() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	csp, scp := t.mu.csp, t.mu.scp
+	t.mu.Unlock()
+	if csp == nil || scp == nil {
+		return false
+	}
+	csp.mu.Lock()
+	defer csp.mu.Unlock()
+	scp.mu.Lock()
+	defer scp.mu.Unlock()
+	return scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime)
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -394,17 +426,41 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 }
 
 func (t *tunnel) setTransferIntent(i bool) {
-	if t.rebalancePolicy == RebalancePolicyPassive &&
-		t.getTransferType() == transferByRebalance {
+	t.setTransferIntentForType(i, t.getTransferType())
+}
+
+func (t *tunnel) setTransferIntentForType(i bool, typ transferType) {
+	if i &&
+		t.rebalancePolicy == RebalancePolicyPassive &&
+		typ == transferByRebalance {
+		return
+	}
+	if t.transferIntent.Swap(i) == i {
 		return
 	}
 	t.logger.Info("set tunnel transfer intent", zap.Bool("value", i))
-	t.transferIntent.Store(i)
 	if i {
 		v2.ProxyConnectionsTransferIntentGauge.Inc()
 	} else {
 		v2.ProxyConnectionsTransferIntentGauge.Dec()
 	}
+}
+
+func (t *tunnel) tryStartTransferAttempt() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.mu.inTransfer {
+		return false
+	}
+	t.mu.inTransfer = true
+	return true
+}
+
+// finishTransferAttempt clears the queue latch for attempts that exit before pipes are paused.
+func (t *tunnel) finishTransferAttempt() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mu.inTransfer = false
 }
 
 func (t *tunnel) finishTransfer(start time.Time) {
@@ -450,7 +506,9 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(false); !ok {
 		t.logger.Info("cannot start transfer safely")
-		t.setTransferIntent(true)
+		typ := t.getTransferType()
+		t.finishTransferAttempt()
+		t.setTransferIntentForType(true, typ)
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
@@ -488,8 +546,13 @@ func (t *tunnel) transfer(ctx context.Context) error {
 }
 
 func (t *tunnel) transferSync(ctx context.Context) error {
+	if ok := t.tryStartTransferAttempt(); !ok {
+		t.logger.Info("tunnel is already in transfer, skip sync transfer")
+		return nil
+	}
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(true); !ok {
+		t.finishTransferAttempt()
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	start := time.Now()
@@ -758,6 +821,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		} else {
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
+			}
+			if isCmdQuit(tempBuf) {
+				p.tun.markExpectedClientQuit()
 			}
 			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
 				p.mu.lastCmdTime = time.Now()

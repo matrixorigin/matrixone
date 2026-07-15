@@ -268,6 +268,19 @@ func TestDefaultBigStats(t *testing.T) {
 	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
 }
 
+func TestAppendSelectListNameConstHeading(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select name_const('myname', 14), name_const(123, -456), name_const('myname', 14) as alias_name, name_const(('paren_name'), (14))", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = appendSelectList(builder, bindCtx, nil, selectClause.Exprs...)
+	require.NoError(t, err)
+	require.Equal(t, []string{"myname", "123", "alias_name", "paren_name"}, bindCtx.headings)
+}
+
 func genBuilderAndCtx() (builder *QueryBuilder, bindCtx *BindContext) {
 	builder = NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx = NewBindContext(builder, nil)
@@ -1213,6 +1226,43 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	require.Equal(t, uint64(5), countExpr.Lit.Value.(*plan.Literal_U64Val).U64Val)
 }
 
+func TestQueryBuilderBindLimitFoldsAndNormalizesConstants(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 2 + 3 offset 0 + 0", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	offset, limit, _, err := builder.bindLimit(bindCtx, astLimit, nil)
+	require.NoError(t, err)
+	require.Nil(t, offset, "constant OFFSET 0 should not disable no-offset optimization paths")
+	require.Equal(t, uint64(5), limit.GetLit().GetU64Val())
+}
+
+func TestQueryBuilderBindLimitReportsConstantOverflow(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 18446744073709551615 + 1", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	_, _, _, err = builder.bindLimit(bindCtx, astLimit, nil)
+	require.Error(t, err)
+}
+
+func TestQueryBuilderBindLimitKeepsVariableDynamic(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit @page_size", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	_, limit, _, err := builder.bindLimit(bindCtx, astLimit, nil)
+	require.NoError(t, err)
+	require.NotNil(t, limit.GetF())
+	require.True(t, containsDynamicParam(limit))
+}
+
 func TestQueryBuilder_bindValues(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -1303,11 +1353,11 @@ func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.groupTag = builder.genNewBindTag()
-	bindCtx.aggregateTag = builder.genNewBindTag()
-	bindCtx.projectTag = builder.genNewBindTag()
-	bindCtx.windowTag = builder.genNewBindTag()
-	bindCtx.sampleTag = builder.genNewBindTag()
+	bindCtx.groupTag = builder.GenNewBindTag()
+	bindCtx.aggregateTag = builder.GenNewBindTag()
+	bindCtx.projectTag = builder.GenNewBindTag()
+	bindCtx.windowTag = builder.GenNewBindTag()
+	bindCtx.sampleTag = builder.GenNewBindTag()
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
@@ -1350,11 +1400,11 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.groupTag = builder.genNewBindTag()
-	bindCtx.aggregateTag = builder.genNewBindTag()
-	bindCtx.projectTag = builder.genNewBindTag()
-	bindCtx.windowTag = builder.genNewBindTag()
-	bindCtx.sampleTag = builder.genNewBindTag()
+	bindCtx.groupTag = builder.GenNewBindTag()
+	bindCtx.aggregateTag = builder.GenNewBindTag()
+	bindCtx.projectTag = builder.GenNewBindTag()
+	bindCtx.windowTag = builder.GenNewBindTag()
+	bindCtx.sampleTag = builder.GenNewBindTag()
 
 	stmts, err := parsers.Parse(
 		context.TODO(),

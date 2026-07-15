@@ -16,8 +16,11 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
@@ -61,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
@@ -89,6 +92,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -452,6 +457,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := insert.NewArgument()
 		op.InsertCtx = t.InsertCtx
 		op.ToWriteS3 = t.ToWriteS3
+		// External-write inserts must stay external when a scope is parallelized;
+		// each duplicated instance opens its own writer/file in Prepare.
+		op.ToExternal = t.ToExternal
 		op.SetInfo(&info)
 		return op
 	case vm.PartitionInsert:
@@ -547,6 +555,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Action = t.Action
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.CountDeleteAffectRows = t.CountDeleteAffectRows
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -644,19 +653,6 @@ func constructDeletion(
 		return op, nil
 	}
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
-}
-
-func constructOnduplicateKey(node *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
-	oldCtx := node.OnDuplicateKey
-	op := onduplicatekey.NewArgument()
-	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
-	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
-	op.Attrs = oldCtx.Attrs
-	op.InsertColCount = oldCtx.InsertColCount
-	op.UniqueCols = oldCtx.UniqueCols
-	op.UniqueColCheckExpr = oldCtx.UniqueColCheckExpr
-	op.IsIgnore = oldCtx.IsIgnore
-	return op
 }
 
 func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyFilter {
@@ -811,6 +807,13 @@ func constructMultiUpdate(
 	arg.Engine = eng
 	arg.IsRemote = isRemote
 
+	for _, updateCtx := range node.UpdateCtxList {
+		if updateCtx.CountDeleteAffectRows {
+			arg.CountDeleteAffectRows = true
+			break
+		}
+	}
+
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {
 		insertCols := make([]int, len(updateCtx.InsertCols))
@@ -883,6 +886,189 @@ func constructInsert(
 	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
 }
 
+// isExternalWriteInsert reports whether an INSERT node targets a writable
+// external table (TableType == external and a WRITE_FILE_PATTERN is set).
+func isExternalWriteInsert(node *plan.Node) bool {
+	if node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false
+	}
+	td := node.InsertCtx.TableDef
+	if td.TableType != catalog.SystemExternalRel {
+		return false
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(td.Createsql), param); err != nil {
+		return false
+	}
+	_, ok := plan2.GetWriteFilePattern(param)
+	return ok
+}
+
+// externalInsertStmtTime resolves the statement-start timestamp that
+// WRITE_FILE_PATTERN time directives are evaluated against, so that every
+// parallel pipeline / CN resolves the same path. Preference order: the
+// frontend's per-statement defines.StartTS on the context, then the Compile's
+// startAt (set on every construction path, including the internal SQL
+// executor), then the wall clock as a last resort.
+func externalInsertStmtTime(proc *process.Process, startAt time.Time) time.Time {
+	if proc != nil && proc.Ctx != nil {
+		if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+			if t, ok := v.(time.Time); ok {
+				return t
+			}
+		}
+	}
+	if !startAt.IsZero() {
+		return startAt
+	}
+	return time.Now()
+}
+
+// constructExternalInsert builds an INSERT operator that writes into a writable
+// external table's backing files. Each parallel instance owns one writer/file.
+// stmtAt is the statement-start timestamp (externalInsertStmtTime), resolved
+// once per statement by the caller so all scopes share it.
+func constructExternalInsert(
+	proc *process.Process,
+	node *plan.Node,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (vm.Operator, error) {
+	oldCtx := node.InsertCtx
+	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
+}
+
+// externalInsertTargetIsLocalFile reports whether WRITE_FILE_PATTERN resolves
+// through a stage backed by file://. Such paths are local to the CN that writes
+// them, so remote CN writers would make files invisible to the coordinator's
+// follow-up external-table scan.
+func externalInsertTargetIsLocalFile(proc *process.Process, node *plan.Node, stmtAt time.Time) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(node.InsertCtx.TableDef.Createsql), param); err != nil {
+		return false, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return false, nil
+	}
+	expanded, err := externalwrite.ExpandFilePattern(pattern, stmtAt)
+	if err != nil {
+		return false, err
+	}
+	sdef, err := stageutil.UrlToStageDef(expanded, proc)
+	if err != nil {
+		return false, err
+	}
+	return sdef.Url.Scheme == stage.FILE_PROTOCOL, nil
+}
+
+// buildExternalInsertArg builds the external-write insert operator from the
+// target's TableDef, whose Createsql stores the ExternParam (pattern, format,
+// FIELDS/LINES). Shared by local compile and remote-run decode; everything but
+// the statement-start timestamp is rebuilt from the TableDef. The writer's
+// session time zone is resolved later, in the operator's Prepare.
+func buildExternalInsertArg(
+	ctx context.Context,
+	ref *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	addAffectedRows bool,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (*insert.Insert, error) {
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
+		return nil, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return nil, moerr.NewNotSupportedf(ctx, "insert into read-only external table %s", tableDef.Name)
+	}
+
+	attrs := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		// Skip Row_ID and any hidden/synthetic columns (e.g. __mo_filepath that
+		// the resolver attaches to external tables) — only the declared columns
+		// are written to the output file.
+		if col.Name == catalog.Row_ID || col.Hidden || col.Name == catalog.ExternalFilePath {
+			continue
+		}
+		attrs = append(attrs, col.GetOriginCaseName())
+	}
+
+	// Format is stored in the option list; param.Format is only materialized by
+	// the read-side init, which we do not run here.
+	format := strings.ToLower(param.Format)
+	if format == "" {
+		for i := 0; i+1 < len(param.Option); i += 2 {
+			if strings.ToLower(param.Option[i]) == "format" {
+				format = strings.ToLower(param.Option[i+1])
+				break
+			}
+		}
+	}
+	cfg := externalwrite.WriterConfig{
+		Pattern: pattern,
+		Format:  format,
+		Attrs:   attrs,
+		Stmt:    stmtAt,
+	}
+	// The reader skips lines whose raw prefix matches the COMMENT marker; the
+	// writer uses it to enclose the first field of any row that would otherwise
+	// collide, so a row written here always reads back.
+	if c := plan2.GetCSVComment(param); c != "" {
+		cfg.Comment = []byte(c)
+	}
+	if cfg.Format == "" {
+		cfg.Format = externalwrite.FormatCSV
+	}
+	// CSV delimiters from the external table's FIELDS/LINES config, if present.
+	if param.Tail != nil {
+		if f := param.Tail.Fields; f != nil {
+			if f.Terminated != nil {
+				cfg.FieldTerminator = []byte(f.Terminated.Value)
+			}
+			if f.EnclosedBy != nil {
+				cfg.EnclosedBy = f.EnclosedBy.Value
+			}
+			// Mirror the reader: nil -> default '\\', explicit '' -> escaping
+			// disabled, anything else -> that character.
+			if f.EscapedBy != nil {
+				if f.EscapedBy.Value == 0 {
+					cfg.NoEscape = true
+				} else {
+					cfg.EscapedBy = f.EscapedBy.Value
+				}
+			}
+		}
+		if l := param.Tail.Lines; l != nil {
+			if l.TerminatedBy != nil {
+				cfg.LineTerminator = []byte(l.TerminatedBy.Value)
+			}
+			// The reader strips (and requires) this prefix per line; emit it so
+			// the table can read back its own files.
+			if l.StartingBy != "" {
+				cfg.LineStartingBy = []byte(l.StartingBy)
+			}
+		}
+	}
+
+	newCtx := &insert.InsertCtx{
+		Ref:             ref,
+		AddAffectedRows: addAffectedRows,
+		Engine:          eng,
+		Attrs:           attrs,
+		TableDef:        tableDef,
+		ExternalConfig:  cfg,
+	}
+	arg := insert.NewArgument()
+	arg.InsertCtx = newCtx
+	arg.ToExternal = true
+	return arg, nil
+}
+
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
@@ -890,23 +1076,14 @@ func constructProjection(node *plan.Node) *projection.Projection {
 }
 
 func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
-	var attrs []plan.ExternAttr
-
-	for i, col := range node.TableDef.Cols {
-		if !col.Hidden {
-			attr := plan.ExternAttr{ColName: col.Name,
-				ColIndex:      int32(i),
-				ColFieldIndex: node.ExternScan.TbColToDataCol[col.Name]}
-			attrs = append(attrs, attr)
-		}
-	}
+	attrs := buildExternalAttrs(node)
 
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
 				Attrs:           attrs,
 				Cols:            node.TableDef.Cols,
-				ColumnListLen:   int32(len(node.ExternScan.TbColToDataCol)),
+				ColumnListLen:   externalColumnListLen(node),
 				Extern:          param,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       node.TableDef.Createsql,
@@ -926,6 +1103,34 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 			},
 		},
 	)
+}
+
+func buildExternalAttrs(node *plan.Node) []plan.ExternAttr {
+	if node == nil || node.TableDef == nil {
+		return nil
+	}
+	var tbColToDataCol map[string]int32
+	if node.ExternScan != nil {
+		tbColToDataCol = node.ExternScan.TbColToDataCol
+	}
+	attrs := make([]plan.ExternAttr, 0, len(node.TableDef.Cols))
+	for i, col := range node.TableDef.Cols {
+		if !col.Hidden {
+			attrs = append(attrs, plan.ExternAttr{
+				ColName:       col.Name,
+				ColIndex:      int32(i),
+				ColFieldIndex: tbColToDataCol[col.Name],
+			})
+		}
+	}
+	return attrs
+}
+
+func externalColumnListLen(node *plan.Node) int32 {
+	if node == nil || node.ExternScan == nil {
+		return 0
+	}
+	return int32(len(node.ExternScan.TbColToDataCol))
 }
 
 func constructStream(node *plan.Node, p [2]int64) *source.Source {
@@ -1020,7 +1225,10 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// OldColList identifies the row being updated.  Both FAIL and IGNORE
+		// must exclude that row from duplicate detection: an UPDATE that keeps
+		// a primary/unique key unchanged is not a duplicate of itself.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 			if len(node.DedupJoinCtx.OldColList) > 1 {
 				arg.DedupDeleteMarkerColIdx = node.DedupJoinCtx.OldColList[1].ColPos
@@ -1087,7 +1295,9 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	if node.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// See constructDedupJoin: UPDATE IGNORE also needs to exclude the
+		// target row's old key from duplicate detection.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
 	}
@@ -1193,14 +1403,12 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {
 	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(node.WinSpecList))
-	typs := make([]types.Type, len(node.WinSpecList))
 
 	for i, expr := range node.WinSpecList {
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var e *plan.Expr = nil
 		var cfg []byte = nil
 		var args = f.F.Args
 		if len(f.F.Args) > 0 {
@@ -1219,18 +1427,11 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 				args = f.F.Args[:len(f.F.Args)-1]
 			}
-
-			e = f.F.Args[0]
 		}
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
-
-		if e != nil {
-			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-		}
 	}
 	arg := window.NewArgument()
-	arg.Types = typs
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
 	return arg
@@ -1315,8 +1516,53 @@ func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*pro
 	return arg
 }
 
-// This function do not setting funcId.
-// PLEASE SETTING FuncId AFTER YOU CALL IT.
+// constructLocalDispatchFromScopes builds a dispatch whose receivers must all be
+// on the source scope's execution node. Use it for local-only dispatch FuncIds;
+// mixed local/remote registrations belong in constructDispatchLocalAndRemote.
+func constructLocalDispatchFromScopes(idx int, target []*Scope, source *Scope) (*dispatch.Dispatch, error) {
+	if source == nil {
+		return nil, moerr.NewInternalErrorNoCtx("local dispatch source scope is nil")
+	}
+	if len(target) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("local dispatch requires at least one target scope")
+	}
+	for i, s := range target {
+		if s == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d is nil", i)
+		}
+		if !sameExecutionNode(s.NodeInfo, source.NodeInfo) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"local dispatch target scope %d is on a different CN, source id %q addr %q target id %q addr %q",
+				i, source.NodeInfo.Id, source.NodeInfo.Addr, s.NodeInfo.Id, s.NodeInfo.Addr)
+		}
+		if s.Proc == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d has no process", i)
+		}
+		if idx < 0 || idx >= len(s.Proc.Reg.MergeReceivers) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"local dispatch target scope %d has no merge receiver at index %d", i, idx)
+		}
+	}
+
+	arg := dispatch.NewArgument()
+	arg.LocalRegs = make([]*process.WaitRegister, 0, len(target))
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0)
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(target))
+	arg.ShuffleRegIdxRemote = make([]int, 0)
+	for i, s := range target {
+		s.Proc.Reg.MergeReceivers[idx].SetNilBatchCntForReuse(source.NodeInfo.Mcpu)
+		arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+		arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
+	}
+	return arg, nil
+}
+
+// constructDispatchLocalAndRemote wires local and remote receivers. It may
+// populate RemoteRegs, so callers must not assign local-only FuncIds unless
+// hasRemote is false. Non-shuffle callers use hasRemote to choose SendToAllFunc
+// vs SendToAllLocalFunc; shuffle callers may use ShuffleToAllFunc for either
+// local-only or mixed registrations. For guaranteed local-only dispatch, prefer
+// constructLocalDispatchFromScopes.
 func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (bool, *dispatch.Dispatch) {
 	arg := dispatch.NewArgument()
 	scopeLen := len(target)
@@ -1327,7 +1573,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	hasRemote := false
 
 	for _, s := range target {
-		if !isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
+		if !sameExecutionNode(s.NodeInfo, source.NodeInfo) {
 			hasRemote = true
 			break
 		}
@@ -1337,10 +1583,10 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	}
 
 	for i, s := range target {
-		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
+		if sameExecutionNode(s.NodeInfo, source.NodeInfo) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
+			s.Proc.Reg.MergeReceivers[idx].SetNilBatchCntForReuse(source.NodeInfo.Mcpu)
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
@@ -1680,7 +1926,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
@@ -1757,7 +2003,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction

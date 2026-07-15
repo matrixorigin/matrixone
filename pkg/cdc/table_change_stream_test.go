@@ -1905,6 +1905,10 @@ func (n *noopTxnOperator) HasLockTable(table uint64) bool {
 	return false
 }
 
+func (n *noopTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (n *noopTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	return 0
 }

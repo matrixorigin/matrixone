@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -38,6 +39,7 @@ type cagraIndexContext struct {
 	params       string
 	nThread      int64
 	batchWindow  int64
+	gpuMultiSim  int64
 }
 
 func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*cagraIndexContext, error) {
@@ -100,6 +102,11 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	gpuMultiSim, err := builder.compCtx.ResolveVariable("gpu_multi_simulation", true, false)
+	if err != nil {
+		return nil, err
+	}
+
 	return &cagraIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -112,18 +119,18 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		params:       idxDef.IndexAlgoParams,
 		nThread:      nThread.(int64),
 		batchWindow:  batchWindow.(int64),
+		gpuMultiSim:  gpuMultiSim.(int64),
 	}, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
 	projNode := vecCtx.projNode
-	sortNode := vecCtx.sortNode
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
@@ -134,14 +141,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		cagraCtx.metaDef.IndexTableName,
 		cagraCtx.idxDef.IndexTableName,
 		cagraCtx.nThread,
 		cagraCtx.origFuncName,
-		cagraCtx.batchWindow)
+		cagraCtx.batchWindow,
+		cagraCtx.gpuMultiSim)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to
@@ -198,10 +206,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kCAGRASearchFuncName,
+				Name:  cagraplan.CAGRASearchFuncName,
 				Param: []byte(cagraCtx.params),
 			},
-			Cols: DeepCopyColDefList(kCAGRASearchColDefs),
+			Cols: DeepCopyColDefList(cagraplan.CAGRASearchColDefs),
 		},
 		BindingTags:     []int32{tableFuncTag},
 		TblFuncExprList: tableFuncExprs,
@@ -257,7 +265,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			// Use shared function to calculate over-fetch factor
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
 
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 			tableFuncNode.Limit = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
@@ -328,13 +336,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
-		Limit:    limit,                         // Apply LIMIT after sorting
-		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		Limit:    resultLimit,
+		Offset:   resultOffset,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

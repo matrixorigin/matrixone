@@ -37,6 +37,8 @@ func (e *Engine) Bind(txnOp client.TxnOperator) *BindedEngine {
 }
 
 var _ engine.Engine = new(BindedEngine)
+var _ engine.QueryCandidateDiscoverer = new(BindedEngine)
+var _ engine.QueryCandidatePoolResolver = new(BindedEngine)
 
 func (b *BindedEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return b.engine.LatestLogtailAppliedTime()
@@ -83,6 +85,18 @@ func (b *BindedEngine) New(ctx context.Context, _ client.TxnOperator) error {
 
 func (b *BindedEngine) Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes engine.Nodes, err error) {
 	return b.engine.Nodes(isInternal, tenant, username, cnLabel)
+}
+
+func (b *BindedEngine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
+	return b.engine.DiscoverQueryCandidates(ctx)
+}
+
+func (b *BindedEngine) ResolveQueryCandidatePool(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+	request engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	return b.engine.ResolveQueryCandidatePool(ctx, candidates, request)
 }
 
 func (b *BindedEngine) Rollback(ctx context.Context, _ client.TxnOperator) error {

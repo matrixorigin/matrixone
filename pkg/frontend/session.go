@@ -145,6 +145,8 @@ type Session struct {
 
 	priv *privilege
 
+	ddlOwnerRoleID uint32
+
 	errInfo *errInfo
 
 	cache       *privilegeCache
@@ -832,6 +834,7 @@ func (ses *Session) Close() {
 	ses.rs = nil
 	ses.queryId = nil
 	ses.p = nil
+	ses.releasePlanCache()
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
@@ -888,6 +891,10 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		freeStmts(stmts)
+		return
+	}
 	ses.planCache.cache(sql, stmts, plans)
 }
 
@@ -897,6 +904,9 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return nil
+	}
 	return ses.planCache.get(sql)
 }
 
@@ -906,13 +916,26 @@ func (ses *Session) isCached(sql string) bool {
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
 	return ses.planCache.isCached(sql)
 }
 
 func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.planCache.clean()
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
+}
+
+// releasePlanCache is an internal method. The caller MUST hold ses.mu
+// (currently only called from Session.Close which holds the lock).
+func (ses *Session) releasePlanCache() {
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
 }
 
 func (ses *Session) UpdateDebugString() {
@@ -1206,6 +1229,20 @@ func (ses *Session) RemovePrepareStmt(name string) {
 		stmt.Close()
 	}
 	delete(ses.prepareStmts, name)
+}
+
+// RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
+// used when a session variable that changes how statements are rewritten (e.g.
+// remap_rewrites / enable_remap_hint) is set: a prepared statement bakes in the
+// rewrite state captured at PREPARE time, so it must be invalidated when that
+// state changes, otherwise a later EXECUTE would run with a stale rewrite.
+func (ses *Session) RemoveAllPrepareStmts() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.Close()
+	}
+	ses.prepareStmts = make(map[string]*PrepareStmt)
 }
 
 // GetUserDefinedVar gets value of the config
@@ -1757,6 +1794,22 @@ func (ses *Session) SetPrivilege(priv *privilege) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.priv = priv
+}
+
+func (ses *Session) SetDDLOwnerRoleID(roleID uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ddlOwnerRoleID = roleID
+}
+
+func (ses *Session) GetDDLOwnerRoleID() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.ddlOwnerRoleID
+}
+
+func (ses *Session) ClearDDLOwnerRoleID() {
+	ses.SetDDLOwnerRoleID(0)
 }
 
 func (ses *Session) SetFromRealUser(b bool) {

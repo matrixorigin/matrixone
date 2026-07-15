@@ -21,12 +21,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
 
@@ -35,18 +39,29 @@ import (
 // network jitter while still bounding how long dead services retain lock tables.
 const keepBindGraceFactor = 2
 
+const (
+	getActiveTxnMaxAttempts = 3
+	getActiveTxnRetryDelay  = 100 * time.Millisecond
+)
+
 type lockTableAllocator struct {
 	service         string
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
 	keepBindTimeout time.Duration
+	clock           clock.Clock
 	address         string
 	server          Server
 	client          Client
 	inactiveService sync.Map // lock service id -> inactive time
+	inactiveMu      sync.RWMutex
 	ctl             sync.Map // lock service id -> *commitCtl
-	version         uint64
-	mu              struct {
+	ctlMu           sync.RWMutex
+	allocatorID     string
+	// version is the allocator process epoch. It is set once when the
+	// allocator is constructed; production code must not mutate it at runtime.
+	version uint64
+	mu      struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
 		lockTables map[uint32]map[uint64]pb.LockTable
@@ -54,7 +69,7 @@ type lockTableAllocator struct {
 
 	// for test
 	options struct {
-		getActiveTxnFunc         func(sid string) (bool, [][]byte, error)
+		getActiveTxnFunc         func(context.Context, string) (bool, [][]byte, error)
 		removeDisconnectDuration time.Duration
 	}
 }
@@ -77,6 +92,10 @@ func NewLockTableAllocator(
 	if err != nil {
 		panic(err)
 	}
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		rt = moruntime.DefaultRuntime()
+	}
 
 	logger := getLogger(service)
 	tag := "lockservice.allocator"
@@ -87,7 +106,9 @@ func NewLockTableAllocator(
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
+		clock:           rt.Clock(),
 		client:          rpcClient,
+		allocatorID:     uuid.New().String(),
 		version:         uint64(time.Now().UnixNano()),
 	}
 	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
@@ -132,11 +153,17 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 }
 
 func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+	return l.addCannotCommitLocked(values)
+}
+
+func (l *lockTableAllocator) addCannotCommitLocked(values []pb.OrphanTxn) [][]byte {
 	var committing [][]byte
 	for _, v := range values {
 		c := l.getCtl(v.Service)
 		for _, txn := range v.Txn {
-			state := c.add(util.UnsafeBytesToString(txn), cannotCommitState)
+			state := c.tryCannotCommit(util.UnsafeBytesToString(txn))
 			if state == committingState {
 				committing = append(committing, txn)
 			}
@@ -145,13 +172,77 @@ func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
 	return committing
 }
 
+func (l *lockTableAllocator) FinishCommit(serviceID string, txnID []byte) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		l.logger.Warn("finish commit without control state",
+			zap.String("serviceID", serviceID),
+			zap.Binary("txn", txnID))
+		return
+	}
+	c := value.(*commitCtl)
+	if !c.finishCommit(util.UnsafeBytesToString(txnID)) {
+		l.logger.Warn("finish unregistered commit",
+			zap.String("serviceID", serviceID),
+			zap.Binary("txn", txnID))
+	}
+}
+
 func (l *lockTableAllocator) AddInvalidService(serviceID string) {
-	l.inactiveService.Store(serviceID, time.Now())
+	l.markServiceInactive(serviceID, nil, 0, false)
 }
 
 func (l *lockTableAllocator) HasInvalidService(serviceID string) bool {
 	_, ok := l.inactiveService.Load(serviceID)
 	return ok
+}
+
+func (l *lockTableAllocator) markServiceInactive(
+	serviceID string,
+	ctl *commitCtl,
+	expectedEpoch uint64,
+	conditional bool,
+) bool {
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	if conditional {
+		current, ok := l.ctl.Load(serviceID)
+		if !ok || current != ctl || expectedEpoch == math.MaxUint64 ||
+			ctl.currentRecoveryEpoch() != expectedEpoch {
+			return false
+		}
+	}
+	l.inactiveService.Store(serviceID, time.Now())
+	return true
+}
+
+func (l *lockTableAllocator) resumeService(serviceID string) {
+	ctl := l.getCtl(serviceID)
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	ctl.advanceRecoveryEpoch()
+	l.inactiveService.Delete(serviceID)
+}
+
+func (l *lockTableAllocator) removeInactiveServiceIfExpired(
+	serviceID string,
+	observedAt time.Time,
+	removeDisconnectDuration time.Duration,
+) bool {
+	if time.Since(observedAt) <= removeDisconnectDuration {
+		return false
+	}
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	current, ok := l.inactiveService.Load(serviceID)
+	if !ok || current.(time.Time) != observedAt {
+		return false
+	}
+	l.inactiveService.Delete(serviceID)
+	return true
 }
 
 func (l *lockTableAllocator) Valid(
@@ -182,6 +273,13 @@ func (l *lockTableAllocator) Valid(
 		return invalid, nil
 	}
 
+	// Admission and commit registration must be atomic with respect to fencing.
+	// Otherwise cleanup can mark the service inactive after this check but
+	// before beginCommit, allowing one commit to start after the fence.
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+	l.inactiveMu.RLock()
+	defer l.inactiveMu.RUnlock()
 	if _, ok := l.inactiveService.Load(serviceID); ok {
 		l.logger.Info("inactive service",
 			zap.String("serviceID", serviceID),
@@ -190,7 +288,7 @@ func (l *lockTableAllocator) Valid(
 	}
 
 	c := l.getCtl(serviceID)
-	state := c.add(util.UnsafeBytesToString(txnID), committingState)
+	state := c.beginCommit(util.UnsafeBytesToString(txnID))
 	if state == cannotCommitState {
 		return nil, moerr.NewCannotCommitOrphanNoCtx()
 	}
@@ -466,6 +564,9 @@ func (l *lockTableAllocator) tryRebindLocked(
 
 	// If not a newer version of the same service, create new binding
 	old.ServiceID = binds.serviceID
+	if old.AllocatorID == "" {
+		old.AllocatorID = l.allocatorID
+	}
 	old.Version++
 	old.Valid = true
 	l.getLockTablesLocked(group)[tableID] = old
@@ -504,6 +605,7 @@ func (l *lockTableAllocator) createBindLocked(
 		Valid:       true,
 		Sharding:    sharding,
 		Group:       group,
+		AllocatorID: l.allocatorID,
 	}
 	l.getLockTablesLocked(group)[tableID] = b
 	l.logger.Info("bind created",
@@ -555,8 +657,8 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 	getActiveTxnFunc := l.options.getActiveTxnFunc
 	if getActiveTxnFunc == nil {
-		getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
-			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseCleanCommitState)
+		getActiveTxnFunc = func(parent context.Context, sid string) (bool, [][]byte, error) {
+			ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseCleanCommitState)
 			defer cancel()
 
 			req := acquireRequest()
@@ -590,86 +692,162 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 			return
 		case <-timer.C:
 			l.logger.Info("clean commit state")
-
-			var services []string
-			var invalidServices []string
-			activeTxnMap := make(map[string]map[string]struct{})
-
-			l.ctl.Range(func(key, value any) bool {
-				services = append(services, key.(string))
-				return true
-			})
-
-			l.inactiveService.Range(func(key, value any) bool {
-				if time.Since(value.(time.Time)) > removeDisconnectDuration {
-					l.logger.Error("remove inactive service",
-						zap.String("serviceID", key.(string)))
-					l.inactiveService.Delete(key)
-				}
-				return true
-			})
-
-			retryCount := math.MaxInt - 1
-
-			for _, sid := range services {
-				for i := 0; i < retryCount+1; i++ {
-					valid, actives, err := getActiveTxnFunc(sid)
-					if err == nil {
-						if !valid {
-							invalidServices = append(invalidServices, sid)
-						} else {
-							m := make(map[string]struct{}, len(actives))
-							for _, txn := range actives {
-								m[util.UnsafeBytesToString(txn)] = struct{}{}
-							}
-							activeTxnMap[sid] = m
-						}
-					} else if isRetryError(err) {
-						// retry err
-						l.logger.Error("retry to check service if alive",
-							zap.String("serviceID", sid),
-							zap.Error(err))
-						if i < retryCount {
-							continue
-						}
-						l.inactiveService.Store(sid, time.Now())
-						l.ctl.Delete(sid)
-					} else {
-						// is not retry err
-						l.logger.Error("get active txn failed",
-							zap.String("serviceID", sid),
-							zap.Error(err))
-						l.inactiveService.Store(sid, time.Now())
-						l.ctl.Delete(sid)
-					}
-					break
-				}
-			}
-
-			for _, sid := range invalidServices {
-				l.ctl.Delete(sid)
-			}
-
-			l.ctl.Range(func(key, value any) bool {
-				sid := key.(string)
-				if m, ok := activeTxnMap[sid]; ok {
-					c := value.(*commitCtl)
-					c.states.Range(func(key, value any) bool {
-						if _, ok := m[key.(string)]; !ok {
-							if value.(ctlState) == cannotCommitState {
-								logCleanCannotCommitTxn(l.logger, key.(string), int(value.(ctlState)))
-							}
-							c.states.Delete(key)
-						}
-						return true
-					})
-				}
-				return true
-			})
+			l.cleanCommitStateOnce(ctx, getActiveTxnFunc, removeDisconnectDuration)
 
 			timer.Reset(l.keepBindTimeout * 2)
 		}
 	}
+}
+
+func (l *lockTableAllocator) cleanCommitStateOnce(
+	ctx context.Context,
+	getActiveTxnFunc func(context.Context, string) (bool, [][]byte, error),
+	removeDisconnectDuration time.Duration,
+) {
+	var services []string
+	var invalidServices []string
+	var unknownServices []string
+	activeTxnMap := make(map[string]map[string]struct{})
+	cleanupWatermarks := make(map[string]uint64)
+	expiredUnknownServices := make(map[string]struct{})
+
+	l.ctlMu.RLock()
+	l.ctl.Range(func(key, value any) bool {
+		services = append(services, key.(string))
+		return true
+	})
+	l.ctlMu.RUnlock()
+
+	l.inactiveService.Range(func(key, value any) bool {
+		sid := key.(string)
+		if l.removeInactiveServiceIfExpired(sid, value.(time.Time), removeDisconnectDuration) {
+			l.logger.Error("remove inactive service", zap.String("serviceID", sid))
+			expiredUnknownServices[sid] = struct{}{}
+		}
+		return true
+	})
+
+	for _, sid := range services {
+		if ctx.Err() != nil {
+			break
+		}
+		ctl, watermark, epoch, ok := l.getCtlCleanupSnapshot(sid)
+		if !ok {
+			continue
+		}
+		cleanupWatermarks[sid] = watermark
+
+		for attempt := 1; attempt <= getActiveTxnMaxAttempts; attempt++ {
+			valid, actives, err := getActiveTxnFunc(ctx, sid)
+			if err == nil {
+				if !valid {
+					// A recovery endpoint can have been reassigned to another CN
+					// after a later hot recreate. That CN legitimately replies
+					// Valid=false for this incarnation, but the response came from
+					// the wrong process. Refresh the endpoint once before treating
+					// a successful negative response as authoritative.
+					if attempt == 1 {
+						if l.resetActiveTxnBackend(ctx, sid) == backendResetSucceeded {
+							continue
+						}
+						// Reset failure and unsupported reset both leave the
+						// observation tied to a potentially stale endpoint. Its
+						// negative reply is not evidence that the service is inactive.
+						break
+					}
+					invalidServices = append(invalidServices, sid)
+				} else {
+					m := make(map[string]struct{}, len(actives))
+					for _, txn := range actives {
+						m[util.UnsafeBytesToString(txn)] = struct{}{}
+					}
+					activeTxnMap[sid] = m
+				}
+				break
+			}
+
+			// The parent was cancelled while the RPC was in flight. Shutdown must
+			// not reset connections or change admission state based on an
+			// incomplete observation.
+			if ctx.Err() != nil {
+				return
+			}
+
+			if !morpc.IsConnectionError(err) {
+				// The service state is unknown. Leave both the admission state and
+				// cannot-commit tombstones unchanged and retry on the next cycle.
+				l.logger.Error("check active txn state failed",
+					zap.String("serviceID", sid), zap.Error(err))
+				break
+			}
+			// Classify and reset after getActiveTxnFunc returns. The production
+			// getter attaches its context cause, and some MORPC failures are only
+			// recognizable through that wrapped error. Resetting inside the getter
+			// can therefore miss exactly the BackendClosed path we are recovering.
+			l.resetActiveTxnBackend(ctx, sid)
+
+			l.logger.Error("get active txn failed",
+				zap.String("serviceID", sid),
+				zap.Int("attempt", attempt),
+				zap.Error(err))
+			if attempt == getActiveTxnMaxAttempts {
+				if l.markServiceInactive(sid, ctl, epoch, true) {
+					unknownServices = append(unknownServices, sid)
+				}
+				continue
+			}
+
+			timer := time.NewTimer(getActiveTxnRetryDelay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+		}
+	}
+
+	l.ctlMu.Lock()
+	for _, sid := range invalidServices {
+		l.cleanCtlLocked(sid, nil, false, cleanupWatermarks[sid])
+	}
+	for _, sid := range unknownServices {
+		_, expired := expiredUnknownServices[sid]
+		l.cleanCtlLocked(sid, nil, !expired, cleanupWatermarks[sid])
+	}
+	for sid, activeTxns := range activeTxnMap {
+		l.cleanCtlLocked(sid, activeTxns, false, cleanupWatermarks[sid])
+	}
+	l.ctlMu.Unlock()
+}
+
+type backendResetResult uint8
+
+const (
+	backendResetUnsupported backendResetResult = iota
+	backendResetSucceeded
+	backendResetFailed
+)
+
+func (l *lockTableAllocator) resetActiveTxnBackend(
+	ctx context.Context,
+	serviceID string,
+) backendResetResult {
+	resetter, ok := l.client.(interface {
+		ResetBackend(context.Context, string) error
+	})
+	if !ok {
+		return backendResetUnsupported
+	}
+	if err := resetter.ResetBackend(ctx, serviceID); err != nil {
+		l.logger.Error("reset active-txn backend failed",
+			zap.String("serviceID", serviceID),
+			zap.Error(err))
+		return backendResetFailed
+	}
+	return backendResetSucceeded
 }
 
 // serviceBinds an instance of serviceBinds, recording the bindings of a lockservice
@@ -848,6 +1026,8 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	resp.GetBind.AllocatorID = l.allocatorID
+	resp.GetBind.AllocatorVersion = l.version
 	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
@@ -867,6 +1047,8 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	resp.KeepLockTableBind.AllocatorID = l.allocatorID
+	resp.KeepLockTableBind.AllocatorVersion = l.version
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
@@ -950,9 +1132,28 @@ func (l *lockTableAllocator) handleCannotCommit(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	committingTxn := l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
+	l.ctlMu.RLock()
+	committingTxn := l.addCannotCommitLocked(req.CannotCommit.OrphanTxnList)
+	fenceTS := l.newFenceTS()
+	l.ctlMu.RUnlock()
 	resp.CannotCommit.CommittingTxn = committingTxn
+	resp.CannotCommit.FenceTS = fenceTS
 	writeResponse(l.logger, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) newFenceTS() timestamp.Timestamp {
+	if l.clock == nil {
+		return timestamp.Timestamp{}
+	}
+	_, upper := l.clock.Now()
+	if upper.PhysicalTime < 0 || upper.PhysicalTime == math.MaxInt64 {
+		return timestamp.Timestamp{}
+	}
+	// Move to the next physical tick so the fence dominates every logical
+	// timestamp at the clock's current upper-bound physical time.
+	upper.PhysicalTime++
+	upper.LogicalTime = 0
+	return upper
 }
 
 func (l *lockTableAllocator) handleCheckOrphan(
@@ -961,6 +1162,8 @@ func (l *lockTableAllocator) handleCheckOrphan(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
 	c := l.getCtl(req.CheckOrphan.ServiceID)
 	state, ok := c.getCtlState(util.UnsafeBytesToString(req.CheckOrphan.Txn))
 	resp.CheckOrphan.Orphan = ok && state == cannotCommitState
@@ -974,7 +1177,7 @@ func (l *lockTableAllocator) handleResumeInvalidCN(
 	resp *pb.Response,
 	cs morpc.ClientSession,
 ) {
-	l.inactiveService.Delete(req.ResumeInvalidCN.ServiceID)
+	l.resumeService(req.ResumeInvalidCN.ServiceID)
 	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
@@ -1030,26 +1233,210 @@ var (
 )
 
 type commitCtl struct {
-	// txn id -> state, 0: cannot commit, 1: committed
-	states sync.Map
+	mu            sync.Mutex
+	generation    uint64
+	recoveryEpoch uint64
+	states        map[string]commitState
 }
 
-func (c *commitCtl) add(txnID string, state ctlState) ctlState {
-	old, loaded := c.states.LoadOrStore(txnID, state)
-	if loaded {
-		return old.(ctlState)
+type commitState struct {
+	state      ctlState
+	inflight   uint32
+	generation uint64
+}
+
+func (c *commitCtl) beginCommit(txnID string) ctlState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureStatesLocked()
+
+	state, ok := c.states[txnID]
+	if ok && state.state == cannotCommitState {
+		state.generation = c.nextGenerationLocked()
+		c.states[txnID] = state
+		return cannotCommitState
 	}
-	return state
+	state.state = committingState
+	if state.inflight < math.MaxUint32 {
+		state.inflight++
+	}
+	state.generation = c.nextGenerationLocked()
+	c.states[txnID] = state
+	return committingState
+}
+
+func (c *commitCtl) finishCommit(txnID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	state, ok := c.states[txnID]
+	if !ok || state.state != committingState || state.inflight == 0 {
+		return false
+	}
+	state.inflight--
+	if state.inflight == 0 {
+		delete(c.states, txnID)
+		return true
+	}
+	state.generation = c.nextGenerationLocked()
+	c.states[txnID] = state
+	return true
+}
+
+func (c *commitCtl) tryCannotCommit(txnID string) ctlState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureStatesLocked()
+
+	state, ok := c.states[txnID]
+	if ok && state.state == committingState && state.inflight > 0 {
+		return committingState
+	}
+	if ok && state.state == cannotCommitState {
+		state.generation = c.nextGenerationLocked()
+		c.states[txnID] = state
+		return cannotCommitState
+	}
+	state.state = cannotCommitState
+	state.inflight = 0
+	state.generation = c.nextGenerationLocked()
+	c.states[txnID] = state
+	return cannotCommitState
 }
 
 func (c *commitCtl) getCtlState(
 	txnID string,
 ) (ctlState, bool) {
-	old, loaded := c.states.Load(txnID)
-	if loaded {
-		return old.(ctlState), true
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, ok := c.states[txnID]
+	if ok {
+		return state.state, true
 	}
 	return ctlState(0), false
+}
+
+func (c *commitCtl) getCommitState(txnID string) (commitState, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, ok := c.states[txnID]
+	return state, ok
+}
+
+func (c *commitCtl) clean(
+	activeTxns map[string]struct{},
+	preserveCannotCommit bool,
+	maxGeneration uint64,
+	logger *log.MOLogger,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for txnID, state := range c.states {
+		// A newer state was created or refreshed while GetActiveTxn was in
+		// flight, so the response cannot be used to remove it.
+		if state.generation == math.MaxUint64 || state.generation > maxGeneration {
+			continue
+		}
+		_, active := activeTxns[txnID]
+		if active || state.inflight > 0 ||
+			(preserveCannotCommit && state.state == cannotCommitState) {
+			continue
+		}
+		if state.state == cannotCommitState {
+			logCleanCannotCommitTxn(logger, txnID, int(state.state))
+		}
+		delete(c.states, txnID)
+	}
+}
+
+func (c *commitCtl) empty() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.states) == 0
+}
+
+func (c *commitCtl) size() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.states)
+}
+
+func (c *commitCtl) ensureStatesLocked() {
+	if c.states == nil {
+		c.states = make(map[string]commitState)
+	}
+}
+
+func (c *commitCtl) nextGenerationLocked() uint64 {
+	if c.generation < math.MaxUint64 {
+		c.generation++
+	}
+	return c.generation
+}
+
+func (c *commitCtl) currentGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
+func (c *commitCtl) currentRecoveryEpoch() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.recoveryEpoch
+}
+
+func (c *commitCtl) advanceRecoveryEpoch() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.recoveryEpoch < math.MaxUint64 {
+		c.recoveryEpoch++
+	}
+}
+
+func (l *lockTableAllocator) getCtlCleanupSnapshot(
+	serviceID string,
+) (*commitCtl, uint64, uint64, bool) {
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		return nil, 0, 0, false
+	}
+	ctl := value.(*commitCtl)
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	return ctl, ctl.generation, ctl.recoveryEpoch, true
+}
+
+func (l *lockTableAllocator) getCtlGeneration(serviceID string) (uint64, bool) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		return 0, false
+	}
+	return value.(*commitCtl).currentGeneration(), true
+}
+
+func (l *lockTableAllocator) cleanCtlLocked(
+	serviceID string,
+	activeTxns map[string]struct{},
+	preserveCannotCommit bool,
+	maxGeneration uint64,
+) {
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		return
+	}
+	c := value.(*commitCtl)
+	c.clean(activeTxns, preserveCannotCommit, maxGeneration, l.logger)
+	// Serialize removal with Resume and conditional inactive marking. This
+	// prevents an old cleanup from passing an identity check while its ctl is
+	// concurrently replaced (ABA).
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	if c.empty() {
+		l.ctl.CompareAndDelete(serviceID, c)
+	}
 }
 
 func (l *lockTableAllocator) canGetBind(serviceID string) bool {

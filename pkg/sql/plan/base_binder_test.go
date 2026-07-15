@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,6 +58,144 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
+	ctx := context.Background()
+
+	for _, name := range []string{function.SerialFunctionName, function.SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			arg := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{
+							MakePlan2Int64ConstExprWithType(1),
+							MakePlan2Int64ConstExprWithType(2),
+						},
+					},
+				},
+			}
+
+			result, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+			require.NoError(t, err)
+			require.Same(t, arg, result)
+			require.Equal(t, int32(types.T_varchar), result.Typ.Id)
+
+			list := result.GetList()
+			require.NotNil(t, list)
+			require.Len(t, list.List, 2)
+			for i, item := range list.List {
+				f := item.GetF()
+				require.NotNil(t, f)
+				require.Equal(t, name, f.Func.GetObjName())
+				require.Len(t, f.Args, 1)
+				require.Equal(t, int64(i+1), f.Args[0].GetLit().GetI64Val())
+			}
+		})
+	}
+}
+
+func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	hex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_ScoreBinaryHexnum)
+
+	rawExpr, err := binder.bindNumVal(hex, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "12", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	testCases := []struct {
+		name  string
+		typ   plan.Type
+		isBin bool
+	}{
+		{name: "integer numeric cast parses text", typ: plan.Type{Id: int32(types.T_uint64)}, isBin: false},
+		{name: "decimal numeric cast parses text", typ: plan.Type{Id: int32(types.T_decimal128)}, isBin: false},
+		{name: "float numeric cast parses text", typ: plan.Type{Id: int32(types.T_float64)}, isBin: false},
+		{name: "binary cast keeps binary string type", typ: plan.Type{Id: int32(types.T_binary)}, isBin: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			castExpr, err := binder.bindNumVal(hex, tc.typ)
+			require.NoError(t, err)
+			castFunc := castExpr.GetF()
+			require.NotNil(t, castFunc)
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, "12", castFunc.Args[0].GetLit().GetSval())
+			require.Equal(t, tc.isBin, castFunc.Args[0].GetLit().GetIsBin())
+		})
+	}
+
+	target := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+	explicitCast, err := BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{rawExpr, target})
+	require.NoError(t, err)
+	explicitCastFunc := explicitCast.GetF()
+	require.NotNil(t, explicitCastFunc)
+	require.Equal(t, int32(types.T_varbinary), explicitCastFunc.Args[0].Typ.Id)
+	require.False(t, explicitCastFunc.Args[0].GetLit().GetIsBin())
+
+	plainHex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_hexnum)
+	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
+	require.NoError(t, err)
+	require.True(t, plainHexExpr.GetLit().GetIsBin())
+
+	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varbinary), bitOrExpr.Typ.Id)
+
+	bitCountExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "bit_count", []*plan.Expr{rawExpr})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), bitCountExpr.Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), bitCountExpr.GetF().Args[0].Typ.Id)
+}
+
+func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	binStr := tree.NewNumVal("1", "1", false, tree.P_ScoreBinary)
+
+	rawExpr, err := binder.bindNumVal(binStr, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "1", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	castExpr, err := binder.bindNumVal(binStr, plan.Type{Id: int32(types.T_uint64)})
+	require.NoError(t, err)
+	castFunc := castExpr.GetF()
+	require.NotNil(t, castFunc)
+	require.Len(t, castFunc.Args, 2)
+	require.Equal(t, "1", castFunc.Args[0].GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), castFunc.Args[0].Typ.Id)
+	require.False(t, castFunc.Args[0].GetLit().GetIsBin())
+}
+
+func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+
+	for _, name := range []string{function.SerialFunctionName, function.SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			arg := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{},
+				},
+			}
+
+			result, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+			require.NoError(t, err)
+			require.Same(t, arg, result)
+			require.NotNil(t, result.GetList())
+			require.Empty(t, result.GetList().List)
+		})
+	}
 }
 
 func TestBindUnaryMinusUint64MinInt64Boundary(t *testing.T) {
@@ -140,6 +279,224 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, int32(types.T_bool), result.Typ.Id)
 	})
+}
+
+func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
+	ctx := context.Background()
+
+	makeJsonExpr := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_json)},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: 0, Name: "j"},
+			},
+		}
+	}
+	makeParamExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{
+				P: &plan.ParamRef{Pos: pos},
+			},
+		}
+	}
+	requireExactJSONParam := func(t *testing.T, expr *plan.Expr) *plan.Expr {
+		t.Helper()
+		require.Equal(t, int32(types.T_json), expr.Typ.Id)
+		normalize := expr.GetF()
+		require.NotNil(t, normalize)
+		require.Equal(t, function.JsonOrderingParamFunctionName, normalize.GetFunc().GetObjName())
+		require.Len(t, normalize.GetArgs(), 1)
+		return normalize.GetArgs()[0]
+	}
+
+	t.Run("json on left", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), param})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		require.Equal(t, int32(types.T_json), args[0].Typ.Id)
+		require.NotNil(t, args[0].GetCol())
+		paramArg := requireExactJSONParam(t, args[1])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	t.Run("json on right", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{param, makeJsonExpr()})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		paramArg := requireExactJSONParam(t, args[0])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+		require.Equal(t, int32(types.T_json), args[1].Typ.Id)
+		require.NotNil(t, args[1].GetCol())
+	})
+
+	t.Run("string literal remains rejected", func(t *testing.T) {
+		_, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
+		require.Error(t, err)
+	})
+
+	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
+		require.NoError(t, err)
+	})
+
+	t.Run("non-ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, "=", []*plan.Expr{makeJsonExpr(), makeParamExpr(0)})
+		require.NoError(t, err)
+	})
+}
+
+func TestBindNameConstConstArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "string name and int value",
+			sql:  "select name_const('myname', 14)",
+		},
+		{
+			name: "numeric name and negative value",
+			sql:  "select name_const(123, -456)",
+		},
+		{
+			name: "parenthesized literals",
+			sql:  "select name_const(('myname'), (14))",
+		},
+		{
+			name: "null value",
+			sql:  "select name_const('myname', null)",
+		},
+		{
+			name: "decimal value",
+			sql:  "select name_const('myname', 12.34)",
+		},
+		{
+			name: "negative decimal value",
+			sql:  "select name_const('myname', -12.34)",
+		},
+		{
+			name: "positive signed integer value",
+			sql:  "select name_const('myname', +1)",
+		},
+		{
+			name: "positive signed decimal value",
+			sql:  "select name_const('myname', +12.34)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, bindNameConstSelect(tc.sql))
+		})
+	}
+}
+
+func TestBindNameConstInvalidArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "wrong arg count",
+			sql:  "select name_const('myname')",
+		},
+		{
+			name: "null name",
+			sql:  "select name_const(null, 1)",
+		},
+		{
+			name: "unary minus name",
+			sql:  "select name_const(-123, -456)",
+		},
+		{
+			name: "column name",
+			sql:  "select name_const(a, 1) from t",
+		},
+		{
+			name: "column value",
+			sql:  "select name_const('myname', a) from t",
+		},
+		{
+			name: "cast function value",
+			sql:  "select name_const('myname', cast(14 as signed))",
+		},
+		{
+			name: "decimal cast function value",
+			sql:  "select name_const('myname', cast('12.34' as decimal(10,2)))",
+		},
+		{
+			name: "foldable function value",
+			sql:  "select name_const('myname', abs(-1))",
+		},
+		{
+			name: "non-foldable function value",
+			sql:  "select name_const('myname', now())",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, bindNameConstSelect(tc.sql))
+		})
+	}
+}
+
+func TestBindNameConstNilProcReturnsError(t *testing.T) {
+	args := []*plan.Expr{
+		makePlan2StringConstExprWithType("myname"),
+		makePlan2Int64ConstExprWithType(14),
+	}
+
+	require.NotPanics(t, func() {
+		_, err := bindFuncExprAndConstFold(context.Background(), nil, "name_const", args)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "name_const")
+	})
+}
+
+func TestGeneratedColBinderRejectsNameConstColumnValue(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select name_const('x', a)", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	funcExpr := selectClause.Exprs[0].Expr
+
+	binder := NewGeneratedColBinder(
+		context.Background(),
+		[]string{"a"},
+		[]plan.Type{{Id: int32(types.T_int64), Width: 64}},
+	)
+	_, err = binder.BindExpr(funcExpr, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "NAME_CONST")
+}
+
+func TestGeneratedColBinderAcceptsNameConstUnaryPlusLiteral(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select name_const('x', +1)", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	funcExpr := selectClause.Exprs[0].Expr
+
+	binder := NewGeneratedColBinder(context.Background(), nil, nil)
+	_, err = binder.BindExpr(funcExpr, 0, false)
+	require.NoError(t, err)
+}
+
+func bindNameConstSelect(sql string) error {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return err
+	}
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	return err
 }
 
 func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {

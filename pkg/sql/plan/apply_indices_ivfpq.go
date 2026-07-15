@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -39,6 +40,7 @@ type ivfpqIndexContext struct {
 	nThread      int64
 	batchWindow  int64
 	nProbe       int64
+	gpuMultiSim  int64
 }
 
 func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfpqIndexContext, error) {
@@ -105,6 +107,11 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		nProbe = nProbeIf.(int64)
 	}
 
+	gpuMultiSim, err := builder.compCtx.ResolveVariable("gpu_multi_simulation", true, false)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ivfpqIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -118,18 +125,18 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		nThread:      nThread.(int64),
 		batchWindow:  batchWindow.(int64),
 		nProbe:       nProbe,
+		gpuMultiSim:  gpuMultiSim.(int64),
 	}, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
 	projNode := vecCtx.projNode
-	sortNode := vecCtx.sortNode
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
@@ -140,7 +147,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "nprobe": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "nprobe": %d, "gpu_multi_simulation": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		ivfpqCtx.metaDef.IndexTableName,
@@ -148,7 +155,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		ivfpqCtx.nThread,
 		ivfpqCtx.origFuncName,
 		ivfpqCtx.batchWindow,
-		ivfpqCtx.nProbe)
+		ivfpqCtx.nProbe,
+		ivfpqCtx.gpuMultiSim)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to
@@ -204,10 +212,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:  kIVFPQSearchFuncName,
+				Name:  ivfpqplan.IVFPQSearchFuncName,
 				Param: []byte(ivfpqCtx.params),
 			},
-			Cols: DeepCopyColDefList(kIVFPQSearchColDefs),
+			Cols: DeepCopyColDefList(ivfpqplan.IVFPQSearchColDefs),
 		},
 		BindingTags:     []int32{tableFuncTag},
 		TblFuncExprList: tableFuncExprs,
@@ -257,7 +265,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 			tableFuncNode.Limit = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
@@ -323,13 +331,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
-		Limit:    limit,
-		Offset:   DeepCopyExpr(sortNode.Offset),
+		Limit:    resultLimit,
+		Offset:   resultOffset,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

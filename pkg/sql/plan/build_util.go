@@ -365,7 +365,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	defaultExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +405,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	onUpdateExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +497,11 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	// A generated CHAR/VARCHAR column is materialized as a real column write, so
+	// use the strict assignment cast: an over-length value is rejected instead of
+	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
+	// assignment paths.
+	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -690,6 +694,36 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 		}
 	default:
 		return expr
+	}
+}
+
+// collectRefColPos returns the ColPos of every base-table column reference
+// (RelPos == 0) inside expr, e.g. the source columns of a generated column's
+// definition expression.
+func collectRefColPos(expr *plan.Expr) []int32 {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			return []int32{e.Col.ColPos}
+		}
+		return nil
+	case *plan.Expr_F:
+		var res []int32
+		for _, arg := range e.F.Args {
+			res = append(res, collectRefColPos(arg)...)
+		}
+		return res
+	case *plan.Expr_List:
+		var res []int32
+		for _, item := range e.List.List {
+			res = append(res, collectRefColPos(item)...)
+		}
+		return res
+	default:
+		return nil
 	}
 }
 

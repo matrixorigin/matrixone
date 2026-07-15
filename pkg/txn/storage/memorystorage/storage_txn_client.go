@@ -72,6 +72,10 @@ func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnClient) IterTxnIDs(func([]byte) bool) {
+	panic("unimplemented")
+}
+
 func (*StorageTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	panic("unimplemented")
 }
@@ -347,6 +351,10 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 }
 
 func (s *StorageTxnOperator) HasLockTable(table uint64) bool {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) CheckLockTableBinds(ctx context.Context) error {
 	panic("should not call")
 }
 

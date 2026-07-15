@@ -90,7 +90,7 @@ func (s *service) addLog(txnMeta txn.TxnMeta) {
 }
 
 func (s *service) end() {
-	defer close(s.recoveryC)
+	defer s.finishRecovery()
 	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
@@ -101,15 +101,26 @@ func (s *service) end() {
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
 			if err := s.startAsyncCheckCommitTask(txnCtx); err != nil {
-				panic(err)
+				s.logger.Error("start check commit task failed during recovery",
+					zap.Error(err),
+					util.TxnField(txnMeta))
 			}
 		case txn.TxnStatus_Committing:
-			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
-				panic(err)
+				s.logger.Error("start commit task failed during recovery",
+					zap.Error(err),
+					util.TxnField(txnMeta))
+				return true
 			}
+			s.removeTxn(txnMeta.ID)
 		}
 		return true
+	})
+}
+
+func (s *service) finishRecovery() {
+	s.recoveryOnce.Do(func() {
+		close(s.recoveryC)
 	})
 }
 

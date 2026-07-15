@@ -374,11 +374,27 @@ func (exec *txnExecutor) Exec(
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	// A DisableIncrStatement execution runs on the caller's transaction
+	// without opening a statement, so its compile must not advance the
+	// workspace snapshot write offset (the statement boundary).
+	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 	}
+
+	// Propagate the "is this frontend?" signal onto the proc — same
+	// pattern as ResolveVariableFunc above. The Options default is
+	// IsFrontend=false (background) so every caller of the internal
+	// SQL executor that doesn't explicitly opt in is treated as
+	// background; frontend code that runs session-bound internal SQL
+	// opts in via opts.WithFrontend(true). Detection sites (e.g.
+	// IdxcronMetadata) consult proc.Base.IsFrontend rather than
+	// inferring from resolver behaviour, which is unreliable because
+	// background paths set resolvers too (idxcron's task.Metadata,
+	// ProcessInitSQL's executor.DefaultResolveVariable).
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
 
 	prepared := false
 	if statementOption.HasParams() {
@@ -592,6 +608,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 		nil,
 		exec.s.taskservice,
 	)
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {

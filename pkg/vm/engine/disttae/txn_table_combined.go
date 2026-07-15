@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -493,7 +494,7 @@ func (t *combinedTxnTable) PrimaryKeysMayBeUpserted(
 }
 
 func (t *combinedTxnTable) Reset(op client.TxnOperator) error {
-	return t.primary.Reset(op)
+	return moerr.NewInternalErrorNoCtx("cannot reset a shared combined relation")
 }
 
 func (t *combinedTxnTable) GetFlushTS(

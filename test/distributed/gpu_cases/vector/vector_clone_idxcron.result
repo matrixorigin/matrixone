@@ -1,0 +1,35 @@
+set experimental_cagra_index = 1;
+set experimental_ivfpq_index = 1;
+drop database if exists clone_idx_db;
+create database clone_idx_db;
+use clone_idx_db;
+create table t_cagra (a bigint primary key, v vecf32(4));
+insert into t_cagra values (1,'[1,1,1,1]'),(2,'[2,2,2,2]'),(3,'[3,3,3,3]'),(4,'[4,4,4,4]');
+create index ix using cagra on t_cagra (v) op_type 'vector_l2_ops';
+create table t_ivfpq (a bigint primary key, v vecf32(4));
+insert into t_ivfpq values (1,'[1,1,1,1]'),(2,'[2,2,2,2]'),(3,'[3,3,3,3]'),(4,'[4,4,4,4]');
+create index ix using ivfpq on t_ivfpq (v) op_type 'vector_l2_ops' lists=1;
+select db_name, table_name, index_name, action from mo_catalog.mo_index_update where db_name = 'clone_idx_db' order by table_name, index_name;
+➤ db_name[12,-1,0]  ¦  table_name[12,-1,0]  ¦  index_name[12,-1,0]  ¦  action[12,-1,0]  𝄀
+clone_idx_db  ¦  t_cagra  ¦  ix  ¦  cagra_reindex  𝄀
+clone_idx_db  ¦  t_ivfpq  ¦  ix  ¦  ivfpq_reindex
+create table t_cagra_copy clone t_cagra;
+create table t_ivfpq_copy clone t_ivfpq;
+select db_name, table_name, index_name, action from mo_catalog.mo_index_update where db_name = 'clone_idx_db' order by table_name, index_name;
+➤ db_name[12,-1,0]  ¦  table_name[12,-1,0]  ¦  index_name[12,-1,0]  ¦  action[12,-1,0]  𝄀
+clone_idx_db  ¦  t_cagra  ¦  ix  ¦  cagra_reindex  𝄀
+clone_idx_db  ¦  t_cagra_copy  ¦  ix  ¦  cagra_reindex  𝄀
+clone_idx_db  ¦  t_ivfpq  ¦  ix  ¦  ivfpq_reindex  𝄀
+clone_idx_db  ¦  t_ivfpq_copy  ¦  ix  ¦  ivfpq_reindex
+drop table t_cagra_copy;
+select db_name, table_name, index_name, action from mo_catalog.mo_index_update where db_name = 'clone_idx_db' order by table_name, index_name;
+➤ db_name[12,-1,0]  ¦  table_name[12,-1,0]  ¦  index_name[12,-1,0]  ¦  action[12,-1,0]  𝄀
+clone_idx_db  ¦  t_cagra  ¦  ix  ¦  cagra_reindex  𝄀
+clone_idx_db  ¦  t_ivfpq  ¦  ix  ¦  ivfpq_reindex  𝄀
+clone_idx_db  ¦  t_ivfpq_copy  ¦  ix  ¦  ivfpq_reindex
+drop database if exists clone_idx_db;
+select count(*) from mo_catalog.mo_index_update where db_name = 'clone_idx_db';
+➤ count(*)[-5,64,0]  𝄀
+0
+set experimental_cagra_index = 0;
+set experimental_ivfpq_index = 0;

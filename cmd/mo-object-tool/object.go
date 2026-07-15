@@ -15,6 +15,7 @@
 package object
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
 	"github.com/spf13/cobra"
 )
@@ -28,15 +29,42 @@ func PrepareCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// If file path is provided, enter view mode directly
 			if len(args) == 1 {
-				return interactive.Run(args[0])
+				kind, err := kindFromFlags(cmd)
+				if err != nil {
+					return err
+				}
+				return interactive.RunWithKind(args[0], kind)
 			}
 			// Otherwise show help
 			return cmd.Help()
 		},
 	}
 
+	// Persistent so the view/info subcommands inherit them. Exactly one of
+	// --local (DISK/CRC), --local2 (DISK-V2 raw), or --s3 (raw) must be set;
+	// there is no default — kindFromFlags errors if none (or more than one) is given.
+	addOfflineKindFlags(cmd)
+
 	cmd.AddCommand(viewCommand())
 	cmd.AddCommand(infoCommand())
 
 	return cmd
+}
+
+// addOfflineKindFlags registers the --local / --s3 / --local2 format flags as
+// persistent flags so subcommands inherit them. Exactly one must be set.
+func addOfflineKindFlags(cmd *cobra.Command) {
+	fs := cmd.PersistentFlags()
+	fs.Bool("local", false, "local DISK (CRC) format")
+	fs.Bool("s3", false, "S3 (raw) format")
+	fs.Bool("local2", false, "local DISK-V2 (raw) format")
+}
+
+// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
+// --local2 must be set, else it returns an error.
+func kindFromFlags(cmd *cobra.Command) (string, error) {
+	local, _ := cmd.Flags().GetBool("local")
+	s3, _ := cmd.Flags().GetBool("s3")
+	local2, _ := cmd.Flags().GetBool("local2")
+	return objectio.OfflineKindStrict(local, s3, local2)
 }

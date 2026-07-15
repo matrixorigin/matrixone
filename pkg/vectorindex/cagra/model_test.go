@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,14 @@ func TestModelStreamError(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming_error
 	defer func() { runSql_streaming = orig }()
 
+	// LoadIndex fires a tag=1 CDC event-log goroutine via runSql; mock it
+	// to return empty so it doesn't hit the production executor.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
+
 	// Manually create a model descriptor as if loaded from metadata.
 	idx := &CagraModel[float32]{
 		Id:       "test-stream-err",
@@ -227,6 +236,15 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.NotEmpty(t, tarPath)
 	require.NotEmpty(t, checksum)
 	defer os.Remove(tarPath)
+
+	// LoadIndex always fires the tag=1 CDC event-log SELECT (even when
+	// Path is already set and the tar download is skipped). Mock it to
+	// return empty so it doesn't hit the production executor.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
 
 	// ---- Load from local tar (skips DB download since Path is set) ----
 	loader := &CagraModel[float32]{
@@ -305,6 +323,12 @@ func TestModelLoadFromDB(t *testing.T) {
 	// Also mock runSql for LoadMetadata.
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		// LoadIndex also fires the tag=1 CDC event-log SELECT in parallel
+		// with the model tar streaming. Return an empty result — the test
+		// exercises the no-CDC-delta path.
+		if strings.Contains(sql, "AND tag = 1") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{

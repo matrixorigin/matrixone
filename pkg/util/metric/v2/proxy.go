@@ -32,6 +32,18 @@ var (
 	ProxyConnectRetryCounter      = proxyConnectCounter.WithLabelValues("retry")
 	ProxyConnectSelectCounter     = proxyConnectCounter.WithLabelValues("select")
 	ProxyConnectRejectCounter     = proxyConnectCounter.WithLabelValues("reject")
+	// ProxyConnectCNHealthTripCounter counts how many times a CN server's
+	// health breaker tripped (was marked temporarily unhealthy).
+	ProxyConnectCNHealthTripCounter = proxyConnectCounter.WithLabelValues("cn-health-trip")
+	// ProxyConnectCNHealthRetripCounter counts re-trips, i.e. a half-open
+	// probe failed and the CN was put back into cooldown with a longer backoff.
+	ProxyConnectCNHealthRetripCounter = proxyConnectCounter.WithLabelValues("cn-health-retrip")
+	// ProxyConnectCNHealthProbeCounter counts half-open probe connections
+	// handed out to a recovering CN server.
+	ProxyConnectCNHealthProbeCounter = proxyConnectCounter.WithLabelValues("cn-health-probe")
+	// ProxyConnectCNAllBusyCounter counts route attempts that fast-failed
+	// because every candidate CN server was temporarily unhealthy.
+	ProxyConnectCNAllBusyCounter = proxyConnectCounter.WithLabelValues("cn-all-busy")
 
 	proxyDisconnectCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -101,5 +113,30 @@ var (
 			Subsystem: "proxy",
 			Name:      "connections_transfer_intent",
 			Help:      "Proxy connections in transfer intent state",
+		})
+
+	ProxyCNHealthCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "cn_health_total",
+			Help:      "Total number of proxy CN health checker events.",
+		}, []string{"event"})
+
+	ProxyBackendHandshakeDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "backend_handshake_duration_seconds",
+			Help:      "Bucketed histogram of proxy backend CN handshake duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"result"})
+
+	ProxyBackendHandshakeInflightGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "backend_handshake_inflight",
+			Help:      "Current number of proxy backend CN handshakes in flight.",
 		})
 )

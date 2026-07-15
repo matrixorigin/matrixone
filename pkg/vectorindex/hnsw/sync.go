@@ -26,6 +26,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -81,6 +82,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 
 	var idxtblcfg vectorindex.IndexTableConfig
 	var param vectorindex.HnswParam
+	var indexCapacity int64
 
 	idxtblcfg.DbName = db
 	idxtblcfg.SrcTable = tbl
@@ -97,11 +99,11 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 		if err != nil {
 			return nil, err
 		}
-		idxtblcfg.IndexCapacity = idxcap.(int64)
+		indexCapacity = idxcap.(int64)
 	} else {
 
 		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(0)
-		idxtblcfg.IndexCapacity = 1000000
+		indexCapacity = 1000000
 	}
 
 	for i, idxdef := range idxdefs {
@@ -131,6 +133,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 
 	var idxcfg vectorindex.IndexConfig
 	idxcfg.Type = "hnsw"
+	idxcfg.IndexCapacity = indexCapacity
 
 	idxcfg.Usearch.Dimensions = uint(dimension)
 
@@ -253,7 +256,7 @@ func (s *HnswSync[T]) checkContains(sqlproc *sqlexec.SqlProcess, cdc *vectorinde
 		len(cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
 	// update max capacity from indexes
-	maxcap = uint(s.tblcfg.IndexCapacity)
+	maxcap = uint(s.idxcfg.IndexCapacity)
 	for _, m := range s.indexes {
 		if maxcap < m.MaxCapacity {
 			maxcap = m.MaxCapacity
@@ -378,8 +381,16 @@ func (s *HnswSync[T]) insertAllInParallel(sqlproc *sqlexec.SqlProcess, maxcap ui
 					return
 				}
 
-				// Len counter already incremented.  Just add to last model
-				last.AddWithoutIncr(row.PKey, row.Vec)
+				// Len counter already incremented in getLastModelAndIncrForSync. Do the
+				// physical add. If it fails (e.g. usearch rejects a duplicate key), roll back
+				// the reserved Len slot so the logical Len does not diverge from the physical
+				// index size, and propagate the error instead of dropping it — otherwise the
+				// sync reports success on a partially-applied batch (#25629).
+				if err := last.AddWithoutIncr(row.PKey, row.Vec); err != nil {
+					last.Len.Add(-1)
+					err_chan <- err
+					return
+				}
 			}
 		}(i)
 	}
@@ -744,7 +755,7 @@ func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 	}
 
 	if len(metas) > 0 {
-		metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", s.tblcfg.DbName, s.tblcfg.MetadataTable, strings.Join(metas, ", "))
+		metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(s.tblcfg.DbName, s.tblcfg.MetadataTable), strings.Join(metas, ", "))
 		sqls = append(sqls, metasql)
 	}
 	return sqls, nil

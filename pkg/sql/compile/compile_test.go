@@ -25,11 +25,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -75,6 +75,7 @@ func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 }
 
 type Ws struct {
+	advanceSnapshot func(context.Context, timestamp.Timestamp) error
 }
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
@@ -103,12 +104,25 @@ func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
 
+func (w *Ws) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	if w.advanceSnapshot != nil {
+		return w.advanceSnapshot(ctx, ts)
+	}
+	return nil
+}
+
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 
 func (w *Ws) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	return nil, nil
+}
+
+func (w *Ws) FinalizeCommit(ctx context.Context) {
+}
+
+func (w *Ws) FinalizeCommitWithUnknownResult(ctx context.Context) {
 }
 
 func (w *Ws) Rollback(ctx context.Context) error {
@@ -119,6 +133,10 @@ func (w *Ws) UpdateSnapshotWriteOffset() {
 }
 
 func (w *Ws) GetSnapshotWriteOffset() int {
+	return 0
+}
+
+func (w *Ws) WriteOffset() uint64 {
 	return 0
 }
 
@@ -378,6 +396,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -397,6 +416,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -432,50 +452,6 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func GetFilePath() string {
 	dir, _ := os.Getwd()
 	return dir
-}
-
-// mockRPCClient is a test implementation of morpc.RPCClient for testing.
-type mockRPCClient struct {
-	pingErr error
-}
-
-func (m *mockRPCClient) Ping(ctx context.Context, backend string) error {
-	return m.pingErr
-}
-
-func (m *mockRPCClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) Close() error {
-	return nil
-}
-
-func (m *mockRPCClient) CloseBackend() error {
-	return nil
-}
-
-// TestIsAvailable tests CN availability check.
-//
-// Test quality criteria:
-// 1. No randomness: Fixed RPC client behavior
-// 2. Fast execution: Mocked Ping that returns immediately (no sleep)
-// 3. Meaningful: Tests availability check logic with both success and failure cases
-// 4. Realistic: Tests real scenario where CN ping can succeed or fail
-func TestIsAvailable(t *testing.T) {
-	// Test case 1: Ping fails - should return false
-	mockClient := &mockRPCClient{pingErr: moerr.NewInternalErrorNoCtx("connection failed")}
-	ret := isAvailable(mockClient, "127.0.0.1:6001")
-	assert.False(t, ret, "should return false when ping fails")
-
-	// Test case 2: Ping succeeds - should return true
-	mockClient = &mockRPCClient{pingErr: nil}
-	ret = isAvailable(mockClient, "127.0.0.1:6002")
-	assert.True(t, ret, "should return true when ping succeeds")
 }
 
 func TestDebugLogFor19288(t *testing.T) {
@@ -537,6 +513,56 @@ func TestLockMeta_doLock(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 
 	assert.Error(t, lm.doLock(eng, proc))
+}
+
+func TestLockMetaInitRetriesAfterPartialFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	databaseRel := mock_frontend.NewMockRelation(ctrl)
+	tableRel := mock_frontend.NewMockRelation(ctrl)
+	lookupErr := moerr.NewInternalErrorNoCtx("lookup mo_tables")
+
+	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).Return(database, nil).Times(2)
+	database.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(databaseRel, nil).Times(2)
+	database.EXPECT().Relation(gomock.Any(), catalog.MO_TABLES, gomock.Any()).Return(nil, lookupErr).Times(1)
+	database.EXPECT().Relation(gomock.Any(), catalog.MO_TABLES, gomock.Any()).Return(tableRel, nil).Times(1)
+	databaseRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).Times(1)
+	tableRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).Times(1)
+	tableRel.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+	databaseRel.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+
+	lm := NewLockMeta()
+	require.ErrorIs(t, lm.initLockExe(eng, proc), lookupErr)
+	require.Nil(t, lm.lockDbExe)
+	require.Nil(t, lm.lockTableExe)
+	require.Nil(t, lm.database_rel)
+	require.Nil(t, lm.table_rel)
+
+	require.NoError(t, lm.initLockExe(eng, proc))
+	require.NotNil(t, lm.lockDbExe)
+	require.NotNil(t, lm.lockTableExe)
+	require.Same(t, databaseRel, lm.database_rel)
+	require.Same(t, tableRel, lm.table_rel)
+	require.NoError(t, lm.initLockExe(eng, proc))
+
+	lm.clear(proc)
+	proc.Free()
+}
+
+func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := allocateNewCompile(proc)
+	c.lockMeta = NewLockMeta()
+	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType())}
+
+	require.NotPanics(t, c.clear)
+	require.Nil(t, c.proc)
+	require.Nil(t, c.lockMeta)
 }
 
 func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) {
@@ -642,4 +668,48 @@ func hasOperatorType(op vm.Operator, opType vm.OpType) bool {
 		}
 	}
 	return false
+}
+
+// TestNewCompileTxnOffsetForInternalSql verifies the statement-boundary
+// contract of NewCompile and Compile.Reset (issue #25557): a compile of a
+// user statement advances the workspace snapshot write offset, while an
+// internal sub-sql compile (DisableIncrStatement, marked on the process)
+// must not touch the shared boundary — it captures the current end of the
+// workspace as its own TxnOffset instead.
+func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
+	t.Run("user statement advances the boundary", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		ws.EXPECT().UpdateSnapshotWriteOffset().Times(1)
+		ws.EXPECT().GetSnapshotWriteOffset().Return(3).Times(1)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.TxnOperator = txnOp
+
+		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
+		require.Equal(t, 3, c.TxnOffset)
+	})
+
+	t.Run("internal sub-sql must not advance the boundary", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		// no UpdateSnapshotWriteOffset expectation: the mock controller
+		// fails the test if the internal compile advances the boundary
+		ws.EXPECT().WriteOffset().Return(uint64(7)).Times(1)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.TxnOperator = txnOp
+		proc.SetIncrStatementDisabled(true)
+
+		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
+		require.Equal(t, 7, c.TxnOffset)
+	})
 }
