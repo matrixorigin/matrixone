@@ -22,12 +22,13 @@ func TestRootPhaseResource(t *testing.T) {
 	stats.PlanStage.PlanDuration = 30 * time.Nanosecond
 	stats.PlanStage.BuildPlanStatsIOConsumption = 7
 	stats.CompileStage.CompileDuration = 20 * time.Nanosecond
+	stats.CompileStage.CompileIOConsumption = 5
 	stats.PlanStage.BuildPlanS3Request = S3Request{Get: 2, Head: 1}
 	stats.CompileStage.CompileS3Request = S3Request{Put: 3}
 
 	delta := stats.RootPhaseResource()
-	require.Equal(t, uint64(53), delta.Usage.ExclusiveActiveNS)
-	require.Equal(t, uint64(7), delta.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, uint64(48), delta.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(12), delta.Usage.WaitNS[resource.WaitFilesystem])
 	require.Equal(t, uint64(2), delta.Usage.S3Requests[resource.S3Get])
 	require.Equal(t, uint64(1), delta.Usage.S3Requests[resource.S3Head])
 	require.Equal(t, uint64(3), delta.Usage.S3Requests[resource.S3Put])

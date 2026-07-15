@@ -285,10 +285,6 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			return 0, err
 		}
 
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
-
 		for _, stats := range statsList {
 			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
 			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))

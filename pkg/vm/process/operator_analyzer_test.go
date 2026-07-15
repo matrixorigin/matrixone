@@ -38,6 +38,7 @@ func TestOperatorStatsResourceDelta(t *testing.T) {
 		S3List:           4,
 		S3Delete:         5,
 		S3DeleteMul:      6,
+		ResourceWaitNS:   [resource.WaitKindCount]int64{resource.WaitLock: 7, resource.WaitOther: 13},
 		OperatorMetrics:  map[MetricType]int64{OpWaitLockTime: 7},
 	}
 	delta := stats.ResourceDelta()
@@ -381,156 +382,26 @@ func TestOperatorStats_String(t *testing.T) {
 	}
 }
 
-func Test_operatorAnalyzer_AddReadSizeInfo(t *testing.T) {
-	type fields struct {
-		nodeIdx              int
-		isFirst              bool
-		isLast               bool
-		start                time.Time
-		wait                 time.Duration
-		childrenCallDuration time.Duration
-		opStats              *OperatorStats
-	}
-	type args struct {
-		counter *perfcounter.CounterSet
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantPanic bool
-		want      struct {
-			ReadSize     int64
-			S3ReadSize   int64
-			DiskReadSize int64
-		}
-	}{
-		{
-			name: "panic when opStats is nil",
-			fields: fields{
-				opStats: nil,
-			},
-			args: args{
-				counter: &perfcounter.CounterSet{},
-			},
-			wantPanic: true,
-		},
-		{
-			name: "normal case - add read size info from CounterSet",
-			fields: fields{
-				opStats: NewOperatorStats("testOp"),
-			},
-			args: args{
-				counter: func() *perfcounter.CounterSet {
-					cs := &perfcounter.CounterSet{}
-					cs.FileService.ReadSize.Add(1024 * 1024)    // 1MB
-					cs.FileService.S3ReadSize.Add(512 * 1024)   // 0.5MB
-					cs.FileService.DiskReadSize.Add(256 * 1024) // 0.25MB
-					return cs
-				}(),
-			},
-			wantPanic: false,
-			want: struct {
-				ReadSize     int64
-				S3ReadSize   int64
-				DiskReadSize int64
-			}{
-				ReadSize:     1024 * 1024,
-				S3ReadSize:   512 * 1024,
-				DiskReadSize: 256 * 1024,
-			},
-		},
-		{
-			name: "accumulate read size info from CounterSet",
-			fields: fields{
-				opStats: NewOperatorStats("testOp"),
-			},
-			args: args{
-				counter: func() *perfcounter.CounterSet {
-					cs := &perfcounter.CounterSet{}
-					cs.FileService.ReadSize.Add(2048 * 1024)    // 2MB
-					cs.FileService.S3ReadSize.Add(1536 * 1024)  // 1.5MB
-					cs.FileService.DiskReadSize.Add(512 * 1024) // 0.5MB
-					return cs
-				}(),
-			},
-			wantPanic: false,
-			want: struct {
-				ReadSize     int64
-				S3ReadSize   int64
-				DiskReadSize int64
-			}{
-				ReadSize:     2048 * 1024,
-				S3ReadSize:   1536 * 1024,
-				DiskReadSize: 512 * 1024,
-			},
-		},
-		{
-			name: "accumulate multiple times",
-			fields: fields{
-				opStats: NewOperatorStats("testOp"),
-			},
-			args: args{
-				counter: func() *perfcounter.CounterSet {
-					cs := &perfcounter.CounterSet{}
-					cs.FileService.ReadSize.Add(1024 * 1024)    // 1MB
-					cs.FileService.S3ReadSize.Add(512 * 1024)   // 0.5MB
-					cs.FileService.DiskReadSize.Add(256 * 1024) // 0.25MB
-					return cs
-				}(),
-			},
-			wantPanic: false,
-			want: struct {
-				ReadSize     int64
-				S3ReadSize   int64
-				DiskReadSize int64
-			}{
-				ReadSize:     1024 * 1024,
-				S3ReadSize:   512 * 1024,
-				DiskReadSize: 256 * 1024,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantPanic {
-				defer func() {
-					if r := recover(); r != nil {
-						t.Logf("operatorAnalyzer.AddReadSizeInfo() panic: %v", r)
-					} else {
-						t.Errorf("should catch operatorAnalyzer.AddReadSizeInfo() panic")
-					}
-				}()
-			}
+func TestOperatorAnalyzerHarvestsTerminalCounterIntervals(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
 
-			opAlyzr := &operatorAnalyzer{
-				nodeIdx:              tt.fields.nodeIdx,
-				isFirst:              tt.fields.isFirst,
-				isLast:               tt.fields.isLast,
-				start:                tt.fields.start,
-				wait:                 tt.fields.wait,
-				childrenCallDuration: tt.fields.childrenCallDuration,
-				opStats:              tt.fields.opStats,
-			}
-			opAlyzr.AddReadSizeInfo(tt.args.counter)
-			if !tt.wantPanic && opAlyzr.opStats != nil {
-				assert.Equalf(t, tt.want.ReadSize, opAlyzr.opStats.ReadSize, "AddReadSizeInfo() ReadSize")
-				assert.Equalf(t, tt.want.S3ReadSize, opAlyzr.opStats.S3ReadSize, "AddReadSizeInfo() S3ReadSize")
-				assert.Equalf(t, tt.want.DiskReadSize, opAlyzr.opStats.DiskReadSize, "AddReadSizeInfo() DiskReadSize")
-				// Test accumulation
-				if tt.name == "normal case - add read size info from CounterSet" {
-					cs2 := &perfcounter.CounterSet{}
-					cs2.FileService.ReadSize.Add(2048 * 1024)    // 2MB
-					cs2.FileService.S3ReadSize.Add(1024 * 1024)  // 1MB
-					cs2.FileService.DiskReadSize.Add(512 * 1024) // 0.5MB
-					opAlyzr.AddReadSizeInfo(cs2)
-					assert.Equalf(t, int64(3072*1024), opAlyzr.opStats.ReadSize, "AddReadSizeInfo() should accumulate ReadSize")
-					assert.Equalf(t, int64(1536*1024), opAlyzr.opStats.S3ReadSize, "AddReadSizeInfo() should accumulate S3ReadSize")
-					assert.Equalf(t, int64(768*1024), opAlyzr.opStats.DiskReadSize, "AddReadSizeInfo() should accumulate DiskReadSize")
-				}
-			}
-		})
-	}
+	first := opAlyzr.GetOpCounterSet()
+	first.FileService.S3.Get.Add(1)
+	first.FileService.ReadSize.Add(1024)
+	first.FileService.S3ReadSize.Add(512)
+
+	// Starting the next producer interval harvests the previous one.
+	second := opAlyzr.GetOpCounterSet()
+	assert.Equal(t, int64(1), opAlyzr.opStats.S3Get)
+	assert.Equal(t, int64(1024), opAlyzr.opStats.ReadSize)
+	second.FileService.S3.Put.Add(2)
+	second.FileService.S3WriteSize.Add(256)
+
+	// Stop is the terminal owner, including error and panic return paths.
+	opAlyzr.Stop()
+	assert.Equal(t, int64(2), opAlyzr.opStats.S3Put)
+	assert.Equal(t, int64(256), opAlyzr.opStats.S3WriteSize)
 }
 
 func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {

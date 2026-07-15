@@ -42,7 +42,10 @@ func (stats *StatsInfo) RootPhaseResource() resource.Delta {
 	planWait := duration(stats.PlanStage.BuildPlanStatsIOConsumption)
 	recorder.AddActiveInterval(planWall, planWait, 0)
 	recorder.AddWait(resource.WaitFilesystem, planWait)
-	recorder.AddActiveInterval(duration(stats.CompileStage.CompileDuration.Nanoseconds()), 0, 0)
+	compileWall := duration(stats.CompileStage.CompileDuration.Nanoseconds())
+	compileWait := duration(atomic.LoadInt64(&stats.CompileStage.CompileIOConsumption))
+	recorder.AddActiveInterval(compileWall, compileWait, 0)
+	recorder.AddWait(resource.WaitFilesystem, compileWait)
 
 	for _, requests := range [...]S3Request{
 		stats.PlanStage.BuildPlanS3Request,

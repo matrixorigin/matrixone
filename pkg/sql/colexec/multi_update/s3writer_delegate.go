@@ -605,10 +605,6 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
-
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
 	}
@@ -714,9 +710,6 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			return
 		}
 	}
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated
 	// deleteBatches are processed through prepareDeleteBatches into

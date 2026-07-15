@@ -16,9 +16,11 @@ package output
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -84,13 +86,13 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		output.ctr.rowCount += int64(bat.RowCount())
 
 		crs := analyzer.GetOpCounterSet()
+		waitStart := time.Now()
 		if err = output.Func(bat, crs); err != nil {
+			analyzer.WaitStopKind(waitStart, resource.WaitOutput)
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
+		analyzer.WaitStopKind(waitStart, resource.WaitOutput)
 
 		// TODO: analyzer.Output(result.Batch)
 		return result, nil
@@ -137,13 +139,13 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				output.ctr.currentIdx = output.ctr.currentIdx + 1
 
 				crs := analyzer.GetOpCounterSet()
+				waitStart := time.Now()
 				if err := output.Func(bat, crs); err != nil {
+					analyzer.WaitStopKind(waitStart, resource.WaitOutput)
 					result.Status = vm.ExecStop
 					return result, err
 				}
-				analyzer.AddS3RequestCount(crs)
-				analyzer.AddFileServiceCacheInfo(crs)
-				analyzer.AddDiskIO(crs)
+				analyzer.WaitStopKind(waitStart, resource.WaitOutput)
 
 				result.Batch = bat
 				// same as nonBlock

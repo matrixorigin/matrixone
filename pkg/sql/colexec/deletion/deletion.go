@@ -249,9 +249,6 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 			return result, err
 		}
 		analyzer.AddDeletedRows(int64(deletion.ctr.resBat.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 
 	if delCtx.AddAffectedRows {

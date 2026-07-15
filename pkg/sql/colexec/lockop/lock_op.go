@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1524,13 +1525,6 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	defer func() {
-		if analyzer != nil {
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
-		}
-	}()
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
@@ -1542,7 +1536,7 @@ func hasNewVersionInRange(
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStop(start)
+		analyzer.WaitStopKind(start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }

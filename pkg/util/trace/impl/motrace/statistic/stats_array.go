@@ -536,6 +536,7 @@ type StatsInfo struct {
 		CompileStartTime      time.Time     `json:"CompileStartTime"`
 		CompileS3Request      S3Request     `json:"CompileS3Request"`
 		CompileExpandRangesS3 S3Request     `json:"CompileExpandRangesS3"`
+		CompileIOConsumption  int64         `json:"CompileIOConsumption"`
 		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
 		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
 	}
@@ -816,6 +817,13 @@ func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Get, sreq.Get)
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Delete, sreq.Delete)
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.DeleteMul, sreq.DeleteMul)
+}
+
+func (stats *StatsInfo) AddCompileIOConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.CompileStage.CompileIOConsumption, int64(d))
 }
 
 // CompileExpandRangesS3Request

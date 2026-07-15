@@ -217,8 +217,6 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			if err != nil {
 				return err
 			}
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddDiskIO(crs)
 
 			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 		} else {

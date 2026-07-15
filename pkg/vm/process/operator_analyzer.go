@@ -47,6 +47,7 @@ type Analyzer interface {
 	Input(batch *batch.Batch)
 	Output(*batch.Batch)
 	WaitStop(time.Time)
+	WaitStopKind(time.Time, resource.WaitKind)
 	Network(*batch.Batch)
 	AddWrittenRows(int64)
 	AddDeletedRows(int64)
@@ -54,10 +55,6 @@ type Analyzer interface {
 	AddInsertTime(t time.Time)
 	AddIncrementTime(t time.Time)
 	AddWaitLockTime(t time.Time)
-	AddS3RequestCount(counter *perfcounter.CounterSet)
-	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
-	AddDiskIO(counter *perfcounter.CounterSet)
-	AddReadSizeInfo(counter *perfcounter.CounterSet)
 	AddParquetProfile(stats ParquetProfileStats)
 
 	GetOpCounterSet() *perfcounter.CounterSet
@@ -148,6 +145,7 @@ type operatorAnalyzer struct {
 	wait                 time.Duration
 	childrenCallDuration time.Duration
 	crs                  *perfcounter.CounterSet
+	crsActive            bool
 	opStats              *OperatorStats
 }
 
@@ -175,10 +173,13 @@ func NewTempAnalyzer() Analyzer {
 	}
 }
 
-// GetOpCounterSet returns the current CounterSet and resets it.
-// This method should be used when you want to start fresh with the performance counters.
+// GetOpCounterSet starts a new producer-owned counter interval. Any previous
+// interval is harvested first, so callers cannot lose a partial operation by
+// returning on its error path.
 func (opAlyzr *operatorAnalyzer) GetOpCounterSet() *perfcounter.CounterSet {
+	opAlyzr.harvestCounterSet()
 	opAlyzr.crs.Reset()
+	opAlyzr.crsActive = true
 	return opAlyzr.crs
 }
 
@@ -186,6 +187,7 @@ func (opAlyzr *operatorAnalyzer) Reset() {
 	opAlyzr.wait = 0
 	opAlyzr.childrenCallDuration = 0
 	opAlyzr.crs.Reset()
+	opAlyzr.crsActive = false
 	opAlyzr.opStats.Reset()
 }
 
@@ -199,6 +201,10 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Stop: operatorAnalyzer.opStats is nil")
 	}
+
+	// The counter interval is terminal even when the producer returned an error
+	// or panicked. Harvest it before publishing the Call statistics.
+	opAlyzr.harvestCounterSet()
 
 	// Calculate producer-local exclusive active time. Child calls and waits are
 	// subtracted only from the Call interval that observed them.
@@ -296,7 +302,21 @@ func (opAlyzr *operatorAnalyzer) Output(bat *batch.Batch) {
 }
 
 func (opAlyzr *operatorAnalyzer) WaitStop(start time.Time) {
-	opAlyzr.wait += time.Since(start)
+	opAlyzr.WaitStopKind(start, resource.WaitOther)
+}
+
+func (opAlyzr *operatorAnalyzer) WaitStopKind(start time.Time, kind resource.WaitKind) {
+	duration := time.Since(start)
+	if duration < 0 || kind >= resource.WaitKindCount {
+		opAlyzr.opStats.ResourceQuality |= resource.QualityInvariantFailure
+		return
+	}
+	opAlyzr.wait += duration
+	opAlyzr.opStats.ResourceWaitNS[kind] = addResourceInt64(
+		opAlyzr.opStats.ResourceWaitNS[kind],
+		uint64(duration.Nanoseconds()),
+		&opAlyzr.opStats.ResourceQuality,
+	)
 }
 
 func (opAlyzr *operatorAnalyzer) ChildrenCallStop(start time.Time) {
@@ -369,24 +389,20 @@ func (opAlyzr *operatorAnalyzer) AddWaitLockTime(t time.Time) {
 	opAlyzr.opStats.AddOpMetric(OpWaitLockTime, duration.Nanoseconds())
 }
 
-func (opAlyzr *operatorAnalyzer) AddS3RequestCount(counter *perfcounter.CounterSet) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.AddS3RequestCount: operatorAnalyzer.opStats is nil")
+func (opAlyzr *operatorAnalyzer) harvestCounterSet() {
+	if !opAlyzr.crsActive {
+		return
 	}
-
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.harvestCounterSet: operatorAnalyzer.opStats is nil")
+	}
+	counter := opAlyzr.crs
 	opAlyzr.opStats.S3List += counter.FileService.S3.List.Load()
 	opAlyzr.opStats.S3Head += counter.FileService.S3.Head.Load()
 	opAlyzr.opStats.S3Put += counter.FileService.S3.Put.Load()
 	opAlyzr.opStats.S3Get += counter.FileService.S3.Get.Load()
 	opAlyzr.opStats.S3Delete += counter.FileService.S3.Delete.Load()
 	opAlyzr.opStats.S3DeleteMul += counter.FileService.S3.DeleteMulti.Load()
-}
-
-func (opAlyzr *operatorAnalyzer) AddFileServiceCacheInfo(counter *perfcounter.CounterSet) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.AddFileServiceCacheInfo: operatorAnalyzer.opStats is nil")
-	}
-
 	opAlyzr.opStats.CacheRead += counter.FileService.Cache.Read.Load()
 	opAlyzr.opStats.CacheHit += counter.FileService.Cache.Hit.Load()
 	opAlyzr.opStats.CacheMemoryRead += counter.FileService.Cache.Memory.Read.Load()
@@ -395,24 +411,12 @@ func (opAlyzr *operatorAnalyzer) AddFileServiceCacheInfo(counter *perfcounter.Co
 	opAlyzr.opStats.CacheDiskHit += counter.FileService.Cache.Disk.Hit.Load()
 	opAlyzr.opStats.CacheRemoteRead += counter.FileService.Cache.Remote.Read.Load()
 	opAlyzr.opStats.CacheRemoteHit += counter.FileService.Cache.Remote.Hit.Load()
-}
-
-func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.AddDiskIO: operatorAnalyzer.opStats is nil")
-	}
-	// DiskIO counter removed - FileWithChecksum metrics deleted
-}
-
-func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet) {
-	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.AddReadSizeInfo: operatorAnalyzer.opStats is nil")
-	}
-
 	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
 	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
 	opAlyzr.opStats.S3WriteSize += counter.FileService.S3WriteSize.Load()
 	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
+	counter.Reset()
+	opAlyzr.crsActive = false
 }
 
 func (opAlyzr *operatorAnalyzer) AddParquetProfile(stats ParquetProfileStats) {
@@ -460,20 +464,21 @@ func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 }
 
 type OperatorStats struct {
-	OperatorName     string                `json:"-"`
-	CallNum          int                   `json:"CallCount,omitempty"`
-	TimeConsumed     int64                 `json:"TimeConsumed,omitempty"`
-	WaitTimeConsumed int64                 `json:"WaitTimeConsumed,omitempty"`
-	MemorySize       int64                 `json:"MemorySize,omitempty"`
-	SpillSize        int64                 `json:"SpillSize,omitempty"`
-	SpillRows        int64                 `json:"SpillRows,omitempty"`
-	InputRows        int64                 `json:"InputRows,omitempty"`
-	InputSize        int64                 `json:"InputSize,omitempty"`
-	OutputRows       int64                 `json:"OutputRows,omitempty"`
-	OutputSize       int64                 `json:"OutputSize,omitempty"`
-	NetworkIO        int64                 `json:"NetworkIO,omitempty"`
-	DiskIO           int64                 `json:"DiskIO,omitempty"`
-	ResourceQuality  resource.QualityFlags `json:"-"`
+	OperatorName     string                        `json:"-"`
+	CallNum          int                           `json:"CallCount,omitempty"`
+	TimeConsumed     int64                         `json:"TimeConsumed,omitempty"`
+	WaitTimeConsumed int64                         `json:"WaitTimeConsumed,omitempty"`
+	MemorySize       int64                         `json:"MemorySize,omitempty"`
+	SpillSize        int64                         `json:"SpillSize,omitempty"`
+	SpillRows        int64                         `json:"SpillRows,omitempty"`
+	InputRows        int64                         `json:"InputRows,omitempty"`
+	InputSize        int64                         `json:"InputSize,omitempty"`
+	OutputRows       int64                         `json:"OutputRows,omitempty"`
+	OutputSize       int64                         `json:"OutputSize,omitempty"`
+	NetworkIO        int64                         `json:"NetworkIO,omitempty"`
+	DiskIO           int64                         `json:"DiskIO,omitempty"`
+	ResourceQuality  resource.QualityFlags         `json:"-"`
+	ResourceWaitNS   [resource.WaitKindCount]int64 `json:"-"`
 
 	InputBlocks  int64 `json:"-"`
 	ScanBytes    int64 `json:"-"`
@@ -550,16 +555,18 @@ func (ps *OperatorStats) ResourceDelta() resource.Delta {
 		*target = uint64(value)
 	}
 	add(ps.TimeConsumed, &delta.Usage.ExclusiveActiveNS)
-	lockWait := int64(0)
-	if ps.OperatorMetrics != nil {
-		lockWait = ps.OperatorMetrics[OpWaitLockTime]
+	var classifiedWait int64
+	for kind := resource.WaitKind(0); kind < resource.WaitKindCount; kind++ {
+		value := ps.ResourceWaitNS[kind]
+		if value < 0 || classifiedWait > math.MaxInt64-value {
+			delta.Quality |= resource.QualityInvariantFailure
+			continue
+		}
+		classifiedWait += value
+		add(value, &delta.Usage.WaitNS[kind])
 	}
-	if lockWait < 0 || ps.WaitTimeConsumed < lockWait {
+	if classifiedWait != ps.WaitTimeConsumed {
 		delta.Quality |= resource.QualityInvariantFailure
-		add(ps.WaitTimeConsumed, &delta.Usage.WaitNS[resource.WaitOther])
-	} else {
-		add(lockWait, &delta.Usage.WaitNS[resource.WaitLock])
-		add(ps.WaitTimeConsumed-lockWait, &delta.Usage.WaitNS[resource.WaitOther])
 	}
 	add(ps.SpillSize, &delta.Usage.SpillBytes)
 	add(ps.S3ReadSize, &delta.Usage.S3ReadBytes)

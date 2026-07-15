@@ -456,10 +456,6 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		return err
 	}
 
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
-
 	if blockInfoBat != nil && blockInfoBat.RowCount() > 0 {
 		insert.ctr.buf, err = insert.ctr.buf.Append(proc.Ctx, proc.GetMPool(), blockInfoBat)
 		if err != nil {
@@ -543,9 +539,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		return input, err
 	}
 	analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	if insert.InsertCtx.AddAffectedRows {
 		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
@@ -573,10 +566,6 @@ func flushTailBatch(
 	if _, err = writer.Sync(newCtx); err != nil {
 		return err
 	}
-
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	if bat, err = writer.FillBlockInfoBat(); err != nil {
 		return err

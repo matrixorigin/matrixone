@@ -87,9 +87,6 @@ func (update *MultiUpdate) delete_table(
 			return err
 		}
 		analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }

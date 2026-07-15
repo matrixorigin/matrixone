@@ -145,9 +145,6 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 	if err != nil {
 		return err
 	}
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	for i := range metaInfos {
 		err = fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])
