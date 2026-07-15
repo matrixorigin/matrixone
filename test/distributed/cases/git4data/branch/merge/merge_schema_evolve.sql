@@ -149,23 +149,20 @@ drop table t0;
 drop table t1;
 
 -- =====================================================
--- Case 7: cluster-by hidden helper columns stay out of SQL/apply columns
+-- Case 7: cluster-by + added column reaches the fake-PK rejection boundary
 -- =====================================================
-create table t0(a int primary key, b int) cluster by(a,b);
+-- MatrixOne does not allow an explicit primary key together with CLUSTER BY.
+-- A legal cluster-by table therefore uses the fake PK, and adding a target-only
+-- column is rejected before MERGE apply can expose any hidden helper column.
+create table t0(a int, b int) cluster by(a,b);
 insert into t0 values(1,1),(2,2);
-create snapshot sp0 for table test t0;
 
-data branch create table t1 from t0{snapshot="sp0"};
+data branch create table t1 from t0;
 alter table t1 add column c int default 0 after a;
-update t1 set b=11 where a=1;
-insert into t1(a,c,b) values(3,30,3);
-create snapshot sp1 for table test t1;
 
+-- @regex("schema compatibility check: target-only columns require an explicit primary key", true)
 data branch merge t1 into t0 when conflict accept;
-select * from t0 order by a;
 
-drop snapshot sp1;
-drop snapshot sp0;
 drop table t0;
 drop table t1;
 
