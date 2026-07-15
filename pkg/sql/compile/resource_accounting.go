@@ -11,6 +11,7 @@ package compile
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -38,18 +39,18 @@ func newExecutionResourceRecorder(ctx context.Context) *executionResourceRecorde
 	if root == nil {
 		return nil
 	}
-	return &executionResourceRecorder{
+	recorder := &executionResourceRecorder{
 		root:  root,
 		stats: statistic.StatsInfoFromContext(ctx),
 	}
+	if phases, ok := recorder.stats.ClaimRootPhaseResource(); ok {
+		recorder.root.AddLocal(phases)
+	}
+	return recorder
 }
 
 func (r *executionResourceRecorder) publish() {
 	if r != nil && !r.published {
-		if phases, ok := r.stats.ClaimRootPhaseResource(); ok {
-			r.execution.Quality |= phases.Quality |
-				resource.MergeUsage(&r.execution.Usage, phases.Usage)
-		}
 		r.root.MergeExecution(r.execution)
 		r.published = true
 	}
@@ -59,6 +60,7 @@ func (r *executionResourceRecorder) finishAttempt(
 	generation uint64,
 	attemptStart time.Time,
 	preRunWall time.Duration,
+	remoteWait time.Duration,
 	stats *statistic.StatsInfo,
 	scopes []*Scope,
 	anal *AnalyzeModule,
@@ -90,12 +92,43 @@ func (r *executionResourceRecorder) finishAttempt(
 	var coordinator resource.LocalRecorder
 	preRunNS := durationNS(preRunWall, &delta.Quality)
 	var lockWaitNS uint64
+	var filesystemWaitNS uint64
+	remoteWaitNS := durationNS(remoteWait, &delta.Quality)
 	if stats != nil {
 		lockWaitNS = signedCounter(stats.PrepareRunStage.CompilePreRunOnceWaitLock, &delta.Quality)
+		if generation > 0 {
+			filesystemWaitNS = signedCounter(stats.PlanStage.BuildPlanStatsIOConsumption, &delta.Quality)
+			compileWait := signedCounter(atomic.LoadInt64(&stats.CompileStage.CompileIOConsumption), &delta.Quality)
+			if filesystemWaitNS > math.MaxUint64-compileWait {
+				filesystemWaitNS = math.MaxUint64
+				delta.Quality |= resource.QualityInvariantFailure
+			} else {
+				filesystemWaitNS += compileWait
+			}
+		}
 	}
-	coordinator.AddActiveInterval(preRunNS, lockWaitNS, 0)
+	totalWaitNS := lockWaitNS
+	if totalWaitNS > math.MaxUint64-filesystemWaitNS {
+		totalWaitNS = math.MaxUint64
+		delta.Quality |= resource.QualityInvariantFailure
+	} else {
+		totalWaitNS += filesystemWaitNS
+	}
+	if totalWaitNS > math.MaxUint64-remoteWaitNS {
+		totalWaitNS = math.MaxUint64
+		delta.Quality |= resource.QualityInvariantFailure
+	} else {
+		totalWaitNS += remoteWaitNS
+	}
+	coordinator.AddActiveInterval(preRunNS, totalWaitNS, 0)
 	coordinator.AddWait(resource.WaitLock, lockWaitNS)
+	coordinator.AddWait(resource.WaitFilesystem, filesystemWaitNS)
+	coordinator.AddWait(resource.WaitRemote, remoteWaitNS)
 	if stats != nil {
+		if generation > 0 {
+			addS3Requests(&coordinator, stats.PlanStage.BuildPlanS3Request, &delta.Quality)
+			addS3Requests(&coordinator, stats.CompileStage.CompileS3Request, &delta.Quality)
+		}
 		addS3Requests(&coordinator, stats.PrepareRunStage.ScopePrepareS3Request, &delta.Quality)
 	}
 	coordinatorDelta := coordinator.Snapshot()

@@ -10,6 +10,7 @@ package statistic
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 )
@@ -61,6 +62,31 @@ func (stats *StatsInfo) RootPhaseResource() resource.Delta {
 	delta := recorder.Snapshot()
 	delta.Quality |= quality
 	return delta
+}
+
+// ResetRetryBuildResource starts a fresh generation-specific plan/compile
+// interval after the initial root phases have been claimed.
+func (stats *StatsInfo) ResetRetryBuildResource() {
+	if stats == nil {
+		return
+	}
+	stats.PlanStage.PlanDuration = 0
+	stats.PlanStage.PlanStartTime = time.Time{}
+	resetS3Request(&stats.PlanStage.BuildPlanS3Request)
+	atomic.StoreInt64(&stats.PlanStage.BuildPlanStatsIOConsumption, 0)
+	stats.CompileStage.CompileDuration = 0
+	stats.CompileStage.CompileStartTime = time.Time{}
+	resetS3Request(&stats.CompileStage.CompileS3Request)
+	atomic.StoreInt64(&stats.CompileStage.CompileIOConsumption, 0)
+}
+
+func resetS3Request(request *S3Request) {
+	atomic.StoreInt64(&request.List, 0)
+	atomic.StoreInt64(&request.Head, 0)
+	atomic.StoreInt64(&request.Put, 0)
+	atomic.StoreInt64(&request.Get, 0)
+	atomic.StoreInt64(&request.Delete, 0)
+	atomic.StoreInt64(&request.DeleteMul, 0)
 }
 
 // ClaimRootPhaseResource transfers this StatsInfo's phase resource facts to

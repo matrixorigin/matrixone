@@ -27,6 +27,7 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), stats)
 	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(ctx, root))
 	require.NotNil(t, recorder)
+	require.Equal(t, uint64(5), root.PreResponseSummary().Usage.ExclusiveActiveNS)
 
 	anal := &AnalyzeModule{}
 	anal.appendRemoteResource(
@@ -42,6 +43,7 @@ func TestExecutionResourceRecorder(t *testing.T) {
 		0,
 		time.Now().Add(-time.Millisecond),
 		10*time.Microsecond,
+		0,
 		nil,
 		nil,
 		anal,
@@ -57,6 +59,40 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
+	require.NotNil(t, recorder)
+
+	stats := statistic.NewStatsInfo()
+	stats.PlanStage.BuildPlanStatsIOConsumption = 7
+	stats.CompileStage.CompileIOConsumption = 5
+	stats.PrepareRunStage.CompilePreRunOnceWaitLock = 3
+	stats.PlanStage.BuildPlanS3Request = statistic.S3Request{Get: 2}
+	stats.CompileStage.CompileS3Request = statistic.S3Request{Put: 1}
+	recorder.finishAttempt(
+		1,
+		time.Now().Add(-time.Millisecond),
+		100*time.Nanosecond,
+		11*time.Nanosecond,
+		stats,
+		nil,
+		nil,
+		"local:6001",
+		resource.OutcomeSuccess,
+		false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(74), summary.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(12), summary.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, uint64(3), summary.Usage.WaitNS[resource.WaitLock])
+	require.Equal(t, uint64(11), summary.Usage.WaitNS[resource.WaitRemote])
+	require.Equal(t, uint64(2), summary.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3Put])
 }
 
 func TestRemoteTerminalEnvelope(t *testing.T) {
@@ -110,6 +146,7 @@ func TestMissingRemoteCountsFragmentAndMemoryDomain(t *testing.T) {
 	recorder.finishAttempt(
 		0,
 		time.Now(),
+		0,
 		0,
 		nil,
 		scopes,

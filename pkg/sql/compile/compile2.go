@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"math"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -251,6 +252,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	attemptStart := time.Now()
 	attemptOpen := true
 	var attemptPreRunWall time.Duration
+	var attemptRemoteWait time.Duration
 	attemptScopes := runC.scopes
 	attemptAnal := runC.anal
 	var coordinatorPhaseStart time.Time
@@ -264,7 +266,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 					attemptPreRunWall = time.Since(attemptStart)
 				}
 				resourceRecorder.finishAttempt(
-					uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+					uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 					attemptScopes, attemptAnal, c.addr, resource.OutcomePanic, false,
 				)
 				attemptOpen = false
@@ -305,7 +307,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 					runC.anal.retryTimes = retryTimes
 				}
 				resourceRecorder.finishAttempt(
-					uint64(retryTimes), attemptStart, preRunWall, stats,
+					uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
 					attemptScopes, attemptAnal, c.addr, resource.OutcomeSuccess, false,
 				)
 				attemptOpen = false
@@ -339,7 +341,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				}
 			}
 			resourceRecorder.finishAttempt(
-				uint64(retryTimes), attemptStart, preRunWall, stats,
+				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
 				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
@@ -372,7 +374,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		retryTransitionStart := time.Now()
 		coordinatorPhaseStart = retryTransitionStart
 		coordinatorPhaseBase = preRunWall
-		transitionErr := c.prepareRetryTransition()
+		transitionErr := c.prepareRetryTransition(&attemptRemoteWait)
 		transitionWall := time.Since(retryTransitionStart)
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
@@ -380,14 +382,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if transitionErr != nil {
 			err = transitionErr
 			resourceRecorder.finishAttempt(
-				uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
 			return nil, err
 		}
 		resourceRecorder.finishAttempt(
-			uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 			attemptScopes, attemptAnal, c.addr, resourceOutcome(retryErr), true,
 		)
 		attemptOpen = false
@@ -401,10 +403,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptStart = time.Now()
 		attemptOpen = true
 		attemptPreRunWall = 0
+		attemptRemoteWait = 0
 		attemptScopes = nil
 		attemptAnal = nil
 		coordinatorPhaseStart = attemptStart
 		coordinatorPhaseBase = 0
+		stats.ResetRetryBuildResource()
 		resetStatsInfoPreRun(stats, isInExecutor)
 		statsPrepared = true
 
@@ -414,7 +418,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if buildErr != nil {
 			err = buildErr
 			resourceRecorder.finishAttempt(
-				uint64(retryTimes), attemptStart, attemptPreRunWall, stats,
+				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
 			)
 			attemptOpen = false
@@ -659,7 +663,7 @@ func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
 
 // prepareRetryTransition quiesces the failed generation and advances its
 // transaction workspace. It is charged to the attempt that requested retry.
-func (c *Compile) prepareRetryTransition() error {
+func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
@@ -670,11 +674,15 @@ func (c *Compile) prepareRetryTransition() error {
 			if sqlText == "" {
 				sqlText = c.sql
 			}
-			if err := coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText); err != nil {
+			if err := measureRetryRemoteWait(remoteWait, func() error {
+				return coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText)
+			}); err != nil {
 				return err
 			}
 		} else if coordinator, ok := txnOp.(runSQLCoordinator); ok {
-			if err := coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken); err != nil {
+			if err := measureRetryRemoteWait(remoteWait, func() error {
+				return coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken)
+			}); err != nil {
 				return err
 			}
 		}
@@ -695,6 +703,22 @@ func (c *Compile) prepareRetryTransition() error {
 	// clear stage cache
 	c.proc.GetStageCache().Clear()
 	return nil
+}
+
+func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error) {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		if total == nil || elapsed <= 0 {
+			return
+		}
+		if *total > time.Duration(math.MaxInt64)-elapsed {
+			*total = time.Duration(math.MaxInt64)
+			return
+		}
+		*total += elapsed
+	}()
+	return wait()
 }
 
 // buildRetryCompile starts the next generation. A build or compile failure is
