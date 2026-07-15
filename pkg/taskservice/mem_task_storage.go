@@ -422,7 +422,11 @@ func (s *memTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun)
 	s.Lock()
 	defer s.Unlock()
 
-	if _, ok := s.sqlTaskRuns[run.RunID]; !ok {
+	existing, ok := s.sqlTaskRuns[run.RunID]
+	if !ok ||
+		existing.Status != SQLTaskStatusRunning ||
+		existing.RunnerCN != run.RunnerCN ||
+		existing.AttemptNumber != run.AttemptNumber {
 		return 0, nil
 	}
 	s.sqlTaskRuns[run.RunID] = run

@@ -1344,7 +1344,8 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
-	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
@@ -2086,6 +2087,18 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 		return "", err
 	}
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
+}
+
+func getSqlForCheckDatabaseByAccount(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseByAccountFormat, dbName, accountID), nil
 }
 
 func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
@@ -4360,6 +4373,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		return rtnErr
 	}
+
+	// The whole account is being removed, so cross-database foreign key
+	// metadata does not need to be rewritten while each database is dropped.
+	// Rewriting it can create a delete+insert catalog pair for a table in a
+	// database that will be dropped later in this transaction.
+	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
 
 	// disable foreign key checks
 	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
@@ -9744,7 +9763,7 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	var err error
 	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
 	defer span.End()
-	sqlForCheckDatabase, err = getSqlForCheckDatabase(ctx, dbName)
+	sqlForCheckDatabase, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
 	if err != nil {
 		return false, err
 	}

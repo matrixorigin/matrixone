@@ -511,6 +511,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
+%token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
 %token <str> SRID
 
@@ -3211,6 +3212,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Ignore: $3 != "",
             Where: $7,
             OrderBy: $8,
             Limit: $9,
@@ -3222,6 +3224,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Ignore: $3 != "",
             Where: $7,
         }
     }
@@ -3234,6 +3237,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs:  $6,
+            Ignore: $3 != "",
             From:   &tree.From{Tables: tree.TableExprs{$8}},
             Where:  $9,
         }
@@ -5442,8 +5446,13 @@ quick_opt:
 |    QUICK
 
 ignore_opt:
-    {}
+    {
+        $$ = ""
+    }
 |    IGNORE
+    {
+        $$ = "ignore"
+    }
 
 // MySQL REPLACE only allows LOW_PRIORITY or DELAYED (not HIGH_PRIORITY). Both are
 // accepted for compatibility and ignored: MatrixOne has no corresponding scheduling,
@@ -12104,6 +12113,28 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
+|   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   JSON_OBJECTAGG '(' func_type_opt expression ',' expression ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$4, $6},
+            Type: $3,
+            WindowSpec: $8,
+        }
+    }
 
 std_dev_pop:
     STD
@@ -14581,6 +14612,8 @@ not_keyword:
 |   DATE_SUB
 |   EXTRACT
 |   GROUP_CONCAT
+|   JSON_ARRAYAGG
+|   JSON_OBJECTAGG
 |   CLUSTER_CENTERS
 |   KMEANS
 |   MAX
