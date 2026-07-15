@@ -377,7 +377,7 @@ bench-resource-accounting: cgo thirdparties
 		./pkg/util/resource ./pkg/common/mpool
 
 .PHONY: bvt-resource-accounting
-bvt-resource-accounting: cgo thirdparties
+bvt-resource-accounting: test-resource-accounting
 	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
 		-run='^TestResourceAccountingBVTSingleCN$$' ./pkg/embed
 	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \

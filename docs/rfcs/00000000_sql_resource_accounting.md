@@ -333,11 +333,12 @@ The session epoch can be reset for the next statement only when
 `CurrNB()==0`. A non-zero start is never normalized with a baseline delta,
 because overlap makes such a delta unattributable.
 
-Pre-response consumers such as `EXPLAIN PHYPLAN ANALYZE` read a non-mutating
-snapshot of the same open epoch. That preview is never merged into the root;
-response completion clears it and publishes the terminal domain exactly once.
-An exact peak of zero is valid when the statement performs no chargeable MPool
-allocation after the epoch begins.
+Pre-response consumers such as `EXPLAIN PHYPLAN ANALYZE` read only the atomic
+peak of the same open epoch. The live preview never calls the terminal snapshot
+or exposes allocated, freed, cross-pool-free, or live-at-seal fields. It is
+never merged into the root; response completion clears it and publishes the
+quiescent terminal domain exactly once. An exact peak of zero is valid when the
+statement performs no chargeable MPool allocation after the epoch begins.
 
 Peaks are not additive. Attempt and root summaries expose
 `max_domain_peak_live_bytes` and
@@ -1703,9 +1704,22 @@ The named fuzz entry points are implementation deliverables. The race and fuzz
 runs must finish with no race, panic, underflow, double merge, goroutine leak,
 MPool-domain leak, lease leak, or tombstone leak.
 
-SQL acceptance adds
-`test/distributed/cases/log/resource_accounting.sql` and its golden result. For
-manual diagnosis, build and run a single-process cluster:
+The checked-in SQL gate is `pkg/embed/resource_accounting_bvt_test.go`. It runs
+real SQL and `EXPLAIN PHYPLAN ANALYZE` against an embedded single-CN service,
+then forces a multi-CN scan and requires resource overviews from at least two
+distinct CN addresses. `make bvt-resource-accounting` first runs the complete
+deterministic production-path gate, then both embedded SQL cases.
+
+The embedded service does not initialize the asynchronous statement exporter,
+so it must not pretend to validate `system.statement_info` persistence. That
+boundary is covered deterministically by the frontend completion test, which
+executes terminal response accounting and feeds its sealed summary through the
+production StatsArray projection, asserting the exact serialized v6 values
+(version, active time, peak memory, egress bytes/packets, attempt count,
+quality, and non-negative CU).
+
+For optional end-to-end diagnosis of exporter deployment, build and run a
+single-process cluster:
 
 ```sh
 make build
@@ -1718,8 +1732,8 @@ Run the multi-CN success path separately with:
 ./mo-service -launch ./etc/launch-multi-cn/launch.toml
 ```
 
-The BVT uses tagged statements and, after asynchronous statement export has
-completed, inspects the persisted row:
+After asynchronous statement export has completed, a manually tagged query can
+inspect the persisted row:
 
 ```sql
 select statement, duration, stats, cu, aggr_count, exec_plan
@@ -1728,9 +1742,11 @@ where statement like '%resource_acceptance%'
 order by response_at desc;
 ```
 
-Its fixtures include point select, parallel scan/join, insert/load, spill,
-prepared execution, error, cancellation, retry, multi-CN fragments, and short
-statement aggregation. Assertions include:
+This manual smoke check is supplementary, not part of the reproducible local
+gate. The deterministic suites cover success/error/cancel/panic/retry,
+partial/missing terminals, spill, protocol failures, projection, aggregation,
+and collector saturation through production recorders with controlled fault
+injection. Assertions include:
 
 - `json_length(stats) = 17`, index 0 is 6, and every persisted count, byte, and
   duration is non-negative;
@@ -1764,11 +1780,12 @@ most 2%, no material scan/join/insert/load/spill/multi-CN regression, and all
 object, wire, JSON, exporter-retention, lease, and tombstone bounds. No shadow
 or dual-calculation path is enabled for this comparison.
 
-Local sign-off attaches the deterministic, race, fuzz, BVT, and benchmark
-results plus representative v6 `statement_info` rows. Local acceptance passes
-only when all suites pass, unexpected invariant/partial flags remain zero,
-ordinary query results and plans are unchanged, and the old accounting path is
-absent from the built binary.
+Local sign-off attaches the deterministic, race, fuzz, embedded SQL BVT, and
+benchmark results. A representative v6 `statement_info` row is required only
+for deployment smoke testing where the asynchronous exporter is enabled. Local
+acceptance passes only when all repository suites pass, unexpected
+invariant/partial flags remain zero, ordinary query results and plans are
+unchanged, and the old accounting path is absent from the built binary.
 
 ## 20. Decisions Required Before Implementation or Rollout
 
