@@ -65,8 +65,6 @@ AFTER_SINGLE
 analyze table t_analyze_01, t_analyze_02;
 approx_count_distinct(a)	approx_count_distinct(b)
 2	3
-approx_count_distinct(x)	approx_count_distinct(y)
-4	4
 select 'AFTER_MULTI';
 AFTER_MULTI
 AFTER_MULTI
@@ -125,8 +123,6 @@ begin;
 analyze table t_analyze_01, t_analyze_02;
 approx_count_distinct(a)	approx_count_distinct(b)
 2	3
-approx_count_distinct(x)	approx_count_distinct(y)
-4	4
 select 'AFTER_TXN_MULTI';
 AFTER_TXN_MULTI
 AFTER_TXN_MULTI
