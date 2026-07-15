@@ -332,16 +332,30 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	var (
-		vOld        uint64
-		cardinality uint64
-		lastBatch   = -1
-		lastRows    []int64
+		vOld                   uint64
+		cardinality            uint64
+		lastBatch              = -1
+		lastRows               []int64
+		ignoreSurvivorRows     []int64
+		ignoreSurvivorOwnsKey  []bool
+		ignoreBuildGroups      []uint64
+		ignoreBuildZvals       []int64
+		ignoreCandidateOwnsKey []bool
+		ignoreCandidateOldKey  []*vector.Vector
 	)
 	if dedupBuildKeepLast {
 		lastRows = make([]int64, hb.InputBatchRowCount+1)
 		for i := range lastRows {
 			lastRows[i] = -1
 		}
+	}
+	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE && hb.delColIdx >= 0 {
+		ignoreSurvivorRows = make([]int64, hb.InputBatchRowCount+1)
+		ignoreSurvivorOwnsKey = make([]bool, hb.InputBatchRowCount+1)
+		ignoreBuildGroups = make([]uint64, hashmap.UnitLimit)
+		ignoreBuildZvals = make([]int64, hashmap.UnitLimit)
+		ignoreCandidateOwnsKey = make([]bool, hashmap.UnitLimit)
+		ignoreCandidateOldKey = make([]*vector.Vector, 1)
 	}
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
@@ -391,6 +405,20 @@ func (hb *HashmapBuilder) buildHashmap(
 		if err != nil {
 			return err
 		}
+		if ignoreSurvivorRows != nil {
+			// Iterator result buffers are reused by Find, so preserve the group
+			// assignment from Insert before looking up each candidate's old key.
+			copy(ignoreBuildGroups[:n], vals[:n])
+			copy(ignoreBuildZvals[:n], zvals[:n])
+			vals = ignoreBuildGroups[:n]
+			zvals = ignoreBuildZvals[:n]
+			clear(ignoreCandidateOwnsKey[:n])
+			ignoreCandidateOldKey[0] = hb.Batches.Buf[vecIdx1].Vecs[hb.delColIdx]
+			oldVals, oldZvals := itr.Find(vecIdx2, n, ignoreCandidateOldKey)
+			for k := 0; k < n; k++ {
+				ignoreCandidateOwnsKey[k] = zvals[k] != 0 && oldZvals[k] != 0 && vals[k] != 0 && oldVals[k] == vals[k]
+			}
+		}
 		for k, v := range vals[:n] {
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
 				hb.Sels.Insert(int32(v), int32(i+k))
@@ -436,10 +464,26 @@ func (hb *HashmapBuilder) buildHashmap(
 						}
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
-						hb.IgnoreRows.Add(uint64(i + k))
+						if ignoreSurvivorRows != nil && ignoreCandidateOwnsKey[k] && !ignoreSurvivorOwnsKey[v] {
+							previousRow := ignoreSurvivorRows[v]
+							if previousRow > 0 {
+								hb.IgnoreRows.Add(uint64(previousRow - 1))
+							}
+							ignoreSurvivorRows[v] = int64(i+k) + 1
+							ignoreSurvivorOwnsKey[v] = true
+						} else {
+							hb.IgnoreRows.Add(uint64(i + k))
+						}
 					}
 				} else {
 					cardinality = v
+					if ignoreSurvivorRows != nil {
+						ignoreSurvivorRows[v] = int64(i+k) + 1
+						ignoreSurvivorOwnsKey[v] = ignoreCandidateOwnsKey[k]
+					}
+					if hb.OnDuplicateAction == plan.Node_IGNORE && needAllocateSels {
+						hb.Sels.Insert(int32(v), int32(i+k))
+					}
 					if dedupBuildKeepLast {
 						lastRows[v] = int64(i + k)
 					}
@@ -504,6 +548,19 @@ func (hb *HashmapBuilder) buildHashmap(
 		hb.InputBatchRowCount = totalRowCount
 		return nil
 	}
+	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE && hb.IgnoreRows.Count() > 0 {
+		// Shrinking changes physical row indexes. Rebuild before producing
+		// DelRows and GroupSels so bucket-to-row mappings address the compacted
+		// batches, including when a later unchanged-key owner replaced an earlier
+		// representative.
+		if err := hb.Batches.Shrink(hb.IgnoreRows, proc); err != nil {
+			return err
+		}
+		hb.InputBatchRowCount = hb.Batches.RowCount()
+		hb.DelRows = nil
+		hb.resetHashStateForRebuild(proc)
+		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
+	}
 
 	if hb.delColIdx != -1 {
 		if hb.DelRows == nil {
@@ -519,6 +576,10 @@ func (hb *HashmapBuilder) buildHashmap(
 		// (issue #24428). For non-keep-last paths the two counts are equal.
 		delScanRowCount := hb.Batches.RowCount()
 		tmpVecs := make([]*vector.Vector, 1)
+		var buildGroups []uint64
+		if hb.OnDuplicateAction == plan.Node_IGNORE {
+			buildGroups = make([]uint64, hashmap.UnitLimit)
+		}
 		for i := 0; i < delScanRowCount; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
 				runtime.Gosched()
@@ -530,13 +591,36 @@ func (hb *HashmapBuilder) buildHashmap(
 
 			vecIdx1 := i / colexec.DefaultBatchSize
 			vecIdx2 := i % colexec.DefaultBatchSize
+			if hb.OnDuplicateAction == plan.Node_IGNORE {
+				// UPDATE IGNORE is evaluated against the original keys. Only
+				// exclude a candidate's own old key; treating every target row's
+				// old key as released can let another candidate consume a key whose
+				// owner is later ignored by a different unique constraint.
+				if err = hb.evalBatch(vecIdx1, proc); err != nil {
+					return err
+				}
+				newVals, newZvals := itr.Find(vecIdx2, n, hb.curVecs)
+				for k := 0; k < n; k++ {
+					buildGroups[k] = 0
+					if newZvals[k] != 0 {
+						buildGroups[k] = newVals[k]
+					}
+				}
+			}
 			tmpVecs[0] = hb.Batches.Buf[vecIdx1].Vecs[hb.delColIdx]
 			vals, zvals := itr.Find(vecIdx2, n, tmpVecs)
 
 			for k, v := range vals[:n] {
-				if zvals[k] != 0 && v != 0 {
-					hb.DelRows.Add(v - 1)
+				if zvals[k] == 0 || v == 0 {
+					continue
 				}
+				if hb.OnDuplicateAction == plan.Node_IGNORE {
+					row := uint64(i + k)
+					if hb.IgnoreRows.Contains(row) || buildGroups[k] != v {
+						continue
+					}
+				}
+				hb.DelRows.Add(v - 1)
 			}
 		}
 	}
@@ -557,6 +641,8 @@ func (hb *HashmapBuilder) buildHashmap(
 
 func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 	hb.detachAndPruneCachedIterators()
+	hb.cachedIntIterator = nil
+	hb.cachedStrIterator = nil
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
 		hb.IntHashMap = nil
@@ -583,6 +669,11 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 		hb.curVecs[i] = nil
 	}
 	hb.curVecs = nil
+	for i := range hb.executors {
+		if hb.executors[i] != nil {
+			hb.executors[i].ResetForNextQuery()
+		}
+	}
 	hb.IgnoreRows = nil
 }
 
