@@ -698,6 +698,95 @@ func TestSetOffsetTransactionUsesPendingOffsetForInsert(t *testing.T) {
 	})
 }
 
+func TestSetOffsetWithoutInsertDoesNotReservePrivateRange(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
+
+		store.Lock()
+		staged := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
+		store.Unlock()
+		require.Equal(t, uint64(999), staged[0].Offset,
+			"ALTER without DML must not reserve a range in its private transaction")
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestPrivateOffsetResetBuildsOneCacheForConcurrentUsers(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		lazy := s.mu.private[key].(*lazyPrivateTableCache)
+		s.mu.Unlock()
+
+		const users = 8
+		caches := make(chan incrTableCache, users)
+		errs := make(chan error, users)
+		var wg sync.WaitGroup
+		for range users {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				cache, err := lazy.load(ctx)
+				if err == nil {
+					cache.release()
+				}
+				caches <- cache
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(caches)
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err)
+		}
+		var first incrTableCache
+		for cache := range caches {
+			if first == nil {
+				first = cache
+			} else {
+				require.Same(t, first, cache)
+			}
+		}
+
+		store.Lock()
+		staged := append([]AutoColumn(nil), store.uncommitted[string(txnOp.Txn().ID)][0]...)
+		store.Unlock()
+		require.Equal(t, uint64(1099), staged[0].Offset,
+			"concurrent users must reserve exactly one 100-value range")
+	})
+}
+
 func TestOffsetResetCacheRetiredOnTransactionClose(t *testing.T) {
 	for _, commit := range []bool{false, true} {
 		name := "rollback"
@@ -736,7 +825,7 @@ func TestOffsetResetCacheRetiredOnTransactionClose(t *testing.T) {
 				_, exists := s.mu.private[key]
 				s.mu.Unlock()
 				require.False(t, exists)
-				cache := private.(*tableCache)
+				cache := private.(*lazyPrivateTableCache)
 				cache.lifecycle.Lock()
 				require.True(t, cache.lifecycle.retired)
 				require.True(t, cache.lifecycle.closed)
@@ -775,7 +864,7 @@ func TestDiscardOffsetResetRetiresPrivateCache(t *testing.T) {
 		_, exists := s.mu.private[key]
 		s.mu.Unlock()
 		require.False(t, exists)
-		cache := private.(*tableCache)
+		cache := private.(*lazyPrivateTableCache)
 		cache.lifecycle.Lock()
 		require.True(t, cache.lifecycle.retired)
 		require.True(t, cache.lifecycle.closed)
@@ -805,7 +894,7 @@ func TestServiceCloseRetiresPrivateOffsetResetCache(t *testing.T) {
 		require.NotNil(t, private)
 
 		s.Close()
-		cache := private.(*tableCache)
+		cache := private.(*lazyPrivateTableCache)
 		cache.lifecycle.Lock()
 		require.True(t, cache.lifecycle.retired)
 		require.True(t, cache.lifecycle.closed)
@@ -838,8 +927,12 @@ func TestPrivateOffsetResetIsVisibleOnlyToOwningTransaction(t *testing.T) {
 
 		key := privateResetKey{txnID: string(owner.Txn().ID), tableID: 0}
 		s.mu.Lock()
-		private := s.mu.private[key].(*tableCache)
+		lazy := s.mu.private[key].(*lazyPrivateTableCache)
 		s.mu.Unlock()
+		loaded, err := lazy.load(ctx)
+		require.NoError(t, err)
+		private := loaded.(*tableCache)
+		loaded.release()
 		privateTS := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
 		private.mu.Lock()
 		privateCol := private.mu.cols[def[0].ColName]
@@ -986,7 +1079,7 @@ func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
 		input2 = newTestVector[uint64](1, vecType, nil, nil)
 		retryGenerated, err := cn2.InsertValues(ctx, 0, newVersion, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
-		require.Equal(t, uint64(1100), retryGenerated)
+		require.Equal(t, uint64(1000), retryGenerated)
 		require.Greater(t, retryGenerated, effectiveOffset)
 	})
 }

@@ -120,7 +120,7 @@ type incrTableCache interface {
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
-	getLastAllocateTS(colName string) (timestamp.Timestamp, error)
+	getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error
 }

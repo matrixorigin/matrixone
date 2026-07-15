@@ -109,7 +109,7 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
-func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
+func (c *tableCache) getLastAllocateTS(_ context.Context, colName string) (timestamp.Timestamp, error) {
 	cc := c.getColumnCache(colName)
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)

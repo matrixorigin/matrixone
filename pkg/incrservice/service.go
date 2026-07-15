@@ -243,7 +243,7 @@ func (s *service) GetLastAllocateTS(
 		return timestamp.Timestamp{}, err
 	}
 	defer tc.release()
-	ts, err := tc.getLastAllocateTS(colName)
+	ts, err := tc.getLastAllocateTS(ctx, colName)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
@@ -355,20 +355,21 @@ func (s *service) SetOffset(
 	if len(cols) == 0 {
 		return moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
-	private, err := newTableCache(
-		ctx,
-		s.sid,
+	private := newLazyPrivateTableCache(
 		tableID,
-		0,
 		cols,
-		s.cfg,
-		s.allocator,
-		txnOp,
-		false,
-	)
-	if err != nil {
-		return err
-	}
+		func(buildCtx context.Context) (incrTableCache, error) {
+			s.mu.Lock()
+			if s.mu.closed {
+				s.mu.Unlock()
+				return nil, moerr.NewTxnNeedRetryWithDefChanged(buildCtx)
+			}
+			s.builders.Add(1)
+			s.mu.Unlock()
+			defer s.builders.Done()
+			return newTableCache(
+				buildCtx, s.sid, tableID, 0, cols, s.cfg, s.allocator, txnOp, false)
+		})
 	if err := s.installPrivateReset(ctx, tableID, txnOp, private); err != nil {
 		return err
 	}
