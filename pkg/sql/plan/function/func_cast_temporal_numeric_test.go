@@ -332,3 +332,156 @@ func TestTemporalNumericCastRejectsPackedValueOutsideInt32(t *testing.T) {
 		})
 	}
 }
+
+func TestTemporalNumericCastDecimalAndNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	dateValue := types.DateFromCalendar(2024, 1, 2)
+	datetimeValue, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timestampValue := datetimeValue.ToTimestamp(time.UTC)
+	dateDecimal64, err := types.ParseDecimal64("20240102.000000", 14, 6)
+	require.NoError(t, err)
+	datetimeDecimal64, err := types.ParseDecimal64("20240102030405.1235", 18, 4)
+	require.NoError(t, err)
+	yearDecimal64, err := types.ParseDecimal64("2024", 4, 0)
+	require.NoError(t, err)
+	packed64, err := types.ParseDecimal64("20220102000101", 14, 0)
+	require.NoError(t, err)
+	dateDecimal128, err := types.ParseDecimal128("20240102", 20, 0)
+	require.NoError(t, err)
+	datetimeDecimal128, err := types.ParseDecimal128("20240102030405.123456", 20, 6)
+	require.NoError(t, err)
+	yearDecimal128, err := types.ParseDecimal128("2024", 20, 0)
+	require.NoError(t, err)
+	packed128, err := types.ParseDecimal128("20220102000101.123456", 20, 6)
+	require.NoError(t, err)
+	expectedDatetime, err := types.ParseDatetime("2022-01-02 00:01:01", 0)
+	require.NoError(t, err)
+	expectedTimestamp, err := types.ParseTimestamp(time.UTC, "2022-01-02 00:01:01", 0)
+	require.NoError(t, err)
+	expectedDatetime128, err := types.ParseDatetime("2022-01-02 00:01:01.123456", 6)
+	require.NoError(t, err)
+	expectedTimestamp128, err := types.ParseTimestamp(time.UTC, "2022-01-02 00:01:01.123456", 6)
+	require.NoError(t, err)
+
+	dateType := types.New(types.T_decimal64, 14, 6)
+	datetimeType := types.New(types.T_decimal64, 18, 4)
+	yearType := types.New(types.T_decimal64, 4, 0)
+	dateType128 := types.New(types.T_decimal128, 20, 0)
+	datetimeType128 := types.New(types.T_decimal128, 20, 6)
+	yearType128 := types.New(types.T_decimal128, 20, 0)
+	datetimeOutType := types.T_datetime.ToTypeWithScale(6)
+	timestampOutType := types.T_timestamp.ToTypeWithScale(6)
+	nulls := []bool{false, true}
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "date to decimal64 propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateValue, 0}, nulls),
+				NewFunctionTestInput(dateType, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(dateType, false, []types.Decimal64{dateDecimal64, 0}, nulls),
+		},
+		{
+			name: "date to decimal128 propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateValue, 0}, nulls),
+				NewFunctionTestInput(dateType128, []types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(dateType128, false, []types.Decimal128{dateDecimal128, {}}, nulls),
+		},
+		{
+			name: "datetime to decimal64 uses target fractional scale",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{datetimeValue, 0}, nulls),
+				NewFunctionTestInput(datetimeType, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(datetimeType, false, []types.Decimal64{datetimeDecimal64, 0}, nulls),
+		},
+		{
+			name: "datetime to decimal128 propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{datetimeValue, 0}, nulls),
+				NewFunctionTestInput(datetimeType128, []types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(datetimeType128, false, []types.Decimal128{datetimeDecimal128, {}}, nulls),
+		},
+		{
+			name: "timestamp to decimal64 uses target fractional scale",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{timestampValue, 0}, nulls),
+				NewFunctionTestInput(datetimeType, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(datetimeType, false, []types.Decimal64{datetimeDecimal64, 0}, nulls),
+		},
+		{
+			name: "timestamp to decimal128 propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{timestampValue, 0}, nulls),
+				NewFunctionTestInput(datetimeType128, []types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(datetimeType128, false, []types.Decimal128{datetimeDecimal128, {}}, nulls),
+		},
+		{
+			name: "year to decimal64 propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024, 0}, nulls),
+				NewFunctionTestInput(yearType, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(yearType, false, []types.Decimal64{yearDecimal64, 0}, nulls),
+		},
+		{
+			name: "year to decimal128 propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024, 0}, nulls),
+				NewFunctionTestInput(yearType128, []types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(yearType128, false, []types.Decimal128{yearDecimal128, {}}, nulls),
+		},
+		{
+			name: "decimal64 to datetime propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal64, 14, 0), []types.Decimal64{packed64, 0}, nulls),
+				NewFunctionTestInput(datetimeOutType, []types.Datetime{}, nil),
+			},
+			expect: NewFunctionTestResult(datetimeOutType, false, []types.Datetime{expectedDatetime, 0}, nulls),
+		},
+		{
+			name: "decimal64 to timestamp propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal64, 14, 0), []types.Decimal64{packed64, 0}, nulls),
+				NewFunctionTestInput(timestampOutType, []types.Timestamp{}, nil),
+			},
+			expect: NewFunctionTestResult(timestampOutType, false, []types.Timestamp{expectedTimestamp, 0}, nulls),
+		},
+		{
+			name: "decimal128 to datetime propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(datetimeType128, []types.Decimal128{packed128, {}}, nulls),
+				NewFunctionTestInput(datetimeOutType, []types.Datetime{}, nil),
+			},
+			expect: NewFunctionTestResult(datetimeOutType, false, []types.Datetime{expectedDatetime128, 0}, nulls),
+		},
+		{
+			name: "decimal128 to timestamp propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(datetimeType128, []types.Decimal128{packed128, {}}, nulls),
+				NewFunctionTestInput(timestampOutType, []types.Timestamp{}, nil),
+			},
+			expect: NewFunctionTestResult(timestampOutType, false, []types.Timestamp{expectedTimestamp128, 0}, nulls),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
