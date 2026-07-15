@@ -907,6 +907,45 @@ func makeIndexHintJoinBuilder(t *testing.T) (*QueryBuilder, int32, int32, *planp
 	return builder, joinID, leftScanID, leftDef
 }
 
+func TestJoinIndexRejectsMixedExactNumericStringKey(t *testing.T) {
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightDef := builder.qry.Nodes[joinNode.Children[1]].TableDef
+
+	leftDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar)}
+	rightDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+	joinNode.OnList[0].GetF().Args[0].Typ = leftDef.Cols[1].Typ
+	joinNode.OnList[0].GetF().Args[1].Typ = rightDef.Cols[1].Typ
+
+	newID, err := builder.applyIndicesForJoins(
+		joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, leftScanID, joinNode.Children[0])
+}
+
+func TestCompositeJoinIndexRejectsMixedPart(t *testing.T) {
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScan := builder.qry.Nodes[joinNode.Children[1]]
+	rightDef := rightScan.TableDef
+
+	leftDef.Indexes[0].Parts = []string{"a", "b", "id"}
+	leftDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar)}
+	rightDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+	joinNode.OnList = append(joinNode.OnList, ftjMakeEqExpr(
+		t,
+		ftjColExpr(leftDef, builder.qry.Nodes[leftScanID].BindingTags[0], 2),
+		ftjColExpr(rightDef, rightScan.BindingTags[0], 1),
+	))
+
+	newID, err := builder.applyIndicesForJoins(
+		joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, leftScanID, joinNode.Children[0])
+}
+
 func TestIndexHintOrderScopeControlsTopSortRewrite(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	tag := builder.genNewBindTag()

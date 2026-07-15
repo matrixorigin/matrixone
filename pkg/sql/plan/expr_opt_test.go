@@ -121,6 +121,95 @@ func TestDoMergeFiltersOnCompositeKeyMergesSortKeyRanges(t *testing.T) {
 	requireFuncNames(t, ret, "in_range")
 }
 
+func TestCompositeKeyRewriteRejectsMixedNumericStringPredicates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tableDef *planpb.TableDef
+	}{
+		{name: "primary key", tableDef: makeExprOptCompositeSortKeyTableDef()},
+		{name: "cluster by", tableDef: makeExprOptCompositeClusterKeyTableDef()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+			tag := builder.genNewBindTag()
+			tableDef := tc.tableDef
+			tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar)}
+			aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
+			bCol := &planpb.Expr{
+				Typ: tableDef.Cols[1].Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: tag, ColPos: 1, Name: "b",
+				}},
+			}
+			intConst := func(v int64) *planpb.Expr { return MakePlan2Int64ConstExprWithType(v) }
+			predicate := func(name string, args ...*planpb.Expr) *planpb.Expr {
+				return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: name}, Args: args,
+				}}}
+			}
+			intList := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{intConst(2), intConst(10)}}},
+			}
+			param := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_any)},
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			}
+			runtimeConst := &planpb.Expr{
+				Typ: planpb.Type{Id: int32(types.T_int64)},
+				Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "abs"}, Args: []*planpb.Expr{intConst(-2)},
+				}},
+			}
+
+			for _, pred := range []struct {
+				name    string
+				filters []*planpb.Expr
+			}{
+				{name: "paired range", filters: []*planpb.Expr{
+					predicate(">", DeepCopyExpr(bCol), intConst(2)),
+					predicate("<", DeepCopyExpr(bCol), intConst(10)),
+				}},
+				{name: "between", filters: []*planpb.Expr{
+					predicate("between", DeepCopyExpr(bCol), intConst(2), intConst(10)),
+				}},
+				{name: "in", filters: []*planpb.Expr{
+					predicate("in", DeepCopyExpr(bCol), intList),
+				}},
+				{name: "in range", filters: []*planpb.Expr{
+					predicate("in_range", DeepCopyExpr(bCol), intConst(2), intConst(10), makePlan2BoolConstExprWithType(true)),
+				}},
+				{name: "prepared parameter", filters: []*planpb.Expr{
+					predicate(">", DeepCopyExpr(bCol), param),
+				}},
+				{name: "runtime constant", filters: []*planpb.Expr{
+					predicate(">", DeepCopyExpr(bCol), runtimeConst),
+				}},
+			} {
+				t.Run(pred.name, func(t *testing.T) {
+					for _, filter := range pred.filters {
+						require.True(t, isUnsafeStringKeyPredicate(filter.GetF()))
+					}
+					filters := append([]*planpb.Expr{DeepCopyExpr(aEq)}, pred.filters...)
+					ret := builder.doMergeFiltersOnCompositeKey(tableDef, tag, filters...)
+					require.Len(t, ret, len(filters))
+					for _, filter := range pred.filters {
+						preserved := false
+						for _, candidate := range ret {
+							if candidate == filter {
+								preserved = true
+								break
+							}
+						}
+						require.True(t, preserved, "mixed predicate %s must remain unchanged", filter.GetF().Func.ObjName)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDoMergeFiltersOnCompositeKeySupportsFoldedInVector(t *testing.T) {
 	testCases := []struct {
 		name            string

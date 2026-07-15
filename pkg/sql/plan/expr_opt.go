@@ -1975,6 +1975,43 @@ func isMixedExactNumericStringExprs(left, right *plan.Expr) bool {
 	return stringAndExact(leftType, rightType) || stringAndExact(rightType, leftType)
 }
 
+func isUnsafeStringKeyComparison(left, right *plan.Expr) bool {
+	if isMixedExactNumericStringExprs(left, right) {
+		return true
+	}
+	if left == nil || right == nil {
+		return false
+	}
+	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
+	return leftType.IsMySQLString() && rightType == types.T_any && containsDynamicParam(right) ||
+		rightType.IsMySQLString() && leftType == types.T_any && containsDynamicParam(left)
+}
+
+func isUnsafeStringKeyPredicate(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+
+	switch fn.Func.ObjName {
+	case "=", ">", ">=", "<", "<=":
+		return len(fn.Args) == 2 && isUnsafeStringKeyComparison(fn.Args[0], fn.Args[1])
+	case "between", "in_range":
+		return len(fn.Args) >= 3 &&
+			(isUnsafeStringKeyComparison(fn.Args[0], fn.Args[1]) ||
+				isUnsafeStringKeyComparison(fn.Args[0], fn.Args[2]))
+	case "in":
+		return len(fn.Args) == 2 && isUnsafeStringKeyComparison(fn.Args[0], fn.Args[1])
+	case "or":
+		for _, arg := range fn.Args {
+			if isUnsafeStringKeyPredicate(arg.GetF()) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (builder *QueryBuilder) bindCompositeKeySerial(args []*plan.Expr) (*plan.Expr, bool) {
 	expr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", args)
 	return expr, err == nil && expr != nil
@@ -2004,6 +2041,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		if fn == nil || fn.Func == nil {
 			continue
 		}
+		if isUnsafeStringKeyPredicate(fn) {
+			continue
+		}
 
 		funcName := fn.Func.ObjName
 		if funcName == "=" {
@@ -2013,10 +2053,6 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			}
-			if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
-				continue
-			}
-
 			col := fn.Args[0].GetCol()
 			if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
 				continue
@@ -2118,7 +2154,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
-				if isMixedExactNumericStringExprs(mergedFn.Args[0], mergedFn.Args[1]) {
+				if isUnsafeStringKeyComparison(mergedFn.Args[0], mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -2251,6 +2287,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 		fn := expr.GetF()
 		if fn == nil || fn.Func == nil {
+			continue
+		}
+		if isUnsafeStringKeyPredicate(fn) {
 			continue
 		}
 		col, isLower := classifyRangeBound(fn)

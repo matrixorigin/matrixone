@@ -523,7 +523,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			if fn == nil {
 				goto END0
 			}
-			if isMixedExactNumericStringIndexFilter(fn) {
+			if isUnsafeStringKeyPredicate(fn) {
 				goto END0
 			}
 
@@ -1636,7 +1636,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		found := false
 		for j := range node.FilterList {
 			fn := node.FilterList[j].GetF()
-			if fn == nil || isMixedExactNumericStringIndexFilter(fn) {
+			if fn == nil || isUnsafeStringKeyPredicate(fn) {
 				continue
 			}
 			switch fn.Func.ObjName {
@@ -1661,7 +1661,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 }
 
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
-	if fn == nil || isMixedExactNumericStringIndexFilter(fn) {
+	if fn == nil || isUnsafeStringKeyPredicate(fn) {
 		return UnsupportedIndexCondition, nil
 	}
 	switch fn.Func.ObjName {
@@ -1712,43 +1712,6 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
-}
-
-func isMixedExactNumericStringIndexFilter(fn *plan.Function) bool {
-	if fn == nil {
-		return false
-	}
-
-	switch fn.Func.ObjName {
-	case "=", ">", ">=", "<", "<=":
-		return len(fn.Args) == 2 && isUnsafeStringIndexComparison(fn.Args[0], fn.Args[1])
-	case "between", "in_range":
-		return len(fn.Args) == 3 &&
-			(isUnsafeStringIndexComparison(fn.Args[0], fn.Args[1]) ||
-				isUnsafeStringIndexComparison(fn.Args[0], fn.Args[2]))
-	case "in":
-		return len(fn.Args) == 2 && isUnsafeStringIndexComparison(fn.Args[0], fn.Args[1])
-	case "or":
-		for _, arg := range fn.Args {
-			if isMixedExactNumericStringIndexFilter(arg.GetF()) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func isUnsafeStringIndexComparison(left, right *plan.Expr) bool {
-	if isMixedExactNumericStringExprs(left, right) {
-		return true
-	}
-	if left == nil || right == nil {
-		return false
-	}
-	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
-	return leftType.IsMySQLString() && rightType == types.T_any && containsDynamicParam(right) ||
-		rightType.IsMySQLString() && leftType == types.T_any && containsDynamicParam(left)
 }
 
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
@@ -2600,6 +2563,9 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	col2Cond := make(map[int32]int)
 	for i, expr := range node.OnList {
 		if !isEquiCond(expr, leftTags, rightTags) {
+			continue
+		}
+		if isUnsafeStringKeyPredicate(expr.GetF()) {
 			continue
 		}
 
