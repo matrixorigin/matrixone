@@ -132,6 +132,9 @@ func NewService(
 		return nil, err
 	}
 	if err := store.loadMetadata(); err != nil {
+		if closeErr := store.close(); closeErr != nil {
+			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 	startCtx, cancelStart := context.WithCancel(context.Background())
@@ -148,6 +151,9 @@ func NewService(
 	}
 	defer cancelStart()
 	if err := store.startReplicas(startCtx); err != nil {
+		if closeErr := store.close(); closeErr != nil {
+			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 	pool := &sync.Pool{}
