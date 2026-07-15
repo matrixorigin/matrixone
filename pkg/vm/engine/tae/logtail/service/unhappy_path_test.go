@@ -78,6 +78,184 @@ func TestSessionSeparatesProgressAndTransportIntervals(t *testing.T) {
 		"idle connection probing must not slow logtail progress heartbeats")
 }
 
+func newTransportProbeTestSession(
+	t *testing.T,
+	sentThrough timestamp.Timestamp,
+	exactFrom timestamp.Timestamp,
+) (*Session, *captureSession) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	transport := newCaptureSession()
+	t.Cleanup(transport.cancel)
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	return &Session{
+		sessionCtx:  ctx,
+		cancelFunc:  cancel,
+		logger:      mockMOLogger(),
+		sendTimeout: time.Second,
+		responses:   NewLogtailResponsePool(),
+		stream:      mockMorpcStream(transport, 1, 1<<20),
+		sendChan:    make(chan message, 1),
+		tables:      map[TableID]tableSubscription{id: {state: TableSubscribed}},
+		exactFrom:   exactFrom,
+		sentThrough: sentThrough,
+	}, transport
+}
+
+func receiveCapturedLogtailResponse(
+	t *testing.T,
+	transport *captureSession,
+) *LogtailResponse {
+	t.Helper()
+	select {
+	case value := <-transport.writes:
+		segment, ok := value.(*LogtailResponseSegment)
+		require.True(t, ok)
+		require.Equal(t, int32(1), segment.MaxSequence,
+			"probe ordering tests require a single transport segment")
+		response := &LogtailResponse{}
+		require.NoError(t, response.Unmarshal(segment.Payload))
+		return response
+	case <-time.After(10 * time.Second):
+		t.Fatal("logtail response was not written")
+		return nil
+	}
+}
+
+type failingWriteSession struct {
+	*captureSession
+	err error
+}
+
+func (s *failingWriteSession) Write(context.Context, morpc.Message) error {
+	return s.err
+}
+
+func TestTransportProbeCannotOvertakeQueuedUpdate(t *testing.T) {
+	from := timestamp.Timestamp{PhysicalTime: 10}
+	to := timestamp.Timestamp{PhysicalTime: 20}
+	session, transport := newTransportProbeTestSession(t, from, to)
+
+	table := mockTable(1, 1, 1)
+	var released atomic.Int32
+	response := session.responses.Acquire()
+	response.Response = newUpdateResponse(from, to, mockLogtail(table, to))
+	response.closeCB = func() { released.Add(1) }
+	session.sendChan <- message{
+		createAt: time.Now(),
+		timeout:  time.Second,
+		response: response,
+	}
+
+	result, err := session.sendProbeOrPending(0)
+	require.NoError(t, err)
+	require.Equal(t, probeWroteQueuedResponse, result)
+	require.Equal(t, int32(1), released.Load())
+
+	result, err = session.sendProbeOrPending(1)
+	require.NoError(t, err)
+	require.Equal(t, probeWroteHeartbeat, result)
+
+	update := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, update)
+	require.NotNil(t, update.From)
+	require.NotNil(t, update.To)
+	require.Equal(t, from, *update.From)
+	require.Equal(t, to, *update.To)
+	require.Len(t, update.LogtailList, 1)
+
+	heartbeat := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, heartbeat)
+	require.NotNil(t, heartbeat.From)
+	require.NotNil(t, heartbeat.To)
+	require.Equal(t, to, *heartbeat.From)
+	require.Equal(t, to, *heartbeat.To)
+	require.Empty(t, heartbeat.LogtailList)
+}
+
+func TestTransportProbeReportsOnlySentProgress(t *testing.T) {
+	sent := timestamp.Timestamp{PhysicalTime: 10}
+	enqueued := timestamp.Timestamp{PhysicalTime: 20}
+	session, transport := newTransportProbeTestSession(t, sent, enqueued)
+
+	result, err := session.sendProbeOrPending(0)
+	require.NoError(t, err)
+	require.Equal(t, probeWroteHeartbeat, result)
+
+	heartbeat := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, heartbeat)
+	require.NotNil(t, heartbeat.From)
+	require.NotNil(t, heartbeat.To)
+	require.Equal(t, sent, *heartbeat.From)
+	require.Equal(t, sent, *heartbeat.To)
+	require.Empty(t, heartbeat.LogtailList)
+}
+
+func TestTransportProbePreservesSubscriptionProgress(t *testing.T) {
+	from := timestamp.Timestamp{PhysicalTime: 10}
+	subscribedAt := timestamp.Timestamp{PhysicalTime: 20}
+	session, transport := newTransportProbeTestSession(t, from, from)
+
+	response := session.responses.Acquire()
+	response.Response = newSubscritpionResponse(
+		mockLogtail(mockTable(1, 1, 1), subscribedAt),
+	)
+	session.sendChan <- message{
+		createAt: time.Now(),
+		timeout:  time.Second,
+		response: response,
+	}
+
+	result, err := session.sendProbeOrPending(0)
+	require.NoError(t, err)
+	require.Equal(t, probeWroteQueuedResponse, result)
+	require.Equal(t, subscribedAt, session.sentThrough)
+
+	result, err = session.sendProbeOrPending(1)
+	require.NoError(t, err)
+	require.Equal(t, probeWroteHeartbeat, result)
+
+	subscribe := receiveCapturedLogtailResponse(t, transport).GetSubscribeResponse()
+	require.NotNil(t, subscribe)
+	require.NotNil(t, subscribe.Logtail.Ts)
+	require.Equal(t, subscribedAt, *subscribe.Logtail.Ts)
+
+	heartbeat := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, heartbeat)
+	require.NotNil(t, heartbeat.From)
+	require.NotNil(t, heartbeat.To)
+	require.Equal(t, subscribedAt, *heartbeat.From)
+	require.Equal(t, subscribedAt, *heartbeat.To)
+}
+
+func TestFailedQueuedUpdateDoesNotAdvanceSentProgress(t *testing.T) {
+	from := timestamp.Timestamp{PhysicalTime: 10}
+	to := timestamp.Timestamp{PhysicalTime: 20}
+	session, transport := newTransportProbeTestSession(t, from, to)
+
+	var released atomic.Int32
+	response := session.responses.Acquire()
+	response.Response = newUpdateResponse(from, to, mockLogtail(mockTable(1, 1, 1), to))
+	response.closeCB = func() { released.Add(1) }
+	session.sendChan <- message{
+		createAt: time.Now(),
+		timeout:  time.Second,
+		response: response,
+	}
+	session.stream.cs = &failingWriteSession{
+		captureSession: transport,
+		err:            context.Canceled,
+	}
+
+	result, err := session.sendProbeOrPending(0)
+	require.Error(t, err)
+	require.Equal(t, probeWroteQueuedResponse, result)
+	require.Equal(t, from, session.sentThrough)
+	require.Equal(t, int32(1), released.Load())
+}
+
 func TestCancelledSubscriptionPhaseCannotPublishStaleResponse(t *testing.T) {
 	server := newUnitLogtailServer(t, &controlledLogtailer{})
 	transport := newCaptureSession()

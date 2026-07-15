@@ -166,6 +166,14 @@ type message struct {
 	response *LogtailResponse
 }
 
+type transportProbeResult uint8
+
+const (
+	probeWroteHeartbeat transportProbeResult = iota
+	probeWroteQueuedResponse
+	probeQueueClosed
+)
+
 // morpcStream describes morpc stream.
 type morpcStream struct {
 	streamID uint64
@@ -265,6 +273,11 @@ type Session struct {
 	publishMu              sync.Mutex
 	exactFrom              timestamp.Timestamp
 	publishInit            sync.Once
+	// sentThrough is owned by the sender goroutine. Unlike exactFrom, which is
+	// advanced after a response is queued, it tracks only update responses that
+	// have been written successfully and is therefore safe to advertise in a
+	// transport heartbeat.
+	sentThrough timestamp.Timestamp
 
 	deletedAt time.Time
 	sendMu    struct {
@@ -347,14 +360,17 @@ func NewSession(
 				return
 
 			case <-timer.C:
-				if ss.TableCount() == 0 {
-					ss.logger.Error("no tables are subscribed yet, close this session")
-					notifyErr = moerr.NewInternalError(ctx, "no tables are subscribed")
+				result, err := ss.sendProbeOrPending(cnt)
+				if result == probeQueueClosed {
+					ss.logger.Info("session sender channel closed")
 					return
 				}
-				if err := ss.sendHeartbeat(); err != nil {
+				if err != nil {
 					notifyErr = err
 					return
+				}
+				if result == probeWroteQueuedResponse {
+					cnt++
 				}
 				timer.Reset(ss.transportProbeInterval)
 
@@ -364,43 +380,7 @@ func NewSession(
 					return
 				}
 				v2.LogTailSendQueueSizeGauge.Set(float64(len(ss.sendChan)))
-				sendFunc := func() error {
-					defer ss.responses.Release(msg.response)
-
-					ctx, cancel := context.WithTimeoutCause(ss.sessionCtx, msg.timeout, moerr.CauseNewSession)
-					defer cancel()
-
-					now := time.Now()
-					v2.LogtailSendLatencyHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
-
-					defer func() {
-						v2.LogtailSendTotalHistogram.Observe(time.Since(now).Seconds())
-					}()
-
-					ss.OnBeforeSend(now)
-					err := ss.stream.write(ctx, msg.response)
-					ss.OnAfterSend(now, cnt, msg.response.ProtoSize())
-					if err != nil {
-						err = moerr.AttachCause(ctx, err)
-						if logutil.IsExpectedConnectionCloseError(err) {
-							ss.logger.Debug("fail to send logtail response (connection closed)",
-								zap.Error(err),
-								zap.String("timeout", msg.timeout.String()),
-								zap.String("remote address", ss.RemoteAddress()),
-							)
-						} else {
-							ss.logger.Error("fail to send logtail response",
-								zap.Error(err),
-								zap.String("timeout", msg.timeout.String()),
-								zap.String("remote address", ss.RemoteAddress()),
-							)
-						}
-						return err
-					}
-					return nil
-				}
-
-				if err := sendFunc(); err != nil {
+				if err := ss.sendMessage(msg, cnt); err != nil {
 					notifyErr = err
 					return
 				}
@@ -416,10 +396,73 @@ func NewSession(
 	return ss
 }
 
+func (ss *Session) sendMessage(msg message, cnt int64) error {
+	defer ss.responses.Release(msg.response)
+
+	ctx, cancel := context.WithTimeoutCause(ss.sessionCtx, msg.timeout, moerr.CauseNewSession)
+	defer cancel()
+
+	now := time.Now()
+	v2.LogtailSendLatencyHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
+	defer func() {
+		v2.LogtailSendTotalHistogram.Observe(time.Since(now).Seconds())
+	}()
+
+	ss.OnBeforeSend(now)
+	err := ss.stream.write(ctx, msg.response)
+	ss.OnAfterSend(now, cnt, msg.response.ProtoSize())
+	if err != nil {
+		err = moerr.AttachCause(ctx, err)
+		if logutil.IsExpectedConnectionCloseError(err) {
+			ss.logger.Debug("fail to send logtail response (connection closed)",
+				zap.Error(err),
+				zap.String("timeout", msg.timeout.String()),
+				zap.String("remote address", ss.RemoteAddress()),
+			)
+		} else {
+			ss.logger.Error("fail to send logtail response",
+				zap.Error(err),
+				zap.String("timeout", msg.timeout.String()),
+				zap.String("remote address", ss.RemoteAddress()),
+			)
+		}
+		return err
+	}
+	if update := msg.response.GetUpdateResponse(); update != nil && update.To != nil {
+		ss.sentThrough = *update.To
+	} else if subscribe := msg.response.GetSubscribeResponse(); subscribe != nil && subscribe.Logtail.Ts != nil {
+		// The disttae client advances every consumer timestamp after applying a
+		// subscription response, so subsequent transport probes must not report
+		// an older frontier.
+		ss.sentThrough = *subscribe.Logtail.Ts
+	}
+	return nil
+}
+
+// sendProbeOrPending linearizes a transport probe after every response that is
+// already queued. A response enqueued after the non-blocking receive below is
+// allowed to follow the probe, but the probe still advertises only sentThrough,
+// never the newer enqueue frontier in exactFrom.
+func (ss *Session) sendProbeOrPending(cnt int64) (transportProbeResult, error) {
+	select {
+	case msg, ok := <-ss.sendChan:
+		if !ok {
+			return probeQueueClosed, nil
+		}
+		v2.LogTailSendQueueSizeGauge.Set(float64(len(ss.sendChan)))
+		return probeWroteQueuedResponse, ss.sendMessage(msg, cnt)
+	default:
+	}
+
+	if ss.TableCount() == 0 {
+		ss.logger.Error("no tables are subscribed yet, close this session")
+		return probeWroteHeartbeat, moerr.NewInternalErrorNoCtx("no tables are subscribed")
+	}
+	return probeWroteHeartbeat, ss.sendHeartbeat()
+}
+
 func (ss *Session) sendHeartbeat() error {
-	ss.publishMu.Lock()
-	from := ss.exactFrom
-	ss.publishMu.Unlock()
+	from := ss.sentThrough
 	resp := ss.responses.Acquire()
 	resp.Response = newUpdateResponse(from, from)
 	defer ss.responses.Release(resp)
