@@ -1558,14 +1558,19 @@ func constructChangeHandle(
 
 	for i := range tarRange.rel {
 		collectStart := time.Now()
-		var sourceMapping []int
-		isHistorical := tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx)
-		if isHistorical {
+		var (
+			sourceMapping   []int
+			needsProjection bool
+		)
+		if tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				tarRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
 			); err != nil {
 				return
 			}
+			needsProjection = dataBranchNeedsHistoricalProjection(
+				sourceMapping, len(tables.def.colNames),
+			)
 		}
 		if handle, err = collectFn(
 			ctx,
@@ -1586,7 +1591,7 @@ func constructChangeHandle(
 		)
 
 		if handle != nil {
-			if isHistorical {
+			if needsProjection {
 				handle = &historicalDataBranchChangesHandle{
 					inner:            handle,
 					sourceMapping:    sourceMapping,
@@ -1602,14 +1607,19 @@ func constructChangeHandle(
 
 	for i := range baseRange.rel {
 		collectStart := time.Now()
-		var sourceMapping []int
-		isHistorical := baseRange.rel[i].GetTableID(ctx) != tables.baseRel.GetTableID(ctx)
-		if isHistorical {
+		var (
+			sourceMapping   []int
+			needsProjection bool
+		)
+		if baseRange.rel[i].GetTableID(ctx) != tables.baseRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				baseRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
 			); err != nil {
 				return
 			}
+			needsProjection = dataBranchNeedsHistoricalProjection(
+				sourceMapping, len(tables.def.colNames),
+			)
 		}
 		if handle, err = collectFn(
 			ctx,
@@ -1630,7 +1640,7 @@ func constructChangeHandle(
 		)
 
 		if handle != nil {
-			if isHistorical {
+			if needsProjection {
 				handle = &historicalDataBranchChangesHandle{
 					inner:            handle,
 					sourceMapping:    sourceMapping,
