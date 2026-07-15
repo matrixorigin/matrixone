@@ -43,7 +43,7 @@ var (
 	// ErrLockConflict lock option conflict
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
 	// ErrLockTimeout lock table timeout
-	ErrLockTimeout = moerr.NewInvalidStateNoCtx("lock timeout")
+	ErrLockTimeout = moerr.NewLockWaitTimeoutNoCtx()
 	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
 	ErrRemoteLockWaitTimeout = moerr.NewRemoteLockWaitTimeoutNoCtx()
 )

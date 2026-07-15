@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -107,6 +108,10 @@ type container struct {
 	maxAllocSize int64
 	rbat         *batch.Batch
 	buf          []*batch.Batch
+
+	// Spill support for large build sides.
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
 }
 
 type DedupJoin struct {
@@ -128,6 +133,7 @@ type DedupJoin struct {
 	OnDuplicateAction         plan.Node_OnDuplicateAction
 	DedupBuildKeepLast        bool
 	DedupColName              string
+	SpillThreshold            int64
 	DedupColTypes             []plan.Type
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
@@ -189,10 +195,13 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.maxAllocSize = 0
 
 	ctr.cleanBuf(proc)
-	ctr.cleanCaptured(proc)
-	ctr.cleanHashMap()
+	ctr.cleanBucketState(proc)
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.handledLast = false
 	ctr.state = Build
 	ctr.lastPos = 0
@@ -201,11 +210,14 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
 	ctr.cleanBuf(proc)
-	ctr.cleanCaptured(proc)
+	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
-	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -260,6 +272,17 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		ctr.joinBat2.Clean(proc.GetMPool())
 		ctr.joinBat2 = nil
 	}
+}
+
+// cleanBucketState releases per-bucket state before advancing to the next
+// spill bucket. This prevents stale JoinMap / capture state from leaking
+// across bucket boundaries.
+func (ctr *container) cleanBucketState(proc *process.Process) {
+	ctr.cleanCaptured(proc)
+	ctr.cleanHashMap()
+	ctr.batches = nil
+	ctr.batchRowCount = 0
+	ctr.matched = nil
 }
 
 func (ctr *container) cleanHashMap() {

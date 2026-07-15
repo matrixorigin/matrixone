@@ -198,7 +198,7 @@ func (l *localLockTable) doLock(
 			if lockWaitTimeoutHit {
 				// lock_wait_timeout expired: return ErrLockTimeout directly
 				// (not errors.Join) so upper layers can recognize it via
-				// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
+				// moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout).
 				v.err = ErrLockTimeout
 			}
 		}
