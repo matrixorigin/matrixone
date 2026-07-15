@@ -153,31 +153,27 @@ func TestDelegate_StatsInfo_GetBroadcastsAndNotify(t *testing.T) {
 	})
 }
 
-func TestDelegateStatsInfoStateUsesStatsMutex(t *testing.T) {
+func TestDelegateStatsInfoStateDoesNotUseDataCacheMutex(t *testing.T) {
 	d := newDelegate(&zap.Logger{}, "127.0.0.1:8889")
+	d.dataCacheKey.mu.Lock()
 	d.statsInfoKey.mu.Lock()
 
-	started := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		close(started)
+		defer close(done)
 		d.statsInfoState()
-		close(done)
 	}()
-	<-started
-
-	select {
-	case <-done:
-		d.statsInfoKey.mu.Unlock()
-		t.Fatal("statsInfoState did not lock statsInfoKey")
-	case <-time.After(20 * time.Millisecond):
-	}
 
 	d.statsInfoKey.mu.Unlock()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("statsInfoState did not resume after statsInfoKey was unlocked")
+		d.dataCacheKey.mu.Unlock()
+	case <-timer.C:
+		d.dataCacheKey.mu.Unlock()
+		<-done
+		t.Fatal("statsInfoState blocked on dataCacheKey")
 	}
 }
 
