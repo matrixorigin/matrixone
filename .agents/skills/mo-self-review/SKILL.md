@@ -1,6 +1,6 @@
 ---
 name: mo-self-review
-description: Pre-push self-review gate for MatrixOne changes — a systematic, multi-angle, first-principles review of your OWN diff with complete functional-closure investigation and unhappy-path coverage, calibrated to the merge bar. Run BEFORE pushing / opening / updating a PR so the human or bot PR review finds nothing new — breaking the review→modify loop. Use before declaring a change "done", before push, or when a PR keeps drawing new review rounds. Complements unhappy-path-audit (Q1–Q3 depth) and /code-review.
+description: Pre-push self-review gate for MatrixOne changes — systematic first-principles review of the complete diff, including functional closure, unhappy paths, state/ownership models, wait-for dependencies, restart/reuse generations, and derived test matrices. Use before push/PR updates, when concurrency or lifecycle code changes, or when repeated review rounds reveal missed closure edges.
 metadata:
   project: matrixone
   repository: matrixorigin/matrixone
@@ -8,6 +8,12 @@ metadata:
 ---
 
 Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
+
+## Resource Map
+
+| Change shape | Read |
+|---|---|
+| Shared state, cancellation, close/terminal paths, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
 
 ## Running this skill IS the review (don't retype the long prompt)
 
@@ -78,6 +84,8 @@ lens is obvious to another.
 |------|-----|
 | **Correctness** | Does each changed function produce the right output for ordinary AND boundary inputs (0, 1, max, empty, nil, overflow)? |
 | **Concurrency** | Shared state touched by >1 goroutine? Races, lost wakeups, double-close, ordering assumptions? (`-race` the new tests.) |
+| **Control path** | Can cancel/close/reject/timeout make progress independently of the blocked operation, or does it wait on the same lock/channel/RPC? |
+| **State / generation** | Is every transition and failed transition defined? Can old work affect a restarted/reused generation or observe it before admission completes? |
 | **Resource lifecycle** | Every fd/goroutine/lock/alloc created on the change's paths — closed/released on **every** branch incl. error/panic? (→ §4 Q1) |
 | **Compatibility / boundary** | On-disk/wire format, config default, API signature, catalog metadata: does the change stay backward-compatible? New format opt-in, not a flipped default? Mismatch detected (fail-fast) not silently misread? |
 | **Failure modes** | Every error return handled; partial failure leaves consistent state; no silent fallback that hides corruption. |
@@ -109,6 +117,9 @@ half* of the closure. Trace to the terminal node.
 | index / CDC | CREATE (+ InitSQL) → sync → query → reindex → DROP |
 | resource handle | create → hand-off → … → **Destroy/Free/Close** (all holders) |
 | config / flag | parse → default-fill → consume → the *other* backend/mode that shares it |
+| state machine | states → events → ownership/linearization point → side effects → failed transition → retry/restart |
+| control path | blocked work → cancel/close/reject → every lock/channel/RPC dependency → guaranteed local termination |
+| reused object | old work stops → cleanup completes → sealed initialization → admission/publish → new generation |
 
 Rule: if you changed one arc of a closure, open and read the arcs that *consume*
 or *reverse* it (the reader for a writer, the restore for a backup, the Reset for
@@ -120,8 +131,8 @@ a Call). A change is not reviewed until its closure is closed.
 
 Run the **unhappy-path-audit** skill's Q1–Q3 over the resources/waits/growth the
 diff touches:
-- **Q1 leak** — every creation has a guaranteed destruction (incl. error paths).
-- **Q2 hung** — every wait has a guaranteed release (exhaust all broadcast/cancel/timeout paths).
+- **Q1 leak/double cleanup** — every creation reaches one effective destruction owner (incl. transfers and error paths).
+- **Q2 hung** — every explicit or implicit wait dependency has a guaranteed release; fail-fast/control paths must not queue behind the work they stop.
 - **Q3 OOM** — every accumulation has a bound / recycle.
 
 Apply its 5-gate false-positive filter (G1 full-graph, G2 can-fail, G3 symmetry,
@@ -156,6 +167,11 @@ G4 line-reread, G5 calibrate-last) before keeping any finding.
   `Workflow(code-review, "high <target>. 多角度评审、第一性原则、系统性思考、完整功能闭环、unhappy path cover")`.
 - Or manually: walk §1 lens-by-lens → §3 closure → §4 Q1–Q3 → §5 gate.
 
+For concurrency/lifecycle changes, build the invariant, transition table,
+ownership graph, wait-for graph, and generation boundary from
+[references/concurrency-lifecycle.md](references/concurrency-lifecycle.md). Derive
+the test matrix from semantic axes; do not reuse a remembered case list.
+
 **On a PR (same methodology, later in the lifecycle):** `/code-review ultra <PR#>`
 or `/review <PR#>`. But the point of *this* skill is to run BEFORE the PR so those
 find nothing.
@@ -171,9 +187,11 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ every §1 lens swept over the whole diff
 □ every changed arc's functional closure (§3) traced to its terminal node
 □ Q1–Q3 unhappy paths (§4) checked on touched resources/waits/growth
+□ state ownership, wait-for dependencies, and generation transitions modeled where applicable
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
 □ new/changed tests run green (incl. -race where concurrency changed)
+□ test matrix covers every changed transition and evidence is newer than the final edit/rebase
 □ applicable domain guards passed (index-plugin → §8) — additive to the §1–§4 sweep above, never a substitute for it
 ```
 
