@@ -53,7 +53,8 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 			4,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="accepted"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="closed"`) + `[$interval]))`,
+				// Older proxies reported close events with the "current" label.
+				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type=~"current|closed"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="success"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="route-fail"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="common-fail"`) + `[$interval]))`,
