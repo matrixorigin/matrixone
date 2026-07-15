@@ -15,6 +15,8 @@
 package frontend
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,6 +24,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
+
+func TestWithDataBranchCloneLockContext(t *testing.T) {
+	proc := newValidateSession(t).proc
+	oldCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	proc.Ctx = oldCtx
+
+	lockCtx := context.WithValue(context.Background(), struct{}{}, "current")
+	wantErr := errors.New("lock failed")
+	err := withDataBranchCloneLockContext(proc, lockCtx, func() error {
+		require.Same(t, lockCtx, proc.Ctx)
+		require.NoError(t, proc.Ctx.Err())
+		return wantErr
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	require.Same(t, oldCtx, proc.Ctx)
+}
 
 func TestDataBranchCloneCatalogLockBatch(t *testing.T) {
 	ses := newValidateSession(t)
