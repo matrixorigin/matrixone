@@ -314,6 +314,7 @@ type txnOperator struct {
 		commitNeedsResolution bool
 		commitDeadline        time.Time
 		commitSequence        uint64
+		unknownCommitResolved func()
 		cache                 sync.Map
 	}
 
@@ -561,6 +562,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitNeedsResolution = false
 	tc.reset.commitDeadline = time.Time{}
 	tc.reset.commitSequence = 0
+	tc.reset.unknownCommitResolved = nil
 	tc.reset.cache = sync.Map{}
 }
 
@@ -1618,6 +1620,7 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			tc.mu.txn.ID,
 			tc.reset.commitDeadline,
 			tc.reset.commitSequence,
+			tc.reset.unknownCommitResolved,
 		); err != nil {
 			tc.logger.Error("failed to schedule unknown commit resolution",
 				util.TxnField(tc.mu.txn),

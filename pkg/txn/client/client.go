@@ -440,6 +440,9 @@ func (client *txnClient) doCreateTxn(
 	client.limiter.Take()
 
 	op.timestampWaiter = client.timestampWaiter
+	if op.opts.options.UserTxn() {
+		op.reset.unknownCommitResolved = client.releaseUnknownCommitAdmission
+	}
 	op.AppendEventCallback(
 		ClosedEvent,
 		TxnEventCallback{
@@ -699,34 +702,21 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 			client.mu.Unlock()
 			return
 		}
-		client.mu.users--
-		if client.mu.users < 0 {
-			panic("BUG: user txns < 0")
+		if op.reset.commitNeedsResolution &&
+			op.reset.unknownCommitResolved != nil {
+			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			client.mu.Unlock()
+			return
 		}
 
-		// Collect waiting ops to activate
-		var toActivate []*txnOperator
-		if len(client.mu.waitActiveTxns) > 0 {
-			newCanAdded := client.maxActiveTxn - client.mu.users
-			for i := 0; i < newCanAdded; i++ {
-				waitOp := client.fetchWaitActiveOpLocked()
-				if waitOp == nil {
-					break
-				}
-				client.mu.users++
-				toActivate = append(toActivate, waitOp)
-			}
-		}
+		toActivate := client.releaseUserTxnLocked()
 
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 		client.mu.Unlock()
 
-		// Add to sharded map and notify outside mu lock
-		for _, waitOp := range toActivate {
-			client.addActiveTxn(waitOp)
-			waitOp.notifyActive()
-		}
+		client.activateWaitActiveTxns(toActivate)
 		return
 	}
 
@@ -742,6 +732,45 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 	client.mu.Unlock()
 	return
+}
+
+// releaseUnknownCommitAdmission returns the user transaction slot only after
+// lockservice has reached terminal cleanup for an unknown Commit. Until then,
+// the resolver-owned transaction remains covered by MaxActiveTxn backpressure.
+func (client *txnClient) releaseUnknownCommitAdmission() {
+	client.mu.Lock()
+	toActivate := client.releaseUserTxnLocked()
+	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	client.mu.Unlock()
+
+	client.activateWaitActiveTxns(toActivate)
+}
+
+func (client *txnClient) releaseUserTxnLocked() []*txnOperator {
+	client.mu.users--
+	if client.mu.users < 0 {
+		panic("BUG: user txns < 0")
+	}
+
+	var toActivate []*txnOperator
+	newCanAdded := client.maxActiveTxn - client.mu.users
+	for i := 0; i < newCanAdded; i++ {
+		waitOp := client.fetchWaitActiveOpLocked()
+		if waitOp == nil {
+			break
+		}
+		client.mu.users++
+		toActivate = append(toActivate, waitOp)
+	}
+	return toActivate
+}
+
+func (client *txnClient) activateWaitActiveTxns(ops []*txnOperator) {
+	for _, op := range ops {
+		client.addActiveTxn(op)
+		op.notifyActive()
+	}
 }
 
 func (client *txnClient) fetchWaitActiveOpLocked() *txnOperator {

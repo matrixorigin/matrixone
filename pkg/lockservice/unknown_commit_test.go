@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		waiterTxn := []byte("waiter")
 		key := []byte("key")
 		options := newTestRowExclusiveOptions()
+		var resolved atomic.Int32
 
 		_, err := service.Lock(ctx, 1, [][]byte{key}, holderTxn, options)
 		require.NoError(t, err)
@@ -45,6 +47,7 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 			holderTxn,
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
+			func() { resolved.Add(1) },
 		))
 
 		type lockResult struct {
@@ -82,8 +85,31 @@ func TestResolveCommitUnknownWaitsForAllocatorFence(t *testing.T) {
 		require.True(t, result.result.HasConflict)
 		require.True(t, result.result.HasPrevCommit)
 		require.False(t, result.result.Timestamp.IsEmpty())
+		require.Eventually(t, func() bool {
+			return resolved.Load() == 1
+		}, time.Second, 10*time.Millisecond)
+		require.Never(t, func() bool {
+			return resolved.Load() > 1
+		}, 100*time.Millisecond, 10*time.Millisecond)
 
 		require.NoError(t, service.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+	})
+}
+
+func TestResolveCommitUnknownCompletesWhenTxnAlreadyUnlocked(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		var resolved atomic.Int32
+		require.NoError(t, service.ResolveCommitUnknown(
+			[]byte("already-unlocked"),
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			func() { resolved.Add(1) },
+		))
+		require.Eventually(t, func() bool {
+			return resolved.Load() == 1
+		}, time.Second, 10*time.Millisecond)
+		require.False(t, service.unknownCommitResolver.isPending([]byte("already-unlocked")))
 	})
 }
 
@@ -331,6 +357,7 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 			overflowTxn,
 			now.Add(time.Second),
 			maxPersistentFenceFrontierEntries+1,
+			nil,
 		))
 
 		require.Eventually(t, func() bool {
@@ -443,6 +470,7 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 			txnID,
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
+			nil,
 		))
 
 		select {

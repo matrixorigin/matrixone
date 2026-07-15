@@ -55,9 +55,10 @@ type unknownCommitResolver struct {
 }
 
 type unknownCommitTxn struct {
-	id       []byte
-	deadline time.Time
-	sequence uint64
+	id         []byte
+	deadline   time.Time
+	sequence   uint64
+	onResolved func()
 }
 
 func newUnknownCommitResolver(s *service) *unknownCommitResolver {
@@ -70,12 +71,13 @@ func newUnknownCommitResolver(s *service) *unknownCommitResolver {
 }
 
 // ResolveCommitUnknown transfers lock cleanup to lockservice. It returns as
-// soon as cleanup is scheduled so the caller does not retain a frontend slot
-// while TN resolves the Commit.
+// soon as cleanup is scheduled. onResolved is called after terminal cleanup so
+// the txn client can release admission independently of the frontend request.
 func (s *service) ResolveCommitUnknown(
 	txnID []byte,
 	commitDeadline time.Time,
 	commitSequence uint64,
+	onResolved func(),
 ) error {
 	if s.unknownCommitResolver == nil {
 		return moerr.NewInternalErrorNoCtx("unknown commit resolver is not initialized")
@@ -89,25 +91,38 @@ func (s *service) ResolveCommitUnknown(
 		// allocator will fail closed for legacy admission until the deadline.
 		commitSequence = s.NextCommitSequence()
 	}
-	return s.unknownCommitResolver.enqueue(txnID, commitDeadline, commitSequence)
+	return s.unknownCommitResolver.enqueue(
+		txnID,
+		commitDeadline,
+		commitSequence,
+		onResolved,
+	)
 }
 
 func (r *unknownCommitResolver) enqueue(
 	txnID []byte,
 	commitDeadline time.Time,
 	commitSequence uint64,
+	onResolved func(),
 ) error {
 	key := string(txnID)
 	id := append([]byte(nil), txnID...)
 
 	r.mu.Lock()
-	if old, ok := r.mu.pending[key]; !ok || old.deadline.Before(commitDeadline) ||
-		old.sequence < commitSequence {
-		r.mu.pending[key] = unknownCommitTxn{
-			id:       id,
-			deadline: commitDeadline,
-			sequence: commitSequence,
+	old, ok := r.mu.pending[key]
+	if !ok || old.deadline.Before(commitDeadline) || old.sequence < commitSequence {
+		if ok && old.onResolved != nil {
+			onResolved = old.onResolved
 		}
+		r.mu.pending[key] = unknownCommitTxn{
+			id:         id,
+			deadline:   commitDeadline,
+			sequence:   commitSequence,
+			onResolved: onResolved,
+		}
+	} else if old.onResolved == nil && onResolved != nil {
+		old.onResolved = onResolved
+		r.mu.pending[key] = old
 	}
 	if r.mu.running {
 		r.mu.Unlock()
@@ -183,23 +198,37 @@ func (r *unknownCommitResolver) resolvePending(ctx context.Context) {
 
 func (r *unknownCommitResolver) pendingActiveTxns() []unknownCommitTxn {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	values := make([]unknownCommitTxn, 0, len(r.mu.pending))
+	var resolved []func()
 	for txnKey, txn := range r.mu.pending {
 		if !r.service.activeTxnHolder.hasActiveTxn(txn.id) {
 			delete(r.mu.pending, txnKey)
+			if txn.onResolved != nil {
+				resolved = append(resolved, txn.onResolved)
+			}
 			continue
 		}
 		values = append(values, txn)
+	}
+	r.mu.Unlock()
+
+	for _, fn := range resolved {
+		fn()
 	}
 	return values
 }
 
 func (r *unknownCommitResolver) remove(txnID []byte) {
 	r.mu.Lock()
-	delete(r.mu.pending, string(txnID))
+	txn, ok := r.mu.pending[string(txnID)]
+	if ok {
+		delete(r.mu.pending, string(txnID))
+	}
 	r.mu.Unlock()
+	if ok && txn.onResolved != nil {
+		txn.onResolved()
+	}
 }
 
 func (r *unknownCommitResolver) isPending(txnID []byte) bool {
