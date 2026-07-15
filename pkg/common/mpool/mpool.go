@@ -100,20 +100,17 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAlloc.Add(1)
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
-	s.recordHighWater(tag, curr)
+	s.recordHighWater(curr)
 	return curr
 }
 
-func (s *MPoolStats) recordHighWater(tag string, curr int64) {
+func (s *MPoolStats) recordHighWater(curr int64) {
 	for {
 		hwm := s.HighWaterMark.Load()
 		if curr <= hwm {
 			return
 		}
 		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
-			if curr/GB != hwm/GB {
-				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
-			}
 			return
 		}
 	}
@@ -142,7 +139,7 @@ func (s *MPoolStats) cancelReserve(sz int64) {
 func (s *MPoolStats) commitReservedAlloc(tag string, sz, curr int64) {
 	s.NumAlloc.Add(1)
 	s.NumAllocBytes.Add(sz)
-	s.recordHighWater(tag, curr)
+	s.recordHighWater(curr)
 }
 
 // Update free stats, return curr bytes.
