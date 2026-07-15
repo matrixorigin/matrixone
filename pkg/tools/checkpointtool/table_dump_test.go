@@ -213,6 +213,51 @@ func TestCSVScalarFormattingAndSQLTypeMapping(t *testing.T) {
 	}
 }
 
+func TestDumpPreparedTableCSVWithRealObjectData(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "dump-prepared.obj")
+	defer fs.Close(ctx)
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	data := &TableDumpData{
+		TableID: 42,
+		Schema: &TableSchema{
+			TableName: "t",
+			Columns: []TableColumn{
+				{Name: "id", SQLType: "INT", Position: 1, PhysicalPosition: 0},
+				{Name: "name", SQLType: "VARCHAR", Position: 2, PhysicalPosition: 1},
+			},
+		},
+		DataEntries: []*ObjectEntryInfo{{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		}},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, reader.DumpPreparedTableCSV(
+		ctx,
+		&out,
+		data,
+		types.BuildTS(200, 0),
+		WithCSVHeader(true),
+		WithCSVMetaComments(true),
+		WithCSVRowOrder(CSVRowOrderStorage),
+	))
+	got := out.String()
+	require.Contains(t, got, "-- Table: t")
+	require.Contains(t, got, "-- Visible rows: 2 (deleted: 0, physical: 2)")
+	require.Contains(t, got, "id,name\n")
+	require.Contains(t, got, "1,\"alice\"\n")
+	require.Contains(t, got, "2,\"bob\"\n")
+
+	require.ErrorContains(t, reader.DumpPreparedTableCSV(ctx, &out, nil, types.BuildTS(200, 0)), "missing prepared")
+	require.ErrorContains(t, reader.DumpPreparedTableCSV(ctx, &out, &TableDumpData{TableID: 7}, types.BuildTS(200, 0)), "cannot resolve visible columns")
+}
+
 func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 	cases := []struct {
 		name string
@@ -526,6 +571,16 @@ func TestMoColumnExpressionDecoders(t *testing.T) {
 	assert.True(t, isPrintableDDLExpression(""))
 	assert.True(t, isPrintableDDLExpression(" a +\n b "))
 	assert.False(t, isPrintableDDLExpression(string([]byte{0xff})))
+
+	typ := types.T_decimal64.ToTypeWithScale(2)
+	raw, err := types.Encode(&typ)
+	require.NoError(t, err)
+	debug := debugMoColumnTypeCell(string(raw), []string{"obj", "3", "7"})
+	assert.Contains(t, debug, "decode_err=<nil>")
+	assert.Contains(t, debug, "DECIMAL64")
+	assert.Contains(t, debug, "block=3")
+	assert.Contains(t, debug, "row=7")
+	assert.Equal(t, "616263", debugHexPrefix("abcdef", 3))
 }
 
 // TestWriteCSV_empty tests writing an empty logical view to CSV.
@@ -586,6 +641,32 @@ func TestDumpPreparedTableCSV_EmptyTableWritesHeader(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "id,name\n", buf.String())
+}
+
+func TestDumpTableCSVUsesBuiltinCatalogSchemaForEmptyData(t *testing.T) {
+	reader := &CheckpointReader{ctx: context.Background()}
+	var buf bytes.Buffer
+
+	err := reader.DumpTableCSV(context.Background(), &buf, moTablesID, types.BuildTS(10, 0), nil, nil, WithCSVMetaComments(false), WithCSVHeader(true))
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "rel_id,relname,reldatabase")
+
+	err = reader.DumpTableCSV(context.Background(), &buf, 334019, types.BuildTS(10, 0), nil, nil)
+	require.ErrorContains(t, err, "cannot resolve visible columns")
+}
+
+func TestShowCreateTableBuiltinFallbackAndErrors(t *testing.T) {
+	reader := &CheckpointReader{ctx: context.Background()}
+
+	ddl, err := reader.ShowCreateTable(context.Background(), moTablesID, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Contains(t, ddl, "CREATE TABLE `mo_tables`")
+
+	_, err = reader.ShowCreateTable(context.Background(), 334019, types.BuildTS(10, 0))
+	require.ErrorContains(t, err, "cannot resolve exact schema")
+
+	_, err = reader.ShowCreateIndexStatements(context.Background(), 334019, "t", types.BuildTS(10, 0))
+	require.ErrorContains(t, err, "read mo_tables")
 }
 
 func TestIsTableDataUnavailable(t *testing.T) {

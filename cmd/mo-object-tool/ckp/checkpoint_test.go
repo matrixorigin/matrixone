@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -254,6 +255,183 @@ func TestFilterAccountRestoreScriptTablesLeavesNonAccountDumpUnchanged(t *testin
 
 	assert.Equal(t, tables, filtered)
 	assert.Zero(t, skipped)
+}
+
+func TestDumpOutputLocalCreateMkdirAndClose(t *testing.T) {
+	ctx := context.Background()
+	out, err := openDumpOutput(ctx, toolfs.StorageOptions{})
+	require.NoError(t, err)
+	require.False(t, out.remote)
+	require.NoError(t, out.MkdirAll(filepath.Join(t.TempDir(), "nested")))
+	out.Close(ctx)
+
+	filePath := filepath.Join(t.TempDir(), "dump.csv")
+	w, err := out.Create(ctx, filePath)
+	require.NoError(t, err)
+	_, err = w.Write([]byte("a,b\n"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	data, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "a,b\n", string(data))
+
+	var nilOut *dumpOutput
+	dir := filepath.Join(t.TempDir(), "nil-output")
+	require.NoError(t, nilOut.MkdirAll(dir))
+	require.DirExists(t, dir)
+}
+
+func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
+	parent := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "parent", TableID: 1}
+	child := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "child", TableID: 2}
+	other := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "other", TableID: 3}
+	plans := []tableDumpPlan{
+		{table: child, data: &checkpointtool.TableDumpData{
+			TableID: child.TableID,
+			Schema: &checkpointtool.TableSchema{ForeignKeys: []checkpointtool.TableForeignKey{{
+				ReferDatabase: parent.DatabaseName,
+				ReferTable:    parent.TableName,
+			}}},
+		}},
+		{table: parent, data: &checkpointtool.TableDumpData{TableID: parent.TableID, Schema: &checkpointtool.TableSchema{}}},
+		{table: other, data: &checkpointtool.TableDumpData{TableID: other.TableID, Schema: &checkpointtool.TableSchema{}}},
+	}
+
+	byID := dumpDataByTableID(plans)
+	require.Len(t, byID, 3)
+	require.Equal(t, uint64(2), byID[2].TableID)
+	require.Nil(t, dumpDataByTableID(nil))
+
+	ordered := orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, other, parent}, byID)
+	require.Equal(t, []uint64{1, 2, 3}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
+	require.Equal(t, []checkpointtool.TableCatalogEntry{parent}, orderTablesForRestore([]checkpointtool.TableCatalogEntry{parent}, byID))
+
+	// Cycles are tolerated; traversal should terminate and keep every table once.
+	byID[1].Schema.ForeignKeys = []checkpointtool.TableForeignKey{{ReferDatabase: child.DatabaseName, ReferTable: child.TableName}}
+	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, parent}, byID)
+	require.Len(t, ordered, 2)
+}
+
+func TestNewLoadDataPathResolverErrors(t *testing.T) {
+	_, err := newLoadDataPathResolver(toolfs.StorageOptions{S3: "bucket=b", Backend: "GCS"})
+	require.NoError(t, err)
+	// Unknown backend falls back to local load-data path because it is not S3 output.
+	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{})
+	require.NoError(t, err)
+	require.Contains(t, resolver.loadDataSource("out", checkpointtool.TableCatalogEntry{AccountID: 1, DatabaseID: 2, TableID: 3, TableName: "t"}), "LOAD DATA INFILE")
+
+	_, err = newLoadDataPathResolver(toolfs.StorageOptions{S3: "endpoint=http://minio", Backend: "S3"})
+	require.ErrorContains(t, err, "missing bucket")
+}
+
+func TestDumpOneTableAndConcurrentDumpUsePreparedData(t *testing.T) {
+	ctx := context.Background()
+	outDir := t.TempDir()
+	dumpOut, err := openDumpOutput(ctx, toolfs.StorageOptions{})
+	require.NoError(t, err)
+	reader := &checkpointtool.CheckpointReader{}
+	plan := tableDumpPlan{
+		table: checkpointtool.TableCatalogEntry{
+			AccountID:    1,
+			DatabaseID:   2,
+			TableID:      3,
+			DatabaseName: "db",
+			TableName:    "t",
+			RelKind:      "r",
+		},
+		data: &checkpointtool.TableDumpData{
+			TableID: 3,
+			Schema: &checkpointtool.TableSchema{
+				TableName:    "t",
+				DatabaseName: "db",
+				Columns: []checkpointtool.TableColumn{
+					{Name: "id", SQLType: "INT", Position: 1, PhysicalPosition: 0},
+				},
+			},
+		},
+	}
+
+	var status bytes.Buffer
+	var statusMu sync.Mutex
+	require.NoError(t, dumpOneTable(ctx, reader, dumpOut, plan, types.BuildTS(1, 0), outDir, checkpointtool.CSVRowOrderStorage, false, true, &status, &statusMu))
+	require.Contains(t, status.String(), "Table 3 db.t dumped")
+	csvPath := tableCSVPath(outDir, plan.table)
+	data, err := os.ReadFile(csvPath)
+	require.NoError(t, err)
+	require.Equal(t, "id\n", string(data))
+
+	status.Reset()
+	require.NoError(t, dumpTablesConcurrently(ctx, reader, dumpOut, []tableDumpPlan{plan}, types.BuildTS(1, 0), outDir, 4, checkpointtool.CSVRowOrderStorage, false, true, &status))
+	require.Contains(t, status.String(), "Table 3 db.t dumped")
+}
+
+func TestDumpOneTableSkipsViewsAndReportsErrors(t *testing.T) {
+	ctx := context.Background()
+	dumpOut, err := openDumpOutput(ctx, toolfs.StorageOptions{})
+	require.NoError(t, err)
+	reader := &checkpointtool.CheckpointReader{}
+
+	var status bytes.Buffer
+	var statusMu sync.Mutex
+	viewPlan := tableDumpPlan{table: checkpointtool.TableCatalogEntry{TableID: 4, DatabaseName: "db", TableName: "v", RelKind: "v"}}
+	require.NoError(t, dumpOneTable(ctx, reader, dumpOut, viewPlan, types.BuildTS(1, 0), t.TempDir(), checkpointtool.CSVRowOrderStorage, false, true, &status, &statusMu))
+	require.Contains(t, status.String(), "View 4 db.v skipped CSV dump")
+
+	badPlan := tableDumpPlan{
+		table: checkpointtool.TableCatalogEntry{TableID: 5, DatabaseName: "db", TableName: "bad", RelKind: "r"},
+		data:  &checkpointtool.TableDumpData{TableID: 5},
+	}
+	err = dumpOneTable(ctx, reader, dumpOut, badPlan, types.BuildTS(1, 0), t.TempDir(), checkpointtool.CSVRowOrderStorage, false, true, &status, &statusMu)
+	require.ErrorContains(t, err, "dump table 5")
+	require.ErrorContains(t, err, "cannot resolve visible columns")
+}
+
+func TestPrepareTableDumpPlansEmptySelection(t *testing.T) {
+	plans, err := prepareTableDumpPlans(context.Background(), &checkpointtool.CheckpointReader{}, nil, types.BuildTS(1, 0))
+	require.NoError(t, err)
+	require.Empty(t, plans)
+}
+
+func TestWriteRestoreScriptForView(t *testing.T) {
+	ctx := context.Background()
+	dumpOut, err := openDumpOutput(ctx, toolfs.StorageOptions{})
+	require.NoError(t, err)
+	outputDir := t.TempDir()
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseID:   2,
+		TableID:      3,
+		DatabaseName: "db",
+		TableName:    "v",
+		RelKind:      "v",
+	}
+	dumpData := map[uint64]*checkpointtool.TableDumpData{
+		table.TableID: {
+			TableID: table.TableID,
+			Schema: &checkpointtool.TableSchema{
+				TableName: "old_v",
+				CreateSQL: "CREATE VIEW old_v AS SELECT 1 AS id",
+				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+			},
+		},
+	}
+
+	scriptPath, err := writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{table}, dumpData, types.BuildTS(1, 0), outputDir, outputDir, loadDataPathResolver{}, true, true)
+	require.NoError(t, err)
+	require.Equal(t, outputPathJoin(outputDir, "restore.sql"), scriptPath)
+	script, err := os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	require.Contains(t, string(script), "CREATE DATABASE IF NOT EXISTS `db`;")
+	require.Contains(t, string(script), "CREATE VIEW `db`.`v` AS SELECT 1 AS id")
+	require.NotContains(t, string(script), "LOAD DATA")
+}
+
+func TestWriteRestoreScriptRejectsMissingDatabase(t *testing.T) {
+	ctx := context.Background()
+	dumpOut, err := openDumpOutput(ctx, toolfs.StorageOptions{})
+	require.NoError(t, err)
+	_, err = writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{{TableID: 7, TableName: "t"}}, nil, types.BuildTS(1, 0), t.TempDir(), t.TempDir(), loadDataPathResolver{}, true, true)
+	require.ErrorContains(t, err, "empty database name")
 }
 
 func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {

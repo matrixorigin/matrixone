@@ -107,6 +107,10 @@ func TestObjectCommandRootHelpAndArgValidation(t *testing.T) {
 func TestObjectInfoViewCommands(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.obj")
 
+	root := PrepareCommand()
+	root.SetArgs([]string{"--local", missing})
+	require.Error(t, root.Execute())
+
 	c := PrepareCommand()
 	c.SetArgs([]string{"info", "--local", missing})
 	require.Error(t, c.Execute())
