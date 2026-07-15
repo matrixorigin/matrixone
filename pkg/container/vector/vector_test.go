@@ -62,6 +62,23 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestDupOffHeap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("longer value")}, nil, mp))
+
+	dup, err := vec.DupOffHeap(mp)
+	require.NoError(t, err)
+	require.True(t, dup.offHeap)
+	require.Equal(t, vec.Length(), dup.Length())
+	require.Equal(t, vec.GetBytesAt(0), dup.GetBytesAt(0))
+	require.Equal(t, vec.GetBytesAt(1), dup.GetBytesAt(1))
+
+	dup.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())

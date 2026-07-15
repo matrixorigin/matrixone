@@ -16,10 +16,8 @@ package hashjoin
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -81,19 +80,25 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.eqCondVecs) == 0 {
-		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
-		ctr.eqCondExecs = make([]colexec.ExpressionExecutor, len(hashJoin.EqConds[0]))
-		ctr.eqCondExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+		eqCondExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
 		if err != nil {
 			return err
 		}
 
+		var nonEqCondExec colexec.ExpressionExecutor
 		if hashJoin.NonEqCond != nil {
-			ctr.nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
+			nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
 			if err != nil {
+				for _, exec := range eqCondExecs {
+					exec.Free()
+				}
 				return err
 			}
 		}
+
+		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
+		ctr.eqCondExecs = eqCondExecs
+		ctr.nonEqCondExec = nonEqCondExec
 	}
 
 	return err
@@ -115,7 +120,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.mp == nil && len(ctr.spillQueue) == 0 && !hashJoin.EmitUnmatchedProbe() {
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
@@ -156,7 +161,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
-				if ctr.mp == nil && !hashJoin.EmitUnmatchedProbe() {
+				if ctr.mp == nil && !ctr.probeEmitUnmatched {
 					continue
 				}
 
@@ -238,13 +243,10 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 
 				// For spilled join, clean up current bucket and move to next
-				if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
+				if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
 					ctr.rightRowsMatched = nil
 					ctr.cleanHashMap()
-
-					if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
-						ctr.state = Probe
-					}
+					ctr.state = Probe
 				}
 				continue
 			}
@@ -269,94 +271,61 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return err
 	}
 
+	// Pre-compute per-query flags for the probe loop.
+	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
+	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
+	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeSingle = hashJoin.IsSingle()
+	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
+	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
+	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
+
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			spilledBuildFds := ctr.mp.TakeSpillBuildFds()
-
-			// Register build fds in spillQueue immediately so cleanupSpillFiles
-			// can close them even if we return early (e.g. context cancelled).
-			// Generate unique baseNames for sub-bucket naming during re-spill.
-			uid, err := uuid.NewV7()
-			if err != nil {
+			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				BuildKeyExprs:           hashJoin.EqConds[1],
+				SpillThreshold:          ctr.spillThreshold,
+				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe(),
+				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
+				HashOnPK:                hashJoin.HashOnPK,
+				NeedAllocateSels:        !hashJoin.HashOnPK,
+				NeedBatches:             hashJoin.NeedBuildBatches(),
+			})
+			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if err := engine.ScatterProbeTable(proc,
+				func() (*batch.Batch, error) {
+					input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+					return input.Batch, err
+				},
+				analyzer,
+				func(bat *batch.Batch) ([]*vector.Vector, error) {
+					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+						return nil, err
+					}
+					return ctr.eqCondVecs, nil
+				},
+			); err != nil {
+				ctr.mp.Free()
+				ctr.mp = nil
+				engine.Cleanup(proc)
 				return err
 			}
-			uidStr := uid.String()
-			ctr.spillQueue = make([]spillBucket, len(spilledBuildFds))
-			for i, fd := range spilledBuildFds {
-				ctr.spillQueue[i] = spillBucket{
-					buildFd:  fd,
-					baseName: fmt.Sprintf("%s_%d", uidStr, i),
-					depth:    1,
-				}
-			}
-
-			// Create writers for probe side (files created lazily on first write).
-			// Disable writers for empty-build buckets so scatter discards those
-			// probe rows immediately, matching the re-spill validBuckets pattern.
-			spillWriters, err := createRootProbeSpillBucketFiles()
-			if err != nil {
-				return err
-			}
-			needsProbeForEmpty := hashJoin.EmitUnmatchedProbe()
-			if !needsProbeForEmpty {
-				for i := range spilledBuildFds {
-					if spilledBuildFds[i] == nil {
-						spillWriters[i].name = ""
-					}
-				}
-			}
-			spillBuffers := make([]*batch.Batch, spillNumBuckets)
-
-			defer func() {
-				for i := range spillWriters {
-					spillWriters[i].close()
-				}
-				for _, buf := range spillBuffers {
-					if buf != nil {
-						buf.Clean(proc.Mp())
-					}
-				}
-			}()
-
-			// Spill each probe batch as it arrives
-			for {
-				input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
-				if err != nil {
-					return err
-				}
-				if input.Batch == nil {
-					break
-				}
-				if !input.Batch.IsEmpty() {
-					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillWriters, spillBuffers, analyzer, 0); err != nil {
-						return err
-					}
-				}
-			}
-
-			// Flush remaining buffered data
-			for i, buf := range spillBuffers {
-				if _, err := ctr.flushBucketBuffer(proc, buf, &spillWriters[i], analyzer); err != nil {
-					return err
-				}
-			}
-
-			// Transfer probe fd ownership into spillQueue.
-			// handOffFd seeks fd to 0; returns nil if probe bucket was empty.
-			for i := range ctr.spillQueue {
-				ctr.spillQueue[i].probeFd = spillWriters[i].handOffFd()
-			}
-
+			ctr.mp.Free()
+			ctr.spillEngine = engine
 			ctr.mp = nil
-			return err
+			return nil
 		}
 	}
 
+	if ctr.mp == nil {
+		return
+	}
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
+	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
 	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
@@ -369,15 +338,66 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 }
 
 func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	// For unspilled join, simply call children.
-	// In spill mode, spillQueue can become empty while we are still reading the
-	// currently loaded bucket via probeBucketReader.
-	if len(hashJoin.ctr.spillQueue) == 0 && !hashJoin.ctr.probeBucketActive {
+	if hashJoin.ctr.spillEngine == nil {
 		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
 	}
-
-	// For spilled join, load bucket and return probe batches
 	return hashJoin.getSpilledInputBatch(proc, analyzer)
+}
+
+func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	var result vm.CallResult
+	ctr := &hashJoin.ctr
+	engine := ctr.spillEngine
+
+	for {
+		// Read next probe batch from current bucket.
+		if ctr.probeBucketActive {
+			bat, err := engine.NextProbeBatch(proc)
+			if err != nil {
+				return result, err
+			}
+			if bat != nil {
+				result.Batch = bat
+				return result, nil
+			}
+			// EOF on probe file.
+			engine.FinishBucket()
+			ctr.probeBucketActive = false
+			if ctr.rightRowsMatched != nil {
+				return result, nil // trigger Finalize for unmatched right rows
+			}
+			ctr.cleanHashMap()
+		}
+
+		// Load next bucket via engine convenience method.
+		if ctr.mp == nil {
+			ok, err := engine.AdvanceToNextBucket(proc, analyzer,
+				func(jm *message.JoinMap, res spillutil.BucketResult) {
+					if res == spillutil.BucketReady {
+						ctr.mp = jm
+						ctr.rightBats = jm.GetBatches()
+						ctr.rightRowCnt = jm.GetRowCount()
+						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
+						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
+							ctr.rightRowsMatched = &bitmap.Bitmap{}
+							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+							ctr.rightMatchedIter = nil
+						}
+					}
+				})
+			if err != nil {
+				return result, err
+			}
+			if !ok {
+				return result, nil
+			}
+			ctr.itr = nil
+			ctr.probeState = psNextBatch
+			ctr.lastIdx = 0
+			ctr.vsIdx = 0
+			ctr.probeBucketActive = true
+		}
+	}
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
@@ -429,7 +449,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			ctr.vsIdx++
 
 			if z == 0 || v == 0 {
-				if hashJoin.EmitUnmatchedProbe() {
+				if ctr.probeEmitUnmatched {
 					ctr.appendOneNotMatch(hashJoin, proc, row)
 					resRowCnt++
 				}
@@ -447,9 +467,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				continue
 			}
 
-			if hashJoin.HashOnPK || ctr.mp.HashOnUnique() {
+			if ctr.probeHashOnPK {
 				if hashJoin.NonEqCond == nil {
-					if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+					if ctr.probeRightSemiAnti {
 						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
 						if err != nil {
 							return err
@@ -458,8 +478,8 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						resRowCnt++
 					}
 
-					if hashJoin.IsRightJoin {
-						if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
+					if ctr.probeRightJoin {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 
@@ -472,7 +492,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+						if ctr.probeRightSemiAnti {
 							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
 							if err != nil {
 								return err
@@ -481,14 +501,14 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							resRowCnt++
 						}
 
-						if hashJoin.IsRightJoin {
-							if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
-					} else if hashJoin.EmitUnmatchedProbe() {
+					} else if ctr.probeEmitUnmatched {
 						err = ctr.appendOneNotMatch(hashJoin, proc, row)
 						if err != nil {
 							return err
@@ -501,15 +521,15 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				ctr.leftRowMatched = false
 
 				if hashJoin.NonEqCond == nil {
-					if hashJoin.IsLeftSingle() {
+					if ctr.probeLeftSingle {
 						if len(ctr.sels) > 1 {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
-					} else if hashJoin.IsLeftSemi() {
+					} else if ctr.probeLeftSemi {
 						ctr.appendOneNotMatch(hashJoin, proc, row)
 						resRowCnt++
 						ctr.sels = nil
-					} else if hashJoin.IsLeftAnti() {
+					} else if ctr.probeLeftAnti {
 						ctr.sels = nil
 					}
 				}
@@ -536,9 +556,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			// remove processed sels
 			ctr.sels = ctr.sels[processCount:]
 			if hashJoin.NonEqCond == nil {
-				if hashJoin.IsRightJoin {
+				if ctr.probeRightJoin {
 					for _, sel := range sels {
-						if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 
@@ -546,7 +566,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 				}
 
-				if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+				if ctr.probeRightSemiAnti {
 					for j, rp := range hashJoin.ResultCols {
 						if rp.Rel == 0 {
 							err = ctr.resBat.Vecs[j].UnionMulti(ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
@@ -577,26 +597,26 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if hashJoin.IsRightJoin {
-							if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 
 							ctr.rightRowsMatched.Add(uint64(sel))
 						} else {
-							if hashJoin.IsSingle() && ctr.leftRowMatched {
+							if ctr.probeSingle && ctr.leftRowMatched {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 						}
 
 						ctr.leftRowMatched = true
 
-						if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+						if ctr.probeRightSemiAnti {
 							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
 							resRowCnt++
 						}
 
-						if hashJoin.IsLeftSemi() {
+						if ctr.probeLeftSemi {
 							ctr.sels = nil
 							break
 						}
@@ -604,7 +624,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				}
 
 				if len(ctr.sels) == 0 &&
-					!ctr.leftRowMatched && hashJoin.EmitUnmatchedProbe() {
+					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
 					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
 					resRowCnt++
 				}
@@ -672,7 +692,7 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 				}
 			}
 
-			if hashJoin.IsSingle() && matchedCnt > ctr.rightRowsMatched.Count() {
+			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
 				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 			}
 
