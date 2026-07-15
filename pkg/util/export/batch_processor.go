@@ -568,6 +568,27 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	}
 }
 
+// TryCollect offers an item exactly once. Statement completion uses this path
+// so a saturated trace queue cannot delay a SQL response while holding
+// statement state.
+func (c *MOCollector) TryCollect(ctx context.Context, item batchpipe.HasName) (bool, error) {
+	select {
+	case <-c.stopCh:
+		c.stopDrop.Add(1)
+		ctx = errutil.ContextWithNoReport(ctx, true)
+		return false, moerr.NewInternalError(ctx, "MOCollector stopped")
+	default:
+	}
+	ok, err := c.awakeQueue.Offer(item)
+	if err != nil {
+		v2.GetTraceCollectorCollectHungCounter(item.GetName(), err.Error()).Inc()
+	}
+	if !ok {
+		v2.GetTraceCollectorDiscardItemCounter(item.GetName()).Inc()
+	}
+	return ok, err
+}
+
 // DiscardableCollect implements motrace.DiscardableCollector
 // cooperate with logutil.Discardable() field
 func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {

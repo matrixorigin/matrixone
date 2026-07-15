@@ -556,10 +556,9 @@ func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float6
 // - BytesScan
 func mergeStats(e, n *StatementInfo) error {
 	if e.resourceStated && n.resourceStated {
+		cu := e.statsArray.GetCU() + n.statsArray.GetCU()
 		e.resourceSummary.Merge(n.resourceSummary)
 		e.resourceSummary.StatementWallNS = uint64(e.Duration)
-		withoutCU := statistic.FromResourceSummary(e.resourceSummary, 0)
-		cu := CalculateCU(withoutCU, int64(e.Duration))
 		e.statsArray = statistic.FromResourceSummary(e.resourceSummary, cu)
 		e.cuStated = true
 		e.RowsRead += n.RowsRead
@@ -725,9 +724,13 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		return
 	}
 
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	if !s.end { // cooperate with s.mux
+	shouldReport := false
+	func() {
+		s.mux.Lock()
+		defer s.mux.Unlock()
+		if s.end { // cooperate with s.mux
+			return
+		}
 		// do report
 		s.end = true
 		s.ResultCount = sentRows
@@ -764,8 +767,11 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		}
 		if !s.reported || s.exported { // cooperate with s.mux
 			s.exported = false
-			s.Report(ctx)
+			shouldReport = true
 		}
+	}()
+	if shouldReport {
+		s.Report(ctx)
 	}
 }
 
@@ -828,6 +834,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
+	collector := GetGlobalBatchProcessor()
 	// Filter out the Running record.
 	if s.Status == StatementStatusRunning {
 		if GetTracerProvider().skipRunningStmt {
@@ -870,7 +877,14 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	s.reported = true
-	return GetGlobalBatchProcessor().Collect(ctx, s)
+	if nonBlocking, ok := collector.(TryCollector); ok {
+		accepted, err := nonBlocking.TryCollect(ctx, s)
+		if !accepted {
+			s.freeNoLocked()
+		}
+		return err
+	}
+	return collector.Collect(ctx, s)
 DiscardAndFreeL:
 	s.freeNoLocked()
 	return nil

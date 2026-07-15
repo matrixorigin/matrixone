@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -36,6 +37,35 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
+
+type rejectingStatementCollector struct{}
+
+func (rejectingStatementCollector) Collect(context.Context, batchpipe.HasName) error { return nil }
+func (rejectingStatementCollector) TryCollect(context.Context, batchpipe.HasName) (bool, error) {
+	return false, nil
+}
+func (rejectingStatementCollector) Start() bool                          { return true }
+func (rejectingStatementCollector) Stop(bool) error                      { return nil }
+func (rejectingStatementCollector) Register(batchpipe.HasName, PipeImpl) {}
+
+func TestReportStatementDoesNotBlockOnFullCollector(t *testing.T) {
+	provider := GetTracerProvider()
+	old := provider.batchProcessor
+	oldEnable := provider.IsEnable()
+	provider.SetEnable(true)
+	provider.batchProcessor = rejectingStatementCollector{}
+	defer func() {
+		provider.batchProcessor = old
+		provider.SetEnable(oldEnable)
+	}()
+
+	stmt := NewStatementInfo()
+	stmt.Statement = append(stmt.Statement, "select 1"...)
+	stmt.Status = StatementStatusSuccess
+	stmt.end = true
+	require.NoError(t, ReportStatement(context.Background(), stmt))
+	require.Empty(t, stmt.Statement)
+}
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {
 	type fields struct {
@@ -350,17 +380,21 @@ func TestMergeStats(t *testing.T) {
 
 func TestMergeStatsUsesTypedResourceSummary(t *testing.T) {
 	e := &StatementInfo{Duration: 5, RowsRead: 1, BytesScan: 2}
-	e.SetResourceSummary(resource.StatementResourceSummary{
+	eSummary := resource.StatementResourceSummary{
 		Usage:           resource.Usage{ExclusiveActiveNS: 10},
 		Memory:          resource.MemoryTotals{MaxDomainPeakLiveBytes: 100},
 		StatementWallNS: 5,
-	})
+	}
+	e.SetResourceSummary(eSummary)
+	e.statsArray = statistic.FromResourceSummary(eSummary, 3)
 	n := &StatementInfo{Duration: 7, RowsRead: 3, BytesScan: 4}
-	n.SetResourceSummary(resource.StatementResourceSummary{
+	nSummary := resource.StatementResourceSummary{
 		Usage:           resource.Usage{ExclusiveActiveNS: 20},
 		Memory:          resource.MemoryTotals{MaxDomainPeakLiveBytes: 80},
 		StatementWallNS: 7,
-	})
+	}
+	n.SetResourceSummary(nSummary)
+	n.statsArray = statistic.FromResourceSummary(nSummary, 4)
 	e.Duration += n.Duration
 	require.NoError(t, mergeStats(e, n))
 	require.Equal(t, uint64(30), e.resourceSummary.Usage.ExclusiveActiveNS)
@@ -369,6 +403,7 @@ func TestMergeStatsUsesTypedResourceSummary(t *testing.T) {
 	require.NotZero(t, e.resourceSummary.Quality&resource.QualityAggregated)
 	require.Equal(t, float64(30), e.statsArray.GetTimeConsumed())
 	require.Equal(t, float64(100), e.statsArray.GetMemorySize())
+	require.Equal(t, float64(7), e.statsArray.GetCU())
 	require.Equal(t, int64(4), e.RowsRead)
 	require.Equal(t, int64(6), e.BytesScan)
 }
