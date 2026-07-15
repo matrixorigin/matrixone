@@ -3304,6 +3304,33 @@ func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
 	assert.True(t, found, "child FK validation must hold a shared lock on its parent row")
 }
 
+func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
+	target := &plan.LockTarget{
+		TableId:  42,
+		ObjRef:   &plan.ObjectRef{Obj: 42, ObjName: "parent"},
+		Mode:     lockpb.LockMode_Shared,
+		LockRows: makePlan2Int64ConstExprWithType(7),
+	}
+
+	direct := DeepCopyLockTarget(target)
+	require.NotSame(t, target, direct)
+	assert.Equal(t, lockpb.LockMode_Shared, direct.Mode)
+	require.NotSame(t, target.ObjRef, direct.ObjRef)
+	require.NotSame(t, target.LockRows, direct.LockRows)
+
+	node := &plan.Node{NodeType: plan.Node_LOCK_OP, LockTargets: []*plan.LockTarget{target}}
+	nodeCopy := DeepCopyNode(node)
+	require.Len(t, nodeCopy.LockTargets, 1)
+	assert.Equal(t, lockpb.LockMode_Shared, nodeCopy.LockTargets[0].Mode)
+	require.NotSame(t, target, nodeCopy.LockTargets[0])
+
+	queryCopy := DeepCopyQuery(&plan.Query{Nodes: []*plan.Node{node}})
+	require.Len(t, queryCopy.Nodes, 1)
+	require.Len(t, queryCopy.Nodes[0].LockTargets, 1)
+	assert.Equal(t, lockpb.LockMode_Shared, queryCopy.Nodes[0].LockTargets[0].Mode)
+	require.NotSame(t, target, queryCopy.Nodes[0].LockTargets[0])
+}
+
 func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
 	parseReplace := func(t *testing.T, sql string) *tree.Replace {
 		t.Helper()
