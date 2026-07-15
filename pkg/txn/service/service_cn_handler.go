@@ -53,7 +53,9 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 		return nil
 	}
 
-	s.waitClockTo(request.Txn.SnapshotTS)
+	if err := s.waitClockTo(ctx, request.Txn.SnapshotTS); err != nil {
+		return err
+	}
 
 	// We do not write transaction information to sync.Map during read operations because commit and abort
 	// for read-only transactions are not sent to the TN node, so there is no way to clean up the transaction
@@ -445,7 +447,9 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 				}
 				util.LogTxnCommittingFailed(s.logger, txnMeta, err)
 				// TODO: make config
-				time.Sleep(time.Second)
+				if !waitRetryBackoff(ctx, time.Second) {
+					return
+				}
 			}
 		}
 
@@ -495,12 +499,22 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 	}
 }
 
-func (s *service) waitClockTo(ts timestamp.Timestamp) {
+func (s *service) waitClockTo(ctx context.Context, ts timestamp.Timestamp) error {
 	for {
 		now, _ := runtime.ServiceRuntime(s.sid).Clock().Now()
 		if now.GreaterEq(ts) {
-			return
+			return nil
 		}
-		time.Sleep(time.Duration(ts.PhysicalTime + 1 - now.PhysicalTime))
+		wait := time.Duration(ts.PhysicalTime - now.PhysicalTime)
+		if wait < time.Duration(math.MaxInt64) {
+			wait++
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return context.Cause(ctx)
+		case <-timer.C:
+		}
 	}
 }

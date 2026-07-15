@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,12 +31,33 @@ type retryTestSender struct {
 	send func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error)
 }
 
+type closeTrackingSender struct {
+	retryTestSender
+	closed atomic.Int32
+}
+
+func (s *closeTrackingSender) Close() error {
+	s.closed.Add(1)
+	return nil
+}
+
 func (s *retryTestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	return s.send(ctx, requests)
 }
 
 func (s *retryTestSender) Close() error {
 	return nil
+}
+
+func TestTxnServiceDoesNotCloseBorrowedSender(t *testing.T) {
+	sender := &closeTrackingSender{}
+	sender.send = func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error) {
+		return &rpc.SendResult{}, nil
+	}
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1))
+	assert.NoError(t, s.Start())
+	assert.NoError(t, s.Close(false))
+	assert.Zero(t, sender.closed.Load())
 }
 
 func TestGCZombie(t *testing.T) {

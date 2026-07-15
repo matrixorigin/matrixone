@@ -21,6 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateRPCMaxMessageSize(t *testing.T) {
+	require.Error(t, ValidateRPCMaxMessageSize(1))
+	require.Error(t, ValidateRPCMaxMessageSize(math.MaxInt64))
+	require.NoError(t, ValidateRPCMaxMessageSize(maxRPCMessageSize))
+	require.Error(t, ValidateRPCMaxMessageSize(maxRPCMessageSize+1))
+}
+
 func TestResponseSize(t *testing.T) {
 	maxMessageSize := 1024
 	pool := NewLogtailServerSegmentPool(maxMessageSize)
