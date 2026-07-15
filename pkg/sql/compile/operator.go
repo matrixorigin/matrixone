@@ -2343,7 +2343,7 @@ func constructTableClone(
 }
 
 func validateApproxPercentileExpr(expr *plan.Expr) error {
-	if expr == nil || !rule.IsConstant(expr, true) {
+	if expr == nil || !rule.IsConstant(expr, false) {
 		return moerr.NewInvalidInputNoCtx(
 			"percentile argument of approx_percentile must be a constant")
 	}

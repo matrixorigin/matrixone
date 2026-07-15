@@ -1662,7 +1662,7 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 		return nil
 	}
 	percentile := args[1]
-	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, true) {
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
 		return moerr.NewInvalidInput(ctx,
 			"percentile argument of approx_percentile must be a non-null constant")
 	}

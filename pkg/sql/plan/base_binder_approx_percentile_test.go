@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,12 +64,8 @@ func TestBindApproxPercentileRequiresStableNonNullPercentile(t *testing.T) {
 	require.ErrorContains(t, err, "percentile argument of approx_percentile must be a non-null constant")
 }
 
-func TestBindApproxPercentileAcceptsExecutionConstants(t *testing.T) {
+func TestBindApproxPercentileAcceptsFoldableConstants(t *testing.T) {
 	ctx := context.Background()
-	parameter := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(types.T_float64)},
-		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
-	}
 	foldable, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
 		makePlan2Float64ConstExprWithType(0.4),
 		makePlan2Float64ConstExprWithType(0.1),
@@ -77,12 +75,41 @@ func TestBindApproxPercentileAcceptsExecutionConstants(t *testing.T) {
 	for _, percentile := range []*planpb.Expr{
 		makePlan2Float64ConstExprWithType(0.95),
 		foldable,
-		parameter,
 	} {
 		_, err = BindFuncExprImplByPlanExpr(ctx, "approx_percentile", []*planpb.Expr{
 			approxPercentileValueColumn(),
 			percentile,
 		})
 		require.NoError(t, err)
+	}
+
+	parameter := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	_, err = BindFuncExprImplByPlanExpr(ctx, "approx_percentile", []*planpb.Expr{
+		approxPercentileValueColumn(),
+		parameter,
+	})
+	require.ErrorContains(t, err, "must be a non-null constant")
+}
+
+func TestBuildPlanApproxPercentileRejectsInvalidPercentileSQL(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	tests := []string{
+		"select approx_percentile(a, null) from select_test.bind_select",
+		"select approx_percentile(a, b) from select_test.bind_select",
+		"select approx_percentile(a, null) over () from select_test.bind_select",
+		"select approx_percentile(a, b) over () from select_test.bind_select",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(ctx, stmts[0], false)
+			require.ErrorContains(t, err,
+				"percentile argument of approx_percentile must be a non-null constant")
+		})
 	}
 }

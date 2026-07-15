@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Preserve prepared-statement parameters as supported execution constants.
+- Reject prepared-statement parameters and variables; the configuration must be a compile-time constant.
 - Do not change percentile computation, result types, or the generic function type-check API.
 - Production changes must follow RED → GREEN TDD and remain limited to the reviewed argument contract.
 - Run CGo-dependent verification with the repository's existing `cgo` and `thirdparties/install` artifacts.
@@ -50,15 +50,11 @@ func TestBindApproxPercentileRequiresStableNonNullPercentile(t *testing.T) {
     require.ErrorContains(t, err, "percentile argument of approx_percentile must be a non-null constant")
 }
 
-func TestBindApproxPercentileAcceptsExecutionConstants(t *testing.T) {
+func TestBindApproxPercentileAcceptsFoldableConstants(t *testing.T) {
     ctx := context.Background()
     value := &planpb.Expr{
         Typ: planpb.Type{Id: int32(types.T_int64)},
         Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0, Name: "v"}},
-    }
-    parameter := &planpb.Expr{
-        Typ: planpb.Type{Id: int32(types.T_float64)},
-        Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
     }
     foldable, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
         makePlan2Float64ConstExprWithType(0.4),
@@ -67,7 +63,7 @@ func TestBindApproxPercentileAcceptsExecutionConstants(t *testing.T) {
     require.NoError(t, err)
 
     for _, percentile := range []*planpb.Expr{
-        makePlan2Float64ConstExprWithType(0.95), foldable, parameter,
+        makePlan2Float64ConstExprWithType(0.95), foldable,
     } {
         _, err = BindFuncExprImplByPlanExpr(ctx, "approx_percentile", []*planpb.Expr{DeepCopyExpr(value), percentile})
         require.NoError(t, err)
@@ -95,7 +91,7 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
         return nil
     }
     percentile := args[1]
-    if isNullExpr(percentile) || !rule.IsConstant(percentile, true) {
+    if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
         return moerr.NewInvalidInput(ctx,
             "percentile argument of approx_percentile must be a non-null constant")
     }
@@ -286,7 +282,7 @@ Then run `go build` and `go vet` for the same packages with `CGO_CFLAGS`, `CGO_L
 
 - [ ] **Step 3: Run MatrixOne self-review gates**
 
-Trace planner → compile → executor closure, apply Q1–Q3 to vector/free paths, confirm both compile error branches call `free()`, and record any intentional compatibility decision about prepared parameters.
+Trace planner → compile → executor closure, apply Q1–Q3 to vector/free paths, confirm both compile error branches call `free()`, and confirm prepared parameters are rejected before compile evaluation.
 
 - [ ] **Step 4: Commit the implementation**
 

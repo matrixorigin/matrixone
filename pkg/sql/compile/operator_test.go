@@ -352,7 +352,7 @@ func TestValidateApproxPercentileExpr(t *testing.T) {
 		}},
 	}
 	require.NoError(t, validateApproxPercentileExpr(literal))
-	require.NoError(t, validateApproxPercentileExpr(parameter))
+	require.Error(t, validateApproxPercentileExpr(parameter))
 }
 
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
