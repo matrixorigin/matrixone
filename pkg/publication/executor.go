@@ -156,6 +156,10 @@ func fillDefaultOption(option *PublicationExecutorOption) *PublicationExecutorOp
 	return option
 }
 
+func newPublicationTaskTree() *btree.BTreeG[TaskEntry] {
+	return btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
+}
+
 func NewPublicationTaskExecutor(
 	ctx context.Context,
 	txnEngine engine.Engine,
@@ -187,7 +191,7 @@ func NewPublicationTaskExecutor(
 		ownerCtx:                 ctx,
 		terminated:               make(chan struct{}),
 		ctx:                      ctx,
-		tasks:                    btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true}),
+		tasks:                    newPublicationTaskTree(),
 		cnUUID:                   cdUUID,
 		txnEngine:                txnEngine,
 		cnTxnClient:              cnTxnClient,
@@ -321,28 +325,32 @@ func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) err
 		"Publication-Task Start",
 	)
 	ctx, cancel := context.WithCancel(parent)
-	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp, exec.upstreamSQLHelperFactory)
+	// A stopped generation can leave accepted top-level tasks in memory as
+	// Pending, or in storage as Running. Repair storage first, then build the
+	// next generation entirely from that authoritative snapshot.
 	err := retryPublication(
 		ctx,
 		func() error {
-			return exec.replay(ctx)
+			return exec.repairAbandonedTasks(ctx)
 		},
 		exec.option.RetryOption,
 	)
 	if err != nil {
-		worker.Stop()
 		cancel()
 		return err
 	}
-	// Update tasks with state != error and drop_at is empty to complete
-	err = exec.updateNonErrorTasksToComplete(ctx)
+	err = retryPublication(
+		ctx,
+		func() error {
+			return exec.rebuildState(ctx)
+		},
+		exec.option.RetryOption,
+	)
 	if err != nil {
-		logutil.Error(
-			"Publication-Task update non-error tasks to complete failed",
-			zap.Error(err),
-		)
-		// Don't return error, continue execution
+		cancel()
+		return err
 	}
+	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp, exec.upstreamSQLHelperFactory)
 	exec.worker = worker
 	exec.ctx = ctx
 	exec.cancel = cancel
@@ -436,9 +444,6 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context, worker Worker) {
 				return
 			}
 			for _, task := range candidateTasks {
-				task.State = IterationStatePending
-				exec.setTask(task)
-				// Only trigger tasks that are not completed
 				err = worker.Submit(task.TaskID, task.LSN, task.State)
 				if err != nil {
 					logutil.Error(
@@ -450,6 +455,10 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context, worker Worker) {
 					)
 					continue
 				}
+				// Admission is the linearization point. Mark the task pending only
+				// after the worker owns it; rejected work remains a candidate.
+				task.State = IterationStatePending
+				exec.setTask(task)
 			}
 		case <-gcTrigger.C:
 			err := GC(ctx, exec.txnEngine, exec.cnTxnClient, exec.cnUUID, exec.upstreamSQLHelperFactory, exec.option.GCTTL)
@@ -659,7 +668,18 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 	return
 }
 
-func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
+type publicationReplayApplyFunc func(
+	taskID string,
+	lsn uint64,
+	state int8,
+	subscriptionState int8,
+	dropAt *time.Time,
+) error
+
+func (exec *PublicationTaskExecutor) loadReplay(
+	ctx context.Context,
+	apply publicationReplayApplyFunc,
+) (watermark types.TS, err error) {
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -680,7 +700,13 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, txn.Rollback(ctx))
+			return
+		}
+		err = txn.Commit(ctx)
+	}()
 	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
 	if err != nil {
 		return
@@ -711,7 +737,7 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 				t := dt.ConvertToGoTime(time.UTC)
 				dropAt = &t
 			}
-			err = exec.addOrUpdateTask(
+			err = apply(
 				taskIDs[i].String(),
 				uint64(lsns[i]),
 				states[i],
@@ -724,8 +750,84 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 		}
 		return true
 	})
-	exec.ccprLogWm = types.TimestampToTS(txn.SnapshotTS())
+	if err != nil {
+		return
+	}
+	watermark = types.TimestampToTS(txn.SnapshotTS())
 	return
+}
+
+// replay merges a snapshot into a live generation. It is used for stale-read
+// recovery while that generation can still have in-flight work.
+func (exec *PublicationTaskExecutor) replay(ctx context.Context) error {
+	watermark, err := exec.loadReplay(ctx, exec.mergeReplayedTask)
+	if err != nil {
+		return err
+	}
+	exec.ccprLogWm = watermark
+	return nil
+}
+
+func (exec *PublicationTaskExecutor) mergeReplayedTask(
+	taskID string,
+	lsn uint64,
+	state int8,
+	subscriptionState int8,
+	dropAt *time.Time,
+) error {
+	current, ok := exec.getTask(taskID)
+	if ok &&
+		(current.State == IterationStatePending || current.State == IterationStateRunning) &&
+		lsn <= current.LSN {
+		// A replay snapshot can lag an admitted iteration. Preserve its local
+		// ownership until normal logtail apply observes a newer durable LSN.
+		// Subscription/drop metadata remains authoritative independently.
+		current.SubscriptionState = subscriptionState
+		current.DropAt = dropAt
+		exec.setTask(current)
+		return nil
+	}
+	return exec.addOrUpdateTask(taskID, lsn, state, subscriptionState, dropAt)
+}
+
+func (exec *PublicationTaskExecutor) addOrUpdateRecoveredTask(
+	taskID string,
+	lsn uint64,
+	state int8,
+	subscriptionState int8,
+	dropAt *time.Time,
+) error {
+	// Read-after-repair can use a snapshot from before the repair commit becomes
+	// visible through logtail. Mirror the idempotent storage repair in memory.
+	if dropAt == nil {
+		switch state {
+		case IterationStatePending, IterationStateRunning, IterationStateCanceled:
+			state = IterationStateCompleted
+		}
+	}
+	return exec.addOrUpdateTask(taskID, lsn, state, subscriptionState, dropAt)
+}
+
+// rebuildState replaces, rather than merges, the stopped generation's memory.
+// No worker from that generation remains to make its optimistic state durable.
+func (exec *PublicationTaskExecutor) rebuildState(ctx context.Context) error {
+	snapshot := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+	watermark, err := exec.loadReplay(ctx, snapshot.addOrUpdateRecoveredTask)
+	if err != nil {
+		return err
+	}
+	exec.publishRebuiltState(snapshot, watermark)
+	return nil
+}
+
+func (exec *PublicationTaskExecutor) publishRebuiltState(
+	snapshot *PublicationTaskExecutor,
+	watermark types.TS,
+) {
+	exec.taskMu.Lock()
+	exec.tasks = snapshot.tasks
+	exec.ccprLogWm = watermark
+	exec.taskMu.Unlock()
 }
 
 func (exec *PublicationTaskExecutor) addOrUpdateTask(
@@ -758,9 +860,9 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	return nil
 }
 
-func (exec *PublicationTaskExecutor) updateNonErrorTasksToComplete(ctx context.Context) error {
-	// Update tasks in database using SQL
-	// Update all rows where iteration_state != error and drop_at is NULL
+func (exec *PublicationTaskExecutor) repairAbandonedTasks(ctx context.Context) (err error) {
+	// Repair only nonterminal iterations. Avoid rewriting every already-complete
+	// row on each Pause/Resume cycle.
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication update non-error tasks")
 	if err != nil {
@@ -769,15 +871,22 @@ func (exec *PublicationTaskExecutor) updateNonErrorTasksToComplete(ctx context.C
 
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, txn.Rollback(ctx))
+			return
+		}
+		err = txn.Commit(ctx)
+	}()
 
-	// Use SQL to update all rows where state != error and drop_at IS NULL
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log `+
 			`SET iteration_state = %d `+
-			`WHERE iteration_state != %d AND drop_at IS NULL`,
+			`WHERE iteration_state IN (%d, %d, %d) AND drop_at IS NULL`,
 		IterationStateCompleted,
-		IterationStateError,
+		IterationStatePending,
+		IterationStateRunning,
+		IterationStateCanceled,
 	)
 
 	result, err := ExecWithResult(ctx, updateSQL, exec.cnUUID, txn)
@@ -786,7 +895,7 @@ func (exec *PublicationTaskExecutor) updateNonErrorTasksToComplete(ctx context.C
 	}
 	defer result.Close()
 
-	logutil.Info("Publication-Task updated non-error tasks with empty drop_at to complete")
+	logutil.Info("Publication-Task repaired abandoned iterations")
 	return nil
 }
 
@@ -1321,7 +1430,7 @@ var getTxn = func(
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, op.Rollback(ctx))
 	}
 	return op, nil
 }

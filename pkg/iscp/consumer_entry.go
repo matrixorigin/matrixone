@@ -34,11 +34,16 @@ func NewJobEntry(
 	tableInfo *TableEntry,
 	jobName string,
 	jobSpec *JobSpec,
+	jobStatus *JobStatus,
 	jobID uint64,
 	watermark types.TS,
 	state int8,
 	dropAt types.Timestamp,
 ) *JobEntry {
+	var currentLSN uint64
+	if jobStatus != nil {
+		currentLSN = jobStatus.LSN
+	}
 	jobEntry := &JobEntry{
 		tableInfo:          tableInfo,
 		jobName:            jobName,
@@ -48,6 +53,7 @@ func NewJobEntry(
 		persistedWatermark: watermark,
 		state:              state,
 		dropAt:             dropAt,
+		currentLSN:         currentLSN,
 	}
 	return jobEntry
 }

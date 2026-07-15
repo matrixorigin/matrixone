@@ -37,7 +37,9 @@ const (
 
 type Worker interface {
 	Submit(iteration *IterationContext) error
-	// Stop cancels running work and discards work that has not started.
+	// Stop cancels running work and discards work that has not started. The
+	// executor repairs and reloads durable state before publishing a successor
+	// generation, so abandoned optimistic state cannot cross that boundary.
 	Stop()
 }
 
