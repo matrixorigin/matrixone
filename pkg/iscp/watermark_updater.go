@@ -621,15 +621,18 @@ func getTableID(
 		return
 	}
 	defer result.Close()
+	totalRows := 0
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid rows %d", rows))
+		if rows == 0 {
+			return true
+		}
+		totalRows += rows
+		if totalRows > 1 {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid rows %d", totalRows))
 			return false
 		}
-		for i := 0; i < rows; i++ {
-			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
-			dbID = vector.MustFixedColWithTypeCheck[uint64](cols[1])[i]
-		}
+		tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[0]
+		dbID = vector.MustFixedColWithTypeCheck[uint64](cols[1])[0]
 		return true
 	})
 	if err != nil {

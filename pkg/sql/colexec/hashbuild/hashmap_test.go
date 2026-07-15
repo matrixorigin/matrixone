@@ -392,6 +392,101 @@ func TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout(t *testing.T) {
 	require.ElementsMatch(t, []int32{1, 2}, []int32{oldPks[1], oldPks[2]})
 }
 
+func TestDedupBuildIgnoreOnlyMarksCandidateOwnOldKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		newKeys []int32
+		oldKeys []int32
+	}{
+		{
+			name:    "another candidate old key is not released",
+			newKeys: []int32{4, 1},
+			oldKeys: []int32{1, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var hb HashmapBuilder
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			hb.IsDedup = true
+			hb.OnDuplicateAction = plan.Node_IGNORE
+			defer func() {
+				hb.Reset(proc, true)
+				hb.Free(proc)
+				require.Equal(t, int64(0), proc.Mp().CurrNB())
+			}()
+
+			require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, -1, nil, proc))
+			bat := makeIntKeyValueBatch(proc, tt.newKeys, tt.oldKeys)
+			require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+			hb.InputBatchRowCount = bat.RowCount()
+			bat.Clean(proc.Mp())
+
+			require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+			require.NotNil(t, hb.DelRows)
+			require.Zero(t, hb.DelRows.Count())
+		})
+	}
+}
+
+func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
+	for _, oldKeys := range [][]int32{{1, 2}, {2, 1}} {
+		t.Run(strings.Join([]string{strconv.Itoa(int(oldKeys[0])), strconv.Itoa(int(oldKeys[1]))}, "_"), func(t *testing.T) {
+			var hb HashmapBuilder
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			hb.IsDedup = true
+			hb.OnDuplicateAction = plan.Node_IGNORE
+			defer func() {
+				hb.Reset(proc, true)
+				hb.Free(proc)
+				require.Equal(t, int64(0), proc.Mp().CurrNB())
+			}()
+
+			require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, -1, nil, proc))
+			bat := makeIntKeyValueBatch(proc, []int32{2, 2}, oldKeys)
+			require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+			hb.InputBatchRowCount = bat.RowCount()
+			bat.Clean(proc.Mp())
+
+			require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+			require.Equal(t, 1, hb.Batches.RowCount())
+			keptOldKeys := vector.MustFixedColNoTypeCheck[int32](hb.Batches.Buf[0].Vecs[1])
+			require.Equal(t, []int32{2}, keptOldKeys[:hb.Batches.RowCount()])
+			require.NotNil(t, hb.DelRows)
+			require.True(t, hb.DelRows.Contains(0), "delRows=%s count=%d", hb.DelRows.String(), hb.DelRows.Count())
+		})
+	}
+}
+
+func TestDedupBuildIgnoreRebuildsAfterOwnerReplacement(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_IGNORE
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, -1, nil, proc))
+	bat := makeIntKeyValueBatch(proc, []int32{2, 1, 2}, []int32{1, 3, 2})
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.Equal(t, 2, hb.Batches.RowCount())
+	keys := vector.MustFixedColNoTypeCheck[int32](hb.Batches.Buf[0].Vecs[0])
+	oldKeys := vector.MustFixedColNoTypeCheck[int32](hb.Batches.Buf[0].Vecs[1])
+	require.Equal(t, []int32{1, 2}, keys[:hb.Batches.RowCount()])
+	require.Equal(t, []int32{3, 2}, oldKeys[:hb.Batches.RowCount()])
+	require.NotNil(t, hb.DelRows)
+	require.False(t, hb.DelRows.Contains(0))
+	require.True(t, hb.DelRows.Contains(1), "delRows=%s count=%d", hb.DelRows.String(), hb.DelRows.Count())
+}
+
 func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	var hb HashmapBuilder
 	mp := mpool.MustNewZero()
