@@ -26,10 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
-const (
-	eofChar   = 0x100
-	unicodeID = 1 << 16
-)
+const eofChar = 0x100
 
 // maxPoolSQLSize is the size threshold beyond which a scanner will not be kept
 // in the pool and large fields will be cleared to release memory.
@@ -55,6 +52,10 @@ type Scanner struct {
 	PrePos      int
 	buf         string
 
+	// allowUnicodeIdentifier is enabled by the lexer only where the grammar
+	// accepts Unicode aliases. Other contexts retain the original tokenization.
+	allowUnicodeIdentifier bool
+
 	strBuilder bytes.Buffer
 }
 
@@ -65,6 +66,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.posVarIndex = 0
 	s.MysqlSpecialComment = nil
 	s.CommentFlag = false
+	s.allowUnicodeIdentifier = false
 	s.Pos = 0
 	s.Line = 0
 	s.Col = 0
@@ -144,7 +146,7 @@ func (s *Scanner) Scan() (int, string) {
 			return tID, ""
 		}
 		return tokenID, tBytes
-	case isIdentifierLetter(ch):
+	case s.isIdentifierLetter(ch):
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -556,7 +558,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 				}
 				s.inc()
 				identifier := s.buf[start : s.Pos-1]
-				if identifierToken(identifier) == LEX_ERROR {
+				if !validIdentifier(identifier) {
 					return LEX_ERROR, identifier
 				}
 				return QUOTE_ID, identifier
@@ -606,7 +608,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 		s.inc()
 	}
 	identifier := buf.String()
-	if identifierToken(identifier) == LEX_ERROR {
+	if !validIdentifier(identifier) {
 		return LEX_ERROR, identifier
 	}
 	return QUOTE_ID, identifier
@@ -746,9 +748,6 @@ func (s *Scanner) scanNumber() (int, string) {
 				if typ == LEX_ERROR {
 					return LEX_ERROR, s.buf[start:s.Pos]
 				}
-				if typ == unicodeID {
-					token = typ
-				}
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
 
@@ -764,9 +763,6 @@ func (s *Scanner) scanNumber() (int, string) {
 				typ, _ := s.scanIdentifier(false)
 				if typ == LEX_ERROR {
 					return LEX_ERROR, s.buf[start:s.Pos]
-				}
-				if typ == unicodeID {
-					token = typ
 				}
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
@@ -798,17 +794,13 @@ exponent:
 	}
 
 exit:
-	if isIdentifierLetter(s.cur()) {
+	if s.isIdentifierLetter(s.cur()) {
 		// TODO: optimize
 		typ, _ := s.scanIdentifier(false)
 		if typ == LEX_ERROR {
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
-		if typ == unicodeID {
-			token = typ
-		} else {
-			token = ID
-		}
+		token = ID
 	}
 
 	return token, strings.ToLower(s.buf[start:s.Pos])
@@ -827,7 +819,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '$' && dollarFlag {
 			break
 		}
-		if !isIdentifierLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
+		if !s.isIdentifierLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
 		if ch == '@' {
@@ -837,12 +829,8 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
-	token := identifierToken(keywordName)
-	if token == LEX_ERROR {
+	if s.allowUnicodeIdentifier && !validIdentifier(keywordName) {
 		return LEX_ERROR, keywordName
-	}
-	if token == unicodeID {
-		return token, keywordName
 	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
@@ -953,23 +941,19 @@ func (s *Scanner) peek(dist int) uint16 {
 	return uint16(s.buf[s.Pos+dist])
 }
 
-func identifierToken(s string) int {
-	token := ID
+func validIdentifier(s string) bool {
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
 		if r == 0 || r > '\uFFFF' || r == utf8.RuneError && size == 1 {
-			return LEX_ERROR
-		}
-		if r >= utf8.RuneSelf {
-			token = unicodeID
+			return false
 		}
 		s = s[size:]
 	}
-	return token
+	return true
 }
 
-func isIdentifierLetter(ch uint16) bool {
-	return isLetter(ch) || ch >= utf8.RuneSelf && ch != eofChar
+func (s *Scanner) isIdentifierLetter(ch uint16) bool {
+	return isLetter(ch) || s.allowUnicodeIdentifier && ch >= utf8.RuneSelf && ch != eofChar
 }
 
 func isLetter(ch uint16) bool {

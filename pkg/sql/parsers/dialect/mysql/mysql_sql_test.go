@@ -3810,6 +3810,34 @@ func TestInvalidUnicodeIdentifiers(t *testing.T) {
 	}
 }
 
+func TestUnicodeIdentifierErrorPosition(t *testing.T) {
+	const prefix = "You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error"
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{
+			sql:  "ALTER TABLE rename06 RENAME COLUMN col1 TO 数据库系统;",
+			want: prefix + " at line 1 column 44 near \" 数据库系统;\";",
+		},
+		{
+			sql:  "CREATE ACCOUNT 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';",
+			want: prefix + " at line 1 column 16 near \" 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';\";",
+		},
+		{
+			sql:  "CREATE ACCOUNT 43349饪 ADMIN_NAME 'admin' IDENTIFIED BY '123456';",
+			want: prefix + " at line 1 column 20 near \" 43349饪 ADMIN_NAME 'admin' IDENTIFIED BY '123456';\";",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), test.sql, 1)
+			require.EqualError(t, err, test.want)
+		})
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)

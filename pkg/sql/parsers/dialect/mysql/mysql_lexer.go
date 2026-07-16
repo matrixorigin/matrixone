@@ -150,6 +150,7 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	l.scanner.allowUnicodeIdentifier = l.lastToken == AS
 	typ, str := l.scanner.Scan()
 	l.scanner.LastToken = str
 
@@ -166,10 +167,6 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
-	if typ == unicodeID && l.lastToken == AS {
-		typ = ID
-	}
-
 	l.lastToken = typ
 	lval.str = str
 	return typ
