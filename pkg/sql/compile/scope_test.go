@@ -1555,7 +1555,7 @@ func TestNotifyMessageClean(t *testing.T) {
 		streamSender: ff,
 		safeToClose:  true,
 	}
-	// no matter error happens or not, clean method should close the sender.
+	// Repeated cleanup attempts must retire a sender exactly once.
 	n1 := notifyMessageResult{
 		sender: sender,
 		err:    moerr.NewInternalErrorNoCtx("there is an error."),
@@ -1569,7 +1569,7 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 
 	n2.clean(proc)
-	require.Equal(t, 2, ff.number)
+	require.Equal(t, 1, ff.number)
 }
 
 func TestSuppressRemoteRunCancelError(t *testing.T) {

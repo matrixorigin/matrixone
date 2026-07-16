@@ -58,6 +58,10 @@ const (
 	BackgroundCNSelector = "background-cn-selector"
 
 	PipelineClient = "pipeline-client"
+	// EnablePipelineStreamReuse controls FIN/FIN_ACK teardown for clean remote
+	// pipeline streams. Setting it to false provides a rolling rollback gate;
+	// absence defaults to enabled.
+	EnablePipelineStreamReuse = "enable-pipeline-stream-reuse"
 
 	// TestingContextKey is the key of context for testing
 	TestingContextKey = "testing-context"
