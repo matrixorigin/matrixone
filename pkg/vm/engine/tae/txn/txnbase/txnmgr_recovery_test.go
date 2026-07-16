@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+type transitioningRecoveryTxn struct {
+	txnif.AsyncTxn
+	stateReads atomic.Int32
+}
+
+func (txn *transitioningRecoveryTxn) GetTxnState(bool) txnif.TxnState {
+	if txn.stateReads.Add(1) == 1 {
+		return txnif.TxnStatePrepared
+	}
+	return txnif.TxnStateCommittingFinished
+}
 
 func TestSnapshotRecoveringTxns(t *testing.T) {
 	mgr := NewTxnManager(NoopStoreFactory, nil, clock.NewHLCClock(time.Now().UnixNano, 0))
@@ -63,6 +76,26 @@ func TestSnapshotRecoveringTxns(t *testing.T) {
 	prepared.GetParticipants()[0] = 99
 	require.Equal(t, []byte("prepared"), byID["prepared"].ID)
 	require.Equal(t, []uint64{1, 2}, byID["prepared"].Participants)
+}
+
+func TestSnapshotRecoveringTxnsRetriesRecoverableStateTransition(t *testing.T) {
+	mgr := NewTxnManager(NoopStoreFactory, nil, clock.NewHLCClock(time.Now().UnixNano, 0))
+	base := makeRecoveryTestTxn(t, mgr, "transitioning", true, []uint64{1, 2}, txnif.TxnStatePrepared)
+	require.NoError(t, mgr.DeleteTxn(base.GetID()))
+	transitioning := &transitioningRecoveryTxn{AsyncTxn: base}
+	require.NoError(t, mgr.OnReplayTxn(transitioning))
+
+	got := mgr.SnapshotRecoveringTxns()
+	require.Equal(t, []RecoveringTxn{
+		{
+			ID:           []byte("transitioning"),
+			SnapshotTS:   base.GetSnapshotTS(),
+			PreparedTS:   base.GetPrepareTS(),
+			CommitTS:     base.GetCommitTS(),
+			State:        txnif.TxnStateCommittingFinished,
+			Participants: []uint64{1, 2},
+		},
+	}, got)
 }
 
 func makeRecoveryTestTxn(

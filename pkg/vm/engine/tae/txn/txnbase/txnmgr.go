@@ -474,27 +474,37 @@ func (mgr *TxnManager) SnapshotRecoveringTxns() []RecoveringTxn {
 		if !txn.IsReplay() || !txn.Is2PC() {
 			return true
 		}
-		state := txn.GetTxnState(false)
-		switch state {
-		case txnif.TxnStatePrepared, txnif.TxnStateCommittingFinished:
-		default:
-			return true
+		for {
+			state := txn.GetTxnState(false)
+			switch state {
+			case txnif.TxnStatePrepared, txnif.TxnStateCommittingFinished:
+			default:
+				return true
+			}
+			snapshot := RecoveringTxn{
+				ID:           append([]byte(nil), txn.GetCtx()...),
+				SnapshotTS:   txn.GetSnapshotTS(),
+				PreparedTS:   txn.GetPrepareTS(),
+				CommitTS:     txn.GetCommitTS(),
+				State:        state,
+				Participants: append([]uint64(nil), txn.GetParticipants()...),
+			}
+			stateAfter := txn.GetTxnState(false)
+			if stateAfter == state {
+				txns = append(txns, snapshot)
+				return true
+			}
+			// Transaction states are monotonic. Prepared can advance once to
+			// CommittingFinished while fields are copied, so retry and capture
+			// that stable recoverable state. A final state needs no recovery
+			// record and can be skipped safely.
+			switch stateAfter {
+			case txnif.TxnStatePrepared, txnif.TxnStateCommittingFinished:
+				continue
+			default:
+				return true
+			}
 		}
-		snapshot := RecoveringTxn{
-			ID:           append([]byte(nil), txn.GetCtx()...),
-			SnapshotTS:   txn.GetSnapshotTS(),
-			PreparedTS:   txn.GetPrepareTS(),
-			CommitTS:     txn.GetCommitTS(),
-			State:        state,
-			Participants: append([]uint64(nil), txn.GetParticipants()...),
-		}
-		// State transitions are monotonic. If it changed while fields were
-		// copied, leave resolution to the final-state path instead of emitting
-		// a mixed recovery record.
-		if txn.GetTxnState(false) == state {
-			txns = append(txns, snapshot)
-		}
-		return true
 	})
 	return txns
 }
