@@ -225,7 +225,12 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.rightRowsMatched == nil || (hashJoin.NumCPU > 1 && !hashJoin.IsMerger) {
+			// Only enter Finalize when syncBitmap ran to completion and set
+			// the iterator. It stays nil for non-merger workers, when there
+			// is no bitmap at all, or when the merger observed teardown (a
+			// worker sent a nil bitmap on Reset, or the context was
+			// canceled) — in all these cases there is nothing to finalize.
+			if ctr.rightMatchedIter == nil {
 				ctr.state = End
 			} else {
 				ctr.state = Finalize
