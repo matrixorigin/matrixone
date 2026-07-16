@@ -25,7 +25,6 @@ import (
 	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
-	logtailservice "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
@@ -98,7 +97,7 @@ func TestNewTAEStorageHandleCreationFailure(t *testing.T) {
 			string,
 			*options.LogtailServerCfg,
 			runtime.Runtime,
-		) (*logtailservice.LogtailServer, error) {
+		) (logtailServer, error) {
 			serverCalls++
 			return nil, nil
 		},
@@ -131,7 +130,7 @@ func TestNewTAEStorageLogtailServerFailureClosesHandle(t *testing.T) {
 			string,
 			*options.LogtailServerCfg,
 			runtime.Runtime,
-		) (*logtailservice.LogtailServer, error) {
+		) (logtailServer, error) {
 			serverCalls++
 			return nil, primaryErr
 		},

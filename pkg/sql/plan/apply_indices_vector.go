@@ -718,46 +718,43 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			goto NO_RANGE
 		}
 
+		// Fold every matching bound into the range, keeping the tightest bound per
+		// side so the index enforces the intersection of all predicates regardless
+		// of filter order (a looser same-side bound is redundant and dropped). If a
+		// bound is not a comparable literal, the predicate is kept as a residual
+		// filter instead. See issue #25639.
 		switch f.Func.ObjName {
 		case "<":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeUpperBound(distRange, f.Args[1], plan.BoundType_EXCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
-			distRange.UpperBound = f.Args[1]
 
 		case "<=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeUpperBound(distRange, f.Args[1], plan.BoundType_INCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
-			distRange.UpperBound = f.Args[1]
 
 		case ">":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeLowerBound(distRange, f.Args[1], plan.BoundType_EXCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
-			distRange.LowerBound = f.Args[1]
 
 		case ">=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeLowerBound(distRange, f.Args[1], plan.BoundType_INCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
-			distRange.LowerBound = f.Args[1]
 
 		default:
 			goto NO_RANGE
@@ -770,7 +767,67 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 		currIdx++
 	}
 
+	// If every matching predicate was non-literal (kept as a residual), the range
+	// was allocated but never bounded; return nil so callers don't stash an empty
+	// DistRange on the index reader.
+	if distRange != nil &&
+		distRange.LowerBoundType == plan.BoundType_UNBOUNDED &&
+		distRange.UpperBoundType == plan.BoundType_UNBOUNDED {
+		distRange = nil
+	}
+
 	return filters[:currIdx], distRange
+}
+
+// mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,
+// or exclusive on an equal value) bound so the range is the intersection of all
+// upper bounds. The bound MUST be a numeric literal the index reader can
+// evaluate; otherwise the predicate would be peeled off the filter list but the
+// reader would later reject it and silently drop the constraint. It returns
+// false for a non-literal bound (including the first one) so the caller keeps
+// the predicate as a residual filter.
+func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	newVal, ok := plan.GetLiteralFloat64(bound)
+	if !ok {
+		return false
+	}
+	if dr.UpperBoundType == plan.BoundType_UNBOUNDED {
+		dr.UpperBoundType = boundType
+		dr.UpperBound = bound
+		return true
+	}
+	curVal, ok := plan.GetLiteralFloat64(dr.UpperBound)
+	if !ok {
+		return false
+	}
+	if newVal < curVal || (newVal == curVal && boundType == plan.BoundType_EXCLUSIVE) {
+		dr.UpperBoundType = boundType
+		dr.UpperBound = bound
+	}
+	return true
+}
+
+// mergeLowerBound folds a new lower bound into dr, keeping the tighter (larger,
+// or exclusive on an equal value) bound. See mergeUpperBound.
+func mergeLowerBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	newVal, ok := plan.GetLiteralFloat64(bound)
+	if !ok {
+		return false
+	}
+	if dr.LowerBoundType == plan.BoundType_UNBOUNDED {
+		dr.LowerBoundType = boundType
+		dr.LowerBound = bound
+		return true
+	}
+	curVal, ok := plan.GetLiteralFloat64(dr.LowerBound)
+	if !ok {
+		return false
+	}
+	if newVal > curVal || (newVal == curVal && boundType == plan.BoundType_EXCLUSIVE) {
+		dr.LowerBoundType = boundType
+		dr.LowerBound = bound
+	}
+	return true
 }
 
 // peelAndRewriteDistFnFilters scans `filters` for predicates of shape

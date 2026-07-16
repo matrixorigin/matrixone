@@ -78,10 +78,15 @@ func CnServerMessageHandler(
 	messageAcquirer func() morpc.Message) (err error) {
 
 	startTime := time.Now()
+	var lifecycle *pipelineStreamLifecycle
 	defer func() {
 		v2.PipelineServerDurationHistogram.Observe(time.Since(startTime).Seconds())
 
 		if e := recover(); e != nil {
+			if lifecycle != nil {
+				lifecycle.remove()
+				lifecycle.markCleaned()
+			}
 			err = moerr.ConvertPanicError(ctx, e)
 			getLogger(lockService.GetConfig().ServiceID).Error("panic in CnServerMessageHandler",
 				zap.String("error", err.Error()))
@@ -102,20 +107,39 @@ func CnServerMessageHandler(
 	if colexecServer == nil {
 		return moerr.NewInternalErrorf(ctx, "colexec server is not initialized for CN %s", lockService.GetConfig().ServiceID)
 	}
+	if msg.GetCmd() == pipeline.Method_PipelineStreamFinish {
+		return handlePipelineStreamFinish(ctx, msg, cs, messageAcquirer)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver := newMessageReceiverOnServer(ctx, serverAddress, msg,
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM, colexecServer)
 
-	// how to handle the *pipeline.Message.
-	err = handlePipelineMessage(&receiver)
+	finishNegotiated := false
+	if receiver.supportsFinishAck() {
+		lifecycle, err = registerPipelineStreamLifecycle(receiver.clientSession, receiver.messageId)
+		finishNegotiated = err == nil
+		if err != nil {
+			return err
+		}
+		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+	}
+
+	// Register negotiated lifecycle ownership before execution. A locally
+	// requested StopSending may make execution return an error, but its terminal
+	// response and FIN still need the same cleanup barrier.
+	handlerErr := handlePipelineMessage(&receiver)
+	responseSent := false
 	if receiver.messageTyp != pipeline.Method_StopSending {
 		// stop message only close a running pipeline, there is no need to reply the finished-message.
-		if err != nil {
-			err = receiver.sendError(err)
+		if handlerErr != nil {
+			err = receiver.sendError(handlerErr)
 		} else {
 			err = receiver.sendEndMessage()
 		}
+		responseSent = err == nil
+	} else {
+		err = handlerErr
 	}
 
 	// if this message is responsible for the execution of certain pipelines, they should be ended after message processing is completed.
@@ -123,7 +147,19 @@ func CnServerMessageHandler(
 		// keep listening until connection was closed
 		// to prevent some strange handle order between 'stop sending message' and others.
 		// todo: it is tcp connection now. should be very careful, we should listen to stream context next day.
-		if err == nil {
+		if responseSent && finishNegotiated {
+			finishReceived := lifecycle.waitForFinish(receiver.messageCtx, receiver.connectionCtx)
+			receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
+			lifecycle.markCleaned()
+			if !finishReceived {
+				_ = receiver.clientSession.Close()
+			}
+			return nil
+		}
+		if lifecycle != nil {
+			lifecycle.remove()
+		}
+		if handlerErr == nil && err == nil {
 			receiver.waitUntilDisconnectedOrCancelled()
 		}
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
@@ -226,7 +262,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		MarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator())
+		if err = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); err != nil {
+			return err
+		}
 		defer func() {
 			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
@@ -461,6 +499,9 @@ type messageReceiverOnServer struct {
 
 	needNotReply bool
 
+	requestedTeardownMode pipeline.StreamTeardownMode
+	acceptedTeardownMode  pipeline.StreamTeardownMode
+
 	waitRegistrationTimeout time.Duration
 	colexecServer           *colexec.Server
 
@@ -485,15 +526,16 @@ func newMessageReceiverOnServer(
 	colexecServer *colexec.Server) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
-		messageCtx:      ctx,
-		connectionCtx:   cs.SessionCtx(),
-		messageId:       m.GetId(),
-		messageTyp:      m.GetCmd(),
-		clientSession:   cs,
-		messageAcquirer: messageAcquirer,
-		maxMessageSize:  maxMessageSizeToMoRpc,
-		needNotReply:    m.NeedNotReply,
-		colexecServer:   colexecServer,
+		messageCtx:            ctx,
+		connectionCtx:         cs.SessionCtx(),
+		messageId:             m.GetId(),
+		messageTyp:            m.GetCmd(),
+		clientSession:         cs,
+		messageAcquirer:       messageAcquirer,
+		maxMessageSize:        maxMessageSizeToMoRpc,
+		needNotReply:          m.NeedNotReply,
+		requestedTeardownMode: m.GetRequestedTeardownMode(),
+		colexecServer:         colexecServer,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,
@@ -526,6 +568,14 @@ func newMessageReceiverOnServer(
 	}
 
 	return receiver
+}
+
+func (receiver *messageReceiverOnServer) supportsFinishAck() bool {
+	if receiver.requestedTeardownMode != pipeline.StreamTeardownMode_FinishAck {
+		return false
+	}
+	return receiver.messageTyp == pipeline.Method_PipelineMessage ||
+		receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage
 }
 
 func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, error) {
@@ -597,6 +647,8 @@ func (receiver *messageReceiverOnServer) sendError(
 	}
 	message.SetID(receiver.messageId)
 	message.SetSid(pipeline.Status_MessageEnd)
+	message.SetMessageType(receiver.messageTyp)
+	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
@@ -657,6 +709,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetSid(pipeline.Status_MessageEnd)
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
+	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 
 	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
 	if err != nil {
@@ -719,8 +772,10 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 // indefinitely when a remote CN fails.
 const waitRegistrationTimeout = 30 * time.Second
 
-func newRemoteDispatchNotRegisteredYetError(ctx context.Context, uid uuid.UUID) error {
-	return moerr.NewRemoteDispatchNotRegistered(ctx, uid.String())
+func newRemoteDispatchNotRegisteredYetError(_ context.Context, uid uuid.UUID) error {
+	// Registration lag is an expected, retryable protocol state. Keep the
+	// typed wire error without reporting every receiver attempt as an ERROR.
+	return moerr.NewRemoteDispatchNotRegistered(moerr.NoReportContext(), uid.String())
 }
 
 func isRemoteDispatchNotRegisteredYetError(err error) bool {

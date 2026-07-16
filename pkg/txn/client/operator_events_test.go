@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -229,61 +230,89 @@ func TestClosedEvent(t *testing.T) {
 		txn.TxnStatus_Aborted)
 }
 
-func TestCommitClosedEventWhenWaitRunningSQLFails(t *testing.T) {
+func TestCommitClosedEventAfterRunningSQLCleanup(t *testing.T) {
 	runOperatorTests(
 		t,
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			_, sqlCancel := context.WithCancel(context.Background())
-			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "select 1")
-			defer tc.ExitRunSqlWithToken(token)
+			token := mustEnterRunSQL(t, tc, sqlCancel, "select 1")
 			defer sqlCancel()
 
 			commitCtx, cancelCommit := context.WithCancel(ctx)
 			cancelCommit()
 
-			cnt := 0
+			closedC := make(chan TxnEvent, 1)
 			tc.AppendEventCallback(ClosedEvent,
 				TxnEventCallback{
 					Func: func(ctx context.Context, tc TxnOperator, event TxnEvent, value any) error {
-						cnt++
-						assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
-						assert.Error(t, event.Err)
+						closedC <- event
 						return nil
 					},
 				})
 
 			require.Error(t, tc.Commit(commitCtx))
-			assert.Equal(t, 1, cnt)
+			select {
+			case event := <-closedC:
+				t.Fatalf("transaction closed before running SQL exited: %+v", event)
+			default:
+			}
+			tc.mu.RLock()
+			assert.False(t, tc.mu.closed)
+			tc.mu.RUnlock()
+			tc.ExitRunSqlWithToken(token)
+			select {
+			case event := <-closedC:
+				assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
+				assert.Error(t, event.Err)
+			case <-time.After(time.Second):
+				t.Fatal("transaction did not close after running SQL exited")
+			}
+			tc.mu.RLock()
 			assert.True(t, tc.mu.closed)
+			tc.mu.RUnlock()
 		})
 }
 
-func TestRollbackClosedEventWhenWaitRunningSQLFails(t *testing.T) {
+func TestRollbackClosedEventAfterRunningSQLCleanup(t *testing.T) {
 	runOperatorTests(
 		t,
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			_, sqlCancel := context.WithCancel(context.Background())
-			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "select 1")
-			defer tc.ExitRunSqlWithToken(token)
+			token := mustEnterRunSQL(t, tc, sqlCancel, "select 1")
 			defer sqlCancel()
 
 			rollbackCtx, cancelRollback := context.WithCancel(ctx)
 			cancelRollback()
 
-			cnt := 0
+			closedC := make(chan TxnEvent, 1)
 			tc.AppendEventCallback(ClosedEvent,
 				TxnEventCallback{
 					Func: func(ctx context.Context, tc TxnOperator, event TxnEvent, value any) error {
-						cnt++
-						assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
-						assert.Error(t, event.Err)
+						closedC <- event
 						return nil
 					},
 				})
 
 			require.Error(t, tc.Rollback(rollbackCtx))
-			assert.Equal(t, 1, cnt)
+			select {
+			case event := <-closedC:
+				t.Fatalf("transaction closed before running SQL exited: %+v", event)
+			default:
+			}
+			tc.mu.RLock()
+			assert.False(t, tc.mu.closed)
+			tc.mu.RUnlock()
+			tc.ExitRunSqlWithToken(token)
+			select {
+			case event := <-closedC:
+				assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
+				assert.Error(t, event.Err)
+			case <-time.After(time.Second):
+				t.Fatal("transaction did not close after running SQL exited")
+			}
+			tc.mu.RLock()
 			assert.True(t, tc.mu.closed)
+			tc.mu.RUnlock()
 		})
 }
 
