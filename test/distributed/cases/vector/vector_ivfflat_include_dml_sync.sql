@@ -61,6 +61,7 @@ execute s1;
 update vector_ivfflat_include_phase3
 set id = 20
 where id = 2;
+select id from vector_ivfflat_include_phase3 order by id;
 execute s1;
 
 delete from vector_ivfflat_include_phase3 where id = 1;
