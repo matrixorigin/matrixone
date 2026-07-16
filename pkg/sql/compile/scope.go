@@ -457,6 +457,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
+		if err == nil {
+			sender.prepareForLocalCleanup()
+		}
 		sender.close()
 	}
 	return runErr
@@ -872,6 +875,9 @@ type notifyMessageSenderFactory func(
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
+		if r.err == nil {
+			r.sender.prepareForLocalCleanup()
+		}
 		r.sender.close()
 	}
 	if r.err != nil {
@@ -928,10 +934,12 @@ func (s *Scope) sendNotifyMessageWithFactory(
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					}
-
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					if sender.requestFinishAck {
+						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
+					}
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
@@ -939,14 +947,17 @@ func (s *Scope) sendNotifyMessageWithFactory(
 						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return
 					}
-					sender.safeToClose = false
-					sender.alreadyClose = false
+					sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
 
 					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
 					if !isRemoteDispatchNotRegisteredYetError(err) {
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return
 					}
+					// "not registered yet" is an expected retry response. The
+					// negotiated terminal response proves the old attempt can use
+					// FIN/ACK after its server cleanup barrier.
+					sender.prepareForLocalCleanup()
 					sender.close()
 
 					select {
