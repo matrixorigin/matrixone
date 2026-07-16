@@ -242,11 +242,11 @@ type StatementInfo struct {
 	stated     bool
 	cuStated   bool
 
-	resourceRoot    *resource.Root
-	resourceSummary resource.StatementResourceSummary
-	resourceStated  bool
-	resourceMPool   *mpool.MPool
-	resourceMPExact bool
+	resourceRoot     *resource.Root
+	resourceSummary  resource.StatementResourceSummary
+	resourceStated   bool
+	resourceMPool    *mpool.MPool
+	resourceMPeakSet bool
 
 	// disableAgg true, do NOT aggregate statement
 	// co-operate with Aggregator and StatementInfoFilter
@@ -286,7 +286,7 @@ func NewStatementInfo() *StatementInfo {
 	s.resourceSummary = resource.StatementResourceSummary{}
 	s.resourceStated = false
 	s.resourceMPool = nil
-	s.resourceMPExact = false
+	s.resourceMPeakSet = false
 	if s.Statement == nil {
 		s.Statement = make([]byte, 0, GetTracerProvider().MaxStatementSize)
 	}
@@ -461,7 +461,7 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.resourceSummary = s.resourceSummary
 	stmt.resourceStated = s.resourceStated
 	stmt.resourceMPool = nil
-	stmt.resourceMPExact = false
+	stmt.resourceMPeakSet = false
 	// part: disableAgg ctl
 	stmt.disableAgg = s.disableAgg
 	// part: skipTxn ctrl
@@ -650,22 +650,21 @@ func (s *StatementInfo) SetResourceRoot(root *resource.Root) {
 	s.resourceRoot = root
 }
 
-// SetResourceMemoryPool establishes one statement-scoped allocator epoch.
-// Nested work caused by the serialized session request is included. A pool
-// with pre-existing live bytes is explicitly missing rather than estimated.
+// SetResourceMemoryPool establishes one statement-scoped peak observation.
+// Nested work and retained state in the serialized session MPool are included.
 func (s *StatementInfo) SetResourceMemoryPool(pool *mpool.MPool) {
-	s.SetResourceMemoryPoolEpoch(pool, pool != nil && pool.ResetResourceEpoch())
+	s.SetResourceMemoryPoolEpoch(pool, pool != nil && pool.StartResourcePeakEpoch())
 }
 
-// SetResourceMemoryPoolEpoch adopts an epoch established at the request root
-// boundary. This avoids resetting counters after parsing and statement setup
-// have already started.
-func (s *StatementInfo) SetResourceMemoryPoolEpoch(pool *mpool.MPool, exact bool) {
+// SetResourceMemoryPoolEpoch adopts a peak observation established at the
+// request root boundary. Allocation/free conservation remains exclusive to
+// isolated execution MPools.
+func (s *StatementInfo) SetResourceMemoryPoolEpoch(pool *mpool.MPool, observed bool) {
 	s.resourceMPool = pool
-	s.resourceMPExact = exact
+	s.resourceMPeakSet = observed
 	if s.resourceRoot != nil {
 		s.resourceRoot.SetMemoryPeakPreview(func() (uint64, bool) {
-			if pool == nil || !exact {
+			if pool == nil || !observed {
 				return 0, false
 			}
 			return pool.ResourcePeakLiveBytes()
@@ -784,14 +783,17 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		}
 		if s.resourceMPool != nil {
 			s.resourceRoot.ClearMemoryPeakPreview()
-			if s.resourceMPExact {
-				domain, _ := s.resourceMPool.ResourceSnapshot()
-				s.resourceRoot.AddMemoryDomain(domain)
+			if s.resourceMPeakSet {
+				if peak, ok := s.resourceMPool.ResourcePeakLiveBytes(); ok {
+					s.resourceRoot.AddMemoryPeakObservation(peak)
+				} else {
+					s.resourceRoot.MarkMemoryDomainMissing()
+				}
 			} else {
 				s.resourceRoot.MarkMemoryDomainMissing()
 			}
 			s.resourceMPool = nil
-			s.resourceMPExact = false
+			s.resourceMPeakSet = false
 		}
 		s.SetResourceSummary(s.resourceRoot.Seal(uint64(s.Duration)))
 		s.ExecPlan2Stats(ctx)

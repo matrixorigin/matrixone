@@ -155,7 +155,7 @@ func TestMPoolFailedAllocationDoesNotAdvanceResourcePeak(t *testing.T) {
 	require.Zero(t, summary.LiveBytesAtSeal)
 }
 
-func TestMPoolResourceEpoch(t *testing.T) {
+func TestMPoolResourcePeakEpochKeepsRetainedBaseline(t *testing.T) {
 	mp := MustNew("resource-epoch")
 	defer DeleteMPool(mp)
 
@@ -172,21 +172,29 @@ func TestMPoolResourceEpoch(t *testing.T) {
 	require.Equal(t, uint64(300), summary.AllocatedBytes)
 	require.Equal(t, uint64(300), summary.PeakLiveBytes)
 	require.Equal(t, uint64(300), summary.LiveBytesAtSeal)
-	require.False(t, mp.ResetResourceEpoch())
+	require.True(t, mp.StartResourcePeakEpoch())
+	peak, exact = mp.ResourcePeakLiveBytes()
+	require.True(t, exact)
+	require.Equal(t, uint64(300), peak)
+	third, err := mp.Alloc(50, true)
+	require.NoError(t, err)
+	peak, exact = mp.ResourcePeakLiveBytes()
+	require.True(t, exact)
+	require.Equal(t, uint64(350), peak)
+	mp.Free(third)
 
 	mp.Free(first)
 	mp.Free(second)
 	summary, flags = mp.ResourceSnapshot()
 	require.Zero(t, flags)
-	require.Equal(t, uint64(300), summary.AllocatedBytes)
-	require.Equal(t, uint64(300), summary.FreedBytes)
-	require.Equal(t, uint64(300), summary.PeakLiveBytes)
+	require.Equal(t, uint64(350), summary.AllocatedBytes)
+	require.Equal(t, uint64(350), summary.FreedBytes)
+	require.Equal(t, uint64(350), summary.PeakLiveBytes)
 	require.Zero(t, summary.LiveBytesAtSeal)
-	require.True(t, mp.ResetResourceEpoch())
-
-	summary, flags = mp.ResourceSnapshot()
-	require.Zero(t, flags)
-	require.Equal(t, resource.MemoryDomainSummary{}, summary)
+	require.True(t, mp.StartResourcePeakEpoch())
+	peak, exact = mp.ResourcePeakLiveBytes()
+	require.True(t, exact)
+	require.Zero(t, peak)
 }
 
 func TestMpoolReAllocate(t *testing.T) {

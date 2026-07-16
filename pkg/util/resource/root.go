@@ -98,8 +98,25 @@ func (r *Root) AddMemoryDomain(domain MemoryDomainSummary) bool {
 	return true
 }
 
-// MarkMemoryDomainMissing records that an exclusive zero-live allocator epoch
-// could not be established for this statement.
+// AddMemoryPeakObservation records the maximum live-byte occupancy observed
+// in a non-isolated but request-serialized MPool. It intentionally contributes
+// no allocation/free/live-at-seal facts: those require an isolated domain.
+func (r *Root) AddMemoryPeakObservation(peak uint64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return false
+	}
+	r.summary.Memory.SumDomainPeakLiveBytesBound, r.summary.Quality = addChecked(
+		r.summary.Memory.SumDomainPeakLiveBytesBound, peak, r.summary.Quality)
+	if peak > r.summary.Memory.MaxDomainPeakLiveBytes {
+		r.summary.Memory.MaxDomainPeakLiveBytes = peak
+	}
+	return true
+}
+
+// MarkMemoryDomainMissing records that an expected allocator domain or peak
+// observation could not be published for this statement.
 func (r *Root) MarkMemoryDomainMissing() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

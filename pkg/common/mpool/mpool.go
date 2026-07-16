@@ -516,21 +516,20 @@ func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.Qual
 	return summary, summary.Validate()
 }
 
-// ResetResourceEpoch clears allocator facts only after the owner has quiesced
-// all users and returned live bytes to zero.
-func (mp *MPool) ResetResourceEpoch() bool {
-	if mp.stats.NumCurrBytes.Load() != 0 {
+// StartResourcePeakEpoch starts a peak-occupancy observation at the current
+// live-byte baseline. The caller must own a quiescent MPool boundary; session
+// requests satisfy that contract because they execute serially on their
+// process MPool. Retained session state is deliberately part of the observed
+// occupancy instead of making the statement's memory value unavailable.
+func (mp *MPool) StartResourcePeakEpoch() bool {
+	if mp == nil {
 		return false
 	}
-	mp.stats.NumAlloc.Store(0)
-	mp.stats.NumFree.Store(0)
-	mp.stats.NumAllocBytes.Store(0)
-	mp.stats.NumFreeBytes.Store(0)
-	mp.stats.HighWaterMark.Store(0)
-	mp.stats.NumCrossPoolFree.Store(0)
-	mp.stats.mu.Lock()
-	clear(mp.stats.xpoolFree)
-	mp.stats.mu.Unlock()
+	live := mp.stats.NumCurrBytes.Load()
+	if live < 0 {
+		return false
+	}
+	mp.stats.HighWaterMark.Store(live)
 	return true
 }
 

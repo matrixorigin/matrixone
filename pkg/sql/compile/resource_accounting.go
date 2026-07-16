@@ -120,7 +120,7 @@ func (r *executionResourceRecorder) finishAttempt(
 	} else {
 		totalWaitNS += remoteWaitNS
 	}
-	coordinator.AddActiveInterval(preRunNS, totalWaitNS, 0)
+	addMeasuredActive(&coordinator, preRunNS, totalWaitNS)
 	coordinator.AddWait(resource.WaitLock, lockWaitNS)
 	coordinator.AddWait(resource.WaitFilesystem, filesystemWaitNS)
 	coordinator.AddWait(resource.WaitRemote, remoteWaitNS)
@@ -153,6 +153,16 @@ func (r *executionResourceRecorder) finishAttempt(
 		summary.Quality |= resource.QualityPartial | resource.QualityMissingMemoryDomain
 	}
 	r.execution.AddAttempt(summary, retried)
+}
+
+// addMeasuredActive publishes active time only when the producer-local wait
+// interval is a valid subset of its wall interval. Some legacy phase counters
+// aggregate parallel I/O waits and can legitimately exceed coordinator wall;
+// their wait remains useful, but subtracting it would fabricate active time.
+func addMeasuredActive(recorder *resource.LocalRecorder, wallNS, waitNS uint64) {
+	if waitNS <= wallNS {
+		recorder.AddActiveInterval(wallNS, waitNS, 0)
+	}
 }
 
 func addS3Requests(

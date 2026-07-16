@@ -40,6 +40,19 @@ func TestRootPhaseResource(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestRootPhaseResourceKeepsAggregateWaitWithoutInvalidActive(t *testing.T) {
+	stats := NewStatsInfo()
+	stats.PlanStage.PlanDuration = 10 * time.Nanosecond
+	stats.PlanStage.BuildPlanStatsIOConsumption = 30
+	stats.CompileStage.CompileDuration = 5 * time.Nanosecond
+	stats.CompileStage.CompileIOConsumption = 20
+
+	delta := stats.RootPhaseResource()
+	require.Zero(t, delta.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(50), delta.Usage.WaitNS[resource.WaitFilesystem])
+	require.Zero(t, delta.Quality)
+}
+
 func TestResetRetryAttemptResource(t *testing.T) {
 	stats := NewStatsInfo()
 	stats.PlanStage.PlanDuration = time.Second

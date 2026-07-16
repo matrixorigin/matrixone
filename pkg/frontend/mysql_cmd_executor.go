@@ -180,12 +180,12 @@ func transferSessionConnType2ResourceConnType(c ConnType) resource.ConnType {
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) (context.Context, error) {
 	root := resource.NewRoot(transferSessionConnType2ResourceConnType(ses.connType))
 	ctx = resource.ContextWithRoot(ctx, root)
-	var resourceMPExact bool
+	var resourceMPObserved bool
 	if proc != nil {
 		pool := proc.Mp()
-		resourceMPExact = pool != nil && pool.ResetResourceEpoch()
+		resourceMPObserved = pool != nil && pool.StartResourcePeakEpoch()
 		root.SetMemoryPeakPreview(func() (uint64, bool) {
-			if pool == nil || !resourceMPExact {
+			if pool == nil || !resourceMPObserved {
 				return 0, false
 			}
 			return pool.ResourcePeakLiveBytes()
@@ -298,7 +298,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	stm.SetResourceRoot(root)
 	if proc != nil {
-		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPExact)
+		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPObserved)
 	}
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165

@@ -129,6 +129,23 @@ func TestRootMemoryPreviewDoesNotMutateTerminalSummary(t *testing.T) {
 	}
 }
 
+func TestRootMemoryPeakObservationDoesNotInventDomainFacts(t *testing.T) {
+	root := NewRoot(ConnExternal)
+	if !root.AddMemoryPeakObservation(96) {
+		t.Fatal("peak observation rejected")
+	}
+	summary := root.Seal(1)
+	if summary.Memory.MaxDomainPeakLiveBytes != 96 ||
+		summary.Memory.SumDomainPeakLiveBytesBound != 96 {
+		t.Fatalf("peak observation missing: %+v", summary.Memory)
+	}
+	if summary.Memory.AllocatedBytes != 0 || summary.Memory.FreedBytes != 0 ||
+		summary.Memory.LiveBytesAtSeal != 0 || summary.Memory.CrossPoolFreeCount != 0 ||
+		summary.Quality != 0 || summary.MissingMemoryDomainCount != 0 {
+		t.Fatalf("peak observation invented isolated-domain facts: %+v", summary)
+	}
+}
+
 func TestUndispatchedSlotsAreNotMissing(t *testing.T) {
 	attempt := NewAttempt(1, 2, 1)
 	if got := attempt.MarkFragmentSendFailed(0); got != PublishAccepted {
