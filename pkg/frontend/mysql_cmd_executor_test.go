@@ -3016,6 +3016,15 @@ func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 
+	for _, data := range [][]byte{{0}, {2, 0}} {
+		setRowCount(ses, ses.GetProc(), 7)
+		resp, err = ExecRequest(ses, ec, &Request{cmd: COM_SET_OPTION, data: data})
+		require.NoError(t, err)
+		require.Equal(t, ErrorResponse, resp.category)
+		require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+		require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+	}
+
 	setRowCount(ses, ses.GetProc(), 7)
 	resp, err = ExecRequest(ses, ec, &Request{cmd: CommandType(0xff)})
 	require.NoError(t, err)
