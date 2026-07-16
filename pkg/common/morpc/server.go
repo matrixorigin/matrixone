@@ -415,6 +415,11 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						continue
 					}
 
+					if !cs.assignStreamSequence(&f.send) {
+						cs.releaseMessage(f.send)
+						f.messageSent(backendClosed)
+						continue
+					}
 					timeout += v
 					// Record the information of some responses in advance, because after flush,
 					// these responses will be released, thus avoiding causing data race.
@@ -718,14 +723,6 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
 
-	id := response.GetID()
-	if v, ok := cs.sentStreamSequences.Load(id); ok {
-		seq := v.(uint32) + 1
-		cs.sentStreamSequences.Store(id, seq)
-		msg.stream = true
-		msg.streamSequence = seq
-	}
-
 	f := cs.newFutureFunc()
 	f.init(msg)
 	if !f.oneWay {
@@ -743,6 +740,27 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
+}
+
+// assignStreamSequence runs in the single server write loop after a response
+// has passed the filter and context checks. Assigning the sequence at enqueue
+// time leaves a permanent gap when the queued response expires before it is
+// written, causing the client to tear down an otherwise healthy stream.
+func (cs *clientSession) assignStreamSequence(msg *RPCMessage) bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.mu.closed {
+		return false
+	}
+
+	id := msg.Message.GetID()
+	if v, ok := cs.sentStreamSequences.Load(id); ok {
+		seq := v.(uint32) + 1
+		cs.sentStreamSequences.Store(id, seq)
+		msg.stream = true
+		msg.streamSequence = seq
+	}
+	return true
 }
 
 func (cs *clientSession) releaseMessage(msg RPCMessage) {

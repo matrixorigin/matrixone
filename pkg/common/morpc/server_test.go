@@ -501,6 +501,62 @@ func TestFinishStreamFlushesAckAndRetiresSequenceState(t *testing.T) {
 	})
 }
 
+func TestCanceledStreamResponseDoesNotCreateSequenceGap(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		canceledWriteResult := make(chan error, 1)
+
+		rs.RegisterRequestHandler(func(_ context.Context, msg RPCMessage, _ uint64, session ClientSession) error {
+			canceledCtx, cancelWrite := context.WithTimeout(context.Background(), time.Second)
+			cancelWrite()
+			canceledWriteResult <- session.Write(canceledCtx, newTestMessage(msg.Message.GetID()))
+			return session.Write(ctx, newTestMessage(msg.Message.GetID()))
+		})
+
+		client := newTestClient(t)
+		defer func() { require.NoError(t, client.Close()) }()
+		stream, err := client.NewStream(ctx, testAddr, false)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close(false)) }()
+		responses, err := stream.Receive()
+		require.NoError(t, err)
+
+		require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+		select {
+		case response := <-responses:
+			require.NotNil(t, response)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		require.Error(t, <-canceledWriteResult)
+	})
+}
+
+func TestAssignStreamSequenceRejectsClosedSession(t *testing.T) {
+	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
+	defer cs.cancel()
+	cs.sentStreamSequences.Store(uint64(11), uint32(0))
+	msg := RPCMessage{Message: newTestMessage(11)}
+
+	cs.mu.Lock()
+	started := make(chan struct{})
+	assigned := make(chan bool, 1)
+	go func() {
+		close(started)
+		assigned <- cs.assignStreamSequence(&msg)
+	}()
+	<-started
+	cs.mu.closed = true
+	cs.sentStreamSequences.Clear()
+	cs.mu.Unlock()
+
+	require.False(t, <-assigned)
+	require.False(t, msg.stream)
+	_, exists := cs.sentStreamSequences.Load(uint64(11))
+	require.False(t, exists)
+}
+
 func TestFinishStreamPoisonsSessionWithPendingCache(t *testing.T) {
 	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
 	cs.receivedStreamSequences[11] = 2
