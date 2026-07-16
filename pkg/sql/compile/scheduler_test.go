@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -229,6 +230,106 @@ func TestScheduleQueryWorkersSortsMultiCNCandidates(t *testing.T) {
 	nodes, err := c.scheduleQueryWorkers()
 	require.NoError(t, err)
 	require.Equal(t, []string{"a:6001", "z:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
+}
+
+func TestScheduleQueryWorkersKeepsIvfLocalDuringMixedCommitTopology(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{
+				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+			},
+			IndexReaderParam: &plan.IndexReaderParam{
+				OrigFuncName: "l2_distance",
+			},
+		}},
+	}}}
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "cn-1", Addr: "one:6001", Mcpu: 4, HasMixedCommit: true},
+			{Id: "cn-2", Addr: "two:6001", Mcpu: 4, HasMixedCommit: true},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
+}
+
+func TestScheduleQueryWorkersUsesResolvedPoolForIvfMixedCommitGate(t *testing.T) {
+	newCompile := func(t *testing.T, resolvedMixed bool) *Compile {
+		c := NewMockCompile(t)
+		c.addr = "local:6001"
+		c.ncpu = 6
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			Nodes: []*plan.Node{{
+				NodeType: plan.Node_FUNCTION_SCAN,
+				TableDef: &plan.TableDef{
+					TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+				},
+				IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
+			}},
+		}}}
+		c.e = &schedulerProviderTestEngine{
+			schedulerTestEngine: &schedulerTestEngine{},
+			candidates: engine.QueryCandidates{{
+				Service:        metadata.CNService{ServiceID: "pool-excluded"},
+				HasMixedCommit: true,
+			}},
+			resolvedNodes: engine.Nodes{
+				{Id: "cn-1", Addr: "one:6001", Mcpu: 4, HasMixedCommit: resolvedMixed},
+				{Id: "cn-2", Addr: "two:6001", Mcpu: 4, HasMixedCommit: resolvedMixed},
+			},
+		}
+		return c
+	}
+
+	t.Run("pool excluded mixed commit does not disable multi cn", func(t *testing.T) {
+		c := newCompile(t, false)
+		nodes, err := c.scheduleQueryWorkers()
+		require.NoError(t, err)
+		require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+		require.Len(t, nodes, 2)
+	})
+
+	t.Run("resolved mixed commit disables multi cn", func(t *testing.T) {
+		c := newCompile(t, true)
+		nodes, err := c.scheduleQueryWorkers()
+		require.NoError(t, err)
+		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
+	})
+}
+
+func TestScheduleQueryWorkersKeepsCurrentCNFirstForIvfEntriesScan(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "z-local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{
+				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+			},
+			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
+		}},
+	}}}
+	c.e = &schedulerTestEngine{nodes: engine.Nodes{
+		{Id: "remote", Addr: "a-remote:6001", Mcpu: 4},
+		{Id: "local", Addr: "z-local:6001", Mcpu: 6},
+	}}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, []string{"z-local:6001", "a-remote:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
 }
 
 func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {

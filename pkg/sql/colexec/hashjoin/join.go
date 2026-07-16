@@ -480,7 +480,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 					if ctr.probeRightJoin {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						ctr.rightRowsMatched.Add(uint64(idx))
@@ -503,7 +503,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 						if ctr.probeRightJoin {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 
 							ctr.rightRowsMatched.Add(uint64(idx))
@@ -523,7 +523,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if hashJoin.NonEqCond == nil {
 					if ctr.probeLeftSingle {
 						if len(ctr.sels) > 1 {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
 						ctr.appendOneNotMatch(hashJoin, proc, row)
@@ -559,7 +559,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if ctr.probeRightJoin {
 					for _, sel := range sels {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						ctr.rightRowsMatched.Add(uint64(sel))
@@ -599,13 +599,13 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					if ok {
 						if ctr.probeRightJoin {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 
 							ctr.rightRowsMatched.Add(uint64(sel))
 						} else {
 							if ctr.probeSingle && ctr.leftRowMatched {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 						}
 
@@ -693,7 +693,7 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 			}
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
-				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+				return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 			}
 
 			close(hashJoin.Channel)

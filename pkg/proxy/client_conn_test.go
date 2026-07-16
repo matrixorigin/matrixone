@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -35,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -728,6 +731,41 @@ type testRouter struct {
 	cnt int
 }
 
+type shortHandshakeServerConn struct {
+	*mockServerConn
+	closeCount           int
+	setConnResponseCount int
+}
+
+func (s *shortHandshakeServerConn) Close() error {
+	s.closeCount++
+	return nil
+}
+
+func (s *shortHandshakeServerConn) SetConnResponse([]byte) {
+	s.setConnResponseCount++
+}
+
+type shortHandshakeRouter struct {
+	testRouter
+	response []byte
+	sc       *shortHandshakeServerConn
+}
+
+func (r *shortHandshakeRouter) Connect(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error) {
+	return r.sc, r.response, nil
+}
+
+type writeCountingConn struct {
+	net.Conn
+	writeCount int
+}
+
+func (c *writeCountingConn) Write(b []byte) (int, error) {
+	c.writeCount++
+	return len(b), nil
+}
+
 func (router *testRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
 	if router.mod == routerReturnErrSecondTime {
 		if router.cnt >= 1 {
@@ -891,6 +929,44 @@ func Test_connectToBackend(t *testing.T) {
 	sConn, err := cConn.connectToBackend("127.0.0.1")
 	require.Error(t, err)
 	require.Nil(t, sConn)
+}
+
+func Test_connectToBackend_ShortHandshakeResponse(t *testing.T) {
+	for responseLen := 0; responseLen < 5; responseLen++ {
+		t.Run(fmt.Sprintf("length_%d", responseLen), func(t *testing.T) {
+			cc, cleanup := createNewClientConn(t)
+			defer cleanup()
+
+			client, ok := cc.(*clientConn)
+			require.True(t, ok)
+
+			local, remote := net.Pipe()
+			defer remote.Close()
+			clientConn := &writeCountingConn{Conn: local}
+			client.mysqlProto.UseConn(clientConn)
+
+			serverConn := &shortHandshakeServerConn{mockServerConn: newMockServerConn(nil)}
+			client.router = &shortHandshakeRouter{
+				response: make([]byte, responseLen),
+				sc:       serverConn,
+			}
+			failuresBefore := testutil.ToFloat64(v2.ProxyConnectCommonFailCounter)
+
+			var (
+				got ServerConn
+				err error
+			)
+			require.NotPanics(t, func() {
+				got, err = client.connectToBackend("")
+			})
+			require.ErrorContains(t, err, "response from cn server")
+			require.Nil(t, got)
+			require.Equal(t, 1, serverConn.closeCount)
+			require.Equal(t, 0, serverConn.setConnResponseCount)
+			require.Equal(t, 0, clientConn.writeCount)
+			require.Equal(t, failuresBefore+1, testutil.ToFloat64(v2.ProxyConnectCommonFailCounter))
+		})
+	}
 }
 
 func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {

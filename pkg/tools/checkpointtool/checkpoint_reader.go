@@ -15,9 +15,10 @@
 package checkpointtool
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -123,9 +124,9 @@ func (r *CheckpointReader) loadEntries() error {
 	r.entries = unique
 
 	// Sort by end timestamp (newest first)
-	sort.Slice(r.entries, func(i, j int) bool {
-		ei, ej := r.entries[i].GetEnd(), r.entries[j].GetEnd()
-		return ei.GT(&ej)
+	slices.SortFunc(r.entries, func(a, b *checkpoint.CheckpointEntry) int {
+		ai, bi := a.GetEnd(), b.GetEnd()
+		return bi.Compare(&ai)
 	})
 	return nil
 }
@@ -258,8 +259,8 @@ func (r *CheckpointReader) GetAccounts(entry *checkpoint.CheckpointEntry) ([]*Ac
 	for _, acc := range accountMap {
 		accounts = append(accounts, acc)
 	}
-	sort.Slice(accounts, func(i, j int) bool {
-		return accounts[i].AccountID < accounts[j].AccountID
+	slices.SortFunc(accounts, func(a, b *AccountInfo) int {
+		return cmp.Compare(a.AccountID, b.AccountID)
 	})
 	return accounts, nil
 }
@@ -311,8 +312,8 @@ func (r *CheckpointReader) rangesToTables(ranges []ckputil.TableRange) []*TableI
 	for _, tbl := range tableMap {
 		tables = append(tables, tbl)
 	}
-	sort.Slice(tables, func(i, j int) bool {
-		return tables[i].TableID < tables[j].TableID
+	slices.SortFunc(tables, func(a, b *TableInfo) int {
+		return cmp.Compare(a.TableID, b.TableID)
 	})
 	return tables
 }

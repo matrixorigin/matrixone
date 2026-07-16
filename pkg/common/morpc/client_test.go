@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,6 +46,15 @@ type blockingCreateFactory struct {
 	entered chan struct{}
 	release chan struct{}
 	backend *testBackend
+}
+
+type failingCreateFactory struct {
+	attempts atomic.Int32
+}
+
+func (f *failingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
+	f.attempts.Add(1)
+	return nil, fmt.Errorf("create failed")
 }
 
 func (f *blockingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
@@ -94,6 +104,89 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 	b, err := c.getBackendLocked("b1", false)
 	assert.NoError(t, err)
 	assert.Nil(t, b)
+}
+
+func TestNewStreamDoesNotSleepPastBackendCreation(t *testing.T) {
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	rc, err := NewClient(
+		"event-driven-create-wait",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+		WithClientRetryPolicy(RetryPolicy{
+			InitialBackoff: 5 * time.Second,
+			MaxBackoff:     5 * time.Second,
+			Multiplier:     1,
+		}),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		select {
+		case <-factory.release:
+		default:
+			close(factory.release)
+		}
+		require.NoError(t, c.Close())
+	}()
+
+	type result struct {
+		stream Stream
+		err    error
+	}
+	resultC := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		stream, err := c.NewStream(ctx, "remote", true)
+		resultC <- result{stream: stream, err: err}
+	}()
+
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend create did not reach the factory")
+	}
+	close(factory.release)
+
+	select {
+	case result := <-resultC:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.stream)
+		require.NoError(t, result.stream.Close(false))
+	case <-time.After(time.Second):
+		t.Fatal("NewStream slept on retry backoff after the backend was ready")
+	}
+}
+
+func TestNewStreamRetainsBackoffAfterBackendCreateFailure(t *testing.T) {
+	factory := &failingCreateFactory{}
+	rc, err := NewClient(
+		"failed-create-backoff",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+		WithClientRetryPolicy(RetryPolicy{
+			InitialBackoff: 5 * time.Second,
+			MaxBackoff:     5 * time.Second,
+			Multiplier:     1,
+		}),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = rc.NewStream(ctx, "remote", true)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int32(1), factory.attempts.Load(),
+		"a failed factory call must not trigger an immediate retry loop")
 }
 
 func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {

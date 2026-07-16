@@ -457,6 +457,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
+		if err == nil {
+			sender.prepareForLocalCleanup()
+		}
 		sender.close()
 	}
 	return runErr
@@ -649,16 +652,17 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 
 	//need to shuffle blocks when cncnt>1
 	rsp := &engine.RangesShuffleParam{
-		Node:  s.DataSource.node,
-		CNCNT: s.NodeInfo.CNCNT,
-		CNIDX: s.NodeInfo.CNIDX,
-		Init:  false,
+		Node:              s.DataSource.node,
+		CNCNT:             s.NodeInfo.CNCNT,
+		CNIDX:             s.NodeInfo.CNIDX,
+		ShuffleByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
+		Init:              false,
 	}
 	if !s.IsRemote { // this is local CN
 		rsp.IsLocalCN = true
 	}
 
-	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
+	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
 	// local
@@ -694,6 +698,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	return err
+}
+
+func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
+	if plan2.IsIvfSearchEntriesInternalScan(node) && cnidx > 0 {
+		return engine.Policy_CollectCommittedPersistedData
+	}
+	return engine.Policy_CollectAllData
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
@@ -864,6 +875,9 @@ type notifyMessageSenderFactory func(
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
+		if r.err == nil {
+			r.sender.prepareForLocalCleanup()
+		}
 		r.sender.close()
 	}
 	if r.err != nil {
@@ -920,10 +934,12 @@ func (s *Scope) sendNotifyMessageWithFactory(
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					}
-
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					if sender.requestFinishAck {
+						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
+					}
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
@@ -931,14 +947,17 @@ func (s *Scope) sendNotifyMessageWithFactory(
 						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return
 					}
-					sender.safeToClose = false
-					sender.alreadyClose = false
+					sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
 
 					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
 					if !isRemoteDispatchNotRegisteredYetError(err) {
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return
 					}
+					// "not registered yet" is an expected retry response. The
+					// negotiated terminal response proves the old attempt can use
+					// FIN/ACK after its server cleanup barrier.
+					sender.prepareForLocalCleanup()
 					sender.close()
 
 					select {

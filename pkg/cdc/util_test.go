@@ -42,6 +42,33 @@ import (
 	"github.com/matrixorigin/mysql"
 )
 
+var (
+	_ func(context.Context, client.TxnOperator, string) func()          = EnterRunSql
+	_ func(context.Context, client.TxnOperator, string) (func(), error) = TryEnterRunSql
+)
+
+type legacyRunSQLTxnOperator struct {
+	client.TxnOperator
+	token      uint64
+	exitTokens []uint64
+}
+
+func (op *legacyRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
+	return op.token
+}
+
+func (op *legacyRunSQLTxnOperator) ExitRunSqlWithToken(token uint64) {
+	op.exitTokens = append(op.exitTokens, token)
+}
+
+func TestEnterRunSqlPreservesLegacyContract(t *testing.T) {
+	op := &legacyRunSQLTxnOperator{token: 0}
+	finish := EnterRunSql(nil, op, "select 1")
+	require.NotNil(t, finish)
+	finish()
+	require.Equal(t, []uint64{0}, op.exitTokens)
+}
+
 func Test_aes(t *testing.T) {
 	AesKey = "test-aes-key-not-use-it-in-cloud"
 	defer func() { AesKey = "" }()

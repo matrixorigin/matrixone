@@ -17,7 +17,7 @@ package taskservice
 import (
 	"context"
 	"runtime"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -559,8 +559,8 @@ func (r *taskRunner) addRetryTask(task runningTask) bool {
 	}
 
 	r.retryTasks.s = append(r.retryTasks.s, task)
-	sort.Slice(r.retryTasks.s, func(i, j int) bool {
-		return r.retryTasks.s[i].retryAt.Before(r.retryTasks.s[j].retryAt)
+	slices.SortFunc(r.retryTasks.s, func(a, b runningTask) int {
+		return a.retryAt.Compare(b.retryAt)
 	})
 	return true
 }

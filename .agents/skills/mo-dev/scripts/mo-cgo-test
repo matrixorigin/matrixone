@@ -1,0 +1,116 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -eu
+
+usage() {
+    echo "usage: $0 [go test flags and package patterns...]" >&2
+    echo "example: $0 -race -count=1 -timeout=120s ./pkg/target/..." >&2
+}
+
+if [ "$#" -eq 0 ]; then
+    usage
+    exit 2
+fi
+
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
+case "$repo_root" in
+    *[[:space:]]*)
+        echo "MatrixOne's Make/CGo flags require a repository path without whitespace: $repo_root" >&2
+        exit 1
+        ;;
+esac
+cgo_dir="$repo_root/cgo"
+thirdparty_dir="$repo_root/thirdparties/install"
+lib_dir="$thirdparty_dir/lib"
+include_dir="$thirdparty_dir/include"
+
+goos=$(go env GOOS)
+gohostos=$(go env GOHOSTOS)
+goarch=$(go env GOARCH)
+gohostarch=$(go env GOHOSTARCH)
+
+if [ "$goos" != "$gohostos" ] || [ "$goarch" != "$gohostarch" ]; then
+    echo "local MatrixOne CGo tests do not support cross compilation:" \
+        "target=$goos/$goarch, host=$gohostos/$gohostarch" >&2
+    exit 1
+fi
+if [ "$(go env CGO_ENABLED)" != "1" ]; then
+    echo "MatrixOne CGo tests require CGO_ENABLED=1" >&2
+    exit 1
+fi
+
+case "$goos" in
+    darwin)
+        libmo="$cgo_dir/libmo.dylib"
+        runtime_path_var=DYLD_LIBRARY_PATH
+        platform_link_flags=
+        ;;
+    linux)
+        libmo="$cgo_dir/libmo.so"
+        runtime_path_var=LD_LIBRARY_PATH
+        platform_link_flags=-fopenmp
+        ;;
+    *)
+        echo "unsupported GOOS for MatrixOne CGo tests: $goos" >&2
+        exit 1
+        ;;
+esac
+
+for required in "$libmo" "$include_dir"; do
+    if [ ! -e "$required" ]; then
+        echo "missing MatrixOne CGo prerequisite: $required" >&2
+        echo "build the repository thirdparties and CGo libraries before testing" >&2
+        exit 1
+    fi
+done
+
+# Match the repository build contract and remove ambient module/CGo flag
+# drift. CC/CXX and other standard toolchain selectors remain caller-owned.
+export GOWORK=off
+export CGO_CFLAGS="'-I$cgo_dir' '-I$include_dir'"
+export CGO_LDFLAGS="'-L$lib_dir'"
+
+# cgo/lib.go owns libmo's native dependency declaration. Query that metadata
+# instead of duplicating a library list here; newly added CPU dependencies then
+# flow into this wrapper automatically. The repository-path check above makes
+# the space-delimited result safe to append to extldflags.
+cgo_link_flags=$(go -C "$repo_root" list -mod=readonly \
+    -f '{{join .CgoLDFLAGS " "}}' ./cgo)
+if [ -z "$cgo_link_flags" ]; then
+    echo "MatrixOne's cgo package declared no native link flags" >&2
+    exit 1
+fi
+
+runtime_paths="$cgo_dir:$lib_dir"
+if [ "$runtime_path_var" = DYLD_LIBRARY_PATH ]; then
+    export DYLD_LIBRARY_PATH="$runtime_paths"
+else
+    export LD_LIBRARY_PATH="$runtime_paths"
+fi
+
+# go test executables run from temporary build directories. Use repository
+# absolute rpaths; package-relative rpaths belong to distributable binaries.
+#
+# The wrapper injects libmo even when the requested package does not import
+# cgo/lib.go, so it must also close libmo's dependency graph. Keep the queried
+# flags after -lmo: archive resolution is order-sensitive on common linkers.
+external_flags="$platform_link_flags -L$cgo_dir -lmo $cgo_link_flags -Wl,-rpath,$cgo_dir -Wl,-rpath,$lib_dir"
+ldflags="-extldflags '$external_flags'"
+
+cd "$repo_root"
+exec go test -mod=readonly -ldflags "$ldflags" "$@"

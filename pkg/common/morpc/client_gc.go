@@ -308,6 +308,15 @@ func (m *clientGCManager) triggerCreateAtGeneration(
 	backend string,
 	generation *backendGeneration,
 ) bool {
+	_, ok := m.triggerCreateAtGenerationState(c, backend, generation)
+	return ok
+}
+
+func (m *clientGCManager) triggerCreateAtGenerationState(
+	c *client,
+	backend string,
+	generation *backendGeneration,
+) (*backendCreateState, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return m.triggerCreateAtGenerationLocked(c, backend, generation)
@@ -319,30 +328,31 @@ func (m *clientGCManager) triggerCreateAtGenerationLocked(
 	c *client,
 	backend string,
 	generation *backendGeneration,
-) bool {
+) (*backendCreateState, bool) {
 	if generation == nil || c.mu.closing || c.mu.closed ||
 		c.mu.backendGeneration[backend] != generation ||
 		!c.canCreateLocked(backend) {
-		return false
+		return nil, false
 	}
 	if pending := c.mu.creating[backend]; pending != nil {
 		// An existing request for this generation already represents the
 		// caller's demand. A different generation must never be coalesced.
-		return pending == generation
+		return pending, pending.generation == generation
 	}
-	c.mu.creating[backend] = generation
+	pending := newBackendCreateState(generation)
+	c.mu.creating[backend] = pending
 	select {
 	case m.createC <- createRequest{c: c, backend: backend, generation: generation}:
-		return true
+		return pending, true
 	default:
-		delete(c.mu.creating, backend)
+		c.releaseBackendCreateLocked(backend, generation)
 		// Channel is full, skip to avoid blocking
 		// This is acceptable because create will be retried when needed
 		m.createDropCounter.Inc()
 		m.logger.Debug("create channel full, skipping",
 			zap.String("backend", backend),
 			zap.Int("channel-capacity", cap(m.createC)))
-		return false
+		return nil, false
 	}
 }
 
