@@ -49,6 +49,14 @@ type container struct {
 	aggExe []colexec.ExpressionExecutor
 	aggVec [][]*vector.Vector
 
+	partExe []colexec.ExpressionExecutor
+	partVec [][]*vector.Vector
+	// partSet broadcasts one input row's partition key across a whole flushed
+	// batch: every window in a flush belongs to a single partition, because
+	// the operator flushes at each boundary.
+	partSet []func(v, w *vector.Vector, sel int64, length int) error
+	partOut []*vector.Vector
+
 	tsExe colexec.ExpressionExecutor
 	tsVec []*vector.Vector
 	tsOid types.T
@@ -83,6 +91,26 @@ type container struct {
 
 	last    bool
 	lastVal types.Datetime
+
+	// partIdx / partRow locate the row whose partition key the window
+	// currently being accumulated belongs to; -1 before the first window.
+	partIdx int
+	partRow int
+	// partEnd mirrors `end` but for one partition: its rows are exhausted, so
+	// windows keep sliding until they pass the partition's last value.
+	partEnd bool
+	// breakVecIdx / breakRowIdx hold the first row of the next partition, the
+	// row the restart re-anchors on.
+	breakVecIdx int
+	breakRowIdx int
+	// partLast* track the last row seen inside the current partition, playing
+	// the role `lastVal` and the final buffered row play for the whole stream.
+	partLastVal    types.Datetime
+	partLastVecIdx int
+	partLastRowIdx int
+	// partitionBreak marks that the pending flush ends a partition, so the
+	// next window must restart rather than slide.
+	partitionBreak bool
 }
 
 type TimeWin struct {
@@ -90,6 +118,11 @@ type TimeWin struct {
 
 	Types []types.Type
 	Aggs  []aggexec.AggFuncExecExpression
+
+	// PartitionBy holds the GROUP BY keys other than the window's timestamp.
+	// Each distinct key value gets its own window sequence, so input must
+	// arrive ordered by these keys first.
+	PartitionBy []*plan.Expr
 
 	TsType  plan.Type
 	Ts      *plan.Expr
@@ -208,6 +241,11 @@ func (ctr *container) resetExes() {
 			exe.ResetForNextQuery()
 		}
 	}
+	for _, exe := range ctr.partExe {
+		if exe != nil {
+			exe.ResetForNextQuery()
+		}
+	}
 	if ctr.tsExe != nil {
 		ctr.tsExe.ResetForNextQuery()
 	}
@@ -229,10 +267,18 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.group = -1
 	ctr.wStart = nil
 	ctr.wEnd = nil
+	ctr.partIdx = -1
+	ctr.partRow = 0
+	ctr.partitionBreak = false
 }
 
 func (ctr *container) freeExes() {
 	for _, exe := range ctr.aggExe {
+		if exe != nil {
+			exe.Free()
+		}
+	}
+	for _, exe := range ctr.partExe {
 		if exe != nil {
 			exe.Free()
 		}
@@ -278,4 +324,24 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 		}
 	}
 	ctr.aggVec = nil
+
+	for _, vecs := range ctr.partVec {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(mp)
+			}
+		}
+	}
+	ctr.partVec = nil
+
+	ctr.freePartOut(mp)
+}
+
+func (ctr *container) freePartOut(mp *mpool.MPool) {
+	for _, vec := range ctr.partOut {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	ctr.partOut = nil
 }

@@ -45,4 +45,56 @@ create table tw(ts timestamp, v int);
 insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
 select _wend, max(v) from tw interval(ts, 1, day);
 
+-- A time window's outputs are addressed by physical slot. Discarding any of
+-- them compacts those slots, so each surviving output must still resolve to
+-- its own value rather than to the neighbour that used to occupy the position.
+create table tws(ts timestamp(3) primary key, v int);
+insert into tws values
+  ('2023-08-01 00:00:00', 10), ('2023-08-01 00:00:01', 20),
+  ('2023-08-01 00:00:06', 30), ('2023-08-01 00:00:07', 40);
+
+-- baseline: every output consumed
+select _wstart, _wend, max(v), min(v) from tws interval(ts, 5, second);
+
+-- only the trailing aggregate survives
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second)) x;
+-- only the leading boundary survives
+select a from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second)) x;
+-- _wstart discarded, _wend kept
+select d from (select _wstart as a, _wend as d, max(v) as b from tws interval(ts, 5, second)) x;
+-- same shapes with sliding windows
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 10, second) sliding(5, second)) x;
+select a from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 10, second) sliding(5, second)) x;
+
+-- fill() reads the window's aggregates by position, so its columns have to be
+-- pruned in step with them.
+select c from (select _wstart as a, _wend as d, max(v) as b, min(v) as c from tws interval(ts, 5, second) fill(prev)) x;
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second) fill(linear)) x;
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second) fill(value, 99)) x;
+
+-- Every value is discarded, but one row per window must still be produced.
+select 1 from (select _wstart as a, max(v) as b from tws interval(ts, 5, second)) x;
+select count(*) from (select _wstart as a, max(v) as b from tws interval(ts, 5, second)) x;
+select 1 from (select max(v) as b from tws interval(ts, 5, second)) x;
+
+-- Empty input produces no windows.
+create table tw_empty(ts timestamp(3) primary key, v int);
+select _wstart, max(v) from tw_empty interval(ts, 5, second);
+select 1 from (select _wstart as a, max(v) as b from tw_empty interval(ts, 5, second)) x;
+
+-- GROUP BY alongside a time window partitions it: each group gets its own
+-- windows rather than sharing one stream with the others.
+create table twp(ts timestamp(3), p int, v int);
+insert into twp values
+  ('2023-08-01 00:00:00', 1, 10), ('2023-08-01 00:00:01', 1, 20),
+  ('2023-08-01 00:00:06', 1, 30), ('2023-08-01 00:00:00', 2, 100),
+  ('2023-08-01 00:00:07', 2, 400);
+
+select _wstart, p, max(v) from twp group by p interval(ts, 5, second) order by p, _wstart;
+select _wstart, _wend, p, max(v), min(v) from twp group by p interval(ts, 5, second) order by p, _wstart;
+select p, _wstart, max(v), min(v) from twp group by p interval(ts, 10, second) sliding(5, second) order by p, _wstart;
+-- the partition key decides row grouping, so it is kept even when unselected
+select b from (select _wstart as a, p, max(v) as b from twp group by p interval(ts, 5, second)) x order by b;
+select count(*) from (select _wstart as a, p, max(v) as b from twp group by p interval(ts, 5, second)) x;
+
 drop database column_pruning;

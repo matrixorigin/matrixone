@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,7 +41,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_VALUE,
 				FillVal: []*plan.Expr{
 					{
@@ -70,7 +67,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_PREV,
 				FillVal: []*plan.Expr{
 					{
@@ -97,7 +93,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NONE,
 				FillVal: []*plan.Expr{
 					{
@@ -125,7 +120,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NEXT,
 				FillVal: []*plan.Expr{
 					{
@@ -152,7 +146,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_LINEAR,
 				FillVal: []*plan.Expr{
 					{

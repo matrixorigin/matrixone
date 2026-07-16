@@ -72,7 +72,6 @@ type Fill struct {
 	ColLen   int
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
-	AggIds   []int32
 
 	vm.OperatorBase
 	colexec.Projection
