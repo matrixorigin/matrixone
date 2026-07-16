@@ -282,4 +282,3 @@ export DYLD_LIBRARY_PATH="/Users/yanghaoyang/repo/matrixone/cgo:/Users/yanghaoya
 export GO_TEST_LDFLAGS="-extldflags '-L/Users/yanghaoyang/repo/matrixone/cgo -lmo -L/Users/yanghaoyang/repo/matrixone/thirdparties/install/lib -Wl,-rpath,/Users/yanghaoyang/repo/matrixone/cgo -Wl,-rpath,/Users/yanghaoyang/repo/matrixone/thirdparties/install/lib'"
 go test -ldflags="$GO_TEST_LDFLAGS" -count=1 -timeout 120s -v ./pkg/sql/plan/function
 ```
-

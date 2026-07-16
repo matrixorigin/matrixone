@@ -129,4 +129,3 @@ Implementation will follow red-green-refactor:
 This change does not redesign MatrixOne's `TIME` representation, add new decimal
 execution kernels, change time-zone behavior, or implement MySQL warning and
 saturation behavior for out-of-range `MAKETIME` values.
-
