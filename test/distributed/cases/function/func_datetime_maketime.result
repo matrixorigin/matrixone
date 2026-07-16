@@ -25,7 +25,7 @@ time7
 SELECT MAKETIME(100, 0, 0) AS time8;
 time8
 100:00:00
-SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
+SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS invalid_hour;
 invalid_hour
 -01:15:30
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
@@ -49,16 +49,16 @@ null
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 null_all
 null
-SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
+SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 float_values
 12:15:30.9
-SELECT MAKETIME(12, 34, 56.789012) AS fractional_seconds;
+SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
 fractional_seconds
 12:34:56.789012
-SELECT MAKETIME(-12, 34, 56.789012) AS negative_fractional;
+SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
 negative_fractional
 -12:34:56.789012
-SELECT MAKETIME(12, 59, 59.9999996) AS fractional_carry;
+SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
 fractional_carry
 13:00:00.000000
 CREATE TABLE t1(h INT, m INT, s INT);
@@ -76,7 +76,7 @@ h    m    s
 12    15    30
 20    0    0
 DROP TABLE t1;
-SELECT MAKETIME(12.0, 15.0, 30.0) AS float_input;
+SELECT CAST(MAKETIME(12.0, 15.0, 30.0) AS VARCHAR) AS float_input;
 float_input
 12:15:30.0
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;

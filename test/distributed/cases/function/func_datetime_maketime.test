@@ -17,7 +17,7 @@ SELECT MAKETIME(838, 59, 59) AS time7;
 SELECT MAKETIME(100, 0, 0) AS time8;
 
 # Negative hours are valid; other invalid values return NULL
-SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
+SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS invalid_hour;
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 SELECT MAKETIME(12, 15, 60) AS invalid_second;
 SELECT MAKETIME(839, 0, 0) AS invalid_hour_too_large;
@@ -29,10 +29,10 @@ SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
 # Float hour and minute values truncate; fractional seconds are preserved
-SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
-SELECT MAKETIME(12, 34, 56.789012) AS fractional_seconds;
-SELECT MAKETIME(-12, 34, 56.789012) AS negative_fractional;
-SELECT MAKETIME(12, 59, 59.9999996) AS fractional_carry;
+SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
+SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
+SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
+SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
 
 # Table usage
 CREATE TABLE t1(h INT, m INT, s INT);
@@ -47,6 +47,5 @@ SELECT * FROM t1 WHERE MAKETIME(h, m, s) > '12:00:00';
 DROP TABLE t1;
 
 # Different numeric types
-SELECT MAKETIME(12.0, 15.0, 30.0) AS float_input;
+SELECT CAST(MAKETIME(12.0, 15.0, 30.0) AS VARCHAR) AS float_input;
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
-
