@@ -26,7 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
-const eofChar = 0x100
+const (
+	eofChar   = 0x100
+	unicodeID = 1 << 16
+)
 
 // maxPoolSQLSize is the size threshold beyond which a scanner will not be kept
 // in the pool and large fields will be cleared to release memory.
@@ -553,7 +556,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 				}
 				s.inc()
 				identifier := s.buf[start : s.Pos-1]
-				if !validIdentifier(identifier) {
+				if identifierToken(identifier) == LEX_ERROR {
 					return LEX_ERROR, identifier
 				}
 				return QUOTE_ID, identifier
@@ -603,7 +606,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 		s.inc()
 	}
 	identifier := buf.String()
-	if !validIdentifier(identifier) {
+	if identifierToken(identifier) == LEX_ERROR {
 		return LEX_ERROR, identifier
 	}
 	return QUOTE_ID, identifier
@@ -743,6 +746,9 @@ func (s *Scanner) scanNumber() (int, string) {
 				if typ == LEX_ERROR {
 					return LEX_ERROR, s.buf[start:s.Pos]
 				}
+				if typ == unicodeID {
+					token = typ
+				}
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
 
@@ -758,6 +764,9 @@ func (s *Scanner) scanNumber() (int, string) {
 				typ, _ := s.scanIdentifier(false)
 				if typ == LEX_ERROR {
 					return LEX_ERROR, s.buf[start:s.Pos]
+				}
+				if typ == unicodeID {
+					token = typ
 				}
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
@@ -795,7 +804,11 @@ exit:
 		if typ == LEX_ERROR {
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
-		token = ID
+		if typ == unicodeID {
+			token = typ
+		} else {
+			token = ID
+		}
 	}
 
 	return token, strings.ToLower(s.buf[start:s.Pos])
@@ -824,8 +837,12 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
-	if !validIdentifier(keywordName) {
+	token := identifierToken(keywordName)
+	if token == LEX_ERROR {
 		return LEX_ERROR, keywordName
+	}
+	if token == unicodeID {
+		return token, keywordName
 	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
@@ -936,15 +953,19 @@ func (s *Scanner) peek(dist int) uint16 {
 	return uint16(s.buf[s.Pos+dist])
 }
 
-func validIdentifier(s string) bool {
+func identifierToken(s string) int {
+	token := ID
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
 		if r == 0 || r > '\uFFFF' || r == utf8.RuneError && size == 1 {
-			return false
+			return LEX_ERROR
+		}
+		if r >= utf8.RuneSelf {
+			token = unicodeID
 		}
 		s = s[size:]
 	}
-	return true
+	return token
 }
 
 func isIdentifierLetter(ch uint16) bool {

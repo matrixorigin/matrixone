@@ -166,6 +166,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
+	if typ == unicodeID && l.lastToken == AS {
+		typ = ID
+	}
 
 	l.lastToken = typ
 	lval.str = str

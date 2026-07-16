@@ -80,9 +80,9 @@ func TestUnicodeIdentifier(t *testing.T) {
 		input string
 		want  int
 	}{
-		{name: "unquoted Arabic", input: "الكمية", want: ID},
-		{name: "unquoted Chinese", input: "数量", want: ID},
-		{name: "digit prefix Chinese", input: "1数量", want: ID},
+		{name: "unquoted Arabic", input: "الكمية", want: unicodeID},
+		{name: "unquoted Chinese", input: "数量", want: unicodeID},
+		{name: "digit prefix Chinese", input: "1数量", want: unicodeID},
 		{name: "quoted Arabic", input: "`الكمية`", want: QUOTE_ID},
 		{name: "quoted Chinese", input: "`数量`", want: QUOTE_ID},
 		{name: "invalid UTF-8", input: "`\xff`", want: LEX_ERROR},
