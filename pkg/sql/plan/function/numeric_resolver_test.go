@@ -50,7 +50,9 @@ func TestResolveNumericBinaryTypesContextPriority(t *testing.T) {
 			left:       types.T_any.ToType(),
 			right:      types.New(types.T_decimal64, 12, 2),
 			outer:      typePtr(types.T_int64.ToType()),
-			wantInputs: types.T_decimal64,
+			wantInputs: types.T_decimal128,
+			wantWidth:  21,
+			wantScale:  2,
 		},
 		{
 			name:       "double sibling overrides exact outer context",
@@ -146,6 +148,63 @@ func TestResolveNumericBinaryTypesContextPriority(t *testing.T) {
 			if test.wantScale != 0 {
 				require.Equal(t, test.wantScale, paramType.Scale)
 			}
+		})
+	}
+}
+
+func TestInferNumericParameterTypeDecimalIncludesIntegerCapacity(t *testing.T) {
+	tests := []struct {
+		name      string
+		known     []types.Type
+		outer     *types.Type
+		wantWidth int32
+	}{
+		{
+			name:      "signed bigint sibling",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1), types.T_int64.ToType()},
+			wantWidth: 20,
+		},
+		{
+			name:      "signed bigint sibling reverse order",
+			known:     []types.Type{types.T_int64.ToType(), types.New(types.T_decimal64, 2, 1)},
+			wantWidth: 20,
+		},
+		{
+			name:      "unsigned bigint sibling",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1), types.T_uint64.ToType()},
+			wantWidth: 21,
+		},
+		{
+			name:      "signed bigint outer context",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1)},
+			outer:     typePtr(types.T_int64.ToType()),
+			wantWidth: 20,
+		},
+		{
+			name:      "unsigned bigint outer context",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1)},
+			outer:     typePtr(types.T_uint64.ToType()),
+			wantWidth: 21,
+		},
+		{
+			name:      "decimal outer context uses storage capacity",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1)},
+			outer:     typePtr(types.T_decimal128.ToType()),
+			wantWidth: 39,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := InferNumericParameterType(test.known, test.outer)
+			require.True(t, ok)
+			if test.wantWidth <= 38 {
+				require.Equal(t, types.T_decimal128, got.Oid)
+			} else {
+				require.Equal(t, types.T_decimal256, got.Oid)
+			}
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, int32(1), got.Scale)
 		})
 	}
 }

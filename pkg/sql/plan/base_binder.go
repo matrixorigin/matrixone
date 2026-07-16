@@ -774,22 +774,27 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	known, hasParam, err := b.numericAstTypes(astExpr, depth)
-	if err != nil || !hasParam {
+	scan, err := b.numericAstTypes(astExpr, depth)
+	if err != nil || !scan.hasParam {
 		if err != nil {
 			return nil, err
 		}
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	typesKnown := make([]types.Type, 0, len(known))
-	for i := range known {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(known[i]))
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
 	}
 	var outerType *types.Type
 	if outer != nil {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
 	}
 	paramType, ok := function.InferNumericParameterType(typesKnown, outerType)
 	if !ok {
@@ -818,65 +823,87 @@ func (b *baseBinder) bindNumericExprWithoutNewContext(astExpr tree.Expr, depth i
 	return b.impl.BindExpr(astExpr, depth, false)
 }
 
-func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) ([]Type, bool, error) {
+type numericAstTypeScan struct {
+	strong       []Type
+	weakDecimals []Type
+	hasParam     bool
+}
+
+func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
+	s.strong = append(s.strong, other.strong...)
+	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
+	s.hasParam = s.hasParam || other.hasParam
+	return s
+}
+
+func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
+	for _, typ := range strong {
+		if typ.IsNumeric() {
+			return true
+		}
+	}
+	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal())
+}
+
+func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
-		return nil, true, nil
+		return numericAstTypeScan{hasParam: true}, nil
 	case *tree.ParenExpr:
 		return b.numericAstTypes(expr.Expr, depth)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
-			return nil, false, nil
+			return numericAstTypeScan{}, nil
 		}
-		leftTypes, leftParam, err := b.numericAstTypes(expr.Left, depth)
+		left, err := b.numericAstTypes(expr.Left, depth)
 		if err != nil {
-			return nil, false, err
+			return numericAstTypeScan{}, err
 		}
-		rightTypes, rightParam, err := b.numericAstTypes(expr.Right, depth)
+		right, err := b.numericAstTypes(expr.Right, depth)
 		if err != nil {
-			return nil, false, err
+			return numericAstTypeScan{}, err
 		}
-		return append(leftTypes, rightTypes...), leftParam || rightParam, nil
+		return left.merge(right), nil
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
 			return b.numericAstTypes(expr.Expr, depth)
 		}
-		return nil, false, nil
+		return numericAstTypeScan{}, nil
 	case *tree.CastExpr:
 		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
 		if err != nil {
-			return nil, false, err
+			return numericAstTypeScan{}, err
 		}
-		return []Type{typ}, false, nil
+		return numericAstTypeScan{strong: []Type{typ}}, nil
 	case *tree.NumVal:
 		bound, err := b.bindNumVal(expr, Type{})
 		if err != nil {
-			return nil, false, err
+			return numericAstTypeScan{}, err
 		}
 		if types.T(bound.Typ.Id).IsDecimal() {
-			return nil, false, nil
+			return numericAstTypeScan{weakDecimals: []Type{bound.Typ}}, nil
 		}
-		return []Type{bound.Typ}, false, nil
+		return numericAstTypeScan{strong: []Type{bound.Typ}}, nil
 	case *tree.FuncExpr:
 		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
-			return nil, false, nil
+			return numericAstTypeScan{}, nil
 		}
-		leftTypes, leftParam, err := b.numericAstTypes(expr.Exprs[0], depth)
+		left, err := b.numericAstTypes(expr.Exprs[0], depth)
 		if err != nil {
-			return nil, false, err
+			return numericAstTypeScan{}, err
 		}
-		rightTypes, rightParam, err := b.numericAstTypes(expr.Exprs[1], depth)
+		right, err := b.numericAstTypes(expr.Exprs[1], depth)
 		if err != nil {
-			return nil, false, err
+			return numericAstTypeScan{}, err
 		}
-		return append(leftTypes, rightTypes...), leftParam || rightParam, nil
+		return left.merge(right), nil
 	case *tree.UnresolvedName:
 		if typ, ok := b.numericColumnType(expr); ok {
-			return []Type{typ}, false, nil
+			return numericAstTypeScan{strong: []Type{typ}}, nil
 		}
-		return nil, false, nil
+		return numericAstTypeScan{}, nil
 	default:
-		return nil, false, nil
+		return numericAstTypeScan{}, nil
 	}
 }
 

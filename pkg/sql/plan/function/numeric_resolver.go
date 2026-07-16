@@ -47,7 +47,7 @@ func InferNumericParameterType(known []types.Type, outer *types.Type) (types.Typ
 			return types.T_float64.ToType(), true
 		}
 	}
-	if decimal, found, ok := commonDecimalType(known); found {
+	if decimal, found, ok := commonDecimalType(known, outer); found {
 		return decimal, ok
 	}
 	if outer != nil && outer.IsNumeric() {
@@ -59,12 +59,16 @@ func InferNumericParameterType(known []types.Type, outer *types.Type) (types.Typ
 	return types.T_float64.ToType(), true
 }
 
-func commonDecimalType(known []types.Type) (types.Type, bool, bool) {
+func commonDecimalType(known []types.Type, outer *types.Type) (types.Type, bool, bool) {
 	found := false
 	maxIntegerDigits := int32(0)
 	maxScale := int32(0)
 	minStorage := types.T_decimal64
 	for _, typ := range known {
+		if typ.Oid.IsInteger() {
+			maxIntegerDigits = max32(maxIntegerDigits, integerDecimalDigits(typ.Oid))
+			continue
+		}
 		if !typ.Oid.IsDecimal() {
 			continue
 		}
@@ -82,6 +86,21 @@ func commonDecimalType(known []types.Type) (types.Type, bool, bool) {
 	if !found {
 		return types.Type{}, false, false
 	}
+	if outer != nil {
+		if outer.Oid.IsInteger() {
+			maxIntegerDigits = max32(maxIntegerDigits, integerDecimalDigits(outer.Oid))
+		} else if outer.Oid.IsDecimal() {
+			width := outer.Width
+			if width <= 0 {
+				width = decimalStorageWidth(outer.Oid)
+			}
+			maxIntegerDigits = max32(maxIntegerDigits, max32(0, width-outer.Scale))
+			maxScale = max32(maxScale, outer.Scale)
+			if decimalStorageWidth(outer.Oid) > decimalStorageWidth(minStorage) {
+				minStorage = outer.Oid
+			}
+		}
+	}
 
 	width := maxIntegerDigits + maxScale
 	oid := minStorage
@@ -96,6 +115,23 @@ func commonDecimalType(known []types.Type) (types.Type, bool, bool) {
 		}
 	}
 	return types.New(oid, width, maxScale), true, true
+}
+
+func integerDecimalDigits(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
 }
 
 func decimalStorageWidth(oid types.T) int32 {

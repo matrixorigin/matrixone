@@ -456,9 +456,11 @@ func TestPreparedCastPropagatesContextOnlyIntoArithmetic(t *testing.T) {
 
 func TestPreparedNumericLiteralStrength(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
-		want types.T
+		name      string
+		sql       string
+		want      types.T
+		wantWidth int32
+		wantScale int32
 	}{
 		{name: "decimal literal is weak", sql: "select 0.0 + ?", want: types.T_float64},
 		{name: "approximate literal is strong", sql: "select 0e0 + ?", want: types.T_float64},
@@ -467,6 +469,53 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 			name: "explicit decimal cast is strong",
 			sql:  "select cast(0 as decimal(10, 1)) + ?",
 			want: types.T_decimal64,
+		},
+		{
+			name:      "weak decimal beats integer sibling in safe decimal domain",
+			sql:       "select (? + 0.5) + cast(0 as signed)",
+			want:      types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 1,
+		},
+		{
+			name:      "weak decimal beats integer sibling in reverse order",
+			sql:       "select (cast(0 as signed) + ?) + 0.5",
+			want:      types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 1,
+		},
+		{
+			name:      "weak decimal includes unsigned bigint capacity",
+			sql:       "select (? + 0.5) + cast(0 as unsigned)",
+			want:      types.T_decimal128,
+			wantWidth: 21,
+			wantScale: 1,
+		},
+		{
+			name:      "weak decimal beats integer outer context",
+			sql:       "select cast(? + 0.5 as signed)",
+			want:      types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 1,
+		},
+		{
+			name: "approximate outer context beats weak decimal",
+			sql:  "select cast(? + 0.5 as double)",
+			want: types.T_float64,
+		},
+		{
+			name:      "weak decimal survives unary traversal",
+			sql:       "select (-? + 0.5) + cast(0 as signed)",
+			want:      types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 1,
+		},
+		{
+			name:      "weak decimal survives mod traversal",
+			sql:       "select mod(?, 0.5) + cast(0 as signed)",
+			want:      types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 1,
 		},
 	}
 
@@ -478,9 +527,15 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 
 			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 			require.NoError(t, err)
-			paramTypes := collectPlanParamTypes(queryPlan)
+			paramTypes := collectPlanParamPlanTypes(queryPlan)
 			require.Len(t, paramTypes, 1)
-			require.Equal(t, test.want, paramTypes[0])
+			require.Equal(t, int32(test.want), paramTypes[0].Id)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, paramTypes[0].Width)
+			}
+			if test.wantScale != 0 {
+				require.Equal(t, test.wantScale, paramTypes[0].Scale)
+			}
 		})
 	}
 }
