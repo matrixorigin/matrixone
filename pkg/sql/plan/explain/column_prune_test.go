@@ -868,6 +868,104 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Len(t, agg.AggList, 1)
 	})
 
+	t.Run("sample compacts discarded output slots", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_regionkey from (select sample(n_comment, n_regionkey, 2 rows) from nation) s",
+		)
+		require.NoError(t, err)
+
+		var sampleNode *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_SAMPLE {
+				sampleNode = node
+				break
+			}
+		}
+		require.NotNil(t, sampleNode)
+		require.Len(t, sampleNode.AggList, 1)
+		require.Equal(t, int32(0), sampleNode.AggList[0].GetCol().ColPos)
+		require.Len(t, sampleNode.ProjectList, 1)
+		require.Equal(t, int32(0), sampleNode.ProjectList[0].GetCol().ColPos)
+
+		columns, err := getPrunedTableColumns(logicPlan)
+		require.NoError(t, err)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_regionkey"}},
+		}, columns)
+	})
+
+	t.Run("sample chooses low-cost discarded carrier", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select sample(n_comment, n_regionkey, 2 rows) from nation) s",
+		)
+		require.NoError(t, err)
+
+		var sampleNode *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_SAMPLE {
+				sampleNode = node
+				break
+			}
+		}
+		require.NotNil(t, sampleNode)
+		require.Len(t, sampleNode.AggList, 1)
+		require.Equal(t, int32(0), sampleNode.AggList[0].GetCol().ColPos)
+
+		columns, err := getPrunedTableColumns(logicPlan)
+		require.NoError(t, err)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_regionkey"}},
+		}, columns)
+	})
+
+	t.Run("sample compacts having-only output", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_nationkey from (select n_nationkey, sample(n_comment, n_regionkey, 2 rows) from nation group by n_nationkey) s where n_regionkey > 0",
+		)
+		require.NoError(t, err)
+
+		var sampleNode *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_SAMPLE {
+				sampleNode = node
+				break
+			}
+		}
+		require.NotNil(t, sampleNode)
+		require.Len(t, sampleNode.AggList, 1)
+		require.Len(t, sampleNode.FilterList, 1)
+		havingCol := sampleNode.FilterList[0].GetF().Args[0].GetCol()
+		require.NotNil(t, havingCol)
+		require.Equal(t, int32(-2), havingCol.RelPos)
+		require.Equal(t, int32(1), havingCol.ColPos)
+	})
+
+	t.Run("sample retains side-effecting output", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_regionkey from (select sample(sleep(0), n_regionkey, 2 rows) from nation) s",
+		)
+		require.NoError(t, err)
+
+		var sampleNode *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_SAMPLE {
+				sampleNode = node
+				break
+			}
+		}
+		require.NotNil(t, sampleNode)
+		require.Len(t, sampleNode.AggList, 2)
+		require.Equal(t, "sleep", sampleNode.AggList[0].GetF().Func.ObjName)
+	})
+
 	t.Run("unused window operators are unreachable", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),

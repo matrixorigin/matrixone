@@ -80,6 +80,30 @@ select 1 from (select group_concat(payload), count(*) from carrier_l where id < 
 select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
 1
 1
+select b from (select sample(payload, b, 4 rows) from l) s order by b;
+b
+10
+10
+20
+30
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from l) s) q;
+count(*)
+4
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from l where a < 0) s) q;
+count(*)
+0
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from l where a = 2) s) q;
+count(*)
+1
+select count(*) from (select 1 from (select sample(payload, b, 100 percent) from l) s) q;
+count(*)
+4
+select a from (
+select a, sample(payload, b, 4 rows) from l group by a
+) s where b > 15 order by a, b;
+a
+1
+2
 create table tw(ts timestamp, v int);
 insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
 select _wend, max(v) from tw interval(ts, 1, day);
