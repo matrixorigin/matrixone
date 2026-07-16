@@ -2,10 +2,10 @@
 -- predicates (ported from classic fulltext's fulltext_pushdown). The membership-filter
 -- pushdown is transparent to query results, so this verifies result correctness across
 -- extra category / status / range filters, count, and LIMIT+OFFSET pagination — the
--- WHERE predicate is pushed into the WAND walk as a membership bitset. NOTE: fulltext2
--- NL semantics differ from classic fulltext — a multi-word AGAINST is an exact PHRASE,
--- not a bag-of-words — so the matched set is fulltext2's own; the point here is that the
--- filter is applied correctly and transparently.
+-- WHERE predicate is pushed into the WAND walk as a membership bitset. fulltext2 shares
+-- classic fulltext's MATCH surface AND its NL semantics (a multi-word AGAINST is an exact
+-- phrase in BOTH engines — verified row-identical), so these matched sets are the same
+-- rows classic fulltext returns; the ported result is a genuine parity fixture.
 set experimental_fulltext2_index = 1;
 set fulltext_bloom_filter_pushdown = 1;
 
