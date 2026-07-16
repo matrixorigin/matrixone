@@ -16,6 +16,7 @@ package maintenance
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ const (
 
 	tablePropertyMinSnapshotsToKeep = "history.expire.min-snapshots-to-keep"
 	tablePropertyMaxSnapshotAgeMS   = "history.expire.max-snapshot-age-ms"
+	tablePropertyMaxRefAgeMS        = "history.expire.max-ref-age-ms"
 )
 
 type MaintenanceTableMetadataLoader interface {
@@ -49,6 +51,7 @@ type ExpireSnapshotsPlanner struct {
 	ObjectReader      api.ObjectReader
 	Now               func() time.Time
 	DefaultRetainLast int
+	PlanningMaxMemory int64
 }
 
 func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req Request) (*CommitPlan, error) {
@@ -79,8 +82,16 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	expired := selectExpiredSnapshots(meta, olderThanMS, retainLast)
-	if len(expired) == 0 {
+	defaultSnapshotAgeMS, defaultRefAgeMS, err := expireRetentionAges(meta.Properties)
+	if err != nil {
+		return nil, err
+	}
+	protected, expiredRefs, err := protectedSnapshots(meta, now.UnixMilli(), retainLast, defaultSnapshotAgeMS, defaultRefAgeMS)
+	if err != nil {
+		return nil, err
+	}
+	expired := selectExpiredSnapshots(meta, olderThanMS, protected)
+	if len(expired) == 0 && len(expiredRefs) == 0 {
 		return &CommitPlan{
 			NoOp:             true,
 			NoOpSnapshotID:   currentID,
@@ -91,7 +102,10 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	updates := make([]api.CommitUpdate, 0, 1)
+	updates := make([]api.CommitUpdate, 0, len(expiredRefs)+1)
+	for _, refName := range expiredRefs {
+		updates = append(updates, api.CommitUpdate{Type: "remove-snapshot-ref", Ref: refName})
+	}
 	orphanPaths, err := p.expiredSnapshotFiles(ctx, expired)
 	if err != nil {
 		return nil, err
@@ -100,12 +114,15 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 	for _, snapshot := range expired {
 		snapshotIDs = append(snapshotIDs, snapshot.SnapshotID)
 	}
-	updates = append(updates, api.CommitUpdate{Type: "remove-snapshots", SnapshotIDs: snapshotIDs})
+	if len(snapshotIDs) > 0 {
+		updates = append(updates, api.CommitUpdate{Type: "remove-snapshots", SnapshotIDs: snapshotIDs})
+	}
 	summary := map[string]string{
 		"operation":         string(OperationExpireSnapshots),
 		"engine":            "matrixone",
 		"idempotency-key":   firstNonEmptyString(req.IdempotencyKey, req.JobID),
 		"expired-snapshots": strconv.Itoa(len(expired)),
+		"expired-refs":      strconv.Itoa(len(expiredRefs)),
 		"older-than-ms":     strconv.FormatInt(olderThanMS, 10),
 		"retain-last":       strconv.Itoa(retainLast),
 	}
@@ -145,6 +162,8 @@ func (p ExpireSnapshotsPlanner) expiredSnapshotFiles(ctx context.Context, snapsh
 	}
 	seenManifestLists := make(map[string]struct{}, len(snapshots))
 	seenManifests := make(map[string]struct{})
+	memoryLimit := maintenanceMemoryLimit(p.PlanningMaxMemory)
+	var memoryUsed int64
 	for _, snapshot := range snapshots {
 		manifestListPath := strings.TrimSpace(snapshot.ManifestList)
 		if manifestListPath == "" {
@@ -154,14 +173,26 @@ func (p ExpireSnapshotsPlanner) expiredSnapshotFiles(ctx context.Context, snapsh
 			continue
 		}
 		seenManifestLists[manifestListPath] = struct{}{}
-		manifestListData, err := p.ObjectReader.Read(ctx, manifestListPath, 0, -1)
+		manifestListData, err := readMaintenanceMetadataObject(ctx, p.ObjectReader, manifestListPath, memoryLimit-memoryUsed)
 		if err != nil {
+			if isMaintenancePlanningLimit(err) {
+				return nil, err
+			}
 			return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg expire-snapshots failed to read manifest list", map[string]string{"manifest_list": api.RedactPath(manifestListPath)}, err)
 		}
-		manifests, err := facade.ReadManifestList(ctx, manifestListData)
+		manifests, err := readMaintenanceManifestList(
+			ctx, facade, manifestListData,
+			maintenanceRecordLimit(memoryLimit-memoryUsed, 512),
+			memoryLimit-memoryUsed,
+		)
 		if err != nil {
 			return nil, err
 		}
+		memoryBytes := metadata.ManifestListMemoryWeight(cap(manifestListData), manifests)
+		if err := checkMaintenanceMemory(memoryUsed, memoryBytes, memoryLimit); err != nil {
+			return nil, err
+		}
+		memoryUsed += memoryBytes
 		for _, manifest := range manifests {
 			manifestPath := strings.TrimSpace(manifest.Path)
 			if manifestPath == "" {
@@ -172,14 +203,29 @@ func (p ExpireSnapshotsPlanner) expiredSnapshotFiles(ctx context.Context, snapsh
 				continue
 			}
 			seenManifests[manifestPath] = struct{}{}
-			manifestData, err := p.ObjectReader.Read(ctx, manifestPath, 0, -1)
+			manifestData, err := readMaintenanceMetadataObject(ctx, p.ObjectReader, manifestPath, memoryLimit-memoryUsed)
 			if err != nil {
+				if isMaintenancePlanningLimit(err) {
+					return nil, err
+				}
 				return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg expire-snapshots failed to read manifest", map[string]string{"manifest": api.RedactPath(manifestPath)}, err)
 			}
-			entries, err := facade.ReadManifest(ctx, manifestData)
+			entries, err := readMaintenanceManifest(
+				ctx, facade, manifestData,
+				maintenanceRecordLimit(memoryLimit-memoryUsed, 1024),
+				memoryLimit-memoryUsed,
+			)
 			if err != nil {
 				return nil, err
 			}
+			entryBytes := metadata.ManifestEntriesMemoryWeight(cap(manifestData), entries)
+			if err := checkMaintenanceMemory(memoryUsed, entryBytes, memoryLimit); err != nil {
+				return nil, err
+			}
+			// Keep a conservative cumulative charge. The output path slice retains
+			// strings from decoded entries, so treating the decoded manifest as live
+			// avoids a second, fragile per-field accounting scheme.
+			memoryUsed += entryBytes
 			for _, entry := range entries {
 				if filePath := strings.TrimSpace(entry.DataFile.FilePath); filePath != "" {
 					paths = append(paths, filePath)
@@ -229,6 +275,18 @@ func expireOptions(options, properties map[string]string, now time.Time, default
 	return 0, 0, api.NewError(api.ErrConfigInvalid, "Iceberg expire-snapshots requires older_than or table max snapshot age property", nil)
 }
 
+func expireRetentionAges(properties map[string]string) (int64, int64, error) {
+	maxSnapshotAgeMS, _, err := int64Option(properties, tablePropertyMaxSnapshotAgeMS)
+	if err != nil {
+		return 0, 0, err
+	}
+	maxRefAgeMS, _, err := int64Option(properties, tablePropertyMaxRefAgeMS)
+	if err != nil {
+		return 0, 0, err
+	}
+	return maxSnapshotAgeMS, maxRefAgeMS, nil
+}
+
 func parseExpireOlderThan(raw string) (time.Time, error) {
 	raw = strings.Trim(strings.TrimSpace(raw), `'"`)
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999", "2006-01-02 15:04:05", "2006-01-02"} {
@@ -242,8 +300,7 @@ func parseExpireOlderThan(raw string) (time.Time, error) {
 	return time.Time{}, api.NewError(api.ErrConfigInvalid, "Iceberg expire-snapshots older_than is invalid", map[string]string{"older_than": raw})
 }
 
-func selectExpiredSnapshots(meta *api.TableMetadata, olderThanMS int64, retainLast int) []api.Snapshot {
-	protected := protectedSnapshots(meta, retainLast)
+func selectExpiredSnapshots(meta *api.TableMetadata, olderThanMS int64, protected map[int64]bool) []api.Snapshot {
 	expired := make([]api.Snapshot, 0)
 	for _, snapshot := range meta.Snapshots {
 		if snapshot.SnapshotID == 0 || snapshot.TimestampMS >= olderThanMS {
@@ -257,45 +314,83 @@ func selectExpiredSnapshots(meta *api.TableMetadata, olderThanMS int64, retainLa
 	return expired
 }
 
-func protectedSnapshots(meta *api.TableMetadata, retainLast int) map[int64]bool {
+func protectedSnapshots(meta *api.TableMetadata, nowMS int64, defaultMinSnapshots int, defaultMaxSnapshotAgeMS, defaultMaxRefAgeMS int64) (map[int64]bool, []string, error) {
 	protected := make(map[int64]bool)
 	if meta == nil {
-		return protected
-	}
-	if meta.CurrentSnapshotID != nil {
-		protected[*meta.CurrentSnapshotID] = true
+		return protected, nil, nil
 	}
 	byID := make(map[int64]api.Snapshot, len(meta.Snapshots))
 	for _, snapshot := range meta.Snapshots {
 		byID[snapshot.SnapshotID] = snapshot
 	}
-	for _, ref := range meta.Refs {
-		if ref.SnapshotID != 0 {
-			protected[ref.SnapshotID] = true
-			limit := ref.MinSnapshotsToKeep
-			if limit < 1 {
-				limit = 1
+	expiredRefs := make([]string, 0)
+	hasMainRef := false
+	for name, ref := range meta.Refs {
+		if ref.SnapshotID == 0 {
+			continue
+		}
+		head, ok := byID[ref.SnapshotID]
+		if !ok {
+			return nil, nil, api.NewError(api.ErrMetadataInvalid, "Iceberg snapshot ref points to an unknown snapshot", map[string]string{
+				"ref":         name,
+				"snapshot_id": strconv.FormatInt(ref.SnapshotID, 10),
+			})
+		}
+		if name == "main" {
+			hasMainRef = true
+		}
+		maxRefAgeMS := ref.MaxRefAgeMS
+		if maxRefAgeMS <= 0 {
+			maxRefAgeMS = defaultMaxRefAgeMS
+		}
+		if name != "main" && snapshotOlderThanAge(head.TimestampMS, nowMS, maxRefAgeMS) {
+			expiredRefs = append(expiredRefs, name)
+			continue
+		}
+		protected[ref.SnapshotID] = true
+		if name != "main" && strings.EqualFold(strings.TrimSpace(ref.Type), "tag") {
+			continue
+		}
+		minSnapshots := ref.MinSnapshotsToKeep
+		if minSnapshots <= 0 {
+			minSnapshots = defaultMinSnapshots
+		}
+		if minSnapshots <= 0 {
+			minSnapshots = 1
+		}
+		maxSnapshotAgeMS := ref.MaxSnapshotAgeMS
+		if maxSnapshotAgeMS <= 0 {
+			maxSnapshotAgeMS = defaultMaxSnapshotAgeMS
+		}
+		protectSnapshotLineage(protected, byID, ref.SnapshotID, minSnapshots, nowMS, maxSnapshotAgeMS)
+	}
+	// Older metadata may omit refs while still carrying current-snapshot-id.
+	// Treat it as an implicit main branch, including retain-last/max-age lineage,
+	// rather than protecting only the head snapshot.
+	if meta.CurrentSnapshotID != nil {
+		if !hasMainRef {
+			minSnapshots := defaultMinSnapshots
+			if minSnapshots <= 0 {
+				minSnapshots = 1
 			}
-			protectSnapshotLineage(protected, byID, ref.SnapshotID, limit)
+			protectSnapshotLineage(protected, byID, *meta.CurrentSnapshotID, minSnapshots, nowMS, defaultMaxSnapshotAgeMS)
+		} else {
+			protected[*meta.CurrentSnapshotID] = true
 		}
 	}
-	if retainLast > 0 {
-		newest := append([]api.Snapshot(nil), meta.Snapshots...)
-		sortSnapshotsNewestFirst(newest)
-		for i, snapshot := range newest {
-			if i >= retainLast {
-				break
-			}
-			protected[snapshot.SnapshotID] = true
-		}
-	}
-	return protected
+	sort.Strings(expiredRefs)
+	return protected, expiredRefs, nil
 }
 
-func protectSnapshotLineage(protected map[int64]bool, byID map[int64]api.Snapshot, snapshotID int64, limit int) {
-	for i := 0; i < limit && snapshotID != 0; i++ {
+func protectSnapshotLineage(protected map[int64]bool, byID map[int64]api.Snapshot, snapshotID int64, minSnapshots int, nowMS, maxSnapshotAgeMS int64) {
+	for count := 0; snapshotID != 0; count++ {
 		snapshot, ok := byID[snapshotID]
 		if !ok {
+			return
+		}
+		withinMinSnapshots := count < minSnapshots
+		withinMaxAge := snapshotWithinAge(snapshot.TimestampMS, nowMS, maxSnapshotAgeMS)
+		if !withinMinSnapshots && !withinMaxAge {
 			return
 		}
 		protected[snapshotID] = true
@@ -306,12 +401,12 @@ func protectSnapshotLineage(protected map[int64]bool, byID map[int64]api.Snapsho
 	}
 }
 
-func sortSnapshotsNewestFirst(snapshots []api.Snapshot) {
-	for i := 1; i < len(snapshots); i++ {
-		for j := i; j > 0 && snapshots[j-1].TimestampMS < snapshots[j].TimestampMS; j-- {
-			snapshots[j-1], snapshots[j] = snapshots[j], snapshots[j-1]
-		}
-	}
+func snapshotOlderThanAge(timestampMS, nowMS, maxAgeMS int64) bool {
+	return maxAgeMS > 0 && nowMS > maxAgeMS && timestampMS < nowMS-maxAgeMS
+}
+
+func snapshotWithinAge(timestampMS, nowMS, maxAgeMS int64) bool {
+	return maxAgeMS > 0 && (nowMS <= maxAgeMS || timestampMS >= nowMS-maxAgeMS)
 }
 
 func currentSnapshotID(meta *api.TableMetadata) (int64, error) {

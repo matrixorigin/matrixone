@@ -185,40 +185,50 @@ func (w AppendWorkflow) CommitAppend(ctx context.Context, req api.AppendRequest)
 	attempt, err := w.Builder.BuildAppend(ctx, req)
 	if err != nil {
 		attempt = appendBuildFailureAttempt(req, attempt)
-		recordErr := w.recordOrphans(ctx, req, attempt, true)
-		w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
+		recoveryCtx, cancel := NewRecoveryContext(ctx)
+		defer cancel()
+		recordErr := w.recordOrphans(recoveryCtx, req, attempt, true)
+		w.onFailure(recoveryCtx, req, attempt, "failed", appendErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	result, err := w.Committer.CommitTable(ctx, commitRequest(req, attempt))
 	if err == nil && result != nil && !result.Unknown {
-		w.onSuccess(ctx, req, attempt, *result)
+		recoveryCtx, cancel := NewRecoveryContext(ctx)
+		defer cancel()
+		w.onSuccess(recoveryCtx, req, attempt, *result)
 		return result, nil
 	}
 	if isUnknownResult(err, result) {
-		verified, ok, verifyErr := w.verifyUnknown(ctx, req, attempt, result)
+		recoveryCtx, cancel := NewRecoveryContext(ctx)
+		defer cancel()
+		verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, attempt, result)
 		if verifyErr != nil {
-			_ = w.recordOrphans(ctx, req, attempt, false)
-			w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(verifyErr))
-			return nil, verifyErr
+			recordErr := w.recordOrphans(recoveryCtx, req, attempt, false)
+			w.onFailure(recoveryCtx, req, attempt, "unknown", appendErrorCategory(verifyErr))
+			return nil, stderrors.Join(verifyErr, recordErr)
 		}
 		if ok {
-			w.onSuccess(ctx, req, attempt, *verified)
+			w.onSuccess(recoveryCtx, req, attempt, *verified)
 			return verified, nil
 		}
-		_ = w.recordOrphans(ctx, req, attempt, false)
+		recordErr := w.recordOrphans(recoveryCtx, req, attempt, false)
 		unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg append commit result is unknown and could not be verified", map[string]string{"table": req.Table})
-		w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(unknownErr))
-		return nil, unknownErr
+		w.onFailure(recoveryCtx, req, attempt, "unknown", appendErrorCategory(unknownErr))
+		return nil, stderrors.Join(unknownErr, recordErr)
 	}
 	if err != nil {
-		_ = w.recordOrphans(ctx, req, attempt, true)
-		w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
-		return nil, err
+		recoveryCtx, cancel := NewRecoveryContext(ctx)
+		defer cancel()
+		recordErr := w.recordOrphans(recoveryCtx, req, attempt, true)
+		w.onFailure(recoveryCtx, req, attempt, "failed", appendErrorCategory(err))
+		return nil, stderrors.Join(err, recordErr)
 	}
-	_ = w.recordOrphans(ctx, req, attempt, false)
+	recoveryCtx, cancel := NewRecoveryContext(ctx)
+	defer cancel()
+	recordErr := w.recordOrphans(recoveryCtx, req, attempt, false)
 	unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg append commit did not return a result", map[string]string{"table": req.Table})
-	w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(unknownErr))
-	return nil, unknownErr
+	w.onFailure(recoveryCtx, req, attempt, "unknown", appendErrorCategory(unknownErr))
+	return nil, stderrors.Join(unknownErr, recordErr)
 }
 
 func appendBuildFailureAttempt(req api.AppendRequest, attempt *api.CommitAttempt) *api.CommitAttempt {

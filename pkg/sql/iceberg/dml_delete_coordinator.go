@@ -41,6 +41,8 @@ type DMLDeleteCoordinatorSpec struct {
 	EqualityColumnIndexes []int32
 	PredicateStable       bool
 	IncludePositionRows   bool
+	MemoryLimitBytes      int64
+	InitialMemoryBytes    int64
 }
 
 type DMLDeleteCoordinatorFromScanPlanRequest struct {
@@ -132,6 +134,7 @@ type DMLDeleteCoordinator struct {
 	spec      DMLDeleteCoordinatorSpec
 	writeReq  icebergwrite.AppendRequest
 	collector *DMLMatchedScanCollector
+	budget    *dmlMemoryBudget
 }
 
 func NewDMLDeleteCoordinator(spec DMLDeleteCoordinatorSpec) *DMLDeleteCoordinator {
@@ -158,6 +161,7 @@ func (c *DMLDeleteCoordinator) Begin(ctx context.Context, req icebergwrite.Appen
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML delete coordinator requires row-ordinal column index", nil))
 	}
 	c.writeReq = req
+	c.budget = newDMLMemoryBudget(c.spec.MemoryLimitBytes, c.spec.InitialMemoryBytes)
 	c.collector = NewDMLMatchedScanCollector(DMLMatchedScanCollectorSpec{
 		DataFiles:               append([]api.DataFile(nil), c.spec.DataFiles...),
 		DataFilePathColumnIndex: req.DataFilePathColumnIndex,
@@ -166,6 +170,7 @@ func (c *DMLDeleteCoordinator) Begin(ctx context.Context, req icebergwrite.Appen
 		EqualityColumnIndexes:   append([]int32(nil), c.spec.EqualityColumnIndexes...),
 		PredicateStable:         c.spec.PredicateStable,
 		IncludePositionRows:     includePositionRows,
+		MemoryBudget:            c.budget,
 	})
 	return nil
 }
@@ -181,23 +186,44 @@ func (c *DMLDeleteCoordinator) Commit(ctx context.Context) error {
 	if c == nil || c.collector == nil {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML delete coordinator was not opened", nil))
 	}
+	defer c.cleanRuntimeState()
+	requestBytes := c.collector.RetainedBytes()
+	if err := c.budget.reserve(ctx, requestBytes); err != nil {
+		return err
+	}
+	defer c.budget.release(requestBytes)
 	targets := c.collector.Targets()
 	if len(targets) == 0 {
 		return nil
 	}
 	req := DMLDeleteActionStreamRequest{
-		Schema:         c.spec.Schema,
-		Base:           c.commitBase(),
-		DeleteSchemaID: c.spec.DeleteSchemaID,
-		ObjectWriter:   c.spec.ObjectWriter,
-		Targets:        targets,
+		Schema:             c.spec.Schema,
+		Base:               c.commitBase(),
+		DeleteSchemaID:     c.spec.DeleteSchemaID,
+		ObjectWriter:       c.spec.ObjectWriter,
+		Targets:            targets,
+		MemoryLimitBytes:   c.spec.MemoryLimitBytes,
+		InitialMemoryBytes: c.budget.usedBytes(),
+		MemoryBudget:       c.budget,
 	}
 	_, err := c.spec.Committer.CommitDelete(ctx, req)
 	return err
 }
 
 func (c *DMLDeleteCoordinator) Abort(ctx context.Context, cause error) error {
+	c.cleanRuntimeState()
 	return nil
+}
+
+func (c *DMLDeleteCoordinator) cleanRuntimeState() {
+	if c == nil {
+		return
+	}
+	if c.collector != nil {
+		c.collector.Reset()
+	}
+	c.collector = nil
+	c.budget = nil
 }
 
 func (c *DMLDeleteCoordinator) commitBase() dml.CommitBase {

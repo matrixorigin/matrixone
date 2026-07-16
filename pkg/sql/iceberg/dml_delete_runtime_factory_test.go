@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestDMLGeneratedIdentifiersFailClosedAtInt64Boundary(t *testing.T) {
+	maxSnapshot := int64(math.MaxInt64)
+	meta := &api.TableMetadata{
+		CurrentSnapshotID:  &maxSnapshot,
+		LastSequenceNumber: math.MaxInt64,
+	}
+	require.Zero(t, nextDMLSnapshotID(time.Unix(0, 1), meta))
+	require.Zero(t, nextDMLSequenceNumber(meta))
+}
 
 func TestDMLRuntimeCoordinatorCacheKeyDoesNotCollideOnDelimiters(t *testing.T) {
 	base := icebergwrite.AppendRequest{AccountID: 1, Operation: icebergwrite.OperationDelete, CatalogName: "catalog", Namespace: "sales", Table: "orders", StatementID: "stmt"}
@@ -594,11 +605,12 @@ func TestDMLDeleteRuntimeFactoryAllowsSchemaIDZeroAndPreservesBaseManifests(t *t
 		Status:     api.ManifestEntryAdded,
 		SnapshotID: 30,
 		DataFile: api.DataFile{
-			Content:     api.DataFileContentData,
-			FilePath:    "s3://warehouse/gold/orders/data/a.parquet",
-			FileFormat:  "parquet",
-			RecordCount: 10,
-			SpecID:      0,
+			Content:         api.DataFileContentData,
+			FilePath:        "s3://warehouse/gold/orders/data/a.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     10,
+			FileSizeInBytes: 100,
+			SpecID:          0,
 		},
 	}})
 	require.NoError(t, err)
@@ -628,7 +640,7 @@ func TestDMLDeleteRuntimeFactoryAllowsSchemaIDZeroAndPreservesBaseManifests(t *t
 		"refs": {"main": {"snapshot-id": 30, "type": "branch"}}
 	}`)
 	factory := dmlRuntimeFactoryForRawMetadata(t, rawMeta, api.CatalogCapabilities{})
-	coord, err := factory.NewCoordinator(ctx, icebergwrite.AppendRequest{
+	req := icebergwrite.AppendRequest{
 		Operation:      icebergwrite.OperationDelete,
 		AccountID:      42,
 		StatementID:    "stmt-1",
@@ -648,7 +660,14 @@ func TestDMLDeleteRuntimeFactoryAllowsSchemaIDZeroAndPreservesBaseManifests(t *t
 				SpecID:      0,
 			}},
 		},
-	})
+	}
+	factory.opts.Config.Write.DMLMaxMemory = 64
+	_, err = factory.NewCoordinator(ctx, req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+
+	factory.opts.Config.Write.DMLMaxMemory = api.DefaultConfig().Write.DMLMaxMemory
+	coord, err := factory.NewCoordinator(ctx, req)
 	require.NoError(t, err)
 	dmlCoord, ok := coord.(*DMLDeleteCoordinator)
 	require.True(t, ok)

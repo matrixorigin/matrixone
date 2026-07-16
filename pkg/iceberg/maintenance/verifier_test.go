@@ -16,6 +16,7 @@ package maintenance
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,7 @@ func TestCatalogCommitVerifierChecksTargetSnapshot(t *testing.T) {
 				Namespace:        req.Namespace,
 				TableName:        req.Table,
 				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
-				MetadataJSON:     expireMetadataJSON(),
+				MetadataJSON:     appliedRewriteMetadataJSON(),
 			}, nil
 		},
 	}
@@ -69,7 +70,7 @@ func TestCatalogCommitVerifierReturnsUnverifiedOnSnapshotMismatch(t *testing.T) 
 				Namespace:        req.Namespace,
 				TableName:        req.Table,
 				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
-				MetadataJSON:     expireMetadataJSON(),
+				MetadataJSON:     appliedRewriteMetadataJSON(),
 			}, nil
 		},
 	}
@@ -97,7 +98,7 @@ func TestCatalogCommitVerifierReturnsUnverifiedOnMetadataHashMismatch(t *testing
 				Namespace:        req.Namespace,
 				TableName:        req.Table,
 				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
-				MetadataJSON:     expireMetadataJSON(),
+				MetadataJSON:     appliedRewriteMetadataJSON(),
 			}, nil
 		},
 	}
@@ -128,7 +129,7 @@ func TestCatalogFactoryCommitVerifierCreatesClientForResolvedCatalog(t *testing.
 				Namespace:        req.Namespace,
 				TableName:        req.Table,
 				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
-				MetadataJSON:     expireMetadataJSON(),
+				MetadataJSON:     appliedRewriteMetadataJSON(),
 			}, nil
 		},
 	}
@@ -168,14 +169,64 @@ func TestCatalogCommitVerifierValidationEdges(t *testing.T) {
 	require.Equal(t, int64(4), result.SnapshotID)
 	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
 
-	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{}}).VerifyCommittedMaintenance(context.Background(), Request{
+	unknownPlan := maintenanceCommitPlan()
+	unknownPlan.Attempt.BaseSnapshotID = 4
+	unknownPlan.Attempt.TargetRef = "main"
+	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{
+		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			return &api.LoadTableResponse{
+				Namespace: req.Namespace, TableName: req.Table,
+				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
+				MetadataJSON:     expireMetadataJSON(),
+			}, nil
+		},
+	}}).VerifyCommittedMaintenance(context.Background(), Request{
 		Operation: OperationRewriteManifests,
 		Namespace: "sales",
 		Table:     "orders",
-	}, maintenanceCommitPlan(), api.CommitResult{SnapshotID: 0, CommitID: "unknown"})
+		TargetRef: "main",
+	}, unknownPlan, api.CommitResult{SnapshotID: 0, CommitID: "unknown", Unknown: true})
 	require.NoError(t, err)
 	require.False(t, ok)
+	require.False(t, result.Verified)
+	require.True(t, result.Unknown)
+	require.Zero(t, result.SnapshotID)
 	require.Equal(t, "unknown", result.CommitID)
+}
+
+func TestCatalogCommitVerifierVerifiesUnknownServerRewriteBySummary(t *testing.T) {
+	plan := maintenanceCommitPlan()
+	plan.Attempt.BaseSnapshotID = 4
+	plan.Attempt.TargetRef = "main"
+	result, ok, err := (CatalogCommitVerifier{Client: &catalog.MockClient{
+		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			return &api.LoadTableResponse{
+				Namespace: req.Namespace, TableName: req.Table,
+				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
+				MetadataJSON:     appliedRewriteMetadataJSON(),
+			}, nil
+		},
+	}}).VerifyCommittedMaintenance(context.Background(), Request{
+		Operation: OperationRewriteManifests,
+		Namespace: "sales",
+		Table:     "orders",
+		TargetRef: "main",
+	}, plan, api.CommitResult{CommitID: "unknown", Unknown: true})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, result.Verified)
+	require.False(t, result.Unknown)
+	require.Equal(t, int64(4), result.SnapshotID)
+	require.Equal(t, "unknown", result.CommitID)
+}
+
+func appliedRewriteMetadataJSON() []byte {
+	return []byte(strings.Replace(
+		string(expireMetadataJSON()),
+		`"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767484800000, "manifest-list": "s3://warehouse/orders/metadata/snap-4.avro"`,
+		`"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767484800000, "manifest-list": "s3://warehouse/orders/metadata/rewrite-manifest.avro", "summary": {"operation": "rewrite_manifests"}`,
+		1,
+	))
 }
 
 func TestCatalogFactoryCommitVerifierValidationEdges(t *testing.T) {

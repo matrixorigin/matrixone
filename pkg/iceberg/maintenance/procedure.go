@@ -331,7 +331,9 @@ func (s MarkAndSweep) Sweep(ctx context.Context) (SweepResult, error) {
 		}
 		if err := s.Cleaner.CleanupOrphan(ctx, candidate); err != nil {
 			result.Failed++
-			_ = s.Store.MarkOrphanFailed(ctx, candidate, string(api.ErrOrphanCleanupFailed))
+			if markErr := s.Store.MarkOrphanFailed(ctx, candidate, string(api.ErrOrphanCleanupFailed)); markErr != nil {
+				return result, stderrors.Join(err, markErr)
+			}
 			continue
 		}
 		result.Deleted++

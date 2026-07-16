@@ -31,10 +31,12 @@ const (
 	ConfigKeyManifestParallel   = "iceberg.scan.manifest_read_parallelism"
 	ConfigKeyMaxManifestFiles   = "iceberg.scan.max_manifest_files"
 	ConfigKeyMaxDataFiles       = "iceberg.scan.max_data_files"
+	ConfigKeyPlanningMaxMemory  = "iceberg.scan.planning_max_memory"
 	ConfigKeyServerPlanningMode = "iceberg.scan.server_planning"
 	ConfigKeyWriteEnabled       = "iceberg.write.enable"
 	ConfigKeyDeleteEnabled      = "iceberg.write.delete.enable"
 	ConfigKeyDeleteMaxMemory    = "iceberg.delete.max_memory"
+	ConfigKeyDMLMaxMemory       = "iceberg.write.dml_max_memory"
 	ConfigKeyDeleteSpillEnabled = "iceberg.delete.spill.enabled"
 	ConfigKeyDMLEnabled         = "iceberg.write.dml.enable"
 	ConfigKeyMaintenanceEnabled = "iceberg.maintenance.enable"
@@ -73,6 +75,7 @@ type ScanPlanningConfig struct {
 	ManifestReadParallelism int
 	MaxManifestFiles        int
 	MaxDataFiles            int
+	PlanningMaxMemory       int64
 	ServerPlanningMode      ServerPlanningMode
 	PlanningTimeout         time.Duration
 }
@@ -81,6 +84,7 @@ type WriteConfig struct {
 	EnableWrite       bool
 	EnableDelete      bool
 	DeleteMaxMemory   int64
+	DMLMaxMemory      int64
 	EnableDeleteSpill bool
 	EnableDML         bool
 	EnableMaintenance bool
@@ -122,6 +126,7 @@ func FromParameters(params moconfig.IcebergParameters) Config {
 			ManifestReadParallelism: params.ManifestReadParallelism,
 			MaxManifestFiles:        params.MaxManifestFiles,
 			MaxDataFiles:            params.MaxDataFiles,
+			PlanningMaxMemory:       params.PlanningMaxMemory,
 			ServerPlanningMode:      ServerPlanningMode(params.ServerPlanningMode),
 			PlanningTimeout:         params.PlanningTimeout.Duration,
 		},
@@ -129,6 +134,7 @@ func FromParameters(params moconfig.IcebergParameters) Config {
 			EnableWrite:       params.EnableWrite,
 			EnableDelete:      params.EnableDelete,
 			DeleteMaxMemory:   params.DeleteMaxMemory,
+			DMLMaxMemory:      params.DMLMaxMemory,
 			EnableDeleteSpill: params.EnableDeleteSpill,
 			EnableDML:         params.EnableDML,
 			EnableMaintenance: params.EnableMaintenance,
@@ -177,11 +183,13 @@ func (c Config) toParameters() moconfig.IcebergParameters {
 		ManifestReadParallelism: c.Scan.ManifestReadParallelism,
 		MaxManifestFiles:        c.Scan.MaxManifestFiles,
 		MaxDataFiles:            c.Scan.MaxDataFiles,
+		PlanningMaxMemory:       c.Scan.PlanningMaxMemory,
 		ServerPlanningMode:      string(c.Scan.ServerPlanningMode),
 		PlanningTimeout:         toml.Duration{Duration: c.Scan.PlanningTimeout},
 		EnableWrite:             c.Write.EnableWrite,
 		EnableDelete:            c.Write.EnableDelete,
 		DeleteMaxMemory:         c.Write.DeleteMaxMemory,
+		DMLMaxMemory:            c.Write.DMLMaxMemory,
 		EnableDeleteSpill:       c.Write.EnableDeleteSpill,
 		EnableDML:               c.Write.EnableDML,
 		EnableMaintenance:       c.Write.EnableMaintenance,

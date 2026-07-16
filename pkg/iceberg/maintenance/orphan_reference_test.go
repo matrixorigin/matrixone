@@ -99,6 +99,26 @@ func TestMetadataReferenceCheckerFindsCommittedReferences(t *testing.T) {
 	require.True(t, referenced)
 }
 
+func TestMetadataReferenceCheckerBoundsMetadataReads(t *testing.T) {
+	const manifestList = "s3://warehouse/orders/metadata/snap-10.avro"
+	checker := MetadataReferenceChecker{
+		Loader: MaintenanceTableMetadataLoaderFunc(func(context.Context, Request) (*api.TableMetadata, error) {
+			return &api.TableMetadata{Snapshots: []api.Snapshot{{SnapshotID: 10, ManifestList: manifestList}}}, nil
+		}),
+		ObjectReader:   fakeOrphanReferenceReader{manifestList: []byte("oversized")},
+		MaxMemoryBytes: 1,
+	}
+	_, err := checker.IsReferenced(context.Background(), write.OrphanCandidate{
+		AccountID: 1,
+		CatalogID: 2,
+		Namespace: "sales",
+		TableName: "orders",
+		FilePath:  "s3://warehouse/orders/data/orphan.parquet",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+}
+
 type fakeOrphanReferenceReader map[string][]byte
 
 func (r fakeOrphanReferenceReader) Read(ctx context.Context, location string, offset, length int64) ([]byte, error) {

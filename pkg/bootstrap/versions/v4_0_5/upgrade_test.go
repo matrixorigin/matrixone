@@ -22,10 +22,23 @@ import (
 )
 
 func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
-	if len(tenantUpgEntries) != 3 {
-		t.Fatalf("expected 3 Iceberg orphan cleanup tenant upgrades, got %d", len(tenantUpgEntries))
+	if len(tenantUpgEntries) != 4 {
+		t.Fatalf("expected 4 Iceberg tenant upgrades, got %d", len(tenantUpgEntries))
 	}
-	for _, entry := range tenantUpgEntries {
+	allocator := tenantUpgEntries[0]
+	if allocator.UpgType != versions.MODIFY_COLUMN || allocator.TableName != "mo_iceberg_catalogs" {
+		t.Fatalf("unexpected catalog allocator upgrade: %+v", allocator)
+	}
+	allocatorSQL := strings.ToLower(allocator.UpgSql)
+	for _, want := range []string{"alter table", "modify catalog_id", "auto_increment"} {
+		if !strings.Contains(allocatorSQL, want) {
+			t.Fatalf("catalog allocator upgrade SQL missing %q: %s", want, allocator.UpgSql)
+		}
+	}
+	if strings.Contains(allocatorSQL, "drop primary key") {
+		t.Fatalf("catalog allocator upgrade should preserve the account-scoped primary key: %s", allocator.UpgSql)
+	}
+	for _, entry := range tenantUpgEntries[1:] {
 		if entry.UpgType != versions.ADD_COLUMN {
 			t.Fatalf("%s should be ADD_COLUMN", entry.TableName)
 		}

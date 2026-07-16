@@ -101,7 +101,7 @@ func TestPairDeleteTasksPositionAndEquality(t *testing.T) {
 			},
 		},
 	}
-	tasks, err := pairDeleteTasks(dataTasks, deleteEntries, "cred")
+	tasks, err := pairDeleteTasks(dataTasks, deleteEntries, nil, "cred")
 	if err != nil {
 		t.Fatalf("pair delete tasks: %v", err)
 	}
@@ -135,28 +135,41 @@ func TestPairDeleteTasksTreatsZeroSpecAndSequenceAsValid(t *testing.T) {
 		{manifestPath: "eq-zero", file: api.DataFile{Content: api.DataFileContentEqualityDelete, FilePath: "eq-zero.parquet", FileFormat: "parquet", EqualityIDs: []int{1}, SpecID: 0, SequenceNumber: 0}},
 		{manifestPath: "eq-one", file: api.DataFile{Content: api.DataFileContentEqualityDelete, FilePath: "eq-one.parquet", FileFormat: "parquet", EqualityIDs: []int{1}, SpecID: 0, SequenceNumber: 1}},
 	}
-	tasks, err := pairDeleteTasks(dataTasks, deleteEntries, "")
+	tasks, err := pairDeleteTasks(dataTasks, deleteEntries, map[int]int{0: 0, 1: 1}, "")
 	if err != nil {
 		t.Fatalf("pair delete tasks: %v", err)
 	}
-	if len(tasks) != 2 {
-		t.Fatalf("expected position seq=0 and equality seq=1 only on spec 0 data, got %+v", tasks)
+	if len(tasks) != 4 {
+		t.Fatalf("expected unpartitioned position and equality deletes for both specs, got %+v", tasks)
 	}
-	byPath := make(map[string]api.DeleteFileTask, len(tasks))
+	var positionCount, equalityCount int
 	for _, task := range tasks {
-		byPath[task.DataFile.FilePath] = task
-		if task.AppliesToPath != dataTasks[0].DataFile.FilePath {
-			t.Fatalf("delete crossed partition spec boundary: %+v", task)
+		switch task.DataFile.FilePath {
+		case "pos.parquet":
+			positionCount++
+		case "eq-zero.parquet":
+			t.Fatalf("equality delete at the same sequence must not apply: %+v", tasks)
+		case "eq-one.parquet":
+			equalityCount++
 		}
 	}
-	if _, ok := byPath["pos.parquet"]; !ok {
-		t.Fatalf("position delete at sequence zero must apply: %+v", tasks)
+	if positionCount != 2 || equalityCount != 2 {
+		t.Fatalf("expected global position=2 and equality=2, got %+v", tasks)
 	}
-	if _, ok := byPath["eq-zero.parquet"]; ok {
-		t.Fatalf("equality delete at the same sequence must not apply: %+v", tasks)
-	}
-	if _, ok := byPath["eq-one.parquet"]; !ok {
-		t.Fatalf("later equality delete must apply: %+v", tasks)
+}
+
+func TestPairDeleteTasksRejectsUnknownDeleteSpec(t *testing.T) {
+	for _, file := range []api.DataFile{
+		{Content: api.DataFileContentEqualityDelete, FilePath: "eq-delete.parquet", SpecID: 7, SequenceNumber: 2, EqualityIDs: []int{1}},
+		{Content: api.DataFileContentPositionDelete, FilePath: "pos-delete.parquet", SpecID: 7, SequenceNumber: 2},
+	} {
+		_, err := pairDeleteTasks(
+			[]api.DataFileTask{{DataFile: api.DataFile{FilePath: "data.parquet", SpecID: 1, SequenceNumber: 1}}},
+			[]deleteManifestEntry{{file: file}},
+			map[int]int{1: 1},
+			"",
+		)
+		assertIcebergCode(t, err, api.ErrMetadataInvalid)
 	}
 }
 
@@ -176,7 +189,34 @@ func TestPairDeleteTasksStopsBeforeDeleteTaskFanoutExceedsLimit(t *testing.T) {
 		},
 	}}
 
-	_, err := pairDeleteTasksBounded(context.Background(), dataTasks, deleteEntries, "", 1, api.ServerPlanningAuto)
+	_, err := pairDeleteTasksBounded(context.Background(), dataTasks, deleteEntries, nil, "", 1, api.ServerPlanningAuto)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+}
+
+func TestPairDeleteTasksChargesDerivedPlanningMemoryBeforeFanout(t *testing.T) {
+	dataTasks := []api.DataFileTask{{DataFile: api.DataFile{FilePath: "data.parquet", SpecID: 0, SequenceNumber: 1}}}
+	deleteEntries := []deleteManifestEntry{{
+		manifestPath: "delete-manifest.avro",
+		file: api.DataFile{
+			Content:        api.DataFileContentEqualityDelete,
+			FilePath:       "delete.parquet",
+			SpecID:         0,
+			SequenceNumber: 2,
+			EqualityIDs:    []int{1},
+		},
+	}}
+	memoryUsed := int64(0)
+	_, err := pairDeleteTasksBoundedMemory(
+		context.Background(),
+		dataTasks,
+		deleteEntries,
+		map[int]int{0: 0},
+		"",
+		10,
+		api.ServerPlanningAuto,
+		&memoryUsed,
+		1,
+	)
 	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
 }
 
@@ -193,6 +233,7 @@ func TestValidateP1DeleteFileRejectsInvalidDeleteMetadata(t *testing.T) {
 	for name, mutate := range map[string]func(*api.DataFile){
 		"negative records": func(file *api.DataFile) { file.RecordCount = -1 },
 		"negative size":    func(file *api.DataFile) { file.FileSizeInBytes = -1 },
+		"missing row size": func(file *api.DataFile) { file.FileSizeInBytes = 0 },
 		"bad format":       func(file *api.DataFile) { file.FileFormat = "orc" },
 		"missing equality": func(file *api.DataFile) { file.EqualityIDs = nil },
 		"bad content":      func(file *api.DataFile) { file.Content = api.DataFileContent(99) },

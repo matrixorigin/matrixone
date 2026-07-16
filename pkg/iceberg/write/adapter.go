@@ -85,6 +85,8 @@ type ManifestAttemptBuilder struct {
 	SequenceNumber     int64
 	TimestampMS        int64
 	PreservedManifests []api.ManifestFile
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 	LastResult         *AppendManifestResult
 }
 
@@ -105,6 +107,8 @@ func (b *ManifestAttemptBuilder) BuildAppend(ctx context.Context, req api.Append
 		ManifestPath:       b.ManifestPath,
 		ManifestListPath:   b.ManifestListPath,
 		PreservedManifests: append([]api.ManifestFile(nil), b.PreservedManifests...),
+		MaxMemoryBytes:     b.MaxMemoryBytes,
+		InitialMemoryBytes: b.InitialMemoryBytes,
 	})
 	if err != nil {
 		return nil, err

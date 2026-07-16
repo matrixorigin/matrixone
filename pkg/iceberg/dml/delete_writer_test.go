@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,24 @@ func TestWriteEqualityDeleteObjectWritesPayloadThroughObjectWriter(t *testing.T)
 	require.Equal(t, 1, pf.Root().Column("id").ID())
 }
 
+func TestDeleteObjectWriterRejectsParquetWorkingSetOverSharedBudget(t *testing.T) {
+	budget := &testDeleteWriteBudget{limit: 4 << 20}
+	writer := &recordingDeleteObjectWriter{}
+	_, err := WritePositionDeleteObject(context.Background(), writer, PositionDeleteWriteRequest{
+		FilePath:           "s3://warehouse/orders/delete/pos-bounded.parquet",
+		ReferencedDataFile: "s3://warehouse/orders/data/a.parquet",
+		Rows: []PositionDeleteRow{{
+			FilePath: "s3://warehouse/orders/data/a.parquet",
+			Pos:      1,
+		}},
+		MemoryBudget: budget,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+	require.Empty(t, writer.objects)
+	require.Zero(t, budget.used)
+}
+
 func TestWriteEqualityDeleteFileMaterializesDeleteManifest(t *testing.T) {
 	ctx := context.Background()
 	var buf bytes.Buffer
@@ -307,6 +326,18 @@ func TestDeleteMetricBoundsCoverTypesAndNaN(t *testing.T) {
 	require.Equal(t, int64(7), file.ValueCounts[1])
 }
 
+func TestDeleteMetricOmitsOversizedStringBounds(t *testing.T) {
+	metrics := newDeleteMetrics([]api.SchemaField{{
+		ID: 1, Name: "key", Type: api.IcebergType{Kind: api.TypeString},
+	}})
+	metrics.observe(context.Background(), 1, "small")
+	metrics.observe(context.Background(), 1, strings.Repeat("x", maxDeleteWriterBoundBytes+1))
+	metrics.observe(context.Background(), 1, "later")
+	require.True(t, metrics.boundsOff[1])
+	require.NotContains(t, metrics.lowerBounds, 1)
+	require.NotContains(t, metrics.upperBounds, 1)
+}
+
 func TestDeleteBoundHelpersCoverUnsupportedAndComparison(t *testing.T) {
 	ctx := context.Background()
 	for _, tt := range []struct {
@@ -373,6 +404,32 @@ func requireDeleteParquetColumnPlainEncoded(t *testing.T, file *parquet.File, pa
 
 type recordingDeleteObjectWriter struct {
 	objects map[string][]byte
+}
+
+type testDeleteWriteBudget struct {
+	limit int64
+	used  int64
+}
+
+func (b *testDeleteWriteBudget) Reserve(ctx context.Context, bytes int64) error {
+	if bytes <= 0 {
+		return nil
+	}
+	if b.used > b.limit || bytes > b.limit-b.used {
+		return api.NewError(api.ErrPlanningLimitExceeded, "test delete memory limit exceeded", map[string]string{
+			"used":  strconv.FormatInt(b.used, 10),
+			"bytes": strconv.FormatInt(bytes, 10),
+		})
+	}
+	b.used += bytes
+	return nil
+}
+
+func (b *testDeleteWriteBudget) Release(bytes int64) {
+	b.used -= bytes
+	if b.used < 0 {
+		b.used = 0
+	}
 }
 
 func (w *recordingDeleteObjectWriter) WriteObject(ctx context.Context, location string, payload []byte) error {

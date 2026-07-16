@@ -648,12 +648,12 @@ func (c *RESTClient) roundTrip(ctx context.Context, operation string, req api.Ca
 		return rawHTTPResponse{}, api.WrapError(api.ErrCatalogUnavailable, "Iceberg REST request failed", map[string]string{"operation": operation, "uri": target}, err)
 	}
 	defer resp.Body.Close()
-	data, readErr := io.ReadAll(io.LimitReader(resp.Body, c.maxBodyBytes+1))
+	data, readErr := api.ReadAllBounded(resp.Body, c.maxBodyBytes)
 	if readErr != nil {
+		if stderrors.Is(readErr, api.ErrMaterializationLimitExceeded) {
+			return rawHTTPResponse{}, api.NewError(api.ErrCatalogUnavailable, "Iceberg REST response body is too large", map[string]string{"operation": operation})
+		}
 		return rawHTTPResponse{}, api.WrapError(api.ErrCatalogUnavailable, "Iceberg REST response read failed", map[string]string{"operation": operation}, readErr)
-	}
-	if int64(len(data)) > c.maxBodyBytes {
-		return rawHTTPResponse{}, api.NewError(api.ErrCatalogUnavailable, "Iceberg REST response body is too large", map[string]string{"operation": operation})
 	}
 	return rawHTTPResponse{statusCode: resp.StatusCode, headers: resp.Header.Clone(), body: data}, nil
 }
@@ -1336,6 +1336,8 @@ func commitUpdateWires(in []api.CommitUpdate) []commitUpdateWire {
 			wire.MaxRefAgeMS = update.MaxRefAgeMS
 		case "remove-snapshots":
 			wire.SnapshotIDs = append([]int64(nil), update.SnapshotIDs...)
+		case "remove-snapshot-ref":
+			wire.RefName = update.Ref
 		default:
 			wire.Payload = cloneStringMap(update.Payload)
 			wire.FilePath = update.FilePath

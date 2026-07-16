@@ -34,7 +34,13 @@ func (v CatalogCommitVerifier) VerifyDMLCommit(ctx context.Context, req CommitWo
 			"table": req.Stream.Base.Table,
 		})
 	}
-	if result == nil || result.SnapshotID <= 0 {
+	expected, ok := dmlExpectedSnapshot(materialized)
+	if !ok {
+		return result, false, api.NewError(api.ErrMetadataInvalid, "Iceberg DML commit verifier has no expected snapshot", map[string]string{
+			"table": req.Stream.Base.Table,
+		})
+	}
+	if result != nil && result.SnapshotID > 0 && result.SnapshotID != expected.SnapshotID {
 		return result, false, nil
 	}
 	catalogReq := req.Catalog
@@ -64,15 +70,41 @@ func (v CatalogCommitVerifier) VerifyDMLCommit(ctx context.Context, req CommitWo
 	if err != nil {
 		return result, false, err
 	}
-	if snapshot.SnapshotID != result.SnapshotID {
+	if snapshot.SnapshotID != expected.SnapshotID {
 		return result, false, nil
 	}
-	if strings.TrimSpace(result.MetadataLocationHash) != "" && meta.MetadataLocationHash != result.MetadataLocationHash {
+	if expected.ManifestList != "" && strings.TrimSpace(snapshot.ManifestList) != strings.TrimSpace(expected.ManifestList) {
 		return result, false, nil
 	}
-	verified := *result
+	idempotencyKey := strings.TrimSpace(materialized.Attempt.IdempotencyKey)
+	if idempotencyKey != "" && strings.TrimSpace(snapshot.Summary["idempotency-key"]) != idempotencyKey {
+		return result, false, nil
+	}
+	if result != nil && strings.TrimSpace(result.MetadataLocationHash) != "" && meta.MetadataLocationHash != result.MetadataLocationHash {
+		return result, false, nil
+	}
+	verified := api.CommitResult{}
+	if result != nil {
+		verified = *result
+	}
+	verified.SnapshotID = expected.SnapshotID
+	verified.MetadataLocation = meta.MetadataLocation
+	verified.MetadataLocationHash = meta.MetadataLocationHash
+	verified.Unknown = false
 	verified.Verified = true
 	return &verified, true, nil
+}
+
+func dmlExpectedSnapshot(materialized *ManifestMaterializeResult) (api.Snapshot, bool) {
+	if materialized == nil || materialized.Attempt == nil {
+		return api.Snapshot{}, false
+	}
+	for _, update := range materialized.Attempt.Updates {
+		if update.Type == "add-snapshot" && update.Snapshot != nil && update.Snapshot.SnapshotID > 0 {
+			return *update.Snapshot, true
+		}
+	}
+	return api.Snapshot{}, false
 }
 
 func dmlTargetRef(req CommitWorkflowRequest, materialized *ManifestMaterializeResult) string {

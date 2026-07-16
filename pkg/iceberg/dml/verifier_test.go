@@ -115,10 +115,20 @@ func TestCatalogCommitVerifierRejectsMissingClientAndMetadata(t *testing.T) {
 	require.Equal(t, int64(4), result.SnapshotID)
 	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
 
-	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{}}).VerifyDMLCommit(context.Background(), req, materialized, nil)
+	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{
+		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			return &api.LoadTableResponse{
+				Namespace: req.Namespace, TableName: req.Table,
+				MetadataLocation: "s3://warehouse/orders/metadata/v4.json",
+				MetadataJSON:     dmlVerifierMetadataJSON(),
+			}, nil
+		},
+	}}).VerifyDMLCommit(context.Background(), req, materialized, nil)
 	require.NoError(t, err)
-	require.False(t, ok)
-	require.Nil(t, result)
+	require.True(t, ok)
+	require.True(t, result.Verified)
+	require.False(t, result.Unknown)
+	require.Equal(t, int64(4), result.SnapshotID)
 }
 
 func TestDMLTargetSnapshotFallbacksAndErrors(t *testing.T) {
@@ -228,7 +238,7 @@ func dmlVerifierMetadataJSON() []byte {
 		},
 		"snapshots": [
 			{"snapshot-id": 3, "timestamp-ms": 1767312000000, "manifest-list": "s3://warehouse/orders/metadata/snap-3.avro"},
-			{"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767398400000, "manifest-list": "s3://warehouse/orders/metadata/snap-4.avro"}
+			{"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 1767398400000, "manifest-list": "s3://warehouse/orders/metadata/snap-4.avro", "summary": {"idempotency-key": "stmt-dml"}}
 		]
 	}`)
 }

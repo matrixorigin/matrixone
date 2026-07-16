@@ -16,6 +16,7 @@ package metadata
 
 import (
 	"bytes"
+	"math"
 	"strings"
 	"testing"
 
@@ -62,6 +63,114 @@ func TestWriteManifestRoundTrip(t *testing.T) {
 	require.Equal(t, int64(100), got[0].DataFile.RecordCount)
 	require.Equal(t, int64(1024), got[0].DataFile.ColumnSizes[1])
 	require.Equal(t, 19815, got[0].DataFile.Partition["created_day"])
+}
+
+func TestEncodeManifestBoundedRejectsOversizedOutput(t *testing.T) {
+	entries := []api.ManifestEntry{{
+		Status:     api.ManifestEntryAdded,
+		SnapshotID: 22,
+		DataFile: api.DataFile{
+			Content:         api.DataFileContentData,
+			FilePath:        "s3://warehouse/t/data/00001.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 10,
+			SpecID:          7,
+		},
+	}}
+	opts := manifestTestOptions(api.ManifestContentData, api.SchemaField{
+		ID: 10, Name: "created_at", Type: api.IcebergType{Kind: api.TypeDate},
+	}, api.PartitionField{SourceID: 10, FieldID: 1000, Name: "created_day", Transform: "identity"})
+
+	_, err := EncodeManifestBounded(entries, opts, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+
+	unbounded, err := EncodeManifest(entries, opts)
+	require.NoError(t, err)
+	// The bound is a peak allowance, so leave room for old+new backing arrays
+	// during deterministic buffer growth.
+	peakLimit := int64(len(unbounded)) * 4
+	bounded, err := EncodeManifestBounded(entries, opts, peakLimit)
+	require.NoError(t, err)
+	roundTrip, err := ReadManifest(bounded)
+	require.NoError(t, err)
+	require.Len(t, roundTrip, 1)
+	require.Equal(t, entries[0].DataFile.FilePath, roundTrip[0].DataFile.FilePath)
+	require.LessOrEqual(t, int64(cap(bounded)), peakLimit)
+}
+
+func TestEncodeManifestListBoundedRejectsOversizedOutput(t *testing.T) {
+	manifests := []api.ManifestFile{{
+		Path:            "s3://warehouse/t/metadata/manifest.avro",
+		Length:          10,
+		Content:         api.ManifestContentData,
+		AddedSnapshotID: 22,
+	}}
+	opts := ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 22, SequenceNumber: 1}
+
+	_, err := EncodeManifestListBounded(manifests, opts, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+}
+
+func TestManifestWritersRejectAvroIntTruncation(t *testing.T) {
+	_, err := EncodeManifestList([]api.ManifestFile{{
+		Path:            "s3://warehouse/t/metadata/manifest.avro",
+		Length:          10,
+		PartitionSpecID: int(int64(math.MaxInt32) + 1),
+		Content:         api.ManifestContentData,
+	}}, ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 22, SequenceNumber: 1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Avro int range")
+
+	entries := []api.ManifestEntry{{
+		Status:     api.ManifestEntryAdded,
+		SnapshotID: 22,
+		DataFile: api.DataFile{
+			Content:         api.DataFileContentEqualityDelete,
+			FilePath:        "s3://warehouse/t/delete/eq.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 10,
+			SpecID:          7,
+			EqualityIDs:     []int{int(int64(math.MaxInt32) + 1)},
+		},
+	}}
+	_, err = EncodeManifest(entries, manifestTestOptions(api.ManifestContentDeletes, api.SchemaField{
+		ID: 10, Name: "created_at", Type: api.IcebergType{Kind: api.TypeDate},
+	}, api.PartitionField{SourceID: 10, FieldID: 1000, Name: "created_day", Transform: "identity"}))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Avro int range")
+}
+
+func TestWriteManifestV2AddedEntryUsesInheritedSequenceNumbers(t *testing.T) {
+	data, err := EncodeManifest([]api.ManifestEntry{{
+		Status:         api.ManifestEntryAdded,
+		SnapshotID:     22,
+		SequenceNumber: 9,
+		FileSequence:   9,
+		DataFile: api.DataFile{
+			FilePath:        "s3://warehouse/t/data/00001.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 10,
+			SpecID:          7,
+		},
+	}}, manifestTestOptions(api.ManifestContentData, api.SchemaField{
+		ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong},
+	}))
+	require.NoError(t, err)
+
+	dec, err := ocf.NewDecoder(bytes.NewReader(data))
+	require.NoError(t, err)
+	defer dec.Close()
+	require.True(t, dec.HasNext())
+	var raw any
+	require.NoError(t, dec.Decode(&raw))
+	record := raw.(map[string]any)
+	require.Nil(t, unwrapUnion(record["sequence_number"]))
+	require.Nil(t, unwrapUnion(record["file_sequence_number"]))
 }
 
 func TestWriteManifestOCFHeaderPreservesIcebergSchemaProperties(t *testing.T) {

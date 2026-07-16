@@ -95,6 +95,7 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 		ManifestReadParallelism: scan.ManifestReadParallelism,
 		MaxManifestFiles:        scan.MaxManifestFiles,
 		MaxDataFiles:            scan.MaxDataFiles,
+		PlanningMaxMemory:       scan.PlanningMaxMemory,
 		PlanningTimeout:         scan.PlanningTimeout,
 	}
 	var planner api.ScanPlanner = localPlanner

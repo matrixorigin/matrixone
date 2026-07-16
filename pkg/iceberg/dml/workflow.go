@@ -17,6 +17,7 @@ package dml
 import (
 	"context"
 	stderrors "errors"
+	"math"
 	"strings"
 	"time"
 
@@ -73,6 +74,8 @@ type CommitWorkflowRequest struct {
 	PreservedManifests []api.ManifestFile
 	PreservedSources   []PreservedManifestSource
 	TableLocation      string
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 }
 
 func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest) (*api.CommitResult, error) {
@@ -84,9 +87,11 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 	}
 	intent, err := BuildCommitIntent(req.Stream)
 	if err != nil {
-		_ = w.recordOrphans(ctx, req, nil)
-		w.onFailure(ctx, req, "failed", dmlErrorCategory(err))
-		return nil, err
+		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+		defer cancel()
+		recordErr := w.recordOrphans(recoveryCtx, req, nil)
+		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		return nil, stderrors.Join(err, recordErr)
 	}
 	materialized, err := BuildManifestCommitAttempt(ctx, ManifestMaterializeRequest{
 		Intent:             *intent,
@@ -101,57 +106,71 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		ManifestListPath:   req.ManifestListPath,
 		PreservedManifests: append([]api.ManifestFile(nil), req.PreservedManifests...),
 		PreservedSources:   clonePreservedManifestSources(req.PreservedSources),
+		MaxMemoryBytes:     req.MaxMemoryBytes,
+		InitialMemoryBytes: req.InitialMemoryBytes,
 	})
 	if err != nil {
-		_ = w.recordOrphans(ctx, req, nil)
-		w.onFailure(ctx, req, "failed", dmlErrorCategory(err))
-		return nil, err
+		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+		defer cancel()
+		recordErr := w.recordOrphans(recoveryCtx, req, nil)
+		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		return nil, stderrors.Join(err, recordErr)
 	}
 	if err := w.writeManifests(ctx, materialized); err != nil {
-		_ = w.recordOrphans(ctx, req, materialized)
-		w.onFailure(ctx, req, "failed", dmlErrorCategory(err))
-		return nil, err
+		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+		defer cancel()
+		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
+		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		return nil, stderrors.Join(err, recordErr)
 	}
 	result, err := w.Committer.CommitTable(ctx, dmlCommitRequest(req.Catalog, req.Stream.Base, materialized.Attempt))
 	if err != nil {
 		if isDMLCommitUnknown(err, result) {
-			verified, ok, verifyErr := w.verifyUnknown(ctx, req, materialized, result)
+			recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+			defer cancel()
+			verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, materialized, result)
 			if verifyErr != nil {
-				_ = w.recordOrphans(ctx, req, materialized)
-				w.onFailure(ctx, req, "unknown", dmlErrorCategory(verifyErr))
-				return nil, verifyErr
+				recordErr := w.recordOrphans(recoveryCtx, req, materialized)
+				w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(verifyErr))
+				return nil, stderrors.Join(verifyErr, recordErr)
 			}
 			if ok {
-				w.onSuccess(ctx, req, intent, materialized, *verified)
+				w.onSuccess(recoveryCtx, req, intent, materialized, *verified)
 				return verified, nil
 			}
-			_ = w.recordOrphans(ctx, req, materialized)
+			recordErr := w.recordOrphans(recoveryCtx, req, materialized)
 			unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg DML commit result is unknown and could not be verified", map[string]string{"table": req.Stream.Base.Table})
-			w.onFailure(ctx, req, "unknown", dmlErrorCategory(unknownErr))
-			return nil, unknownErr
+			w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(unknownErr))
+			return nil, stderrors.Join(unknownErr, recordErr)
 		}
-		_ = w.recordOrphans(ctx, req, materialized)
-		w.onFailure(ctx, req, "failed", dmlErrorCategory(err))
-		return nil, err
+		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+		defer cancel()
+		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
+		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		return nil, stderrors.Join(err, recordErr)
 	}
 	if result == nil || result.Unknown {
-		verified, ok, verifyErr := w.verifyUnknown(ctx, req, materialized, result)
+		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+		defer cancel()
+		verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, materialized, result)
 		if verifyErr != nil {
-			_ = w.recordOrphans(ctx, req, materialized)
-			w.onFailure(ctx, req, "unknown", dmlErrorCategory(verifyErr))
-			return nil, verifyErr
+			recordErr := w.recordOrphans(recoveryCtx, req, materialized)
+			w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(verifyErr))
+			return nil, stderrors.Join(verifyErr, recordErr)
 		}
 		if ok {
-			w.onSuccess(ctx, req, intent, materialized, *verified)
+			w.onSuccess(recoveryCtx, req, intent, materialized, *verified)
 			return verified, nil
 		}
-		_ = w.recordOrphans(ctx, req, materialized)
+		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
 		unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg DML commit result is unknown and could not be verified", map[string]string{"table": req.Stream.Base.Table})
-		w.onFailure(ctx, req, "unknown", dmlErrorCategory(unknownErr))
-		return nil, unknownErr
+		w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(unknownErr))
+		return nil, stderrors.Join(unknownErr, recordErr)
 	}
-	committed := w.verifyCommitted(ctx, req, materialized, *result)
-	w.onSuccess(ctx, req, intent, materialized, committed)
+	recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+	defer cancel()
+	committed := w.verifyCommitted(recoveryCtx, req, materialized, *result)
+	w.onSuccess(recoveryCtx, req, intent, materialized, committed)
 	return &committed, nil
 }
 
@@ -378,15 +397,15 @@ func dmlActionRecordCount(stream ActionStream) int64 {
 	for _, action := range stream.Actions {
 		switch action.Kind {
 		case ActionAppendData:
-			rows += positiveRecordCount(action.File)
+			rows = saturatingDMLMetricAdd(rows, positiveRecordCount(action.File))
 		case ActionAddEqualityDelete, ActionAddPositionDelete:
-			rows += positiveRecordCount(action.DeleteFile)
+			rows = saturatingDMLMetricAdd(rows, positiveRecordCount(action.DeleteFile))
 		case ActionDeleteDataFile:
-			rows += positiveRecordCount(action.ReplacedFile)
+			rows = saturatingDMLMetricAdd(rows, positiveRecordCount(action.ReplacedFile))
 		case ActionRewriteDataFile:
-			rows += positiveRecordCount(action.ReplacedFile)
+			rows = saturatingDMLMetricAdd(rows, positiveRecordCount(action.ReplacedFile))
 			for _, file := range action.ReplacementFiles {
-				rows += positiveRecordCount(file)
+				rows = saturatingDMLMetricAdd(rows, positiveRecordCount(file))
 			}
 		}
 	}
@@ -425,6 +444,13 @@ func positiveRecordCount(file api.DataFile) int64 {
 		return 0
 	}
 	return file.RecordCount
+}
+
+func saturatingDMLMetricAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func logDMLHookWarning(message string, req CommitWorkflowRequest, result api.CommitResult, err error) {

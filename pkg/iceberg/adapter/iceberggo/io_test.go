@@ -76,6 +76,51 @@ func TestFileServiceIOReadSeekReadAtAndStat(t *testing.T) {
 	}
 }
 
+func TestFileServiceIOBoundsMaterializedReads(t *testing.T) {
+	ctx := context.Background()
+	mem, err := fileservice.NewMemoryFS("iceberg-go-bounded-read", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	writeAdapterMemoryFile(t, ctx, mem, "sales/orders.avro", []byte("12345"))
+	iofs := NewFileServiceIO(ctx, mopio.ScopedProvider{FileService: mem}, func(location string) mopio.ObjectScope {
+		return objectScopeForAdapterTest(location, strings.TrimPrefix(location, "s3://warehouse/"))
+	})
+	iofs.MaxMaterializedReadBytes = 4
+	if _, err := iofs.ReadFile("s3://warehouse/sales/orders.avro"); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded read error, got %v", err)
+	}
+}
+
+func TestFileServiceIOBoundsMaterializedWritesWithoutPublishingPartialObject(t *testing.T) {
+	ctx := context.Background()
+	mem, err := fileservice.NewMemoryFS("iceberg-go-bounded-write", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	iofs := NewFileServiceIO(ctx, mopio.ScopedProvider{FileService: mem}, func(location string) mopio.ObjectScope {
+		return objectScopeForAdapterTest(location, strings.TrimPrefix(location, "s3://warehouse/"))
+	})
+	iofs.MaxMaterializedWriteBytes = 8
+	if err := iofs.WriteFile("s3://warehouse/sales/too-large.bin", []byte("123456789")); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded writefile error, got %v", err)
+	}
+
+	writer, err := iofs.Create("s3://warehouse/sales/partial.bin")
+	if err != nil {
+		t.Fatalf("create bounded writer: %v", err)
+	}
+	if _, err := writer.Write([]byte("123456789")); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded streaming write error, got %v", err)
+	}
+	if err := writer.Close(); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected close to preserve write error, got %v", err)
+	}
+	if _, err := readAdapterMemoryFile(ctx, mem, "sales/partial.bin"); err == nil {
+		t.Fatalf("bounded writer published a partial object")
+	}
+}
+
 func TestFileServiceIOWriteCreateAndRemove(t *testing.T) {
 	ctx := context.Background()
 	mem, err := fileservice.NewMemoryFS("iceberg-go-write", fileservice.DisabledCacheConfig, nil)

@@ -15,6 +15,7 @@
 package write
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -195,6 +196,7 @@ func validatePartitionSpec(req api.AppendRequest, spec api.PartitionSpec, fields
 }
 
 func validateAppendDataFiles(req api.AppendRequest, specsByID map[int]api.PartitionSpec) error {
+	var totalRows, totalBytes int64
 	for _, file := range req.DataFiles {
 		if strings.TrimSpace(file.FilePath) == "" {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg append data file requires a path", map[string]string{"table": req.Table})
@@ -220,6 +222,13 @@ func validateAppendDataFiles(req api.AppendRequest, specsByID map[int]api.Partit
 				"path": api.RedactPath(file.FilePath),
 			})
 		}
+		if file.RecordCount > math.MaxInt64-totalRows || file.FileSizeInBytes > math.MaxInt64-totalBytes {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg append data file metrics overflow", map[string]string{
+				"path": api.RedactPath(file.FilePath),
+			})
+		}
+		totalRows += file.RecordCount
+		totalBytes += file.FileSizeInBytes
 		if len(specsByID) != 0 {
 			spec, exists := specsByID[file.SpecID]
 			if !exists {

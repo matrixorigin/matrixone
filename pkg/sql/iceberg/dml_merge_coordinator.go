@@ -45,6 +45,8 @@ type DMLMergeCoordinatorSpec struct {
 
 	TargetFileSizeBytes int64
 	TimeZone            *time.Location
+	MemoryLimitBytes    int64
+	InitialMemoryBytes  int64
 }
 
 type DMLMergeCoordinator struct {
@@ -58,6 +60,9 @@ type DMLMergeCoordinator struct {
 	updateBats       []*batch.Batch
 	insertBats       []*batch.Batch
 	mp               *mpool.MPool
+	budget           *dmlMemoryBudget
+	replacementBytes int64
+	matchedKeyBytes  int64
 }
 
 func NewDMLMergeCoordinator(spec DMLMergeCoordinatorSpec) *DMLMergeCoordinator {
@@ -91,6 +96,7 @@ func (c *DMLMergeCoordinator) Begin(ctx context.Context, req icebergwrite.Append
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML merge coordinator requires merge action column index", nil))
 	}
 	c.writeReq = req
+	c.budget = newDMLMemoryBudget(c.spec.MemoryLimitBytes, c.spec.InitialMemoryBytes)
 	c.replacementAttrs = append([]string(nil), req.Attrs[:req.DataFilePathColumnIndex]...)
 	c.replacementCols = make([]int, len(c.replacementAttrs))
 	for idx := range c.replacementCols {
@@ -101,6 +107,7 @@ func (c *DMLMergeCoordinator) Begin(ctx context.Context, req icebergwrite.Append
 		DataFilePathColumnIndex: req.DataFilePathColumnIndex,
 		RowOrdinalColumnIndex:   req.RowOrdinalColumnIndex,
 		IncludePositionRows:     true,
+		MemoryBudget:            c.budget,
 	}
 	c.deleteCollector = NewDMLMatchedScanCollector(collectorSpec)
 	c.updateCollector = NewDMLMatchedScanCollector(collectorSpec)
@@ -123,6 +130,14 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		return nil
 	}
 	ctx := proc.Ctx
+	// splitMergeActionBatch duplicates the input before the retained subsets are
+	// cloned. Account for that transient copy up front and release it when this
+	// call returns; retained collectors/batches take their own reservations.
+	transientBytes := retainedDMLBatchBytes(bat)
+	if err := c.budget.reserve(ctx, transientBytes); err != nil {
+		return err
+	}
+	defer c.budget.release(transientBytes)
 	deleteBatch, updateBatch, insertBatch, err := c.splitMergeActionBatch(ctx, bat, proc.Mp())
 	if err != nil {
 		return err
@@ -150,24 +165,36 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		if err != nil {
 			return err
 		}
+		retainedBytes := retainedDMLBatchBytes(updateBatch)
+		if err := c.budget.reserve(ctx, retainedBytes); err != nil {
+			return err
+		}
 		cloned, err := updateBatch.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
 		if err != nil {
+			c.budget.release(retainedBytes)
 			return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to clone matched update rows", nil, err))
 		}
 		c.mp = proc.Mp()
 		c.updateBats = append(c.updateBats, cloned)
+		c.replacementBytes = saturatingDMLAdd(c.replacementBytes, retainedBytes)
 	}
 	if insertBatch != nil && insertBatch.RowCount() > 0 {
 		replacementCols, err := dmlReplacementColumnIndexes(ctx, insertBatch, c.replacementAttrs, c.replacementCols)
 		if err != nil {
 			return err
 		}
+		retainedBytes := retainedDMLBatchBytes(insertBatch)
+		if err := c.budget.reserve(ctx, retainedBytes); err != nil {
+			return err
+		}
 		cloned, err := insertBatch.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
 		if err != nil {
+			c.budget.release(retainedBytes)
 			return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to clone unmatched insert rows", nil, err))
 		}
 		c.mp = proc.Mp()
 		c.insertBats = append(c.insertBats, cloned)
+		c.replacementBytes = saturatingDMLAdd(c.replacementBytes, retainedBytes)
 	}
 	return nil
 }
@@ -216,7 +243,12 @@ func (c *DMLMergeCoordinator) rejectDuplicateMatchedTargets(ctx context.Context,
 				"row_ordinal": strconv.FormatInt(ordinal, 10),
 			}))
 		}
+		keyBytes := int64(len(key) + 32)
+		if err := c.budget.reserve(ctx, keyBytes); err != nil {
+			return err
+		}
 		c.matchedRows[key] = struct{}{}
+		c.matchedKeyBytes = saturatingDMLAdd(c.matchedKeyBytes, keyBytes)
 	}
 	return nil
 }
@@ -225,7 +257,12 @@ func (c *DMLMergeCoordinator) Commit(ctx context.Context) error {
 	if c == nil || c.deleteCollector == nil || c.updateCollector == nil {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML merge coordinator was not opened", nil))
 	}
-	defer c.cleanReplacementBatches()
+	defer c.cleanRuntimeState()
+	requestBytes := saturatingDMLAdd(c.deleteCollector.RetainedBytes(), c.updateCollector.RetainedBytes())
+	if err := c.budget.reserve(ctx, requestBytes); err != nil {
+		return err
+	}
+	defer c.budget.release(requestBytes)
 	matchedDeletes := c.deleteCollector.Targets()
 	updateTargets := c.updateCollector.Targets()
 	if len(matchedDeletes) == 0 && len(updateTargets) == 0 && len(c.insertBats) == 0 {
@@ -247,13 +284,16 @@ func (c *DMLMergeCoordinator) Commit(ctx context.Context) error {
 		MatchedUpdates:                  matchedUpdates,
 		MatchedUpdateReplacementBatches: updateReplacements,
 		UnmatchedAppendBatches:          insertReplacements,
+		MemoryLimitBytes:                c.spec.MemoryLimitBytes,
+		InitialMemoryBytes:              c.budget.usedBytes(),
+		MemoryBudget:                    c.budget,
 	}
 	_, err := c.spec.Committer.CommitMerge(ctx, req)
 	return err
 }
 
 func (c *DMLMergeCoordinator) Abort(ctx context.Context, cause error) error {
-	c.cleanReplacementBatches()
+	c.cleanRuntimeState()
 	return nil
 }
 
@@ -363,6 +403,7 @@ func (c *DMLMergeCoordinator) replacementBatches(bats []*batch.Batch) []DMLRepla
 			TargetFileSizeBytes: c.spec.TargetFileSizeBytes,
 			TimeZone:            c.spec.TimeZone,
 			ObjectWriter:        c.spec.ObjectWriter,
+			MemoryBudget:        c.budget,
 		})
 	}
 	return out
@@ -410,6 +451,27 @@ func (c *DMLMergeCoordinator) cleanReplacementBatches() {
 	}
 	c.updateBats = nil
 	c.insertBats = nil
+	c.budget.release(c.replacementBytes)
+	c.replacementBytes = 0
+}
+
+func (c *DMLMergeCoordinator) cleanRuntimeState() {
+	if c == nil {
+		return
+	}
+	c.cleanReplacementBatches()
+	if c.deleteCollector != nil {
+		c.deleteCollector.Reset()
+	}
+	if c.updateCollector != nil {
+		c.updateCollector.Reset()
+	}
+	c.deleteCollector = nil
+	c.updateCollector = nil
+	c.budget.release(c.matchedKeyBytes)
+	c.matchedKeyBytes = 0
+	c.matchedRows = nil
+	c.budget = nil
 }
 
 var _ icebergwrite.Coordinator = (*DMLMergeCoordinator)(nil)

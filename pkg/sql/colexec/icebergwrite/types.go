@@ -105,6 +105,7 @@ type IcebergWrite struct {
 	Coordinator            Coordinator
 	Factory                CoordinatorFactory
 	coordinatorFromFactory bool
+	factoryInvoked         bool
 
 	objectIORefRetained bool
 

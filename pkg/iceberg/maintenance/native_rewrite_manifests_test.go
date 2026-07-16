@@ -16,6 +16,7 @@ package maintenance
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 	oldManifestPath := "s3://warehouse/orders/metadata/old-manifest.avro"
 	oldManifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
 	entries := []api.ManifestEntry{{
-		Status:         api.ManifestEntryExisting,
+		Status:         api.ManifestEntryAdded,
 		SnapshotID:     10,
 		SequenceNumber: 10,
 		FileSequence:   10,
@@ -55,8 +56,8 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 		SequenceNumber:       10,
 		MinSequenceNumber:    10,
 		AddedSnapshotID:      10,
-		ExistingFilesCount:   1,
-		ExistingRowsCount:    9,
+		AddedFilesCount:      1,
+		AddedRowsCount:       9,
 		ManifestPathHash:     api.PathHash(oldManifestPath),
 		ManifestPathRedacted: api.RedactPath(oldManifestPath),
 	}})
@@ -96,6 +97,9 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 	require.Len(t, rewrittenEntries, 1)
 	require.Equal(t, "s3://warehouse/orders/data/part-1.parquet", rewrittenEntries[0].DataFile.FilePath)
 	require.Equal(t, int64(9), rewrittenEntries[0].DataFile.RecordCount)
+	require.Equal(t, api.ManifestEntryExisting, rewrittenEntries[0].Status)
+	require.Equal(t, int64(10), rewrittenEntries[0].SequenceNumber)
+	require.Equal(t, int64(10), rewrittenEntries[0].FileSequence)
 
 	rewrittenManifestList, err := metadata.ReadManifestList(result.Objects[1].Payload)
 	require.NoError(t, err)
@@ -103,6 +107,10 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 	require.Equal(t, result.Manifests[0].Path, rewrittenManifestList[0].Path)
 	require.Equal(t, int64(len(result.Objects[0].Payload)), rewrittenManifestList[0].Length)
 	require.NotEqual(t, oldManifestPath, rewrittenManifestList[0].Path)
+	require.Equal(t, int64(11), rewrittenManifestList[0].SequenceNumber)
+	require.Equal(t, int64(10), rewrittenManifestList[0].MinSequenceNumber)
+	require.Zero(t, rewrittenManifestList[0].AddedFilesCount)
+	require.Equal(t, 1, rewrittenManifestList[0].ExistingFilesCount)
 }
 
 func TestRewriteManifestsMaterializerUsesCustomPathPrefixAndManifestListDirFallback(t *testing.T) {
@@ -150,6 +158,50 @@ func TestRewriteManifestsMaterializerRequiresObjectReader(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires an object reader")
+}
+
+func TestRewrittenMaintenanceManifestPreservesUnknownPositionReferenceCount(t *testing.T) {
+	manifest, err := rewrittenMaintenanceManifest(RewriteManifestsMaterializeRequest{
+		SnapshotID:     11,
+		SequenceNumber: 11,
+	}, api.ManifestFile{
+		Content:                  api.ManifestContentDeletes,
+		ReferencedDataFilesCount: 7,
+	}, []api.ManifestEntry{{
+		Status:         api.ManifestEntryExisting,
+		SequenceNumber: 10,
+		DataFile: api.DataFile{
+			Content:     api.DataFileContentPositionDelete,
+			RecordCount: 1,
+		},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, 7, manifest.ReferencedDataFilesCount)
+}
+
+func TestRewrittenMaintenanceManifestRejectsAggregateOverflow(t *testing.T) {
+	_, err := rewrittenMaintenanceManifest(RewriteManifestsMaterializeRequest{
+		SnapshotID: 11, SequenceNumber: 11,
+	}, api.ManifestFile{}, []api.ManifestEntry{
+		{SequenceNumber: 1, DataFile: api.DataFile{FilePath: "a.parquet", RecordCount: math.MaxInt64}},
+		{SequenceNumber: 1, DataFile: api.DataFile{FilePath: "b.parquet", RecordCount: 1}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+}
+
+func TestRewriteManifestsMaterializerBoundsMetadataReads(t *testing.T) {
+	const manifestList = "s3://warehouse/orders/metadata/snap-10.avro"
+	_, err := (RewriteManifestsMaterializer{
+		ObjectReader:   fakeRewriteManifestObjectReader{manifestList: []byte("oversized")},
+		MaxMemoryBytes: 1,
+	}).Materialize(context.Background(), RewriteManifestsMaterializeRequest{
+		Metadata:   maintenanceTestTableMetadata("s3://warehouse/orders"),
+		Snapshot:   api.Snapshot{SnapshotID: 10, ManifestList: manifestList},
+		SnapshotID: 11,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
 }
 
 type fakeRewriteManifestObjectReader map[string][]byte

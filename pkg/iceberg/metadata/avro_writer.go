@@ -17,6 +17,7 @@ package metadata
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -51,19 +52,8 @@ func WriteManifestList(w io.Writer, manifests []api.ManifestFile, opts ManifestL
 		return err
 	}
 	for _, manifest := range manifests {
-		if strings.TrimSpace(manifest.Path) == "" {
-			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains a manifest without a path", nil)
-		}
-		if manifest.Length < 0 {
-			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains a manifest with negative length", map[string]string{
-				"path": manifest.ManifestPathHash,
-			})
-		}
-		if manifest.Content != "" && manifest.Content != api.ManifestContentData && manifest.Content != api.ManifestContentDeletes {
-			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains an invalid manifest content type", map[string]string{
-				"path":    manifest.ManifestPathHash,
-				"content": string(manifest.Content),
-			})
+		if err := validateManifestFileForWrite(manifest); err != nil {
+			return err
 		}
 	}
 	enc, err := newIcebergOCFEncoder(manifestListWriterSchema, w, metadata)
@@ -72,8 +62,7 @@ func WriteManifestList(w io.Writer, manifests []api.ManifestFile, opts ManifestL
 	}
 	for _, manifest := range manifests {
 		if err := enc.Encode(manifestFileRecord(manifest)); err != nil {
-			_ = enc.Close()
-			return api.WrapError(api.ErrMetadataInvalid, "Iceberg manifest list OCF encode failed", map[string]string{"path": manifest.ManifestPathHash}, err)
+			return api.WrapError(api.ErrMetadataInvalid, "Iceberg manifest list OCF encode failed", map[string]string{"path": manifest.ManifestPathHash}, errors.Join(err, enc.Close()))
 		}
 	}
 	if err := enc.Close(); err != nil {
@@ -102,12 +91,10 @@ func WriteManifest(w io.Writer, entries []api.ManifestEntry, opts ManifestWriteO
 	for _, entry := range entries {
 		record, recordErr := manifestEntryRecord(entry, fields)
 		if recordErr != nil {
-			_ = enc.Close()
-			return recordErr
+			return errors.Join(recordErr, enc.Close())
 		}
 		if err := enc.Encode(record); err != nil {
-			_ = enc.Close()
-			return api.WrapError(api.ErrMetadataInvalid, "Iceberg manifest OCF encode failed", map[string]string{"path": entry.DataFile.FilePathHash}, err)
+			return api.WrapError(api.ErrMetadataInvalid, "Iceberg manifest OCF encode failed", map[string]string{"path": entry.DataFile.FilePathHash}, errors.Join(err, enc.Close()))
 		}
 	}
 	if err := enc.Close(); err != nil {
@@ -129,6 +116,22 @@ func newIcebergOCFEncoder(schema string, w io.Writer, metadata ...map[string][]b
 func EncodeManifestList(manifests []api.ManifestFile, opts ManifestListWriteOptions) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := WriteManifestList(&buf, manifests, opts); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// EncodeManifestListBounded is the production-safe materializing variant of
+// EncodeManifestList. The ordinary helper remains available to small in-memory
+// callers, while runtime planning/commit paths should use this method so an
+// unexpectedly large Avro object cannot grow a bytes.Buffer without limit.
+func EncodeManifestListBounded(manifests []api.ManifestFile, opts ManifestListWriteOptions, maxBytes int64) ([]byte, error) {
+	buf := boundedAvroOutput{maxBytes: maxBytes}
+	err := WriteManifestList(&buf, manifests, opts)
+	if buf.exceeded {
+		return nil, avroOutputLimitExceeded(maxBytes)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -166,6 +169,75 @@ func EncodeManifest(entries []api.ManifestEntry, opts ManifestWriteOptions) ([]b
 	return buf.Bytes(), nil
 }
 
+// EncodeManifestBounded is equivalent to EncodeManifest but gives the output
+// slice a deterministic hard peak capacity. Callers that retain other planning
+// state must subtract that state and the encoder scratch allowance before
+// passing maxBytes; hamba/avro keeps a block buffer in addition to this output.
+// A growth whose old+new backing arrays exceed maxBytes is rejected even when
+// the final output alone would fit.
+func EncodeManifestBounded(entries []api.ManifestEntry, opts ManifestWriteOptions, maxBytes int64) ([]byte, error) {
+	buf := boundedAvroOutput{maxBytes: maxBytes}
+	err := WriteManifest(&buf, entries, opts)
+	if buf.exceeded {
+		return nil, avroOutputLimitExceeded(maxBytes)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+type boundedAvroOutput struct {
+	data     []byte
+	maxBytes int64
+	exceeded bool
+}
+
+func (b *boundedAvroOutput) Write(payload []byte) (int, error) {
+	if b.maxBytes <= 0 || int64(len(payload)) > b.maxBytes-int64(len(b.data)) {
+		b.exceeded = true
+		return 0, avroOutputLimitExceeded(b.maxBytes)
+	}
+	required := len(b.data) + len(payload)
+	if required > cap(b.data) {
+		maxCapacity := math.MaxInt
+		if b.maxBytes < int64(maxCapacity) {
+			maxCapacity = int(b.maxBytes)
+		}
+		nextCapacity := cap(b.data) * 2
+		if nextCapacity < 512 {
+			nextCapacity = 512
+		}
+		if nextCapacity < required {
+			nextCapacity = required
+		}
+		if nextCapacity > maxCapacity {
+			nextCapacity = maxCapacity
+		}
+		if cap(b.data) > maxCapacity-nextCapacity {
+			b.exceeded = true
+			return 0, avroOutputLimitExceeded(b.maxBytes)
+		}
+		next := make([]byte, len(b.data), nextCapacity)
+		copy(next, b.data)
+		b.data = next
+	}
+	start := len(b.data)
+	b.data = b.data[:required]
+	copy(b.data[start:], payload)
+	return len(payload), nil
+}
+
+func (b *boundedAvroOutput) Bytes() []byte {
+	return b.data
+}
+
+func avroOutputLimitExceeded(limit int64) error {
+	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg Avro output exceeds its memory limit", map[string]string{
+		"limit_bytes": strconv.FormatInt(limit, 10),
+	})
+}
+
 func validateManifestWriteOptions(opts ManifestWriteOptions, entries []api.ManifestEntry) error {
 	if opts.FormatVersion != 2 {
 		return api.NewError(api.ErrUnsupportedFeature, "Iceberg manifest writer supports format version 2 only", map[string]string{
@@ -178,6 +250,24 @@ func validateManifestWriteOptions(opts ManifestWriteOptions, entries []api.Manif
 	if opts.Content != api.ManifestContentData && opts.Content != api.ManifestContentDeletes {
 		return api.NewError(api.ErrConfigInvalid, "Iceberg manifest writer requires data or deletes content", nil)
 	}
+	if !fitsNonNegativeInt32(opts.Schema.SchemaID) || !fitsNonNegativeInt32(opts.PartitionSpec.SpecID) {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest schema or partition spec id is outside the Avro int range", nil)
+	}
+	for _, field := range opts.Schema.Fields {
+		if err := validateSchemaFieldIntRanges(field); err != nil {
+			return err
+		}
+	}
+	for _, id := range opts.Schema.IdentifierFieldIDs {
+		if !fitsPositiveInt32(id) {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest identifier field id is outside the Avro int range", nil)
+		}
+	}
+	for _, field := range opts.PartitionSpec.Fields {
+		if !fitsPositiveInt32(field.SourceID) || !fitsPositiveInt32(field.FieldID) {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest partition field id is outside the Avro int range", map[string]string{"field": field.Name})
+		}
+	}
 	for _, entry := range entries {
 		if entry.Status < api.ManifestEntryExisting || entry.Status > api.ManifestEntryDeleted {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest entry status is invalid", nil)
@@ -185,10 +275,13 @@ func validateManifestWriteOptions(opts ManifestWriteOptions, entries []api.Manif
 		if strings.TrimSpace(entry.DataFile.FilePath) == "" {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest entry requires a data file path", nil)
 		}
-		if entry.DataFile.RecordCount < 0 || entry.DataFile.FileSizeInBytes < 0 {
+		if entry.SnapshotID < 0 || entry.SequenceNumber < 0 || entry.FileSequence < 0 || entry.DataFile.RecordCount < 0 || entry.DataFile.FileSizeInBytes < 0 {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest entry contains negative file metrics", map[string]string{
 				"path": entry.DataFile.FilePathHash,
 			})
+		}
+		if err := validateDataFileIntRanges(entry.DataFile); err != nil {
+			return err
 		}
 		if entry.DataFile.Content < api.DataFileContentData || entry.DataFile.Content > api.DataFileContentEqualityDelete {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest entry file content is invalid", map[string]string{
@@ -211,6 +304,110 @@ func validateManifestWriteOptions(opts ManifestWriteOptions, entries []api.Manif
 		}
 	}
 	return nil
+}
+
+func validateManifestFileForWrite(manifest api.ManifestFile) error {
+	if strings.TrimSpace(manifest.Path) == "" {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains a manifest without a path", nil)
+	}
+	if manifest.Length < 0 || manifest.SequenceNumber < 0 || manifest.MinSequenceNumber < 0 || manifest.AddedSnapshotID < 0 ||
+		manifest.AddedRowsCount < 0 || manifest.ExistingRowsCount < 0 || manifest.DeletedRowsCount < 0 ||
+		manifest.AddedFilesSizeInBytes < 0 || manifest.ExistingFilesSizeInBytes < 0 || manifest.DeletedFilesSizeInBytes < 0 {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains negative sequence or file metrics", map[string]string{
+			"path": manifest.ManifestPathHash,
+		})
+	}
+	if !fitsNonNegativeInt32(manifest.PartitionSpecID) || !fitsNonNegativeInt32(manifest.AddedFilesCount) ||
+		!fitsNonNegativeInt32(manifest.ExistingFilesCount) || !fitsNonNegativeInt32(manifest.DeletedFilesCount) ||
+		!fitsNonNegativeInt32(manifest.ReferencedDataFilesCount) {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains a value outside the Avro int range", map[string]string{
+			"path": manifest.ManifestPathHash,
+		})
+	}
+	if manifest.FirstRowID != nil && *manifest.FirstRowID < 0 {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains a negative first row id", map[string]string{"path": manifest.ManifestPathHash})
+	}
+	if manifest.Content != "" && manifest.Content != api.ManifestContentData && manifest.Content != api.ManifestContentDeletes {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest list contains an invalid manifest content type", map[string]string{
+			"path":    manifest.ManifestPathHash,
+			"content": string(manifest.Content),
+		})
+	}
+	return nil
+}
+
+func validateDataFileIntRanges(file api.DataFile) error {
+	if !fitsNonNegativeInt32(file.SpecID) || !fitsNonNegativeInt32(file.SortOrderID) || !fitsNonNegativeInt32(file.DeleteSchemaID) {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg data file contains an id outside the Avro int range", map[string]string{"path": file.FilePathHash})
+	}
+	for _, id := range file.EqualityIDs {
+		if !fitsPositiveInt32(id) {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg data file equality id is outside the Avro int range", map[string]string{"path": file.FilePathHash})
+		}
+	}
+	for _, values := range []map[int]int64{file.ColumnSizes, file.ValueCounts, file.NullValueCounts, file.NaNValueCounts} {
+		for id, value := range values {
+			if !fitsPositiveInt32(id) || value < 0 {
+				return api.NewError(api.ErrMetadataInvalid, "Iceberg data file column metric is outside its Avro range", map[string]string{"path": file.FilePathHash})
+			}
+		}
+	}
+	for _, values := range []map[int][]byte{file.LowerBounds, file.UpperBounds} {
+		for id := range values {
+			if !fitsPositiveInt32(id) {
+				return api.NewError(api.ErrMetadataInvalid, "Iceberg data file bound field id is outside the Avro int range", map[string]string{"path": file.FilePathHash})
+			}
+		}
+	}
+	for _, offset := range file.SplitOffsets {
+		if offset < 0 {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg data file contains a negative split offset", map[string]string{"path": file.FilePathHash})
+		}
+	}
+	return nil
+}
+
+func validateSchemaFieldIntRanges(field api.SchemaField) error {
+	if !fitsPositiveInt32(field.ID) {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg manifest schema field id is outside the Avro int range", map[string]string{"field": field.Name})
+	}
+	return validateIcebergTypeIntRanges(field.Type, field.Name)
+}
+
+func validateIcebergTypeIntRanges(typ api.IcebergType, fieldName string) error {
+	for _, nested := range typ.Fields {
+		if err := validateSchemaFieldIntRanges(nested); err != nil {
+			return err
+		}
+	}
+	if typ.Element != nil {
+		if !fitsPositiveInt32(typ.ElementID) {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg list element id is outside the Avro int range", map[string]string{"field": fieldName})
+		}
+		if err := validateIcebergTypeIntRanges(*typ.Element, fieldName); err != nil {
+			return err
+		}
+	}
+	if typ.Key != nil || typ.Value != nil {
+		if typ.Key == nil || typ.Value == nil || !fitsPositiveInt32(typ.KeyID) || !fitsPositiveInt32(typ.ValueID) {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg map key/value id is outside the Avro int range", map[string]string{"field": fieldName})
+		}
+		if err := validateIcebergTypeIntRanges(*typ.Key, fieldName); err != nil {
+			return err
+		}
+		if err := validateIcebergTypeIntRanges(*typ.Value, fieldName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fitsPositiveInt32(value int) bool {
+	return value > 0 && int64(value) <= math.MaxInt32
+}
+
+func fitsNonNegativeInt32(value int) bool {
+	return value >= 0 && int64(value) <= math.MaxInt32
 }
 
 func manifestOCFMetadata(opts ManifestWriteOptions) (map[string][]byte, error) {
@@ -271,11 +468,21 @@ func manifestEntryRecord(entry api.ManifestEntry, fields []partitionField) (map[
 	if err != nil {
 		return nil, err
 	}
+	sequenceNumber := any(entry.SequenceNumber)
+	fileSequenceNumber := any(entry.FileSequence)
+	if entry.Status == api.ManifestEntryAdded {
+		// Iceberg v2 requires both sequence fields to be null for added
+		// entries. The catalog assigns the manifest sequence during commit;
+		// writing the locally predicted number (especially zero) suppresses
+		// that inheritance and can make delete ordering incorrect.
+		sequenceNumber = nil
+		fileSequenceNumber = nil
+	}
 	return map[string]any{
 		"status":               int32(entry.Status),
 		"snapshot_id":          entry.SnapshotID,
-		"sequence_number":      entry.SequenceNumber,
-		"file_sequence_number": entry.FileSequence,
+		"sequence_number":      sequenceNumber,
+		"file_sequence_number": fileSequenceNumber,
 		"data_file":            dataFile,
 	}, nil
 }

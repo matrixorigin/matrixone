@@ -44,21 +44,25 @@ type DMLOverwriteCoordinatorSpec struct {
 
 	TargetFileSizeBytes int64
 	TimeZone            *time.Location
+	MemoryLimitBytes    int64
+	InitialMemoryBytes  int64
 }
 
 type DMLOverwriteCoordinator struct {
-	mu              sync.Mutex
-	spec            DMLOverwriteCoordinatorSpec
-	writeReq        icebergwrite.AppendRequest
-	replacementCols []int
-	replacementBats []*batch.Batch
-	mp              *mpool.MPool
-	opened          bool
-	activeScopes    int
-	commitAttempted bool
-	committed       bool
-	aborted         bool
-	commitErr       error
+	mu               sync.Mutex
+	spec             DMLOverwriteCoordinatorSpec
+	writeReq         icebergwrite.AppendRequest
+	replacementCols  []int
+	replacementBats  []*batch.Batch
+	mp               *mpool.MPool
+	opened           bool
+	activeScopes     int
+	commitAttempted  bool
+	committed        bool
+	aborted          bool
+	commitErr        error
+	budget           *dmlMemoryBudget
+	replacementBytes int64
 }
 
 func NewDMLOverwriteCoordinator(spec DMLOverwriteCoordinatorSpec) *DMLOverwriteCoordinator {
@@ -105,6 +109,7 @@ func (c *DMLOverwriteCoordinator) Begin(ctx context.Context, req icebergwrite.Ap
 			c.replacementCols[idx] = idx
 		}
 		c.opened = true
+		c.budget = newDMLMemoryBudget(c.spec.MemoryLimitBytes, c.spec.InitialMemoryBytes)
 	}
 	c.activeScopes++
 	return nil
@@ -139,24 +144,33 @@ func (c *DMLOverwriteCoordinator) AppendWithProcess(proc *process.Process, bat *
 	}
 	replacementCols := append([]int(nil), c.replacementCols...)
 	attrs := append([]string(nil), c.writeReq.Attrs...)
+	retainedBytes := retainedDMLBatchBytes(bat)
+	if err := c.budget.reserve(proc.Ctx, retainedBytes); err != nil {
+		c.mu.Unlock()
+		return err
+	}
 	c.mu.Unlock()
 
 	cloned, err := bat.CloneSelectedColumns(replacementCols, attrs, proc.Mp())
 	if err != nil {
+		c.budget.release(retainedBytes)
 		return api.ToMOErr(proc.Ctx, api.WrapError(api.ErrInternal, "Iceberg DML overwrite coordinator failed to clone replacement rows", nil, err))
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.aborted {
 		cloned.Clean(proc.Mp())
+		c.budget.release(retainedBytes)
 		return api.ToMOErr(proc.Ctx, api.NewError(api.ErrInternal, "Iceberg DML overwrite coordinator was aborted", nil))
 	}
 	if c.commitAttempted {
 		cloned.Clean(proc.Mp())
+		c.budget.release(retainedBytes)
 		return api.ToMOErr(proc.Ctx, api.NewError(api.ErrCommitUnknown, "Iceberg DML overwrite coordinator already committed before all rows were appended", nil))
 	}
 	c.mp = proc.Mp()
 	c.replacementBats = append(c.replacementBats, cloned)
+	c.replacementBytes = saturatingDMLAdd(c.replacementBytes, retainedBytes)
 	return nil
 }
 
@@ -187,6 +201,9 @@ func (c *DMLOverwriteCoordinator) Commit(ctx context.Context) error {
 		c.activeScopes--
 	}
 	req := c.commitRequestLocked()
+	req.MemoryLimitBytes = c.spec.MemoryLimitBytes
+	req.InitialMemoryBytes = c.budget.usedBytes()
+	req.MemoryBudget = c.budget
 	if len(req.ReplacementBatches) == 0 && len(req.AffectedDataFiles) == 0 {
 		c.commitAttempted = true
 		c.committed = true
@@ -229,6 +246,7 @@ func (c *DMLOverwriteCoordinator) commitRequestLocked() DMLOverwriteActionStream
 			TargetFileSizeBytes: c.spec.TargetFileSizeBytes,
 			TimeZone:            c.spec.TimeZone,
 			ObjectWriter:        c.spec.ObjectWriter,
+			MemoryBudget:        c.budget,
 		})
 	}
 	return DMLOverwriteActionStreamRequest{
@@ -242,6 +260,7 @@ func (c *DMLOverwriteCoordinator) commitRequestLocked() DMLOverwriteActionStream
 		ReplacementBatches: replacements,
 		ReplacementBatch: DMLReplacementDataBatch{
 			ObjectWriter: c.spec.ObjectWriter,
+			MemoryBudget: c.budget,
 		},
 	}
 }
@@ -296,6 +315,8 @@ func (c *DMLOverwriteCoordinator) cleanReplacementBatchesLocked() {
 		}
 	}
 	c.replacementBats = nil
+	c.budget.release(c.replacementBytes)
+	c.replacementBytes = 0
 }
 
 var _ icebergwrite.Coordinator = (*DMLOverwriteCoordinator)(nil)

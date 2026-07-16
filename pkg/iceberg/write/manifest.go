@@ -16,6 +16,8 @@ package write
 
 import (
 	"context"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +33,8 @@ type AppendManifestRequest struct {
 	ManifestPath       string
 	ManifestListPath   string
 	PreservedManifests []api.ManifestFile
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 }
 
 type AppendManifestResult struct {
@@ -56,6 +60,19 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 	if err != nil {
 		return nil, err
 	}
+	validated := req.Append
+	validated.DataFiles = attempt.DataFiles
+	if err := ValidateAppendRequest(validated); err != nil {
+		return nil, err
+	}
+	budget, err := newAppendManifestBudget(req.MaxMemoryBytes, req.InitialMemoryBytes)
+	if err != nil {
+		return nil, err
+	}
+	entryMemory := appendManifestEntriesMemoryWeight(attempt.DataFiles)
+	if err := budget.reserve(entryMemory); err != nil {
+		return nil, err
+	}
 	entries := make([]api.ManifestEntry, 0, len(attempt.DataFiles))
 	for _, file := range attempt.DataFiles {
 		entries = append(entries, api.ManifestEntry{
@@ -66,7 +83,7 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 			DataFile:       file,
 		})
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries, metadata.ManifestWriteOptions{
+	manifestBytes, err := budget.encodeManifest(entries, metadata.ManifestWriteOptions{
 		FormatVersion: req.Append.FormatVersion,
 		Schema:        req.Append.BaseSchema,
 		PartitionSpec: req.Append.BaseSpec,
@@ -78,7 +95,7 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 	manifest := api.ManifestFile{
 		Path:                  req.ManifestPath,
 		Length:                int64(len(manifestBytes)),
-		PartitionSpecID:       manifestPartitionSpecID(req.Append),
+		PartitionSpecID:       manifestPartitionSpecID(validated),
 		Content:               api.ManifestContentData,
 		SequenceNumber:        req.SequenceNumber,
 		MinSequenceNumber:     req.SequenceNumber,
@@ -90,11 +107,14 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 		ManifestPathHash:      api.PathHash(req.ManifestPath),
 	}
 	manifestList := append(cloneManifestFiles(req.PreservedManifests), manifest)
+	if err := budget.reserve(metadata.ManifestListMemoryWeight(0, manifestList)); err != nil {
+		return nil, err
+	}
 	var parentSnapshotID *int64
 	if req.Append.BaseSnapshotID > 0 {
 		parentSnapshotID = &req.Append.BaseSnapshotID
 	}
-	manifestListBytes, err := metadata.EncodeManifestList(manifestList, metadata.ManifestListWriteOptions{
+	manifestListBytes, err := budget.encodeManifestList(manifestList, metadata.ManifestListWriteOptions{
 		FormatVersion:    req.Append.FormatVersion,
 		SnapshotID:       req.SnapshotID,
 		ParentSnapshotID: parentSnapshotID,
@@ -163,4 +183,98 @@ func totalFileSize(files []api.DataFile) int64 {
 		total += file.FileSizeInBytes
 	}
 	return total
+}
+
+func appendManifestEntriesMemoryWeight(files []api.DataFile) int64 {
+	var total int64
+	for idx := range files {
+		weight := metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: files[idx]}})
+		if total > math.MaxInt64-weight {
+			return math.MaxInt64
+		}
+		total += weight
+	}
+	return total
+}
+
+type appendManifestBudget struct {
+	limit int64
+	used  int64
+}
+
+func newAppendManifestBudget(limit, initial int64) (*appendManifestBudget, error) {
+	if initial < 0 {
+		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg append initial memory usage cannot be negative", nil)
+	}
+	budget := &appendManifestBudget{limit: limit, used: initial}
+	if limit > 0 && initial > limit {
+		return nil, appendManifestMemoryExceeded(initial, 0, limit)
+	}
+	return budget, nil
+}
+
+func (b *appendManifestBudget) reserve(bytes int64) error {
+	if b == nil || bytes <= 0 {
+		return nil
+	}
+	if b.limit > 0 && (b.used > b.limit || bytes > b.limit-b.used) {
+		return appendManifestMemoryExceeded(b.used, bytes, b.limit)
+	}
+	if b.used > math.MaxInt64-bytes {
+		b.used = math.MaxInt64
+	} else {
+		b.used += bytes
+	}
+	return nil
+}
+
+func (b *appendManifestBudget) encodeManifest(entries []api.ManifestEntry, opts metadata.ManifestWriteOptions) ([]byte, error) {
+	if b == nil || b.limit <= 0 {
+		return metadata.EncodeManifest(entries, opts)
+	}
+	remaining, err := b.remainingAfterScratch(metadata.ManifestEntriesMemoryWeight(0, entries))
+	if err != nil {
+		return nil, err
+	}
+	payload, err := metadata.EncodeManifestBounded(entries, opts, remaining)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.reserve(int64(cap(payload))); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (b *appendManifestBudget) encodeManifestList(manifests []api.ManifestFile, opts metadata.ManifestListWriteOptions) ([]byte, error) {
+	if b == nil || b.limit <= 0 {
+		return metadata.EncodeManifestList(manifests, opts)
+	}
+	remaining, err := b.remainingAfterScratch(metadata.ManifestListMemoryWeight(0, manifests))
+	if err != nil {
+		return nil, err
+	}
+	payload, err := metadata.EncodeManifestListBounded(manifests, opts, remaining)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.reserve(int64(cap(payload))); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (b *appendManifestBudget) remainingAfterScratch(scratch int64) (int64, error) {
+	if scratch < 0 || b.used > b.limit || scratch >= b.limit-b.used {
+		return 0, appendManifestMemoryExceeded(b.used, scratch, b.limit)
+	}
+	return b.limit - b.used - scratch, nil
+}
+
+func appendManifestMemoryExceeded(used, requested, limit int64) error {
+	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg append manifest materialization memory limit exceeded", map[string]string{
+		"used_bytes":      strconv.FormatInt(used, 10),
+		"requested_bytes": strconv.FormatInt(requested, 10),
+		"limit_bytes":     strconv.FormatInt(limit, 10),
+	})
 }

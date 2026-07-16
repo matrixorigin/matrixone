@@ -16,9 +16,22 @@ package icebergdelete
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 )
+
+func TestDeleteApplyMemoryAccountingSaturatesOnOverflow(t *testing.T) {
+	state := NewApplyState(Options{MaxMemoryBytes: math.MaxInt64 - 1})
+	state.Position.memoryBytes = math.MaxInt64
+	state.Equality.memoryBytes = 1
+	if got := state.MemoryBytes(); got != math.MaxInt64 {
+		t.Fatalf("expected saturated memory, got %d", got)
+	}
+	if err := state.CheckMemory(context.Background()); err == nil {
+		t.Fatal("expected saturated memory to exceed the configured limit")
+	}
+}
 
 func TestPositionDeleteMaskUsesGlobalRowOrdinal(t *testing.T) {
 	state := NewApplyState(Options{MaxMemoryBytes: 1024})

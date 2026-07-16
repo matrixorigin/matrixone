@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math"
 	"testing"
 	"time"
 
@@ -145,6 +146,18 @@ func TestRewriteDataFilesSelectorBoundsTotalMaterializedInput(t *testing.T) {
 	require.Equal(t, groups, boundRewriteDataFileGroups(groups, 240))
 }
 
+func TestRewriteDataFilesSelectorBoundsMetadataMemory(t *testing.T) {
+	const manifestListPath = "s3://warehouse/orders/metadata/snap-10.avro"
+	_, err := (RewriteDataFilesSelector{
+		ObjectReader:   fakeRewriteManifestObjectReader{manifestListPath: []byte("oversized")},
+		MaxMemoryBytes: 1,
+	}).Select(context.Background(), RewriteDataFilesSelectionRequest{
+		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+}
+
 func TestBoundedRewriteBufferRejectsOversizedOutput(t *testing.T) {
 	buffer := boundedRewriteBuffer{maxBytes: 3}
 	n, err := buffer.Write([]byte("four"))
@@ -152,6 +165,63 @@ func TestBoundedRewriteBufferRejectsOversizedOutput(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
 	require.Empty(t, buffer.Bytes())
+}
+
+func TestBoundedRewriteBufferAccountsRetainedCapacityAndWorkingSet(t *testing.T) {
+	buffer := boundedRewriteBuffer{
+		maxBytes:       20,
+		maxMemoryBytes: 19,
+		reservedBytes:  4,
+	}
+	_, err := buffer.Write([]byte("12345"))
+	require.NoError(t, err)
+	_, err = buffer.Write([]byte("678"))
+	require.NoError(t, err)
+	require.Equal(t, 10, cap(buffer.Bytes()))
+
+	n, err := buffer.Write([]byte("9AB"))
+	require.Zero(t, n)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+	require.Equal(t, "12345678", string(buffer.Bytes()))
+}
+
+func TestBoundedMaintenanceBufferRejectsBackingArrayGrowthPeak(t *testing.T) {
+	buffer := boundedMaintenanceBuffer{maxBytes: 900}
+	_, err := buffer.Write(make([]byte, 500))
+	require.NoError(t, err)
+	_, err = buffer.Write(make([]byte, 20))
+	require.ErrorIs(t, err, errMaintenanceBufferLimit)
+	require.True(t, buffer.exceeded)
+}
+
+func TestParquetConcatRewriteDataFilesCompactorRejectsDataLargerThanManifestSize(t *testing.T) {
+	const dataPath = "s3://warehouse/orders/data/part-1.parquet"
+	data := rewriteDataFilesParquetBytes(t, []int64{1, 2})
+	_, _, err := (ParquetConcatRewriteDataFilesCompactor{
+		ObjectReader: fakeRewriteManifestObjectReader{dataPath: data},
+	}).compactGroup(context.Background(), RewriteDataFilesCompactRequest{}, RewriteDataFileGroup{
+		Candidates: []RewriteDataFileCandidate{{File: api.DataFile{
+			FilePath:        dataPath,
+			FileSizeInBytes: int64(len(data)) - 1,
+		}}},
+	}, 0, nil, 1<<20, 1<<20)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+}
+
+func TestParquetConcatRewriteDataFilesCompactorBoundsDecodedDeleteKeys(t *testing.T) {
+	const deletePath = "s3://warehouse/orders/delete/eq.parquet"
+	data := rewriteDataFilesParquetBytes(t, []int64{1})
+	memoryUsed := int64(0)
+	_, err := (ParquetConcatRewriteDataFilesCompactor{
+		ObjectReader: fakeRewriteManifestObjectReader{deletePath: data},
+	}).readEqualityDeleteKeys(context.Background(), api.DataFile{
+		FilePath:    deletePath,
+		EqualityIDs: []int{1},
+	}, &memoryUsed, int64(len(data))+1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
 }
 
 func TestRewriteDataFilesPartitionKeyNormalizesIntegerWidths(t *testing.T) {
@@ -332,6 +402,38 @@ func TestBuildRewriteDataFilesManifestCommitValidatesReplacementFiles(t *testing
 	require.Contains(t, err.Error(), "requires replacement files")
 }
 
+func TestBuildRewriteDataFilesManifestCommitCarriesStageMemoryBudget(t *testing.T) {
+	source := rewriteDataFileEntry("s3://warehouse/orders/data/source.parquet", 1, nil, api.ManifestEntryExisting)
+	replacement := rewriteDataFileEntry("s3://warehouse/orders/data/replacement.parquet", 1, nil, api.ManifestEntryAdded).DataFile
+	_, err := BuildRewriteDataFilesManifestCommit(RewriteDataFilesMaterializeRequest{
+		Snapshot:           api.Snapshot{SnapshotID: 10},
+		SnapshotID:         11,
+		SequenceNumber:     11,
+		IdempotencyKey:     "idem-budget",
+		DataManifestPath:   "s3://warehouse/orders/metadata/data-manifest.avro",
+		ManifestListPath:   "s3://warehouse/orders/metadata/manifest-list.avro",
+		MaxMemoryBytes:     1024,
+		InitialMemoryBytes: 1024,
+		Rewrites: []RewriteDataFileRewrite{{
+			Group:            RewriteDataFileGroup{Candidates: []RewriteDataFileCandidate{{Entry: source, File: source.DataFile}}},
+			ReplacementFiles: []api.DataFile{replacement},
+		}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+}
+
+func TestAggregateRewriteDataFilesManifestEntriesRejectsOverflow(t *testing.T) {
+	entries := []api.ManifestEntry{
+		{Status: api.ManifestEntryAdded, DataFile: api.DataFile{FilePath: "first.parquet", RecordCount: math.MaxInt64, FileSizeInBytes: 1}},
+		{Status: api.ManifestEntryAdded, DataFile: api.DataFile{FilePath: "second.parquet", RecordCount: 1, FileSizeInBytes: 1}},
+	}
+	_, err := aggregateRewriteDataFilesManifestEntries(entries)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+	require.Contains(t, err.Error(), "aggregate metrics overflow")
+}
+
 func TestNativeRewriteDataFilesPlannerBuildsCommitPlanWithInjectedCompactor(t *testing.T) {
 	manifestPath := "s3://warehouse/orders/metadata/data-manifest.avro"
 	manifestListPath := "s3://warehouse/orders/metadata/snap-4.avro"
@@ -507,7 +609,7 @@ func TestParquetConcatRewriteDataFilesCompactorMergesAppendOnlyFiles(t *testing.
 			secondPath:       secondData,
 		},
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
-		Metadata:       &api.TableMetadata{Location: "s3://warehouse/orders"},
+		Metadata:       rewriteDataFilesPartitionedMetadata(),
 		Snapshot:       api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
 		Selection:      RewriteDataFilesSelection{Groups: []RewriteDataFileGroup{group}},
 		JobID:          "job-1",
@@ -571,7 +673,7 @@ func TestParquetConcatRewriteDataFilesCompactorAllowsIrrelevantDeleteManifests(t
 			secondPath:         secondData,
 		},
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
-		Metadata:       &api.TableMetadata{Location: "s3://warehouse/orders"},
+		Metadata:       rewriteDataFilesPartitionedMetadata(),
 		Snapshot:       api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
 		Selection:      RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{group}},
 		JobID:          "job-1",
@@ -621,7 +723,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesEqualityDeleteManifests(t 
 			secondPath:         secondData,
 		},
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
-		Metadata: &api.TableMetadata{Location: "s3://warehouse/orders"},
+		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
 		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
@@ -654,13 +756,12 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t 
 	deleteManifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status: api.ManifestEntryAdded,
 		DataFile: api.DataFile{
-			Content:            api.DataFileContentPositionDelete,
-			FilePath:           deleteFilePath,
-			FileFormat:         "parquet",
-			FileSizeInBytes:    10,
-			RecordCount:        3,
-			ReferencedDataFile: dataPath,
-			SequenceNumber:     10,
+			Content:         api.DataFileContentPositionDelete,
+			FilePath:        deleteFilePath,
+			FileFormat:      "parquet",
+			FileSizeInBytes: 10,
+			RecordCount:     3,
+			SequenceNumber:  10,
 		},
 	}})
 	require.NoError(t, err)
@@ -679,7 +780,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t 
 			dataPath:           data,
 		},
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
-		Metadata: &api.TableMetadata{Location: "s3://warehouse/orders"},
+		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
 		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
@@ -734,7 +835,7 @@ func TestParquetConcatRewriteDataFilesCompactorSkipsDifferentSpecEqualityDeletes
 			dataPath:           data,
 		},
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
-		Metadata: &api.TableMetadata{Location: "s3://warehouse/orders"},
+		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
 		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes, PartitionSpecID: 1}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
@@ -750,6 +851,48 @@ func TestParquetConcatRewriteDataFilesCompactorSkipsDifferentSpecEqualityDeletes
 	require.Len(t, result.Rewrites, 1)
 	require.Equal(t, int64(2), result.Rewrites[0].ReplacementFiles[0].RecordCount)
 	require.Equal(t, []int64{1, 2}, rewriteDataFilesParquetInt64Values(t, result.Objects[0].Payload))
+}
+
+func TestRewriteDataFilesDeleteAffectedFilesHandlesGlobalAndUnreferencedDeletes(t *testing.T) {
+	data := map[string]api.DataFile{
+		"s3://warehouse/data/a.parquet": {FilePath: "s3://warehouse/data/a.parquet", SpecID: 0, SequenceNumber: 1},
+		"s3://warehouse/data/b.parquet": {FilePath: "s3://warehouse/data/b.parquet", SpecID: 1, SequenceNumber: 1},
+	}
+	specs := map[int]int{0: 0, 1: 1}
+
+	affected, err := rewriteDataFilesDeleteAffectedFiles(api.DataFile{
+		Content: api.DataFileContentPositionDelete, FilePath: "pos.parquet", SpecID: 1, SequenceNumber: 1,
+	}, data, specs)
+	require.NoError(t, err)
+	require.Equal(t, []string{"s3://warehouse/data/a.parquet", "s3://warehouse/data/b.parquet"}, affected)
+
+	affected, err = rewriteDataFilesDeleteAffectedFiles(api.DataFile{
+		Content: api.DataFileContentEqualityDelete, FilePath: "eq.parquet", SpecID: 0, SequenceNumber: 2,
+	}, data, specs)
+	require.NoError(t, err)
+	require.Equal(t, []string{"s3://warehouse/data/a.parquet", "s3://warehouse/data/b.parquet"}, affected)
+
+	_, err = rewriteDataFilesDeleteAffectedFiles(api.DataFile{
+		Content: api.DataFileContentEqualityDelete, FilePath: "unknown.parquet", SpecID: 7,
+	}, data, specs)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+}
+
+func TestRewriteDataFilesPositionDeleteRejectsNegativePosition(t *testing.T) {
+	deletePath := "s3://warehouse/orders/delete/negative.parquet"
+	data := rewriteDataFilesPositionDeleteParquetBytes(t, []rewriteDataFilesPositionDeleteRow{{
+		FilePath: "s3://warehouse/orders/data/a.parquet",
+		Pos:      -1,
+	}})
+	used := int64(0)
+	_, err := (ParquetConcatRewriteDataFilesCompactor{ObjectReader: fakeRewriteManifestObjectReader{
+		deletePath: data,
+	}}).readPositionDeletePositions(context.Background(), api.DataFile{
+		FilePath: deletePath,
+	}, []string{"s3://warehouse/orders/data/a.parquet"}, &used, 1<<20)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
 }
 
 func TestParquetConcatRewriteDataFilesCompactorUsesSelectionDeleteManifestCount(t *testing.T) {
@@ -849,6 +992,16 @@ func rewriteDataFilesParquetBytes(t *testing.T, values []int64) []byte {
 type rewriteDataFilesPositionDeleteRow struct {
 	FilePath string
 	Pos      int64
+}
+
+func rewriteDataFilesPartitionedMetadata() *api.TableMetadata {
+	return &api.TableMetadata{
+		Location: "s3://warehouse/orders",
+		PartitionSpecs: []api.PartitionSpec{
+			{SpecID: 0, Fields: []api.PartitionField{{Name: "region"}}},
+			{SpecID: 1, Fields: []api.PartitionField{{Name: "region"}}},
+		},
+	}
 }
 
 func rewriteDataFilesPositionDeleteParquetBytes(t *testing.T, rows []rewriteDataFilesPositionDeleteRow) []byte {

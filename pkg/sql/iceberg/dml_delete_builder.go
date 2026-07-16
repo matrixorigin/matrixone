@@ -27,15 +27,18 @@ import (
 )
 
 type DMLDeleteActionStreamRequest struct {
-	TableLocation  string
-	Schema         api.Schema
-	Base           dml.CommitBase
-	Operation      dml.Operation
-	SnapshotID     int64
-	DeleteSchemaID int
-	ObjectWriter   dml.DeleteObjectWriter
-	Targets        []DMLMatchedDeleteTarget
-	MatchedBatches []DMLMatchedRowsBatchRequest
+	TableLocation      string
+	Schema             api.Schema
+	Base               dml.CommitBase
+	Operation          dml.Operation
+	SnapshotID         int64
+	DeleteSchemaID     int
+	ObjectWriter       dml.DeleteObjectWriter
+	Targets            []DMLMatchedDeleteTarget
+	MatchedBatches     []DMLMatchedRowsBatchRequest
+	MemoryLimitBytes   int64
+	InitialMemoryBytes int64
+	MemoryBudget       *dmlMemoryBudget
 }
 
 type DMLMatchedDeleteTarget struct {
@@ -68,6 +71,7 @@ type DMLReplacementDataBatch struct {
 	OutputFactory       icebergwrite.DataFileOutputFactory
 	ObjectWriter        dml.DeleteObjectWriter
 	FileSequence        int
+	MemoryBudget        *dmlMemoryBudget
 }
 
 type DMLMergeActionStreamRequest struct {
@@ -84,6 +88,9 @@ type DMLMergeActionStreamRequest struct {
 	UnmatchedAppends                []api.DataFile
 	UnmatchedAppendBatch            DMLReplacementDataBatch
 	UnmatchedAppendBatches          []DMLReplacementDataBatch
+	MemoryLimitBytes                int64
+	InitialMemoryBytes              int64
+	MemoryBudget                    *dmlMemoryBudget
 }
 
 type DMLOverwriteActionStreamRequest struct {
@@ -100,6 +107,9 @@ type DMLOverwriteActionStreamRequest struct {
 	ReplacementFiles   []api.DataFile
 	ReplacementBatch   DMLReplacementDataBatch
 	ReplacementBatches []DMLReplacementDataBatch
+	MemoryLimitBytes   int64
+	InitialMemoryBytes int64
+	MemoryBudget       *dmlMemoryBudget
 }
 
 func BuildDMLDeleteActionStream(ctx context.Context, req DMLDeleteActionStreamRequest) (*dml.ActionStream, error) {
@@ -190,6 +200,7 @@ func BuildDMLMergeActionStream(ctx context.Context, req DMLMergeActionStreamRequ
 		SnapshotID:     req.SnapshotID,
 		DeleteSchemaID: req.DeleteSchemaID,
 		ObjectWriter:   req.ObjectWriter,
+		MemoryBudget:   req.MemoryBudget,
 	}
 	var matchedDeletes []dml.DeleteTarget
 	if len(req.MatchedDeletes) > 0 {
@@ -416,6 +427,7 @@ func buildDMLDeleteTarget(ctx context.Context, req DMLDeleteActionStreamRequest,
 			Partition:      target.DataFile.Partition,
 			SpecID:         target.DataFile.SpecID,
 			DeleteSchemaID: deleteSchemaID,
+			MemoryBudget:   req.MemoryBudget,
 		})
 		if err != nil {
 			return dml.DeleteTarget{}, api.ToMOErr(ctx, err)
@@ -451,6 +463,7 @@ func buildDMLDeleteTarget(ctx context.Context, req DMLDeleteActionStreamRequest,
 			Partition:          target.DataFile.Partition,
 			SpecID:             target.DataFile.SpecID,
 			DeleteSchemaID:     deleteSchemaID,
+			MemoryBudget:       req.MemoryBudget,
 		})
 		if err != nil {
 			return dml.DeleteTarget{}, api.ToMOErr(ctx, err)
@@ -547,6 +560,7 @@ func materializeDMLReplacementBatch(ctx context.Context, operation dml.Operation
 		OutputFactory:       replacement.OutputFactory,
 		ObjectWriter:        replacement.ObjectWriter,
 		FileSequence:        replacement.FileSequence,
+		MemoryBudget:        replacement.MemoryBudget,
 	})
 }
 

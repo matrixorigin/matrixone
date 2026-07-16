@@ -16,6 +16,7 @@ package write
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,23 @@ func TestAppendBuilderBuildsRequirementsUpdatesAndSummary(t *testing.T) {
 	require.Equal(t, "set-snapshot-summary", attempt.Updates[1].Type)
 	require.Equal(t, "append", attempt.Summary["operation"])
 	require.Equal(t, "2", attempt.Summary["added-records"])
+}
+
+func TestAppendFailureRecoverySurvivesCancellationAndPreservesRecorderError(t *testing.T) {
+	commitErr := api.NewError(api.ErrCatalogUnavailable, "commit failed", nil)
+	recordErr := api.NewError(api.ErrObjectIO, "orphan recorder failed", nil)
+	recorder := &fakeOrphanRecorder{err: recordErr}
+	workflow := AppendWorkflow{
+		Committer:      &fakeCommitter{results: []commitOutcome{{err: commitErr}}},
+		OrphanRecorder: recorder,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := workflow.CommitAppend(ctx, appendRequest())
+	require.ErrorIs(t, err, commitErr)
+	require.ErrorIs(t, err, recordErr)
+	require.False(t, recorder.sawCanceledContext)
 }
 
 func TestValidateAppendPreflightRunsBeforeDataFilesExist(t *testing.T) {
@@ -154,6 +172,25 @@ func TestAppendBuilderRejectsIncompatibleWriteMetadata(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
 	require.Contains(t, err.Error(), "unknown partition spec")
+}
+
+func TestAppendBuilderRejectsAggregateMetricOverflow(t *testing.T) {
+	req := appendRequest()
+	first := req.DataFiles[0]
+	first.RecordCount = math.MaxInt64
+	first.FileSizeInBytes = math.MaxInt64
+	first.ValueCounts[1] = math.MaxInt64
+	second := first
+	second.FilePath = "s3://warehouse/sales/orders/data/part-2.parquet"
+	second.RecordCount = 1
+	second.FileSizeInBytes = 1
+	second.ValueCounts = map[int]int64{1: 1}
+	req.DataFiles = []api.DataFile{first, second}
+
+	_, err := (AppendBuilder{}).BuildAppend(context.Background(), req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+	require.Contains(t, err.Error(), "metrics overflow")
 }
 
 func TestAppendWorkflowTreatsPostCommitHooksAsBestEffort(t *testing.T) {
@@ -548,12 +585,15 @@ func (v *fakeVerifier) VerifyCommit(ctx context.Context, req api.AppendRequest, 
 }
 
 type fakeOrphanRecorder struct {
-	candidates []OrphanCandidate
+	candidates         []OrphanCandidate
+	err                error
+	sawCanceledContext bool
 }
 
 func (r *fakeOrphanRecorder) RecordOrphans(ctx context.Context, candidates []OrphanCandidate) error {
+	r.sawCanceledContext = ctx.Err() != nil
 	r.candidates = append(r.candidates, candidates...)
-	return nil
+	return r.err
 }
 
 type fakeOrphanCleaner struct {

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
 func TestSignedHTTPFileServiceReadsRangeWithSignedHeaders(t *testing.T) {
@@ -308,6 +309,52 @@ func TestSignedHTTPFileServiceWritesWithSignedHeaders(t *testing.T) {
 	}
 	if string(received) != "payload" {
 		t.Fatalf("unexpected body: %q", received)
+	}
+}
+
+func TestSignedHTTPFileServiceBoundsUnknownLengthWriteReader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("oversized payload must be rejected before the HTTP request")
+	}))
+	defer server.Close()
+
+	fs, writePath, err := SignedHTTPFileServiceBuilder{
+		HTTPClient:               server.Client(),
+		MaxMaterializedReadBytes: 4,
+	}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{URL: server.URL})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: writePath, Entries: []fileservice.IOEntry{{
+		Offset:         0,
+		Size:           -1,
+		ReaderForWrite: strings.NewReader("12345"),
+	}}}
+	if err := fs.Write(context.Background(), vec); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded write payload error, got %v", err)
+	}
+}
+
+func TestSignedHTTPFileServiceBoundsKnownLengthWriteReader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("oversized known payload must be rejected before the HTTP request")
+	}))
+	defer server.Close()
+
+	fs, writePath, err := SignedHTTPFileServiceBuilder{
+		HTTPClient:               server.Client(),
+		MaxMaterializedReadBytes: 4,
+	}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{URL: server.URL})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: writePath, Entries: []fileservice.IOEntry{{
+		Offset:         0,
+		Size:           5,
+		ReaderForWrite: strings.NewReader("12345"),
+	}}}
+	if err := fs.Write(context.Background(), vec); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded known write payload error, got %v", err)
 	}
 }
 

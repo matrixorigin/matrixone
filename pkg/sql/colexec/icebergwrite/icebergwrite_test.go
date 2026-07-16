@@ -46,12 +46,15 @@ func TestIcebergWriteLifecycleAbortsOpenCoordinator(t *testing.T) {
 	}).WithCoordinator(coord)
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
-	proc.Ctx = context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	proc.Ctx = ctx
 
 	require.NoError(t, op.Prepare(proc))
 	require.Equal(t, 1, coord.beginCalls)
+	cancel()
 	op.Reset(proc, true, context.Canceled)
 	require.Equal(t, 1, coord.abortCalls)
+	require.NoError(t, coord.abortContextErr)
 }
 
 func TestIcebergWritePassesSessionTimeZoneToCoordinatorFactory(t *testing.T) {
@@ -363,6 +366,29 @@ func TestIcebergWriteCachedExecutionCreatesIndependentCoordinators(t *testing.T)
 	require.Same(t, secondZone, requests[1].TimeZone)
 }
 
+func TestIcebergWriteCachedExecutionDoesNotReuseCompiledIdentity(t *testing.T) {
+	proc := testutil.NewProc(t)
+	var requests []AppendRequest
+	op := NewArgument(AppendRequest{
+		Operation:      OperationAppend,
+		StatementID:    "compile-statement-id",
+		IdempotencyKey: "compile-idempotency-key",
+	}).WithCoordinatorFactory(CoordinatorFactoryFunc(func(ctx context.Context, req AppendRequest) (Coordinator, error) {
+		requests = append(requests, req)
+		return &testCoordinator{}, nil
+	}))
+
+	require.NoError(t, op.Prepare(proc))
+	op.Reset(proc, false, nil)
+	require.NoError(t, op.Prepare(proc))
+
+	require.Len(t, requests, 2)
+	require.Equal(t, "compile-statement-id", requests[0].StatementID)
+	require.Equal(t, "compile-idempotency-key", requests[0].IdempotencyKey)
+	require.Empty(t, requests[1].StatementID)
+	require.Empty(t, requests[1].IdempotencyKey)
+}
+
 func TestIcebergWriteReinvokesFactoryAfterNilCoordinatorFallback(t *testing.T) {
 	proc := testutil.NewProc(t)
 	factoryCalls := 0
@@ -427,16 +453,17 @@ func TestUnsupportedCoordinatorOperationMessages(t *testing.T) {
 }
 
 type testCoordinator struct {
-	beginCalls  int
-	appendCalls int
-	commitCalls int
-	abortCalls  int
-	appendRows  []int
-	appendErr   error
-	commitErr   error
-	abortErr    error
-	abortCause  error
-	beginErr    error
+	beginCalls      int
+	appendCalls     int
+	commitCalls     int
+	abortCalls      int
+	appendRows      []int
+	appendErr       error
+	commitErr       error
+	abortErr        error
+	abortCause      error
+	abortContextErr error
+	beginErr        error
 }
 
 func (c *testCoordinator) Begin(ctx context.Context, req AppendRequest) error {
@@ -458,6 +485,7 @@ func (c *testCoordinator) Commit(ctx context.Context) error {
 func (c *testCoordinator) Abort(ctx context.Context, cause error) error {
 	c.abortCalls++
 	c.abortCause = cause
+	c.abortContextErr = ctx.Err()
 	return c.abortErr
 }
 

@@ -369,6 +369,13 @@ func TestProviderObjectReaderReadsThroughFileService(t *testing.T) {
 	if string(full) != "abcdef" || seenLocation != "warehouse/sales/data.bin" {
 		t.Fatalf("unexpected full read data=%q seen=%q", full, seenLocation)
 	}
+	bounded, err := reader.ReadBounded(ctx, "warehouse/sales/data.bin", 6)
+	if err != nil || string(bounded) != "abcdef" {
+		t.Fatalf("bounded full read data=%q err=%v", bounded, err)
+	}
+	if _, err := reader.ReadBounded(ctx, "warehouse/sales/data.bin", 5); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded read limit, got %v", err)
+	}
 	part, err := reader.Read(ctx, "warehouse/sales/data.bin", 2, 3)
 	if err != nil {
 		t.Fatalf("read object range: %v", err)

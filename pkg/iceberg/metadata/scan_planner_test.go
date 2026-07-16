@@ -260,6 +260,17 @@ func TestLocalScanPlannerEnforcesPlanningLimits(t *testing.T) {
 		Ref:            "main",
 	})
 	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+
+	fixture = newPlannerFixture(t, 1)
+	planner = fixture.planner()
+	planner.PlanningMaxMemory = 1
+	_, err = planner.PlanScan(ctx, api.ScanPlanRequest{
+		CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+		Ref:            "main",
+	})
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
 }
 
 func TestLocalScanPlannerRejectsDeleteManifest(t *testing.T) {
@@ -396,6 +407,20 @@ func TestLocalScanPlannerKeepsFileTaskWhenRowGroupsDoNotPrune(t *testing.T) {
 	if plan.Profile.RowGroupsSelected != 2 || plan.Profile.RowGroupsPruned != 0 {
 		t.Fatalf("unexpected row group profile: %+v", plan.Profile)
 	}
+}
+
+func TestRowGroupPlanningRejectsFooterOutsideRemainingMemory(t *testing.T) {
+	data := writePlannerInt64ParquetWithRowGroups(t, []int64{1, 2}, 1)
+	const path = "s3://warehouse/sales/orders/data/footer-limit.parquet"
+	planner := LocalScanPlanner{ObjectReader: &plannerObjectReader{data: map[string][]byte{path: data}}}
+	_, err := planner.readParquetRowGroupFooters(
+		context.Background(),
+		api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}},
+		api.DataFile{FilePath: path, FileSizeInBytes: int64(len(data))},
+		1,
+		api.ServerPlanningAuto,
+	)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
 }
 
 func TestLocalScanPlannerPrunesManifestByIdentityPartitionSummary(t *testing.T) {

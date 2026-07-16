@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,9 +32,10 @@ import (
 )
 
 type ParquetConcatRewriteDataFilesCompactor struct {
-	ObjectReader api.ObjectReader
-	Metadata     api.MetadataFacade
-	OutputPrefix string
+	ObjectReader   api.ObjectReader
+	Metadata       api.MetadataFacade
+	OutputPrefix   string
+	MaxMemoryBytes int64
 }
 
 type rewriteDataFilesDeleteFilters map[string]rewriteDataFilesFileDeleteFilter
@@ -47,6 +49,15 @@ type rewriteDataFilesEqualityDeleteFilter struct {
 	EqualityIDs []int
 	Keys        map[string]struct{}
 }
+
+const (
+	// parquet-go maintains one page buffer per leaf column plus shared encode
+	// scratch space. Keep those buffers deliberately small because this rewrite
+	// implementation still materializes its output. A future spillable writer
+	// can replace this conservative reservation and permit larger row groups.
+	rewriteDataFilesPageBufferBytes = 64 << 10
+	rewriteDataFilesRowsPerRowGroup = 1024
+)
 
 func (c ParquetConcatRewriteDataFilesCompactor) SupportsDeleteManifests() bool {
 	return true
@@ -66,17 +77,25 @@ func (c ParquetConcatRewriteDataFilesCompactor) CompactRewriteDataFiles(ctx cont
 	if err != nil {
 		return nil, err
 	}
-	deleteFilters, err := c.buildDeleteFilters(ctx, req)
+	deleteFilters, retainedBytes, err := c.buildDeleteFilters(ctx, req, req.Selection.RetainedMemoryBytes)
 	if err != nil {
 		return nil, err
+	}
+	memoryLimit := maintenanceMemoryLimit(c.MaxMemoryBytes)
+	if retainedBytes >= memoryLimit {
+		return nil, maintenanceMemoryExceeded(retainedBytes, memoryLimit)
 	}
 	out := &RewriteDataFilesCompactResult{
 		Rewrites: make([]RewriteDataFileRewrite, 0, len(req.Selection.Groups)),
 		Objects:  make([]ObjectWrite, 0, len(req.Selection.Groups)),
 	}
+	remainingMemory := uint64(memoryLimit - retainedBytes)
 	remaining := opts.maxRewriteBytes
+	if remainingMemory < remaining {
+		remaining = remainingMemory
+	}
 	for idx, group := range req.Selection.Groups {
-		rewrite, object, err := c.compactGroup(ctx, req, group, idx, deleteFilters, remaining)
+		rewrite, object, err := c.compactGroup(ctx, req, group, idx, deleteFilters, remaining, int64(remainingMemory))
 		if err != nil {
 			return nil, err
 		}
@@ -86,22 +105,34 @@ func (c ParquetConcatRewriteDataFilesCompactor) CompactRewriteDataFiles(ctx cont
 			})
 		}
 		remaining -= uint64(len(object.Payload))
+		retainedOutputBytes := uint64(cap(object.Payload))
+		if retainedOutputBytes > remainingMemory {
+			return nil, maintenanceMemoryExceeded(int64(retainedOutputBytes), int64(remainingMemory))
+		}
+		remainingMemory -= retainedOutputBytes
 		out.Rewrites = append(out.Rewrites, rewrite)
 		out.Objects = append(out.Objects, object)
 		out.OrphanPaths = append(out.OrphanPaths, object.Location)
 	}
+	out.RetainedMemoryBytes = memoryLimit - int64(remainingMemory)
 	return out, nil
 }
 
-func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.Context, req RewriteDataFilesCompactRequest) (rewriteDataFilesDeleteFilters, error) {
-	deleteManifests, err := c.rewriteDataFilesDeleteManifests(ctx, req)
+func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.Context, req RewriteDataFilesCompactRequest, initialMemory int64) (rewriteDataFilesDeleteFilters, int64, error) {
+	memoryLimit := maintenanceMemoryLimit(c.MaxMemoryBytes)
+	memoryUsed := initialMemory
+	if err := checkMaintenanceMemory(0, memoryUsed, memoryLimit); err != nil {
+		return nil, memoryUsed, err
+	}
+	deleteManifests, err := c.rewriteDataFilesDeleteManifests(ctx, req, &memoryUsed, memoryLimit)
 	if err != nil || len(deleteManifests) == 0 {
-		return nil, err
+		return nil, memoryUsed, err
 	}
 	candidates := rewriteDataFilesCompactionCandidates(req.Selection.Groups)
 	if len(candidates) == 0 {
-		return nil, nil
+		return nil, memoryUsed, nil
 	}
+	specFieldCounts := rewriteDataFilesSpecFieldCounts(req.Metadata)
 	facade := c.Metadata
 	if facade == nil {
 		facade = metadata.NativeFacade{}
@@ -110,19 +141,29 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 	for _, manifest := range deleteManifests {
 		manifestPath := strings.TrimSpace(manifest.Path)
 		if manifestPath == "" {
-			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor found delete manifest without path", map[string]string{
+			return nil, memoryUsed, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor found delete manifest without path", map[string]string{
 				"snapshot_id": strconv.FormatInt(req.Snapshot.SnapshotID, 10),
 			})
 		}
-		manifestData, err := c.ObjectReader.Read(ctx, manifestPath, 0, -1)
+		manifestData, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, manifestPath, memoryLimit-memoryUsed)
 		if err != nil {
-			return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg parquet rewrite-data-files compactor failed to read delete manifest", map[string]string{
+			if isMaintenancePlanningLimit(err) {
+				return nil, memoryUsed, err
+			}
+			return nil, memoryUsed, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg parquet rewrite-data-files compactor failed to read delete manifest", map[string]string{
 				"manifest": api.RedactPath(manifestPath),
 			}, err)
 		}
-		entries, err := facade.ReadManifest(ctx, manifestData)
+		entries, err := readMaintenanceManifest(
+			ctx, facade, manifestData,
+			maintenanceRecordLimit(memoryLimit-memoryUsed, 1024),
+			memoryLimit-memoryUsed,
+		)
 		if err != nil {
-			return nil, err
+			return nil, memoryUsed, err
+		}
+		if err := reserveMaintenanceMemory(&memoryUsed, metadata.ManifestEntriesMemoryWeight(cap(manifestData), entries), memoryLimit); err != nil {
+			return nil, memoryUsed, err
 		}
 		for _, entry := range entries {
 			if entry.Status == api.ManifestEntryDeleted {
@@ -131,38 +172,55 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 			file := entry.DataFile
 			file.SpecID = manifest.PartitionSpecID
 			if err := metadata.ValidateP1DeleteFile(file); err != nil {
-				return nil, err
+				return nil, memoryUsed, err
 			}
-			affected := rewriteDataFilesDeleteAffectedFiles(file, candidates)
+			if file.RecordCount == 0 {
+				continue
+			}
+			affected, err := rewriteDataFilesDeleteAffectedFiles(file, candidates, specFieldCounts)
+			if err != nil {
+				return nil, memoryUsed, err
+			}
 			if len(affected) == 0 {
 				continue
 			}
 			switch file.Content {
 			case api.DataFileContentPositionDelete:
-				positions, err := c.readPositionDeletePositions(ctx, file, affected)
+				positions, err := c.readPositionDeletePositions(ctx, file, affected, &memoryUsed, memoryLimit)
 				if err != nil {
-					return nil, err
+					return nil, memoryUsed, err
 				}
 				for path, filePositions := range positions {
 					filter := filters[path]
 					if filter.Positions == nil {
+						if err := reserveMaintenanceMemory(&memoryUsed, int64(64+len(path)), memoryLimit); err != nil {
+							return nil, memoryUsed, err
+						}
 						filter.Positions = make(map[int64]struct{}, len(filePositions))
 					}
 					for pos := range filePositions {
+						if _, exists := filter.Positions[pos]; !exists {
+							if err := reserveMaintenanceMemory(&memoryUsed, 32, memoryLimit); err != nil {
+								return nil, memoryUsed, err
+							}
+						}
 						filter.Positions[pos] = struct{}{}
 					}
 					filters[path] = filter
 				}
 			case api.DataFileContentEqualityDelete:
-				keys, err := c.readEqualityDeleteKeys(ctx, file)
+				keys, err := c.readEqualityDeleteKeys(ctx, file, &memoryUsed, memoryLimit)
 				if err != nil {
-					return nil, err
+					return nil, memoryUsed, err
 				}
 				equality := rewriteDataFilesEqualityDeleteFilter{
 					EqualityIDs: append([]int(nil), file.EqualityIDs...),
 					Keys:        keys,
 				}
 				for _, path := range affected {
+					if err := reserveMaintenanceMemory(&memoryUsed, int64(64+len(path)+len(file.EqualityIDs)*8), memoryLimit); err != nil {
+						return nil, memoryUsed, err
+					}
 					filter := filters[path]
 					filter.Equality = append(filter.Equality, equality)
 					filters[path] = filter
@@ -171,12 +229,12 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 		}
 	}
 	if len(filters) == 0 {
-		return nil, nil
+		return nil, memoryUsed, nil
 	}
-	return filters, nil
+	return filters, memoryUsed, nil
 }
 
-func (c ParquetConcatRewriteDataFilesCompactor) rewriteDataFilesDeleteManifests(ctx context.Context, req RewriteDataFilesCompactRequest) ([]api.ManifestFile, error) {
+func (c ParquetConcatRewriteDataFilesCompactor) rewriteDataFilesDeleteManifests(ctx context.Context, req RewriteDataFilesCompactRequest, memoryUsed *int64, memoryLimit int64) ([]api.ManifestFile, error) {
 	if len(req.Selection.DeleteManifests) > 0 {
 		return append([]api.ManifestFile(nil), req.Selection.DeleteManifests...), nil
 	}
@@ -196,14 +254,24 @@ func (c ParquetConcatRewriteDataFilesCompactor) rewriteDataFilesDeleteManifests(
 	if facade == nil {
 		facade = metadata.NativeFacade{}
 	}
-	manifestListData, err := c.ObjectReader.Read(ctx, snapshot.ManifestList, 0, -1)
+	manifestListData, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, snapshot.ManifestList, memoryLimit-*memoryUsed)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return nil, err
+		}
 		return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg parquet rewrite-data-files compactor failed to read manifest list", map[string]string{
 			"manifest_list": api.RedactPath(snapshot.ManifestList),
 		}, err)
 	}
-	manifests, err := facade.ReadManifestList(ctx, manifestListData)
+	manifests, err := readMaintenanceManifestList(
+		ctx, facade, manifestListData,
+		maintenanceRecordLimit(memoryLimit-*memoryUsed, 512),
+		memoryLimit-*memoryUsed,
+	)
 	if err != nil {
+		return nil, err
+	}
+	if err := reserveMaintenanceMemory(memoryUsed, metadata.ManifestListMemoryWeight(cap(manifestListData), manifests), memoryLimit); err != nil {
 		return nil, err
 	}
 	deleteManifests := make([]api.ManifestFile, 0)
@@ -228,29 +296,63 @@ func rewriteDataFilesCompactionCandidates(groups []RewriteDataFileGroup) map[str
 	return out
 }
 
-func rewriteDataFilesDeleteAffectedFiles(deleteFile api.DataFile, dataByPath map[string]api.DataFile) []string {
+func rewriteDataFilesSpecFieldCounts(meta *api.TableMetadata) map[int]int {
+	if meta == nil {
+		return nil
+	}
+	out := make(map[int]int, len(meta.PartitionSpecs))
+	for _, spec := range meta.PartitionSpecs {
+		out[spec.SpecID] = len(spec.Fields)
+	}
+	return out
+}
+
+func rewriteDataFilesDeleteAffectedFiles(deleteFile api.DataFile, dataByPath map[string]api.DataFile, specFieldCounts map[int]int) ([]string, error) {
+	fieldCount, specKnown := specFieldCounts[deleteFile.SpecID]
+	if !specKnown {
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files delete file references an unknown partition spec", map[string]string{
+			"file":    api.RedactPath(deleteFile.FilePath),
+			"spec_id": strconv.Itoa(deleteFile.SpecID),
+		})
+	}
+	globalDelete := fieldCount == 0
 	affected := make([]string, 0)
 	switch deleteFile.Content {
 	case api.DataFileContentPositionDelete:
-		dataFile, ok := dataByPath[strings.TrimSpace(deleteFile.ReferencedDataFile)]
-		if ok && rewriteDataFilesDeleteSequenceApplies(dataFile, deleteFile) {
-			affected = append(affected, dataFile.FilePath)
+		referenced := strings.TrimSpace(deleteFile.ReferencedDataFile)
+		if referenced != "" {
+			dataFile, ok := dataByPath[referenced]
+			if ok && rewriteDataFilesDeleteSequenceApplies(dataFile, deleteFile) {
+				affected = append(affected, dataFile.FilePath)
+			}
+			break
+		}
+		// referenced_data_file is optional. In that form each delete row carries
+		// its target path, so preselect every sequence-compatible candidate and
+		// let readPositionDeletePositions filter by the actual row paths.
+		for path, dataFile := range dataByPath {
+			if rewriteDataFilesDeleteSequenceApplies(dataFile, deleteFile) {
+				affected = append(affected, path)
+			}
 		}
 	case api.DataFileContentEqualityDelete:
 		for path, dataFile := range dataByPath {
 			if !rewriteDataFilesDeleteSequenceApplies(dataFile, deleteFile) {
 				continue
 			}
-			if deleteFile.SpecID != dataFile.SpecID {
-				continue
-			}
-			if !rewriteDataFilesSamePartitionScope(deleteFile.Partition, dataFile.Partition) {
-				continue
+			if !globalDelete {
+				if deleteFile.SpecID != dataFile.SpecID {
+					continue
+				}
+				if !rewriteDataFilesSamePartitionScope(deleteFile.Partition, dataFile.Partition) {
+					continue
+				}
 			}
 			affected = append(affected, path)
 		}
 	}
-	return affected
+	sort.Strings(affected)
+	return affected, nil
 }
 
 func rewriteDataFilesDeleteSequenceApplies(dataFile, deleteFile api.DataFile) bool {
@@ -328,20 +430,54 @@ func rewriteDataFilesPartitionScopeUint(value uint64) string {
 	return "u:" + strconv.FormatUint(value, 10)
 }
 
-func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context, req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int, deleteFilters rewriteDataFilesDeleteFilters, maxOutputBytes uint64) (RewriteDataFileRewrite, ObjectWrite, error) {
+func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context, req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int, deleteFilters rewriteDataFilesDeleteFilters, maxOutputBytes uint64, maxMemoryBytes int64) (RewriteDataFileRewrite, ObjectWrite, error) {
 	if len(group.Candidates) == 0 {
 		return RewriteDataFileRewrite{}, ObjectWrite{}, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor received an empty group", nil)
 	}
-	output := boundedRewriteBuffer{maxBytes: maxOutputBytes}
+	output := boundedRewriteBuffer{maxBytes: maxOutputBytes, maxMemoryBytes: uint64(maxMemoryBytes)}
 	var writer *parquet.Writer
 	var writerSchema *parquet.Schema
+	var writerReservedBytes uint64
 	var totalRows int64
 	for _, candidate := range group.Candidates {
-		data, err := c.ObjectReader.Read(ctx, candidate.File.FilePath, 0, -1)
+		if candidate.File.FileSizeInBytes <= 0 {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files candidate is missing file size", map[string]string{
+				"file": api.RedactPath(candidate.File.FilePath),
+			})
+		}
+		retainedBeforeRead, overflow := addRewriteMemory(uint64(cap(output.data)), writerReservedBytes)
+		if overflow || retainedBeforeRead > uint64(maxMemoryBytes) {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, maintenanceMemoryExceeded(math.MaxInt64, maxMemoryBytes)
+		}
+		availableInputBytes := uint64(maxMemoryBytes) - retainedBeforeRead
+		if uint64(candidate.File.FileSizeInBytes) > availableInputBytes {
+			// Reject before the read. Checking after materialization would permit the
+			// retained output + writer + next input to transiently cross the bound.
+			actual := int64(math.MaxInt64)
+			if retainedBeforeRead <= uint64(math.MaxInt64-candidate.File.FileSizeInBytes) {
+				actual = candidate.File.FileSizeInBytes + int64(retainedBeforeRead)
+			}
+			return RewriteDataFileRewrite{}, ObjectWrite{}, maintenanceMemoryExceeded(actual, maxMemoryBytes)
+		}
+		data, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, candidate.File.FilePath, int64(availableInputBytes))
 		if err != nil {
+			if isMaintenancePlanningLimit(err) {
+				return RewriteDataFileRewrite{}, ObjectWrite{}, err
+			}
 			return RewriteDataFileRewrite{}, ObjectWrite{}, api.WrapError(api.ErrObjectIO, "Iceberg parquet rewrite-data-files compactor failed to read data file", map[string]string{
 				"file": api.RedactPath(candidate.File.FilePath),
 			}, err)
+		}
+		if int64(len(data)) != candidate.File.FileSizeInBytes {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files object size does not match manifest metadata", map[string]string{
+				"file":          api.RedactPath(candidate.File.FilePath),
+				"metadata_size": strconv.FormatInt(candidate.File.FileSizeInBytes, 10),
+				"actual_size":   strconv.Itoa(len(data)),
+			})
+		}
+		output.reservedBytes = uint64(cap(data)) + writerReservedBytes
+		if err := output.checkMemory(uint64(cap(output.data))); err != nil {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, err
 		}
 		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
@@ -349,13 +485,41 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 				"file": api.RedactPath(candidate.File.FilePath),
 			}, err)
 		}
-		if writer == nil {
+		initializeWriter := writer == nil
+		if initializeWriter {
 			schema, err := rewriteDataFilesWriterSchema(req.Metadata, file.Schema())
 			if err != nil {
 				return RewriteDataFileRewrite{}, ObjectWrite{}, err
 			}
 			writerSchema = schema
-			writer = parquet.NewWriter(&output, schema)
+			writerReservedBytes, err = rewriteDataFilesWriterMemoryReservation(schema)
+			if err != nil {
+				return RewriteDataFileRewrite{}, ObjectWrite{}, err
+			}
+		}
+		decodeBytes, err := rewriteDataFilesMaxRowGroupBytes(file)
+		if err != nil {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, err
+		}
+		workingBytes, overflow := addRewriteMemory(uint64(cap(data)), decodeBytes)
+		if !overflow {
+			workingBytes, overflow = addRewriteMemory(workingBytes, writerReservedBytes)
+		}
+		if overflow {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, maintenanceMemoryExceeded(math.MaxInt64, maxMemoryBytes)
+		}
+		output.reservedBytes = workingBytes
+		if err := output.checkMemory(uint64(cap(output.data))); err != nil {
+			return RewriteDataFileRewrite{}, ObjectWrite{}, err
+		}
+		if initializeWriter {
+			writer = parquet.NewWriter(
+				&output,
+				writerSchema,
+				parquet.PageBufferSize(rewriteDataFilesPageBufferBytes),
+				parquet.WriteBufferSize(0),
+				parquet.MaxRowsPerRowGroup(rewriteDataFilesRowsPerRowGroup),
+			)
 		}
 		conv, err := parquet.Convert(writerSchema, file.Schema())
 		if err != nil {
@@ -367,6 +531,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 		if err != nil {
 			return RewriteDataFileRewrite{}, ObjectWrite{}, err
 		}
+		output.reservedBytes = writerReservedBytes
 		totalRows += n
 	}
 	if writer == nil {
@@ -400,17 +565,123 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 }
 
 type boundedRewriteBuffer struct {
-	bytes.Buffer
-	maxBytes uint64
+	data           []byte
+	maxBytes       uint64
+	maxMemoryBytes uint64
+	reservedBytes  uint64
 }
 
 func (b *boundedRewriteBuffer) Write(p []byte) (int, error) {
-	if uint64(b.Len()) > b.maxBytes || uint64(len(p)) > b.maxBytes-uint64(b.Len()) {
+	current := uint64(len(b.data))
+	if current > b.maxBytes || uint64(len(p)) > b.maxBytes-current {
 		return 0, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg rewrite-data-files output exceeded its byte budget", map[string]string{
 			"limit": strconv.FormatUint(b.maxBytes, 10),
 		})
 	}
-	return b.Buffer.Write(p)
+	required := current + uint64(len(p))
+	if required > uint64(math.MaxInt) {
+		return 0, b.memoryExceeded()
+	}
+	capacity := uint64(cap(b.data))
+	if required > capacity {
+		capacity = required
+		if doubled := uint64(cap(b.data)) * 2; doubled > capacity {
+			capacity = doubled
+		}
+		if capacity > uint64(math.MaxInt) {
+			capacity = uint64(math.MaxInt)
+		}
+		if b.maxMemoryBytes > 0 {
+			if b.reservedBytes > b.maxMemoryBytes {
+				return 0, b.memoryExceeded()
+			}
+			available := b.maxMemoryBytes - b.reservedBytes
+			if required > available {
+				return 0, b.memoryExceeded()
+			}
+			if capacity > available {
+				capacity = available
+			}
+		}
+	}
+	if err := b.checkMemory(capacity); err != nil {
+		return 0, err
+	}
+	if required > uint64(cap(b.data)) {
+		// make+copy keeps both arrays live. reservedBytes covers input and
+		// parquet writer state; add both output capacities for the true peak.
+		if b.maxMemoryBytes > 0 {
+			oldCapacity := uint64(cap(b.data))
+			if b.reservedBytes > b.maxMemoryBytes || oldCapacity > b.maxMemoryBytes-b.reservedBytes || capacity > b.maxMemoryBytes-b.reservedBytes-oldCapacity {
+				return 0, b.memoryExceeded()
+			}
+		}
+		next := make([]byte, len(b.data), int(capacity))
+		copy(next, b.data)
+		b.data = next
+	}
+	oldLen := len(b.data)
+	b.data = b.data[:int(required)]
+	copy(b.data[oldLen:], p)
+	return len(p), nil
+}
+
+func (b *boundedRewriteBuffer) Len() int {
+	return len(b.data)
+}
+
+func (b *boundedRewriteBuffer) Bytes() []byte {
+	return b.data
+}
+
+func (b *boundedRewriteBuffer) checkMemory(outputCapacity uint64) error {
+	if b.maxMemoryBytes > 0 && (b.reservedBytes > b.maxMemoryBytes || outputCapacity > b.maxMemoryBytes-b.reservedBytes) {
+		return b.memoryExceeded()
+	}
+	return nil
+}
+
+func (b *boundedRewriteBuffer) memoryExceeded() error {
+	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg rewrite-data-files materialized working set exceeded the memory budget", map[string]string{
+		"limit": strconv.FormatUint(b.maxMemoryBytes, 10),
+	})
+}
+
+func rewriteDataFilesWriterMemoryReservation(schema *parquet.Schema) (uint64, error) {
+	if schema == nil {
+		return 0, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files writer requires a schema", nil)
+	}
+	// The two extra pages cover parquet-go's shared encode/compression scratch
+	// buffers. Schema/index bookkeeping is bounded by the materialized input and
+	// output; this reservation covers the large reusable payload buffers.
+	columns := uint64(len(schema.Columns()))
+	if columns > math.MaxUint64/rewriteDataFilesPageBufferBytes-2 {
+		return 0, maintenanceMemoryExceeded(math.MaxInt64, math.MaxInt64)
+	}
+	return (columns + 2) * rewriteDataFilesPageBufferBytes, nil
+}
+
+func rewriteDataFilesMaxRowGroupBytes(file *parquet.File) (uint64, error) {
+	if file == nil || file.Metadata() == nil {
+		return 0, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files compactor requires Parquet metadata", nil)
+	}
+	var maxBytes uint64
+	for _, rowGroup := range file.Metadata().RowGroups {
+		if rowGroup.TotalByteSize < 0 {
+			return 0, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files compactor found a negative Parquet row-group size", nil)
+		}
+		if size := uint64(rowGroup.TotalByteSize); size > maxBytes {
+			maxBytes = size
+		}
+	}
+	return maxBytes, nil
+}
+
+func addRewriteMemory(left, right uint64) (uint64, bool) {
+	if right > math.MaxUint64-left {
+		return 0, true
+	}
+	return left + right, false
 }
 
 func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int) (string, error) {
@@ -534,7 +805,7 @@ func cloneRewriteDataFilesPartition(in map[string]any) map[string]any {
 
 var _ RewriteDataFilesCompactor = ParquetConcatRewriteDataFilesCompactor{}
 
-func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx context.Context, deleteFile api.DataFile, affected []string) (map[string]map[int64]struct{}, error) {
+func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx context.Context, deleteFile api.DataFile, affected []string, memoryUsed *int64, memoryLimit int64) (map[string]map[int64]struct{}, error) {
 	deletePath := strings.TrimSpace(deleteFile.FilePath)
 	if deletePath == "" {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete file path is required before rewrite-data-files delete apply", nil)
@@ -548,11 +819,21 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 	if len(affectedSet) == 0 {
 		return nil, nil
 	}
-	data, err := c.ObjectReader.Read(ctx, deletePath, 0, -1)
+	readLimit := memoryLimit - *memoryUsed
+	data, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, deletePath, readLimit)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return nil, err
+		}
 		return nil, api.WrapError(api.ErrObjectIO, "Iceberg rewrite-data-files compactor failed to read position delete file", map[string]string{
 			"file": api.RedactPath(deletePath),
 		}, err)
+	}
+	// Keep the encoded input charged while building decoded maps. This is
+	// intentionally conservative; a future spillable delete index can release
+	// pages incrementally and lower this charge without weakening the bound.
+	if err := reserveMaintenanceMemory(memoryUsed, int64(cap(data)), memoryLimit); err != nil {
+		return nil, err
 	}
 	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -580,7 +861,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 			n, readErr := rows.ReadRows(buffer)
 			for idx := 0; idx < n; idx++ {
 				dataFile, ok := rewriteDataFilesRowString(buffer[idx], filePathCol)
-				if !ok {
+				if !ok || strings.TrimSpace(dataFile) == "" {
 					_ = rows.Close()
 					return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete row is missing file_path", map[string]string{
 						"delete_file": api.RedactPath(deletePath),
@@ -590,7 +871,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 					continue
 				}
 				pos, ok := rewriteDataFilesRowInt64(buffer[idx], posCol)
-				if !ok {
+				if !ok || pos < 0 {
 					_ = rows.Close()
 					return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete row is missing pos", map[string]string{
 						"delete_file": api.RedactPath(deletePath),
@@ -598,8 +879,18 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 				}
 				positions := out[dataFile]
 				if positions == nil {
+					if err := reserveMaintenanceMemory(memoryUsed, int64(64+len(dataFile)), memoryLimit); err != nil {
+						_ = rows.Close()
+						return nil, err
+					}
 					positions = make(map[int64]struct{})
 					out[dataFile] = positions
+				}
+				if _, exists := positions[pos]; !exists {
+					if err := reserveMaintenanceMemory(memoryUsed, 32, memoryLimit); err != nil {
+						_ = rows.Close()
+						return nil, err
+					}
 				}
 				positions[pos] = struct{}{}
 			}
@@ -622,16 +913,23 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 	return out, nil
 }
 
-func (c ParquetConcatRewriteDataFilesCompactor) readEqualityDeleteKeys(ctx context.Context, deleteFile api.DataFile) (map[string]struct{}, error) {
+func (c ParquetConcatRewriteDataFilesCompactor) readEqualityDeleteKeys(ctx context.Context, deleteFile api.DataFile, memoryUsed *int64, memoryLimit int64) (map[string]struct{}, error) {
 	deletePath := strings.TrimSpace(deleteFile.FilePath)
 	if deletePath == "" {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg equality delete file path is required before rewrite-data-files delete apply", nil)
 	}
-	data, err := c.ObjectReader.Read(ctx, deletePath, 0, -1)
+	readLimit := memoryLimit - *memoryUsed
+	data, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, deletePath, readLimit)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return nil, err
+		}
 		return nil, api.WrapError(api.ErrObjectIO, "Iceberg rewrite-data-files compactor failed to read equality delete file", map[string]string{
 			"file": api.RedactPath(deletePath),
 		}, err)
+	}
+	if err := reserveMaintenanceMemory(memoryUsed, int64(cap(data)), memoryLimit); err != nil {
+		return nil, err
 	}
 	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -655,7 +953,13 @@ func (c ParquetConcatRewriteDataFilesCompactor) readEqualityDeleteKeys(ctx conte
 					_ = rows.Close()
 					return nil, err
 				}
-				keys[key] = struct{}{}
+				if _, exists := keys[key]; !exists {
+					if err := reserveMaintenanceMemory(memoryUsed, int64(48+len(key)), memoryLimit); err != nil {
+						_ = rows.Close()
+						return nil, err
+					}
+					keys[key] = struct{}{}
+				}
 			}
 			if readErr == io.EOF {
 				break
@@ -851,7 +1155,7 @@ func rewriteDataFilesRowString(row parquet.Row, columnIndex int) (string, bool) 
 	case parquet.ByteArray, parquet.FixedLenByteArray:
 		return string(value.ByteArray()), true
 	default:
-		return value.String(), true
+		return "", false
 	}
 }
 

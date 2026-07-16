@@ -17,6 +17,7 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,8 +35,9 @@ const (
 )
 
 type RewriteDataFilesSelector struct {
-	Metadata     api.MetadataFacade
-	ObjectReader api.ObjectReader
+	Metadata       api.MetadataFacade
+	ObjectReader   api.ObjectReader
+	MaxMemoryBytes int64
 }
 
 type RewriteDataFilesSelectionRequest struct {
@@ -67,6 +69,10 @@ type RewriteDataFilesSelection struct {
 	ScannedFileCount       uint64
 	CandidateFileCount     uint64
 	CandidateSizeBytes     int64
+	// RetainedMemoryBytes is the conservative handoff working set. The native
+	// pipeline carries it across stages so independently bounded stages cannot
+	// stack above one configured process budget.
+	RetainedMemoryBytes int64
 }
 
 type RewriteDataFileRewrite struct {
@@ -97,6 +103,8 @@ type RewriteDataFilesMaterializeRequest struct {
 	PreservedManifests []api.ManifestFile
 	Summary            map[string]string
 	Rewrites           []RewriteDataFileRewrite
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 }
 
 type RewriteDataFilesMaterializeResult struct {
@@ -139,6 +147,10 @@ type RewriteDataFilesCompactResult struct {
 	Rewrites    []RewriteDataFileRewrite
 	Objects     []ObjectWrite
 	OrphanPaths []string
+	// RetainedMemoryBytes includes the selection handoff plus materialized
+	// outputs. A future spillable compactor may report a smaller live set after
+	// it releases intermediate filters and decoded input pages.
+	RetainedMemoryBytes int64
 }
 
 type NativeRewriteDataFilesPlanner struct {
@@ -226,11 +238,28 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
 	dataManifestPath := joinObjectPath(basePath, "data-manifest.avro")
 	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
-	preservedDataManifests, preservedObjects, err := materializeRewriteDataFilesPreservedManifests(
+	memoryLimit := maintenanceMemoryLimit(selector.MaxMemoryBytes)
+	memoryUsed := compacted.RetainedMemoryBytes
+	if memoryUsed < selection.RetainedMemoryBytes {
+		memoryUsed = selection.RetainedMemoryBytes
+	}
+	if compacted.RetainedMemoryBytes == 0 {
+		for _, object := range compacted.Objects {
+			if err := reserveMaintenanceMemory(&memoryUsed, int64(cap(object.Payload)), memoryLimit); err != nil {
+				return nil, err
+			}
+			if err := reserveMaintenanceMemory(&memoryUsed, 128, memoryLimit); err != nil {
+				return nil, err
+			}
+		}
+	}
+	preservedDataManifests, preservedObjects, err := materializeRewriteDataFilesPreservedManifestsWithBudget(
 		meta,
 		basePath,
 		selection.PreservedDataManifests,
 		rewriteDataFilesSourcePathSet(compacted.Rewrites),
+		&memoryUsed,
+		memoryLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -263,7 +292,9 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 			"candidate-bytes":     strconv.FormatInt(selection.CandidateSizeBytes, 10),
 			"candidate-manifests": strconv.Itoa(selection.ScannedManifestCount),
 		},
-		Rewrites: compacted.Rewrites,
+		Rewrites:           compacted.Rewrites,
+		MaxMemoryBytes:     memoryLimit,
+		InitialMemoryBytes: memoryUsed,
 	})
 	if err != nil {
 		return nil, err
@@ -337,12 +368,26 @@ func rewriteDataFilesSourcePathSet(rewrites []RewriteDataFileRewrite) map[string
 }
 
 func materializeRewriteDataFilesPreservedManifests(meta *api.TableMetadata, basePath string, preserved []RewriteDataFilesPreservedManifest, removedPaths map[string]struct{}) ([]api.ManifestFile, []ObjectWrite, error) {
+	memoryUsed := int64(0)
+	return materializeRewriteDataFilesPreservedManifestsWithBudget(
+		meta, basePath, preserved, removedPaths, &memoryUsed, defaultMaintenancePlanningMemory,
+	)
+}
+
+func materializeRewriteDataFilesPreservedManifestsWithBudget(meta *api.TableMetadata, basePath string, preserved []RewriteDataFilesPreservedManifest, removedPaths map[string]struct{}, memoryUsed *int64, memoryLimit int64) ([]api.ManifestFile, []ObjectWrite, error) {
 	if len(preserved) == 0 {
 		return nil, nil, nil
+	}
+	if err := reserveMaintenanceMemory(memoryUsed, saturatingMaintenanceMul(int64(len(preserved)), 512), memoryLimit); err != nil {
+		return nil, nil, err
 	}
 	outManifests := make([]api.ManifestFile, 0, len(preserved))
 	outObjects := make([]ObjectWrite, 0, len(preserved))
 	for idx, item := range preserved {
+		encoderScratch := saturatingMaintenanceMul(metadata.ManifestEntriesMemoryWeight(0, item.Entries), 2)
+		if err := checkMaintenanceMemory(*memoryUsed, encoderScratch, memoryLimit); err != nil {
+			return nil, nil, err
+		}
 		entries := filterRewriteDataFilesPreservedEntries(item.Entries, removedPaths)
 		if len(entries) == 0 {
 			continue
@@ -356,11 +401,22 @@ func materializeRewriteDataFilesPreservedManifests(meta *api.TableMetadata, base
 		if err != nil {
 			return nil, nil, err
 		}
-		payload, err := metadata.EncodeManifest(entries, writeOpts)
+		payloadBuffer := boundedMaintenanceBuffer{maxBytes: memoryLimit - *memoryUsed - encoderScratch}
+		err = metadata.WriteManifest(&payloadBuffer, entries, writeOpts)
+		if err != nil {
+			if payloadBuffer.exceeded {
+				return nil, nil, checkMaintenanceMemory(memoryLimit, 1, memoryLimit)
+			}
+			return nil, nil, err
+		}
+		payload := payloadBuffer.Bytes()
+		if err := reserveMaintenanceMemory(memoryUsed, int64(cap(payload)), memoryLimit); err != nil {
+			return nil, nil, err
+		}
+		manifest, err := rewriteDataFilesPreservedManifestFile(item.Manifest, path, payload, entries)
 		if err != nil {
 			return nil, nil, err
 		}
-		manifest := rewriteDataFilesPreservedManifestFile(item.Manifest, path, payload, entries)
 		outManifests = append(outManifests, manifest)
 		outObjects = append(outObjects, ObjectWrite{Location: path, Payload: payload})
 	}
@@ -382,25 +438,29 @@ func filterRewriteDataFilesPreservedEntries(entries []api.ManifestEntry, removed
 	return out
 }
 
-func rewriteDataFilesPreservedManifestFile(original api.ManifestFile, path string, payload []byte, entries []api.ManifestEntry) api.ManifestFile {
+func rewriteDataFilesPreservedManifestFile(original api.ManifestFile, path string, payload []byte, entries []api.ManifestEntry) (api.ManifestFile, error) {
+	metrics, err := aggregateRewriteDataFilesManifestEntries(entries)
+	if err != nil {
+		return api.ManifestFile{}, err
+	}
 	manifest := original
 	manifest.Path = path
 	manifest.Length = int64(len(payload))
 	if manifest.Content == "" {
 		manifest.Content = api.ManifestContentData
 	}
-	manifest.AddedFilesCount = rewriteDataFilesCountEntries(entries, api.ManifestEntryAdded)
-	manifest.ExistingFilesCount = rewriteDataFilesCountEntries(entries, api.ManifestEntryExisting)
-	manifest.DeletedFilesCount = rewriteDataFilesCountEntries(entries, api.ManifestEntryDeleted)
-	manifest.AddedRowsCount = rewriteDataFilesRows(entries, api.ManifestEntryAdded)
-	manifest.ExistingRowsCount = rewriteDataFilesRows(entries, api.ManifestEntryExisting)
-	manifest.DeletedRowsCount = rewriteDataFilesRows(entries, api.ManifestEntryDeleted)
-	manifest.AddedFilesSizeInBytes = rewriteDataFilesBytes(entries, api.ManifestEntryAdded)
-	manifest.ExistingFilesSizeInBytes = rewriteDataFilesBytes(entries, api.ManifestEntryExisting)
-	manifest.DeletedFilesSizeInBytes = rewriteDataFilesBytes(entries, api.ManifestEntryDeleted)
+	manifest.AddedFilesCount = metrics.addedFiles
+	manifest.ExistingFilesCount = metrics.existingFiles
+	manifest.DeletedFilesCount = metrics.deletedFiles
+	manifest.AddedRowsCount = metrics.addedRows
+	manifest.ExistingRowsCount = metrics.existingRows
+	manifest.DeletedRowsCount = metrics.deletedRows
+	manifest.AddedFilesSizeInBytes = metrics.addedBytes
+	manifest.ExistingFilesSizeInBytes = metrics.existingBytes
+	manifest.DeletedFilesSizeInBytes = metrics.deletedBytes
 	manifest.ManifestPathRedacted = api.RedactPath(path)
 	manifest.ManifestPathHash = api.PathHash(path)
-	return manifest
+	return manifest, nil
 }
 
 func preservedManifestFiles(in []api.ManifestFile) []api.ManifestFile {
@@ -429,18 +489,33 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 	if facade == nil {
 		facade = metadata.NativeFacade{}
 	}
-	manifestListData, err := s.ObjectReader.Read(ctx, req.Snapshot.ManifestList, 0, -1)
+	memoryLimit := maintenanceMemoryLimit(s.MaxMemoryBytes)
+	var memoryUsed int64
+	manifestListData, err := readMaintenanceMetadataObject(ctx, s.ObjectReader, req.Snapshot.ManifestList, memoryLimit)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return nil, err
+		}
 		return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg rewrite-data-files selector failed to read manifest list", map[string]string{
 			"manifest_list": api.RedactPath(req.Snapshot.ManifestList),
 		}, err)
 	}
-	manifests, err := facade.ReadManifestList(ctx, manifestListData)
+	manifests, err := readMaintenanceManifestList(
+		ctx, facade, manifestListData,
+		maintenanceRecordLimit(memoryLimit, 512),
+		memoryLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
+	manifestListWeight := metadata.ManifestListMemoryWeight(cap(manifestListData), manifests)
+	if err := checkMaintenanceMemory(memoryUsed, manifestListWeight, memoryLimit); err != nil {
+		return nil, err
+	}
+	memoryUsed += manifestListWeight
 	grouped := make(map[string][]RewriteDataFileCandidate)
 	selection := &RewriteDataFilesSelection{}
+	var candidateRecordCount int64
 	for _, manifest := range manifests {
 		if manifest.Content == api.ManifestContentDeletes {
 			if strings.TrimSpace(manifest.Path) == "" {
@@ -462,20 +537,38 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 				"manifest_list": api.RedactPath(req.Snapshot.ManifestList),
 			})
 		}
-		manifestData, err := s.ObjectReader.Read(ctx, manifestPath, 0, -1)
+		manifestData, err := readMaintenanceMetadataObject(ctx, s.ObjectReader, manifestPath, memoryLimit-memoryUsed)
 		if err != nil {
+			if isMaintenancePlanningLimit(err) {
+				return nil, err
+			}
 			return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg rewrite-data-files selector failed to read manifest", map[string]string{
 				"manifest": api.RedactPath(manifestPath),
 			}, err)
 		}
-		entries, err := facade.ReadManifest(ctx, manifestData)
+		entries, err := readMaintenanceManifest(
+			ctx, facade, manifestData,
+			maintenanceRecordLimit(memoryLimit-memoryUsed, 1024),
+			memoryLimit-memoryUsed,
+		)
 		if err != nil {
 			return nil, err
 		}
+		entryWeight := metadata.ManifestEntriesMemoryWeight(cap(manifestData), entries)
+		if err := checkMaintenanceMemory(memoryUsed, entryWeight, memoryLimit); err != nil {
+			return nil, err
+		}
+		memoryUsed += entryWeight
 		for idx := range entries {
 			entries[idx].DataFile.SpecID = manifest.PartitionSpecID
 		}
 		selection.ScannedManifestCount++
+		// PreservedDataManifests owns a second entry slice. Nested immutable maps
+		// and strings are shared, so the full decoded weight is conservative but
+		// keeps slice growth/struct copies safely inside the stage handoff budget.
+		if err := reserveMaintenanceMemory(&memoryUsed, metadata.ManifestEntriesMemoryWeight(0, entries), memoryLimit); err != nil {
+			return nil, err
+		}
 		selection.PreservedDataManifests = append(selection.PreservedDataManifests, RewriteDataFilesPreservedManifest{
 			Manifest: manifest,
 			Entries:  append([]api.ManifestEntry(nil), entries...),
@@ -490,18 +583,37 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 					"manifest": api.RedactPath(manifestPath),
 				})
 			}
+			if file.RecordCount < 0 || file.FileSizeInBytes < 0 || entry.SequenceNumber < 0 || entry.FileSequence < 0 {
+				return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files selector found negative sequence or file metrics", map[string]string{
+					"file": api.RedactPath(file.FilePath),
+				})
+			}
 			selection.ScannedFileCount++
 			if !isRewriteDataFilesCandidate(file, opts) {
 				continue
 			}
 			candidate := RewriteDataFileCandidate{ManifestPath: manifestPath, Entry: entry, File: file}
+			// Candidate structs duplicate headers retained by PreservedDataManifests;
+			// their maps/strings still share immutable decoded backing storage.
+			candidateMemory := saturatingMaintenanceMul(metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{entry}), 2)
+			if err := checkMaintenanceMemory(memoryUsed, candidateMemory, memoryLimit); err != nil {
+				return nil, err
+			}
+			memoryUsed += candidateMemory
 			groupKey := rewriteDataFilesGroupKey(file)
 			grouped[groupKey] = append(grouped[groupKey], candidate)
 			selection.CandidateFileCount++
+			if file.FileSizeInBytes > math.MaxInt64-selection.CandidateSizeBytes || file.RecordCount > math.MaxInt64-candidateRecordCount {
+				return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files candidate metrics overflow", map[string]string{
+					"file": api.RedactPath(file.FilePath),
+				})
+			}
 			selection.CandidateSizeBytes += file.FileSizeInBytes
+			candidateRecordCount += file.RecordCount
 		}
 	}
 	selection.Groups = boundRewriteDataFileGroups(buildRewriteDataFileGroups(grouped, opts), opts.maxRewriteBytes)
+	selection.RetainedMemoryBytes = memoryUsed
 	return selection, nil
 }
 
@@ -701,6 +813,15 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 	if strings.TrimSpace(req.IdempotencyKey) == "" {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg rewrite-data-files materialization requires an idempotency key", nil)
 	}
+	memoryLimit := maintenanceMemoryLimit(req.MaxMemoryBytes)
+	memoryUsed := req.InitialMemoryBytes
+	if err := checkMaintenanceMemory(0, memoryUsed, memoryLimit); err != nil {
+		return nil, err
+	}
+	entryMemory := rewriteDataFilesNewEntriesMemory(req)
+	if err := reserveMaintenanceMemory(&memoryUsed, entryMemory, memoryLimit); err != nil {
+		return nil, err
+	}
 	entries, rewrittenFiles, addedFiles, err := rewriteDataFilesManifestEntries(req)
 	if err != nil {
 		return nil, err
@@ -708,12 +829,20 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 	if len(entries) == 0 {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files materialization requires at least one rewrite group", nil)
 	}
+	// entriesBySpec owns a second set of slice headers/entry structs while the
+	// flat result entries remain live.
+	if err := reserveMaintenanceMemory(&memoryUsed, entryMemory, memoryLimit); err != nil {
+		return nil, err
+	}
 	entriesBySpec := rewriteDataFilesEntriesBySpec(entries)
 	specIDs := make([]int, 0, len(entriesBySpec))
 	for specID := range entriesBySpec {
 		specIDs = append(specIDs, specID)
 	}
 	sort.Ints(specIDs)
+	if err := reserveMaintenanceMemory(&memoryUsed, saturatingMaintenanceMul(int64(len(specIDs)), 512), memoryLimit); err != nil {
+		return nil, err
+	}
 	manifests := make([]api.ManifestFile, 0, len(specIDs))
 	manifestObjects := make([]ObjectWrite, 0, len(specIDs))
 	for _, specID := range specIDs {
@@ -722,24 +851,66 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 		if err != nil {
 			return nil, err
 		}
-		manifestBytes, err := metadata.EncodeManifest(specEntries, writeOpts)
+		encoderScratch := metadata.ManifestEntriesMemoryWeight(0, specEntries)
+		if err := checkMaintenanceMemory(memoryUsed, encoderScratch, memoryLimit); err != nil {
+			return nil, err
+		}
+		manifestBuffer := boundedMaintenanceBuffer{maxBytes: memoryLimit - memoryUsed - encoderScratch}
+		err = metadata.WriteManifest(&manifestBuffer, specEntries, writeOpts)
 		if err != nil {
+			if manifestBuffer.exceeded {
+				return nil, checkMaintenanceMemory(memoryLimit, 1, memoryLimit)
+			}
+			return nil, err
+		}
+		manifestBytes := manifestBuffer.Bytes()
+		if err := reserveMaintenanceMemory(&memoryUsed, int64(cap(manifestBytes)), memoryLimit); err != nil {
 			return nil, err
 		}
 		manifestPath := rewriteDataFilesManifestPath(req.DataManifestPath, specID, len(specIDs))
-		manifest := rewriteDataFilesManifestFile(req, manifestPath, specID, manifestBytes, specEntries)
+		manifest, err := rewriteDataFilesManifestFile(req, manifestPath, specID, manifestBytes, specEntries)
+		if err != nil {
+			return nil, err
+		}
 		manifests = append(manifests, manifest)
 		manifestObjects = append(manifestObjects, ObjectWrite{Location: manifestPath, Payload: manifestBytes})
 	}
-	manifestList := append(cloneRewriteDataFilesManifests(req.PreservedManifests), manifests...)
+	manifestListMemory := saturatingMaintenanceAdd(
+		metadata.ManifestListMemoryWeight(0, req.PreservedManifests),
+		metadata.ManifestListMemoryWeight(0, manifests),
+	)
+	if err := reserveMaintenanceMemory(&memoryUsed, manifestListMemory, memoryLimit); err != nil {
+		return nil, err
+	}
+	manifestList := make([]api.ManifestFile, 0, len(req.PreservedManifests)+len(manifests))
+	manifestList = append(manifestList, req.PreservedManifests...)
+	manifestList = append(manifestList, manifests...)
 	parentSnapshotID := req.Snapshot.SnapshotID
-	manifestListBytes, err := metadata.EncodeManifestList(manifestList, metadata.ManifestListWriteOptions{
+	encoderScratch := metadata.ManifestListMemoryWeight(0, manifestList)
+	if err := checkMaintenanceMemory(memoryUsed, encoderScratch, memoryLimit); err != nil {
+		return nil, err
+	}
+	manifestListBuffer := boundedMaintenanceBuffer{maxBytes: memoryLimit - memoryUsed - encoderScratch}
+	err = metadata.WriteManifestList(&manifestListBuffer, manifestList, metadata.ManifestListWriteOptions{
 		FormatVersion:    req.FormatVersion,
 		SnapshotID:       req.SnapshotID,
 		ParentSnapshotID: &parentSnapshotID,
 		SequenceNumber:   req.SequenceNumber,
 	})
 	if err != nil {
+		if manifestListBuffer.exceeded {
+			return nil, checkMaintenanceMemory(memoryLimit, 1, memoryLimit)
+		}
+		return nil, err
+	}
+	manifestListBytes := manifestListBuffer.Bytes()
+	if err := reserveMaintenanceMemory(&memoryUsed, int64(cap(manifestListBytes)), memoryLimit); err != nil {
+		return nil, err
+	}
+	if err := reserveMaintenanceMemory(&memoryUsed, metadata.ManifestListMemoryWeight(0, manifests), memoryLimit); err != nil {
+		return nil, err
+	}
+	if err := reserveMaintenanceMemory(&memoryUsed, 4096, memoryLimit); err != nil {
 		return nil, err
 	}
 	result := &RewriteDataFilesMaterializeResult{
@@ -757,6 +928,24 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 	}
 	result.Attempt = buildRewriteDataFilesCommitAttempt(req, manifests, rewrittenFiles, addedFiles)
 	return result, nil
+}
+
+func rewriteDataFilesNewEntriesMemory(req RewriteDataFilesMaterializeRequest) int64 {
+	var total int64
+	for _, rewrite := range req.Rewrites {
+		for _, candidate := range rewrite.Group.Candidates {
+			total = saturatingMetadataEntryWeight(total, candidate.File)
+		}
+		for _, replacement := range rewrite.ReplacementFiles {
+			total = saturatingMetadataEntryWeight(total, replacement)
+		}
+	}
+	return total
+}
+
+func saturatingMetadataEntryWeight(total int64, file api.DataFile) int64 {
+	weight := metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}})
+	return saturatingMaintenanceAdd(total, weight)
 }
 
 func rewriteDataFilesEntriesBySpec(entries []api.ManifestEntry) map[int][]api.ManifestEntry {
@@ -780,7 +969,11 @@ func rewriteDataFilesManifestPath(base string, specID, specCount int) string {
 	return base + "-spec-" + strconv.Itoa(specID) + ext
 }
 
-func rewriteDataFilesManifestFile(req RewriteDataFilesMaterializeRequest, path string, specID int, payload []byte, entries []api.ManifestEntry) api.ManifestFile {
+func rewriteDataFilesManifestFile(req RewriteDataFilesMaterializeRequest, path string, specID int, payload []byte, entries []api.ManifestEntry) (api.ManifestFile, error) {
+	metrics, err := aggregateRewriteDataFilesManifestEntries(entries)
+	if err != nil {
+		return api.ManifestFile{}, err
+	}
 	return api.ManifestFile{
 		Path:                     path,
 		Length:                   int64(len(payload)),
@@ -789,16 +982,18 @@ func rewriteDataFilesManifestFile(req RewriteDataFilesMaterializeRequest, path s
 		SequenceNumber:           req.SequenceNumber,
 		MinSequenceNumber:        req.SequenceNumber,
 		AddedSnapshotID:          req.SnapshotID,
-		AddedFilesCount:          rewriteDataFilesCountEntries(entries, api.ManifestEntryAdded),
-		DeletedFilesCount:        rewriteDataFilesCountEntries(entries, api.ManifestEntryDeleted),
-		AddedRowsCount:           rewriteDataFilesRows(entries, api.ManifestEntryAdded),
-		DeletedRowsCount:         rewriteDataFilesRows(entries, api.ManifestEntryDeleted),
-		AddedFilesSizeInBytes:    rewriteDataFilesBytes(entries, api.ManifestEntryAdded),
-		DeletedFilesSizeInBytes:  rewriteDataFilesBytes(entries, api.ManifestEntryDeleted),
-		ExistingFilesSizeInBytes: 0,
+		AddedFilesCount:          metrics.addedFiles,
+		ExistingFilesCount:       metrics.existingFiles,
+		DeletedFilesCount:        metrics.deletedFiles,
+		AddedRowsCount:           metrics.addedRows,
+		ExistingRowsCount:        metrics.existingRows,
+		DeletedRowsCount:         metrics.deletedRows,
+		AddedFilesSizeInBytes:    metrics.addedBytes,
+		ExistingFilesSizeInBytes: metrics.existingBytes,
+		DeletedFilesSizeInBytes:  metrics.deletedBytes,
 		ManifestPathRedacted:     api.RedactPath(path),
 		ManifestPathHash:         api.PathHash(path),
-	}
+	}, nil
 }
 
 func rewriteDataFilesManifestWriteOptions(req RewriteDataFilesMaterializeRequest, specID int) (metadata.ManifestWriteOptions, error) {
@@ -933,32 +1128,44 @@ func cloneRewriteDataFilesManifests(in []api.ManifestFile) []api.ManifestFile {
 	return out
 }
 
-func rewriteDataFilesCountEntries(entries []api.ManifestEntry, status api.ManifestEntryStatus) int {
-	count := 0
-	for _, entry := range entries {
-		if entry.Status == status {
-			count++
-		}
-	}
-	return count
+type rewriteDataFilesManifestMetrics struct {
+	addedFiles, existingFiles, deletedFiles int
+	addedRows, existingRows, deletedRows    int64
+	addedBytes, existingBytes, deletedBytes int64
 }
 
-func rewriteDataFilesRows(entries []api.ManifestEntry, status api.ManifestEntryStatus) int64 {
-	var rows int64
+func aggregateRewriteDataFilesManifestEntries(entries []api.ManifestEntry) (rewriteDataFilesManifestMetrics, error) {
+	var metrics rewriteDataFilesManifestMetrics
 	for _, entry := range entries {
-		if entry.Status == status {
-			rows += entry.DataFile.RecordCount
+		file := entry.DataFile
+		if entry.SequenceNumber < 0 || entry.FileSequence < 0 || file.RecordCount < 0 || file.FileSizeInBytes < 0 {
+			return rewriteDataFilesManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files found negative sequence or file metrics", map[string]string{
+				"file": api.RedactPath(file.FilePath),
+			})
 		}
-	}
-	return rows
-}
-
-func rewriteDataFilesBytes(entries []api.ManifestEntry, status api.ManifestEntryStatus) int64 {
-	var bytes int64
-	for _, entry := range entries {
-		if entry.Status == status {
-			bytes += entry.DataFile.FileSizeInBytes
+		var count *int
+		var rows, bytes *int64
+		switch entry.Status {
+		case api.ManifestEntryAdded:
+			count, rows, bytes = &metrics.addedFiles, &metrics.addedRows, &metrics.addedBytes
+		case api.ManifestEntryExisting:
+			count, rows, bytes = &metrics.existingFiles, &metrics.existingRows, &metrics.existingBytes
+		case api.ManifestEntryDeleted:
+			count, rows, bytes = &metrics.deletedFiles, &metrics.deletedRows, &metrics.deletedBytes
+		default:
+			return rewriteDataFilesManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files found invalid manifest entry status", map[string]string{
+				"file":   api.RedactPath(file.FilePath),
+				"status": strconv.Itoa(int(entry.Status)),
+			})
 		}
+		if file.RecordCount > math.MaxInt64-*rows || file.FileSizeInBytes > math.MaxInt64-*bytes {
+			return rewriteDataFilesManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files aggregate metrics overflow", map[string]string{
+				"file": api.RedactPath(file.FilePath),
+			})
+		}
+		*count = *count + 1
+		*rows += file.RecordCount
+		*bytes += file.FileSizeInBytes
 	}
-	return bytes
+	return metrics, nil
 }

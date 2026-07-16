@@ -579,6 +579,24 @@ func ValidateMaintenanceJob(ctx context.Context, job model.MaintenanceJob) error
 }
 
 func InsertCatalogSQL(c model.Catalog) string {
+	if c.CatalogID == 0 {
+		// SQL-facing CREATE lets the table's auto-increment allocator choose a
+		// race-free id. Client-side MAX(id)+1 races across concurrent CNs; callers
+		// that import a stable account-scoped id may still use the explicit form.
+		return fmt.Sprintf(
+			"insert into mo_catalog.%s(account_id,name,type,uri,warehouse,auth_mode,token_secret_ref,capabilities_json,version) values (%d,%s,%s,%s,%s,%s,%s,%s,%d)",
+			TableCatalogs,
+			c.AccountID,
+			quoteSQLString(c.Name),
+			quoteSQLString(c.Type),
+			quoteSQLString(c.URI),
+			nullOrSQLString(c.Warehouse),
+			quoteSQLString(defaultString(c.AuthMode, model.AuthModeNone)),
+			nullOrSQLString(c.TokenSecretRef),
+			nullOrSQLString(c.CapabilitiesJSON),
+			defaultVersion(c.Version),
+		)
+	}
 	return fmt.Sprintf(
 		"insert into mo_catalog.%s(account_id,catalog_id,name,type,uri,warehouse,auth_mode,token_secret_ref,capabilities_json,version) values (%d,%d,%s,%s,%s,%s,%s,%s,%s,%d)",
 		TableCatalogs,

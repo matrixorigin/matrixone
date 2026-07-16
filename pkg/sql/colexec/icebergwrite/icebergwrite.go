@@ -17,13 +17,17 @@ package icebergwrite
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (w *IcebergWrite) String(buf *bytes.Buffer) {
@@ -45,6 +49,7 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 		w.Request.MaxParallel = w.GetMaxParallel()
 		if w.Factory != nil {
 			w.refreshExecutionRequest(proc)
+			w.factoryInvoked = true
 			coordinator, err := w.Factory.NewCoordinator(proc.Ctx, w.Request)
 			if err != nil {
 				return err
@@ -58,9 +63,11 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 	}
 	if !w.ctr.opened {
 		if err := w.Coordinator.Begin(proc.Ctx, w.Request); err != nil {
-			_ = w.Coordinator.Abort(proc.Ctx, err)
+			recoveryCtx, cancel := icebergwritecore.NewRecoveryContext(proc.Ctx)
+			abortErr := w.Coordinator.Abort(recoveryCtx, err)
+			cancel()
 			w.discardFactoryCoordinator()
-			return err
+			return errors.Join(err, abortErr)
 		}
 		w.ctr.opened = true
 	}
@@ -134,7 +141,23 @@ func (w *IcebergWrite) abortOpen(proc *process.Process, cause error) {
 	if w == nil || w.Coordinator == nil || !w.ctr.opened || w.ctr.finished {
 		return
 	}
-	_ = w.Coordinator.Abort(proc.Ctx, cause)
+	parent := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		parent = proc.Ctx
+	}
+	recoveryCtx, cancel := icebergwritecore.NewRecoveryContext(parent)
+	defer cancel()
+	if err := w.Coordinator.Abort(recoveryCtx, cause); err != nil {
+		// Reset/Free cannot return an error through the operator contract. Keep
+		// the abort bounded and observable instead of silently losing a cleanup
+		// failure or skipping it because the query context was cancelled.
+		logutil.Warn("Iceberg write coordinator abort failed",
+			zap.String("operation", w.Request.Operation),
+			zap.String("catalog", w.Request.CatalogName),
+			zap.String("namespace", w.Request.Namespace),
+			zap.String("table", w.Request.Table),
+			zap.Error(err))
+	}
 	w.ctr.finished = true
 }
 
@@ -150,6 +173,14 @@ func (w *IcebergWrite) refreshExecutionRequest(proc *process.Process) {
 	if w == nil || proc == nil {
 		return
 	}
+	compiledStatementID := w.Request.StatementID
+	compiledIdempotencyKey := w.Request.IdempotencyKey
+	// Never let a missing execution identity fall back to the PREPARE-time key:
+	// that would make two EXECUTEs look like one idempotent commit. Runtime
+	// factory validation may reject an empty identity, which is safer than
+	// silently reusing a stale one.
+	w.Request.StatementID = ""
+	w.Request.IdempotencyKey = ""
 	if sessionInfo := proc.GetSessionInfo(); sessionInfo != nil && sessionInfo.TimeZone != nil {
 		w.Request.TimeZone = sessionInfo.TimeZone
 	}
@@ -174,6 +205,15 @@ func (w *IcebergWrite) refreshExecutionRequest(proc *process.Process) {
 		statementID = strings.TrimSpace(proc.QueryId())
 	}
 	if statementID == "" {
+		// The first invocation may be a directly compiled, non-cached pipeline
+		// without a statement profile (notably embedded/operator callers). Its
+		// compiled identity belongs to this execution and remains a valid one-time
+		// fallback. Once the factory has been invoked, Reset means a new execution;
+		// never resurrect that old identity on subsequent invocations.
+		if !w.factoryInvoked {
+			w.Request.StatementID = compiledStatementID
+			w.Request.IdempotencyKey = compiledIdempotencyKey
+		}
 		return
 	}
 	w.Request.StatementID = statementID

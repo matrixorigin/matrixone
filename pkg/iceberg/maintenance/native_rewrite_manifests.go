@@ -17,6 +17,7 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -26,9 +27,10 @@ import (
 )
 
 type RewriteManifestsMaterializer struct {
-	Metadata     api.MetadataFacade
-	ObjectReader api.ObjectReader
-	PathPrefix   string
+	Metadata       api.MetadataFacade
+	ObjectReader   api.ObjectReader
+	PathPrefix     string
+	MaxMemoryBytes int64
 }
 
 type RewriteManifestsMaterializeRequest struct {
@@ -147,14 +149,27 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	if facade == nil {
 		facade = metadata.NativeFacade{}
 	}
-	manifestListData, err := m.ObjectReader.Read(ctx, req.Snapshot.ManifestList, 0, -1)
+	memoryLimit := maintenanceMemoryLimit(m.MaxMemoryBytes)
+	var memoryUsed int64
+	manifestListData, err := readMaintenanceMetadataObject(ctx, m.ObjectReader, req.Snapshot.ManifestList, memoryLimit)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return nil, err
+		}
 		return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg rewrite-manifests materializer failed to read manifest list", map[string]string{
 			"manifest_list": api.RedactPath(req.Snapshot.ManifestList),
 		}, err)
 	}
-	manifests, err := facade.ReadManifestList(ctx, manifestListData)
+	manifests, err := readMaintenanceManifestList(
+		ctx, facade, manifestListData,
+		maintenanceRecordLimit(memoryLimit, 512),
+		memoryLimit,
+	)
 	if err != nil {
+		return nil, err
+	}
+	memoryUsed = metadata.ManifestListMemoryWeight(cap(manifestListData), manifests)
+	if err := checkMaintenanceMemory(0, memoryUsed, memoryLimit); err != nil {
 		return nil, err
 	}
 	if len(manifests) == 0 {
@@ -164,6 +179,16 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	}
 	basePath, err := m.rewriteBasePath(req)
 	if err != nil {
+		return nil, err
+	}
+	// The result retains a second manifest slice, ObjectWrite headers and orphan
+	// path headers alongside the decoded source list. Reserve those capacities
+	// before allocating them; payload capacities are charged as they are encoded.
+	resultCapacityMemory := saturatingMaintenanceAdd(
+		metadata.ManifestListMemoryWeight(0, manifests),
+		saturatingMaintenanceMul(saturatingMaintenanceAdd(int64(len(manifests)), 1), 128),
+	)
+	if err := reserveMaintenanceMemory(&memoryUsed, resultCapacityMemory, memoryLimit); err != nil {
 		return nil, err
 	}
 	result := &RewriteManifestsMaterializeResult{
@@ -178,18 +203,34 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 				"manifest_list": api.RedactPath(req.Snapshot.ManifestList),
 			})
 		}
-		manifestData, err := m.ObjectReader.Read(ctx, manifestPath, 0, -1)
+		manifestData, err := readMaintenanceMetadataObject(ctx, m.ObjectReader, manifestPath, memoryLimit-memoryUsed)
 		if err != nil {
+			if isMaintenancePlanningLimit(err) {
+				return nil, err
+			}
 			return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg rewrite-manifests materializer failed to read manifest", map[string]string{
 				"manifest": api.RedactPath(manifestPath),
 			}, err)
 		}
-		entries, err := facade.ReadManifest(ctx, manifestData)
+		entries, err := readMaintenanceManifest(
+			ctx, facade, manifestData,
+			maintenanceRecordLimit(memoryLimit-memoryUsed, 1024),
+			memoryLimit-memoryUsed,
+		)
 		if err != nil {
 			return nil, err
 		}
-		for entryIdx := range entries {
-			entries[entryIdx].DataFile.SpecID = manifest.PartitionSpecID
+		entryMemory := metadata.ManifestEntriesMemoryWeight(cap(manifestData), entries)
+		if err := checkMaintenanceMemory(memoryUsed, entryMemory, memoryLimit); err != nil {
+			return nil, err
+		}
+		memoryUsed += entryMemory
+		entries = liveRewriteManifestEntries(entries, manifest)
+		if len(entries) == 0 {
+			// Deleted entries describe historical changes, not live files. A
+			// rewrite may drop a manifest that contains no live entries.
+			result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
+			continue
 		}
 		rewritePath := joinObjectPath(basePath, fmt.Sprintf("manifest-%05d.avro", idx))
 		content := manifest.Content
@@ -200,35 +241,146 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 		if err != nil {
 			return nil, err
 		}
-		rewriteData, err := metadata.EncodeManifest(entries, writeOpts)
+		encoderScratch := metadata.ManifestEntriesMemoryWeight(0, entries)
+		if err := checkMaintenanceMemory(memoryUsed, encoderScratch, memoryLimit); err != nil {
+			return nil, err
+		}
+		// hamba/avro keeps one encoded OCF block while the flushed output is
+		// retained. Reserve a decoded-entry-sized scratch allowance and give only
+		// the remainder to a capacity-bounded output buffer.
+		rewriteBuffer := boundedMaintenanceBuffer{maxBytes: memoryLimit - memoryUsed - encoderScratch}
+		err = metadata.WriteManifest(&rewriteBuffer, entries, writeOpts)
+		if err != nil {
+			if rewriteBuffer.exceeded {
+				return nil, checkMaintenanceMemory(memoryLimit, 1, memoryLimit)
+			}
+			return nil, err
+		}
+		rewriteData := rewriteBuffer.Bytes()
+		rewrittenManifest, err := rewrittenMaintenanceManifest(req, manifest, entries)
 		if err != nil {
 			return nil, err
 		}
-		rewrittenManifest := manifest
 		rewrittenManifest.Path = rewritePath
 		rewrittenManifest.Length = int64(len(rewriteData))
 		rewrittenManifest.ManifestPathRedacted = api.RedactPath(rewritePath)
 		rewrittenManifest.ManifestPathHash = api.PathHash(rewritePath)
+		retainedOutput := int64(cap(rewriteData))
+		if err := checkMaintenanceMemory(memoryUsed, retainedOutput, memoryLimit); err != nil {
+			return nil, err
+		}
+		memoryUsed += retainedOutput
 		result.Manifests = append(result.Manifests, rewrittenManifest)
 		result.Objects = append(result.Objects, ObjectWrite{Location: rewritePath, Payload: rewriteData})
 		result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
 	}
 	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
 	parentSnapshotID := req.Snapshot.SnapshotID
-	manifestListBytes, err := metadata.EncodeManifestList(result.Manifests, metadata.ManifestListWriteOptions{
+	encoderScratch := metadata.ManifestListMemoryWeight(0, result.Manifests)
+	if err := checkMaintenanceMemory(memoryUsed, encoderScratch, memoryLimit); err != nil {
+		return nil, err
+	}
+	manifestListBuffer := boundedMaintenanceBuffer{maxBytes: memoryLimit - memoryUsed - encoderScratch}
+	err = metadata.WriteManifestList(&manifestListBuffer, result.Manifests, metadata.ManifestListWriteOptions{
 		FormatVersion:    req.Metadata.FormatVersion,
 		SnapshotID:       req.SnapshotID,
 		ParentSnapshotID: &parentSnapshotID,
 		SequenceNumber:   req.SequenceNumber,
 	})
 	if err != nil {
+		if manifestListBuffer.exceeded {
+			return nil, checkMaintenanceMemory(memoryLimit, 1, memoryLimit)
+		}
 		return nil, err
 	}
+	manifestListBytes := manifestListBuffer.Bytes()
+	if err := checkMaintenanceMemory(memoryUsed, int64(cap(manifestListBytes)), memoryLimit); err != nil {
+		return nil, err
+	}
+	memoryUsed += int64(cap(manifestListBytes))
 	result.ManifestListPath = manifestListPath
 	result.Objects = append(result.Objects, ObjectWrite{Location: manifestListPath, Payload: manifestListBytes})
 	result.PostCommitOrphanPaths = dedupeNonEmptyStrings(result.PostCommitOrphanPaths)
 	result.RewrittenManifestCount = uint64(len(result.Manifests))
 	return result, nil
+}
+
+func liveRewriteManifestEntries(entries []api.ManifestEntry, manifest api.ManifestFile) []api.ManifestEntry {
+	out := make([]api.ManifestEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Status == api.ManifestEntryDeleted {
+			continue
+		}
+		entry.Status = api.ManifestEntryExisting
+		entry.SnapshotID = firstNonZeroMaintenanceInt64(entry.SnapshotID, manifest.AddedSnapshotID)
+		entry.SequenceNumber = firstNonZeroMaintenanceInt64(entry.SequenceNumber, manifest.SequenceNumber)
+		entry.FileSequence = firstNonZeroMaintenanceInt64(entry.FileSequence, manifest.SequenceNumber)
+		entry.DataFile.SpecID = manifest.PartitionSpecID
+		entry.DataFile.SequenceNumber = entry.SequenceNumber
+		entry.DataFile.FileSequenceNumber = entry.FileSequence
+		out = append(out, entry)
+	}
+	return out
+}
+
+func rewrittenMaintenanceManifest(req RewriteManifestsMaterializeRequest, original api.ManifestFile, entries []api.ManifestEntry) (api.ManifestFile, error) {
+	manifest := original
+	manifest.SequenceNumber = req.SequenceNumber
+	manifest.AddedSnapshotID = req.SnapshotID
+	manifest.AddedFilesCount = 0
+	manifest.DeletedFilesCount = 0
+	manifest.AddedRowsCount = 0
+	manifest.DeletedRowsCount = 0
+	manifest.AddedFilesSizeInBytes = 0
+	manifest.DeletedFilesSizeInBytes = 0
+	manifest.ExistingFilesCount = len(entries)
+	manifest.ExistingRowsCount = 0
+	manifest.ExistingFilesSizeInBytes = 0
+	manifest.MinSequenceNumber = 0
+	referenced := make(map[string]struct{})
+	allPositionReferencesKnown := true
+	for idx, entry := range entries {
+		if entry.SequenceNumber < 0 || entry.FileSequence < 0 || entry.DataFile.RecordCount < 0 || entry.DataFile.FileSizeInBytes < 0 {
+			return api.ManifestFile{}, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-manifests found negative sequence or file metrics", map[string]string{
+				"file": api.RedactPath(entry.DataFile.FilePath),
+			})
+		}
+		if entry.DataFile.RecordCount > math.MaxInt64-manifest.ExistingRowsCount || entry.DataFile.FileSizeInBytes > math.MaxInt64-manifest.ExistingFilesSizeInBytes {
+			return api.ManifestFile{}, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-manifests aggregate metrics overflow", map[string]string{
+				"file": api.RedactPath(entry.DataFile.FilePath),
+			})
+		}
+		manifest.ExistingRowsCount += entry.DataFile.RecordCount
+		manifest.ExistingFilesSizeInBytes += entry.DataFile.FileSizeInBytes
+		if idx == 0 || entry.SequenceNumber < manifest.MinSequenceNumber {
+			manifest.MinSequenceNumber = entry.SequenceNumber
+		}
+		if entry.DataFile.Content == api.DataFileContentPositionDelete {
+			if path := strings.TrimSpace(entry.DataFile.ReferencedDataFile); path != "" {
+				referenced[path] = struct{}{}
+			} else {
+				allPositionReferencesKnown = false
+			}
+		}
+	}
+	if allPositionReferencesKnown {
+		manifest.ReferencedDataFilesCount = len(referenced)
+	} else {
+		// referenced_data_file is optional for position deletes; the paths may
+		// live only inside the delete Parquet rows. Preserve the catalog-provided
+		// aggregate when this metadata-only rewrite cannot recompute it exactly.
+		manifest.ReferencedDataFilesCount = original.ReferencedDataFilesCount
+	}
+	return manifest, nil
+}
+
+func firstNonZeroMaintenanceInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMaterializeRequest) (string, error) {

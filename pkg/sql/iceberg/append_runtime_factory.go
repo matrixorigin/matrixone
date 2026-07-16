@@ -191,7 +191,9 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	}
 	objectWriter := icebergio.ProviderObjectWriter{Provider: objectIO.WriterProvider, ScopeForLocation: objectIO.ScopeForLocation}
 	objectReader := icebergio.ProviderObjectReader{Provider: objectIO.ReaderProvider, ScopeForLocation: objectIO.ScopeForLocation}
-	preserved, err := readAppendBaseManifestList(ctx, objectReader, baseSnapshot)
+	effectiveCfg := f.effectiveConfig(req.AccountID)
+	scanConfig := effectiveCfg.Scan
+	preserved, err := readAppendBaseManifestList(ctx, objectReader, baseSnapshot, scanConfig.PlanningMaxMemory, scanConfig.MaxManifestFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +205,10 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
+	appendWriteBudget := newDMLMemoryBudget(
+		effectiveCfg.Write.DMLMaxMemory,
+		metadata.ManifestListMemoryWeight(0, preserved),
+	)
 	writer, err := icebergwritecore.NewFanoutParquetDataWriter(ctx, icebergwritecore.FanoutWriterConfig{
 		Schema:              schema,
 		PartitionSpec:       spec,
@@ -211,7 +217,11 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		WriterID:            writerID,
 		TargetFileSizeBytes: f.opts.TargetFileSizeBytes,
 		TimeZone:            req.TimeZone,
-	}, bufferedDataFileOutputFactory{Writer: objectWriter})
+	}, bufferedDataFileOutputFactory{
+		Writer:                objectWriter,
+		MemoryBudget:          appendWriteBudget,
+		RetainedMetadataBytes: retainedDMLDataFileMetadataBytesForSchema(schema, spec),
+	})
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
 	}
@@ -223,19 +233,25 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 			ManifestPath:       manifestPaths.ManifestPath,
 			ManifestListPath:   manifestPaths.ManifestListPath,
 			PreservedManifests: preserved,
+			MaxMemoryBytes:     effectiveCfg.Write.DMLMaxMemory,
+			InitialMemoryBytes: metadata.ManifestListMemoryWeight(0, preserved),
 		},
 		Writer: objectWriter,
+	}
+	commitVerifier := f.opts.CommitVerifier
+	if commitVerifier == nil {
+		commitVerifier = icebergwritecore.CatalogCommitVerifier{Client: client}
 	}
 	workflow := icebergwritecore.AppendWorkflow{
 		Builder:          builder,
 		Committer:        client,
-		Verifier:         f.opts.CommitVerifier,
+		Verifier:         commitVerifier,
 		OrphanRecorder:   OrphanFileRecorder{DAO: f.opts.Store},
 		AuditRecorder:    PublishAuditRecorder{DAO: f.opts.Store},
 		CacheInvalidator: f.opts.CacheInvalidator,
 		MetricsReporter:  appendMetricsReporter(f.opts.MetricsReporter, client),
 		Now:              f.opts.Now,
-		OrphanTTL:        f.effectiveConfig(req.AccountID).Write.OrphanTTL,
+		OrphanTTL:        effectiveCfg.Write.OrphanTTL,
 	}
 	appendReq, err := icebergwritecore.BuildAppendRequest(ctx, icebergwritecore.AppendRequestSpec{
 		CatalogRequest:       catalogReq,
@@ -270,19 +286,19 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		},
 	})
 	if err != nil {
-		_ = writer.Abort(ctx)
-		return nil, api.ToMOErr(ctx, err)
+		return nil, api.ToMOErr(ctx, errors.Join(err, writer.Abort(ctx)))
 	}
 	return &AppendRuntimeCoordinator{
-		req:        req,
-		appendReq:  appendReq,
-		writer:     writer,
-		workflow:   workflow,
-		closed:     false,
-		committed:  false,
-		dataFiles:  nil,
-		objectRef:  "",
-		releaseRef: nil,
+		req:          req,
+		appendReq:    appendReq,
+		writer:       writer,
+		workflow:     workflow,
+		closed:       false,
+		committed:    false,
+		dataFiles:    nil,
+		objectRef:    "",
+		releaseRef:   nil,
+		memoryBudget: appendWriteBudget,
 	}, nil
 }
 
@@ -779,15 +795,16 @@ func (f AppendRuntimeCoordinatorFactory) nextSnapshotID(now time.Time, meta *api
 }
 
 type AppendRuntimeCoordinator struct {
-	req        icebergwrite.AppendRequest
-	appendReq  api.AppendRequest
-	writer     *icebergwritecore.FanoutParquetDataWriter
-	workflow   icebergwritecore.AppendWorkflow
-	closed     bool
-	committed  bool
-	dataFiles  []api.DataFile
-	objectRef  string
-	releaseRef func()
+	req          icebergwrite.AppendRequest
+	appendReq    api.AppendRequest
+	writer       *icebergwritecore.FanoutParquetDataWriter
+	workflow     icebergwritecore.AppendWorkflow
+	closed       bool
+	committed    bool
+	dataFiles    []api.DataFile
+	objectRef    string
+	releaseRef   func()
+	memoryBudget *dmlMemoryBudget
 }
 
 func (c *AppendRuntimeCoordinator) Begin(ctx context.Context, req icebergwrite.AppendRequest) error {
@@ -919,6 +936,12 @@ func (c *AppendRuntimeCoordinator) Commit(ctx context.Context) error {
 	}
 	req := c.appendReq
 	req.DataFiles = append([]api.DataFile(nil), files...)
+	if builder, ok := c.workflow.Builder.(*appendManifestWritingBuilder); ok && c.memoryBudget != nil {
+		// Data-file buffers are released after upload, but their DataFile metadata
+		// remains live through manifest encoding. Handoff the same budget's
+		// retained usage so the write peak is bounded end to end.
+		builder.InitialMemoryBytes = c.memoryBudget.usedBytes()
+	}
 	if _, err := c.workflow.CommitAppend(ctx, req); err != nil {
 		return api.ToMOErr(ctx, err)
 	}
@@ -1022,17 +1045,47 @@ func appendBaseSnapshot(ctx context.Context, meta *api.TableMetadata, ref string
 	return snapshot, snapshot.SnapshotID, nil
 }
 
-func readAppendBaseManifestList(ctx context.Context, reader icebergio.ProviderObjectReader, snapshot api.Snapshot) ([]api.ManifestFile, error) {
+func readAppendBaseManifestList(
+	ctx context.Context,
+	reader icebergio.ProviderObjectReader,
+	snapshot api.Snapshot,
+	planningMaxMemory int64,
+	maxManifestFiles int,
+) ([]api.ManifestFile, error) {
 	if strings.TrimSpace(snapshot.ManifestList) == "" {
 		return nil, nil
 	}
-	data, err := reader.Read(ctx, snapshot.ManifestList, 0, -1)
+	defaults := api.DefaultConfig().Scan
+	if planningMaxMemory <= 0 {
+		planningMaxMemory = defaults.PlanningMaxMemory
+	}
+	if maxManifestFiles <= 0 {
+		maxManifestFiles = defaults.MaxManifestFiles
+	}
+	// The append path must preserve the prior manifest list, but it must not
+	// silently bypass the same planning limits used by scans. A future streaming
+	// commit builder could remove this materialization altogether.
+	data, err := reader.ReadBounded(ctx, snapshot.ManifestList, planningMaxMemory)
 	if err != nil {
 		return nil, err
 	}
-	manifests, err := metadata.ReadManifestList(data)
+	budgetRecordLimit := planningMaxMemory / 256
+	if budgetRecordLimit < 1 {
+		budgetRecordLimit = 1
+	}
+	if budgetRecordLimit < int64(maxManifestFiles) {
+		maxManifestFiles = int(budgetRecordLimit)
+	}
+	manifests, err := (metadata.NativeFacade{}).ReadManifestListWithLimits(ctx, data, maxManifestFiles, planningMaxMemory)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
+	}
+	weight := metadata.ManifestListMemoryWeight(cap(data), manifests)
+	if weight > planningMaxMemory {
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg append base manifest list exceeded the planning memory limit", map[string]string{
+			"actual_bytes": strconv.FormatInt(weight, 10),
+			"limit_bytes":  strconv.FormatInt(planningMaxMemory, 10),
+		}))
 	}
 	return append([]api.ManifestFile(nil), manifests...), nil
 }

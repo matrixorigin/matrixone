@@ -40,6 +40,10 @@ type DataWriterConfig struct {
 	TimeZone      *time.Location
 }
 
+const parquetWriteConversionBatchRows = 1024
+const parquetWriteMaxRowsPerRowGroup = 8192
+const maxIcebergWriterBoundBytes = 4 << 10
+
 type ParquetDataWriter struct {
 	cfg     DataWriterConfig
 	writer  *parquet.GenericWriter[any]
@@ -80,8 +84,15 @@ func NewParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writ
 	}
 	cw := &countingWriter{writer: dst}
 	return &ParquetDataWriter{
-		cfg:     cfg,
-		writer:  parquet.NewGenericWriter[any](cw, parquet.NewSchema("iceberg", group)),
+		cfg: cfg,
+		// parquet-go otherwise defaults to an effectively unbounded row group.
+		// Small bounded groups prevent its opaque column/page state from growing
+		// with the whole data file. The outer fanout still controls file sizing.
+		writer: parquet.NewGenericWriter[any](
+			cw,
+			parquet.NewSchema("iceberg", group),
+			parquet.MaxRowsPerRowGroup(parquetWriteMaxRowsPerRowGroup),
+		),
 		out:     cw,
 		fields:  append([]api.SchemaField(nil), cfg.Schema.Fields...),
 		byName:  byName,
@@ -106,63 +117,86 @@ func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *
 	if len(attrs) != len(bat.Vecs) {
 		return moerr.NewInvalidInputf(ctx, "Iceberg Parquet writer attrs/vector mismatch: attrs=%d vectors=%d", len(attrs), len(bat.Vecs))
 	}
-	if len(rowIndexes) == 0 {
-		rowIndexes = make([]int, bat.RowCount())
-		for i := range rowIndexes {
-			rowIndexes[i] = i
-		}
+	selectedRows := len(rowIndexes)
+	useAllRows := selectedRows == 0
+	if useAllRows {
+		selectedRows = bat.RowCount()
 	}
-	rows := make([]any, len(rowIndexes))
-	for outIdx, rowIdx := range rowIndexes {
-		if rowIdx < 0 || rowIdx >= bat.RowCount() {
-			return moerr.NewInvalidInputf(ctx, "Iceberg Parquet writer row index out of range: row=%d row_count=%d", rowIdx, bat.RowCount())
+	// Convert and encode bounded chunks instead of constructing one Go map graph
+	// for the whole input batch. The source batch remains the authoritative
+	// retained representation; this conversion working set is transient. A
+	// future vector-native Parquet encoder can remove these maps entirely.
+	for start := 0; start < selectedRows; start += parquetWriteConversionBatchRows {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		row := make(map[string]any, len(w.fields))
-		rowValues := make(map[int]any, len(w.fields))
-		seenFieldIDs := make(map[int]struct{}, len(attrs))
-		for colIdx, attr := range attrs {
-			field, err := w.byName.field(attr)
+		end := start + parquetWriteConversionBatchRows
+		if end > selectedRows {
+			end = selectedRows
+		}
+		rows := make([]any, end-start)
+		for outIdx := start; outIdx < end; outIdx++ {
+			rowIdx := outIdx
+			if !useAllRows {
+				rowIdx = rowIndexes[outIdx]
+			}
+			if rowIdx < 0 || rowIdx >= bat.RowCount() {
+				return moerr.NewInvalidInputf(ctx, "Iceberg Parquet writer row index out of range: row=%d row_count=%d", rowIdx, bat.RowCount())
+			}
+			row := make(map[string]any, len(w.fields))
+			rowValues := make(map[int]any, len(w.fields))
+			seenFieldIDs := make(map[int]struct{}, len(attrs))
+			for colIdx, attr := range attrs {
+				field, err := w.byName.field(attr)
+				if err != nil {
+					return err
+				}
+				if field.ID == 0 {
+					return api.NewError(api.ErrMetadataInvalid, "Iceberg writer column is not present in schema", map[string]string{"column": attr})
+				}
+				seenFieldIDs[field.ID] = struct{}{}
+				value, isNull, err := vectorValue(ctx, bat.Vecs[colIdx], rowIdx, field.Type, w.cfg.TimeZone)
+				if err != nil {
+					return err
+				}
+				if isNull {
+					row[field.Name] = nil
+					rowValues[field.ID] = nil
+					w.metric(field).observeNull()
+					continue
+				}
+				row[field.Name] = value
+				rowValues[field.ID] = value
+				if err := w.metric(field).observe(ctx, field.Type, value); err != nil {
+					return err
+				}
+				w.estimated = saturatingWriterAdd(w.estimated, estimatedValueSize(value))
+			}
+			if err := w.fillMissingFields(row, rowValues, seenFieldIDs); err != nil {
+				return err
+			}
+			partition, err := partitionTuple(ctx, w.cfg.PartitionSpec, w.fields, rowValues)
 			if err != nil {
 				return err
 			}
-			if field.ID == 0 {
-				return api.NewError(api.ErrMetadataInvalid, "Iceberg writer column is not present in schema", map[string]string{"column": attr})
-			}
-			seenFieldIDs[field.ID] = struct{}{}
-			value, isNull, err := vectorValue(ctx, bat.Vecs[colIdx], rowIdx, field.Type, w.cfg.TimeZone)
-			if err != nil {
+			if err := w.observePartition(ctx, partition); err != nil {
 				return err
 			}
-			if isNull {
-				row[field.Name] = nil
-				rowValues[field.ID] = nil
-				w.metric(field).observeNull()
-				continue
-			}
-			row[field.Name] = value
-			rowValues[field.ID] = value
-			if err := w.metric(field).observe(ctx, field.Type, value); err != nil {
-				return err
-			}
-			w.estimated += estimatedValueSize(value)
+			rows[outIdx-start] = row
 		}
-		if err := w.fillMissingFields(row, rowValues, seenFieldIDs); err != nil {
-			return err
+		if _, err := w.writer.Write(rows); err != nil {
+			return api.WrapError(api.ErrObjectIO, "Iceberg Parquet writer failed to encode rows", nil, err)
 		}
-		partition, err := partitionTuple(ctx, w.cfg.PartitionSpec, w.fields, rowValues)
-		if err != nil {
-			return err
-		}
-		if err := w.observePartition(ctx, partition); err != nil {
-			return err
-		}
-		rows[outIdx] = row
+		w.rows = saturatingWriterAdd(w.rows, int64(len(rows)))
 	}
-	if _, err := w.writer.Write(rows); err != nil {
-		return api.WrapError(api.ErrObjectIO, "Iceberg Parquet writer failed to encode rows", nil, err)
-	}
-	w.rows += int64(len(rowIndexes))
 	return nil
+}
+
+func saturatingWriterAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func (w *ParquetDataWriter) fillMissingFields(
@@ -461,21 +495,36 @@ func typeMismatch(ctx context.Context, typ api.IcebergType, vec *vector.Vector) 
 }
 
 type columnMetrics struct {
-	nullCount int64
-	nanCount  int64
-	hasValue  bool
-	lower     []byte
-	upper     []byte
-	compare   any
+	nullCount      int64
+	nanCount       int64
+	hasValue       bool
+	lower          []byte
+	upper          []byte
+	compare        any
+	boundsDisabled bool
 }
 
 func (m *columnMetrics) observeNull() {
-	m.nullCount++
+	m.nullCount = saturatingWriterAdd(m.nullCount, 1)
 }
 
 func (m *columnMetrics) observe(ctx context.Context, typ api.IcebergType, value any) error {
 	if isNaN(value) {
-		m.nanCount++
+		m.nanCount = saturatingWriterAdd(m.nanCount, 1)
+		return nil
+	}
+	if m.boundsDisabled {
+		return nil
+	}
+	if text, ok := value.(string); ok && len(text) > maxIcebergWriterBoundBytes {
+		// Keeping an arbitrary prefix as an exact upper/lower bound is unsafe for
+		// pruning. Omit both bounds for the column once a value is too large;
+		// a future Iceberg-compatible truncation implementation may retain them.
+		m.boundsDisabled = true
+		m.hasValue = false
+		m.compare = nil
+		m.lower = nil
+		m.upper = nil
 		return nil
 	}
 	encoded, cmp, err := encodeBound(ctx, typ, value)

@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -263,6 +265,19 @@ func TestDAOInsertCatalogSQL(t *testing.T) {
 	if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], "mo_iceberg_catalogs") {
 		t.Fatalf("unexpected sqls: %#v", exec.sqls)
 	}
+}
+
+func TestInsertCatalogSQLUsesStorageAllocatorWhenIDIsUnset(t *testing.T) {
+	sql := InsertCatalogSQL(model.Catalog{
+		AccountID: 1,
+		Name:      "ksa",
+		Type:      "rest",
+		URI:       "https://catalog.example",
+	})
+	require.NotContains(t, sql, "catalog_id")
+	require.Contains(t, sql, "insert into mo_catalog.mo_iceberg_catalogs(account_id,name")
+	require.Contains(t, CatalogsDDL, "catalog_id bigint unsigned not null auto_increment")
+	require.Contains(t, CatalogsDDL, "primary key(account_id, catalog_id)")
 }
 
 func TestQuoteSQLStringEscapesBackslashAndQuote(t *testing.T) {

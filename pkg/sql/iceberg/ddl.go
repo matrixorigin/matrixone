@@ -29,7 +29,7 @@ const (
 
 const CatalogsDDL = `create table mo_catalog.mo_iceberg_catalogs (
 	account_id int unsigned not null,
-	catalog_id bigint unsigned not null,
+	catalog_id bigint unsigned not null auto_increment,
 	name varchar(300) not null,
 	type varchar(32) not null,
 	uri text not null,

@@ -16,6 +16,9 @@ package iceberg
 
 import (
 	"context"
+	"errors"
+	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -108,6 +111,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 	if err := f.validateRuntimeRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	effectiveCfg := f.effectiveConfig(req.AccountID)
 	catalogModel, err := f.opts.Store.GetCatalogByName(ctx, req.AccountID, req.CatalogName)
 	if err != nil {
 		return nil, err
@@ -167,7 +171,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		}))
 	}
 	scanObjectIO := objectIORefDMLObjectWriter{ObjectIORef: req.DMLScan.ObjectIORef}
-	preservedManifests, preservedSources, err := readDMLBaseManifests(ctx, scanObjectIO, baseSnapshot)
+	preservedManifests, preservedSources, baseManifestMemory, err := readDMLBaseManifests(ctx, scanObjectIO, baseSnapshot, effectiveCfg.Write.DMLMaxMemory)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +196,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 	}
 	now := f.now()
 	workflow := NewDMLCommitWorkflow(f.opts.Store, DMLCommitWorkflowOptions{
-		Config:           f.effectiveConfig(req.AccountID),
+		Config:           effectiveCfg,
 		ManifestWriter:   objectWriter,
 		Committer:        client,
 		CommitVerifier:   f.opts.CommitVerifier,
@@ -247,39 +251,45 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 			}
 		}
 		return NewDMLOverwriteCoordinator(DMLOverwriteCoordinatorSpec{
-			Committer:         executor,
-			Base:              base,
-			Schema:            schema,
-			ObjectWriter:      objectWriter,
-			AffectedDataFiles: affectedFiles,
-			PartitionSpec:     partitionSpec,
-			Scope:             scope,
-			Partition:         cloneDMLAnyMap(req.DMLScan.OverwritePartition),
-			TimeZone:          req.TimeZone,
+			Committer:          executor,
+			Base:               base,
+			Schema:             schema,
+			ObjectWriter:       objectWriter,
+			AffectedDataFiles:  affectedFiles,
+			PartitionSpec:      partitionSpec,
+			Scope:              scope,
+			Partition:          cloneDMLAnyMap(req.DMLScan.OverwritePartition),
+			TimeZone:           req.TimeZone,
+			MemoryLimitBytes:   effectiveCfg.Write.DMLMaxMemory,
+			InitialMemoryBytes: baseManifestMemory,
 		}), nil
 	}
 	if req.Operation == icebergwrite.OperationMerge {
 		return NewDMLMergeCoordinator(DMLMergeCoordinatorSpec{
-			Committer:      executor,
-			Base:           base,
-			Schema:         schema,
-			DeleteSchemaID: schema.SchemaID,
-			ObjectWriter:   objectWriter,
-			DataFiles:      append([]api.DataFile(nil), req.DMLScan.DataFiles...),
-			PartitionSpec:  partitionSpec,
-			TimeZone:       req.TimeZone,
+			Committer:          executor,
+			Base:               base,
+			Schema:             schema,
+			DeleteSchemaID:     schema.SchemaID,
+			ObjectWriter:       objectWriter,
+			DataFiles:          append([]api.DataFile(nil), req.DMLScan.DataFiles...),
+			PartitionSpec:      partitionSpec,
+			TimeZone:           req.TimeZone,
+			MemoryLimitBytes:   effectiveCfg.Write.DMLMaxMemory,
+			InitialMemoryBytes: baseManifestMemory,
 		}), nil
 	}
 	if req.Operation == icebergwrite.OperationUpdate {
 		return NewDMLUpdateCoordinator(DMLUpdateCoordinatorSpec{
-			Committer:      executor,
-			Base:           base,
-			Schema:         schema,
-			DeleteSchemaID: schema.SchemaID,
-			ObjectWriter:   objectWriter,
-			DataFiles:      append([]api.DataFile(nil), req.DMLScan.DataFiles...),
-			PartitionSpec:  partitionSpec,
-			TimeZone:       req.TimeZone,
+			Committer:          executor,
+			Base:               base,
+			Schema:             schema,
+			DeleteSchemaID:     schema.SchemaID,
+			ObjectWriter:       objectWriter,
+			DataFiles:          append([]api.DataFile(nil), req.DMLScan.DataFiles...),
+			PartitionSpec:      partitionSpec,
+			TimeZone:           req.TimeZone,
+			MemoryLimitBytes:   effectiveCfg.Write.DMLMaxMemory,
+			InitialMemoryBytes: baseManifestMemory,
 		}), nil
 	}
 	spec := DMLDeleteCoordinatorSpec{
@@ -290,6 +300,8 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		ObjectWriter:        objectWriter,
 		DataFiles:           append([]api.DataFile(nil), req.DMLScan.DataFiles...),
 		IncludePositionRows: true,
+		MemoryLimitBytes:    effectiveCfg.Write.DMLMaxMemory,
+		InitialMemoryBytes:  baseManifestMemory,
 	}
 	return NewDMLDeleteCoordinator(spec), nil
 }
@@ -607,6 +619,10 @@ func (w objectIORefDMLObjectWriter) WriteManifestObject(ctx context.Context, loc
 }
 
 func (w objectIORefDMLObjectWriter) ReadManifestObject(ctx context.Context, location string) ([]byte, error) {
+	return w.ReadManifestObjectBounded(ctx, location, 0)
+}
+
+func (w objectIORefDMLObjectWriter) ReadManifestObjectBounded(ctx context.Context, location string, maxBytes int64) ([]byte, error) {
 	location = strings.TrimSpace(location)
 	if location == "" {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg DML object reader requires location", nil))
@@ -620,25 +636,49 @@ func (w objectIORefDMLObjectWriter) ReadManifestObject(ctx context.Context, loca
 			"location": api.RedactPath(location),
 		}))
 	}
+	var stream io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: strings.TrimSpace(filePath),
 		Policy:   fileservice.SkipFullFilePreloads,
 		Entries: []fileservice.IOEntry{{
-			Offset: 0,
-			Size:   -1,
+			Offset:            0,
+			Size:              -1,
+			ReadCloserForRead: &stream,
 		}},
 	}
 	if err := fs.Read(ctx, &vec); err != nil {
+		if stream != nil {
+			err = errors.Join(err, stream.Close())
+		}
 		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg DML object reader failed to read object", map[string]string{
 			"location": api.RedactPath(location),
 		}, err))
 	}
-	if len(vec.Entries) == 0 {
+	if len(vec.Entries) == 0 || stream == nil {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg DML object reader returned no entries", map[string]string{
 			"location": api.RedactPath(location),
 		}))
 	}
-	return append([]byte(nil), vec.Entries[0].Data...), nil
+	readLimit := maxBytes
+	if readLimit <= 0 {
+		// The unparameterized helper is retained for tests/compatibility, but it
+		// must not reintroduce an unknown-length production materialization.
+		readLimit = api.DefaultConfig().Write.DMLMaxMemory
+	}
+	data, readErr := api.ReadAllBounded(stream, readLimit)
+	closeErr := stream.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		if errors.Is(err, api.ErrMaterializationLimitExceeded) {
+			return nil, api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg DML manifest object exceeds the memory limit", map[string]string{
+				"location":    api.RedactPath(location),
+				"limit_bytes": strconv.FormatInt(readLimit, 10),
+			}))
+		}
+		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg DML object reader failed to materialize object", map[string]string{
+			"location": api.RedactPath(location),
+		}, err))
+	}
+	return data, nil
 }
 
 func (w objectIORefDMLObjectWriter) write(ctx context.Context, location string, payload []byte) error {
@@ -655,13 +695,20 @@ func (w objectIORefDMLObjectWriter) write(ctx context.Context, location string, 
 			"location": api.RedactPath(location),
 		}))
 	}
-	data := append([]byte(nil), payload...)
+	// FileService.Write consumes IOVector synchronously, so payload is borrowed
+	// only for this call. Keeping that ownership contract avoids an unaccounted
+	// full-object clone after the DML coordinator has already charged payload to
+	// its shared memory budget. SkipDiskCacheWrites also prevents object stores
+	// from teeing the complete object into a second, hidden buffer. If the file
+	// service gains an asynchronous write API, this adapter must instead accept
+	// an explicit ownership transfer or a budget-aware streaming writer.
 	if err := fs.Write(ctx, fileservice.IOVector{
 		FilePath: filePath,
+		Policy:   fileservice.SkipDiskCacheWrites,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len(data)),
-			Data:   data,
+			Size:   int64(len(payload)),
+			Data:   payload,
 		}},
 	}); err != nil {
 		return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg DML object writer failed to write object", map[string]string{
@@ -689,19 +736,29 @@ func dmlDeleteSchemaForRequest(ctx context.Context, meta *api.TableMetadata, sch
 	return api.Schema{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML DELETE table metadata has no current schema", nil))
 }
 
-func readDMLBaseManifests(ctx context.Context, reader objectIORefDMLObjectWriter, snapshot api.Snapshot) ([]api.ManifestFile, []dml.PreservedManifestSource, error) {
+func readDMLBaseManifests(ctx context.Context, reader objectIORefDMLObjectWriter, snapshot api.Snapshot, maxMemory int64) ([]api.ManifestFile, []dml.PreservedManifestSource, int64, error) {
 	manifestListPath := strings.TrimSpace(snapshot.ManifestList)
 	if manifestListPath == "" {
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	}
-	data, err := reader.ReadManifestObject(ctx, manifestListPath)
+	if maxMemory <= 0 {
+		maxMemory = api.DefaultConfig().Write.DMLMaxMemory
+	}
+	data, err := reader.ReadManifestObjectBounded(ctx, manifestListPath, dmlObjectReadAllowance(maxMemory, 0))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	manifests, err := metadata.ReadManifestList(data)
+	manifests, err := (metadata.NativeFacade{}).ReadManifestListWithLimits(
+		ctx, data, dmlRecordAllowance(maxMemory, 0, 512), maxMemory,
+	)
 	if err != nil {
-		return nil, nil, api.ToMOErr(ctx, err)
+		return nil, nil, 0, api.ToMOErr(ctx, err)
 	}
+	retainedBytes := metadata.ManifestListMemoryWeight(0, manifests)
+	if err := checkDMLBaseManifestMemory(ctx, retainedBytes, int64(cap(data)), maxMemory); err != nil {
+		return nil, nil, 0, err
+	}
+	data = nil
 	sources := make([]dml.PreservedManifestSource, 0, len(manifests))
 	for _, manifest := range manifests {
 		if manifest.Content != "" && manifest.Content != api.ManifestContentData {
@@ -709,18 +766,29 @@ func readDMLBaseManifests(ctx context.Context, reader objectIORefDMLObjectWriter
 		}
 		manifestPath := strings.TrimSpace(manifest.Path)
 		if manifestPath == "" {
-			return nil, nil, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML base manifest has no path", map[string]string{
+			return nil, nil, 0, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML base manifest has no path", map[string]string{
 				"manifest_list": api.RedactPath(manifestListPath),
 			}))
 		}
-		manifestData, err := reader.ReadManifestObject(ctx, manifestPath)
-		if err != nil {
-			return nil, nil, err
+		allowance := dmlObjectReadAllowance(maxMemory, retainedBytes)
+		if allowance <= 0 {
+			return nil, nil, 0, checkDMLBaseManifestMemory(ctx, retainedBytes, 1, maxMemory)
 		}
-		entries, err := metadata.ReadManifest(manifestData)
+		manifestData, err := reader.ReadManifestObjectBounded(ctx, manifestPath, allowance)
 		if err != nil {
-			return nil, nil, api.ToMOErr(ctx, err)
+			return nil, nil, 0, err
 		}
+		entries, err := (metadata.NativeFacade{}).ReadManifestWithLimits(
+			ctx, manifestData, dmlRecordAllowance(maxMemory, retainedBytes, 1024), maxMemory-retainedBytes,
+		)
+		if err != nil {
+			return nil, nil, 0, api.ToMOErr(ctx, err)
+		}
+		entryBytes := metadata.ManifestEntriesMemoryWeight(0, entries)
+		if err := checkDMLBaseManifestMemory(ctx, saturatingDMLAdd(retainedBytes, entryBytes), int64(cap(manifestData)), maxMemory); err != nil {
+			return nil, nil, 0, err
+		}
+		retainedBytes = saturatingDMLAdd(retainedBytes, entryBytes)
 		for entryIdx := range entries {
 			entries[entryIdx].DataFile.SpecID = manifest.PartitionSpecID
 		}
@@ -729,7 +797,54 @@ func readDMLBaseManifests(ctx context.Context, reader objectIORefDMLObjectWriter
 			Entries:  entries,
 		})
 	}
-	return append([]api.ManifestFile(nil), manifests...), sources, nil
+	return append([]api.ManifestFile(nil), manifests...), sources, retainedBytes, nil
+}
+
+func dmlObjectReadAllowance(limit, retained int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	remaining := limit - retained
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining == 1 {
+		return 1
+	}
+	// During Avro decode both the encoded object and decoded records are live.
+	// Reserve half for expansion; a future streaming object/Avro facade can use
+	// a weighted token per record and safely spend this headroom more precisely.
+	return remaining / 2
+}
+
+func dmlRecordAllowance(limit, retained, perRecord int64) int {
+	if limit <= 0 || perRecord <= 0 {
+		return 0
+	}
+	remaining := limit - retained
+	if remaining <= 0 {
+		return 1
+	}
+	count := remaining / perRecord
+	if count < 1 {
+		return 1
+	}
+	if count > int64(^uint(0)>>1) {
+		return int(^uint(0) >> 1)
+	}
+	return int(count)
+}
+
+func checkDMLBaseManifestMemory(ctx context.Context, retained, transient, limit int64) error {
+	peak := saturatingDMLAdd(retained, transient)
+	if limit <= 0 || peak <= limit {
+		return nil
+	}
+	return api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg DML base manifests exceed the memory limit", map[string]string{
+		"retained_bytes":  strconv.FormatInt(retained, 10),
+		"transient_bytes": strconv.FormatInt(transient, 10),
+		"limit_bytes":     strconv.FormatInt(limit, 10),
+	}))
 }
 
 func resolveDMLTargetRef(ctx context.Context, meta *api.TableMetadata, raw string, caps api.CatalogCapabilities, allowTagMove bool) (string, string, error) {
@@ -777,6 +892,12 @@ func nextDMLSnapshotID(now time.Time, meta *api.TableMetadata) int64 {
 		}
 	}
 	if candidate <= maxSnapshotID {
+		// Snapshot IDs are signed longs. Zero deliberately propagates into the
+		// existing prerequisite validation instead of wrapping MaxInt64 to a
+		// negative/colliding identifier.
+		if maxSnapshotID == math.MaxInt64 {
+			return 0
+		}
 		return maxSnapshotID + 1
 	}
 	return candidate
@@ -788,10 +909,16 @@ func nextDMLSequenceNumber(meta *api.TableMetadata) int64 {
 		return next
 	}
 	if meta.LastSequenceNumber >= next {
+		if meta.LastSequenceNumber == math.MaxInt64 {
+			return 0
+		}
 		next = meta.LastSequenceNumber + 1
 	}
 	for _, snapshot := range meta.Snapshots {
 		if snapshot.SequenceNumber >= next {
+			if snapshot.SequenceNumber == math.MaxInt64 {
+				return 0
+			}
 			next = snapshot.SequenceNumber + 1
 		}
 	}

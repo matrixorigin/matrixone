@@ -68,13 +68,13 @@ func (idx *PositionIndex) Add(dataFile string, rowOrdinal int64) {
 	if rows == nil {
 		rows = make(map[int64]struct{})
 		idx.rows[dataFile] = rows
-		idx.memoryBytes += defaultPositionFileBytes + int64(len(dataFile))
+		idx.memoryBytes = saturatingMemoryAdd(idx.memoryBytes, saturatingMemoryAdd(defaultPositionFileBytes, int64(len(dataFile))))
 	}
 	if _, exists := rows[rowOrdinal]; exists {
 		return
 	}
 	rows[rowOrdinal] = struct{}{}
-	idx.memoryBytes += defaultPositionEntryBytes
+	idx.memoryBytes = saturatingMemoryAdd(idx.memoryBytes, defaultPositionEntryBytes)
 }
 
 func (idx *PositionIndex) ShouldDelete(dataFile string, rowOrdinal int64) bool {
@@ -110,7 +110,7 @@ func (idx *EqualityIndex) AddKey(values ...any) {
 		return
 	}
 	idx.keys[key] = struct{}{}
-	idx.memoryBytes += defaultEqualityEntryBytes + int64(len(key))
+	idx.memoryBytes = saturatingMemoryAdd(idx.memoryBytes, saturatingMemoryAdd(defaultEqualityEntryBytes, int64(len(key))))
 }
 
 func (idx *EqualityIndex) ShouldDelete(values ...any) bool {
@@ -152,16 +152,17 @@ func (s *ApplyState) CheckMemory(ctx context.Context) error {
 	}
 	memoryBytes := s.MemoryBytes()
 	s.Profile.MemoryBytes = memoryBytes
-	return CheckMemoryLimit(ctx, s.Options, s.Options.BaseMemoryBytes+memoryBytes)
+	return CheckMemoryLimit(ctx, s.Options, saturatingMemoryAdd(s.Options.BaseMemoryBytes, memoryBytes))
 }
 
 func (s *ApplyState) MemoryBytes() int64 {
 	if s == nil {
 		return 0
 	}
-	memoryBytes := s.Position.MemoryBytes() + s.Equality.MemoryBytes() + s.layoutBytes
+	memoryBytes := saturatingMemoryAdd(s.Position.MemoryBytes(), s.Equality.MemoryBytes())
+	memoryBytes = saturatingMemoryAdd(memoryBytes, s.layoutBytes)
 	for _, idx := range s.EqualityLayouts {
-		memoryBytes += idx.MemoryBytes()
+		memoryBytes = saturatingMemoryAdd(memoryBytes, idx.MemoryBytes())
 	}
 	return memoryBytes
 }
@@ -198,9 +199,16 @@ func (s *ApplyState) AddEqualityKey(layout string, values ...any) {
 	if idx == nil {
 		idx = NewEqualityIndex()
 		s.EqualityLayouts[layout] = idx
-		s.layoutBytes += defaultEqualityLayoutBytes + int64(len(layout))
+		s.layoutBytes = saturatingMemoryAdd(s.layoutBytes, saturatingMemoryAdd(defaultEqualityLayoutBytes, int64(len(layout))))
 	}
 	idx.AddKey(values...)
+}
+
+func saturatingMemoryAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func (s *ApplyState) ApplyEqualityMaskForLayout(ctx context.Context, layout string, rows [][]any) ([]bool, error) {

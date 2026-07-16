@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"bufio"
 	"bytes"
 	"testing"
 
@@ -138,6 +139,43 @@ func TestReadManifestList(t *testing.T) {
 	}
 }
 
+func TestReadManifestListRejectsInvalidContentAndMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "unknown content", mutate: func(record map[string]any) { record["content"] = int32(9) }},
+		{name: "negative rows", mutate: func(record map[string]any) { record["existing_rows_count"] = int64(-1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := validManifestListTestRecord()
+			tc.mutate(record)
+			_, err := ReadManifestList(encodeOCF(t, manifestListTestSchema, []map[string]any{record}))
+			assertIcebergCode(t, err, api.ErrMetadataInvalid)
+		})
+	}
+}
+
+func validManifestListTestRecord() map[string]any {
+	return map[string]any{
+		"manifest_path":        "s3://warehouse/t/metadata/m0.avro",
+		"manifest_length":      int64(1234),
+		"partition_spec_id":    int32(7),
+		"content":              int32(0),
+		"sequence_number":      int64(9),
+		"min_sequence_number":  int64(8),
+		"added_snapshot_id":    int64(22),
+		"added_files_count":    int32(3),
+		"existing_files_count": int32(4),
+		"deleted_files_count":  int32(1),
+		"added_rows_count":     int64(30),
+		"existing_rows_count":  int64(40),
+		"deleted_rows_count":   int64(10),
+		"partitions":           []map[string]any{},
+		"key_metadata":         []byte{},
+	}
+}
+
 func TestReadManifest(t *testing.T) {
 	data := encodeOCF(t, manifestEntryTestSchema, []map[string]any{
 		{
@@ -184,6 +222,128 @@ func TestReadManifest(t *testing.T) {
 	if err := ValidateP0DataFile(entry.DataFile); err != nil {
 		t.Fatalf("parquet data file should be accepted: %v", err)
 	}
+}
+
+func TestReadManifestRejectsInvalidEntryEnumsAndMetrics(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int32
+		content     int32
+		recordCount int64
+		fileSize    int64
+	}{
+		{name: "unknown status", status: 9, content: 0, recordCount: 1, fileSize: 1},
+		{name: "unknown content", status: 1, content: 9, recordCount: 1, fileSize: 1},
+		{name: "negative metrics", status: 2, content: 0, recordCount: -1, fileSize: 1},
+		{name: "missing nonempty size", status: 2, content: 0, recordCount: 1, fileSize: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data := encodeOCF(t, manifestEntryTestSchema, []map[string]any{
+				manifestEntryTestRecord(tc.status, tc.content, tc.recordCount, tc.fileSize),
+			})
+			_, err := ReadManifest(data)
+			assertIcebergCode(t, err, api.ErrMetadataInvalid)
+		})
+	}
+}
+
+func manifestEntryTestRecord(status, content int32, recordCount, fileSize int64) map[string]any {
+	return map[string]any{
+		"status":               status,
+		"snapshot_id":          int64(22),
+		"sequence_number":      int64(9),
+		"file_sequence_number": int64(9),
+		"data_file": map[string]any{
+			"content":                 content,
+			"file_path":               "s3://warehouse/t/data/invalid.parquet",
+			"file_format":             "PARQUET",
+			"partition":               map[string]any{"created_day": int32(1)},
+			"record_count":            recordCount,
+			"file_size_in_bytes":      fileSize,
+			"column_sizes":            []map[string]any{},
+			"value_counts":            []map[string]any{},
+			"null_value_counts":       []map[string]any{},
+			"nan_value_counts":        []map[string]any{},
+			"lower_bounds":            []map[string]any{},
+			"upper_bounds":            []map[string]any{},
+			"split_offsets":           []int64{},
+			"equality_ids":            []int32{},
+			"sort_order_id":           int32(0),
+			"spec_id":                 int32(7),
+			"key_metadata":            []byte{},
+			"encryption_key_metadata": []byte{},
+		},
+	}
+}
+
+func TestReadOCFRecordsRejectsCompressedBlockExpansion(t *testing.T) {
+	const schema = `{"type":"record","name":"compressed_record","fields":[{"name":"payload","type":"bytes"}]}`
+	var buf bytes.Buffer
+	enc, err := ocf.NewEncoder(schema, &buf, ocf.WithCodec(ocf.Deflate))
+	if err != nil {
+		t.Fatalf("new compressed ocf encoder: %v", err)
+	}
+	if err := enc.Encode(map[string]any{"payload": bytes.Repeat([]byte{'x'}, 64<<10)}); err != nil {
+		t.Fatalf("encode compressed ocf record: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("close compressed ocf encoder: %v", err)
+	}
+
+	visited := 0
+	err = readOCFRecords(bytes.NewReader(buf.Bytes()), "compressed_test", 10, 1<<20, func(_ int, record map[string]any) error {
+		visited++
+		if len(record["payload"].([]byte)) != 64<<10 {
+			t.Fatalf("unexpected decoded payload length: %d", len(record["payload"].([]byte)))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read bounded compressed OCF: %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("expected one compressed record, got %d", visited)
+	}
+
+	err = readOCFRecords(bytes.NewReader(buf.Bytes()), "compressed_test", 10, 1024, func(int, map[string]any) error {
+		t.Fatal("oversized compressed record must not be visited")
+		return nil
+	})
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+}
+
+func TestReadOCFRecordsRejectsNonPositiveAndUnderdeclaredBlocks(t *testing.T) {
+	const schema = `{"type":"record","name":"item","fields":[{"name":"id","type":"long"}]}`
+	data := encodeOCF(t, schema, []map[string]any{{"id": int64(1)}, {"id": int64(2)}})
+	blockOffset := firstOCFBlockOffset(t, data)
+	if data[blockOffset] != byte(4) {
+		t.Fatalf("expected one two-record OCF block, count byte=%d", data[blockOffset])
+	}
+
+	zeroCount := append([]byte(nil), data...)
+	zeroCount[blockOffset] = 0
+	err := readOCFRecords(bytes.NewReader(zeroCount), "zero_count", 10, 1<<20, func(int, map[string]any) error {
+		t.Fatal("zero-count block must not be visited")
+		return nil
+	})
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+
+	underdeclared := append([]byte(nil), data...)
+	underdeclared[blockOffset] = 2 // Avro zig-zag encoding for a declared count of one.
+	err = readOCFRecords(bytes.NewReader(underdeclared), "underdeclared", 10, 1<<20, func(int, map[string]any) error { return nil })
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+}
+
+func firstOCFBlockOffset(t *testing.T, data []byte) int {
+	t.Helper()
+	source := bytes.NewReader(data)
+	reader := bufio.NewReaderSize(source, 4096)
+	_, err := readBoundedOCFHeader(reader, "test", 1<<20)
+	if err != nil {
+		t.Fatalf("read OCF header: %v", err)
+	}
+	return len(data) - source.Len() - reader.Buffered()
 }
 
 func encodeOCF(t *testing.T, schema string, records []map[string]any) []byte {

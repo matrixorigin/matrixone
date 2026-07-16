@@ -34,6 +34,7 @@ type CatalogRunnerOptions struct {
 	Now               func() time.Time
 	OrphanTTL         time.Duration
 	DefaultRetainLast int
+	PlanningMaxMemory int64
 }
 
 func NewCatalogExpireSnapshotsRunner(client api.CatalogClient, catalog api.CatalogRequest, opts CatalogRunnerOptions) Runner {
@@ -73,7 +74,8 @@ func NewNativeRewriteManifestsRunner(client api.CatalogClient, catalog api.Catal
 			Loader:  CatalogMetadataLoader{Client: client, Catalog: catalog},
 			Now:     opts.Now,
 			Materializer: RewriteManifestsMaterializer{
-				ObjectReader: objectReader,
+				ObjectReader:   objectReader,
+				MaxMemoryBytes: opts.PlanningMaxMemory,
 			},
 		},
 		ObjectWriter:   objectWriter,
@@ -92,7 +94,8 @@ func NewNativeRewriteDataFilesRunner(client api.CatalogClient, catalog api.Catal
 			Loader:  CatalogMetadataLoader{Client: client, Catalog: catalog},
 			Now:     opts.Now,
 			Selector: RewriteDataFilesSelector{
-				ObjectReader: objectReader,
+				ObjectReader:   objectReader,
+				MaxMemoryBytes: opts.PlanningMaxMemory,
 			},
 			Compactor: compactor,
 		},

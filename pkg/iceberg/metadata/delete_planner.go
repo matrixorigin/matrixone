@@ -36,6 +36,9 @@ func ValidateP1DeleteFile(file api.DataFile) error {
 	if file.FileSizeInBytes < 0 {
 		return api.NewError(api.ErrMetadataInvalid, "Iceberg delete file size is negative", map[string]string{"path": file.FilePathRedacted})
 	}
+	if file.RecordCount > 0 && file.FileSizeInBytes == 0 {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg delete file with rows is missing file size", map[string]string{"path": file.FilePathRedacted})
+	}
 	if !strings.EqualFold(strings.TrimSpace(file.FileFormat), "parquet") {
 		return api.NewError(api.ErrUnsupportedFeature, "Iceberg delete apply supports Parquet delete files only", map[string]string{
 			"path":   file.FilePathRedacted,
@@ -71,13 +74,25 @@ func ValidateP1DeleteFile(file api.DataFile) error {
 	return nil
 }
 
-func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, credentialScope string) ([]api.DeleteFileTask, error) {
-	return pairDeleteTasksBounded(context.Background(), dataTasks, deleteEntries, credentialScope, 0, api.ServerPlanningAuto)
+func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, specFieldCounts map[int]int, credentialScope string) ([]api.DeleteFileTask, error) {
+	return pairDeleteTasksBounded(context.Background(), dataTasks, deleteEntries, specFieldCounts, credentialScope, 0, api.ServerPlanningAuto)
 }
 
-func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, credentialScope string, maxTasks int, mode api.ServerPlanningMode) ([]api.DeleteFileTask, error) {
+func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, specFieldCounts map[int]int, credentialScope string, maxTasks int, mode api.ServerPlanningMode) ([]api.DeleteFileTask, error) {
+	return pairDeleteTasksBoundedMemory(ctx, dataTasks, deleteEntries, specFieldCounts, credentialScope, maxTasks, mode, nil, 0)
+}
+
+func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileTask, deleteEntries []deleteManifestEntry, specFieldCounts map[int]int, credentialScope string, maxTasks int, mode api.ServerPlanningMode, memoryUsed *int64, memoryLimit int64) ([]api.DeleteFileTask, error) {
 	if len(deleteEntries) == 0 {
 		return nil, nil
+	}
+	if memoryUsed != nil {
+		// dataByPath and seen are transient but coexist with the retained task
+		// slices during pairing. Reserve their bucket/header overhead up front.
+		indexMemory := saturatingPlanningMul(int64(len(dataTasks)+len(deleteEntries)), 128)
+		if err := reservePlanningMemory(memoryUsed, indexMemory, memoryLimit, mode); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]api.DeleteFileTask, 0)
 	dataByPath := make(map[string]api.DataFileTask, len(dataTasks))
@@ -100,6 +115,15 @@ func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, d
 		if maxTasks > 0 && len(out) >= maxTasks {
 			return planningLimitExceeded("delete_tasks", len(out)+1, maxTasks, mode)
 		}
+		if memoryUsed != nil {
+			taskMemory := saturatingPlanningAdd(
+				planningDataFileMemory(file),
+				int64(192+len(key)+len(entry.manifestPath)+len(dataPath)+len(credentialScope)),
+			)
+			if err := reservePlanningMemory(memoryUsed, taskMemory, memoryLimit, mode); err != nil {
+				return err
+			}
+		}
 		seen[key] = struct{}{}
 		out = append(out, api.DeleteFileTask{
 			DataFile:        file,
@@ -116,6 +140,14 @@ func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, d
 			return nil, err
 		}
 		file := normalizeDataFile(entry.file)
+		fieldCount, specKnown := specFieldCounts[file.SpecID]
+		if specFieldCounts != nil && !specKnown {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg delete file references an unknown partition spec", map[string]string{
+				"path":    file.FilePathRedacted,
+				"spec_id": strconv.Itoa(file.SpecID),
+			})
+		}
+		globalDelete := specKnown && fieldCount == 0
 		switch file.Content {
 		case api.DataFileContentPositionDelete:
 			if referenced := strings.TrimSpace(file.ReferencedDataFile); referenced != "" {
@@ -135,11 +167,13 @@ func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, d
 				if !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
-				if file.SpecID != dataTask.DataFile.SpecID {
-					continue
-				}
-				if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
-					continue
+				if !globalDelete {
+					if file.SpecID != dataTask.DataFile.SpecID {
+						continue
+					}
+					if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
+						continue
+					}
 				}
 				if err := appendDeleteTask(entry, file, dataTask.DataFile.FilePath); err != nil {
 					return nil, err
@@ -153,11 +187,13 @@ func pairDeleteTasksBounded(ctx context.Context, dataTasks []api.DataFileTask, d
 				if !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
-				if file.SpecID != dataTask.DataFile.SpecID {
-					continue
-				}
-				if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
-					continue
+				if !globalDelete {
+					if file.SpecID != dataTask.DataFile.SpecID {
+						continue
+					}
+					if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
+						continue
+					}
 				}
 				if err := appendDeleteTask(entry, file, dataTask.DataFile.FilePath); err != nil {
 					return nil, err

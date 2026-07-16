@@ -52,10 +52,9 @@ func (e DMLActionExecutor) CommitDelete(ctx context.Context, req DMLDeleteAction
 	wrapDMLDeleteRequestWriters(&req, tracker)
 	stream, err := BuildDMLDeleteActionStream(ctx, req)
 	if err != nil {
-		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
-			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
+		return DMLCommitActionStreamResult{}, e.recordDMLBuildFailure(ctx, err, req.TableLocation, req.Base, tracker.paths())
 	}
-	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
+	return e.commit(ctx, req.TableLocation, req.SnapshotID, req.MemoryLimitBytes, effectiveDMLInitialMemory(req.InitialMemoryBytes, req.MemoryBudget), stream)
 }
 
 func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateActionStreamRequest) (DMLCommitActionStreamResult, error) {
@@ -70,10 +69,9 @@ func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateAction
 	wrapDMLUpdateRequestWriters(&req, tracker)
 	stream, err := BuildDMLUpdateActionStream(ctx, req)
 	if err != nil {
-		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
-			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
+		return DMLCommitActionStreamResult{}, e.recordDMLBuildFailure(ctx, err, req.TableLocation, req.Base, tracker.paths())
 	}
-	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
+	return e.commit(ctx, req.TableLocation, req.SnapshotID, req.MemoryLimitBytes, effectiveDMLInitialMemory(req.InitialMemoryBytes, req.MemoryBudget), stream)
 }
 
 func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionStreamRequest) (DMLCommitActionStreamResult, error) {
@@ -88,10 +86,9 @@ func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionSt
 	wrapDMLMergeRequestWriters(&req, tracker)
 	stream, err := BuildDMLMergeActionStream(ctx, req)
 	if err != nil {
-		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
-			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
+		return DMLCommitActionStreamResult{}, e.recordDMLBuildFailure(ctx, err, req.TableLocation, req.Base, tracker.paths())
 	}
-	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
+	return e.commit(ctx, req.TableLocation, req.SnapshotID, req.MemoryLimitBytes, effectiveDMLInitialMemory(req.InitialMemoryBytes, req.MemoryBudget), stream)
 }
 
 func (e DMLActionExecutor) CommitOverwrite(ctx context.Context, req DMLOverwriteActionStreamRequest) (DMLCommitActionStreamResult, error) {
@@ -106,10 +103,26 @@ func (e DMLActionExecutor) CommitOverwrite(ctx context.Context, req DMLOverwrite
 	wrapDMLOverwriteRequestWriters(&req, tracker)
 	stream, err := BuildDMLOverwriteActionStream(ctx, req)
 	if err != nil {
-		return DMLCommitActionStreamResult{}, joinDMLBuildAndOrphanRecordErrors(err,
-			e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths()))
+		return DMLCommitActionStreamResult{}, e.recordDMLBuildFailure(ctx, err, req.TableLocation, req.Base, tracker.paths())
 	}
-	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
+	return e.commit(ctx, req.TableLocation, req.SnapshotID, req.MemoryLimitBytes, effectiveDMLInitialMemory(req.InitialMemoryBytes, req.MemoryBudget), stream)
+}
+
+func effectiveDMLInitialMemory(configured int64, budget *dmlMemoryBudget) int64 {
+	if budget == nil {
+		return configured
+	}
+	if used := budget.usedBytes(); used > configured {
+		return used
+	}
+	return configured
+}
+
+func (e DMLActionExecutor) recordDMLBuildFailure(ctx context.Context, buildErr error, tableLocation string, base dml.CommitBase, paths []string) error {
+	recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
+	defer cancel()
+	return joinDMLBuildAndOrphanRecordErrors(buildErr,
+		e.recordMaterializedOrphans(recoveryCtx, tableLocation, base, paths))
 }
 
 func joinDMLBuildAndOrphanRecordErrors(buildErr, recordErr error) error {
@@ -119,7 +132,7 @@ func joinDMLBuildAndOrphanRecordErrors(buildErr, recordErr error) error {
 	return errors.Join(buildErr, recordErr)
 }
 
-func (e DMLActionExecutor) commit(ctx context.Context, tableLocation string, snapshotID int64, stream *dml.ActionStream) (DMLCommitActionStreamResult, error) {
+func (e DMLActionExecutor) commit(ctx context.Context, tableLocation string, snapshotID, maxMemoryBytes, initialMemoryBytes int64, stream *dml.ActionStream) (DMLCommitActionStreamResult, error) {
 	if stream == nil {
 		return DMLCommitActionStreamResult{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML action executor produced an empty action stream", nil))
 	}
@@ -138,6 +151,8 @@ func (e DMLActionExecutor) commit(ctx context.Context, tableLocation string, sna
 			e.PreservedManifests...),
 		PreservedSources: append([]dml.PreservedManifestSource(nil),
 			e.PreservedSources...),
+		MaxMemoryBytes:     maxMemoryBytes,
+		InitialMemoryBytes: initialMemoryBytes,
 	})
 }
 

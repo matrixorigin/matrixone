@@ -55,7 +55,7 @@ type CacheEntry struct {
 	Metadata         *api.TableMetadata
 	ManifestList     []api.ManifestFile
 	ManifestEntries  []api.ManifestEntry
-	SizeBytes        int64 // Positive serialized payload size used as the cache weight.
+	SizeBytes        int64 // Positive retained-memory weight supplied by the loader.
 	StoredAt         time.Time
 	ExpiresAt        time.Time
 }
@@ -168,9 +168,8 @@ func (c *Cache) Put(key CacheKey, entry CacheEntry) {
 	if existing, ok := c.entries[key]; ok {
 		c.removeElement(existing)
 	}
-	// SizeBytes is the cache weight supplied by the loader from the serialized
-	// metadata or manifest. Refuse missing and oversized weights so neither can
-	// bypass the configured bound.
+	// Refuse missing and oversized weights so neither can bypass the configured
+	// bound. Production loaders include encoded buffers and decoded Go objects.
 	if weight <= 0 || weight > c.maxBytes {
 		return
 	}

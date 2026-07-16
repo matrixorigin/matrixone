@@ -31,12 +31,14 @@ type DMLMatchedScanCollectorSpec struct {
 	EqualityColumnIndexes   []int32
 	PredicateStable         bool
 	IncludePositionRows     bool
+	MemoryBudget            *dmlMemoryBudget
 }
 
 type DMLMatchedScanCollector struct {
-	spec    DMLMatchedScanCollectorSpec
-	targets map[string]*DMLMatchedDeleteTarget
-	order   []string
+	spec          DMLMatchedScanCollectorSpec
+	targets       map[string]*DMLMatchedDeleteTarget
+	order         []string
+	reservedBytes int64
 }
 
 func NewDMLMatchedScanCollector(spec DMLMatchedScanCollectorSpec) *DMLMatchedScanCollector {
@@ -56,6 +58,18 @@ func (c *DMLMatchedScanCollector) AddBatch(ctx context.Context, bat *batch.Batch
 		return nil
 	}
 	spec := c.spec
+	reserved := retainedDMLCollectorBatchBytes(bat, len(spec.EqualityFieldIDs))
+	// Reserve before materializing maps and copied strings so one large input
+	// batch cannot transiently jump over the configured DML heap boundary.
+	if err := spec.MemoryBudget.reserve(ctx, reserved); err != nil {
+		return err
+	}
+	keepReservation := false
+	defer func() {
+		if !keepReservation {
+			spec.MemoryBudget.release(reserved)
+		}
+	}()
 	spec.DataFilePathColumnIndex = dmlBatchColumnIndexByName(
 		bat,
 		api.DMLDataFilePathColumnName,
@@ -82,7 +96,19 @@ func (c *DMLMatchedScanCollector) AddBatch(ctx context.Context, bat *batch.Batch
 	for idx := range targets {
 		c.addTarget(targets[idx])
 	}
+	c.reservedBytes = saturatingDMLAdd(c.reservedBytes, reserved)
+	keepReservation = true
 	return nil
+}
+
+func (c *DMLMatchedScanCollector) Reset() {
+	if c == nil {
+		return
+	}
+	c.spec.MemoryBudget.release(c.reservedBytes)
+	c.reservedBytes = 0
+	c.targets = make(map[string]*DMLMatchedDeleteTarget)
+	c.order = nil
 }
 
 func (c *DMLMatchedScanCollector) Targets() []DMLMatchedDeleteTarget {
@@ -105,6 +131,13 @@ func (c *DMLMatchedScanCollector) Targets() []DMLMatchedDeleteTarget {
 		})
 	}
 	return out
+}
+
+func (c *DMLMatchedScanCollector) RetainedBytes() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.reservedBytes
 }
 
 func (c *DMLMatchedScanCollector) addTarget(target DMLMatchedDeleteTarget) {

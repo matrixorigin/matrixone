@@ -221,7 +221,9 @@ func dmlStringValue(ctx context.Context, vec *vector.Vector, row int) (string, e
 	}
 	switch vec.GetType().Oid {
 	case types.T_varchar, types.T_text, types.T_json:
-		return vec.GetStringAt(row), nil
+		// Vector strings may alias mpool-backed batch memory. Matched DML state
+		// outlives the input batch, so retain an owned copy.
+		return strings.Clone(vec.GetStringAt(row)), nil
 	default:
 		return "", api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg DML metadata path column type is unsupported", map[string]string{
 			"type": vec.GetType().String(),
@@ -281,7 +283,7 @@ func dmlVectorValue(ctx context.Context, vec *vector.Vector, row int) (any, erro
 	case types.T_timestamp:
 		return int64(vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, row)), nil
 	case types.T_varchar, types.T_text, types.T_json:
-		return vec.GetStringAt(row), nil
+		return strings.Clone(vec.GetStringAt(row)), nil
 	default:
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg DML equality column type is unsupported", map[string]string{
 			"type": vec.GetType().String(),

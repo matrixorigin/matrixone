@@ -17,6 +17,7 @@ package icebergio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"iter"
 	"math"
@@ -84,18 +85,45 @@ func (s *signedHTTPFileService) Write(ctx context.Context, vector fileservice.IO
 			"signed_url": RedactObjectPath(target),
 		}))
 	}
-	body := append([]byte(nil), entry.Data...)
+	if int64(len(entry.Data)) > s.maxMaterializedReadBytes {
+		return api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg signed HTTP write payload exceeds the materialization limit", map[string]string{
+			"signed_url":  RedactObjectPath(target),
+			"limit_bytes": strconv.FormatInt(s.maxMaterializedReadBytes, 10),
+		}))
+	}
+	// The HTTP request is synchronous; retaining the caller's immutable payload
+	// avoids a second full materialized copy during upload.
+	body := entry.Data
 	if entry.ReaderForWrite != nil {
 		reader := io.Reader(entry.ReaderForWrite)
-		if entry.Size >= 0 {
-			limit := entry.Size
-			if limit < math.MaxInt64 {
-				limit++
-			}
-			reader = io.LimitReader(reader, limit)
+		readLimit := s.maxMaterializedReadBytes
+		if entry.Size >= 0 && entry.Size < readLimit {
+			readLimit = entry.Size
 		}
-		data, err := io.ReadAll(reader)
+		if entry.Size > s.maxMaterializedReadBytes {
+			return api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg signed HTTP write payload exceeds the materialization limit", map[string]string{
+				"signed_url":  RedactObjectPath(target),
+				"limit_bytes": strconv.FormatInt(s.maxMaterializedReadBytes, 10),
+			}))
+		}
+		// A zero-size write still probes one byte so a non-empty reader is
+		// reported as a size mismatch without an unbounded materialization.
+		if readLimit == 0 {
+			readLimit = 1
+		}
+		data, err := api.ReadAllBounded(reader, readLimit)
 		if err != nil {
+			if errors.Is(err, api.ErrMaterializationLimitExceeded) {
+				if entry.Size >= 0 {
+					return api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP write size mismatch", map[string]string{
+						"signed_url": RedactObjectPath(target),
+					}))
+				}
+				return api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg signed HTTP write payload exceeds the materialization limit", map[string]string{
+					"signed_url":  RedactObjectPath(target),
+					"limit_bytes": strconv.FormatInt(s.maxMaterializedReadBytes, 10),
+				}))
+			}
 			return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP write payload read failed", map[string]string{
 				"signed_url": RedactObjectPath(target),
 			}, err))
@@ -296,17 +324,21 @@ func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, en
 	if entry.Size > maxBytes {
 		return s.materializedReadTooLarge(ctx, target, maxBytes)
 	}
-	if entry.Size < 0 {
-		reader = io.LimitReader(reader, maxBytes+1)
+	readLimit := maxBytes
+	if entry.Size >= 0 {
+		readLimit = entry.Size
 	}
-	data, err := io.ReadAll(reader)
+	var data []byte
+	if readLimit > 0 {
+		data, err = api.ReadAllBounded(reader, readLimit)
+	}
 	if err != nil {
+		if errors.Is(err, api.ErrMaterializationLimitExceeded) {
+			return s.materializedReadTooLarge(ctx, target, maxBytes)
+		}
 		return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP response read failed", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}, err))
-	}
-	if int64(len(data)) > maxBytes {
-		return s.materializedReadTooLarge(ctx, target, maxBytes)
 	}
 	if entry.Size >= 0 {
 		if int64(len(data)) < entry.Size {

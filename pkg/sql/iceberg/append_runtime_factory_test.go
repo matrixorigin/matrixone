@@ -65,6 +65,31 @@ func TestAppendBaseSnapshotTreatsIcebergEmptyTableSentinelAsNoBase(t *testing.T)
 	require.Empty(t, snapshot.ManifestList)
 }
 
+func TestReadAppendBaseManifestListIsBounded(t *testing.T) {
+	ctx := context.Background()
+	fs, scopeForLocation := appendRuntimeMemoryObjectIO(t, ctx)
+	const manifestList = "s3://warehouse/writer/orders/metadata/snap-30.avro"
+	encoded, err := metadata.EncodeManifestList([]api.ManifestFile{{
+		Path:            "s3://warehouse/writer/orders/metadata/m0.avro",
+		PartitionSpecID: 0,
+		Content:         api.ManifestContentData,
+	}}, metadata.ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 30})
+	require.NoError(t, err)
+	writeAppendRuntimeMemoryFile(t, ctx, fs, manifestList, encoded)
+	reader := icebergio.ProviderObjectReader{
+		Provider:         icebergio.ScopedProvider{FileService: fs},
+		ScopeForLocation: scopeForLocation,
+	}
+
+	_, err = readAppendBaseManifestList(ctx, reader, api.Snapshot{ManifestList: manifestList}, int64(len(encoded))-1, 100)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+
+	manifests, err := readAppendBaseManifestList(ctx, reader, api.Snapshot{ManifestList: manifestList}, 1<<20, 100)
+	require.NoError(t, err)
+	require.Len(t, manifests, 1)
+}
+
 func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	ctx := context.Background()
 	tableLocation := "s3://warehouse/writer/gold_kpi"

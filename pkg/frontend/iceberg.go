@@ -60,10 +60,6 @@ func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Cr
 		}
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s already exists", catalogName)
 	}
-	nextID, err := nextIcebergCatalogID(ctx, bh, accountID)
-	if err != nil {
-		return err
-	}
 	authMode := firstIcebergOption(opts, "auth_mode")
 	if authMode == "" {
 		authMode = firstIcebergOption(opts, "auth")
@@ -80,8 +76,11 @@ func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Cr
 	}
 
 	return bh.Exec(ctx, sqliceberg.InsertCatalogSQL(model.Catalog{
-		AccountID:        accountID,
-		CatalogID:        nextID,
+		AccountID: accountID,
+		// CatalogID zero selects the storage-owned auto-increment path. IDs are
+		// allocated without a cross-CN MAX(id)+1 race; account_id remains part of
+		// the logical key and every authorization/lookup boundary.
+		CatalogID:        0,
 		Name:             catalogName,
 		Type:             catalogType,
 		URI:              uri,
@@ -368,22 +367,6 @@ func queryIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uin
 		return 0, nil
 	}
 	return results[0].GetUint64(ctx, 0, 1)
-}
-
-func nextIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uint32) (uint64, error) {
-	sql := fmt.Sprintf(
-		"select coalesce(max(catalog_id), 0) + 1 from mo_catalog.%s where account_id = %d",
-		sqliceberg.TableCatalogs,
-		accountID,
-	)
-	results, err := ExeSqlInBgSes(ctx, bh, sql)
-	if err != nil {
-		return 0, err
-	}
-	if !execResultArrayHasData(results) {
-		return 1, nil
-	}
-	return results[0].GetUint64(ctx, 0, 0)
 }
 
 type icebergCatalogDependencySpec struct {

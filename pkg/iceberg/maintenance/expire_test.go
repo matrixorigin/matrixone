@@ -16,6 +16,7 @@ package maintenance
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -62,6 +63,87 @@ func TestExpireSnapshotsPlannerProtectsRefsAndRetainLast(t *testing.T) {
 	require.Len(t, plan.Attempt.Updates, 1)
 	require.Equal(t, "remove-snapshots", plan.Attempt.Updates[0].Type)
 	require.Equal(t, []int64{1}, plan.Attempt.Updates[0].SnapshotIDs, "snapshot 3 and its parent are protected by ref lineage, current/newest are protected by retain/current")
+}
+
+func TestExpireSnapshotsPlannerHonorsBranchSnapshotAge(t *testing.T) {
+	current := int64(4)
+	meta := expireMetadata(current)
+	meta.Refs["audit"] = api.SnapshotRef{
+		SnapshotID:         3,
+		Type:               "branch",
+		MinSnapshotsToKeep: 1,
+		MaxSnapshotAgeMS:   3 * 24 * 60 * 60 * 1000,
+	}
+	plan, err := (ExpireSnapshotsPlanner{
+		Loader: MaintenanceTableMetadataLoaderFunc(func(ctx context.Context, req Request) (*api.TableMetadata, error) { return meta, nil }),
+		Now:    func() time.Time { return time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC) },
+	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2026-01-05 00:00:00,retain_last=1"))
+	require.NoError(t, err)
+	require.Len(t, plan.Attempt.Updates, 1)
+	require.Equal(t, "remove-snapshots", plan.Attempt.Updates[0].Type)
+	require.Equal(t, []int64{1}, plan.Attempt.Updates[0].SnapshotIDs)
+}
+
+func TestExpireSnapshotsPlannerRemovesExpiredRefBeforeSnapshots(t *testing.T) {
+	current := int64(4)
+	meta := expireMetadata(current)
+	meta.Refs["old-tag"] = api.SnapshotRef{
+		SnapshotID:  1,
+		Type:        "tag",
+		MaxRefAgeMS: 24 * 60 * 60 * 1000,
+	}
+	plan, err := (ExpireSnapshotsPlanner{
+		Loader: MaintenanceTableMetadataLoaderFunc(func(ctx context.Context, req Request) (*api.TableMetadata, error) { return meta, nil }),
+		Now:    func() time.Time { return time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC) },
+	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2026-01-05 00:00:00,retain_last=1"))
+	require.NoError(t, err)
+	require.Len(t, plan.Attempt.Updates, 2)
+	require.Equal(t, api.CommitUpdate{Type: "remove-snapshot-ref", Ref: "old-tag"}, plan.Attempt.Updates[0])
+	require.Equal(t, "remove-snapshots", plan.Attempt.Updates[1].Type)
+	require.Equal(t, []int64{1, 2, 3}, plan.Attempt.Updates[1].SnapshotIDs)
+	require.Equal(t, "1", plan.Attempt.Summary["expired-refs"])
+}
+
+func TestExpireSnapshotsPlannerNeverExpiresMainRef(t *testing.T) {
+	current := int64(4)
+	meta := expireMetadata(current)
+	main := meta.Refs["main"]
+	main.MaxRefAgeMS = 1
+	meta.Refs["main"] = main
+	plan, err := (ExpireSnapshotsPlanner{
+		Loader: MaintenanceTableMetadataLoaderFunc(func(ctx context.Context, req Request) (*api.TableMetadata, error) { return meta, nil }),
+		Now:    func() time.Time { return time.Date(2027, 1, 5, 0, 0, 0, 0, time.UTC) },
+	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2027-01-05 00:00:00,retain_last=1"))
+	require.NoError(t, err)
+	for _, update := range plan.Attempt.Updates {
+		require.False(t, update.Type == "remove-snapshot-ref" && update.Ref == "main")
+	}
+}
+
+func TestExpireSnapshotsPlannerAppliesRetainLastToImplicitMain(t *testing.T) {
+	current := int64(4)
+	meta := expireMetadata(current)
+	meta.Refs = nil
+	plan, err := (ExpireSnapshotsPlanner{
+		Loader: MaintenanceTableMetadataLoaderFunc(func(context.Context, Request) (*api.TableMetadata, error) { return meta, nil }),
+		Now:    func() time.Time { return time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC) },
+	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2026-01-05 00:00:00,retain_last=3"))
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, plan.Attempt.Updates[0].SnapshotIDs)
+}
+
+func TestExpireSnapshotsPlannerAgeArithmeticDoesNotOverflow(t *testing.T) {
+	current := int64(4)
+	meta := expireMetadata(current)
+	meta.Refs["long-lived"] = api.SnapshotRef{SnapshotID: 1, Type: "tag", MaxRefAgeMS: math.MaxInt64}
+	plan, err := (ExpireSnapshotsPlanner{
+		Loader: MaintenanceTableMetadataLoaderFunc(func(context.Context, Request) (*api.TableMetadata, error) { return meta, nil }),
+		Now:    func() time.Time { return time.Date(2027, 1, 5, 0, 0, 0, 0, time.UTC) },
+	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2027-01-05 00:00:00,retain_last=1"))
+	require.NoError(t, err)
+	for _, update := range plan.Attempt.Updates {
+		require.False(t, update.Type == "remove-snapshot-ref" && update.Ref == "long-lived")
+	}
 }
 
 func TestExpireSnapshotsPlannerEnumeratesExpiredSnapshotFiles(t *testing.T) {
@@ -166,6 +248,44 @@ func TestExpireSnapshotsPlannerRejectsInvalidSnapshotBefore(t *testing.T) {
 	}).BuildMaintenanceCommit(context.Background(), req)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot_before")
+}
+
+func TestExpireSnapshotsPlannerBoundsManifestListReads(t *testing.T) {
+	const manifestList = "s3://warehouse/orders/metadata/snap-1.avro"
+	_, err := (ExpireSnapshotsPlanner{
+		ObjectReader:      expireObjectReader{objects: map[string][]byte{manifestList: []byte("oversized")}},
+		PlanningMaxMemory: 1,
+	}).expiredSnapshotFiles(context.Background(), []api.Snapshot{{SnapshotID: 1, ManifestList: manifestList}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+}
+
+func TestExpireSnapshotsPlannerBoundsIndividualManifestReads(t *testing.T) {
+	const (
+		manifestList = "s3://warehouse/orders/metadata/snap-1.avro"
+		manifestPath = "s3://warehouse/orders/metadata/m0.avro"
+	)
+	manifestListBytes, err := icebergmetadata.EncodeManifestList([]api.ManifestFile{{
+		Path:            manifestPath,
+		PartitionSpecID: 0,
+		Content:         api.ManifestContentData,
+	}}, icebergmetadata.ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 1})
+	require.NoError(t, err)
+	listWeight := icebergmetadata.ManifestListMemoryWeight(len(manifestListBytes), []api.ManifestFile{{
+		Path:            manifestPath,
+		PartitionSpecID: 0,
+		Content:         api.ManifestContentData,
+	}})
+
+	_, err = (ExpireSnapshotsPlanner{
+		ObjectReader: expireObjectReader{objects: map[string][]byte{
+			manifestList: manifestListBytes,
+			manifestPath: []byte("oversized-manifest"),
+		}},
+		PlanningMaxMemory: listWeight + int64(len("oversized-manifest")) - 1,
+	}).expiredSnapshotFiles(context.Background(), []api.Snapshot{{SnapshotID: 1, ManifestList: manifestList}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
 }
 
 func expireRequest(options string) Request {

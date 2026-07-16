@@ -112,7 +112,8 @@ func TestCommitRunnerReturnsUnknownAndRecordsOrphans(t *testing.T) {
 		Now:            func() time.Time { return now },
 		OrphanTTL:      time.Hour,
 	}).RunMaintenance(context.Background(), maintenanceRequest())
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrCommitUnknown))
 	require.True(t, result.Unknown)
 	require.Equal(t, "102", result.SnapshotAfter)
 	require.Equal(t, "commit-unknown", result.CommitID)
@@ -130,6 +131,27 @@ func TestCommitRunnerReturnsUnknownAndRecordsOrphans(t *testing.T) {
 		"s3://warehouse/orders/metadata/rewrite-manifest.avro",
 		"s3://warehouse/orders/data/rewrite-output.parquet",
 	}, paths)
+}
+
+func TestCommitRunnerVerifiesUnknownOutcomeFromAttempt(t *testing.T) {
+	var verifierResult api.CommitResult
+	result, err := (CommitRunner{
+		Planner:      fakeMaintenancePlanner{plan: maintenanceCommitPlan()},
+		ObjectWriter: &fakeMaintenanceObjectWriter{},
+		Committer: &fakeMaintenanceCommitter{
+			err: api.NewError(api.ErrCommitUnknown, "response lost", nil),
+		},
+		Verifier: CommitResultVerifierFunc(func(ctx context.Context, req Request, plan *CommitPlan, result api.CommitResult) (api.CommitResult, bool, error) {
+			verifierResult = result
+			result.SnapshotID = plan.Attempt.BaseSnapshotID
+			return result, true, nil
+		}),
+	}).RunMaintenance(context.Background(), maintenanceRequest())
+	require.NoError(t, err)
+	require.True(t, verifierResult.Unknown)
+	require.Equal(t, "100", result.SnapshotAfter)
+	require.True(t, result.Verified)
+	require.False(t, result.Unknown)
 }
 
 func TestCommitRunnerRequiresInjectedDependencies(t *testing.T) {

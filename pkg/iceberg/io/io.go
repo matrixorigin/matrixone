@@ -16,7 +16,10 @@ package icebergio
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,21 +111,9 @@ func (r ProviderObjectReader) Read(ctx context.Context, location string, offset,
 			"location": r.Provider.RedactPath(location),
 		}))
 	}
-	scope := ObjectScope{StorageLocation: strings.TrimSpace(location)}
-	if r.ScopeForLocation != nil {
-		scope = r.ScopeForLocation(location)
-		if strings.TrimSpace(scope.StorageLocation) == "" {
-			scope.StorageLocation = strings.TrimSpace(location)
-		}
-	}
-	fs, readPath, err := r.Provider.Resolve(ctx, scope)
+	fs, readPath, err := r.resolveRead(ctx, location)
 	if err != nil {
 		return nil, err
-	}
-	if fs == nil || strings.TrimSpace(readPath) == "" {
-		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg object reader resolved empty FileService or path", map[string]string{
-			"location": r.Provider.RedactPath(location),
-		}))
 	}
 	entry := fileservice.IOEntry{Offset: offset, Size: length}
 	vec := fileservice.IOVector{
@@ -141,6 +132,81 @@ func (r ProviderObjectReader) Read(ctx context.Context, location string, offset,
 		}))
 	}
 	return append([]byte(nil), vec.Entries[0].Data...), nil
+}
+
+// ReadBounded streams an object into memory with a hard byte cap. Requesting a
+// max-sized range is not equivalent: FileService correctly reports unexpected
+// EOF when the object is shorter than that range.
+func (r ProviderObjectReader) ReadBounded(ctx context.Context, location string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg bounded object read requires a positive limit", nil))
+	}
+	fs, readPath, err := r.resolveRead(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	var stream io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: strings.TrimSpace(readPath),
+		Policy:   fileservice.SkipFullFilePreloads,
+		Entries: []fileservice.IOEntry{{
+			Offset:            0,
+			Size:              -1,
+			ReadCloserForRead: &stream,
+		}},
+	}
+	if err := fs.Read(ctx, &vec); err != nil {
+		if stream != nil {
+			err = errors.Join(err, stream.Close())
+		}
+		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg bounded object read failed", map[string]string{
+			"location": r.Provider.RedactPath(location),
+		}, err))
+	}
+	if stream == nil {
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg bounded object read returned no stream", map[string]string{
+			"location": r.Provider.RedactPath(location),
+		}))
+	}
+	data, readErr := api.ReadAllBounded(stream, maxBytes)
+	if err := errors.Join(readErr, stream.Close()); err != nil {
+		if errors.Is(err, api.ErrMaterializationLimitExceeded) {
+			return nil, api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg object exceeds the materialization limit", map[string]string{
+				"location":    r.Provider.RedactPath(location),
+				"limit_bytes": strconv.FormatInt(maxBytes, 10),
+			}))
+		}
+		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg bounded object stream failed", map[string]string{
+			"location": r.Provider.RedactPath(location),
+		}, err))
+	}
+	return data, nil
+}
+
+func (r ProviderObjectReader) resolveRead(ctx context.Context, location string) (fileservice.ETLFileService, string, error) {
+	if r.Provider == nil {
+		return nil, "", api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg object reader requires ObjectIOProvider", nil))
+	}
+	if strings.TrimSpace(location) == "" {
+		return nil, "", api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg object reader requires location", nil))
+	}
+	scope := ObjectScope{StorageLocation: strings.TrimSpace(location)}
+	if r.ScopeForLocation != nil {
+		scope = r.ScopeForLocation(location)
+		if strings.TrimSpace(scope.StorageLocation) == "" {
+			scope.StorageLocation = strings.TrimSpace(location)
+		}
+	}
+	fs, readPath, err := r.Provider.Resolve(ctx, scope)
+	if err != nil {
+		return nil, "", err
+	}
+	if fs == nil || strings.TrimSpace(readPath) == "" {
+		return nil, "", api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg object reader resolved empty FileService or path", map[string]string{
+			"location": r.Provider.RedactPath(location),
+		}))
+	}
+	return fs, readPath, nil
 }
 
 func (w ProviderObjectWriter) WriteObject(ctx context.Context, location string, payload []byte) error {
@@ -171,13 +237,20 @@ func (w ProviderObjectWriter) WriteObject(ctx context.Context, location string, 
 			"location": w.Provider.RedactPath(location),
 		}))
 	}
-	payloadCopy := append([]byte(nil), payload...)
+	// FileService.Write consumes IOVector synchronously, so the caller-owned
+	// payload remains valid for the complete call and does not need a defensive
+	// clone. Iceberg materializers already retain it until this method returns.
+	// Also skip S3's write-through disk-cache tee: it buffers the full object in
+	// a second bytes.Buffer and would bypass the configured DML memory boundary.
+	// A future streaming object-writer API can make this ownership contract more
+	// explicit while retaining the same bounded behavior.
 	vec := fileservice.IOVector{
 		FilePath: strings.TrimSpace(writePath),
+		Policy:   fileservice.SkipDiskCacheWrites,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len(payloadCopy)),
-			Data:   payloadCopy,
+			Size:   int64(len(payload)),
+			Data:   payload,
 		}},
 	}
 	if err := fs.Write(ctx, vec); err != nil {

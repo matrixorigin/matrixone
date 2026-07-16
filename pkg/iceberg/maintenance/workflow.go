@@ -104,42 +104,39 @@ func (r CommitRunner) RunMaintenance(ctx context.Context, req Request) (Result, 
 		}, nil
 	}
 	if err := validateCommitPlan(req, plan); err != nil {
-		_ = r.recordOrphans(ctx, req, plan)
-		return Result{}, err
+		recoveryCtx, cancel := write.NewRecoveryContext(ctx)
+		defer cancel()
+		return Result{}, stderrors.Join(err, r.recordOrphans(recoveryCtx, req, plan))
 	}
 	if len(plan.Objects) > 0 && r.ObjectWriter == nil {
-		_ = r.recordOrphans(ctx, req, plan)
-		return Result{}, api.NewError(api.ErrConfigInvalid, "Iceberg maintenance commit runner requires an object writer", map[string]string{"operation": string(req.Operation)})
+		recoveryCtx, cancel := write.NewRecoveryContext(ctx)
+		defer cancel()
+		primaryErr := api.NewError(api.ErrConfigInvalid, "Iceberg maintenance commit runner requires an object writer", map[string]string{"operation": string(req.Operation)})
+		return Result{}, stderrors.Join(primaryErr, r.recordOrphans(recoveryCtx, req, plan))
 	}
 	for _, object := range plan.Objects {
 		if err := r.ObjectWriter.WriteObject(ctx, object.Location, object.Payload); err != nil {
-			_ = r.recordOrphans(ctx, req, plan)
-			return Result{}, err
+			recoveryCtx, cancel := write.NewRecoveryContext(ctx)
+			defer cancel()
+			return Result{}, stderrors.Join(err, r.recordOrphans(recoveryCtx, req, plan))
 		}
 	}
 	result, err := r.Committer.CommitTable(ctx, maintenanceCommitRequest(req, plan))
 	if isCommitUnknown(err, result) {
-		_ = r.recordOrphans(ctx, req, plan)
-		_ = r.recordPostCommitOrphans(ctx, req, plan)
-		return Result{
-			SnapshotAfter:      snapshotIDString(result),
-			RewrittenFileCount: plan.RewrittenFileCount,
-			RemovedFileCount:   plan.RemovedFileCount,
-			CommitID:           commitIDString(result),
-			Unknown:            true,
-		}, nil
+		return r.resolveUnknownCommit(ctx, req, plan, result)
 	}
 	if err != nil {
-		_ = r.recordOrphans(ctx, req, plan)
-		return Result{}, err
+		recoveryCtx, cancel := write.NewRecoveryContext(ctx)
+		defer cancel()
+		return Result{}, stderrors.Join(err, r.recordOrphans(recoveryCtx, req, plan))
 	}
 	if result == nil {
-		_ = r.recordOrphans(ctx, req, plan)
-		_ = r.recordPostCommitOrphans(ctx, req, plan)
-		return Result{RewrittenFileCount: plan.RewrittenFileCount, RemovedFileCount: plan.RemovedFileCount, Unknown: true}, nil
+		return r.resolveUnknownCommit(ctx, req, plan, nil)
 	}
-	committed := r.verifyCommitted(ctx, req, plan, *result)
-	_ = r.recordPostCommitOrphans(ctx, req, plan)
+	recoveryCtx, cancel := write.NewRecoveryContext(ctx)
+	defer cancel()
+	committed := r.verifyCommitted(recoveryCtx, req, plan, *result)
+	r.recordPostCommitOrphansAfterSuccess(recoveryCtx, req, plan, committed)
 	return Result{
 		SnapshotAfter:      strconv.FormatInt(committed.SnapshotID, 10),
 		RewrittenFileCount: plan.RewrittenFileCount,
@@ -147,6 +144,71 @@ func (r CommitRunner) RunMaintenance(ctx context.Context, req Request) (Result, 
 		CommitID:           committed.CommitID,
 		Verified:           committed.Verified,
 	}, nil
+}
+
+func (r CommitRunner) resolveUnknownCommit(ctx context.Context, req Request, plan *CommitPlan, result *api.CommitResult) (Result, error) {
+	recoveryCtx, cancel := write.NewRecoveryContext(ctx)
+	defer cancel()
+	candidate := api.CommitResult{Unknown: true}
+	if result != nil {
+		candidate = *result
+	}
+	if r.Verifier != nil {
+		verified, ok, err := r.Verifier.VerifyCommittedMaintenance(recoveryCtx, req, plan, candidate)
+		if err == nil && ok {
+			verified.Verified = true
+			verified.Unknown = false
+			r.recordPostCommitOrphansAfterSuccess(recoveryCtx, req, plan, verified)
+			return maintenanceResult(plan, verified), nil
+		}
+		if err != nil {
+			recoveryErr := stderrors.Join(
+				r.recordOrphans(recoveryCtx, req, plan),
+				r.recordPostCommitOrphans(recoveryCtx, req, plan),
+			)
+			unknownErr := api.WrapError(api.ErrCommitUnknown, "Iceberg maintenance commit outcome could not be verified", map[string]string{
+				"operation": string(req.Operation),
+				"table":     req.Table,
+			}, err)
+			return maintenanceResult(plan, candidate), stderrors.Join(unknownErr, recoveryErr)
+		}
+	}
+	recoveryErr := stderrors.Join(
+		r.recordOrphans(recoveryCtx, req, plan),
+		r.recordPostCommitOrphans(recoveryCtx, req, plan),
+	)
+	unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg maintenance commit outcome is unknown and could not be verified", map[string]string{
+		"operation": string(req.Operation),
+		"table":     req.Table,
+	})
+	return maintenanceResult(plan, candidate), stderrors.Join(unknownErr, recoveryErr)
+}
+
+func (r CommitRunner) recordPostCommitOrphansAfterSuccess(ctx context.Context, req Request, plan *CommitPlan, result api.CommitResult) {
+	if err := r.recordPostCommitOrphans(ctx, req, plan); err != nil {
+		// The table commit is already known to have succeeded. Returning this
+		// hook error would invite a retry of a committed operation, so keep the
+		// successful result and surface the cleanup scheduling failure in logs.
+		logutil.Warn("Iceberg maintenance post-commit orphan record failed",
+			zap.Uint32("account-id", req.AccountID),
+			zap.Uint64("catalog-id", req.CatalogID),
+			zap.String("namespace", req.Namespace),
+			zap.String("table", req.Table),
+			zap.String("operation", string(req.Operation)),
+			zap.Int64("snapshot-id", result.SnapshotID),
+			zap.Error(err))
+	}
+}
+
+func maintenanceResult(plan *CommitPlan, result api.CommitResult) Result {
+	return Result{
+		SnapshotAfter:      snapshotIDString(&result),
+		RewrittenFileCount: plan.RewrittenFileCount,
+		RemovedFileCount:   plan.RemovedFileCount,
+		CommitID:           result.CommitID,
+		Verified:           result.Verified,
+		Unknown:            result.Unknown,
+	}
 }
 
 func (r CommitRunner) verifyCommitted(ctx context.Context, req Request, plan *CommitPlan, result api.CommitResult) api.CommitResult {

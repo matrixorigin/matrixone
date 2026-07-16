@@ -19,8 +19,10 @@ package iceberggo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,10 +33,15 @@ import (
 	mopio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 )
 
+const defaultMaxMaterializedReadBytes int64 = 512 << 20
+const defaultMaxMaterializedWriteBytes int64 = 512 << 20
+
 type FileServiceIO struct {
-	Ctx              context.Context
-	Provider         mopio.ObjectIOProvider
-	ScopeForLocation mopio.ObjectScopeForLocation
+	Ctx                       context.Context
+	Provider                  mopio.ObjectIOProvider
+	ScopeForLocation          mopio.ObjectScopeForLocation
+	MaxMaterializedReadBytes  int64
+	MaxMaterializedWriteBytes int64
 }
 
 type fileServiceResolve struct {
@@ -87,6 +94,7 @@ func (iofs *FileServiceIO) Create(name string) (icebergio.FileWriter, error) {
 		ctx:      iofs.ctx(),
 		fs:       resolved.fs,
 		readPath: resolved.readPath,
+		maxBytes: iofs.maxMaterializedWriteBytes(),
 	}, nil
 }
 
@@ -137,36 +145,69 @@ func (iofs *FileServiceIO) resolve(op, name string) (fileServiceResolve, error) 
 }
 
 func (iofs *FileServiceIO) readAll(resolved fileServiceResolve) ([]byte, error) {
+	maxBytes := iofs.MaxMaterializedReadBytes
+	if maxBytes <= 0 || maxBytes > defaultMaxMaterializedReadBytes {
+		maxBytes = defaultMaxMaterializedReadBytes
+	}
+	var stream io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: resolved.readPath,
 		Policy:   fileservice.SkipFullFilePreloads,
 		Entries: []fileservice.IOEntry{{
-			Offset: 0,
-			Size:   -1,
+			Offset:            0,
+			Size:              -1,
+			ReadCloserForRead: &stream,
 		}},
 	}
 	if err := resolved.fs.Read(iofs.ctx(), &vec); err != nil {
+		if stream != nil {
+			err = errors.Join(err, stream.Close())
+		}
 		return nil, api.ToMOErr(iofs.ctx(), api.WrapError(api.ErrObjectIO, "Iceberg-go FileServiceIO read failed", nil, err))
 	}
-	if len(vec.Entries) == 0 {
+	if len(vec.Entries) == 0 || stream == nil {
 		return nil, api.ToMOErr(iofs.ctx(), api.NewError(api.ErrObjectIO, "Iceberg-go FileServiceIO read returned no entries", nil))
 	}
-	return append([]byte(nil), vec.Entries[0].Data...), nil
+	data, readErr := api.ReadAllBounded(stream, maxBytes)
+	if err := errors.Join(readErr, stream.Close()); err != nil {
+		if errors.Is(err, api.ErrMaterializationLimitExceeded) {
+			return nil, api.ToMOErr(iofs.ctx(), api.NewError(api.ErrPlanningLimitExceeded, "Iceberg-go FileServiceIO object exceeds the materialization limit", nil))
+		}
+		return nil, api.ToMOErr(iofs.ctx(), api.WrapError(api.ErrObjectIO, "Iceberg-go FileServiceIO stream read failed", nil, err))
+	}
+	return data, nil
 }
 
 func (iofs *FileServiceIO) writeAll(op, name string, resolved fileServiceResolve, data []byte) error {
-	payload := append([]byte(nil), data...)
+	if int64(len(data)) > iofs.maxMaterializedWriteBytes() {
+		return iofs.pathError(op, name, api.ToMOErr(iofs.ctx(), api.NewError(api.ErrPlanningLimitExceeded, "Iceberg-go FileServiceIO write exceeds the materialization limit", nil)))
+	}
+	// FileService.Write consumes the vector synchronously. Borrow the caller's
+	// payload for that call and skip S3's full-object disk-cache tee so the
+	// adapter does not create an unaccounted second copy.
 	if err := resolved.fs.Write(iofs.ctx(), fileservice.IOVector{
 		FilePath: resolved.readPath,
+		Policy:   fileservice.SkipDiskCacheWrites,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len(payload)),
-			Data:   payload,
+			Size:   int64(len(data)),
+			Data:   data,
 		}},
 	}); err != nil {
 		return iofs.pathError(op, name, api.ToMOErr(iofs.ctx(), api.WrapError(api.ErrObjectIO, "Iceberg-go FileServiceIO write failed", nil, err)))
 	}
 	return nil
+}
+
+func (iofs *FileServiceIO) maxMaterializedWriteBytes() int64 {
+	maxBytes := iofs.MaxMaterializedWriteBytes
+	if maxBytes <= 0 || maxBytes > defaultMaxMaterializedWriteBytes {
+		maxBytes = defaultMaxMaterializedWriteBytes
+	}
+	if maxBytes > int64(math.MaxInt) {
+		return int64(math.MaxInt)
+	}
+	return maxBytes
 }
 
 func (iofs *FileServiceIO) pathError(op, name string, err error) error {
@@ -244,7 +285,9 @@ type fileServiceWriter struct {
 	ctx      context.Context
 	fs       fileservice.ETLFileService
 	readPath string
-	buf      bytes.Buffer
+	data     []byte
+	maxBytes int64
+	writeErr error
 	closed   bool
 }
 
@@ -252,14 +295,45 @@ func (w *fileServiceWriter) Write(data []byte) (int, error) {
 	if w.closed {
 		return 0, fs.ErrClosed
 	}
-	return w.buf.Write(data)
+	if w.writeErr != nil {
+		return 0, w.writeErr
+	}
+	if int64(len(data)) > w.maxBytes-int64(len(w.data)) {
+		w.writeErr = api.ToMOErr(w.ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg-go FileServiceIO writer exceeds the materialization limit", nil))
+		return 0, w.writeErr
+	}
+	required := len(w.data) + len(data)
+	if required > cap(w.data) {
+		nextCapacity := cap(w.data) * 2
+		if nextCapacity < 512 {
+			nextCapacity = 512
+		}
+		if nextCapacity < required {
+			nextCapacity = required
+		}
+		maxCapacity := int(w.maxBytes)
+		if nextCapacity > maxCapacity {
+			nextCapacity = maxCapacity
+		}
+		if cap(w.data) > maxCapacity-nextCapacity {
+			w.writeErr = api.ToMOErr(w.ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg-go FileServiceIO writer growth exceeds the materialization limit", nil))
+			return 0, w.writeErr
+		}
+		next := make([]byte, len(w.data), nextCapacity)
+		copy(next, w.data)
+		w.data = next
+	}
+	start := len(w.data)
+	w.data = w.data[:required]
+	copy(w.data[start:], data)
+	return len(data), nil
 }
 
 func (w *fileServiceWriter) ReadFrom(reader io.Reader) (int64, error) {
 	if w.closed {
 		return 0, fs.ErrClosed
 	}
-	return w.buf.ReadFrom(reader)
+	return io.Copy(w, reader)
 }
 
 func (w *fileServiceWriter) Close() error {
@@ -267,13 +341,16 @@ func (w *fileServiceWriter) Close() error {
 		return nil
 	}
 	w.closed = true
-	payload := append([]byte(nil), w.buf.Bytes()...)
+	if w.writeErr != nil {
+		return w.writeErr
+	}
 	if err := w.fs.Write(w.ctx, fileservice.IOVector{
 		FilePath: w.readPath,
+		Policy:   fileservice.SkipDiskCacheWrites,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len(payload)),
-			Data:   payload,
+			Size:   int64(len(w.data)),
+			Data:   w.data,
 		}},
 	}); err != nil {
 		return api.ToMOErr(w.ctx, api.WrapError(api.ErrObjectIO, "Iceberg-go FileServiceIO writer close failed", nil, err))

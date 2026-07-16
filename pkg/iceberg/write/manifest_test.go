@@ -83,6 +83,20 @@ func TestBuildAppendManifestsRoundTripsArtifacts(t *testing.T) {
 	assertRESTSnapshotCommitUpdates(t, result.Attempt.Updates, int64(200), int64(100), int64(9), 3, "s3://warehouse/sales/orders/metadata/snap-200.avro")
 }
 
+func TestBuildAppendManifestsEnforcesEndToEndMemoryBudget(t *testing.T) {
+	_, err := BuildAppendManifests(context.Background(), AppendManifestRequest{
+		Append:             appendRequest(),
+		SnapshotID:         200,
+		SequenceNumber:     9,
+		ManifestPath:       "s3://warehouse/sales/orders/metadata/m-1.avro",
+		ManifestListPath:   "s3://warehouse/sales/orders/metadata/snap-200.avro",
+		MaxMemoryBytes:     1024,
+		InitialMemoryBytes: 1024,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+}
+
 func TestBuildAppendManifestsPreservesAllBaseManifestsAndUsesRESTUpdates(t *testing.T) {
 	req := appendRequest()
 	result, err := BuildAppendManifests(context.Background(), AppendManifestRequest{

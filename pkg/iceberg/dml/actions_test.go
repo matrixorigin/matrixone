@@ -16,6 +16,7 @@ package dml
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -314,6 +315,47 @@ func TestBuildManifestCommitAttemptMaterializesDataAndDeleteManifests(t *testing
 	require.Equal(t, intent.Requirements, result.Attempt.Requirements)
 	require.Equal(t, "update", result.Attempt.Summary["operation"])
 	assertRESTSnapshotCommitUpdates(t, result.Attempt.Updates, int64(99), testBase().BaseSnapshotID, int64(12), testBase().BaseSchemaID, "s3://warehouse/orders/metadata/snap-99.avro")
+}
+
+func TestAggregateDMLManifestEntriesRejectsMetricOverflow(t *testing.T) {
+	entries := []api.ManifestEntry{
+		{Status: api.ManifestEntryAdded, DataFile: api.DataFile{FilePath: "first.parquet", RecordCount: math.MaxInt64, FileSizeInBytes: 1}},
+		{Status: api.ManifestEntryAdded, DataFile: api.DataFile{FilePath: "second.parquet", RecordCount: 1, FileSizeInBytes: 1}},
+	}
+	_, err := aggregateDMLManifestEntries(entries)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+	require.Contains(t, err.Error(), "aggregate metrics overflow")
+}
+
+func TestBuildManifestCommitAttemptEnforcesEndToEndMemoryBudget(t *testing.T) {
+	base := testBase()
+	intent := CommitIntent{
+		Actions:        []Action{{Kind: ActionDeleteDataFile, ReplacedFile: dataFile("s3://warehouse/orders/data-1.parquet")}},
+		IdempotencyKey: base.IdempotencyKey,
+		BaseSnapshotID: base.BaseSnapshotID,
+		BaseSchemaID:   base.BaseSchemaID,
+		BaseSpecID:     base.BaseSpecID,
+		TargetRef:      base.TargetRef,
+		TargetRefType:  "branch",
+	}
+
+	_, err := BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
+		Intent:             intent,
+		SnapshotID:         99,
+		SequenceNumber:     12,
+		DataManifestPath:   "s3://warehouse/orders/metadata/data-99.avro",
+		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
+		PreservedManifests: []api.ManifestFile{{Path: "s3://warehouse/orders/metadata/base.avro", Content: api.ManifestContentData}},
+		PreservedSources: []PreservedManifestSource{{
+			Manifest: api.ManifestFile{Path: "s3://warehouse/orders/metadata/base.avro", Content: api.ManifestContentData},
+			Entries:  []api.ManifestEntry{{Status: api.ManifestEntryExisting, DataFile: dataFile("s3://warehouse/orders/data-1.parquet")}},
+		}},
+		MaxMemoryBytes:     1024,
+		InitialMemoryBytes: 1024,
+	}, 2))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
 }
 
 func TestBuildManifestCommitAttemptSeparatesPartitionSpecs(t *testing.T) {

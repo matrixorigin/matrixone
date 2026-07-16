@@ -91,6 +91,7 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 			CommitVerifier:         opts.CommitVerifier,
 			Now:                    opts.Now,
 			OrphanTTL:              orphanTTL,
+			PlanningMaxMemory:      opts.Config.Scan.PlanningMaxMemory,
 		}
 	}
 	rewriteDataFilesRunner := maintenance.Runner(maintenance.CatalogRewriteDataFilesRunner{
@@ -115,6 +116,7 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 			CommitVerifier:         opts.CommitVerifier,
 			Now:                    opts.Now,
 			OrphanTTL:              orphanTTL,
+			PlanningMaxMemory:      opts.Config.Scan.PlanningMaxMemory,
 		}
 	}
 	expireSnapshotsRunner := maintenance.Runner(maintenance.CatalogExpireSnapshotsRunner{
@@ -139,6 +141,7 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 			Now:                    opts.Now,
 			OrphanTTL:              orphanTTL,
 			DefaultRetainLast:      opts.DefaultRetainLast,
+			PlanningMaxMemory:      opts.Config.Scan.PlanningMaxMemory,
 		}
 	}
 	return maintenance.ProcedureExecutor{
@@ -201,6 +204,7 @@ type NativeExpireSnapshotsProcedureRunner struct {
 	Now                    func() time.Time
 	OrphanTTL              time.Duration
 	DefaultRetainLast      int
+	PlanningMaxMemory      int64
 }
 
 func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context, req maintenance.Request) (maintenance.Result, error) {
@@ -256,6 +260,7 @@ func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context
 			ObjectReader:      reader,
 			Now:               r.Now,
 			DefaultRetainLast: r.DefaultRetainLast,
+			PlanningMaxMemory: r.PlanningMaxMemory,
 		},
 		Committer:      client,
 		Verifier:       r.CommitVerifier,
@@ -277,6 +282,7 @@ type NativeRewriteManifestsProcedureRunner struct {
 	CommitVerifier         maintenance.CommitResultVerifier
 	Now                    func() time.Time
 	OrphanTTL              time.Duration
+	PlanningMaxMemory      int64
 }
 
 func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Context, req maintenance.Request) (maintenance.Result, error) {
@@ -339,7 +345,8 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 			}),
 			Now: r.Now,
 			Materializer: maintenance.RewriteManifestsMaterializer{
-				ObjectReader: reader,
+				ObjectReader:   reader,
+				MaxMemoryBytes: r.PlanningMaxMemory,
 			},
 		},
 		ObjectWriter:   writer,
@@ -364,6 +371,7 @@ type NativeRewriteDataFilesProcedureRunner struct {
 	CommitVerifier         maintenance.CommitResultVerifier
 	Now                    func() time.Time
 	OrphanTTL              time.Duration
+	PlanningMaxMemory      int64
 }
 
 func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Context, req maintenance.Request) (maintenance.Result, error) {
@@ -421,7 +429,8 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 	compactor := r.Compactor
 	if compactor == nil {
 		compactor = maintenance.ParquetConcatRewriteDataFilesCompactor{
-			ObjectReader: reader,
+			ObjectReader:   reader,
+			MaxMemoryBytes: r.PlanningMaxMemory,
 		}
 	}
 	return maintenance.CommitRunner{
@@ -432,7 +441,8 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 			}),
 			Now: r.Now,
 			Selector: maintenance.RewriteDataFilesSelector{
-				ObjectReader: reader,
+				ObjectReader:   reader,
+				MaxMemoryBytes: r.PlanningMaxMemory,
 			},
 			Compactor: compactor,
 		},

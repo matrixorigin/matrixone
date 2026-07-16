@@ -42,6 +42,8 @@ type DMLUpdateCoordinatorSpec struct {
 
 	TargetFileSizeBytes int64
 	TimeZone            *time.Location
+	MemoryLimitBytes    int64
+	InitialMemoryBytes  int64
 }
 
 type DMLUpdateCoordinator struct {
@@ -52,6 +54,8 @@ type DMLUpdateCoordinator struct {
 	replacementAttrs []string
 	replacementBats  []*batch.Batch
 	mp               *mpool.MPool
+	budget           *dmlMemoryBudget
+	replacementBytes int64
 }
 
 func NewDMLUpdateCoordinator(spec DMLUpdateCoordinatorSpec) *DMLUpdateCoordinator {
@@ -82,6 +86,7 @@ func (c *DMLUpdateCoordinator) Begin(ctx context.Context, req icebergwrite.Appen
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML update coordinator requires row-ordinal column index", nil))
 	}
 	c.writeReq = req
+	c.budget = newDMLMemoryBudget(c.spec.MemoryLimitBytes, c.spec.InitialMemoryBytes)
 	c.replacementAttrs = append([]string(nil), req.Attrs[:req.DataFilePathColumnIndex]...)
 	c.replacementCols = make([]int, len(c.replacementAttrs))
 	for idx := range c.replacementCols {
@@ -92,6 +97,7 @@ func (c *DMLUpdateCoordinator) Begin(ctx context.Context, req icebergwrite.Appen
 		DataFilePathColumnIndex: req.DataFilePathColumnIndex,
 		RowOrdinalColumnIndex:   req.RowOrdinalColumnIndex,
 		IncludePositionRows:     true,
+		MemoryBudget:            c.budget,
 	})
 	return nil
 }
@@ -118,12 +124,18 @@ func (c *DMLUpdateCoordinator) AppendWithProcess(proc *process.Process, bat *bat
 	if err != nil {
 		return err
 	}
+	retainedBytes := retainedDMLBatchBytes(bat)
+	if err := c.budget.reserve(ctx, retainedBytes); err != nil {
+		return err
+	}
 	cloned, err := bat.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
 	if err != nil {
+		c.budget.release(retainedBytes)
 		return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML update coordinator failed to clone replacement rows", nil, err))
 	}
 	c.mp = proc.Mp()
 	c.replacementBats = append(c.replacementBats, cloned)
+	c.replacementBytes = saturatingDMLAdd(c.replacementBytes, retainedBytes)
 	return nil
 }
 
@@ -131,7 +143,12 @@ func (c *DMLUpdateCoordinator) Commit(ctx context.Context) error {
 	if c == nil || c.collector == nil {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML update coordinator was not opened", nil))
 	}
-	defer c.cleanReplacementBatches()
+	defer c.cleanRuntimeState()
+	requestBytes := c.collector.RetainedBytes()
+	if err := c.budget.reserve(ctx, requestBytes); err != nil {
+		return err
+	}
+	defer c.budget.release(requestBytes)
 	targets := c.collector.Targets()
 	if len(targets) == 0 {
 		return nil
@@ -148,6 +165,7 @@ func (c *DMLUpdateCoordinator) Commit(ctx context.Context) error {
 			TargetFileSizeBytes: c.spec.TargetFileSizeBytes,
 			TimeZone:            c.spec.TimeZone,
 			ObjectWriter:        c.spec.ObjectWriter,
+			MemoryBudget:        c.budget,
 		})
 	}
 	if len(replacements) == 0 {
@@ -157,11 +175,14 @@ func (c *DMLUpdateCoordinator) Commit(ctx context.Context) error {
 	}
 	req := DMLUpdateActionStreamRequest{
 		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
-			Schema:         c.spec.Schema,
-			Base:           c.commitBase(),
-			DeleteSchemaID: c.spec.DeleteSchemaID,
-			ObjectWriter:   c.spec.ObjectWriter,
-			Targets:        targets,
+			Schema:             c.spec.Schema,
+			Base:               c.commitBase(),
+			DeleteSchemaID:     c.spec.DeleteSchemaID,
+			ObjectWriter:       c.spec.ObjectWriter,
+			Targets:            targets,
+			MemoryLimitBytes:   c.spec.MemoryLimitBytes,
+			InitialMemoryBytes: c.budget.usedBytes(),
+			MemoryBudget:       c.budget,
 		},
 		ReplacementBatches: replacements,
 	}
@@ -170,7 +191,7 @@ func (c *DMLUpdateCoordinator) Commit(ctx context.Context) error {
 }
 
 func (c *DMLUpdateCoordinator) Abort(ctx context.Context, cause error) error {
-	c.cleanReplacementBatches()
+	c.cleanRuntimeState()
 	return nil
 }
 
@@ -210,6 +231,20 @@ func (c *DMLUpdateCoordinator) cleanReplacementBatches() {
 		}
 	}
 	c.replacementBats = nil
+	c.budget.release(c.replacementBytes)
+	c.replacementBytes = 0
+}
+
+func (c *DMLUpdateCoordinator) cleanRuntimeState() {
+	if c == nil {
+		return
+	}
+	c.cleanReplacementBatches()
+	if c.collector != nil {
+		c.collector.Reset()
+	}
+	c.collector = nil
+	c.budget = nil
 }
 
 var _ icebergwrite.Coordinator = (*DMLUpdateCoordinator)(nil)

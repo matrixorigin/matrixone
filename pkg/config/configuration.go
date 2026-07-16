@@ -215,9 +215,11 @@ const (
 	IcebergConfigKeyManifestReadParallelism = "iceberg.scan.manifest_read_parallelism"
 	IcebergConfigKeyMaxManifestFiles        = "iceberg.scan.max_manifest_files"
 	IcebergConfigKeyMaxDataFiles            = "iceberg.scan.max_data_files"
+	IcebergConfigKeyPlanningMaxMemory       = "iceberg.scan.planning_max_memory"
 	IcebergConfigKeyServerPlanningMode      = "iceberg.scan.server_planning"
 	IcebergConfigKeyPlanningTimeout         = "iceberg.planning.timeout"
 	IcebergConfigKeyDeleteMaxMemory         = "iceberg.delete.max_memory"
+	IcebergConfigKeyDMLMaxMemory            = "iceberg.write.dml_max_memory"
 	IcebergConfigKeyEnableDeleteSpill       = "iceberg.delete.enable_spill"
 	IcebergConfigKeyWriteOrphanTTL          = "iceberg.write.orphan_ttl"
 	IcebergConfigKeyEnableOrphanGC          = "iceberg.write.enable_orphan_gc"
@@ -236,11 +238,13 @@ type IcebergParameters struct {
 	ManifestReadParallelism int           `toml:"manifest-read-parallelism" user_setting:"advanced"`
 	MaxManifestFiles        int           `toml:"max-manifest-files" user_setting:"advanced"`
 	MaxDataFiles            int           `toml:"max-data-files" user_setting:"advanced"`
+	PlanningMaxMemory       int64         `toml:"planning-max-memory" user_setting:"advanced"`
 	ServerPlanningMode      string        `toml:"server-planning-mode" user_setting:"advanced"`
 	PlanningTimeout         toml.Duration `toml:"planning-timeout" user_setting:"advanced"`
 	EnableWrite             bool          `toml:"enable-write" user_setting:"advanced"`
 	EnableDelete            bool          `toml:"enable-delete" user_setting:"advanced"`
 	DeleteMaxMemory         int64         `toml:"delete-max-memory" user_setting:"advanced"`
+	DMLMaxMemory            int64         `toml:"dml-max-memory" user_setting:"advanced"`
 	EnableDeleteSpill       bool          `toml:"enable-delete-spill" user_setting:"advanced"`
 	EnableDML               bool          `toml:"enable-dml" user_setting:"advanced"`
 	EnableMaintenance       bool          `toml:"enable-maintenance" user_setting:"advanced"`
@@ -266,6 +270,9 @@ func (ip *IcebergParameters) SetDefaultValues() {
 	if ip.MaxDataFiles == 0 {
 		ip.MaxDataFiles = 1000000
 	}
+	if ip.PlanningMaxMemory == 0 {
+		ip.PlanningMaxMemory = 256 << 20
+	}
 	if ip.ServerPlanningMode == "" {
 		ip.ServerPlanningMode = IcebergServerPlanningAuto
 	}
@@ -274,6 +281,9 @@ func (ip *IcebergParameters) SetDefaultValues() {
 	}
 	if ip.DeleteMaxMemory == 0 {
 		ip.DeleteMaxMemory = 256 << 20
+	}
+	if ip.DMLMaxMemory == 0 {
+		ip.DMLMaxMemory = 256 << 20
 	}
 	if ip.OrphanTTL.Duration == 0 {
 		ip.OrphanTTL.Duration = 24 * time.Hour
@@ -296,6 +306,9 @@ func (ip IcebergParameters) Validate(ctx context.Context) error {
 	if ip.MaxDataFiles <= 0 {
 		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxDataFiles+" must be greater than zero")
 	}
+	if ip.PlanningMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningMaxMemory+" must be greater than zero")
+	}
 	switch ip.ServerPlanningMode {
 	case IcebergServerPlanningOff, IcebergServerPlanningAuto, IcebergServerPlanningRequired:
 	default:
@@ -306,6 +319,9 @@ func (ip IcebergParameters) Validate(ctx context.Context) error {
 	}
 	if ip.DeleteMaxMemory < 0 {
 		return moerr.NewBadConfig(ctx, IcebergConfigKeyDeleteMaxMemory+" must be greater than or equal to zero")
+	}
+	if ip.DMLMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDMLMaxMemory+" must be greater than zero")
 	}
 	if ip.EnableDeleteSpill {
 		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableDeleteSpill+" is not supported; keep enable-delete-spill disabled")

@@ -15,7 +15,6 @@
 package dml
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -34,7 +33,18 @@ import (
 const (
 	positionDeleteFilePathFieldID = 2147483546
 	positionDeletePosFieldID      = 2147483545
+	deleteWriteBatchRows          = 1024
+	deleteMaxRowsPerRowGroup      = 8192
+	maxDeleteWriterBoundBytes     = 4 << 10
 )
+
+// WriteMemoryBudget lets the SQL runtime and the format encoder charge the
+// same hard boundary without introducing an Iceberg -> SQL dependency. The
+// runtime always supplies it; direct library callers may leave it nil.
+type WriteMemoryBudget interface {
+	Reserve(ctx context.Context, bytes int64) error
+	Release(bytes int64)
+}
 
 type PositionDeleteRow struct {
 	FilePath string
@@ -48,6 +58,7 @@ type PositionDeleteWriteRequest struct {
 	Partition          map[string]any
 	SpecID             int
 	DeleteSchemaID     int
+	MemoryBudget       WriteMemoryBudget
 }
 
 type EqualityDeleteRow struct {
@@ -62,10 +73,38 @@ type EqualityDeleteWriteRequest struct {
 	Partition      map[string]any
 	SpecID         int
 	DeleteSchemaID int
+	MemoryBudget   WriteMemoryBudget
 }
 
 type DeleteObjectWriter interface {
 	WriteObject(ctx context.Context, location string, payload []byte) error
+}
+
+func reserveDeleteWriterMemory(ctx context.Context, budget WriteMemoryBudget, bytes int64) error {
+	if budget == nil || bytes <= 0 {
+		return nil
+	}
+	return budget.Reserve(ctx, bytes)
+}
+
+func releaseDeleteWriterMemory(budget WriteMemoryBudget, bytes int64) {
+	if budget != nil && bytes > 0 {
+		budget.Release(bytes)
+	}
+}
+
+func deleteParquetScratchBytes(fields int) int64 {
+	// parquet-go owns page/column buffers which are not visible through the
+	// destination writer. Bounded row groups cap their lifetime; reserve a
+	// conservative per-column allowance for that opaque state. A future writer
+	// exposing allocator hooks could replace this estimate with exact charging.
+	return saturatingDeleteAdd(2<<20, saturatingDeleteMul(int64(fields), 1<<20))
+}
+
+func retainedDeleteFileMetadataBytes(fields int) int64 {
+	// Bounds are capped at 4 KiB and DataFile metadata is defensively cloned by
+	// planning/commit handoffs. Keep the reservation until the coordinator ends.
+	return saturatingDeleteAdd(32<<10, saturatingDeleteMul(int64(fields), 16<<10))
 }
 
 func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDeleteWriteRequest) (api.DataFile, error) {
@@ -75,6 +114,11 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 	if strings.TrimSpace(req.FilePath) == "" {
 		return api.DataFile{}, api.NewError(api.ErrConfigInvalid, "Iceberg position delete writer requires file path", nil)
 	}
+	rowCopyBytes := saturatingDeleteMul(int64(len(req.Rows)), 64)
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, rowCopyBytes); err != nil {
+		return api.DataFile{}, err
+	}
+	defer releaseDeleteWriterMemory(req.MemoryBudget, rowCopyBytes)
 	rows, referenced, err := normalizePositionDeleteRows(req)
 	if err != nil {
 		return api.DataFile{}, err
@@ -84,23 +128,50 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 		"file_path": parquet.FieldID(parquet.Required(deleteStringNode()), positionDeleteFilePathFieldID),
 		"pos":       parquet.FieldID(parquet.Required(parquet.Leaf(parquet.Int64Type)), positionDeletePosFieldID),
 	})
-	writer := parquet.NewGenericWriter[any](cw, schema)
-	parquetRows := make([]any, len(rows))
+	scratchBytes := deleteParquetScratchBytes(2)
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, scratchBytes); err != nil {
+		return api.DataFile{}, err
+	}
+	defer releaseDeleteWriterMemory(req.MemoryBudget, scratchBytes)
+	writer := parquet.NewGenericWriter[any](cw, schema, parquet.MaxRowsPerRowGroup(deleteMaxRowsPerRowGroup))
+	writerFinished := false
+	defer func() {
+		if !writerFinished {
+			// Reset drops parquet-go's page/row-group state without attempting to
+			// publish a footer after an earlier validation or budget error.
+			writer.Reset(io.Discard)
+		}
+	}()
 	metrics := newDeleteMetrics([]api.SchemaField{
 		{ID: positionDeleteFilePathFieldID, Name: "file_path", Required: true, Type: api.IcebergType{Kind: api.TypeString, Raw: string(api.TypeString)}},
 		{ID: positionDeletePosFieldID, Name: "pos", Required: true, Type: api.IcebergType{Kind: api.TypeLong, Raw: string(api.TypeLong)}},
 	})
-	for idx, row := range rows {
-		parquetRows[idx] = map[string]any{"file_path": row.FilePath, "pos": row.Pos}
-		metrics.observe(ctx, positionDeleteFilePathFieldID, row.FilePath)
-		metrics.observe(ctx, positionDeletePosFieldID, row.Pos)
-	}
-	if _, err := writer.Write(parquetRows); err != nil {
-		return api.DataFile{}, api.WrapError(api.ErrObjectIO, "Iceberg position delete writer failed to encode rows", nil, err)
+	for start := 0; start < len(rows); start += deleteWriteBatchRows {
+		if err := ctx.Err(); err != nil {
+			return api.DataFile{}, err
+		}
+		end := min(start+deleteWriteBatchRows, len(rows))
+		workingBytes := saturatingDeleteMul(int64(end-start), 256)
+		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
+			return api.DataFile{}, err
+		}
+		parquetRows := make([]any, end-start)
+		for idx := start; idx < end; idx++ {
+			row := rows[idx]
+			parquetRows[idx-start] = map[string]any{"file_path": row.FilePath, "pos": row.Pos}
+			metrics.observe(ctx, positionDeleteFilePathFieldID, row.FilePath)
+			metrics.observe(ctx, positionDeletePosFieldID, row.Pos)
+		}
+		_, writeErr := writer.Write(parquetRows)
+		releaseDeleteWriterMemory(req.MemoryBudget, workingBytes)
+		if writeErr != nil {
+			return api.DataFile{}, api.WrapError(api.ErrObjectIO, "Iceberg position delete writer failed to encode rows", nil, writeErr)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return api.DataFile{}, api.WrapError(api.ErrObjectIO, "Iceberg position delete writer failed to close", nil, err)
 	}
+	writerFinished = true
 	file := deleteDataFile(req.FilePath, api.DataFileContentPositionDelete, int64(len(rows)), cw.n, req.Partition, req.SpecID, req.DeleteSchemaID, metrics)
 	file.ReferencedDataFile = referenced
 	return file, nil
@@ -110,12 +181,22 @@ func WritePositionDeleteObject(ctx context.Context, writer DeleteObjectWriter, r
 	if writer == nil {
 		return api.DataFile{}, api.NewError(api.ErrConfigInvalid, "Iceberg position delete object writer requires object writer", nil)
 	}
-	var buf bytes.Buffer
+	buf := deleteObjectBuffer{ctx: ctx, budget: req.MemoryBudget}
+	defer buf.Release()
 	file, err := WritePositionDeleteFile(ctx, &buf, req)
 	if err != nil {
 		return api.DataFile{}, err
 	}
-	if err := writer.WriteObject(ctx, req.FilePath, buf.Bytes()); err != nil {
+	copyBytes := int64(len(buf.Bytes()))
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, copyBytes); err != nil {
+		return api.DataFile{}, err
+	}
+	err = writer.WriteObject(ctx, req.FilePath, buf.Bytes())
+	releaseDeleteWriterMemory(req.MemoryBudget, copyBytes)
+	if err != nil {
+		return api.DataFile{}, err
+	}
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, retainedDeleteFileMetadataBytes(2)); err != nil {
 		return api.DataFile{}, err
 	}
 	return file, nil
@@ -144,36 +225,64 @@ func WriteEqualityDeleteFile(ctx context.Context, dst io.Writer, req EqualityDel
 		group[field.Name] = parquet.FieldID(node, field.ID)
 	}
 	cw := &deleteCountingWriter{writer: dst}
-	writer := parquet.NewGenericWriter[any](cw, parquet.NewSchema("equality_delete", group))
-	parquetRows := make([]any, len(req.Rows))
-	metrics := newDeleteMetrics(fields)
-	for rowIdx, row := range req.Rows {
-		out := make(map[string]any, len(fields))
-		for _, field := range fields {
-			value, ok := row.Values[field.ID]
-			if !ok || value == nil {
-				if field.Required {
-					return api.DataFile{}, api.NewError(api.ErrMetadataInvalid, "Iceberg equality delete row is missing required field", map[string]string{"field_id": strconv.Itoa(field.ID), "field": field.Name})
-				}
-				out[field.Name] = nil
-				metrics.observeNull(field.ID)
-				continue
-			}
-			canonical, err := canonicalDeleteValue(ctx, field.Type, value)
-			if err != nil {
-				return api.DataFile{}, err
-			}
-			out[field.Name] = canonical
-			metrics.observe(ctx, field.ID, canonical)
-		}
-		parquetRows[rowIdx] = out
+	scratchBytes := deleteParquetScratchBytes(len(fields))
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, scratchBytes); err != nil {
+		return api.DataFile{}, err
 	}
-	if _, err := writer.Write(parquetRows); err != nil {
-		return api.DataFile{}, api.WrapError(api.ErrObjectIO, "Iceberg equality delete writer failed to encode rows", nil, err)
+	defer releaseDeleteWriterMemory(req.MemoryBudget, scratchBytes)
+	writer := parquet.NewGenericWriter[any](cw, parquet.NewSchema("equality_delete", group), parquet.MaxRowsPerRowGroup(deleteMaxRowsPerRowGroup))
+	writerFinished := false
+	defer func() {
+		if !writerFinished {
+			writer.Reset(io.Discard)
+		}
+	}()
+	metrics := newDeleteMetrics(fields)
+	for start := 0; start < len(req.Rows); start += deleteWriteBatchRows {
+		if err := ctx.Err(); err != nil {
+			return api.DataFile{}, err
+		}
+		end := min(start+deleteWriteBatchRows, len(req.Rows))
+		perRowBytes := saturatingDeleteAdd(128, saturatingDeleteMul(int64(len(fields)), 96))
+		workingBytes := saturatingDeleteMul(int64(end-start), perRowBytes)
+		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
+			return api.DataFile{}, err
+		}
+		parquetRows := make([]any, end-start)
+		for rowIdx := start; rowIdx < end; rowIdx++ {
+			row := req.Rows[rowIdx]
+			out := make(map[string]any, len(fields))
+			for _, field := range fields {
+				value, ok := row.Values[field.ID]
+				if !ok || value == nil {
+					if field.Required {
+						releaseDeleteWriterMemory(req.MemoryBudget, workingBytes)
+						return api.DataFile{}, api.NewError(api.ErrMetadataInvalid, "Iceberg equality delete row is missing required field", map[string]string{"field_id": strconv.Itoa(field.ID), "field": field.Name})
+					}
+					out[field.Name] = nil
+					metrics.observeNull(field.ID)
+					continue
+				}
+				canonical, err := canonicalDeleteValue(ctx, field.Type, value)
+				if err != nil {
+					releaseDeleteWriterMemory(req.MemoryBudget, workingBytes)
+					return api.DataFile{}, err
+				}
+				out[field.Name] = canonical
+				metrics.observe(ctx, field.ID, canonical)
+			}
+			parquetRows[rowIdx-start] = out
+		}
+		_, writeErr := writer.Write(parquetRows)
+		releaseDeleteWriterMemory(req.MemoryBudget, workingBytes)
+		if writeErr != nil {
+			return api.DataFile{}, api.WrapError(api.ErrObjectIO, "Iceberg equality delete writer failed to encode rows", nil, writeErr)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return api.DataFile{}, api.WrapError(api.ErrObjectIO, "Iceberg equality delete writer failed to close", nil, err)
 	}
+	writerFinished = true
 	file := deleteDataFile(req.FilePath, api.DataFileContentEqualityDelete, int64(len(req.Rows)), cw.n, req.Partition, req.SpecID, req.DeleteSchemaID, metrics)
 	file.EqualityIDs = equalityIDs
 	return file, nil
@@ -183,12 +292,22 @@ func WriteEqualityDeleteObject(ctx context.Context, writer DeleteObjectWriter, r
 	if writer == nil {
 		return api.DataFile{}, api.NewError(api.ErrConfigInvalid, "Iceberg equality delete object writer requires object writer", nil)
 	}
-	var buf bytes.Buffer
+	buf := deleteObjectBuffer{ctx: ctx, budget: req.MemoryBudget}
+	defer buf.Release()
 	file, err := WriteEqualityDeleteFile(ctx, &buf, req)
 	if err != nil {
 		return api.DataFile{}, err
 	}
-	if err := writer.WriteObject(ctx, req.FilePath, buf.Bytes()); err != nil {
+	copyBytes := int64(len(buf.Bytes()))
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, copyBytes); err != nil {
+		return api.DataFile{}, err
+	}
+	err = writer.WriteObject(ctx, req.FilePath, buf.Bytes())
+	releaseDeleteWriterMemory(req.MemoryBudget, copyBytes)
+	if err != nil {
+		return api.DataFile{}, err
+	}
+	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, retainedDeleteFileMetadataBytes(len(req.EqualityIDs))); err != nil {
 		return api.DataFile{}, err
 	}
 	return file, nil
@@ -405,6 +524,7 @@ type deleteMetrics struct {
 	lowerBounds map[int][]byte
 	upperBounds map[int][]byte
 	compare     map[int]any
+	boundsOff   map[int]bool
 }
 
 func newDeleteMetrics(fields []api.SchemaField) *deleteMetrics {
@@ -415,6 +535,7 @@ func newDeleteMetrics(fields []api.SchemaField) *deleteMetrics {
 		lowerBounds: make(map[int][]byte),
 		upperBounds: make(map[int][]byte),
 		compare:     make(map[int]any),
+		boundsOff:   make(map[int]bool),
 	}
 	for _, field := range fields {
 		out.fields[field.ID] = field
@@ -423,15 +544,28 @@ func newDeleteMetrics(fields []api.SchemaField) *deleteMetrics {
 }
 
 func (m *deleteMetrics) observeNull(fieldID int) {
-	m.nullCounts[fieldID]++
+	m.nullCounts[fieldID] = saturatingDeleteAdd(m.nullCounts[fieldID], 1)
 }
 
 func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 	field, ok := m.fields[fieldID]
 	if !ok || isDeleteNaN(value) {
 		if isDeleteNaN(value) {
-			m.nanCounts[fieldID]++
+			m.nanCounts[fieldID] = saturatingDeleteAdd(m.nanCounts[fieldID], 1)
 		}
+		return
+	}
+	if m.boundsOff[fieldID] {
+		return
+	}
+	if text, ok := value.(string); ok && len(text) > maxDeleteWriterBoundBytes {
+		// Prefix truncation needs Iceberg's type-specific upper-bound rules. Until
+		// those are implemented, omitting both bounds is the only pruning-safe
+		// behavior and also keeps retained delete metrics bounded.
+		m.boundsOff[fieldID] = true
+		delete(m.compare, fieldID)
+		delete(m.lowerBounds, fieldID)
+		delete(m.upperBounds, fieldID)
 		return
 	}
 	encoded, cmp, err := encodeDeleteBound(ctx, field.Type, value)
@@ -569,8 +703,82 @@ type deleteCountingWriter struct {
 
 func (w *deleteCountingWriter) Write(data []byte) (int, error) {
 	n, err := w.writer.Write(data)
-	w.n += int64(n)
+	w.n = saturatingDeleteAdd(w.n, int64(n))
 	return n, err
+}
+
+type deleteObjectBuffer struct {
+	ctx      context.Context
+	budget   WriteMemoryBudget
+	data     []byte
+	reserved int64
+}
+
+func (b *deleteObjectBuffer) Write(payload []byte) (int, error) {
+	if len(payload) == 0 {
+		return 0, nil
+	}
+	if len(b.data) > math.MaxInt-len(payload) {
+		return 0, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg delete-file output exceeds the addressable memory limit", nil)
+	}
+	required := len(b.data) + len(payload)
+	if required > cap(b.data) {
+		oldCapacity := cap(b.data)
+		nextCapacity := required
+		if oldCapacity <= math.MaxInt/2 && oldCapacity*2 > nextCapacity {
+			nextCapacity = oldCapacity * 2
+		}
+		if nextCapacity < 64<<10 {
+			nextCapacity = 64 << 10
+		}
+		// The old and new arrays coexist during copy, so charge the entire new
+		// allocation before releasing the old reservation.
+		if err := reserveDeleteWriterMemory(b.ctx, b.budget, int64(nextCapacity)); err != nil {
+			return 0, err
+		}
+		next := make([]byte, len(b.data), nextCapacity)
+		copy(next, b.data)
+		b.data = next
+		releaseDeleteWriterMemory(b.budget, int64(oldCapacity))
+		b.reserved = int64(nextCapacity)
+	}
+	start := len(b.data)
+	b.data = b.data[:required]
+	copy(b.data[start:], payload)
+	return len(payload), nil
+}
+
+func (b *deleteObjectBuffer) Bytes() []byte {
+	if b == nil {
+		return nil
+	}
+	return b.data
+}
+
+func (b *deleteObjectBuffer) Release() {
+	if b == nil {
+		return
+	}
+	b.data = nil
+	releaseDeleteWriterMemory(b.budget, b.reserved)
+	b.reserved = 0
+}
+
+func saturatingDeleteAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
+}
+
+func saturatingDeleteMul(left, right int64) int64 {
+	if left <= 0 || right <= 0 {
+		return 0
+	}
+	if left > math.MaxInt64/right {
+		return math.MaxInt64
+	}
+	return left * right
 }
 
 func cloneAnyMap(in map[string]any) map[string]any {

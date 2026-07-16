@@ -269,6 +269,17 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
+	if external.Es != nil {
+		// Release Iceberg-only execution state without changing External's legacy
+		// terminal file cursor contract. Cached prepared Iceberg scans are rejected
+		// at the compile-cache boundary and receive a freshly planned operator.
+		external.Es.currentPartValues = nil
+		external.Es.icebergDeleteStates = nil
+		external.Es.icebergDeleteLoaded = false
+		external.Es.IcebergBatchDataFile = ""
+		external.Es.IcebergBatchStartRowOrdinal = 0
+		external.Es.parquetProfile = process.ParquetProfileStats{}
+	}
 
 	allocSize := int64(external.ctr.maxAllocSize)
 	if external.ProjectList != nil {

@@ -35,6 +35,8 @@ type DMLCommitWorkflowRequestSpec struct {
 	TimestampMS        int64
 	PreservedManifests []api.ManifestFile
 	PreservedSources   []dml.PreservedManifestSource
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 }
 
 type DMLCommitActionStreamSpec struct {
@@ -50,6 +52,8 @@ type DMLCommitActionStreamSpec struct {
 	TimestampMS        int64
 	PreservedManifests []api.ManifestFile
 	PreservedSources   []dml.PreservedManifestSource
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 }
 
 type DMLCommitActionStreamResult struct {
@@ -93,7 +97,9 @@ func BuildDMLCommitWorkflowRequest(ctx context.Context, spec DMLCommitWorkflowRe
 		PreservedManifests: append([]api.ManifestFile(nil), spec.PreservedManifests...),
 		PreservedSources: append([]dml.PreservedManifestSource(nil),
 			spec.PreservedSources...),
-		TableLocation: tableLocation,
+		TableLocation:      tableLocation,
+		MaxMemoryBytes:     spec.MaxMemoryBytes,
+		InitialMemoryBytes: spec.InitialMemoryBytes,
 	}, nil
 }
 
@@ -112,6 +118,8 @@ func CommitDMLActionStream(ctx context.Context, spec DMLCommitActionStreamSpec) 
 			spec.PreservedManifests...),
 		PreservedSources: append([]dml.PreservedManifestSource(nil),
 			spec.PreservedSources...),
+		MaxMemoryBytes:     spec.MaxMemoryBytes,
+		InitialMemoryBytes: spec.InitialMemoryBytes,
 	})
 	if err != nil {
 		return DMLCommitActionStreamResult{}, err

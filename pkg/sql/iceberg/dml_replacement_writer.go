@@ -15,9 +15,10 @@
 package iceberg
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ type DMLReplacementDataFilesRequest struct {
 	OutputFactory       icebergwrite.DataFileOutputFactory
 	ObjectWriter        dml.DeleteObjectWriter
 	FileSequence        int
+	MemoryBudget        *dmlMemoryBudget
 }
 
 func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFilesRequest) ([]api.DataFile, error) {
@@ -73,7 +75,11 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 				"table": req.Base.Table,
 			}))
 		}
-		factory = bufferedDataFileOutputFactory{Writer: req.ObjectWriter}
+		factory = bufferedDataFileOutputFactory{
+			Writer:                req.ObjectWriter,
+			MemoryBudget:          req.MemoryBudget,
+			RetainedMetadataBytes: retainedDMLDataFileMetadataBytesForSchema(req.Schema, req.PartitionSpec),
+		}
 	}
 	writerID := "replace-" + api.PathHash(statementKey)
 	if req.FileSequence > 0 {
@@ -92,13 +98,11 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 		return nil, api.ToMOErr(ctx, err)
 	}
 	if err := writer.WriteBatch(ctx, req.Attrs, req.Batch); err != nil {
-		_ = writer.Abort(ctx)
-		return nil, api.ToMOErr(ctx, err)
+		return nil, api.ToMOErr(ctx, errors.Join(err, writer.Abort(ctx)))
 	}
 	files, err := writer.Close(ctx)
 	if err != nil {
-		_ = writer.Abort(ctx)
-		return nil, api.ToMOErr(ctx, err)
+		return nil, api.ToMOErr(ctx, errors.Join(err, writer.Abort(ctx)))
 	}
 	return files, nil
 }
@@ -108,26 +112,58 @@ func dmlReplacementDataDir(operation, statementKey string, snapshotID int64) str
 }
 
 type bufferedDataFileOutputFactory struct {
-	Writer dml.DeleteObjectWriter
+	Writer                dml.DeleteObjectWriter
+	MemoryBudget          *dmlMemoryBudget
+	RetainedMetadataBytes int64
 }
+
+const retainedDMLDataFileMetadataBytes int64 = 2048
 
 func (f bufferedDataFileOutputFactory) CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error) {
 	if f.Writer == nil {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML buffered data file factory requires object writer", nil)
 	}
+	// Closed files leave DataFile metadata (or an orphan path on failure) in the
+	// coordinator until commit/abort. Reserve that retained state at creation so
+	// tiny target-file settings cannot generate an unbounded file list.
+	metadataBytes := f.RetainedMetadataBytes
+	if metadataBytes <= 0 {
+		metadataBytes = retainedDMLDataFileMetadataBytes
+	}
+	if err := f.MemoryBudget.reserve(ctx, metadataBytes); err != nil {
+		return nil, err
+	}
 	return &bufferedDataFileObject{
-		ctx:      ctx,
-		location: location,
-		writer:   f.Writer,
+		ctx:                 ctx,
+		location:            location,
+		writer:              f.Writer,
+		budget:              f.MemoryBudget,
+		metadataReservation: metadataBytes,
 	}, nil
 }
 
+func retainedDMLDataFileMetadataBytesForSchema(schema api.Schema, spec api.PartitionSpec) int64 {
+	// Each column may retain lower/upper bounds and several metric-map entries;
+	// the file list is cloned across fanout, coordinator and commit request. The
+	// writer caps each bound at 4 KiB, so 40 KiB per column covers those copies
+	// plus map/header overhead. This may be tightened if those handoffs become
+	// ownership transfers instead of defensive clones.
+	perColumn := int64(40 << 10)
+	columns := int64(len(schema.Fields))
+	partitions := int64(len(spec.Fields))
+	return saturatingDMLAdd(retainedDMLDataFileMetadataBytes,
+		saturatingDMLAdd(saturatingDMLMul(columns, perColumn), saturatingDMLMul(partitions, 1024)))
+}
+
 type bufferedDataFileObject struct {
-	ctx      context.Context
-	location string
-	writer   dml.DeleteObjectWriter
-	buf      bytes.Buffer
-	closed   bool
+	ctx                 context.Context
+	location            string
+	writer              dml.DeleteObjectWriter
+	data                []byte
+	budget              *dmlMemoryBudget
+	reserved            int64
+	metadataReservation int64
+	closed              bool
 }
 
 func (o *bufferedDataFileObject) Write(p []byte) (int, error) {
@@ -136,7 +172,39 @@ func (o *bufferedDataFileObject) Write(p []byte) (int, error) {
 			"location": api.RedactPath(o.location),
 		})
 	}
-	return o.buf.Write(p)
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if len(o.data) > math.MaxInt-len(p) {
+		return 0, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg DML buffered data file exceeds the addressable memory limit", nil)
+	}
+	required := len(o.data) + len(p)
+	if required > cap(o.data) {
+		oldCapacity := cap(o.data)
+		nextCapacity := required
+		if oldCapacity <= math.MaxInt/2 && oldCapacity*2 > nextCapacity {
+			nextCapacity = oldCapacity * 2
+		}
+		if nextCapacity < 64<<10 {
+			nextCapacity = 64 << 10
+		}
+		// make+copy keeps the old backing array live until the copy completes.
+		// Reserve the full new capacity first, then release the old capacity;
+		// accounting only the delta would understate the real growth peak by
+		// almost 2x for a geometrically growing buffer.
+		if err := o.budget.reserve(o.ctx, int64(nextCapacity)); err != nil {
+			return 0, err
+		}
+		next := make([]byte, len(o.data), nextCapacity)
+		copy(next, o.data)
+		o.data = next
+		o.budget.release(int64(oldCapacity))
+		o.reserved = int64(nextCapacity)
+	}
+	start := len(o.data)
+	o.data = o.data[:required]
+	copy(o.data[start:], p)
+	return len(p), nil
 }
 
 func (o *bufferedDataFileObject) Close() error {
@@ -145,9 +213,22 @@ func (o *bufferedDataFileObject) Close() error {
 	}
 	o.closed = true
 	if o.writer == nil {
+		o.releaseBuffer()
+		o.releaseMetadataReservation()
 		return api.NewError(api.ErrConfigInvalid, "Iceberg DML buffered data file requires object writer", nil)
 	}
-	return o.writer.WriteObject(o.ctx, o.location, o.buf.Bytes())
+	// ObjectWriter is a byte-slice API and some FileService adapters must copy
+	// the payload before returning. Reserve that second live copy explicitly;
+	// streaming ObjectWriter support can remove this conservative allowance.
+	copyBytes := int64(len(o.data))
+	if err := o.budget.reserve(o.ctx, copyBytes); err != nil {
+		o.releaseBuffer()
+		return err
+	}
+	err := o.writer.WriteObject(o.ctx, o.location, o.data)
+	o.budget.release(copyBytes)
+	o.releaseBuffer()
+	return err
 }
 
 func (o *bufferedDataFileObject) Abort() error {
@@ -155,8 +236,26 @@ func (o *bufferedDataFileObject) Abort() error {
 		return nil
 	}
 	o.closed = true
-	o.buf.Reset()
+	o.releaseBuffer()
+	o.releaseMetadataReservation()
 	return nil
+}
+
+func (o *bufferedDataFileObject) releaseBuffer() {
+	if o == nil {
+		return
+	}
+	o.data = nil
+	o.budget.release(o.reserved)
+	o.reserved = 0
+}
+
+func (o *bufferedDataFileObject) releaseMetadataReservation() {
+	if o == nil || o.metadataReservation <= 0 {
+		return
+	}
+	o.budget.release(o.metadataReservation)
+	o.metadataReservation = 0
 }
 
 var _ icebergwrite.DataFileOutputAborter = (*bufferedDataFileObject)(nil)

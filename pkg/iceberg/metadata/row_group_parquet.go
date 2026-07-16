@@ -15,7 +15,6 @@
 package metadata
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -33,21 +32,44 @@ func (p LocalScanPlanner) applyRowGroupPlanning(
 	req api.ScanPlanRequest,
 	tasks []api.DataFileTask,
 	profile *api.PlanningProfile,
+	memoryUsed *int64,
+	memoryLimit int64,
+	maxTasks int,
+	mode api.ServerPlanningMode,
 ) ([]api.DataFileTask, error) {
 	if !req.EnableRowGroupPlanning || len(tasks) == 0 {
 		return tasks, nil
 	}
-	out := make([]api.DataFileTask, 0, len(tasks))
+	var out []api.DataFileTask
 	for _, task := range tasks {
 		if err := checkPlanningContext(ctx); err != nil {
 			return nil, err
 		}
-		footers, err := p.readParquetRowGroupFooters(ctx, schema, task.DataFile)
+		remainingMemory := memoryLimit
+		if memoryUsed != nil {
+			remainingMemory -= *memoryUsed
+		}
+		footers, err := p.readParquetRowGroupFooters(ctx, schema, task.DataFile, remainingMemory, mode)
 		if err != nil {
+			return nil, err
+		}
+		footerMemory := rowGroupFootersMemory(footers)
+		// Footer structs, split clones and the optional pruning slice coexist for
+		// one file. They are transient; validate the peak without permanently
+		// charging them to the retained output task budget.
+		peakMemory := saturatingPlanningMul(footerMemory, 3)
+		peakUsed := int64(0)
+		if memoryUsed != nil {
+			peakUsed = *memoryUsed
+		}
+		if err := reservePlanningMemory(&peakUsed, peakMemory, memoryLimit, mode); err != nil {
 			return nil, err
 		}
 		splits := BuildRowGroupSplits(footers)
 		if len(splits) == 0 {
+			if err := reserveRowGroupTaskMemory(memoryUsed, memoryLimit, mode, api.RowGroupSplit{}); err != nil {
+				return nil, err
+			}
 			out = append(out, task)
 			continue
 		}
@@ -57,10 +79,19 @@ func (p LocalScanPlanner) applyRowGroupPlanning(
 			profile.RowGroupsPruned += pruned
 		}
 		if pruned == 0 {
+			if err := reserveRowGroupTaskMemory(memoryUsed, memoryLimit, mode, api.RowGroupSplit{}); err != nil {
+				return nil, err
+			}
 			out = append(out, task)
 			continue
 		}
+		if maxTasks > 0 && len(selected) > maxTasks-len(out) {
+			return nil, planningLimitExceeded("row_group_tasks", len(out)+len(selected), maxTasks, mode)
+		}
 		for _, split := range selected {
+			if err := reserveRowGroupTaskMemory(memoryUsed, memoryLimit, mode, split); err != nil {
+				return nil, err
+			}
 			rowGroupTask := task
 			rowGroupTask.RowGroups = []api.RowGroupSplit{split}
 			out = append(out, rowGroupTask)
@@ -69,26 +100,50 @@ func (p LocalScanPlanner) applyRowGroupPlanning(
 	return out, nil
 }
 
-func (p LocalScanPlanner) readParquetRowGroupFooters(ctx context.Context, schema api.Schema, file api.DataFile) ([]RowGroupFooter, error) {
+func (p LocalScanPlanner) readParquetRowGroupFooters(ctx context.Context, schema api.Schema, file api.DataFile, maxMemory int64, mode api.ServerPlanningMode) ([]RowGroupFooter, error) {
 	var reader io.ReaderAt
 	size := file.FileSizeInBytes
-	if size > 0 {
-		reader = icebergObjectReaderAt{ctx: ctx, reader: p.ObjectReader, location: file.FilePath}
-	} else {
-		data, err := p.ObjectReader.Read(ctx, file.FilePath, 0, -1)
-		if err != nil {
-			return nil, err
-		}
-		reader = bytes.NewReader(data)
-		size = int64(len(data))
+	if size < 8 {
+		// Iceberg requires file_size_in_bytes for non-empty data files. Refuse
+		// malformed metadata instead of materializing an unknown-length Parquet
+		// object merely to discover its footer.
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg row-group planning requires data file size", map[string]string{
+			"file": api.RedactPath(file.FilePath),
+		})
 	}
+	trailer, err := p.ObjectReader.Read(ctx, file.FilePath, size-8, 8)
+	if err != nil {
+		return nil, api.WrapError(api.ErrObjectIO, "Iceberg row-group footer trailer read failed", map[string]string{
+			"file": api.RedactPath(file.FilePath),
+		}, err)
+	}
+	if len(trailer) != 8 || string(trailer[4:]) != "PAR1" {
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg row-group planning found an invalid Parquet trailer", map[string]string{
+			"file": api.RedactPath(file.FilePath),
+		})
+	}
+	footerBytes := int64(binary.LittleEndian.Uint32(trailer[:4]))
+	if footerBytes <= 0 || footerBytes > size-8 {
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg row-group planning found an invalid Parquet footer size", map[string]string{
+			"file": api.RedactPath(file.FilePath),
+		})
+	}
+	// parquet-go decodes compact Thrift metadata into maps, slices and column
+	// objects. A conservative expansion factor bounds the parser before it asks
+	// ReaderAt for a footer-sized buffer. A future streaming footer decoder can
+	// replace this factor with exact token accounting.
+	estimatedFooterMemory := saturatingPlanningMul(footerBytes, 64)
+	if maxMemory <= 0 || estimatedFooterMemory > maxMemory {
+		return nil, planningMemoryExceeded(estimatedFooterMemory, maxMemory, mode)
+	}
+	reader = icebergObjectReaderAt{ctx: ctx, reader: p.ObjectReader, location: file.FilePath}
 	pf, err := parquet.OpenFile(reader, size)
 	if err != nil {
 		return nil, api.WrapError(api.ErrObjectIO, "Iceberg row-group footer read failed", map[string]string{
 			"file": api.RedactPath(file.FilePath),
 		}, err)
 	}
-	return parquetRowGroupFooters(pf, schema, file.FileSizeInBytes), nil
+	return parquetRowGroupFooters(pf, schema, file.FileSizeInBytes, maxMemory, mode)
 }
 
 type icebergObjectReaderAt struct {
@@ -109,16 +164,23 @@ func (r icebergObjectReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func parquetRowGroupFooters(file *parquet.File, schema api.Schema, fileSize int64) []RowGroupFooter {
+func parquetRowGroupFooters(file *parquet.File, schema api.Schema, fileSize int64, maxMemory int64, mode api.ServerPlanningMode) ([]RowGroupFooter, error) {
 	if file == nil {
-		return nil
+		return nil, nil
 	}
 	rowGroups := file.RowGroups()
 	if len(rowGroups) == 0 {
-		return nil
+		return nil, nil
 	}
 	fields := schemaFieldsByID(schema)
 	columnFieldIDs := parquetLeafColumnFieldIDs(file.Root(), fields)
+	estimatedMemory := saturatingPlanningMul(
+		int64(len(rowGroups)),
+		saturatingPlanningAdd(256, saturatingPlanningMul(int64(len(columnFieldIDs)), 192)),
+	)
+	if estimatedMemory > maxMemory {
+		return nil, planningMemoryExceeded(estimatedMemory, maxMemory, mode)
+	}
 	out := make([]RowGroupFooter, 0, len(rowGroups))
 	totalRows := file.NumRows()
 	for idx, rowGroup := range rowGroups {
@@ -169,7 +231,38 @@ func parquetRowGroupFooters(file *parquet.File, schema api.Schema, fileSize int6
 		}
 		out = append(out, footer)
 	}
-	return out
+	return out, nil
+}
+
+func reserveRowGroupTaskMemory(memoryUsed *int64, memoryLimit int64, mode api.ServerPlanningMode, split api.RowGroupSplit) error {
+	if memoryUsed == nil {
+		return nil
+	}
+	return reservePlanningMemory(memoryUsed, saturatingPlanningAdd(512, rowGroupSplitMemory(split)), memoryLimit, mode)
+}
+
+func rowGroupFootersMemory(footers []RowGroupFooter) int64 {
+	var total int64
+	for _, footer := range footers {
+		total = saturatingPlanningAdd(total, 160)
+		for _, bounds := range []map[int][]byte{footer.LowerBounds, footer.UpperBounds} {
+			for _, value := range bounds {
+				total = saturatingPlanningAdd(total, int64(48+len(value)))
+			}
+		}
+		total = saturatingPlanningAdd(total, saturatingPlanningMul(int64(len(footer.NullValueCounts)+len(footer.ValueCounts)), 40))
+	}
+	return total
+}
+
+func rowGroupSplitMemory(split api.RowGroupSplit) int64 {
+	footer := RowGroupFooter{
+		LowerBounds:     split.LowerBounds,
+		UpperBounds:     split.UpperBounds,
+		NullValueCounts: split.NullValueCounts,
+		ValueCounts:     split.ValueCounts,
+	}
+	return rowGroupFootersMemory([]RowGroupFooter{footer})
 }
 
 func schemaFieldsByID(schema api.Schema) map[int]api.SchemaField {

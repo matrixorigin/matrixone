@@ -24,9 +24,10 @@ import (
 )
 
 type MetadataReferenceChecker struct {
-	Loader       MaintenanceTableMetadataLoader
-	Metadata     api.MetadataFacade
-	ObjectReader api.ObjectReader
+	Loader         MaintenanceTableMetadataLoader
+	Metadata       api.MetadataFacade
+	ObjectReader   api.ObjectReader
+	MaxMemoryBytes int64
 }
 
 func (c MetadataReferenceChecker) IsReferenced(ctx context.Context, candidate write.OrphanCandidate) (bool, error) {
@@ -58,10 +59,12 @@ func (c MetadataReferenceChecker) IsReferenced(ctx context.Context, candidate wr
 	if err != nil {
 		return false, err
 	}
-	return c.isPathReferencedByMetadata(ctx, facade, meta, path)
+	memoryLimit := maintenanceMemoryLimit(c.MaxMemoryBytes)
+	memoryUsed := int64(0)
+	return c.isPathReferencedByMetadata(ctx, facade, meta, path, &memoryUsed, memoryLimit)
 }
 
-func (c MetadataReferenceChecker) isPathReferencedByMetadata(ctx context.Context, facade api.MetadataFacade, meta *api.TableMetadata, path string) (bool, error) {
+func (c MetadataReferenceChecker) isPathReferencedByMetadata(ctx context.Context, facade api.MetadataFacade, meta *api.TableMetadata, path string, memoryUsed *int64, memoryLimit int64) (bool, error) {
 	if meta == nil {
 		return false, api.NewError(api.ErrMetadataInvalid, "Iceberg orphan reference checker requires table metadata", nil)
 	}
@@ -78,7 +81,7 @@ func (c MetadataReferenceChecker) isPathReferencedByMetadata(ctx context.Context
 			continue
 		}
 		seenManifestLists[manifestList] = struct{}{}
-		referenced, err := c.isPathReferencedByManifestList(ctx, facade, manifestList, path)
+		referenced, err := c.isPathReferencedByManifestList(ctx, facade, manifestList, path, memoryUsed, memoryLimit)
 		if err != nil || referenced {
 			return referenced, err
 		}
@@ -86,17 +89,29 @@ func (c MetadataReferenceChecker) isPathReferencedByMetadata(ctx context.Context
 	return false, nil
 }
 
-func (c MetadataReferenceChecker) isPathReferencedByManifestList(ctx context.Context, facade api.MetadataFacade, manifestListPath, candidatePath string) (bool, error) {
-	data, err := c.ObjectReader.Read(ctx, manifestListPath, 0, -1)
+func (c MetadataReferenceChecker) isPathReferencedByManifestList(ctx context.Context, facade api.MetadataFacade, manifestListPath, candidatePath string, memoryUsed *int64, memoryLimit int64) (bool, error) {
+	data, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, manifestListPath, memoryLimit-*memoryUsed)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return false, err
+		}
 		return false, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg orphan reference checker failed to read manifest list", map[string]string{
 			"manifest_list": api.RedactPath(manifestListPath),
 		}, err)
 	}
-	manifests, err := facade.ReadManifestList(ctx, data)
+	manifests, err := readMaintenanceManifestList(
+		ctx, facade, data,
+		maintenanceRecordLimit(memoryLimit-*memoryUsed, 512),
+		memoryLimit-*memoryUsed,
+	)
 	if err != nil {
 		return false, err
 	}
+	weight := metadata.ManifestListMemoryWeight(cap(data), manifests)
+	if err := checkMaintenanceMemory(*memoryUsed, weight, memoryLimit); err != nil {
+		return false, err
+	}
+	*memoryUsed += weight
 	seenManifests := make(map[string]struct{})
 	for _, manifest := range manifests {
 		manifestPath := strings.TrimSpace(manifest.Path)
@@ -110,7 +125,7 @@ func (c MetadataReferenceChecker) isPathReferencedByManifestList(ctx context.Con
 			continue
 		}
 		seenManifests[manifestPath] = struct{}{}
-		referenced, err := c.isPathReferencedByManifest(ctx, facade, manifestPath, candidatePath)
+		referenced, err := c.isPathReferencedByManifest(ctx, facade, manifestPath, candidatePath, memoryUsed, memoryLimit)
 		if err != nil || referenced {
 			return referenced, err
 		}
@@ -118,17 +133,32 @@ func (c MetadataReferenceChecker) isPathReferencedByManifestList(ctx context.Con
 	return false, nil
 }
 
-func (c MetadataReferenceChecker) isPathReferencedByManifest(ctx context.Context, facade api.MetadataFacade, manifestPath, candidatePath string) (bool, error) {
-	data, err := c.ObjectReader.Read(ctx, manifestPath, 0, -1)
+func (c MetadataReferenceChecker) isPathReferencedByManifest(ctx context.Context, facade api.MetadataFacade, manifestPath, candidatePath string, memoryUsed *int64, memoryLimit int64) (bool, error) {
+	data, err := readMaintenanceMetadataObject(ctx, c.ObjectReader, manifestPath, memoryLimit-*memoryUsed)
 	if err != nil {
+		if isMaintenancePlanningLimit(err) {
+			return false, err
+		}
 		return false, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg orphan reference checker failed to read manifest", map[string]string{
 			"manifest": api.RedactPath(manifestPath),
 		}, err)
 	}
-	entries, err := facade.ReadManifest(ctx, data)
+	entries, err := readMaintenanceManifest(
+		ctx, facade, data,
+		maintenanceRecordLimit(memoryLimit-*memoryUsed, 1024),
+		memoryLimit-*memoryUsed,
+	)
 	if err != nil {
 		return false, err
 	}
+	weight := metadata.ManifestEntriesMemoryWeight(cap(data), entries)
+	if err := checkMaintenanceMemory(*memoryUsed, weight, memoryLimit); err != nil {
+		return false, err
+	}
+	// The checker currently trades a conservative cumulative bound for a
+	// simple proof that scanning a long snapshot history cannot grow without
+	// limit. A streaming visitor can later release each manifest's charge.
+	*memoryUsed += weight
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.DataFile.FilePath) == candidatePath || strings.TrimSpace(entry.DataFile.ReferencedDataFile) == candidatePath {
 			return true, nil

@@ -16,10 +16,10 @@ package metadata
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -42,6 +42,7 @@ type LocalScanPlanner struct {
 	ManifestReadParallelism int
 	MaxManifestFiles        int
 	MaxDataFiles            int
+	PlanningMaxMemory       int64
 	PlanningTimeout         time.Duration
 	ServerPlanningMode      api.ServerPlanningMode
 }
@@ -75,13 +76,14 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		Snapshots:      loadTableSnapshots(selector),
 	}
 	loaded, err := CachedTableMetadataLoader{
-		Catalog:          p.Catalog,
-		Metadata:         p.Metadata,
-		ObjectReader:     p.ObjectReader,
-		Cache:            p.Cache,
-		CredentialHash:   p.CredentialHash,
-		ExternalRef:      selector.RefName,
-		SnapshotSelector: selector,
+		Catalog:           p.Catalog,
+		Metadata:          p.Metadata,
+		ObjectReader:      p.ObjectReader,
+		Cache:             p.Cache,
+		CredentialHash:    p.CredentialHash,
+		ExternalRef:       selector.RefName,
+		SnapshotSelector:  selector,
+		PlanningMaxMemory: cfg.planningMaxMemory,
 	}.Load(planningCtx, tableReq)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
@@ -126,16 +128,38 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		BaseKey:        baseKey,
 		CredentialHash: p.CredentialHash,
 	}
-	manifestListRead, err := manifestReader.ReadManifestListWithStats(planningCtx, snapshot.ManifestList)
+	remainingPlanningBytes := cfg.planningMaxMemory - profile.MetadataBytes
+	if remainingPlanningBytes <= 0 {
+		return nil, planningMemoryExceeded(profile.MetadataBytes, cfg.planningMaxMemory, cfg.serverPlanningMode)
+	}
+	manifestListRead, err := manifestReader.ReadManifestListWithLimits(
+		planningCtx,
+		snapshot.ManifestList,
+		remainingPlanningBytes,
+		cfg.maxManifestFiles,
+	)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
 	}
 	profile.ManifestListBytes = manifestListRead.SizeBytes
+	remainingPlanningBytes -= manifestListRead.SizeBytes
 	if manifestListRead.CacheHit {
 		profile.PlanningCacheHits++
 	} else {
 		profile.PlanningCacheMiss++
 	}
+	planningMemoryUsed := cfg.planningMaxMemory - remainingPlanningBytes
+	// Selection and manifestsToRead retain additional manifest structs while the
+	// decoded list remains live. Charge full manifest weights conservatively;
+	// paths and partition bounds are mostly shared, but slice/map overhead is not.
+	derivedManifestMemory := saturatingPlanningMul(
+		ManifestListMemoryWeight(0, manifestListRead.Manifests),
+		2,
+	)
+	if err := reservePlanningMemory(&planningMemoryUsed, derivedManifestMemory, cfg.planningMaxMemory, cfg.serverPlanningMode); err != nil {
+		return nil, err
+	}
+	remainingPlanningBytes = cfg.planningMaxMemory - planningMemoryUsed
 	if len(manifestListRead.Manifests) > cfg.maxManifestFiles {
 		return nil, planningLimitExceeded("manifest_files", len(manifestListRead.Manifests), cfg.maxManifestFiles, cfg.serverPlanningMode)
 	}
@@ -152,9 +176,22 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 
 	manifestsToRead := append([]api.ManifestFile(nil), selectedManifests...)
 	manifestsToRead = append(manifestsToRead, selectedDeleteManifests...)
-	manifestReads, err := p.readManifests(planningCtx, manifestReader, manifestsToRead, cfg.manifestReadParallelism)
+	manifestReads, err := p.readManifests(
+		planningCtx,
+		manifestReader,
+		manifestsToRead,
+		cfg.manifestReadParallelism,
+		remainingPlanningBytes,
+		cfg.maxDataFiles,
+		cfg.serverPlanningMode,
+	)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
+	}
+	for _, read := range manifestReads {
+		if err := reservePlanningMemory(&planningMemoryUsed, read.SizeBytes, cfg.planningMaxMemory, cfg.serverPlanningMode); err != nil {
+			return nil, err
+		}
 	}
 
 	var files []api.DataFile
@@ -172,20 +209,33 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			if err := checkPlanningContext(planningCtx); err != nil {
 				return nil, err
 			}
+			if err := validateScanManifestEntry(entry); err != nil {
+				return nil, err
+			}
 			if entry.Status == api.ManifestEntryDeleted {
 				profile.DataFilesPruned++
-				profile.DataFileBytesPruned += positiveFileSize(entry.DataFile)
+				if err := addPlanningFileBytes(&profile.DataFileBytesPruned, positiveFileSize(entry.DataFile)); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			file := normalizeDataFile(entry.DataFile)
 			file.SequenceNumber = firstNonZeroInt64(file.SequenceNumber, entry.SequenceNumber, read.Manifest.SequenceNumber)
-			file.FileSequenceNumber = firstNonZeroInt64(file.FileSequenceNumber, entry.FileSequence)
+			file.FileSequenceNumber = firstNonZeroInt64(file.FileSequenceNumber, entry.FileSequence, read.Manifest.SequenceNumber)
 			file.SpecID = read.Manifest.PartitionSpecID
 			if read.Manifest.Content == api.ManifestContentDeletes {
 				if !req.EnableDeleteApply {
 					return nil, ValidateP0ManifestFile(read.Manifest)
 				}
 				if err := ValidateP1DeleteFile(file); err != nil {
+					return nil, err
+				}
+				if err := reservePlanningMemory(
+					&planningMemoryUsed,
+					planningDataFileMemory(file),
+					cfg.planningMaxMemory,
+					cfg.serverPlanningMode,
+				); err != nil {
 					return nil, err
 				}
 				deleteEntries = append(deleteEntries, deleteManifestEntry{
@@ -202,16 +252,33 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			}
 			if shouldPruneZeroRecordDataFile(file) {
 				profile.DataFilesPruned++
-				profile.DataFileBytesPruned += positiveFileSize(file)
+				if err := addPlanningFileBytes(&profile.DataFileBytesPruned, positiveFileSize(file)); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			if pruner.shouldPruneDataFile(file) {
 				profile.DataFilesPruned++
-				profile.DataFileBytesPruned += positiveFileSize(file)
+				if err := addPlanningFileBytes(&profile.DataFileBytesPruned, positiveFileSize(file)); err != nil {
+					return nil, err
+				}
 				continue
 			}
+			// files is retained for feature detection and dataTasks is returned to
+			// execution. Both own struct/slice headers while sharing immutable nested
+			// values from the decoded manifest.
+			if err := reservePlanningMemory(
+				&planningMemoryUsed,
+				saturatingPlanningMul(planningDataFileMemory(file), 2),
+				cfg.planningMaxMemory,
+				cfg.serverPlanningMode,
+			); err != nil {
+				return nil, err
+			}
 			files = append(files, file)
-			profile.DataFileBytesSelected += positiveFileSize(file)
+			if err := addPlanningFileBytes(&profile.DataFileBytesSelected, positiveFileSize(file)); err != nil {
+				return nil, err
+			}
 			if len(files) > cfg.maxDataFiles {
 				return nil, planningLimitExceeded("data_files", len(files), cfg.maxDataFiles, cfg.serverPlanningMode)
 			}
@@ -224,11 +291,44 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		}
 	}
 	profile.DataFilesSelected = len(dataTasks)
-	deleteTasks, err := pairDeleteTasksBounded(planningCtx, dataTasks, deleteEntries, p.CredentialScope, cfg.maxDataFiles, cfg.serverPlanningMode)
+	var specFieldCounts map[int]int
+	if len(deleteEntries) > 0 {
+		if err := reservePlanningMemory(
+			&planningMemoryUsed,
+			saturatingPlanningMul(int64(len(loaded.Metadata.PartitionSpecs)), 64),
+			cfg.planningMaxMemory,
+			cfg.serverPlanningMode,
+		); err != nil {
+			return nil, err
+		}
+		specFieldCounts = partitionSpecFieldCounts(loaded.Metadata)
+	}
+	deleteTasks, err := pairDeleteTasksBoundedMemory(
+		planningCtx,
+		dataTasks,
+		deleteEntries,
+		specFieldCounts,
+		p.CredentialScope,
+		cfg.maxDataFiles,
+		cfg.serverPlanningMode,
+		&planningMemoryUsed,
+		cfg.planningMaxMemory,
+	)
 	if err != nil {
 		return nil, err
 	}
-	dataTasks, err = p.applyRowGroupPlanning(planningCtx, loaded.Metadata, schema, req, dataTasks, &profile)
+	dataTasks, err = p.applyRowGroupPlanning(
+		planningCtx,
+		loaded.Metadata,
+		schema,
+		req,
+		dataTasks,
+		&profile,
+		&planningMemoryUsed,
+		cfg.planningMaxMemory,
+		cfg.maxDataFiles,
+		cfg.serverPlanningMode,
+	)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
 	}
@@ -239,6 +339,14 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		return nil, unsupportedFeaturesError(features)
 	}
 
+	if err := reservePlanningMemory(
+		&planningMemoryUsed,
+		saturatingPlanningMul(int64(len(schema.Fields)), 512),
+		cfg.planningMaxMemory,
+		cfg.serverPlanningMode,
+	); err != nil {
+		return nil, err
+	}
 	columnMapping, err := buildColumnMapping(schema, req.ProjectionIDs)
 	if err != nil {
 		return nil, err
@@ -269,6 +377,17 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		DeleteMaxMemoryBytes: req.DeleteMaxMemoryBytes,
 		EnableDeleteSpill:    req.EnableDeleteSpill,
 	}, nil
+}
+
+func partitionSpecFieldCounts(meta *api.TableMetadata) map[int]int {
+	if meta == nil {
+		return nil
+	}
+	out := make(map[int]int, len(meta.PartitionSpecs))
+	for _, spec := range meta.PartitionSpecs {
+		out[spec.SpecID] = len(spec.Fields)
+	}
+	return out
 }
 
 type RefCacheRefresher interface {
@@ -310,6 +429,7 @@ type localPlannerConfig struct {
 	manifestReadParallelism int
 	maxManifestFiles        int
 	maxDataFiles            int
+	planningMaxMemory       int64
 	planningTimeout         time.Duration
 	serverPlanningMode      api.ServerPlanningMode
 }
@@ -320,6 +440,7 @@ func (p LocalScanPlanner) normalizedConfig(req api.ScanPlanRequest) (localPlanne
 		manifestReadParallelism: p.ManifestReadParallelism,
 		maxManifestFiles:        p.MaxManifestFiles,
 		maxDataFiles:            p.MaxDataFiles,
+		planningMaxMemory:       p.PlanningMaxMemory,
 		planningTimeout:         p.PlanningTimeout,
 		serverPlanningMode:      p.ServerPlanningMode,
 	}
@@ -331,6 +452,9 @@ func (p LocalScanPlanner) normalizedConfig(req api.ScanPlanRequest) (localPlanne
 	}
 	if cfg.maxDataFiles <= 0 {
 		cfg.maxDataFiles = defaults.MaxDataFiles
+	}
+	if cfg.planningMaxMemory <= 0 {
+		cfg.planningMaxMemory = defaults.PlanningMaxMemory
 	}
 	if cfg.planningTimeout == 0 {
 		cfg.planningTimeout = defaults.PlanningTimeout
@@ -357,90 +481,114 @@ type plannedManifestRead struct {
 	SizeBytes int64
 }
 
-func (p LocalScanPlanner) readManifests(ctx context.Context, reader CachedManifestReader, manifests []api.ManifestFile, parallelism int) ([]plannedManifestRead, error) {
+func (p LocalScanPlanner) readManifests(ctx context.Context, reader CachedManifestReader, manifests []api.ManifestFile, parallelism int, maxBytes int64, maxEntries int, mode api.ServerPlanningMode) ([]plannedManifestRead, error) {
 	if len(manifests) == 0 {
 		return nil, nil
 	}
-	if parallelism <= 0 {
-		parallelism = api.DefaultConfig().Scan.ManifestReadParallelism
-	}
-	if parallelism > len(manifests) {
-		parallelism = len(manifests)
-	}
-
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(parentCtx)
-	defer cancel()
-	jobs := make(chan int)
-	results := make(chan plannedManifestReadResult, len(manifests))
-	var wg sync.WaitGroup
-	var firstReadErr error
-	var firstReadErrOnce sync.Once
-	for i := 0; i < parallelism; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range jobs {
-				manifest := normalizeManifestFile(manifests[idx])
-				read, err := reader.ReadManifestWithStats(ctx, manifest.Path)
-				if err != nil {
-					firstReadErrOnce.Do(func() {
-						firstReadErr = err
-						cancel()
-					})
-					return
-				}
-				results <- plannedManifestReadResult{
-					Index: idx,
-					Read: plannedManifestRead{
-						Manifest:  manifest,
-						Entries:   read.Entries,
-						CacheHit:  read.CacheHit,
-						SizeBytes: read.SizeBytes,
-					},
-				}
-			}
-		}()
-	}
-	var dispatchErr error
-dispatch:
-	for idx := range manifests {
-		if err := checkPlanningContext(parentCtx); err != nil {
-			dispatchErr = err
-			break
+	// The old parallel reader decoded every manifest before max_data_files was
+	// checked, allowing parallelism * manifest-size transient growth. Decode in
+	// budget order until a future streaming facade can reserve/release weighted
+	// tokens around each worker without retaining all decoded entries.
+	_ = parallelism
+	remainingBytes := maxBytes
+	remainingEntries := maxEntries
+	out := make([]plannedManifestRead, 0, len(manifests))
+	for _, rawManifest := range manifests {
+		if err := checkPlanningContext(ctx); err != nil {
+			return nil, err
 		}
-		select {
-		case jobs <- idx:
-		case <-ctx.Done():
-			if parentCtx.Err() != nil {
-				dispatchErr = planningContextError(parentCtx)
-			}
-			break dispatch
+		if remainingBytes <= 0 {
+			return nil, planningMemoryExceeded(maxBytes-remainingBytes+1, maxBytes, mode)
 		}
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-	if dispatchErr != nil {
-		return nil, dispatchErr
-	}
-	if err := checkPlanningContext(parentCtx); err != nil {
-		return nil, err
-	}
-	if firstReadErr != nil {
-		return nil, firstReadErr
-	}
-
-	out := make([]plannedManifestRead, len(manifests))
-	for result := range results {
-		out[result.Index] = result.Read
+		manifest := normalizeManifestFile(rawManifest)
+		// Allow decoding one record past the remaining count so an empty trailing
+		// manifest remains valid while a non-empty one fails deterministically.
+		entryDecodeLimit := remainingEntries
+		if entryDecodeLimit < math.MaxInt {
+			entryDecodeLimit++
+		}
+		read, err := reader.ReadManifestWithLimits(ctx, manifest.Path, remainingBytes, entryDecodeLimit)
+		if err != nil {
+			return nil, err
+		}
+		if len(read.Entries) > remainingEntries {
+			return nil, planningLimitExceeded("manifest_entries", maxEntries-remainingEntries+len(read.Entries), maxEntries, mode)
+		}
+		remainingBytes -= read.SizeBytes
+		remainingEntries -= len(read.Entries)
+		out = append(out, plannedManifestRead{
+			Manifest: manifest, Entries: read.Entries, CacheHit: read.CacheHit, SizeBytes: read.SizeBytes,
+		})
 	}
 	return out, nil
 }
 
-type plannedManifestReadResult struct {
-	Index int
-	Read  plannedManifestRead
+func planningMemoryExceeded(used, limit int64, mode api.ServerPlanningMode) error {
+	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg planning memory limit exceeded", map[string]string{
+		"dimension":            "planning_memory_bytes",
+		"actual":               strconv.FormatInt(used, 10),
+		"limit":                strconv.FormatInt(limit, 10),
+		"server_planning_mode": string(mode),
+	})
+}
+
+func reservePlanningMemory(used *int64, addition, limit int64, mode api.ServerPlanningMode) error {
+	if used == nil || addition < 0 || *used < 0 || *used > limit || addition > limit-*used {
+		actual := int64(math.MaxInt64)
+		if used != nil && *used >= 0 && addition >= 0 && *used <= math.MaxInt64-addition {
+			actual = *used + addition
+		}
+		return planningMemoryExceeded(actual, limit, mode)
+	}
+	*used += addition
+	return nil
+}
+
+func saturatingPlanningMul(left, right int64) int64 {
+	if left <= 0 || right <= 0 {
+		return 0
+	}
+	if left > math.MaxInt64/right {
+		return math.MaxInt64
+	}
+	return left * right
+}
+
+func saturatingPlanningAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
+}
+
+func planningDataFileMemory(file api.DataFile) int64 {
+	return ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}})
+}
+
+func validateScanManifestEntry(entry api.ManifestEntry) error {
+	file := entry.DataFile
+	if entry.Status < api.ManifestEntryExisting || entry.Status > api.ManifestEntryDeleted {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg scan found an invalid manifest entry status", map[string]string{
+			"status": strconv.Itoa(int(entry.Status)),
+		})
+	}
+	if file.Content < api.DataFileContentData || file.Content > api.DataFileContentEqualityDelete ||
+		entry.SequenceNumber < 0 || entry.FileSequence < 0 ||
+		file.RecordCount < 0 || file.FileSizeInBytes < 0 ||
+		(file.RecordCount > 0 && file.FileSizeInBytes == 0) {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg scan found invalid manifest entry metrics or content", map[string]string{
+			"file": api.RedactPath(file.FilePath),
+		})
+	}
+	return nil
+}
+
+func addPlanningFileBytes(total *int64, addition int64) error {
+	if total == nil || addition < 0 || *total < 0 || addition > math.MaxInt64-*total {
+		return api.NewError(api.ErrMetadataInvalid, "Iceberg scan aggregate file bytes overflow", nil)
+	}
+	*total += addition
+	return nil
 }
 
 func normalizeSnapshotSelector(req api.ScanPlanRequest) api.SnapshotSelector {

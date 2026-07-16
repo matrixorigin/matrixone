@@ -16,19 +16,22 @@ package metadata
 
 import (
 	"context"
+	stderrors "errors"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
 type CachedTableMetadataLoader struct {
-	Catalog          api.CatalogClient
-	Metadata         api.MetadataFacade
-	ObjectReader     api.ObjectReader
-	Cache            *Cache
-	CredentialHash   string
-	ExternalRef      string
-	SnapshotSelector api.SnapshotSelector
+	Catalog           api.CatalogClient
+	Metadata          api.MetadataFacade
+	ObjectReader      api.ObjectReader
+	Cache             *Cache
+	CredentialHash    string
+	ExternalRef       string
+	SnapshotSelector  api.SnapshotSelector
+	PlanningMaxMemory int64
 }
 
 type LoadedTableMetadata struct {
@@ -113,18 +116,33 @@ func (l CachedTableMetadataLoader) Load(ctx context.Context, req api.LoadTableRe
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg REST load table response did not include metadata location", nil)
 	}
 	metadataJSON := append([]byte(nil), resp.MetadataJSON...)
+	planningMaxMemory := l.PlanningMaxMemory
+	if planningMaxMemory <= 0 {
+		planningMaxMemory = api.DefaultConfig().Scan.PlanningMaxMemory
+	}
 	if len(metadataJSON) == 0 {
 		if l.ObjectReader == nil {
 			return nil, api.NewError(api.ErrConfigInvalid, "Iceberg metadata location requires object reader", map[string]string{
 				"metadata_location": api.RedactPath(metadataLocation),
 			})
 		}
-		metadataJSON, err = l.ObjectReader.Read(ctx, metadataLocation, 0, -1)
+		metadataJSON, err = readPlanningObject(ctx, l.ObjectReader, metadataLocation, planningMaxMemory)
 		if err != nil {
+			if isPlanningLimitError(err) {
+				return nil, err
+			}
 			return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg metadata JSON read failed", map[string]string{
 				"metadata_location": api.RedactPath(metadataLocation),
 			}, err)
 		}
+	}
+	// Reject obviously oversized JSON before parsing creates its decoded object
+	// graph. The same estimator is used for cache/planning accounting below.
+	if estimate := metadataMemoryWeight(cap(metadataJSON), nil); estimate > planningMaxMemory {
+		return nil, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg table metadata exceeded the planning memory limit", map[string]string{
+			"actual_bytes": strconv.FormatInt(estimate, 10),
+			"limit_bytes":  strconv.FormatInt(planningMaxMemory, 10),
+		})
 	}
 	meta, err := l.Metadata.ParseTableMetadata(ctx, metadataJSON, metadataLocation)
 	if err != nil {
@@ -132,19 +150,26 @@ func (l CachedTableMetadataLoader) Load(ctx context.Context, req api.LoadTableRe
 	}
 
 	metadataKey := l.metadataCacheKey(req, metadataLocation)
+	memoryBytes := metadataMemoryWeight(cap(metadataJSON), meta)
+	if memoryBytes > planningMaxMemory {
+		return nil, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg decoded table metadata exceeded the planning memory limit", map[string]string{
+			"actual_bytes": strconv.FormatInt(memoryBytes, 10),
+			"limit_bytes":  strconv.FormatInt(planningMaxMemory, 10),
+		})
+	}
 	entry := CacheEntry{
 		ETag:             resp.ETag,
 		MetadataLocation: metadataLocation,
 		MetadataJSON:     metadataJSON,
 		Metadata:         meta,
-		SizeBytes:        int64(len(metadataJSON)),
+		SizeBytes:        memoryBytes,
 	}
 	l.Cache.Put(locationKey, entry)
 	l.Cache.Put(metadataKey, entry)
 	return &LoadedTableMetadata{
 		LoadTable:         cloneLoadTableResponse(resp),
 		Metadata:          meta,
-		MetadataBytes:     int64(len(metadataJSON)),
+		MetadataBytes:     memoryBytes,
 		LocationCacheKey:  locationKey,
 		MetadataCacheKey:  metadataKey,
 		StorageCredential: cloneStorageCredentials(resp.StorageCredentials),
@@ -160,25 +185,53 @@ func (r CachedManifestReader) ReadManifestList(ctx context.Context, manifestList
 }
 
 func (r CachedManifestReader) ReadManifestListWithStats(ctx context.Context, manifestListPath string) (CachedManifestListRead, error) {
+	return r.ReadManifestListWithLimits(ctx, manifestListPath, 0, 0)
+}
+
+func (r CachedManifestReader) ReadManifestListWithLimits(ctx context.Context, manifestListPath string, maxBytes int64, maxRecords int) (CachedManifestListRead, error) {
 	key := r.cacheKey(CacheKindManifestList, manifestListPath)
 	if cached, ok := r.Cache.Get(key); ok && len(cached.ManifestList) > 0 {
+		if err := validatePlanningReadLimits("manifest_list", cached.SizeBytes, len(cached.ManifestList), maxBytes, maxRecords); err != nil {
+			return CachedManifestListRead{}, err
+		}
 		return CachedManifestListRead{Manifests: cached.ManifestList, CacheHit: true, SizeBytes: cached.SizeBytes}, nil
 	}
 	if r.Metadata == nil || r.ObjectReader == nil {
 		return CachedManifestListRead{}, api.NewError(api.ErrConfigInvalid, "Iceberg manifest list reader requires metadata facade and object reader", nil)
 	}
-	data, err := r.ObjectReader.Read(ctx, manifestListPath, 0, -1)
+	data, err := readPlanningObject(ctx, r.ObjectReader, manifestListPath, maxBytes)
 	if err != nil {
+		if isPlanningLimitError(err) {
+			return CachedManifestListRead{}, err
+		}
 		return CachedManifestListRead{}, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg manifest list read failed", map[string]string{
 			"manifest_list": api.RedactPath(manifestListPath),
 		}, err)
 	}
-	manifests, err := r.Metadata.ReadManifestList(ctx, data)
+	var manifests []api.ManifestFile
+	if bounded, ok := r.Metadata.(interface {
+		ReadManifestListWithLimits(context.Context, []byte, int, int64) ([]api.ManifestFile, error)
+	}); ok && maxRecords > 0 && maxBytes > 0 {
+		manifests, err = bounded.ReadManifestListWithLimits(ctx, data, maxRecords, maxBytes)
+	} else if bounded, ok := r.Metadata.(interface {
+		ReadManifestListBounded(context.Context, []byte, int) ([]api.ManifestFile, error)
+	}); ok && maxRecords > 0 {
+		manifests, err = bounded.ReadManifestListBounded(ctx, data, maxRecords)
+	} else {
+		// Third-party metadata adapters can opt into the bounded decoder above.
+		// The post-check still bounds retained state, while the native production
+		// facade enforces the limit during Avro decoding.
+		manifests, err = r.Metadata.ReadManifestList(ctx, data)
+	}
 	if err != nil {
 		return CachedManifestListRead{}, err
 	}
-	r.Cache.Put(key, CacheEntry{ManifestList: manifests, SizeBytes: int64(len(data))})
-	return CachedManifestListRead{Manifests: manifests, SizeBytes: int64(len(data))}, nil
+	memoryBytes := ManifestListMemoryWeight(cap(data), manifests)
+	if err := validatePlanningReadLimits("manifest_list", memoryBytes, len(manifests), maxBytes, maxRecords); err != nil {
+		return CachedManifestListRead{}, err
+	}
+	r.Cache.Put(key, CacheEntry{ManifestList: manifests, SizeBytes: memoryBytes})
+	return CachedManifestListRead{Manifests: manifests, SizeBytes: memoryBytes}, nil
 }
 
 func (r CachedManifestReader) ReadManifest(ctx context.Context, manifestPath string) ([]api.ManifestEntry, bool, error) {
@@ -190,25 +243,98 @@ func (r CachedManifestReader) ReadManifest(ctx context.Context, manifestPath str
 }
 
 func (r CachedManifestReader) ReadManifestWithStats(ctx context.Context, manifestPath string) (CachedManifestRead, error) {
+	return r.ReadManifestWithLimits(ctx, manifestPath, 0, 0)
+}
+
+func (r CachedManifestReader) ReadManifestWithLimits(ctx context.Context, manifestPath string, maxBytes int64, maxRecords int) (CachedManifestRead, error) {
 	key := r.cacheKey(CacheKindManifest, manifestPath)
 	if cached, ok := r.Cache.Get(key); ok && len(cached.ManifestEntries) > 0 {
+		if err := validatePlanningReadLimits("manifest", cached.SizeBytes, len(cached.ManifestEntries), maxBytes, maxRecords); err != nil {
+			return CachedManifestRead{}, err
+		}
 		return CachedManifestRead{Entries: cached.ManifestEntries, CacheHit: true, SizeBytes: cached.SizeBytes}, nil
 	}
 	if r.Metadata == nil || r.ObjectReader == nil {
 		return CachedManifestRead{}, api.NewError(api.ErrConfigInvalid, "Iceberg manifest reader requires metadata facade and object reader", nil)
 	}
-	data, err := r.ObjectReader.Read(ctx, manifestPath, 0, -1)
+	data, err := readPlanningObject(ctx, r.ObjectReader, manifestPath, maxBytes)
 	if err != nil {
+		if isPlanningLimitError(err) {
+			return CachedManifestRead{}, err
+		}
 		return CachedManifestRead{}, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg manifest read failed", map[string]string{
 			"manifest": api.RedactPath(manifestPath),
 		}, err)
 	}
-	entries, err := r.Metadata.ReadManifest(ctx, data)
+	var entries []api.ManifestEntry
+	if bounded, ok := r.Metadata.(interface {
+		ReadManifestWithLimits(context.Context, []byte, int, int64) ([]api.ManifestEntry, error)
+	}); ok && maxRecords > 0 && maxBytes > 0 {
+		entries, err = bounded.ReadManifestWithLimits(ctx, data, maxRecords, maxBytes)
+	} else if bounded, ok := r.Metadata.(interface {
+		ReadManifestBounded(context.Context, []byte, int) ([]api.ManifestEntry, error)
+	}); ok && maxRecords > 0 {
+		entries, err = bounded.ReadManifestBounded(ctx, data, maxRecords)
+	} else {
+		entries, err = r.Metadata.ReadManifest(ctx, data)
+	}
 	if err != nil {
 		return CachedManifestRead{}, err
 	}
-	r.Cache.Put(key, CacheEntry{ManifestEntries: entries, SizeBytes: int64(len(data))})
-	return CachedManifestRead{Entries: entries, SizeBytes: int64(len(data))}, nil
+	memoryBytes := ManifestEntriesMemoryWeight(cap(data), entries)
+	if err := validatePlanningReadLimits("manifest", memoryBytes, len(entries), maxBytes, maxRecords); err != nil {
+		return CachedManifestRead{}, err
+	}
+	r.Cache.Put(key, CacheEntry{ManifestEntries: entries, SizeBytes: memoryBytes})
+	return CachedManifestRead{Entries: entries, SizeBytes: memoryBytes}, nil
+}
+
+func isPlanningLimitError(err error) bool {
+	var icebergErr *api.IcebergError
+	return stderrors.As(err, &icebergErr) && icebergErr.Code == api.ErrPlanningLimitExceeded
+}
+
+func readPlanningObject(ctx context.Context, reader api.ObjectReader, location string, maxBytes int64) ([]byte, error) {
+	if maxBytes > 0 {
+		if bounded, ok := reader.(interface {
+			ReadBounded(context.Context, string, int64) ([]byte, error)
+		}); ok {
+			return bounded.ReadBounded(ctx, location, maxBytes)
+		}
+	}
+	// Custom/testing adapters may not expose streaming. Keep the post-check for
+	// compatibility; production ProviderObjectReader implements ReadBounded so
+	// unknown-length metadata is capped before materialization.
+	data, err := reader.Read(ctx, location, 0, -1)
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes > 0 && int64(cap(data)) > maxBytes {
+		return nil, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg metadata object exceeds the planning memory limit", map[string]string{
+			"path":        api.RedactPath(location),
+			"bytes":       strconv.FormatInt(int64(cap(data)), 10),
+			"limit_bytes": strconv.FormatInt(maxBytes, 10),
+		})
+	}
+	return data, nil
+}
+
+func validatePlanningReadLimits(kind string, sizeBytes int64, records int, maxBytes int64, maxRecords int) error {
+	if maxBytes > 0 && sizeBytes > maxBytes {
+		return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg cached metadata object exceeds the planning memory limit", map[string]string{
+			"kind":        kind,
+			"bytes":       strconv.FormatInt(sizeBytes, 10),
+			"limit_bytes": strconv.FormatInt(maxBytes, 10),
+		})
+	}
+	if maxRecords > 0 && records > maxRecords {
+		return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg metadata record count exceeds the planning limit", map[string]string{
+			"kind":    kind,
+			"records": strconv.Itoa(records),
+			"limit":   strconv.Itoa(maxRecords),
+		})
+	}
+	return nil
 }
 
 func (l CachedTableMetadataLoader) locationCacheKey(req api.LoadTableRequest) CacheKey {

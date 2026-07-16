@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -42,11 +43,56 @@ func (NativeFacade) ReadManifestList(ctx context.Context, data []byte) ([]api.Ma
 	return ReadManifestList(data)
 }
 
+func (NativeFacade) ReadManifestListBounded(ctx context.Context, data []byte, maxRecords int) ([]api.ManifestFile, error) {
+	return NativeFacade{}.ReadManifestListWithLimits(ctx, data, maxRecords, defaultOCFDecodedBytesLimit)
+}
+
+func (NativeFacade) ReadManifestListWithLimits(ctx context.Context, data []byte, maxRecords int, maxMemoryBytes int64) ([]api.ManifestFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg manifest list read was canceled", nil, err)
+	}
+	allowance, err := ocfDecodedMemoryAllowance(maxMemoryBytes, len(data))
+	if err != nil {
+		return nil, err
+	}
+	return ReadManifestListFromReaderWithLimits(bytes.NewReader(data), maxRecords, allowance)
+}
+
 func (NativeFacade) ReadManifest(ctx context.Context, data []byte) ([]api.ManifestEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg manifest read was canceled", nil, err)
 	}
 	return ReadManifest(data)
+}
+
+func (NativeFacade) ReadManifestBounded(ctx context.Context, data []byte, maxRecords int) ([]api.ManifestEntry, error) {
+	return NativeFacade{}.ReadManifestWithLimits(ctx, data, maxRecords, defaultOCFDecodedBytesLimit)
+}
+
+func (NativeFacade) ReadManifestWithLimits(ctx context.Context, data []byte, maxRecords int, maxMemoryBytes int64) ([]api.ManifestEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg manifest read was canceled", nil, err)
+	}
+	allowance, err := ocfDecodedMemoryAllowance(maxMemoryBytes, len(data))
+	if err != nil {
+		return nil, err
+	}
+	return ReadManifestFromReaderWithLimits(bytes.NewReader(data), maxRecords, allowance)
+}
+
+func ocfDecodedMemoryAllowance(maxMemoryBytes int64, encodedBytes int) (int64, error) {
+	if maxMemoryBytes <= 0 {
+		maxMemoryBytes = defaultOCFDecodedBytesLimit
+	}
+	remaining := maxMemoryBytes - int64(encodedBytes)
+	if remaining <= 1 {
+		return 0, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg Avro OCF has no memory available for decoding", nil)
+	}
+	// During decode the encoded object, one OCF block, and decoded Go values can
+	// coexist. Spend only half the remaining budget on the block/record bytes;
+	// the other half covers the decoded map/string/slice graph. A future facade
+	// that visits typed records directly can replace this conservative split.
+	return remaining / 2, nil
 }
 
 func (NativeFacade) ResolveSnapshot(ctx context.Context, meta *api.TableMetadata, selector api.SnapshotSelector) (api.Snapshot, error) {

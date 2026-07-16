@@ -807,7 +807,7 @@ func TestRESTClientCommitInvalidSuccessBodyIsUnknown(t *testing.T) {
 	}
 }
 
-func TestRESTClientCommitSerializesRemoveSnapshots(t *testing.T) {
+func TestRESTClientCommitSerializesSnapshotRemovals(t *testing.T) {
 	var gotBody commitTableRequestWire
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -826,12 +826,18 @@ func TestRESTClientCommitSerializesRemoveSnapshots(t *testing.T) {
 		CatalogRequest: api.CatalogRequest{Catalog: testCatalog(server.URL), Prefix: "warehouse_a"},
 		Namespace:      api.Namespace{"sales"},
 		Table:          "orders",
-		Updates:        []api.CommitUpdate{{Type: "remove-snapshots", SnapshotIDs: []int64{1, 2}}},
+		Updates: []api.CommitUpdate{
+			{Type: "remove-snapshot-ref", Ref: "old-tag"},
+			{Type: "remove-snapshots", SnapshotIDs: []int64{1, 2}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("commit remove snapshots: %v", err)
 	}
-	if len(gotBody.Updates) != 1 || gotBody.Updates[0].Action != "remove-snapshots" || len(gotBody.Updates[0].SnapshotIDs) != 2 || gotBody.Updates[0].SnapshotIDs[0] != 1 || gotBody.Updates[0].SnapshotIDs[1] != 2 {
+	if len(gotBody.Updates) != 2 || gotBody.Updates[0].Action != "remove-snapshot-ref" || gotBody.Updates[0].RefName != "old-tag" {
+		t.Fatalf("unexpected remove-snapshot-ref update: %+v", gotBody.Updates)
+	}
+	if gotBody.Updates[1].Action != "remove-snapshots" || len(gotBody.Updates[1].SnapshotIDs) != 2 || gotBody.Updates[1].SnapshotIDs[0] != 1 || gotBody.Updates[1].SnapshotIDs[1] != 2 {
 		t.Fatalf("unexpected remove-snapshots update: %+v", gotBody.Updates)
 	}
 }

@@ -17,6 +17,7 @@ package external
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"iter"
 	"os"
@@ -32,13 +33,56 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergdelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestValidateIcebergDeleteParquetFooterChargesDecodeExpansion(t *testing.T) {
+	data := make([]byte, 16)
+	binary.LittleEndian.PutUint32(data[8:12], 8)
+	copy(data[12:], "PAR1")
+	err := validateIcebergDeleteParquetFooter(
+		context.Background(),
+		bytes.NewReader(data),
+		int64(len(data)),
+		128,
+		icebergdelete.Options{MaxMemoryBytes: 128 + 8*64 - 1},
+		"s3://warehouse/t/delete/pos.parquet",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(icebergapi.ErrPlanningLimitExceeded))
+}
+
+func TestExternalResetClearsIcebergStateWithoutRewindingFileCursor(t *testing.T) {
+	param := &ExternalParam{ExParam: ExParam{
+		Fileparam:                   &ExFileparam{End: true, FileCnt: 2, FileFin: 2, FileIndex: 2, Filepath: "data.parquet"},
+		currentPartValues:           map[string]string{"p": "1"},
+		icebergDeleteStates:         map[string]*icebergdelete.ApplyState{"data.parquet": icebergdelete.NewApplyState(icebergdelete.Options{})},
+		icebergDeleteLoaded:         true,
+		IcebergBatchDataFile:        "data.parquet",
+		IcebergBatchStartRowOrdinal: 42,
+	}}
+	ext := &External{Es: param}
+
+	ext.Reset(nil, false, nil)
+
+	require.True(t, param.Fileparam.End)
+	require.Equal(t, 2, param.Fileparam.FileFin)
+	require.Equal(t, 2, param.Fileparam.FileIndex)
+	require.Equal(t, "data.parquet", param.Fileparam.Filepath)
+	require.Equal(t, 2, param.Fileparam.FileCnt)
+	require.Nil(t, param.currentPartValues)
+	require.Nil(t, param.icebergDeleteStates)
+	require.False(t, param.icebergDeleteLoaded)
+	require.Empty(t, param.IcebergBatchDataFile)
+	require.Zero(t, param.IcebergBatchStartRowOrdinal)
+}
 
 func TestIcebergDeleteApplyPositionAndEqualityMasksBatch(t *testing.T) {
 	ctx := context.Background()
@@ -364,6 +408,30 @@ func TestIcebergDeleteApplyUsesConfiguredMemoryLimit(t *testing.T) {
 	require.Contains(t, err.Error(), "ICEBERG_PLANNING_LIMIT_EXCEEDED")
 	require.Contains(t, err.Error(), "limit_bytes")
 	require.False(t, strings.Contains(err.Error(), "delete-pos.parquet"))
+}
+
+func TestIcebergDeleteApplyRejectsNegativePosition(t *testing.T) {
+	ctx := context.Background()
+	deleteFS := &icebergDeleteTestFS{files: map[string][]byte{
+		"delete-pos.parquet": writeIcebergPositionDeleteParquet(t, []icebergPositionDeleteRow{{FilePath: "data.parquet", Pos: -1}}),
+	}}
+	ref, err := icebergio.RegisterObjectIOProvider(ctx, icebergDeleteTestProvider{fs: deleteFS}, nil, time.Minute)
+	require.NoError(t, err)
+	defer icebergio.ReleaseObjectIORef(ref)
+
+	proc := testutil.NewProc(t)
+	ext := &External{Es: &ExternalParam{ExParamConst: ExParamConst{
+		Ctx:                ctx,
+		IcebergObjectIORef: ref,
+		IcebergDeleteTasks: []*pipeline.IcebergDeleteFileTask{{
+			DeleteType: "position", DeleteFilePath: "delete-pos.parquet", ReferencedDataFile: "data.parquet",
+		}},
+		Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.PARQUET}},
+	}}}
+
+	err = ext.prepareIcebergDeleteApply(proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid position")
 }
 
 func TestIcebergRowOrdinalSideChannelUsesRowGroupStart(t *testing.T) {

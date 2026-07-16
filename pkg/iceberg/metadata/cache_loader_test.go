@@ -159,6 +159,34 @@ func TestCachedManifestReaderCachesByCredential(t *testing.T) {
 	}
 }
 
+func TestCachedManifestReaderEnforcesPlanningLimitsBeforeRetention(t *testing.T) {
+	entries := []api.ManifestEntry{
+		{Status: api.ManifestEntryAdded, SnapshotID: 1, DataFile: api.DataFile{Content: api.DataFileContentData, FilePath: "a.parquet", FileFormat: "parquet", RecordCount: 1, FileSizeInBytes: 1, SpecID: 7}},
+		{Status: api.ManifestEntryAdded, SnapshotID: 1, DataFile: api.DataFile{Content: api.DataFileContentData, FilePath: "b.parquet", FileFormat: "parquet", RecordCount: 1, FileSizeInBytes: 1, SpecID: 7}},
+	}
+	data, err := EncodeManifest(entries, manifestTestOptions(api.ManifestContentData, api.SchemaField{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}))
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	const path = "s3://warehouse/t/metadata/m.avro"
+	reader := CachedManifestReader{
+		Metadata:     NativeFacade{},
+		ObjectReader: &fakeObjectReader{data: map[string][]byte{path: data}},
+		Cache:        NewCache(time.Minute, 1<<20),
+	}
+
+	if _, err := reader.ReadManifestWithLimits(context.Background(), path, int64(len(data)-1), 10); err == nil {
+		t.Fatal("expected encoded-byte planning limit")
+	} else {
+		assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+	}
+	if _, err := reader.ReadManifestWithLimits(context.Background(), path, int64(len(data)), 1); err == nil {
+		t.Fatal("expected record-count planning limit")
+	} else {
+		assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+	}
+}
+
 func cacheLoadTableRequest() api.LoadTableRequest {
 	return api.LoadTableRequest{
 		CatalogRequest: api.CatalogRequest{
@@ -207,5 +235,25 @@ func TestCachedLoaderRedactsMissingMetadataLocationReader(t *testing.T) {
 	_, err := loader.Load(ctx, cacheLoadTableRequest())
 	if err == nil || strings.Contains(err.Error(), "warehouse") {
 		t.Fatalf("missing reader error should redact metadata location, got %v", err)
+	}
+}
+
+func TestCachedLoaderBoundsExternalMetadataJSON(t *testing.T) {
+	const location = "s3://warehouse/sales/orders/metadata/v2.metadata.json"
+	client := &catalog.MockClient{
+		LoadTableFunc: func(context.Context, api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			return &api.LoadTableResponse{MetadataLocation: location}, nil
+		},
+	}
+	loader := CachedTableMetadataLoader{
+		Catalog:           client,
+		Metadata:          NativeFacade{},
+		ObjectReader:      &fakeObjectReader{data: map[string][]byte{location: []byte("oversized")}},
+		Cache:             NewCache(time.Minute, 1<<20),
+		PlanningMaxMemory: 1,
+	}
+	_, err := loader.Load(context.Background(), cacheLoadTableRequest())
+	if err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected bounded metadata read error, got %v", err)
 	}
 }

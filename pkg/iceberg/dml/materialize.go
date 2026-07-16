@@ -16,6 +16,7 @@ package dml
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,11 @@ type ManifestMaterializeRequest struct {
 	ManifestListPath   string
 	PreservedManifests []api.ManifestFile
 	PreservedSources   []PreservedManifestSource
+	// MaxMemoryBytes bounds the complete materialization working set. A zero
+	// value preserves compatibility for direct library callers; MatrixOne's
+	// runtime always supplies the validated iceberg.write.dml-max-memory value.
+	MaxMemoryBytes     int64
+	InitialMemoryBytes int64
 }
 
 type ManifestMaterializeResult struct {
@@ -81,6 +87,17 @@ func BuildManifestCommitAttempt(ctx context.Context, req ManifestMaterializeRequ
 	if strings.TrimSpace(req.Intent.IdempotencyKey) == "" {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML manifest materialization requires an idempotency key", nil)
 	}
+	budget, err := newManifestMaterializeBudget(req.MaxMemoryBytes, req.InitialMemoryBytes)
+	if err != nil {
+		return nil, err
+	}
+	// Reserve before constructing the entry slices. Intent actions retain the
+	// source DataFile values while materialization creates independent entry
+	// structs; counting the full conservative entry weight also covers slice and
+	// map/header overhead without relying on Go implementation sizes.
+	if err := budget.reserve(estimateIntentEntryMemory(req.Intent)); err != nil {
+		return nil, err
+	}
 	dataEntries, deleteEntries, err := manifestEntries(req.Intent, req.SnapshotID, req.SequenceNumber)
 	if err != nil {
 		return nil, err
@@ -97,7 +114,7 @@ func BuildManifestCommitAttempt(ctx context.Context, req ManifestMaterializeRequ
 		if strings.TrimSpace(req.DataManifestPath) == "" {
 			return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML data manifest path is required", nil)
 		}
-		manifests, err := buildDMLManifests(req, req.DataManifestPath, api.ManifestContentData, req.SnapshotID, req.SequenceNumber, dataEntries)
+		manifests, err := buildDMLManifests(req, budget, req.DataManifestPath, api.ManifestContentData, req.SnapshotID, req.SequenceNumber, dataEntries)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +127,7 @@ func BuildManifestCommitAttempt(ctx context.Context, req ManifestMaterializeRequ
 		if strings.TrimSpace(req.DeleteManifestPath) == "" {
 			return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML delete manifest path is required", nil)
 		}
-		manifests, err := buildDMLManifests(req, req.DeleteManifestPath, api.ManifestContentDeletes, req.SnapshotID, req.SequenceNumber, deleteEntries)
+		manifests, err := buildDMLManifests(req, budget, req.DeleteManifestPath, api.ManifestContentDeletes, req.SnapshotID, req.SequenceNumber, deleteEntries)
 		if err != nil {
 			return nil, err
 		}
@@ -119,17 +136,23 @@ func BuildManifestCommitAttempt(ctx context.Context, req ManifestMaterializeRequ
 		result.DeleteManifestBytes = result.DeleteManifests[0].ManifestBytes
 		newManifests = append(newManifests, materializedManifestFiles(manifests)...)
 	}
-	preservedManifests, rewrittenPreserved, err := materializePreservedManifests(req, dataEntries)
+	if err := budget.reserve(estimatePreservedDerivationMemory(req, dataEntries)); err != nil {
+		return nil, err
+	}
+	preservedManifests, rewrittenPreserved, err := materializePreservedManifests(req, budget, dataEntries)
 	if err != nil {
 		return nil, err
 	}
 	result.RewrittenPreservedManifests = rewrittenPreserved
 	manifestList := append(preservedManifests, newManifests...)
+	if err := budget.reserve(metadata.ManifestListMemoryWeight(0, manifestList)); err != nil {
+		return nil, err
+	}
 	var parentSnapshotID *int64
 	if req.Intent.BaseSnapshotID > 0 {
 		parentSnapshotID = &req.Intent.BaseSnapshotID
 	}
-	manifestListBytes, err := metadata.EncodeManifestList(manifestList, metadata.ManifestListWriteOptions{
+	manifestListBytes, err := budget.encodeManifestList(manifestList, metadata.ManifestListWriteOptions{
 		FormatVersion:    req.FormatVersion,
 		SnapshotID:       req.SnapshotID,
 		ParentSnapshotID: parentSnapshotID,
@@ -205,7 +228,14 @@ func deletedManifestEntry(snapshotID int64, file api.DataFile) api.ManifestEntry
 	}
 }
 
-func buildDMLManifests(req ManifestMaterializeRequest, basePath string, content api.ManifestContent, snapshotID, sequenceNumber int64, entries []api.ManifestEntry) ([]MaterializedManifest, error) {
+func buildDMLManifests(req ManifestMaterializeRequest, budget *manifestMaterializeBudget, basePath string, content api.ManifestContent, snapshotID, sequenceNumber int64, entries []api.ManifestEntry) ([]MaterializedManifest, error) {
+	// Grouping copies entry structs by spec while the flat entry list remains
+	// live. Charge it before the map/slices are allocated.
+	groupingMemory := metadata.ManifestEntriesMemoryWeight(0, entries)
+	if err := budget.reserve(groupingMemory); err != nil {
+		return nil, err
+	}
+	defer budget.release(groupingMemory)
 	entriesBySpec := make(map[int][]api.ManifestEntry)
 	for _, entry := range entries {
 		entriesBySpec[entry.DataFile.SpecID] = append(entriesBySpec[entry.DataFile.SpecID], entry)
@@ -218,32 +248,42 @@ func buildDMLManifests(req ManifestMaterializeRequest, basePath string, content 
 	out := make([]MaterializedManifest, 0, len(specIDs))
 	for _, specID := range specIDs {
 		specEntries := entriesBySpec[specID]
+		metrics, err := aggregateDMLManifestEntries(specEntries)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateDMLManifestContent(specEntries, content); err != nil {
+			return nil, err
+		}
 		opts, err := dmlManifestWriteOptions(req, content, specID)
 		if err != nil {
 			return nil, err
 		}
-		manifestBytes, err := metadata.EncodeManifest(specEntries, opts)
+		manifestBytes, err := budget.encodeManifest(specEntries, opts)
 		if err != nil {
 			return nil, err
 		}
 		path := dmlManifestPathForSpec(basePath, specID, len(specIDs))
 		out = append(out, MaterializedManifest{
 			Manifest: api.ManifestFile{
-				Path:                    path,
-				Length:                  int64(len(manifestBytes)),
-				PartitionSpecID:         specID,
-				Content:                 content,
-				SequenceNumber:          sequenceNumber,
-				MinSequenceNumber:       sequenceNumber,
-				AddedSnapshotID:         snapshotID,
-				AddedFilesCount:         countManifestEntries(specEntries, api.ManifestEntryAdded),
-				DeletedFilesCount:       countManifestEntries(specEntries, api.ManifestEntryDeleted),
-				AddedRowsCount:          rowsForManifestEntries(specEntries, api.ManifestEntryAdded),
-				DeletedRowsCount:        rowsForManifestEntries(specEntries, api.ManifestEntryDeleted),
-				AddedFilesSizeInBytes:   bytesForManifestEntries(specEntries, api.ManifestEntryAdded),
-				DeletedFilesSizeInBytes: bytesForManifestEntries(specEntries, api.ManifestEntryDeleted),
-				ManifestPathRedacted:    api.RedactPath(path),
-				ManifestPathHash:        api.PathHash(path),
+				Path:                     path,
+				Length:                   int64(len(manifestBytes)),
+				PartitionSpecID:          specID,
+				Content:                  content,
+				SequenceNumber:           sequenceNumber,
+				MinSequenceNumber:        sequenceNumber,
+				AddedSnapshotID:          snapshotID,
+				AddedFilesCount:          metrics.addedFiles,
+				ExistingFilesCount:       metrics.existingFiles,
+				DeletedFilesCount:        metrics.deletedFiles,
+				AddedRowsCount:           metrics.addedRows,
+				ExistingRowsCount:        metrics.existingRows,
+				DeletedRowsCount:         metrics.deletedRows,
+				AddedFilesSizeInBytes:    metrics.addedBytes,
+				ExistingFilesSizeInBytes: metrics.existingBytes,
+				DeletedFilesSizeInBytes:  metrics.deletedBytes,
+				ManifestPathRedacted:     api.RedactPath(path),
+				ManifestPathHash:         api.PathHash(path),
 			},
 			ManifestBytes: manifestBytes,
 		})
@@ -296,7 +336,7 @@ func buildDMLCommitAttempt(req ManifestMaterializeRequest, manifests []api.Manif
 	}
 }
 
-func materializePreservedManifests(req ManifestMaterializeRequest, dataEntries []api.ManifestEntry) ([]api.ManifestFile, []RewrittenPreservedManifest, error) {
+func materializePreservedManifests(req ManifestMaterializeRequest, budget *manifestMaterializeBudget, dataEntries []api.ManifestEntry) ([]api.ManifestFile, []RewrittenPreservedManifest, error) {
 	deletedFiles := deletedDataFileSet(dataEntries)
 	if len(deletedFiles) == 0 {
 		return cloneManifestFiles(req.PreservedManifests), nil, nil
@@ -329,7 +369,7 @@ func materializePreservedManifests(req ManifestMaterializeRequest, dataEntries [
 		if len(retainedEntries) == 0 {
 			continue
 		}
-		rewrite, err := buildRewrittenPreservedManifest(req, manifest, retainedEntries, idx, removed)
+		rewrite, err := buildRewrittenPreservedManifest(req, budget, manifest, retainedEntries, idx, removed)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -384,7 +424,7 @@ func filterPreservedManifestEntries(entries []api.ManifestEntry, deletedFiles ma
 	return retained, removed
 }
 
-func buildRewrittenPreservedManifest(req ManifestMaterializeRequest, original api.ManifestFile, entries []api.ManifestEntry, index int, removed int) (RewrittenPreservedManifest, error) {
+func buildRewrittenPreservedManifest(req ManifestMaterializeRequest, budget *manifestMaterializeBudget, original api.ManifestFile, entries []api.ManifestEntry, index int, removed int) (RewrittenPreservedManifest, error) {
 	path := rewrittenPreservedManifestPath(req.ManifestListPath, original.Path, index)
 	content := original.Content
 	if content == "" {
@@ -398,22 +438,29 @@ func buildRewrittenPreservedManifest(req ManifestMaterializeRequest, original ap
 	if err != nil {
 		return RewrittenPreservedManifest{}, err
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries, opts)
+	metrics, err := aggregateDMLManifestEntries(entries)
+	if err != nil {
+		return RewrittenPreservedManifest{}, err
+	}
+	if err := validateDMLManifestContent(entries, content); err != nil {
+		return RewrittenPreservedManifest{}, err
+	}
+	manifestBytes, err := budget.encodeManifest(entries, opts)
 	if err != nil {
 		return RewrittenPreservedManifest{}, err
 	}
 	manifest := original
 	manifest.Path = path
 	manifest.Length = int64(len(manifestBytes))
-	manifest.AddedFilesCount = countManifestEntries(entries, api.ManifestEntryAdded)
-	manifest.ExistingFilesCount = countManifestEntries(entries, api.ManifestEntryExisting)
-	manifest.DeletedFilesCount = countManifestEntries(entries, api.ManifestEntryDeleted)
-	manifest.AddedRowsCount = rowsForManifestEntries(entries, api.ManifestEntryAdded)
-	manifest.ExistingRowsCount = rowsForManifestEntries(entries, api.ManifestEntryExisting)
-	manifest.DeletedRowsCount = rowsForManifestEntries(entries, api.ManifestEntryDeleted)
-	manifest.AddedFilesSizeInBytes = bytesForManifestEntries(entries, api.ManifestEntryAdded)
-	manifest.ExistingFilesSizeInBytes = bytesForManifestEntries(entries, api.ManifestEntryExisting)
-	manifest.DeletedFilesSizeInBytes = bytesForManifestEntries(entries, api.ManifestEntryDeleted)
+	manifest.AddedFilesCount = metrics.addedFiles
+	manifest.ExistingFilesCount = metrics.existingFiles
+	manifest.DeletedFilesCount = metrics.deletedFiles
+	manifest.AddedRowsCount = metrics.addedRows
+	manifest.ExistingRowsCount = metrics.existingRows
+	manifest.DeletedRowsCount = metrics.deletedRows
+	manifest.AddedFilesSizeInBytes = metrics.addedBytes
+	manifest.ExistingFilesSizeInBytes = metrics.existingBytes
+	manifest.DeletedFilesSizeInBytes = metrics.deletedBytes
 	manifest.ManifestPathRedacted = api.RedactPath(path)
 	manifest.ManifestPathHash = api.PathHash(path)
 	return RewrittenPreservedManifest{
@@ -476,32 +523,199 @@ func manifestSpecID(entries []api.ManifestEntry) int {
 	return 0
 }
 
-func countManifestEntries(entries []api.ManifestEntry, status api.ManifestEntryStatus) int {
-	count := 0
-	for _, entry := range entries {
-		if entry.Status == status {
-			count++
-		}
-	}
-	return count
+type dmlManifestMetrics struct {
+	addedFiles, existingFiles, deletedFiles int
+	addedRows, existingRows, deletedRows    int64
+	addedBytes, existingBytes, deletedBytes int64
 }
 
-func rowsForManifestEntries(entries []api.ManifestEntry, status api.ManifestEntryStatus) int64 {
-	var rows int64
+func aggregateDMLManifestEntries(entries []api.ManifestEntry) (dmlManifestMetrics, error) {
+	var metrics dmlManifestMetrics
 	for _, entry := range entries {
-		if entry.Status == status {
-			rows += entry.DataFile.RecordCount
+		file := entry.DataFile
+		if strings.TrimSpace(file.FilePath) == "" {
+			return dmlManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg DML manifest entry requires a file path", nil)
 		}
+		if file.Content < api.DataFileContentData || file.Content > api.DataFileContentEqualityDelete ||
+			entry.SequenceNumber < 0 || entry.FileSequence < 0 || file.RecordCount < 0 || file.FileSizeInBytes < 0 ||
+			(file.RecordCount > 0 && file.FileSizeInBytes == 0) {
+			return dmlManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg DML manifest entry has negative sequence or file metrics", map[string]string{
+				"file": api.RedactPath(file.FilePath),
+			})
+		}
+		var count *int
+		var rows, bytes *int64
+		switch entry.Status {
+		case api.ManifestEntryAdded:
+			count, rows, bytes = &metrics.addedFiles, &metrics.addedRows, &metrics.addedBytes
+		case api.ManifestEntryExisting:
+			count, rows, bytes = &metrics.existingFiles, &metrics.existingRows, &metrics.existingBytes
+		case api.ManifestEntryDeleted:
+			count, rows, bytes = &metrics.deletedFiles, &metrics.deletedRows, &metrics.deletedBytes
+		default:
+			return dmlManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg DML manifest entry status is invalid", map[string]string{
+				"file":   api.RedactPath(file.FilePath),
+				"status": strconv.Itoa(int(entry.Status)),
+			})
+		}
+		if file.RecordCount > math.MaxInt64-*rows || file.FileSizeInBytes > math.MaxInt64-*bytes {
+			return dmlManifestMetrics{}, api.NewError(api.ErrMetadataInvalid, "Iceberg DML manifest aggregate metrics overflow", map[string]string{
+				"file": api.RedactPath(file.FilePath),
+			})
+		}
+		*count = *count + 1
+		*rows += file.RecordCount
+		*bytes += file.FileSizeInBytes
 	}
-	return rows
+	return metrics, nil
 }
 
-func bytesForManifestEntries(entries []api.ManifestEntry, status api.ManifestEntryStatus) int64 {
-	var bytes int64
+func validateDMLManifestContent(entries []api.ManifestEntry, content api.ManifestContent) error {
 	for _, entry := range entries {
-		if entry.Status == status {
-			bytes += entry.DataFile.FileSizeInBytes
+		valid := entry.DataFile.Content == api.DataFileContentData
+		if content == api.ManifestContentDeletes {
+			valid = entry.DataFile.Content == api.DataFileContentPositionDelete || entry.DataFile.Content == api.DataFileContentEqualityDelete
+		}
+		if !valid {
+			return api.NewError(api.ErrMetadataInvalid, "Iceberg DML manifest entry content does not match its manifest", map[string]string{
+				"file": api.RedactPath(entry.DataFile.FilePath),
+			})
 		}
 	}
-	return bytes
+	return nil
+}
+
+type manifestMaterializeBudget struct {
+	limit int64
+	used  int64
+}
+
+func newManifestMaterializeBudget(limit, initial int64) (*manifestMaterializeBudget, error) {
+	if initial < 0 {
+		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML initial memory usage cannot be negative", nil)
+	}
+	budget := &manifestMaterializeBudget{limit: limit, used: initial}
+	if limit > 0 && initial > limit {
+		return nil, dmlMaterializeMemoryExceeded(initial, 0, limit)
+	}
+	return budget, nil
+}
+
+func (b *manifestMaterializeBudget) reserve(bytes int64) error {
+	if b == nil || bytes <= 0 {
+		return nil
+	}
+	if b.limit > 0 && (b.used > b.limit || bytes > b.limit-b.used) {
+		return dmlMaterializeMemoryExceeded(b.used, bytes, b.limit)
+	}
+	b.used = saturatingMaterializeAdd(b.used, bytes)
+	return nil
+}
+
+func (b *manifestMaterializeBudget) release(bytes int64) {
+	if b == nil || bytes <= 0 {
+		return
+	}
+	b.used -= bytes
+	if b.used < 0 {
+		b.used = 0
+	}
+}
+
+func (b *manifestMaterializeBudget) encodeManifest(entries []api.ManifestEntry, opts metadata.ManifestWriteOptions) ([]byte, error) {
+	if b == nil || b.limit <= 0 {
+		return metadata.EncodeManifest(entries, opts)
+	}
+	scratch := metadata.ManifestEntriesMemoryWeight(0, entries)
+	remaining, err := b.remainingAfterScratch(scratch)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := metadata.EncodeManifestBounded(entries, opts, remaining)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.reserve(int64(cap(payload))); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (b *manifestMaterializeBudget) encodeManifestList(manifests []api.ManifestFile, opts metadata.ManifestListWriteOptions) ([]byte, error) {
+	if b == nil || b.limit <= 0 {
+		return metadata.EncodeManifestList(manifests, opts)
+	}
+	scratch := metadata.ManifestListMemoryWeight(0, manifests)
+	remaining, err := b.remainingAfterScratch(scratch)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := metadata.EncodeManifestListBounded(manifests, opts, remaining)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.reserve(int64(cap(payload))); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (b *manifestMaterializeBudget) remainingAfterScratch(scratch int64) (int64, error) {
+	if b == nil || b.limit <= 0 {
+		return math.MaxInt64, nil
+	}
+	if scratch < 0 || b.used > b.limit || scratch >= b.limit-b.used {
+		return 0, dmlMaterializeMemoryExceeded(b.used, scratch, b.limit)
+	}
+	return b.limit - b.used - scratch, nil
+}
+
+func estimateIntentEntryMemory(intent CommitIntent) int64 {
+	var total int64
+	addFile := func(file api.DataFile) {
+		total = saturatingMaterializeAdd(total, metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}}))
+	}
+	for _, action := range intent.Actions {
+		switch action.Kind {
+		case ActionAppendData:
+			addFile(action.File)
+		case ActionAddEqualityDelete, ActionAddPositionDelete:
+			addFile(action.DeleteFile)
+		case ActionRewriteDataFile:
+			addFile(action.ReplacedFile)
+			for _, replacement := range action.ReplacementFiles {
+				addFile(replacement)
+			}
+		case ActionDeleteDataFile:
+			addFile(action.ReplacedFile)
+		}
+	}
+	return total
+}
+
+func estimatePreservedDerivationMemory(req ManifestMaterializeRequest, dataEntries []api.ManifestEntry) int64 {
+	// The source entries and manifests remain live while filtering creates path
+	// indexes and retained-entry slices. Full weights intentionally over-count
+	// aliased strings/maps; this is a safety limit, not heap profiling.
+	total := metadata.ManifestListMemoryWeight(0, req.PreservedManifests)
+	total = saturatingMaterializeAdd(total, metadata.ManifestEntriesMemoryWeight(0, dataEntries))
+	for _, source := range req.PreservedSources {
+		total = saturatingMaterializeAdd(total, metadata.ManifestEntriesMemoryWeight(0, source.Entries))
+	}
+	return total
+}
+
+func dmlMaterializeMemoryExceeded(used, requested, limit int64) error {
+	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg DML manifest materialization memory limit exceeded", map[string]string{
+		"used_bytes":      strconv.FormatInt(used, 10),
+		"requested_bytes": strconv.FormatInt(requested, 10),
+		"limit_bytes":     strconv.FormatInt(limit, 10),
+	})
+}
+
+func saturatingMaterializeAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }

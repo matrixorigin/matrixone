@@ -53,14 +53,15 @@ type OrphanCleanupStore struct {
 }
 
 type OrphanSweeperOptions struct {
-	Store            OrphanSweeperStore
-	AccountID        uint32
-	CatalogFactory   maintenance.CatalogClientFactory
-	ObjectIOProvider icebergio.ObjectIOProvider
-	ScopeForLocation icebergio.ObjectScopeForLocation
-	Metadata         api.MetadataFacade
-	Now              func() time.Time
-	Limit            int
+	Store             OrphanSweeperStore
+	AccountID         uint32
+	CatalogFactory    maintenance.CatalogClientFactory
+	ObjectIOProvider  icebergio.ObjectIOProvider
+	ScopeForLocation  icebergio.ObjectScopeForLocation
+	Metadata          api.MetadataFacade
+	PlanningMaxMemory int64
+	Now               func() time.Time
+	Limit             int
 }
 
 type OrphanSweeper struct {
@@ -90,11 +91,12 @@ func (s OrphanSweeper) Sweep(ctx context.Context) (maintenance.SweepResult, erro
 			AccountID: s.opts.AccountID,
 		},
 		Cleaner: orphanSweeperCleaner{
-			CatalogGetter:    s.opts.Store,
-			CatalogFactory:   s.opts.CatalogFactory,
-			ObjectIOProvider: s.opts.ObjectIOProvider,
-			ScopeForLocation: s.opts.ScopeForLocation,
-			Metadata:         s.opts.Metadata,
+			CatalogGetter:     s.opts.Store,
+			CatalogFactory:    s.opts.CatalogFactory,
+			ObjectIOProvider:  s.opts.ObjectIOProvider,
+			ScopeForLocation:  s.opts.ScopeForLocation,
+			Metadata:          s.opts.Metadata,
+			PlanningMaxMemory: s.opts.PlanningMaxMemory,
 		},
 		Now:   s.opts.Now,
 		Limit: s.opts.Limit,
@@ -165,11 +167,12 @@ func orphanFileToCandidate(file model.OrphanFile) icebergwrite.OrphanCandidate {
 }
 
 type orphanSweeperCleaner struct {
-	CatalogGetter    OrphanCleanupCatalogGetter
-	CatalogFactory   maintenance.CatalogClientFactory
-	ObjectIOProvider icebergio.ObjectIOProvider
-	ScopeForLocation icebergio.ObjectScopeForLocation
-	Metadata         api.MetadataFacade
+	CatalogGetter     OrphanCleanupCatalogGetter
+	CatalogFactory    maintenance.CatalogClientFactory
+	ObjectIOProvider  icebergio.ObjectIOProvider
+	ScopeForLocation  icebergio.ObjectScopeForLocation
+	Metadata          api.MetadataFacade
+	PlanningMaxMemory int64
 }
 
 func (c orphanSweeperCleaner) CleanupOrphan(ctx context.Context, candidate icebergwrite.OrphanCandidate) error {
@@ -206,8 +209,9 @@ func (c orphanSweeperCleaner) CleanupOrphan(ctx context.Context, candidate icebe
 			Client:  client,
 			Catalog: api.CatalogRequest{Catalog: catalog},
 		},
-		Metadata:     c.Metadata,
-		ObjectReader: reader,
+		Metadata:       c.Metadata,
+		ObjectReader:   reader,
+		MaxMemoryBytes: c.PlanningMaxMemory,
 	}
 	cleaner := icebergwrite.FileServiceOrphanCleaner{
 		Resolver: objectIOFileServiceResolver{

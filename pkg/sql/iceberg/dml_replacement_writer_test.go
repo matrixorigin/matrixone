@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -154,4 +155,52 @@ func TestBufferedDataFileObjectAbortDoesNotPublishPartialObject(t *testing.T) {
 	if len(objectWriter.objects) != 0 {
 		t.Fatalf("abort published partial object: %+v", objectWriter.objects)
 	}
+}
+
+func TestBufferedDataFileObjectSharesHardMemoryBudgetWithPublishCopy(t *testing.T) {
+	objectWriter := &recordingDMLDeleteObjectWriter{}
+	budget := newDMLMemoryBudget(100<<10, 0)
+	object := &bufferedDataFileObject{
+		ctx:      context.Background(),
+		location: "s3://warehouse/gold/orders/data/bounded.parquet",
+		writer:   objectWriter,
+		budget:   budget,
+	}
+	requireWrite := bytes.Repeat([]byte{'x'}, 60<<10)
+	if _, err := object.Write(requireWrite); err != nil {
+		t.Fatalf("buffer bounded object: %v", err)
+	}
+	if err := object.Close(); err == nil || !strings.Contains(err.Error(), string(api.ErrPlanningLimitExceeded)) {
+		t.Fatalf("expected publish-copy budget error, got %v", err)
+	}
+	if len(objectWriter.objects) != 0 {
+		t.Fatalf("budget failure published object: %+v", objectWriter.objects)
+	}
+	if got := budget.usedBytes(); got != 0 {
+		t.Fatalf("buffer reservation leaked after close: %d", got)
+	}
+}
+
+func TestBufferedDataFileObjectChargesOldAndNewArraysDuringGrowth(t *testing.T) {
+	budget := newDMLMemoryBudget(160<<10, 0)
+	object := &bufferedDataFileObject{
+		ctx:      context.Background(),
+		location: "s3://warehouse/gold/orders/data/growth.parquet",
+		writer:   &recordingDMLDeleteObjectWriter{},
+		budget:   budget,
+	}
+	require.NoError(t, writeBufferedObjectForTest(object, 60<<10))
+	// Growing 64 KiB -> 128 KiB needs both arrays live (192 KiB peak), even
+	// though the final 128 KiB capacity alone fits under the 160 KiB limit.
+	_, err := object.Write(bytes.Repeat([]byte{'y'}, 10<<10))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPlanningLimitExceeded))
+	require.Equal(t, int64(64<<10), budget.usedBytes())
+	require.NoError(t, object.Abort())
+	require.Zero(t, budget.usedBytes())
+}
+
+func writeBufferedObjectForTest(object *bufferedDataFileObject, size int) error {
+	_, err := object.Write(bytes.Repeat([]byte{'x'}, size))
+	return err
 }

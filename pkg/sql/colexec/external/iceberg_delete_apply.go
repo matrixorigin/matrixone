@@ -16,7 +16,10 @@ package external
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,7 +62,7 @@ func (external *External) prepareIcebergDeleteApply(proc *process.Process) error
 		if state == nil {
 			state = icebergdelete.NewApplyState(opts)
 			states[dataFile] = state
-			totalMemoryBytes += icebergDeleteApplyStateBytes + int64(len(dataFile))
+			totalMemoryBytes = saturatingIcebergDeleteMemoryAdd(totalMemoryBytes, icebergDeleteApplyStateBytes+int64(len(dataFile)))
 			if err := icebergdelete.CheckMemoryLimit(proc.Ctx, opts, totalMemoryBytes); err != nil {
 				return err
 			}
@@ -83,7 +86,11 @@ func (external *External) prepareIcebergDeleteApply(proc *process.Process) error
 		if err := state.CheckMemory(proc.Ctx); err != nil {
 			return err
 		}
-		totalMemoryBytes += state.Profile.MemoryBytes - beforeMemoryBytes
+		delta := state.Profile.MemoryBytes - beforeMemoryBytes
+		if delta < 0 {
+			return icebergapi.ToMOErr(proc.Ctx, icebergapi.NewError(icebergapi.ErrInternal, "Iceberg delete apply memory accounting regressed", nil))
+		}
+		totalMemoryBytes = saturatingIcebergDeleteMemoryAdd(totalMemoryBytes, delta)
 		if err := icebergdelete.CheckMemoryLimit(proc.Ctx, opts, totalMemoryBytes); err != nil {
 			return err
 		}
@@ -98,6 +105,13 @@ func (external *External) prepareIcebergDeleteApply(proc *process.Process) error
 	param.icebergDeleteLoaded = true
 	param.addIcebergDeleteLoadProfile(states, totalMemoryBytes)
 	return nil
+}
+
+func saturatingIcebergDeleteMemoryAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func icebergDeleteApplyOptions(param *ExternalParam) icebergdelete.Options {
@@ -200,7 +214,7 @@ func icebergDeleteApplyStates(states map[string]*icebergdelete.ApplyState, dataF
 }
 
 func loadIcebergPositionDeleteFile(ctx context.Context, param *ExternalParam, state *icebergdelete.ApplyState, task *pipeline.IcebergDeleteFileTask) error {
-	file, err := openIcebergDeleteParquet(ctx, param, task.DeleteFilePath)
+	file, err := openIcebergDeleteParquet(ctx, param, state, task.DeleteFilePath)
 	if err != nil {
 		return err
 	}
@@ -218,15 +232,19 @@ func loadIcebergPositionDeleteFile(ctx context.Context, param *ExternalParam, st
 	}
 	return readParquetRows(ctx, file, func(row parquet.Row) error {
 		dataFile, ok := parquetRowString(row, filePathCol)
-		if !ok {
-			return nil
+		if !ok || strings.TrimSpace(dataFile) == "" {
+			return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg position delete row has an invalid file_path", map[string]string{
+				"delete_file": icebergapi.RedactPath(task.DeleteFilePath),
+			}))
 		}
 		if task.ReferencedDataFile != "" && dataFile != task.ReferencedDataFile {
 			return nil
 		}
 		pos, ok := parquetRowInt64(row, posCol)
-		if !ok {
-			return nil
+		if !ok || pos < 0 {
+			return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg position delete row has an invalid position", map[string]string{
+				"delete_file": icebergapi.RedactPath(task.DeleteFilePath),
+			}))
 		}
 		state.Position.Add(dataFile, pos)
 		return state.CheckMemory(ctx)
@@ -238,7 +256,7 @@ func loadIcebergEqualityDeleteFile(proc *process.Process, param *ExternalParam, 
 	if proc != nil && proc.Ctx != nil {
 		ctx = proc.Ctx
 	}
-	file, err := openIcebergDeleteParquet(ctx, param, task.DeleteFilePath)
+	file, err := openIcebergDeleteParquet(ctx, param, state, task.DeleteFilePath)
 	if err != nil {
 		return err
 	}
@@ -260,7 +278,7 @@ func loadIcebergEqualityDeleteFile(proc *process.Process, param *ExternalParam, 
 	})
 }
 
-func openIcebergDeleteParquet(ctx context.Context, param *ExternalParam, location string) (*parquet.File, error) {
+func openIcebergDeleteParquet(ctx context.Context, param *ExternalParam, state *icebergdelete.ApplyState, location string) (*parquet.File, error) {
 	fs, readPath, err := icebergFileServiceForLocation(ctx, param, location)
 	if err != nil {
 		return nil, err
@@ -272,6 +290,10 @@ func openIcebergDeleteParquet(ctx context.Context, param *ExternalParam, locatio
 		}, err))
 	}
 	reader := &fsReaderAt{fs: fs, readPath: readPath, ctx: ctx, param: param}
+	retainedMemory, memoryOpts := icebergDeleteFooterMemory(state, param)
+	if err := validateIcebergDeleteParquetFooter(ctx, reader, stat.Size, retainedMemory, memoryOpts, location); err != nil {
+		return nil, err
+	}
 	file, err := parquet.OpenFile(reader, stat.Size)
 	if err != nil {
 		return nil, icebergapi.ToMOErr(ctx, icebergapi.WrapError(icebergapi.ErrObjectIO, "Iceberg delete file open failed", map[string]string{
@@ -281,6 +303,50 @@ func openIcebergDeleteParquet(ctx context.Context, param *ExternalParam, locatio
 	return file, nil
 }
 
+func icebergDeleteFooterMemory(state *icebergdelete.ApplyState, param *ExternalParam) (retained int64, opts icebergdelete.Options) {
+	if state != nil {
+		opts = state.Options
+		retained = saturatingIcebergDeleteMemoryAdd(state.Options.BaseMemoryBytes, state.MemoryBytes())
+	}
+	if opts.MaxMemoryBytes <= 0 {
+		opts = icebergDeleteApplyOptions(param)
+	}
+	return retained, opts
+}
+
+func validateIcebergDeleteParquetFooter(ctx context.Context, reader io.ReaderAt, size, retainedMemory int64, memoryOpts icebergdelete.Options, location string) error {
+	if reader == nil || size < 8 {
+		return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg delete file has an invalid Parquet size", map[string]string{
+			"delete_file": icebergapi.RedactPath(location),
+		}))
+	}
+	var trailer [8]byte
+	n, err := reader.ReadAt(trailer[:], size-8)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return icebergapi.ToMOErr(ctx, icebergapi.WrapError(icebergapi.ErrObjectIO, "Iceberg delete file trailer read failed", map[string]string{
+			"delete_file": icebergapi.RedactPath(location),
+		}, err))
+	}
+	if n != len(trailer) || string(trailer[4:]) != "PAR1" {
+		return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg delete file has an invalid Parquet trailer", map[string]string{
+			"delete_file": icebergapi.RedactPath(location),
+		}))
+	}
+	footerBytes := int64(binary.LittleEndian.Uint32(trailer[:4]))
+	if footerBytes <= 0 || footerBytes > size-8 {
+		return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg delete file has an invalid Parquet footer size", map[string]string{
+			"delete_file": icebergapi.RedactPath(location),
+		}))
+	}
+	// parquet-go expands compact Thrift footer metadata into a graph of maps,
+	// slices and column objects. Charge a conservative factor before OpenFile is
+	// allowed to allocate. A future streaming footer decoder can replace this
+	// factor with exact token accounting and safely relax the rejection point.
+	estimatedFooterMemory := saturatingIcebergDeleteMemoryAdd(0, footerBytes*64)
+	return icebergdelete.CheckMemoryLimit(ctx, memoryOpts,
+		saturatingIcebergDeleteMemoryAdd(retainedMemory, estimatedFooterMemory))
+}
+
 func icebergFileServiceForLocation(ctx context.Context, param *ExternalParam, location string) (fileservice.ETLFileService, string, error) {
 	if strings.TrimSpace(param.IcebergObjectIORef) != "" {
 		return icebergio.ResolveObjectIORef(ctx, param.IcebergObjectIORef, location)
@@ -288,10 +354,19 @@ func icebergFileServiceForLocation(ctx context.Context, param *ExternalParam, lo
 	return plan2.GetForETLWithType(param.Extern, location)
 }
 
-func readParquetRows(ctx context.Context, file *parquet.File, visit func(parquet.Row) error) error {
+func readParquetRows(ctx context.Context, file *parquet.File, visit func(parquet.Row) error) (retErr error) {
 	rowGroup := parquet.MultiRowGroup(file.RowGroups()...)
 	rows := rowGroup.Rows()
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			retErr = errors.Join(retErr, icebergapi.ToMOErr(ctx, icebergapi.WrapError(
+				icebergapi.ErrObjectIO,
+				"Iceberg delete file row reader close failed",
+				nil,
+				closeErr,
+			)))
+		}
+	}()
 	buf := make([]parquet.Row, icebergDeleteReadBatchRows)
 	for {
 		n, err := rows.ReadRows(buf)
@@ -429,7 +504,7 @@ func parquetRowString(row parquet.Row, col int) (string, bool) {
 		case parquet.ByteArray, parquet.FixedLenByteArray:
 			return string(value.ByteArray()), true
 		default:
-			return value.String(), true
+			return "", false
 		}
 	}
 	return "", false
