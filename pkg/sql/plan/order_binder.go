@@ -51,11 +51,20 @@ func (b *distinctOrderBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bo
 func (b *distinctOrderBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	if astExpr.NumParts == 1 {
 		name := astExpr.ColName()
-		if b.ctx.aliasFrequency[name] > 1 {
-			return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
-		}
-		if selectItem, ok := b.ctx.aliasMap[name]; ok {
-			return makeProjectColRef(b.ctx, selectItem.idx), nil
+		if isRoot {
+			if b.ctx.aliasFrequency[name] > 1 {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
+			}
+			if selectItem, ok := b.ctx.aliasMap[name]; ok {
+				return makeProjectColRef(b.ctx, selectItem.idx), nil
+			}
+		} else if _, found := b.ctx.bindingByCol[name]; !found {
+			if b.ctx.aliasFrequency[name] > 1 {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
+			}
+			if selectItem, ok := b.ctx.aliasMap[name]; ok {
+				return makeProjectColRef(b.ctx, selectItem.idx), nil
+			}
 		}
 	}
 
@@ -97,7 +106,11 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 }
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
-	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
+	rootExpr := astExpr
+	if b.ctx.isDistinct {
+		rootExpr = unwrapParenExpr(rootExpr)
+	}
+	if colRef, ok := rootExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
 		if frequency, ok := b.ctx.aliasFrequency[colRef.ColName()]; ok && frequency > 1 {
 			return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
 		}

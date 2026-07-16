@@ -301,3 +301,19 @@ select distinct grp + 1 as g from t_order order by g + 1 desc;
 3  𝄀
 2
 drop table t_order;
+drop table if exists t_distinct_order_name;
+create table t_distinct_order_name(a int, b int);
+insert into t_distinct_order_name values (1, 100), (2, 0);
+select distinct a as b, b from t_distinct_order_name order by abs(b);
+➤ b[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  0  𝄀
+1  ¦  100
+select distinct a as b from t_distinct_order_name order by abs(b);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct a as b, b from t_distinct_order_name order by (b);
+invalid input: Column 'b' in order clause is ambiguous
+select distinct a as x from t_distinct_order_name order by abs(x);
+➤ x[4,32,0]  𝄀
+1  𝄀
+2
+drop table t_distinct_order_name;

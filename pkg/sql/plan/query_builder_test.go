@@ -1125,6 +1125,77 @@ func TestQueryBuilder_bindOrderByDistinctDerivedAlias(t *testing.T) {
 	require.Len(t, bindCtx.projects, 1)
 }
 
+func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
+	t.Run("selected FROM column wins over colliding alias", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b, b from select_test.bind_select order by abs(b)",
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+
+		absExpr := boundOrderBys[0].Expr.GetF()
+		require.NotNil(t, absExpr)
+		require.Len(t, absExpr.Args, 1)
+		col := absExpr.Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(1), col.ColPos)
+	})
+
+	t.Run("unselected FROM column does not fall back to colliding alias", func(t *testing.T) {
+		_, _, _, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b from select_test.bind_select order by abs(b)",
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	})
+
+	t.Run("parenthesized root preserves output ambiguity", func(t *testing.T) {
+		_, _, _, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b, b from select_test.bind_select order by (b)",
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Column 'b' in order clause is ambiguous")
+	})
+
+	t.Run("nested name falls back to noncolliding alias", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+			"select distinct a as x from select_test.bind_select order by abs(x)",
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+
+		absExpr := boundOrderBys[0].Expr.GetF()
+		require.NotNil(t, absExpr)
+		require.Len(t, absExpr.Args, 1)
+		col := absExpr.Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(0), col.ColPos)
+	})
+
+	t.Run("qualified selected FROM column remains available", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b, b from select_test.bind_select order by abs(bind_select.b)",
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+
+		col := boundOrderBys[0].Expr.GetF().Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(1), col.ColPos)
+	})
+
+	t.Run("qualified unselected FROM column is rejected", func(t *testing.T) {
+		_, _, _, _, err := bindDistinctOrderByForTest(
+			"select distinct a as x from select_test.bind_select order by abs(bind_select.b)",
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	})
+}
+
 func TestQueryBuilder_bindOrderByDistinctDerivedAggregateAliasDoesNotRebind(t *testing.T) {
 	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
 		"select distinct count(distinct a) as x from select_test.bind_select order by x + 1",

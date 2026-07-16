@@ -230,3 +230,12 @@ select distinct grp, label from t_order order by concat(label, 'x'), grp;
 select distinct grp from t_order order by grp + 0 desc;
 select distinct grp + 1 as g from t_order order by g + 1 desc;
 drop table t_order;
+
+drop table if exists t_distinct_order_name;
+create table t_distinct_order_name(a int, b int);
+insert into t_distinct_order_name values (1, 100), (2, 0);
+select distinct a as b, b from t_distinct_order_name order by abs(b);
+select distinct a as b from t_distinct_order_name order by abs(b);
+select distinct a as b, b from t_distinct_order_name order by (b);
+select distinct a as x from t_distinct_order_name order by abs(x);
+drop table t_distinct_order_name;
