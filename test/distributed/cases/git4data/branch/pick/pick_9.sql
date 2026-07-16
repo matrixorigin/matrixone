@@ -311,4 +311,40 @@ drop table t2;
 drop table t1;
 drop table t0;
 
+-- ----------------------------------------------------------------
+-- case j: no-LCA BETWEEN hydrates through a dropped middle generation
+-- ----------------------------------------------------------------
+-- The upper-bound generation is itself replaced by a later ALTER. Rows from
+-- the first generation still need its endpoint image, so the reader fallback
+-- must use the relation opened at sp_double_to rather than current catalog.
+
+drop snapshot if exists sp_double_from;
+drop snapshot if exists sp_double_to;
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2);
+data branch create table t1 from t0;
+
+create table t2 (a int, b int, c int default 7, d int default 9, primary key(a));
+insert into t2 values (1,100,70,90),(2,200,71,91);
+
+create snapshot sp_double_from for account sys;
+update t1 set b=10 where a=1;
+alter table t1 add column c int default 7;
+update t1 set b=15,c=8 where a=1;
+create snapshot sp_double_to for account sys;
+alter table t1 add column d int default 9;
+update t1 set b=25,c=18,d=19 where a=1;
+
+data branch pick t1 into t2 between snapshot sp_double_from and sp_double_to when conflict accept;
+select * from t2 order by a asc;
+-- expect bounded middle-generation row; d did not exist at the upper bound
+select * from t1 order by a asc;
+
+drop snapshot sp_double_from;
+drop snapshot sp_double_to;
+drop table t2;
+drop table t1;
+drop table t0;
+
 drop database test;

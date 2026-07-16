@@ -1567,6 +1567,66 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	require.Equal(t, [][]any{{int64(3), "base-only", "hb"}}, got[1].rows)
 }
 
+func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	updateTS := types.BuildTS(15, 0)
+	tarData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), "bounded", "h1", commitTSBytes(updateTS)},
+	})
+	tarTombstone := buildHashDiffTombstoneBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), commitTSBytes(updateTS)},
+	})
+	baseData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), "destination", "h1", commitTSBytes(types.BuildTS(5, 0))},
+	})
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(), ses, nil, tblStuff, branchMetaInfo{},
+		compositeOption{
+			conflictOpt:  &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT},
+			expandUpdate: true,
+		},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) > 0 {
+				got = append(got, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{
+			data: tarData, tombstone: tarTombstone,
+		}}}},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{
+			data: baseData,
+		}}}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, diffDelete, got[0].kind)
+	require.Equal(t, diffSideBase, got[0].side)
+	require.Equal(t, [][]any{{int64(1), "destination", "h1"}}, got[0].rows)
+	require.Equal(t, diffInsert, got[1].kind)
+	require.Equal(t, diffSideTarget, got[1].side)
+	require.Equal(t, [][]any{{int64(1), "bounded", "h1"}}, got[1].rows)
+}
+
 func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -2460,6 +2520,44 @@ func TestDataBranchNeedsHistoricalProjection(t *testing.T) {
 		"a target-only column requires projection and endpoint hydration")
 	require.True(t, dataBranchNeedsHistoricalProjection([]int{1, 0}, 2),
 		"a reordered layout requires projection")
+}
+
+func TestHistoricalDataBranchChangesHandleSkipsHydrationAtBoundedGeneration(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+
+	source := batch.NewWithSize(4)
+	source.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
+	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], buildHashDiffRowID(t, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[2], int64(15), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[3], types.BuildTS(20, 0), false, mp))
+	source.SetRowCount(1)
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colNames = []string{"a", "b", "c"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+	}
+	h := historicalDataBranchChangesHandle{
+		inner:         &stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: source}}},
+		sourceMapping: []int{0, 1},
+		tblStuff:      tblStuff,
+		hydrate:       false,
+	}
+
+	got, tombstone, _, err := h.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Nil(t, tombstone)
+	require.NotNil(t, got)
+	defer got.Clean(mp)
+	require.Equal(t, 1, got.RowCount())
+	require.Equal(t, int64(15), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[2], 0))
+	require.True(t, got.Vecs[3].IsNull(0), "column added after the upper bound must stay NULL")
 }
 
 func TestOverlayDataBranchProbeResultHydratesTargetDefaults(t *testing.T) {
