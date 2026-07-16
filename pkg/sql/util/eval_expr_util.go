@@ -330,7 +330,7 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
 			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
 			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
-			if res < types.TimestampMinValue {
+			if res != types.ZeroTimestamp && res < types.TimestampMinValue {
 				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
 				// Use row 1 as default since we don't have row number in this context
 				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)

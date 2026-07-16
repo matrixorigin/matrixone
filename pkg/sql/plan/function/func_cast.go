@@ -3213,10 +3213,16 @@ func dateToDecimal128(
 }
 
 func packedDateInt64(v types.Date) int64 {
+	if v == types.ZeroDate {
+		return 0
+	}
 	return int64(v.Year())*10000 + int64(v.Month())*100 + int64(v.Day())
 }
 
 func packedDatetimeInt64(v types.Datetime) int64 {
+	if v == types.ZeroDatetime {
+		return 0
+	}
 	return int64(v.Year())*10000000000 +
 		int64(v.Month())*100000000 +
 		int64(v.Day())*1000000 +

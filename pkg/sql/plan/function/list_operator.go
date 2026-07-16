@@ -19,6 +19,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if left.Oid == types.T_time && isTemporalComparisonCharacterString(right.Oid) {
+		target := types.T_varchar.ToType()
+		return true, target, target
+	}
+	if right.Oid == types.T_time && isTemporalComparisonCharacterString(left.Oid) {
+		target := types.T_varchar.ToType()
+		return true, target, target
+	}
+	return fixedTypeCastRule1(left, right)
+}
+
+func isTemporalComparisonCharacterString(t types.T) bool {
+	return t == types.T_char || t == types.T_varchar || t == types.T_text
+}
+
 var supportedOperators = []FuncNew{
 	// operator `=`
 	// return true if a = b, return false if a != b, return null if one of a and b is null
@@ -28,7 +44,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -79,7 +95,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -133,7 +149,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -171,7 +187,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -209,7 +225,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -247,7 +263,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -289,8 +305,8 @@ var supportedOperators = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
-			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
+			has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
+			has1, t02, t2 := comparisonTypeCastRule(inputs[0], inputs[2])
 			if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -335,7 +351,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})

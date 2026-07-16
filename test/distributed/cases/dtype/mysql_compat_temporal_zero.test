@@ -1,0 +1,25 @@
+-- @bvt:issue
+-- @bvt:parallel
+
+set time_zone = '+00:00';
+
+select cast('0000-00-00' as date) as zero_date,
+       cast('0000-00-00 00:00:00' as datetime) as zero_datetime,
+       cast('0000-00-00 00:00:00' as timestamp) as zero_timestamp;
+select cast('0000-00-00 00:00:00' as date) as zero_datetime_string_to_date;
+select cast(cast('0000-00-00' as date) as signed) as zero_date_signed,
+       cast(cast('0000-00-00 00:00:00' as datetime) as decimal(20,6)) as zero_datetime_decimal,
+       cast(cast('0000-00-00 00:00:00' as timestamp) as decimal(20,6)) as zero_timestamp_decimal;
+select unix_timestamp('0000-00-00 00:00:00') as zero_unix_timestamp;
+select unix_timestamp('0000-00-00 00:00:00.000000') as zero_unix_timestamp_fraction;
+
+-- The zero sentinels must not consume the valid minimum calendar value.
+select cast('0001-01-01' as date) as minimum_date,
+       cast('0001-01-01 00:00:00' as datetime) as minimum_datetime;
+
+drop table if exists mysql_compat_temporal_zero;
+create table mysql_compat_temporal_zero(d date, dt datetime, ts timestamp);
+insert into mysql_compat_temporal_zero values
+    ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+select d, dt, ts from mysql_compat_temporal_zero;
+drop table mysql_compat_temporal_zero;

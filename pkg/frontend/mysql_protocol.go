@@ -3963,14 +3963,10 @@ func GetPassWord(pwd string) ([]byte, error) {
 	return pwdByte, nil
 }
 
-// formatDateForMySQL formats a Date value for MySQL protocol, handling zero date (0000-00-00)
-// MySQL uses 0000-00-00 as zero date for minimum overflow cases (e.g., TIMESTAMPADD(DAY, -1, '0001-01-01'))
-// MatrixOne's Date(0) represents 0001-01-01, so we format it as "0000-00-00" for MySQL compatibility
+// formatDateForMySQL formats a Date value for MySQL protocol, including the
+// dedicated MySQL zero-date sentinel.
 func formatDateForMySQL(d types.Date) string {
-	// Check if this is a zero date (Date(0) = 0001-01-01)
-	// MySQL uses 0000-00-00 as zero date for minimum overflow cases
-	// For MySQL compatibility, format Date(0) as "0000-00-00"
-	if d == types.Date(0) {
+	if d == types.ZeroDate {
 		return "0000-00-00"
 	}
 	return d.String()

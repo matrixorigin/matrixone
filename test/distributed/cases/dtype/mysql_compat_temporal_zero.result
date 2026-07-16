@@ -1,0 +1,32 @@
+set time_zone = '+00:00';
+select cast('0000-00-00' as date) as zero_date,
+cast('0000-00-00 00:00:00' as datetime) as zero_datetime,
+cast('0000-00-00 00:00:00' as timestamp) as zero_timestamp;
+➤ zero_date[91,64,0]  ¦  zero_datetime[93,64,0]  ¦  zero_timestamp[93,64,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+select cast('0000-00-00 00:00:00' as date) as zero_datetime_string_to_date;
+➤ zero_datetime_string_to_date[91,64,0]  𝄀
+0000-00-00
+select cast(cast('0000-00-00' as date) as signed) as zero_date_signed,
+cast(cast('0000-00-00 00:00:00' as datetime) as decimal(20,6)) as zero_datetime_decimal,
+cast(cast('0000-00-00 00:00:00' as timestamp) as decimal(20,6)) as zero_timestamp_decimal;
+➤ zero_date_signed[-5,64,0]  ¦  zero_datetime_decimal[3,20,6]  ¦  zero_timestamp_decimal[3,20,6]  𝄀
+0  ¦  0.000000  ¦  0.000000
+select unix_timestamp('0000-00-00 00:00:00') as zero_unix_timestamp;
+➤ zero_unix_timestamp[-5,64,0]  𝄀
+null
+select unix_timestamp('0000-00-00 00:00:00.000000') as zero_unix_timestamp_fraction;
+➤ zero_unix_timestamp_fraction[3,38,6]  𝄀
+null
+select cast('0001-01-01' as date) as minimum_date,
+cast('0001-01-01 00:00:00' as datetime) as minimum_datetime;
+➤ minimum_date[91,64,0]  ¦  minimum_datetime[93,64,0]  𝄀
+0001-01-01  ¦  0001-01-01 00:00:00
+drop table if exists mysql_compat_temporal_zero;
+create table mysql_compat_temporal_zero(d date, dt datetime, ts timestamp);
+insert into mysql_compat_temporal_zero values
+('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+select d, dt, ts from mysql_compat_temporal_zero;
+➤ d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+drop table mysql_compat_temporal_zero;

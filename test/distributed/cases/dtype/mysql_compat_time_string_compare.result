@@ -1,0 +1,29 @@
+select cast('03:04:05.123456' as time(6)) = '030405.123456' as time_eq_compact_string,
+cast('03:04:05.123456' as time(6)) = '03:04:05.123456' as time_eq_formatted_string;
+➤ time_eq_compact_string[-7,1,0]  ¦  time_eq_formatted_string[-7,1,0]  𝄀
+0  ¦  1
+select '030405.123456' = cast('03:04:05.123456' as time(6)) as compact_string_eq_time;
+➤ compact_string_eq_time[-7,1,0]  𝄀
+0
+select cast('03:04:05.123456' as time(6)) < '030405.123456' as time_lt_compact_string,
+cast('03:04:05.123456' as time(6)) > '030405.123456' as time_gt_compact_string;
+➤ time_lt_compact_string[-7,1,0]  ¦  time_gt_compact_string[-7,1,0]  𝄀
+0  ¦  1
+select cast('03:04:05.123456' as time(6)) != '030405.123456' as time_ne_compact_string,
+cast('03:04:05.123456' as time(6)) <=> '030405.123456' as time_null_safe_eq_compact_string,
+cast('03:04:05.123456' as time(6)) <= '030405.123456' as time_le_compact_string,
+cast('03:04:05.123456' as time(6)) >= '030405.123456' as time_ge_compact_string;
+➤ time_ne_compact_string[-7,1,0]  ¦  time_null_safe_eq_compact_string[-7,1,0]  ¦  time_le_compact_string[-7,1,0]  ¦  time_ge_compact_string[-7,1,0]  𝄀
+1  ¦  0  ¦  0  ¦  1
+select cast('03:04:05.123456' as time(6)) between '030405.123455' and '030405.123457' as time_between_compact_string;
+➤ time_between_compact_string[-7,1,0]  𝄀
+0
+drop table if exists mysql_compat_time_string_compare;
+create table mysql_compat_time_string_compare(t time(6));
+insert into mysql_compat_time_string_compare values ('03:04:05.123456');
+select t = '030405.123456' as time_col_eq_compact_string,
+t between '030405.123455' and '030405.123457' as time_col_between_compact_string
+from mysql_compat_time_string_compare;
+➤ time_col_eq_compact_string[-7,1,0]  ¦  time_col_between_compact_string[-7,1,0]  𝄀
+0  ¦  0
+drop table mysql_compat_time_string_compare;

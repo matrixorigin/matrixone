@@ -209,6 +209,13 @@ func TestSetInsertValueTimeStamp_MinValueValidation(t *testing.T) {
 			description: "UTC: 1970-01-01 00:00:01 -> UTC 1970-01-01 00:00:01 (at min, should pass)",
 		},
 		{
+			name:        "zero_timestamp",
+			timezone:    time.UTC,
+			input:       "0000-00-00 00:00:00",
+			shouldError: false,
+			description: "the dedicated zero timestamp sentinel bypasses the normal minimum range check",
+		},
+		{
 			name:        "UTC-8_at_min",
 			timezone:    time.FixedZone("UTC-8", -8*3600),
 			input:       "1969-12-31 16:00:01",
@@ -253,7 +260,11 @@ func TestSetInsertValueTimeStamp_MinValueValidation(t *testing.T) {
 				require.True(t, canInsert, tc.description)
 				require.NoError(t, err, tc.description)
 				require.False(t, isnull, tc.description)
-				require.GreaterOrEqual(t, res, types.TimestampMinValue, tc.description)
+				if tc.input == "0000-00-00 00:00:00" {
+					require.Equal(t, types.ZeroTimestamp, res, tc.description)
+				} else {
+					require.GreaterOrEqual(t, res, types.TimestampMinValue, tc.description)
+				}
 			}
 		})
 	}
