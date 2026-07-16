@@ -67,16 +67,22 @@ execute s1;
 update vector_ivfflat_include_phase3
 set id = 20
 where id = 2;
+unsupported DML: update primary key on a table with a synchronous full-text/vector index
+select id from vector_ivfflat_include_phase3 order by id;
+id
+1
+2
+3
 execute s1;
 ➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_centroid_fk_entry[12,3,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
 1  ¦  [1, 2, 3]  ¦  alpha  ¦  10  𝄀
-3  ¦  [7, 8, 9]  ¦  gamma  ¦  30  𝄀
-20  ¦  [4, 5, 7]  ¦  beta2  ¦  200
+2  ¦  [4, 5, 7]  ¦  beta2  ¦  200  𝄀
+3  ¦  [7, 8, 9]  ¦  gamma  ¦  30
 delete from vector_ivfflat_include_phase3 where id = 1;
 execute s1;
 ➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_centroid_fk_entry[12,3,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
-3  ¦  [7, 8, 9]  ¦  gamma  ¦  30  𝄀
-20  ¦  [4, 5, 7]  ¦  beta2  ¦  200
+2  ¦  [4, 5, 7]  ¦  beta2  ¦  200  𝄀
+3  ¦  [7, 8, 9]  ¦  gamma  ¦  30
 deallocate prepare s1;
 drop table vector_ivfflat_include_phase3;
 drop database vector_ivfflat_include_phase3;
