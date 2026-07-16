@@ -2,8 +2,8 @@ drop database if exists column_pruning;
 create database column_pruning;
 use column_pruning;
 
-create table l(a int, b int, payload varchar(100));
-create table r(a int, b int, payload varchar(100));
+create table l(a int not null, b int not null, payload varchar(100) not null);
+create table r(a int not null, b int not null, payload varchar(100) not null);
 insert into l values (1, 10, 'x'), (1, 10, 'y'), (1, 20, 'w'), (2, 30, 'z');
 insert into r values (1, 10, 'u'), (3, 40, 'v');
 

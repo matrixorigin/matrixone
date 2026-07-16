@@ -872,7 +872,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select n_regionkey from (select sample(n_comment, n_regionkey, 2 rows) from nation) s",
+			"select n_regionkey from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
 		)
 		require.NoError(t, err)
 
@@ -900,7 +900,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select 1 from (select sample(n_comment, n_regionkey, 2 rows) from nation) s",
+			"select 1 from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
 		)
 		require.NoError(t, err)
 
@@ -926,7 +926,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select n_nationkey from (select n_nationkey, sample(n_comment, n_regionkey, 2 rows) from nation group by n_nationkey) s where n_regionkey > 0",
+			"select n_nationkey from (select n_nationkey, sample(n_name, n_regionkey, 2 rows) from nation group by n_nationkey) s where n_regionkey > 0",
 		)
 		require.NoError(t, err)
 
@@ -964,6 +964,31 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.NotNil(t, sampleNode)
 		require.Len(t, sampleNode.AggList, 2)
 		require.Equal(t, "sleep", sampleNode.AggList[0].GetF().Func.ObjName)
+	})
+
+	t.Run("sample retains nullable outputs for row cardinality", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select sample(n_comment, n_regionkey, 2 rows) from nation) s",
+		)
+		require.NoError(t, err)
+
+		var sampleNode *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_SAMPLE {
+				sampleNode = node
+				break
+			}
+		}
+		require.NotNil(t, sampleNode)
+		require.Len(t, sampleNode.AggList, 2)
+
+		columns, err := getPrunedTableColumns(logicPlan)
+		require.NoError(t, err)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_regionkey", "n_comment"}},
+		}, columns)
 	})
 
 	t.Run("unused window operators are unreachable", func(t *testing.T) {

@@ -1333,15 +1333,31 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		// Multi-column sampling maintains capacity independently for each
+		// expression. Removing a nullable expression can therefore change the
+		// sampled row set even when its value is unused. With a single expression,
+		// or when every expression is non-null, all expressions admit the same
+		// rows and physical slots can be compacted safely.
+		canPruneSample := len(node.AggList) <= 1
+		if !canPruneSample {
+			canPruneSample = true
+			for _, expr := range node.AggList {
+				if !expr.Typ.NotNullable {
+					canPruneSample = false
+					break
+				}
+			}
+		}
+
 		keepCarrier := false
 		carrier := -1
-		if remapping.preserveRowCount && len(node.AggList) > 0 && neededSampleCount == 0 {
+		if canPruneSample && remapping.preserveRowCount && len(node.AggList) > 0 && neededSampleCount == 0 {
 			carrier = chooseRowCarrier(node.AggList, false)
 			neededSampleCount = 1
 			keepCarrier = true
 		}
 
-		pruneSample := neededSampleCount < len(node.AggList)
+		pruneSample := canPruneSample && neededSampleCount < len(node.AggList)
 		var samplePos []int32
 		if pruneSample {
 			samplePos = make([]int32, len(node.AggList))
