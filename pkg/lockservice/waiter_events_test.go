@@ -23,8 +23,9 @@ import (
 )
 
 func TestWaiterEventsRemoveBlockedWaiter(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("waiter")}, "test", nil)
-	defer w.close("test", nil)
+	w := newWaiter()
+	w.txn = pb.WaitTxn{TxnID: []byte("waiter")}
+	require.Equal(t, int32(1), w.ref("test", nil))
 
 	events := &waiterEvents{}
 	events.addToLazyCheckDeadlockC(w)
@@ -41,8 +42,9 @@ func TestWaiterEventsRemoveBlockedWaiter(t *testing.T) {
 func TestWaiterEventsCloseDropsBlockedWaiters(t *testing.T) {
 	logger := getLogger("")
 	events := newWaiterEvents(0, nil, nil, time.Second, nil, logger)
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("waiter")}, "test", logger)
-	defer w.close("test", logger)
+	w := newWaiter()
+	w.txn = pb.WaitTxn{TxnID: []byte("waiter")}
+	require.Equal(t, int32(1), w.ref("test", logger))
 
 	events.addToLazyCheckDeadlockC(w)
 	require.Equal(t, int32(2), w.refCount.Load())
