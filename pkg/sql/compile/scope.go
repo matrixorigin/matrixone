@@ -818,13 +818,14 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	rs.Proc = s.Proc.NewContextChildProc(0)
 
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
+	dupCtx := newOperatorDupContext()
 	for i := 0; i < s.NodeInfo.Mcpu; i++ {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
 		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
 		parallelScopes[i].TxnOffset = s.TxnOffset
-		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
+		parallelScopes[i].setRootOperator(dupOperatorRecursivelyWithContext(s.RootOp, i, s.NodeInfo.Mcpu, dupCtx))
 	}
 
 	rs.PreScopes = parallelScopes

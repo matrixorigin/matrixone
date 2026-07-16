@@ -178,7 +178,6 @@
 /pkg/sql/colexec/hashbuild @aunjgr
 /pkg/sql/colexec/left @aunjgr
 /pkg/sql/colexec/shuffle @aunjgr
-/pkg/sql/colexec/shuffleV2 @aunjgr
 /pkg/sql/colexec/shufflebuild @aunjgr
 /pkg/sql/colexec/multi_update @XuPeng
 

@@ -484,11 +484,22 @@ func TestNewParallelScope(t *testing.T) {
 			[]vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
+		templateShuffle := scopeToParallel.RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+		templateShuffle.BucketNum = 3
 
 		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
+		firstPool := ss[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool()
+		require.Same(t, firstPool, ss[1].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool())
+		require.Same(t, firstPool, ss[2].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool())
+		require.Nil(t, templateShuffle.GetShufflePool())
+
+		_, nextGeneration := newParallelScope(scopeToParallel)
+		nextPool := nextGeneration[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool()
+		require.NotSame(t, firstPool, nextPool)
+		require.Nil(t, templateShuffle.GetShufflePool())
 	}
 }
 
