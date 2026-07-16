@@ -60,12 +60,14 @@ type service struct {
 	// due to the network, resulting in the transaction information being written back to the map.
 	// We use the zombieTimeout setting to solve this problem, so that when a transaction exceeds the zombieTimeout
 	// threshold in the map, it is cleaned up.
-	transactions  sync.Map // string(txn.id) -> txnContext
-	zombieTimeout time.Duration
-	pool          sync.Pool
-	recoveryC     chan struct{}
-	recoveryOnce  sync.Once
-	txnC          chan txn.TxnMeta
+	transactions   sync.Map // string(txn.id) -> txnContext
+	zombieTimeout  time.Duration
+	pool           sync.Pool
+	recoveryC      chan struct{}
+	recoveryOnce   sync.Once
+	recoveryCtx    context.Context
+	recoveryCancel context.CancelFunc
+	txnC           chan txn.TxnMeta
 }
 
 // NewTxnService create TxnService
@@ -78,6 +80,7 @@ func NewTxnService(
 	allocator lockservice.LockTableAllocator,
 ) TxnService {
 	logger := util.GetLogger(sid)
+	recoveryCtx, recoveryCancel := context.WithCancel(context.Background())
 	s := &service{
 		sid:     sid,
 		logger:  logger,
@@ -92,10 +95,12 @@ func NewTxnService(
 			shard.ShardID,
 			shard.ReplicaID),
 			stopper.WithLogger(logger.RawLogger())),
-		zombieTimeout: zombieTimeout,
-		recoveryC:     make(chan struct{}),
-		txnC:          make(chan txn.TxnMeta, 16),
-		allocator:     allocator,
+		zombieTimeout:  zombieTimeout,
+		recoveryC:      make(chan struct{}),
+		recoveryCtx:    recoveryCtx,
+		recoveryCancel: recoveryCancel,
+		txnC:           make(chan txn.TxnMeta, 16),
+		allocator:      allocator,
 	}
 	if err := s.stopper.RunTask(s.gcZombieTxn); err != nil {
 		s.logger.Fatal("start gc zombie txn failed",
@@ -120,6 +125,8 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close(destroy bool) error {
+	s.recoveryCancel()
+	s.finishRecovery()
 	s.waitRecoveryCompleted()
 	s.stopper.Stop()
 	closer := s.storage.Close

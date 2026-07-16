@@ -16,7 +16,10 @@ package service
 
 import (
 	"context"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -27,23 +30,140 @@ func (s *service) startRecovery() {
 		s.logger.Fatal("start recover task failed",
 			zap.Error(err))
 	}
-	s.storage.StartRecovery(context.TODO(), s.txnC)
+	s.storage.StartRecovery(s.recoveryCtx, s.txnC)
 	s.waitRecoveryCompleted()
 }
 
 func (s *service) doRecovery(ctx context.Context) {
+	defer s.finishRecovery()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.recoveryCtx.Done():
 			return
 		case txn, ok := <-s.txnC:
 			if !ok {
 				s.end()
 				return
 			}
+			if recoveryTxnNeedsRouteResolution(txn) {
+				var resolved bool
+				txn, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txn)
+				if !resolved {
+					return
+				}
+			}
 			s.addLog(txn)
 		}
 	}
+}
+
+func (s *service) resolveRecoveryTNShards(
+	ctx context.Context,
+	txnMeta txn.TxnMeta,
+) (txn.TxnMeta, bool) {
+	const retryInterval = 100 * time.Millisecond
+	var cluster clusterservice.MOCluster
+	for cluster == nil {
+		var err error
+		cluster, err = clusterservice.GetMOClusterWithContext(ctx, s.sid)
+		if err == nil {
+			break
+		}
+		if !waitRecoveryRouteRetry(ctx, retryInterval) {
+			return txnMeta, false
+		}
+	}
+
+	for {
+		services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+		if err != nil {
+			if !waitRecoveryRouteRetry(ctx, retryInterval) {
+				return txnMeta, false
+			}
+			continue
+		}
+		if shards, ok := s.resolveRecoveryTNShardsFromSnapshot(txnMeta.TNShards, services); ok {
+			txnMeta.TNShards = shards
+			return txnMeta, true
+		}
+
+		if refresher, ok := cluster.(clusterservice.AuthoritativeRefresher); ok {
+			if err := refresher.Refresh(ctx); err != nil && ctx.Err() != nil {
+				return txnMeta, false
+			}
+		}
+		if !waitRecoveryRouteRetry(ctx, retryInterval) {
+			return txnMeta, false
+		}
+	}
+}
+
+func waitRecoveryRouteRetry(ctx context.Context, interval time.Duration) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func recoveryTxnNeedsRouteResolution(txnMeta txn.TxnMeta) bool {
+	if len(txnMeta.TNShards) <= 1 ||
+		(txnMeta.Status != txn.TxnStatus_Prepared && txnMeta.Status != txn.TxnStatus_Committing) {
+		return false
+	}
+	for _, shard := range txnMeta.TNShards {
+		if !recoveryTNShardRouteComplete(shard) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *service) resolveRecoveryTNShardsFromSnapshot(
+	participants []metadata.TNShard,
+	services []metadata.TNService,
+) ([]metadata.TNShard, bool) {
+	routes := make(map[uint64]metadata.TNShard)
+	for _, service := range services {
+		for _, shard := range service.Shards {
+			shard.Address = service.TxnServiceAddress
+			if recoveryTNShardRouteComplete(shard) {
+				routes[shard.ShardID] = shard
+			}
+		}
+	}
+
+	resolved := make([]metadata.TNShard, len(participants))
+	for i, participant := range participants {
+		if participant.ShardID == s.shard.ShardID {
+			if !recoveryTNShardRouteComplete(s.shard) {
+				return nil, false
+			}
+			resolved[i] = s.shard
+			continue
+		}
+		route, ok := routes[participant.ShardID]
+		if !ok {
+			return nil, false
+		}
+		resolved[i] = route
+	}
+	return resolved, true
+}
+
+func recoveryTNShardRouteComplete(shard metadata.TNShard) bool {
+	// LogShardID is storage metadata, not part of txn RPC routing or TN shard
+	// identity. Dynamic HAKeeper TN snapshots currently expose only ShardID and
+	// ReplicaID, so preserve LogShardID when supplied but do not wait forever
+	// when a current route legitimately has it unset.
+	return shard.ShardID != 0 &&
+		shard.ReplicaID != 0 &&
+		shard.Address != ""
 }
 
 func (s *service) addLog(txnMeta txn.TxnMeta) {

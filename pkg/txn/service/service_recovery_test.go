@@ -16,14 +16,253 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type recoveryRouteSender struct {
+	mu       sync.Mutex
+	requests [][]txn.TxnRequest
+	notifyC  chan struct{}
+	block    bool
+}
+
+func newRecoveryRouteSender() *recoveryRouteSender {
+	return &recoveryRouteSender{notifyC: make(chan struct{}, 4)}
+}
+
+func (s *recoveryRouteSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	copied := append([]txn.TxnRequest(nil), requests...)
+	s.mu.Lock()
+	s.requests = append(s.requests, copied)
+	s.mu.Unlock()
+
+	responses := make([]txn.TxnResponse, len(requests))
+	for i := range responses {
+		meta := requests[i].Txn
+		meta.Status = txn.TxnStatus_Aborted
+		responses[i].Txn = &meta
+	}
+	select {
+	case s.notifyC <- struct{}{}:
+	default:
+	}
+	if s.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return &rpc.SendResult{Responses: responses}, nil
+}
+
+func (s *recoveryRouteSender) Close() error { return nil }
+
+func (s *recoveryRouteSender) firstRequests(t *testing.T) []txn.TxnRequest {
+	t.Helper()
+	select {
+	case <-s.notifyC:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not send requests")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]txn.TxnRequest(nil), s.requests[0]...)
+}
+
+func installRecoveryCluster(t *testing.T, sid string, services ...metadata.TNService) {
+	t.Helper()
+	c := clusterservice.NewMOCluster(
+		sid,
+		nil,
+		time.Hour,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(nil, services),
+	)
+	t.Cleanup(c.Close)
+	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, c)
+}
+
+func TestRecoveryCompletesRemoteParticipantRoutesBeforeGetStatus(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+	defer s.stopper.Stop()
+
+	remote2 := metadata.TNShard{
+		// Dynamic HAKeeper TN snapshots do not carry LogShardID.
+		TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+		ReplicaID:     200,
+	}
+	remote3 := metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 3, LogShardID: 30},
+		ReplicaID:     300,
+	}
+	installRecoveryCluster(t, s.sid,
+		metadata.TNService{TxnServiceAddress: "tn-2", Shards: []metadata.TNShard{remote2}},
+		metadata.TNService{TxnServiceAddress: "tn-3", Shards: []metadata.TNShard{remote3}},
+	)
+
+	meta := NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards,
+		metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 2}},
+		metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 3}},
+	)
+
+	require.NoError(t, s.stopper.RunTask(s.doRecovery))
+	s.txnC <- meta
+	close(s.txnC)
+	s.waitRecoveryCompleted()
+
+	requests := sender.firstRequests(t)
+	require.Len(t, requests, 2)
+	assert.Equal(t, []uint64{2, 3}, []uint64{
+		requests[0].GetTargetTN().ShardID,
+		requests[1].GetTargetTN().ShardID,
+	})
+	assert.Equal(t, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+		ReplicaID:     200,
+		Address:       "tn-2",
+	}, requests[0].GetTargetTN())
+	assert.Equal(t, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 3, LogShardID: 30},
+		ReplicaID:     300,
+		Address:       "tn-3",
+	}, requests[1].GetTargetTN())
+	for _, request := range requests {
+		require.Len(t, request.Txn.TNShards, 3)
+		assert.Equal(t, s.shard, request.Txn.TNShards[0])
+		assert.NotEmpty(t, request.GetTargetTN().Address)
+	}
+}
+
+func TestRecoveryCompletesRemoteParticipantRoutesBeforeCommitTNShard(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	sender.block = true
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+
+	remote := metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+		ReplicaID:     200,
+	}
+	installRecoveryCluster(t, s.sid,
+		metadata.TNService{TxnServiceAddress: "tn-2", Shards: []metadata.TNShard{remote}},
+	)
+
+	meta := NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Committing
+	meta.PreparedTS = NewTestTimestamp(2)
+	meta.CommitTS = NewTestTimestamp(3)
+	meta.TNShards = append(meta.TNShards,
+		metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 2}},
+	)
+
+	require.NoError(t, s.stopper.RunTask(s.doRecovery))
+	s.txnC <- meta
+	close(s.txnC)
+	s.waitRecoveryCompleted()
+
+	requests := sender.firstRequests(t)
+	require.Len(t, requests, 1)
+	assert.Equal(t, txn.TxnMethod_CommitTNShard, requests[0].Method)
+	assert.Equal(t, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+		ReplicaID:     200,
+		Address:       "tn-2",
+	}, requests[0].GetTargetTN())
+	require.Len(t, requests[0].Txn.TNShards, 2)
+	assert.Equal(t, s.shard, requests[0].Txn.TNShards[0])
+
+	require.NoError(t, s.Close(false))
+}
+
+func TestRecoveryMissingParticipantRouteWaitsUntilCloseCancels(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	meta := NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards,
+		metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 99}},
+	)
+	mlog := mem.NewMemLog()
+	addLog(t, mlog, meta, 1)
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
+	installRecoveryCluster(t, s.sid)
+
+	started := make(chan error, 1)
+	go func() { started <- s.Start() }()
+	select {
+	case <-s.recoveryC:
+		t.Fatal("recovery silently completed with an unresolved participant")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		_ = s.Close(false)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close deadlocked while recovery waited for cluster metadata")
+	}
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Start remained blocked after Close canceled recovery")
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	assert.Empty(t, sender.requests, "must not send to an unresolved or empty address")
+}
+
+func TestRecoveryRetriesTransientClusterLookupError(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+	defer s.stopper.Stop()
+	runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.ClusterService, "not-a-cluster")
+
+	meta := NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards,
+		metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 2}},
+	)
+	require.NoError(t, s.stopper.RunTask(s.doRecovery))
+	s.txnC <- meta
+	close(s.txnC)
+	select {
+	case <-s.recoveryC:
+		t.Fatal("recovery silently completed after a transient cluster lookup error")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	remote := metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 2, LogShardID: 20},
+		ReplicaID:     200,
+	}
+	installRecoveryCluster(t, s.sid,
+		metadata.TNService{TxnServiceAddress: "tn-2", Shards: []metadata.TNShard{remote}},
+	)
+	s.waitRecoveryCompleted()
+	requests := sender.firstRequests(t)
+	require.Len(t, requests, 1)
+	assert.Equal(t, "tn-2", requests[0].GetTargetTN().Address)
+}
 
 func TestRecoveryFromCommittedWithData(t *testing.T) {
 	mlog := mem.NewMemLog()
