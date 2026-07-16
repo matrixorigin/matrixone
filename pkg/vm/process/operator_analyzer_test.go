@@ -57,6 +57,38 @@ func TestOperatorStatsResourceDelta(t *testing.T) {
 	assert.Zero(t, delta.Usage.ExclusiveActiveNS)
 }
 
+func TestOperatorAnalyzerRejectsNegativeObservedIntervals(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+	opAlyzr.wait = -time.Nanosecond
+	opAlyzr.Stop()
+
+	assert.NotZero(t, opAlyzr.opStats.ResourceQuality&resource.QualityInvariantFailure)
+}
+
+func TestOperatorAnalyzerRejectsObservedIntervalLargerThanCall(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		wait  time.Duration
+		child time.Duration
+	}{
+		{name: "wait", wait: time.Hour},
+		{name: "child call", child: time.Hour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+			opAlyzr.Start()
+			opAlyzr.start = time.Now().Add(-time.Second)
+			opAlyzr.wait = test.wait
+			opAlyzr.childrenCallDuration = test.child
+			opAlyzr.Stop()
+
+			assert.Zero(t, opAlyzr.opStats.TimeConsumed)
+			assert.NotZero(t, opAlyzr.opStats.ResourceQuality&resource.QualityInvariantFailure)
+		})
+	}
+}
+
 func Test_operatorAnalyzer_AddWaitLockTime(t *testing.T) {
 	type fields struct {
 		nodeIdx              int
@@ -420,6 +452,26 @@ func TestMeasureFilesystemWaitRecordsTerminalPaths(t *testing.T) {
 		})
 	})
 	assert.Greater(t, opAlyzr.opStats.ResourceWaitNS[resource.WaitFilesystem], first)
+}
+
+func TestMeasureWaitStopsAtBlockingBoundary(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+
+	_, err := MeasureWait(opAlyzr, resource.WaitOther, func() (struct{}, error) {
+		time.Sleep(time.Millisecond)
+		return struct{}{}, nil
+	})
+	assert.NoError(t, err)
+	recordedWait := opAlyzr.opStats.ResourceWaitNS[resource.WaitOther]
+	assert.Positive(t, recordedWait)
+
+	// Work after the blocking call must remain active, not extend the wait.
+	time.Sleep(5 * time.Millisecond)
+	opAlyzr.Stop()
+	assert.Equal(t, recordedWait, opAlyzr.opStats.ResourceWaitNS[resource.WaitOther])
+	assert.Positive(t, opAlyzr.opStats.TimeConsumed)
+	assert.Zero(t, opAlyzr.opStats.ResourceQuality)
 }
 
 func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {

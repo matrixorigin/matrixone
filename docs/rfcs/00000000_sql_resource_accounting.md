@@ -248,7 +248,8 @@ exclusive active = call wall - local wait - local child-call wall
 All producers use one checked constructor from `pkg/util/resource`. If local
 wait plus child-call wall exceeds call wall, the contribution is zero and an
 invariant flag is set. Producers cannot cast a negative duration to `uint64` or
-implement their own subtraction.
+implement their own subtraction. Wait instrumentation must end immediately when
+the blocking boundary returns; CPU work after that boundary is active work.
 
 Parse, plan, compile, and pre-run work contributes to active time only when a
 producer can measure a non-overlapping local interval. Legacy I/O/lock counters
@@ -814,7 +815,8 @@ Pipeline/fragment wrapper wall time is diagnostic only. Billable active time is
 the sum of every operator's non-overlapping exclusive interval plus coordinator
 exclusive phases that provably do not overlap execution. Parent operator child
 Call time is removed before summing; Filter, Join, Project, and other non-leaf
-operators still contribute their own exclusive work.
+operators still contribute their own exclusive work. A wait wrapper contains
+only the synchronous blocking call, never the CPU work that consumes its result.
 
 ## 11. Remote CN Protocol
 
