@@ -123,6 +123,21 @@ func TestEncoding(t *testing.T) {
 	require.Equal(t, e, e2)
 }
 
+func TestErrSubqueryNo1RowContract(t *testing.T) {
+	err := NewErrSubqueryNo1Row(context.Background())
+	require.Equal(t, ErrSubqueryNo1Row, err.ErrorCode())
+	require.Equal(t, ER_SUBQUERY_NO_1_ROW, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "Subquery returns more than 1 row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 

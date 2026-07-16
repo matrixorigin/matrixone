@@ -15,7 +15,8 @@
 package shardservice
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -155,10 +156,10 @@ func (s *balanceScheduler) doBalance(
 		return false, nil
 	}
 
-	sort.Slice(
+	slices.SortFunc(
 		cns,
-		func(i, j int) bool {
-			return t.getReplicaCount(cns[i].id) < t.getReplicaCount(cns[j].id)
+		func(a, b *cn) int {
+			return cmp.Compare(t.getReplicaCount(a.id), t.getReplicaCount(b.id))
 		},
 	)
 
