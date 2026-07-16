@@ -7273,6 +7273,13 @@ func MakeDateString(
 	return nil
 }
 
+func makeTimeIntegerSecond(value int64, null bool) (int64, uint32, bool) {
+	if null || value < 0 || value >= 60 {
+		return 0, 0, true
+	}
+	return value, 0, false
+}
+
 // makeTimeFromInt64: Helper function to create Time from int64 values
 func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vector.FunctionResult[types.Time], i uint64) error {
 	if hour < -838 || hour > 838 {
@@ -7404,31 +7411,31 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[2])
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), 0, null
+			return makeTimeIntegerSecond(int64(val), null)
 		}
 	case types.T_int16:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[2])
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), 0, null
+			return makeTimeIntegerSecond(int64(val), null)
 		}
 	case types.T_int32:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), 0, null
+			return makeTimeIntegerSecond(int64(val), null)
 		}
 	case types.T_int64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return val, 0, null
+			return makeTimeIntegerSecond(val, null)
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[2])
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), 0, null
+			return makeTimeIntegerSecond(int64(val), null)
 		}
 	case types.T_float32, types.T_float64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])

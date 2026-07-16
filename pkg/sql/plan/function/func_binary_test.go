@@ -9558,6 +9558,44 @@ func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
 	require.True(t, s, "MAKETIME unsigned hour overflow case failed: %s", info)
 }
 
+func TestMakeTimeIntegerSecondRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expected := NewFunctionTestResult(types.T_time.ToType(), false,
+		[]types.Time{
+			types.TimeFromClock(false, 12, 34, 59, 0),
+			0,
+		},
+		[]bool{false, true})
+
+	t.Run("signed", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{12, 12}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{34, 34}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{59, 60}, []bool{false, false}),
+			},
+			expected,
+			MakeTime)
+
+		s, info := fcTC.Run()
+		require.True(t, s, "MAKETIME signed integer second range failed: %s", info)
+	})
+
+	t.Run("unsigned", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{12, 12}, []bool{false, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{34, 34}, []bool{false, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{59, 60}, []bool{false, false}),
+			},
+			expected,
+			MakeTime)
+
+		s, info := fcTC.Run()
+		require.True(t, s, "MAKETIME unsigned integer second range failed: %s", info)
+	})
+}
+
 // TestTimestampDiffDateString tests TIMESTAMPDIFF with DATE and string arguments
 // This tests the new overload that handles mixed DATE and string types
 func TestTimestampDiffDateString(t *testing.T) {
