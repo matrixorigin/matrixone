@@ -448,11 +448,14 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 }
 
 // valueRepr picks the value representation the paired writer needs: the WAND
-// retrieval writer binary-encodes the pk (encodePk), so it needs native Go values;
-// every other writer builds SQL text and needs the SQL-display string (the historical
-// default). Keeping it a single helper localizes the one writer that opts into native.
+// retrieval and fulltext2 writers binary-encode the pk (encodePk), so they need
+// native Go values (a datetime/time/timestamp/decimal/uuid pk delivered as its
+// SQL-display string would make encodePk's native type assertion panic and crash the
+// consumer goroutine, permanently stalling index maintenance); every other writer
+// builds SQL text and needs the SQL-display string (the historical default).
 func (c *IndexConsumer) valueRepr() ValueRepr {
-	if _, ok := c.sqlWriter.(*WandSqlWriter); ok {
+	switch c.sqlWriter.(type) {
+	case *WandSqlWriter, *Fulltext2SqlWriter:
 		return ReprNative
 	}
 	return ReprSQLString

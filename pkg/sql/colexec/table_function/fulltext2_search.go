@@ -34,9 +34,10 @@ import (
 )
 
 // fulltext2SearchState answers a MATCH over a fulltext2 index: it loads the
-// index's segments (base + CDC tail), runs the WAND positional query, and emits
-// (doc_id, score) rows. Step-4 first cut: load-and-materialize each query (no
-// VectorIndexCache yet); the top-k is bounded by the pushed LIMIT.
+// index's segments (base + CDC tail) once via the shared VectorIndexCache and reuses
+// them across queries (evicted on CDC append / compaction / rebuild), runs the WAND
+// positional query, and emits (doc_id, score) rows; the top-k is bounded by the
+// pushed LIMIT, and a pushed-down WHERE prefilter is applied inside the walk.
 type fulltext2SearchState struct {
 	inited      bool
 	tblcfg      fulltext2.TableConfig

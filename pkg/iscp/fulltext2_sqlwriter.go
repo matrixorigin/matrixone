@@ -116,7 +116,10 @@ func (w *Fulltext2SqlWriter) Reset() {
 
 func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 	w.last = vectorindex.CDC_INSERT
-	text := w.rowText(row)
+	text, err := w.rowText(row)
+	if err != nil {
+		return err
+	}
 	w.cdc.Insert(ftCopyPk(row[w.pkPos]), text)
 	w.ndata += len(text) + 16
 	return nil
@@ -124,7 +127,10 @@ func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 
 func (w *Fulltext2SqlWriter) Upsert(ctx context.Context, row []any) error {
 	w.last = vectorindex.CDC_UPSERT
-	text := w.rowText(row)
+	text, err := w.rowText(row)
+	if err != nil {
+		return err
+	}
 	w.cdc.Upsert(ftCopyPk(row[w.pkPos]), text)
 	w.ndata += len(text) + 16
 	return nil
@@ -142,22 +148,33 @@ func (w *Fulltext2SqlWriter) Delete(ctx context.Context, row []any) error {
 // tokenization). If ANY indexed column is NULL the doc yields no tokens — the
 // whole-doc-skip the create-TVF's rowTerms does — so CREATE and CDC tokenize a
 // row identically (a doc's searchability must not depend on which path indexed
-// it). datalink columns are NOT resolved here — CDC of a datalink column indexes
-// the URL string; file-content datalink is build-only.
-func (w *Fulltext2SqlWriter) rowText(row []any) string {
+// it). For a json parser each column is flattened to its leaf values PER COLUMN
+// (FlattenJSONColumn), exactly as rowTerms does, so CdcTokenizer then just ngrams the
+// flattened text (it no longer re-flattens). datalink columns are NOT resolved here —
+// CDC of a datalink column indexes the URL string; file-content datalink is build-only.
+func (w *Fulltext2SqlWriter) rowText(row []any) (string, error) {
 	for _, pos := range w.textPos {
 		if row[pos] == nil {
-			return ""
+			return "", nil
 		}
 	}
+	isJSON := fulltext2.IsJSONParser(w.cfg.Parser)
 	var b strings.Builder
 	for i, pos := range w.textPos {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(ftRowText(row[pos]))
+		if isJSON {
+			ft, err := fulltext2.FlattenJSONColumn(row[pos])
+			if err != nil {
+				return "", err
+			}
+			b.Write(ft)
+		} else {
+			b.WriteString(ftRowText(row[pos]))
+		}
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 func ftRowText(v any) string {

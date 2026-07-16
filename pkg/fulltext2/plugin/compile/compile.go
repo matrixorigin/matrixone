@@ -28,6 +28,7 @@ import (
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 // parserFromParams extracts the "parser" field from an index's IndexAlgoParams
@@ -105,11 +106,18 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
 	if clearTail {
 		cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
-		for _, s := range fulltext2.DeleteTailSqls(cfg) {
+		// REBUILD: clear the tail AND the prior tag=0 base(s) here. The create TVF also
+		// clears the bases, but it SKIPS that when the rebuild sees zero source rows
+		// (empty/all-deleted table) — so without this a REBUILD over an emptied table
+		// would keep serving the stale old base. Evict the local cache too, since the
+		// create TVF's post-build eviction is likewise skipped on the zero-doc path.
+		clearSqls := append(fulltext2.DeleteTailSqls(cfg), fulltext2.DeleteAllBasesSqls(cfg)...)
+		for _, s := range clearSqls {
 			if err := ctx.RunSql(s); err != nil {
 				return err
 			}
 		}
+		cache.Cache.Remove(storeDef.IndexTableName)
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {

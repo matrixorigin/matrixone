@@ -138,6 +138,12 @@ func FlattenJSON(raw []byte, binary bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return flattenBJ(bj), nil
+}
+
+// flattenBJ joins a parsed json document's leaf values with spaces (shared by
+// FlattenJSON and FlattenJSONColumn).
+func flattenBJ(bj bytejson.ByteJson) []byte {
 	var b strings.Builder
 	for tk := range bj.TokenizeValue(false) {
 		n := int(tk.TokenBytes[0])
@@ -146,7 +152,28 @@ func FlattenJSON(raw []byte, binary bool) ([]byte, error) {
 		}
 		b.Write(tk.TokenBytes[1 : 1+n])
 	}
-	return []byte(b.String()), nil
+	return []byte(b.String())
+}
+
+// FlattenJSONColumn flattens ONE indexed column's value to its space-joined leaf
+// values for a json parser — the CDC-write-side analogue of the create-TVF's
+// per-column flatten (rowTerms). A T_json column arrives as an already-parsed
+// bytejson.ByteJson (types.DecodeJson, repr-independent); a text/varchar json column
+// arrives as a string/[]byte of json TEXT. Doing this per column (vs joining raw
+// columns then flattening the blob once) is what makes CDC json tokens match CREATE:
+// the old joined-then-flattened path yielded ZERO tokens for T_json and for
+// multi-column json, silently making CDC-inserted rows unsearchable.
+func FlattenJSONColumn(v any) ([]byte, error) {
+	switch t := v.(type) {
+	case bytejson.ByteJson:
+		return flattenBJ(t), nil
+	case []byte:
+		return FlattenJSON(t, false)
+	case string:
+		return FlattenJSON([]byte(t), false)
+	default:
+		return nil, nil
+	}
 }
 
 // IsJSONParser reports whether parser is one of the json variants.
@@ -155,21 +182,15 @@ func IsJSONParser(parser string) bool {
 	return p == ParserJSON || p == ParserJSONValue
 }
 
-// CdcTokenizer returns the parser-aware tokenize closure the CDC consumer feeds
-// to TailBuilder — ordered words per parser (json text flattened to its values
-// first). It mirrors the create-TVF's row tokenization so CDC tail tokens match
-// the base build and the query side.
+// CdcTokenizer returns the parser-aware tokenize closure the CDC consumer feeds to
+// TailBuilder — ordered words per parser. For a json parser the CDC WRITER
+// (Fulltext2SqlWriter.rowText) already flattens each json column to its values,
+// binary-aware and PER COLUMN, exactly as the create-TVF's rowTerms does — so the CDC
+// text is plain flattened text here and is tokenized as ngram, NOT flattened again.
+// (The old form flattened the whole joined multi-column blob once with binary=false,
+// which produced zero tokens for a T_json column and mis-parsed multi-column json — so
+// CDC-inserted json rows were unsearchable.)
 func CdcTokenizer(parser string) (func(string) []string, error) {
-	if IsJSONParser(parser) {
-		simple := tokenizer.NewSimpleTokenizer()
-		return func(text string) []string {
-			ft, err := FlattenJSON([]byte(text), false)
-			if err != nil {
-				return nil
-			}
-			return tokenizeWords(simple, ft)
-		}, nil
-	}
 	tok, err := DocTokenizer(parser)
 	if err != nil {
 		return nil, err
