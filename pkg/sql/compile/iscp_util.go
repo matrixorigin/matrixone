@@ -197,7 +197,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 }
 
 func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
-	return drainIndexCdcTaskConsumer(c, tableDef, dbname, tablename, indexname, true)
+	return drainIndexCdcTaskConsumer(c, tableDef, dbname, tablename, indexname, false)
 }
 
 func drainIndexCdcTaskConsumer(

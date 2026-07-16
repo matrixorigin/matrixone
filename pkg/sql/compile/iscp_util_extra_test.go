@@ -353,7 +353,7 @@ func TestDrainIndexCdcTaskConsumerFencesRuntimeJob(t *testing.T) {
 	require.True(t, exec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)))
 }
 
-func TestDrainIndexCdcTaskConsumerNoExecutorFailsClosed(t *testing.T) {
+func TestDrainIndexCdcTaskConsumerNoLocalExecutorContinues(t *testing.T) {
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
 		return nil, false
 	}
@@ -379,7 +379,7 @@ func TestDrainIndexCdcTaskConsumerNoExecutorFailsClosed(t *testing.T) {
 		},
 	}
 
-	require.ErrorContains(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"), "cannot confirm ISCP consumer quiescence")
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
 }
 
 func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
