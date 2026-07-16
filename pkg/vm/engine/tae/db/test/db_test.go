@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"path"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	logtailpb "github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -6908,13 +6910,50 @@ func TestPreparedDMLReplayRestoresAutoIncrementFence(t *testing.T) {
 			tableEntry, err := dbEntry.GetTableEntryByID(tableID)
 			require.NoError(t, err)
 
-			// Stage a real AUTO_INCREMENT ALTER from a post-replay snapshot before
-			// the recovered transaction resolves. This is the old MAX snapshot
-			// whose TN prepare must still retry after the active count is cleared.
-			alterTxn, alterRel := testutil.GetDefaultRelation(t, rTae.DB, schema.Name)
-			require.NoError(t, alterRel.AlterTable(ctx,
-				api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 999)))
-			oldStart := alterTxn.GetStartTS()
+			var seen5000, seen6000 atomic.Bool
+			callbackErr := make(chan error, 1)
+			require.NoError(t, rTae.LogtailMgr.RegisterCallback(func(
+				_, _ timestamp.Timestamp, closeCB func(), tails ...logtailpb.TableLogtail,
+			) error {
+				defer closeCB()
+				for _, tail := range tails {
+					if tail.Table == nil || tail.Table.TbId != tableID {
+						continue
+					}
+					for _, command := range tail.Commands {
+						if command.EntryType != api.Entry_Insert {
+							continue
+						}
+						insert, err := batch.ProtoBatchToBatch(command.Bat)
+						if err != nil {
+							select {
+							case callbackErr <- err:
+							default:
+							}
+							continue
+						}
+						pkIdx := slices.Index(insert.Attrs, schema.GetPrimaryKey().Name)
+						if pkIdx < 0 {
+							select {
+							case callbackErr <- fmt.Errorf("primary key %q missing from insert attrs %v",
+								schema.GetPrimaryKey().Name, insert.Attrs):
+							default:
+							}
+							continue
+						}
+						pk := insert.Vecs[pkIdx]
+						for row := 0; row < pk.Length(); row++ {
+							switch vector.GetFixedAtWithTypeCheck[int16](pk, row) {
+							case 5000:
+								seen5000.Store(true)
+							case 6000:
+								seen6000.Store(true)
+							}
+						}
+					}
+				}
+				return nil
+			}))
 
 			if resolution == "commit" {
 				commitTS := recovered.GetPrepareTS()
@@ -6924,22 +6963,24 @@ func TestPreparedDMLReplayRestoresAutoIncrementFence(t *testing.T) {
 				require.NoError(t, recovered.Rollback(ctx))
 			}
 
-			err = alterTxn.Commit(ctx)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
-
-			// The real ALTER consumed pending resolution into its prepareTS. A
-			// second already-started ALTER remains fenced by that watermark.
-			barrier := alterTxn.GetPrepareTS()
-			require.True(t, tableEntry.ShouldRetryAutoIncrementAlter(oldStart, barrier.Next()))
-
-			resolvedOffset := uint64(999)
-			if resolution == "commit" {
-				resolvedOffset = 5000
+			// A later ordinary append proves the ordered callback stream advanced
+			// past the replay slot. The recovered commit must publish the actual
+			// row-bearing Entry_Insert for key 5000 before that point; rollback
+			// must release the slot without publishing key 5000.
+			laterTxn, laterRel := testutil.GetDefaultRelation(t, rTae.DB, schema.Name)
+			later := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 6000)
+			defer later.Close()
+			require.NoError(t, laterRel.Append(ctx, later))
+			require.NoError(t, laterTxn.Commit(ctx))
+			testutils.WaitExpect(5000, seen6000.Load)
+			select {
+			case err := <-callbackErr:
+				require.NoError(t, err)
+			default:
 			}
-			retryTxn, retryRel := testutil.GetDefaultRelation(t, rTae.DB, schema.Name)
-			require.NoError(t, retryRel.AlterTable(ctx,
-				api.NewUpdateAutoIncrementReq(0, retryRel.ID(), resolvedOffset)))
-			require.NoError(t, retryTxn.Commit(ctx))
+			require.Equal(t, resolution == "commit", seen5000.Load(),
+				"recovered commit must publish key 5000; rollback must not")
+			_ = tableEntry
 		})
 	}
 }

@@ -62,8 +62,7 @@ type TableEntry struct {
 	latestKnownDMLPrepare atomic.Pointer[types.TS]
 	replayedPreparedDML   struct {
 		sync.Mutex
-		txns              map[string]struct{}
-		resolutionPending bool
+		txns map[string]struct{}
 	}
 
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
@@ -104,32 +103,28 @@ func (entry *TableEntry) RegisterReplayedPreparedDML(txnID string) {
 	entry.replayedPreparedDML.txns[txnID] = struct{}{}
 }
 
-// ResolveReplayedPreparedDML removes one replay fence. The pending bit closes
-// the race in which the decision lands after ALTER's MAX snapshot but before
-// TN prepare validation.
-func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string) {
+// ResolveReplayedPreparedDML removes one replay fence. A committed replay
+// publishes its original DML prepare timestamp while holding the same lock
+// used by AUTO_INCREMENT ALTER validation. Rollback publishes no watermark.
+// Row visibility for snapshots at/after prepareTS is guaranteed by the
+// ordered replay logtail slot, not by promoting an ALTER timestamp.
+func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string, prepareTS *types.TS) {
 	entry.replayedPreparedDML.Lock()
 	defer entry.replayedPreparedDML.Unlock()
 	if _, ok := entry.replayedPreparedDML.txns[txnID]; !ok {
 		return
 	}
-	entry.replayedPreparedDML.resolutionPending = true
+	if prepareTS != nil {
+		entry.RecordKnownDMLPrepare(*prepareTS)
+	}
 	delete(entry.replayedPreparedDML.txns, txnID)
 }
 
-// ShouldRetryAutoIncrementAlter atomically consumes recovered-prepare state at
-// the TN prepare serialization point. Consuming a resolution publishes the
-// current ALTER prepare timestamp before returning retry; subsequent ALTERs
-// with older snapshots are then rejected by the ordinary DML watermark.
+// ShouldRetryAutoIncrementAlter serializes the unresolved replay set with the
+// durable DML prepare watermark at TN prepare validation.
 func (entry *TableEntry) ShouldRetryAutoIncrementAlter(startTS, prepareTS types.TS) bool {
 	entry.replayedPreparedDML.Lock()
 	if len(entry.replayedPreparedDML.txns) > 0 {
-		entry.replayedPreparedDML.Unlock()
-		return true
-	}
-	if entry.replayedPreparedDML.resolutionPending {
-		entry.replayedPreparedDML.resolutionPending = false
-		entry.RecordKnownDMLPrepare(prepareTS)
 		entry.replayedPreparedDML.Unlock()
 		return true
 	}

@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
@@ -352,17 +354,156 @@ type fakeAsyncTxn struct {
 	txnif.AsyncTxn
 	store   *fakeTxnStore
 	replay  bool
+	twoPC   bool
+	prepare types.TS
 	state   txnif.TxnState
 	stateFn func() txnif.TxnState // overrides state when set
 }
 
 func (t *fakeAsyncTxn) IsReplay() bool           { return t.replay }
+func (t *fakeAsyncTxn) Is2PC() bool              { return t.twoPC }
+func (t *fakeAsyncTxn) GetPrepareTS() types.TS   { return t.prepare }
 func (t *fakeAsyncTxn) GetStore() txnif.TxnStore { return t.store }
 func (t *fakeAsyncTxn) GetTxnState(bool) txnif.TxnState {
 	if t.stateFn != nil {
 		return t.stateFn()
 	}
 	return t.state
+}
+
+func TestOnTxnLogTails_Replayed2PCCommitHoldsOrderUntilDecision(t *testing.T) {
+	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
+	defer mgr.Stop()
+
+	release := make(chan struct{})
+	enteredStateWait := make(chan struct{}, 1)
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		replay:  true,
+		twoPC:   true,
+		prepare: types.BuildTS(20, 0),
+		stateFn: func() txnif.TxnState {
+			enteredStateWait <- struct{}{}
+			<-release
+			return txnif.TxnStateCommitted
+		},
+	}
+	txn.store.AddEvent(txnif.TailCollecting)
+
+	var callbacks atomic.Int32
+	require.NoError(t, mgr.RegisterCallback(func(
+		_, _ timestamp.Timestamp, closeCB func(), _ ...logtail.TableLogtail,
+	) error {
+		callbacks.Add(1)
+		closeCB()
+		return nil
+	}))
+
+	done := make(chan struct{})
+	go func() {
+		mgr.onTxnLogTails(txn)
+		close(done)
+	}()
+
+	select {
+	case <-enteredStateWait:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayed prepared 2PC never entered final-state wait")
+	}
+	select {
+	case <-done:
+		t.Fatal("replayed prepared 2PC was released before its final decision")
+	default:
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayed committed 2PC did not release its logtail slot")
+	}
+	require.Positive(t, callbacks.Load(), "committed replay must advance the ordered logtail stream")
+	require.Zero(t, txn.store.tailCollecting.Load())
+}
+
+func TestOnTxnLogTails_Replayed2PCRollbackHoldsThenDrops(t *testing.T) {
+	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
+	defer mgr.Stop()
+
+	release := make(chan struct{})
+	enteredStateWait := make(chan struct{}, 1)
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		replay:  true,
+		twoPC:   true,
+		prepare: types.BuildTS(20, 0),
+		stateFn: func() txnif.TxnState {
+			enteredStateWait <- struct{}{}
+			<-release
+			return txnif.TxnStateRollbacked
+		},
+	}
+	txn.store.AddEvent(txnif.TailCollecting)
+
+	var callbacks atomic.Int32
+	require.NoError(t, mgr.RegisterCallback(func(
+		_, _ timestamp.Timestamp, closeCB func(), _ ...logtail.TableLogtail,
+	) error {
+		callbacks.Add(1)
+		closeCB()
+		return nil
+	}))
+
+	done := make(chan struct{})
+	go func() {
+		mgr.onTxnLogTails(txn)
+		close(done)
+	}()
+
+	select {
+	case <-enteredStateWait:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayed prepared 2PC never entered final-state wait")
+	}
+	select {
+	case <-done:
+		t.Fatal("replayed prepared 2PC rollback was released before its final decision")
+	default:
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayed rolled-back 2PC did not release its logtail slot")
+	}
+	require.Zero(t, callbacks.Load(), "rolled-back replay must not publish a logtail")
+	require.Zero(t, txn.store.tailCollecting.Load())
+}
+
+func TestOnTxnLogTails_Replayed1PCRemainsSkipped(t *testing.T) {
+	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
+	defer mgr.Stop()
+
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		replay:  true,
+		twoPC:   false,
+		prepare: types.BuildTS(20, 0),
+		stateFn: func() txnif.TxnState {
+			t.Fatal("replayed 1PC must not be recollected")
+			return txnif.TxnStateCommitted
+		},
+	}
+	var callbacks atomic.Int32
+	require.NoError(t, mgr.RegisterCallback(func(
+		_, _ timestamp.Timestamp, closeCB func(), _ ...logtail.TableLogtail,
+	) error {
+		callbacks.Add(1)
+		closeCB()
+		return nil
+	}))
+
+	mgr.onTxnLogTails(txn)
+	require.Zero(t, callbacks.Load())
 }
 
 func newFakeCommittedTxn() *fakeAsyncTxn {

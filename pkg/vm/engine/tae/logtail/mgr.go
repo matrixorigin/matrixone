@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,6 +80,7 @@ type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
 	rt        *dbutils.Runtime
+	catalog   *catalog.Catalog
 	truncated types.TS
 	nowClock  func() types.TS // nowClock is from TxnManager
 
@@ -95,12 +97,14 @@ type Manager struct {
 
 func NewManager(
 	rt *dbutils.Runtime,
+	c *catalog.Catalog,
 	blockSize int,
 	nowClock func() types.TS,
 ) *Manager {
 
 	mgr := &Manager{
-		rt: rt,
+		rt:      rt,
+		catalog: c,
 		table: NewTxnTable(
 			blockSize,
 			nowClock,
@@ -262,6 +266,119 @@ func collectOneTxn(
 	}
 }
 
+// collectReplayed2PC occupies the recovered transaction's original prepare
+// slot until the durable 2PC decision is known. Unlike an ordinary txn, WAL
+// replay has no live txn store batches to observe, so a committed replay is
+// rebuilt from catalog MVCC after apply has completed.
+func (mgr *Manager) collectReplayed2PC(txn txnif.AsyncTxn) *txnWithLogtails {
+	txn.GetStore().WaitEvent(txnif.WalPreparing)
+	// Release apply before waiting for the final state. commit2PC/rollback2PC
+	// apply catalog changes before DoneWithErr makes that state observable.
+	txn.GetStore().DoneEvent(txnif.TailCollecting)
+
+	state := txn.GetTxnState(true)
+	if state == txnif.TxnStateRollbacked {
+		return nil
+	}
+	if state != txnif.TxnStateCommitted {
+		panic(fmt.Sprintf("wrong replayed 2PC state %v", state))
+	}
+
+	tails, closeCB := mgr.collectReplayed2PCTables(txn)
+	return &txnWithLogtails{txn: txn, tails: tails, closeCB: closeCB}
+}
+
+func (mgr *Manager) collectReplayed2PCTables(
+	txn txnif.AsyncTxn,
+) (*[]logtail.TableLogtail, func()) {
+	tails := make([]logtail.TableLogtail, 0)
+	visitors := make([]*TableLogtailRespBuilder, 0)
+	var closeOnce sync.Once
+	closeCB := func() {
+		closeOnce.Do(func() {
+			for _, visitor := range visitors {
+				visitor.Close()
+			}
+		})
+	}
+	failed := true
+	defer func() {
+		if failed {
+			closeCB()
+		}
+	}()
+
+	// Tests that exercise only the ordering contract intentionally construct a
+	// manager without a catalog. Production always injects DB.Catalog.
+	if mgr.catalog == nil {
+		failed = false
+		return &tails, closeCB
+	}
+
+	dirty := txn.GetMemo().GetDirty()
+	if dirty == nil || dirty.IsEmpty() {
+		failed = false
+		return &tails, closeCB
+	}
+	records := make([][2]uint64, 0, dirty.TableCount())
+	for _, record := range dirty.Tables {
+		records = append(records, [2]uint64{record.DbID, record.ID})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i][0] != records[j][0] {
+			return records[i][0] < records[j][0]
+		}
+		return records[i][1] < records[j][1]
+	})
+
+	prepareTS := txn.GetPrepareTS()
+	for _, record := range records {
+		dbEntry, err := mgr.catalog.GetDatabaseByID(record[0])
+		if err != nil {
+			panic(err)
+		}
+		tableEntry, err := dbEntry.GetTableEntryByID(record[1])
+		if err != nil {
+			panic(err)
+		}
+		visitor := NewTableLogtailRespBuilder(
+			context.Background(), "", prepareTS.Prev(), prepareTS, tableEntry)
+		visitors = append(visitors, visitor)
+		if err = mgr.GetTableOperator(
+			prepareTS.Prev(), prepareTS, tableEntry, visitor).Run(); err != nil {
+			panic(err)
+		}
+		resp, err := visitor.BuildResp()
+		if err != nil {
+			panic(err)
+		}
+		commands := make([]api.Entry, len(resp.Commands))
+		for i := range resp.Commands {
+			commands[i] = *resp.Commands[i]
+		}
+		schema := tableEntry.GetLastestSchemaLocked(false)
+		primarySeqnum := uint32(0)
+		if primary := schema.GetPrimaryKey(); primary != nil {
+			primarySeqnum = uint32(primary.SeqNum)
+		}
+		ts := prepareTS.ToTimestamp()
+		tails = append(tails, logtail.TableLogtail{
+			Ts: &ts,
+			Table: &api.TableID{
+				AccId:         schema.AcInfo.TenantID,
+				DbId:          record[0],
+				TbId:          record[1],
+				DbName:        dbEntry.GetName(),
+				TbName:        schema.Name,
+				PrimarySeqnum: primarySeqnum,
+			},
+			Commands: commands,
+		})
+	}
+	failed = false
+	return &tails, closeCB
+}
+
 func (mgr *Manager) onTxnLogTails(items ...any) {
 	// Collect logtails for all txns in parallel via collectPool.
 	// A slow txn only blocks the publisher up to its slot, not the
@@ -274,11 +391,16 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 	orderedCollectAndPublish(
 		len(items),
 		func(i int) bool {
-			return items[i].(txnif.AsyncTxn).IsReplay()
+			txn := items[i].(txnif.AsyncTxn)
+			return txn.IsReplay() && !txn.Is2PC()
 		},
 		func(fn func()) { _ = mgr.collectPool.Submit(fn) },
 		func(i int) *txnWithLogtails {
-			return collectOneTxn(items[i].(txnif.AsyncTxn), collect)
+			txn := items[i].(txnif.AsyncTxn)
+			if txn.IsReplay() {
+				return mgr.collectReplayed2PC(txn)
+			}
+			return collectOneTxn(txn, collect)
 		},
 		mgr.generateLogtailWithTxn,
 	)

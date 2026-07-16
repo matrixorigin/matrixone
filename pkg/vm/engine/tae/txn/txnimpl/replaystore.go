@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -89,13 +90,14 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
-	store.resolvePreparedDMLTables()
+	prepareTS := txn.GetPrepareTS()
+	store.resolvePreparedDMLTables(&prepareTS)
 	return
 }
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyRollback()
-	store.resolvePreparedDMLTables()
+	store.resolvePreparedDMLTables(nil)
 	return
 }
 
@@ -123,9 +125,9 @@ func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
 	}
 }
 
-func (store *replayTxnStore) resolvePreparedDMLTables() {
+func (store *replayTxnStore) resolvePreparedDMLTables(prepareTS *types.TS) {
 	for _, table := range store.preparedTables {
-		table.ResolveReplayedPreparedDML(store.preparedTxnID)
+		table.ResolveReplayedPreparedDML(store.preparedTxnID, prepareTS)
 	}
 	store.preparedTables = nil
 }

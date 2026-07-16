@@ -644,6 +644,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 	db.Runtime.Now = db.TxnMgr.Now
 	db.LogtailMgr = logtail.NewManager(
 		db.Runtime,
+		db.Catalog,
 		int(db.Opts.LogtailCfg.PageSize),
 		db.TxnMgr.Now,
 	)

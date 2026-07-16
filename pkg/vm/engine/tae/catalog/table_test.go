@@ -56,26 +56,26 @@ func TestReplayedPreparedDMLFenceLifecycle(t *testing.T) {
 	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(20, 0)))
 	require.True(t, other.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(20, 1)))
 
-	// Resolving one transaction cannot release the other blocker. Duplicate
-	// resolution is harmless and cannot create another pending generation.
-	table.ResolveReplayedPreparedDML("txn-1")
-	table.ResolveReplayedPreparedDML("txn-1")
+	// Rolling one transaction back cannot release the other blocker. Duplicate
+	// resolution is harmless and publishes no DML watermark.
+	table.ResolveReplayedPreparedDML("txn-1", nil)
+	table.ResolveReplayedPreparedDML("txn-1", nil)
 	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(21, 0)))
 
-	// This is the critical old-MAX interleaving: ALTER has an old snapshot,
-	// the final recovered transaction resolves, and only then ALTER prepares.
-	// The pending decision is consumed into the ordinary watermark and retries.
-	table.ResolveReplayedPreparedDML("txn-2")
+	// A committed replay publishes its own DML prepare timestamp while removing
+	// the final blocker. It never promotes the current ALTER prepare timestamp.
+	replayedPrepare := types.BuildTS(12, 0)
+	table.ResolveReplayedPreparedDML("txn-2", &replayedPrepare)
 	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(22, 0)))
 
-	// A second already-started ALTER is rejected by the published watermark,
-	// while a causally fresh retry can proceed. Unknown replayed writes use the
-	// same bounded lifecycle and therefore cannot leave a permanent blocker.
+	// An ALTER whose snapshot is at/after the original DML prepare proceeds;
+	// ordered logtail delivery guarantees that such a CN snapshot contains the
+	// recovered row. Unknown duplicate resolutions cannot add a new fence.
 	require.True(t, table.ShouldRetryAutoIncrementAlter(
 		types.BuildTS(11, 0), types.BuildTS(23, 0)))
 	require.False(t, table.ShouldRetryAutoIncrementAlter(
-		types.BuildTS(22, 0), types.BuildTS(24, 0)))
-	table.ResolveReplayedPreparedDML("missing")
+		types.BuildTS(12, 0), types.BuildTS(24, 0)))
+	table.ResolveReplayedPreparedDML("missing", &replayedPrepare)
 	require.False(t, table.ShouldRetryAutoIncrementAlter(
 		types.BuildTS(22, 0), types.BuildTS(25, 0)))
 }
