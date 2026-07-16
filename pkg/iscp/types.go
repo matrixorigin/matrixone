@@ -49,7 +49,6 @@ const (
 	ISCPJobState_Completed
 	ISCPJobState_Error
 	ISCPJobState_Canceled
-	ISCPJobState_Canceling
 )
 
 type DataRetriever interface {
@@ -164,8 +163,6 @@ type ISCPTaskExecutor struct {
 	runtimeMu        sync.Mutex
 	fencedJobs       map[JobRuntimeKey]struct{}
 	runningConsumers map[JobRuntimeKey]map[uint64]*RunningJobConsumer
-	cancelJobs       chan JobRuntimeKey
-	cancelingJobs    map[JobRuntimeKey]struct{}
 }
 
 type JobRuntimeKey struct {

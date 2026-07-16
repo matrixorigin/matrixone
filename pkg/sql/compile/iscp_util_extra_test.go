@@ -19,14 +19,44 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type iscpDrainTestQueryClient struct {
+	serviceID string
+	requests  []*query.Request
+	err       error
+}
+
+func (q *iscpDrainTestQueryClient) ServiceID() string {
+	return q.serviceID
+}
+
+func (q *iscpDrainTestQueryClient) SendMessage(_ context.Context, _ string, req *query.Request) (*query.Response, error) {
+	q.requests = append(q.requests, req)
+	if q.err != nil {
+		return nil, q.err
+	}
+	return &query.Response{CmdMethod: req.CmdMethod}, nil
+}
+
+func (q *iscpDrainTestQueryClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+
+func (q *iscpDrainTestQueryClient) Release(*query.Response) {}
+
+func (q *iscpDrainTestQueryClient) Close() error {
+	return nil
+}
 
 func TestCoverage_genCdcTaskJobID(t *testing.T) {
 	tests := []struct {
@@ -426,6 +456,151 @@ func TestDrainIndexCdcTaskConsumerNoRunnerExecutorFailsClosed(t *testing.T) {
 	}
 
 	require.ErrorContains(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"), "cannot confirm ISCP consumer quiescence on CN runner-cn")
+}
+
+func TestDrainIndexCdcTaskConsumerRoutesToRemoteRunnerQueryService(t *testing.T) {
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetCNQueryAddress = func(context.Context, string, string) (string, error) {
+		return "runner-cn:18101", nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetCNQueryAddress = getCNQueryAddress
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	qc := &iscpDrainTestQueryClient{serviceID: "ddl-cn"}
+	c.proc.Base.QueryClient = qc
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	require.Len(t, qc.requests, 1)
+	req := qc.requests[0]
+	require.Equal(t, query.CmdMethod_ISCPDrainConsumer, req.CmdMethod)
+	require.NotNil(t, req.ISCPDrainConsumerRequest)
+	require.Equal(t, uint32(0), req.ISCPDrainConsumerRequest.AccountID)
+	require.Equal(t, uint64(42), req.ISCPDrainConsumerRequest.TableID)
+	require.Equal(t, "index_idx1", req.ISCPDrainConsumerRequest.JobName)
+	require.Equal(t, uint64(7), req.ISCPDrainConsumerRequest.JobID)
+	require.False(t, req.ISCPDrainConsumerRequest.RemoveFenceOnly)
+}
+
+func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetCNQueryAddress = func(context.Context, string, string) (string, error) {
+		return "runner-cn:18101", nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetCNQueryAddress = getCNQueryAddress
+	}()
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	var rollbackCleanup client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).Times(1)
+	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			rollbackCleanup = cb
+		},
+	).Times(1)
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	c.proc.Base.TxnOperator = txnOp
+	qc := &iscpDrainTestQueryClient{serviceID: "ddl-cn"}
+	c.proc.Base.QueryClient = qc
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	require.NotNil(t, rollbackCleanup.Func)
+	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{CostEvent: true}, nil))
+
+	require.Len(t, qc.requests, 2)
+	require.False(t, qc.requests[0].ISCPDrainConsumerRequest.RemoveFenceOnly)
+	require.True(t, qc.requests[1].ISCPDrainConsumerRequest.RemoveFenceOnly)
+}
+
+func TestDrainIndexCdcTaskConsumerRemoteQueryFailureFailsClosed(t *testing.T) {
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetCNQueryAddress = func(context.Context, string, string) (string, error) {
+		return "runner-cn:18101", nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetCNQueryAddress = getCNQueryAddress
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	c.proc.Base.QueryClient = &iscpDrainTestQueryClient{
+		serviceID: "ddl-cn",
+		err:       moerr.NewInternalErrorNoCtx("remote drain failed"),
+	}
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.ErrorContains(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"), "remote drain failed")
 }
 
 func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {

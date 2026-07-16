@@ -16,17 +16,9 @@ package iscp
 
 import (
 	"context"
-	"errors"
 	"sync"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 var iscpExecutors sync.Map // map[cnUUID]*ISCPTaskExecutor
@@ -71,9 +63,6 @@ func (exec *ISCPTaskExecutor) ensureRuntimeMapsLocked() {
 	}
 	if exec.runningConsumers == nil {
 		exec.runningConsumers = make(map[JobRuntimeKey]map[uint64]*RunningJobConsumer)
-	}
-	if exec.cancelingJobs == nil {
-		exec.cancelingJobs = make(map[JobRuntimeKey]struct{})
 	}
 }
 
@@ -128,142 +117,6 @@ func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
 			return ctx.Err()
 		}
 	}
-	return nil
-}
-
-func (exec *ISCPTaskExecutor) enqueueCancelJob(key JobRuntimeKey) {
-	if exec == nil {
-		return
-	}
-	exec.runtimeMu.Lock()
-	exec.ensureRuntimeMapsLocked()
-	if _, ok := exec.cancelingJobs[key]; ok {
-		exec.runtimeMu.Unlock()
-		return
-	}
-	exec.cancelingJobs[key] = struct{}{}
-	cancelJobs := exec.cancelJobs
-	exec.runtimeMu.Unlock()
-
-	if cancelJobs == nil {
-		exec.clearCancelingJob(key)
-		return
-	}
-	select {
-	case cancelJobs <- key:
-	default:
-		go func() {
-			ctx := exec.ctx
-			if ctx == nil {
-				exec.clearCancelingJob(key)
-				return
-			}
-			select {
-			case cancelJobs <- key:
-			case <-ctx.Done():
-				exec.clearCancelingJob(key)
-			}
-		}()
-	}
-}
-
-func (exec *ISCPTaskExecutor) requeueCancelJob(ctx context.Context, key JobRuntimeKey) {
-	if exec == nil {
-		return
-	}
-	go func() {
-		timer := time.NewTimer(DefaultRetryInterval)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			exec.clearCancelingJob(key)
-			return
-		}
-		cancelJobs := exec.cancelJobs
-		if cancelJobs == nil {
-			exec.clearCancelingJob(key)
-			return
-		}
-		select {
-		case cancelJobs <- key:
-		case <-ctx.Done():
-			exec.clearCancelingJob(key)
-		}
-	}()
-}
-
-func (exec *ISCPTaskExecutor) clearCancelingJob(key JobRuntimeKey) {
-	exec.runtimeMu.Lock()
-	delete(exec.cancelingJobs, key)
-	exec.runtimeMu.Unlock()
-}
-
-func (exec *ISCPTaskExecutor) finishCanceledJob(ctx context.Context, key JobRuntimeKey) error {
-	if exec == nil {
-		return nil
-	}
-	if err := exec.CancelAndDrainJobConsumer(ctx, key.AccountID, key.TableID, key.JobName, key.JobID); err != nil {
-		return err
-	}
-	if err := exec.markJobCanceled(ctx, key); err != nil {
-		return err
-	}
-	exec.clearCancelingJob(key)
-	exec.RemoveJobFence(key)
-	return nil
-}
-
-func (exec *ISCPTaskExecutor) markJobCanceled(ctx context.Context, key JobRuntimeKey) (err error) {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp cancel job timeout"))
-	defer cancel()
-	if _, _, injected := fault.TriggerFaultWithContext(ctx, objectio.FJ_ISCPCancelBeforeMarkCanceled); injected {
-		logutil.Infof(
-			"ISCP-Task cancel fault triggered %s: accountID=%d tableID=%d jobName=%s jobID=%d",
-			objectio.FJ_ISCPCancelBeforeMarkCanceled,
-			key.AccountID,
-			key.TableID,
-			key.JobName,
-			key.JobID,
-		)
-	}
-	if _, msg, injected := fault.TriggerFault(objectio.FJ_ISCPCancelMarkCanceledError); injected {
-		if msg == "" {
-			msg = objectio.FJ_ISCPCancelMarkCanceledError
-		}
-		return moerr.NewInternalErrorNoCtxf("injected ISCP cancel mark error: %s", msg)
-	}
-	txnOp, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp cancel job")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, txnOp.Rollback(ctx))
-			return
-		}
-		err = txnOp.Commit(ctx)
-	}()
-	sql := cdc.CDCSQLBuilder.ISCPLogUpdateStateSQL(
-		key.AccountID,
-		key.TableID,
-		key.JobName,
-		key.JobID,
-		ISCPJobState_Canceled,
-	)
-	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txnOp)
-	if err != nil {
-		return err
-	}
-	result.Close()
-	logutil.Infof(
-		"ISCP-Task marked job canceled: accountID=%d tableID=%d jobName=%s jobID=%d",
-		key.AccountID,
-		key.TableID,
-		key.JobName,
-		key.JobID,
-	)
 	return nil
 }
 

@@ -28,21 +28,10 @@ func newRuntimeTestExecutor() *ISCPTaskExecutor {
 	return &ISCPTaskExecutor{
 		fencedJobs:       make(map[JobRuntimeKey]struct{}),
 		runningConsumers: make(map[JobRuntimeKey]map[uint64]*RunningJobConsumer),
-		cancelJobs:       make(chan JobRuntimeKey, DefaultCancelJobQueueSize),
-		cancelingJobs:    make(map[JobRuntimeKey]struct{}),
 		option:           fillDefaultOption(nil),
 		ctx:              context.Background(),
 		tables:           newISCPTableTree(),
 	}
-}
-
-func encodeRuntimeCancelTestJSON(t *testing.T, value string) []byte {
-	t.Helper()
-	byteJSON, err := types.ParseStringToByteJson(value)
-	require.NoError(t, err)
-	encoded, err := types.EncodeJson(byteJSON)
-	require.NoError(t, err)
-	return encoded
 }
 
 func TestGetExecutorRuntimeRequiresExactCN(t *testing.T) {
@@ -224,87 +213,4 @@ func TestCancelAndDrainJobConsumerHonorsCallerContext(t *testing.T) {
 
 	require.True(t, errors.Is(err, context.Canceled))
 	<-consumerCancelCalled
-}
-
-func TestDroppedJobIsQueuedForCancel(t *testing.T) {
-	exec := newRuntimeTestExecutor()
-	table := NewTableEntry(exec, 1, 10, 2, "db", "tbl")
-	exec.setTable(table)
-	spec := &JobSpec{
-		ConsumerInfo: ConsumerInfo{
-			SrcTable: TableInfo{DBID: 10, TableID: 2, DBName: "db", TableName: "tbl"},
-		},
-		TriggerSpec: TriggerSpec{JobType: TriggerType_Default},
-	}
-	specJSON, err := MarshalJobSpec(spec)
-	require.NoError(t, err)
-	statusJSON, err := MarshalJobStatus(&JobStatus{})
-	require.NoError(t, err)
-	dropAt := types.Timestamp(time.Now().UnixNano())
-
-	err = exec.addOrUpdateJob(
-		1,
-		2,
-		"index_idx01",
-		7,
-		ISCPJobState_Canceling,
-		types.BuildTS(1, 0).ToString(),
-		encodeRuntimeCancelTestJSON(t, specJSON),
-		encodeRuntimeCancelTestJSON(t, statusJSON),
-		dropAt,
-		true,
-	)
-	require.NoError(t, err)
-
-	key := NewJobRuntimeKey(1, 2, "index_idx01", 7)
-	require.Eventually(t, func() bool {
-		select {
-		case got := <-exec.cancelJobs:
-			return got == key
-		default:
-			return false
-		}
-	}, time.Second, 10*time.Millisecond)
-	exec.runtimeMu.Lock()
-	_, queued := exec.cancelingJobs[key]
-	exec.runtimeMu.Unlock()
-	require.True(t, queued)
-}
-
-func TestRecoveredDroppedJobBecomesCanceledWithoutQueue(t *testing.T) {
-	exec := newRuntimeTestExecutor()
-	table := NewTableEntry(exec, 1, 10, 2, "db", "tbl")
-	exec.setTable(table)
-	spec := &JobSpec{
-		ConsumerInfo: ConsumerInfo{
-			SrcTable: TableInfo{DBID: 10, TableID: 2, DBName: "db", TableName: "tbl"},
-		},
-		TriggerSpec: TriggerSpec{JobType: TriggerType_Default},
-	}
-	specJSON, err := MarshalJobSpec(spec)
-	require.NoError(t, err)
-	statusJSON, err := MarshalJobStatus(&JobStatus{})
-	require.NoError(t, err)
-	dropAt := types.Timestamp(time.Now().UnixNano())
-
-	err = exec.addOrUpdateRecoveredJob(
-		1,
-		2,
-		"index_idx01",
-		7,
-		ISCPJobState_Canceling,
-		types.BuildTS(1, 0).ToString(),
-		encodeRuntimeCancelTestJSON(t, specJSON),
-		encodeRuntimeCancelTestJSON(t, statusJSON),
-		dropAt,
-		true,
-	)
-	require.NoError(t, err)
-
-	select {
-	case got := <-exec.cancelJobs:
-		t.Fatalf("recovered dropped job should not be queued, got %+v", got)
-	default:
-	}
-	require.Equal(t, int8(ISCPJobState_Canceled), table.jobs[JobKey{JobName: "index_idx01", JobID: 7}].state)
 }

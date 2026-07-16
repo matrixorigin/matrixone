@@ -102,6 +102,7 @@ enum CmdMethod {
   WorkspaceThreshold = 34;
   MinTimestamp = 35;
   CtlPrefetchOnSubscribed = 36;
+  ISCPDrainConsumer = 37;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -242,6 +243,7 @@ message Request {
   CtlMoTableStatsRequest CtlMoTableStatsRequest = 36 [ (gogoproto.nullable) = false ];
   WorkspaceThresholdRequest WorkspaceThresholdRequest = 37;
   CtlPrefetchOnSubscribedRequest CtlPrefetchOnSubscribedRequest = 38;
+  ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -307,6 +309,7 @@ message Response {
   WorkspaceThresholdResponse WorkspaceThresholdResponse = 37;
   MinTimestampResponse MinTimestampResponse = 38;
   CtlPrefetchOnSubscribedResponse CtlPrefetchOnSubscribedResponse = 39;
+  ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -350,6 +353,18 @@ message CtlPrefetchOnSubscribedRequest {
 
 message CtlPrefetchOnSubscribedResponse {
   string Resp = 1;
+}
+
+message ISCPDrainConsumerRequest {
+  uint32 AccountID = 1;
+  uint64 TableID = 2;
+  string JobName = 3;
+  uint64 JobID = 4;
+  bool RemoveFenceOnly = 5;
+}
+
+message ISCPDrainConsumerResponse {
+  bool Success = 1;
 }
 
 message TraceSpanRequest {
