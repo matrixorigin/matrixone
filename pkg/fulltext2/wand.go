@@ -313,8 +313,9 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 						theta = (*h)[0].score
 					}
 				} else if score > theta {
-					heap.Pop(h)
-					heap.Push(h, scoredDoc{pivotDoc, score})
+					// Replace-root + Fix (one sift) rather than Pop+Push (two).
+					(*h)[0] = scoredDoc{pivotDoc, score}
+					heap.Fix(h, 0)
 					theta = (*h)[0].score
 				}
 			}

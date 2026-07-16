@@ -190,11 +190,14 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		}
 		if h.Len() < k {
 			heap.Push(h, scoredDoc{ord, score})
-		} else if root := (*h)[0]; score > root.score || (score == root.score && ord < root.ord) {
-			// Strictly better, or ties the worst kept score with a smaller ord (the
-			// score-desc / ord-asc tiebreak the full sort produced).
-			heap.Pop(h)
-			heap.Push(h, scoredDoc{ord, score})
+			continue
+		}
+		// Strictly better, or ties the worst kept score with a smaller ord (the
+		// score-desc / ord-asc tiebreak the full sort produced). Replace-root + Fix
+		// (one sift) rather than Pop+Push (two).
+		if root := (*h)[0]; score > root.score || (score == root.score && ord < root.ord) {
+			(*h)[0] = scoredDoc{ord, score}
+			heap.Fix(h, 0)
 		}
 	}
 	return heapToResults(s, h), nil

@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"container/heap"
 	"fmt"
 	"sort"
 	"strconv"
@@ -183,22 +184,61 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 			Score: m.seg.scoreTerm(algo, float64(m.tf), idf2, m.ord, idx.globalAvgDocLen),
 		})
 	}
-	sortResults(results) // score desc, ties by ascending pk (deterministic)
-	if len(results) > k {
-		results = results[:k]
-	}
-	return results
+	return topKResults(results, k) // bounded top-k (score desc, ties by ascending pk)
 }
 
-// sortResults orders results by score descending, breaking ties by the pk's sortKey
-// (ascending) for a deterministic, reproducible order.
-func sortResults(results []Result) {
-	sort.Slice(results, func(a, b int) bool {
-		if results[a].Score != results[b].Score {
-			return results[a].Score > results[b].Score
+// rk decorates a Result with its precomputed sortKey so the heap compares a string,
+// not a per-call Sprintf.
+type rk struct {
+	r  Result
+	sk string
+}
+
+// rkHeap is a min-heap by (score asc, sortKey desc): the root is the worst-kept entry
+// (lowest score, and among ties the largest sortKey), so it is the eviction candidate.
+type rkHeap []rk
+
+func (h rkHeap) Len() int { return len(h) }
+func (h rkHeap) Less(i, j int) bool {
+	if h[i].r.Score != h[j].r.Score {
+		return h[i].r.Score < h[j].r.Score
+	}
+	return h[i].sk > h[j].sk
+}
+func (h rkHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *rkHeap) Push(x any)   { *h = append(*h, x.(rk)) }
+func (h *rkHeap) Pop() any     { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+
+// topKResults returns the top-k results (score desc, ties by ascending sortKey) via a
+// bounded min-heap, so a query matching far more than k docs (a common single-term NL
+// phrase, or a boolean union) pays O(n log k) instead of an O(n log n) reflection-based
+// full sort — and sortKey is computed ONCE per result, not per comparison. The kept set
+// and order are identical to a full sort + truncate.
+func topKResults(results []Result, k int) []Result {
+	if k <= 0 || len(results) == 0 {
+		return nil
+	}
+	h := &rkHeap{}
+	for _, r := range results {
+		e := rk{r, sortKey(r.Pk)}
+		if h.Len() < k {
+			heap.Push(h, e)
+			continue
 		}
-		return sortKey(results[a].Pk) < sortKey(results[b].Pk)
-	})
+		// Replace-root + Fix (ONE sift) instead of Pop+Push (two sifts): with a common
+		// term ~half the candidates beat the running worst-of-k, so the eviction sift is
+		// the hot loop. Only pay sortKey's string compare on a score tie.
+		root := (*h)[0]
+		if e.r.Score > root.r.Score || (e.r.Score == root.r.Score && e.sk < root.sk) {
+			(*h)[0] = e
+			heap.Fix(h, 0)
+		}
+	}
+	out := make([]Result, h.Len())
+	for i := len(out) - 1; i >= 0; i-- { // drain worst-first → fill from the end = score desc
+		out[i] = heap.Pop(h).(rk).r
+	}
+	return out
 }
 
 // SearchText tokenizes query with tok and runs an NL exact-phrase search across
@@ -342,11 +382,7 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfi
 	for _, r := range matched {
 		results = append(results, r)
 	}
-	sortResults(results)
-	if len(results) > k {
-		results = results[:k]
-	}
-	return results, nil
+	return topKResults(results, k), nil
 }
 
 // SearchBooleanText tokenizes+parses query in boolean mode with tok, then
