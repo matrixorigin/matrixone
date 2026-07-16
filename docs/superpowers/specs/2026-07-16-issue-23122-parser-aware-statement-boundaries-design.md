@@ -32,7 +32,7 @@ Use the parser-aware helper only where positional alignment with parsed statemen
 1. `rewriteSQL`, so one materialized policy is added per top-level statement.
 2. `extractLeadingHints` / `AddRewriteHints`, so hint count follows the same boundaries as the AST list.
 3. `extractRemapDbByStatement`, so each AST receives only its own remap.
-4. `sqlForRecordByStatement`, so execution records remain aligned with computation wrappers. Refactor the existing record sanitizer so it can sanitize one parser-aware fragment without lexically splitting its compound body; masking behavior remains unchanged.
+4. `sqlForRecordByStatement`, so execution records remain aligned with computation wrappers. Reuse the existing record sanitizer independently for each parser-aware fragment and rejoin any lexical subparts of a compound body; masking behavior remains unchanged without duplicating sanitization logic.
 
 If parser-aware splitting returns a syntax error before the normal parse stage, propagate that parser error. There is no executable statement on that path, so rewrite policy cannot be bypassed.
 
