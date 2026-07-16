@@ -190,11 +190,10 @@ func checkRemoteActiveTxn(client Client, txn pb.WaitTxn) (bool, error) {
 				"lockservice client does not support active-txn backend reset")
 		}
 		if err := resetter.ResetBackend(ctx, txn.CreatedOn); err != nil {
-			// Normalize reset failures to an indeterminate/retryable lockservice
-			// error. In particular, a BackendClosed reset error must not flow into
-			// isValidRemoteTxn's definitive-inactive branch.
-			return false, moerr.NewInternalErrorNoCtx(
-				"failed to reset active-txn backend: " + err.Error())
+			// Preserve the original error for observability. The caller treats every
+			// error as an indeterminate observation, independent of its transport
+			// error code.
+			return false, moerr.AttachCause(ctx, err)
 		}
 	}
 	return false, nil

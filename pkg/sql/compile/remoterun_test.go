@@ -1876,6 +1876,7 @@ var _ morpc.Stream = &fakeStreamSender{}
 type fakeStreamSender struct {
 	// how many packages were sent.
 	sentCnt int
+	sent    []morpc.Message
 
 	// return it during next send.
 	nextSendError error
@@ -1885,6 +1886,7 @@ func (s *fakeStreamSender) ID() uint64 { return 0 }
 func (s *fakeStreamSender) Send(ctx context.Context, request morpc.Message) error {
 	if s.nextSendError == nil {
 		s.sentCnt++
+		s.sent = append(s.sent, request)
 	}
 	return s.nextSendError
 }
@@ -2074,30 +2076,39 @@ func TestBuildRemoteDispatchReceiverRootReusesEarlyRegistration(t *testing.T) {
 
 func Test_MessageSenderSendPipeline(t *testing.T) {
 	sender := messageSenderOnClient{
-		ctx:          context.Background(),
-		streamSender: &fakeStreamSender{},
+		ctx:              context.Background(),
+		streamSender:     &fakeStreamSender{},
+		requestFinishAck: true,
 	}
 
 	{
 		// there should only send one time if this is just a small data.
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).sent = nil
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.Nil(t, err)
 
 		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
+		require.Equal(t, pipeline.StreamTeardownMode_FinishAck,
+			sender.streamSender.(*fakeStreamSender).sent[0].(*pipeline.Message).GetRequestedTeardownMode())
 	}
 
 	{
 		// there should be cut as multiple message to send for a big data.
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).sent = nil
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
 		require.Nil(t, err)
 
 		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
+		for _, sent := range sender.streamSender.(*fakeStreamSender).sent {
+			require.Equal(t, pipeline.StreamTeardownMode_FinishAck,
+				sent.(*pipeline.Message).GetRequestedTeardownMode())
+		}
 	}
 
 	{
