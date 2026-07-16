@@ -164,3 +164,128 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 		})
 	}
 }
+
+func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	for _, tc := range []struct {
+		name    string
+		fn      func() error
+		isError func(error) bool
+	}{
+		{
+			name: "date add",
+			fn: func() error {
+				_, err := doDateAdd(types.ZeroDate, 1, types.Day)
+				return err
+			},
+			isError: isDateOverflowMaxError,
+		},
+		{
+			name: "datetime add",
+			fn: func() error {
+				_, err := doDatetimeAdd(types.ZeroDatetime, 1, types.Day)
+				return err
+			},
+			isError: isDatetimeOverflowMaxError,
+		},
+		{
+			name: "timestamp add",
+			fn: func() error {
+				_, err := doTimestampAdd(time.UTC, types.ZeroTimestamp, 1, types.Day)
+				return err
+			},
+			isError: isDatetimeOverflowMaxError,
+		},
+		{
+			name: "date sub",
+			fn: func() error {
+				_, err := doDateSub(types.ZeroDate, 1, types.Day)
+				return err
+			},
+			isError: isDatetimeOverflowMaxError,
+		},
+		{
+			name: "datetime sub",
+			fn: func() error {
+				_, err := doDatetimeSub(types.ZeroDatetime, 1, types.Day)
+				return err
+			},
+			isError: isDatetimeOverflowMaxError,
+		},
+		{
+			name: "timestamp sub",
+			fn: func() error {
+				_, err := doTimestampSub(time.UTC, types.ZeroTimestamp, 1, types.Day)
+				return err
+			},
+			isError: isDatetimeOverflowMaxError,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, tc.isError(tc.fn()))
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "to days", fn: builtInToDays},
+		{name: "to seconds", fn: builtInToSeconds},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				tc.fn,
+			)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestZeroTemporalIntervalOperatorsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	intervalType := int64(types.Day)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "date sub",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{intervalType}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{0}, []bool{true}),
+			fn:     DateSub,
+		},
+		{
+			name: "timestamp add",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{intervalType}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{0}, []bool{true}),
+			fn:     TimestampAdd,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}

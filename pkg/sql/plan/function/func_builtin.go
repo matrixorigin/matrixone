@@ -3216,6 +3216,12 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		rs.Append(DateTimeDiff(intervalUnitDAY, types.DatetimeEpoch, datetimeValue)+ADZeroDays, false)
 	}
 	return nil
@@ -3405,6 +3411,12 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 	for i := uint64(0); i < uint64(length); i++ {
 		datetimeValue, isNull := dateParams.GetValue(i)
 		if isNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if datetimeValue == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}

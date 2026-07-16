@@ -47,6 +47,26 @@ func getVal(val any) string {
 	}
 }
 
+func rejectZeroTemporalInStrictMode(proc *process.Process, value, typ string) error {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return nil
+	}
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return nil
+	}
+	modeStr, ok := mode.(string)
+	if !ok {
+		return nil
+	}
+	modeStr = strings.ToUpper(modeStr)
+	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
+	if hasStrictMode && strings.Contains(modeStr, "NO_ZERO_DATE") {
+		return moerr.NewTruncatedValueForField(proc.Ctx, typ, value, "value", 1)
+	}
+	return nil
+}
+
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
 	return strconv.ParseUint(s, 16, 64)
@@ -323,6 +343,11 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			if err != nil {
 				return false, false, res, err
 			}
+			if res == types.ZeroTimestamp {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					return false, false, res, err
+				}
+			}
 			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
 			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
 			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
@@ -378,6 +403,11 @@ func SetInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, typ *typ
 			isnull = true
 		} else {
 			res, err = types.ParseDatetime(s, typ.Scale)
+			if err == nil && res == types.ZeroDatetime {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					canInsert = false
+				}
+			}
 		}
 
 	case tree.P_bool:
@@ -489,6 +519,10 @@ func SetInsertValueDate(proc *process.Process, numVal *tree.NumVal, typ *types.T
 			res, err = types.ParseDateCast(s)
 			if err != nil {
 				canInsert = false
+			} else if res == types.ZeroDate {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "date"); err != nil {
+					canInsert = false
+				}
 			}
 		}
 

@@ -269,3 +269,49 @@ func TestSetInsertValueTimeStamp_MinValueValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSetInsertValueRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		require.True(t, isSystemVar)
+		require.False(t, isGlobalVar)
+		return "STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE", nil
+	})
+
+	dateType := types.T_date.ToType()
+	datetimeType := types.T_datetime.ToType()
+	timestampType := types.T_timestamp.ToType()
+	for _, tc := range []struct {
+		name string
+		call func() (bool, error)
+	}{
+		{
+			name: "date",
+			call: func() (bool, error) {
+				canInsert, _, _, err := SetInsertValueDate(proc, tree.NewNumVal("0000-00-00", "0000-00-00", false, tree.P_char), &dateType)
+				return canInsert, err
+			},
+		},
+		{
+			name: "datetime",
+			call: func() (bool, error) {
+				canInsert, _, _, err := SetInsertValueDateTime(proc, tree.NewNumVal("0000-00-00 00:00:00", "0000-00-00 00:00:00", false, tree.P_char), &datetimeType)
+				return canInsert, err
+			},
+		},
+		{
+			name: "timestamp",
+			call: func() (bool, error) {
+				canInsert, _, _, err := SetInsertValueTimeStamp(proc, tree.NewNumVal("0000-00-00 00:00:00", "0000-00-00 00:00:00", false, tree.P_char), &timestampType)
+				return canInsert, err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			canInsert, err := tc.call()
+			require.False(t, canInsert)
+			require.Error(t, err)
+		})
+	}
+}

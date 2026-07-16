@@ -35,6 +35,26 @@ func isTemporalComparisonCharacterString(t types.T) bool {
 	return t == types.T_char || t == types.T_varchar || t == types.T_text
 }
 
+func timeStringBetweenCastRule(inputs []types.Type) (bool, []types.Type) {
+	hasTime := false
+	hasString := false
+	for _, input := range inputs {
+		switch {
+		case input.Oid == types.T_time:
+			hasTime = true
+		case isTemporalComparisonCharacterString(input.Oid):
+			hasString = true
+		default:
+			return false, nil
+		}
+	}
+	if !hasTime || !hasString {
+		return false, nil
+	}
+	target := types.T_varchar.ToType()
+	return true, []types.Type{target, target, target}
+}
+
 var supportedOperators = []FuncNew{
 	// operator `=`
 	// return true if a = b, return false if a != b, return null if one of a and b is null
@@ -298,6 +318,9 @@ var supportedOperators = []FuncNew{
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) != 3 {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if hasCast, targets := timeStringBetweenCastRule(inputs); hasCast {
+				return newCheckResultWithCast(0, targets)
 			}
 
 			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||

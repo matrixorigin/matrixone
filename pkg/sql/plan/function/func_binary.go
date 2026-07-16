@@ -1324,6 +1324,9 @@ func isDateOverflowMaxError(err error) bool {
 }
 
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	if start == types.ZeroDate {
+		return 0, dateOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1444,6 +1447,9 @@ func isDatetimeOverflowMaxError(err error) bool {
 }
 
 func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1575,6 +1581,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateType)
 	if success {
 		// Check if result is less than minimum valid date (0001-01-01)
@@ -1655,6 +1664,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	if start == types.ZeroTimestamp {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1959,9 +1971,34 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampAdd(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
+	rsNull := rsVec.GetNulls()
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v2 == math.MaxInt64 {
+			rsNull.Add(i)
+			continue
+		}
+		resultTs, err := doTimestampAdd(loc, v1, v2, iTyp)
+		if err != nil {
+			if isDatetimeOverflowMaxError(err) {
+				rsNull.Add(i)
+				continue
+			}
+			return err
+		}
+		rss[i] = resultTs
+	}
+	return nil
 }
 
 func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -4165,6 +4202,9 @@ func AbbrDayOfMonth(day int) string {
 }
 
 func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	if start == types.ZeroDate {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4195,6 +4235,9 @@ func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 }
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4238,6 +4281,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	dt, success := start.AddInterval(-diff, iTyp, types.DateType)
 	if success {
 		return dt, nil
@@ -4275,6 +4321,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	if start == types.ZeroTimestamp {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4299,9 +4348,32 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
-		return doDateSub(v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Date](result)
+	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v2 == math.MaxInt64 {
+			rsNull.Add(i)
+			continue
+		}
+		resultDate, err := doDateSub(v1, v2, iTyp)
+		if err != nil {
+			if isDatetimeOverflowMaxError(err) {
+				rsNull.Add(i)
+				continue
+			}
+			return err
+		}
+		rss[i] = resultDate
+	}
+	return nil
 }
 
 func intToDate(v int32) (types.Date, error) {

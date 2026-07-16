@@ -243,6 +243,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if err = checkZeroTemporalInStrictMode(preInsert, preInsert.ctr.buf, proc); err != nil {
+		return result, err
+	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
@@ -301,6 +304,55 @@ func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
 		return false
 	}
 	return shouldTreatZeroAsAutoIncr(proc)
+}
+
+// checkZeroTemporalInStrictMode covers expression-produced values that bypass
+// the literal conversion helpers used by INSERT ... VALUES.
+func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc *proc) error {
+	if preInsert == nil || bat == nil || proc == nil || proc.GetResolveVariableFunc() == nil {
+		return nil
+	}
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return nil
+	}
+	modeStr, ok := mode.(string)
+	if !ok {
+		return nil
+	}
+	modeStr = strings.ToUpper(modeStr)
+	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
+	if !hasStrictMode || !strings.Contains(modeStr, "NO_ZERO_DATE") {
+		return nil
+	}
+
+	for idx := range preInsert.Attrs {
+		vecIdx := int(preInsert.ColOffset) + idx
+		if vecIdx >= len(bat.Vecs) || bat.Vecs[vecIdx] == nil {
+			continue
+		}
+		vec := bat.Vecs[vecIdx]
+		for row := 0; row < vec.Length(); row++ {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			switch vec.GetType().Oid {
+			case types.T_date:
+				if vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
+				}
+			case types.T_datetime:
+				if vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			case types.T_timestamp:
+				if vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row) == types.ZeroTimestamp {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func convertZeroToNull(bat *batch.Batch, preInsert *PreInsert) {

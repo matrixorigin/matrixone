@@ -78,3 +78,21 @@ func TestTimeStringComparisonOperatorsRequestStringCasts(t *testing.T) {
 	require.True(t, shouldCast)
 	require.Equal(t, []types.Type{varcharType, varcharType, varcharType}, targets)
 }
+
+func TestTimeStringBetweenUsesOneComparisonTypeForAllArguments(t *testing.T) {
+	ctx := context.Background()
+	timeType := types.T_time.ToTypeWithScale(6)
+	varcharType := types.T_varchar.ToType()
+
+	for _, inputs := range [][]types.Type{
+		{timeType, varcharType, timeType},
+		{timeType, timeType, varcharType},
+		{varcharType, timeType, varcharType},
+	} {
+		get, err := GetFunctionByName(ctx, "between", inputs)
+		require.NoError(t, err)
+		targets, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Equal(t, []types.Type{varcharType, varcharType, varcharType}, targets)
+	}
+}

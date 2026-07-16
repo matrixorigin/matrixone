@@ -293,6 +293,128 @@ func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
 	require.False(t, shouldConvertZeroToNull(pre, proc))
 }
 
+func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	mode := "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", varName)
+		return mode, nil
+	})
+
+	tests := []struct {
+		name string
+		typ  types.T
+	}{
+		{name: "date", typ: types.T_date},
+		{name: "datetime", typ: types.T_datetime},
+		{name: "timestamp", typ: types.T_timestamp},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ.ToType())
+			switch tc.typ {
+			case types.T_date:
+				require.NoError(t, vector.AppendFixed(vec, types.ZeroDate, false, proc.Mp()))
+			case types.T_datetime:
+				require.NoError(t, vector.AppendFixed(vec, types.ZeroDatetime, false, proc.Mp()))
+			case types.T_timestamp:
+				require.NoError(t, vector.AppendFixed(vec, types.ZeroTimestamp, false, proc.Mp()))
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			pre := &PreInsert{
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
+				Attrs:    []string{"v"},
+			}
+
+			require.Error(t, checkZeroTemporalInStrictMode(pre, bat, proc))
+			mode = "NO_ZERO_DATE"
+			require.NoError(t, checkZeroTemporalInStrictMode(pre, bat, proc))
+			mode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+			bat.Clean(proc.Mp())
+		})
+	}
+}
+
+func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	mode := "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return mode, nil
+	})
+
+	for _, tc := range []struct {
+		name string
+		typ  types.T
+	}{
+		{name: "date", typ: types.T_date},
+		{name: "datetime", typ: types.T_datetime},
+		{name: "timestamp", typ: types.T_timestamp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := newZeroTemporalConstVector(t, tc.typ, proc)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vec
+			input.SetRowCount(1)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			pre := &PreInsert{
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
+				Attrs:    []string{"v"},
+			}
+			pre.AppendChild(child)
+			require.NoError(t, pre.Prepare(proc))
+
+			_, err := pre.Call(proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValueForField))
+
+			pre.Free(proc, false, err)
+			child.Free(proc, false, nil)
+		})
+	}
+
+	mode = "NO_ZERO_DATE"
+	vec := newZeroTemporalConstVector(t, types.T_date, proc)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vec
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	pre := &PreInsert{
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_date)}}}},
+		Attrs:    []string{"v"},
+	}
+	pre.AppendChild(child)
+	require.NoError(t, pre.Prepare(proc))
+	_, err := pre.Call(proc)
+	require.NoError(t, err)
+	pre.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+}
+
+func newZeroTemporalConstVector(t *testing.T, typ types.T, proc *proc) *vector.Vector {
+	t.Helper()
+	switch typ {
+	case types.T_date:
+		vec, err := vector.NewConstFixed(typ.ToType(), types.ZeroDate, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	case types.T_datetime:
+		vec, err := vector.NewConstFixed(typ.ToType(), types.ZeroDatetime, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	case types.T_timestamp:
+		vec, err := vector.NewConstFixed(typ.ToType(), types.ZeroTimestamp, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	default:
+		require.FailNow(t, "unsupported temporal type", typ.String())
+		return nil
+	}
+}
+
 func TestShouldTreatZeroAsAutoIncrFallback(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
