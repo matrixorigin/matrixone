@@ -201,6 +201,9 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	sessionRules, sessionRemapDb := getSessionRewriteRules(ctx, ses)
 	fragments, err := parsers.SplitSqlByStatement(ctx, sql)
 	if err != nil {
+		if _, ok := err.(*moerr.Error); !ok {
+			err = moerr.NewParseError(ctx, err.Error())
+		}
 		return sql, err
 	}
 	if len(fragments) == 1 {

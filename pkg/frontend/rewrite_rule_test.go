@@ -27,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -570,6 +571,21 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.NoError(t, err)
 		return chains["db.t"]
 	}
+
+	t.Run("parser boundary errors keep parse classification", func(t *testing.T) {
+		ses := newSession(t, "", "")
+		sql := "/*! {\n" +
+			"  \"rewrites\": {\"hint_test.users\": \"select * from users\"}\n" +
+			"} */ drop table if exists users"
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.Equal(t, sql, rewritten)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+			"expected parse error, got %T: %v", err, err)
+		require.True(t, strings.HasPrefix(err.Error(), "SQL parser error:"),
+			"expected parser error prefix, got %q", err.Error())
+	})
 
 	t.Run("role and session policy reach later statement", func(t *testing.T) {
 		ses := newSession(t,
