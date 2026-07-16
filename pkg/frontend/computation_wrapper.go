@@ -850,6 +850,7 @@ func createCompile(
 	} else {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatement(ses, schedulingSQL))
 	}
+	retCompile.SetResourceAttemptOwnerEligible()
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		// No permission verification is required when retry execute buildPlan

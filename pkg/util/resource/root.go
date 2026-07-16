@@ -20,6 +20,7 @@ type Root struct {
 	mu            sync.Mutex
 	summary       StatementResourceSummary
 	memoryPreview func() (uint64, bool)
+	attemptOwner  bool
 	sealed        bool
 }
 
@@ -57,6 +58,20 @@ func (r *Root) AddLocal(delta Delta) bool {
 		return false
 	}
 	r.summary.Quality |= delta.Quality | MergeUsage(&r.summary.Usage, delta.Usage)
+	return true
+}
+
+// TryClaimAttemptOwner grants the single execution allowed to publish retry
+// generations for this statement root. Callers must first establish that the
+// execution is the explicit top-level statement candidate; arbitrary child
+// executions must not race for ownership.
+func (r *Root) TryClaimAttemptOwner() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed || r.attemptOwner {
+		return false
+	}
+	r.attemptOwner = true
 	return true
 }
 

@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -26,7 +25,7 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	stats := statistic.NewStatsInfo()
 	stats.ParseStage.ParseDuration = 5 * time.Nanosecond
 	ctx := statistic.ContextWithStatsInfo(context.Background(), stats)
-	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(ctx, root))
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(ctx, root), true)
 	require.NotNil(t, recorder)
 	require.Equal(t, uint64(5), root.PreResponseSummary().Usage.ExclusiveActiveNS)
 
@@ -64,7 +63,7 @@ func TestExecutionResourceRecorder(t *testing.T) {
 
 func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
-	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root), true)
 	require.NotNil(t, recorder)
 
 	stats := statistic.NewStatsInfo()
@@ -98,7 +97,7 @@ func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
 
 func TestAggregateWaitLargerThanCoordinatorWallIsNotInvalid(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
-	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root), true)
 	stats := statistic.NewStatsInfo()
 	stats.PrepareRunStage.CompilePreRunOnceWaitLock = 30
 	stats.PlanStage.BuildPlanStatsIOConsumption = 20
@@ -118,7 +117,7 @@ func TestAggregateWaitLargerThanCoordinatorWallIsNotInvalid(t *testing.T) {
 
 func TestRetryScopePrepareRequestsAreGenerationLocal(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
-	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root))
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root), true)
 	stats := statistic.NewStatsInfo()
 	stats.PrepareRunStage.ScopePrepareS3Request = statistic.S3Request{Get: 2}
 	recorder.finishAttempt(
@@ -139,18 +138,17 @@ func TestRetryScopePrepareRequestsAreGenerationLocal(t *testing.T) {
 	require.Equal(t, uint64(2), summary.AttemptCount)
 }
 
-func TestInlineChildDoesNotInflateParentAttemptCount(t *testing.T) {
+func TestChildExecutionDoesNotInflateStatementAttemptCount(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
 	ctx := resource.ContextWithRoot(context.Background(), root)
-	parent := newExecutionResourceRecorder(ctx)
+	parent := newExecutionResourceRecorder(ctx, true)
 	parent.finishAttempt(
 		0, time.Now(), 5*time.Nanosecond, 0, nil, nil, nil, "",
 		resource.OutcomeSuccess, false,
 	)
 	parent.publish()
 
-	childCtx := perfcounter.AttachTxnExecutorKey(ctx)
-	child := newExecutionResourceRecorder(childCtx)
+	child := newExecutionResourceRecorder(ctx, false)
 
 	child.finishAttempt(
 		0, time.Now(), 10*time.Nanosecond, 0, nil, nil, nil, "",
@@ -166,6 +164,44 @@ func TestInlineChildDoesNotInflateParentAttemptCount(t *testing.T) {
 	require.Equal(t, uint64(1), summary.AttemptCount)
 	require.Zero(t, summary.RetryWallNS)
 	require.Equal(t, uint64(35), summary.Usage.ExclusiveActiveNS)
+}
+
+func TestOnlyOneEligibleExecutionOwnsStatementAttempts(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx := resource.ContextWithRoot(context.Background(), root)
+
+	child := newExecutionResourceRecorder(ctx, false)
+	require.False(t, child.ownsAttempts)
+
+	owner := newExecutionResourceRecorder(ctx, true)
+	require.True(t, owner.ownsAttempts)
+	secondEligible := newExecutionResourceRecorder(ctx, true)
+	require.False(t, secondEligible.ownsAttempts)
+
+	child.finishAttempt(
+		0, time.Now(), 3*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeSuccess, false,
+	)
+	child.publish()
+	owner.finishAttempt(
+		0, time.Now(), 5*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeError, true,
+	)
+	owner.finishAttempt(
+		1, time.Now(), 7*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeSuccess, false,
+	)
+	owner.publish()
+	secondEligible.finishAttempt(
+		0, time.Now(), 11*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeSuccess, false,
+	)
+	secondEligible.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(2), summary.AttemptCount)
+	require.Greater(t, summary.RetryWallNS, uint64(0))
+	require.Equal(t, uint64(26), summary.Usage.ExclusiveActiveNS)
 }
 
 func TestRemoteTerminalEnvelope(t *testing.T) {
@@ -213,7 +249,7 @@ func TestCountExpectedRemoteScopes(t *testing.T) {
 func TestMissingRemoteCountsFragmentAndMemoryDomain(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
 	ctx := resource.ContextWithRoot(context.Background(), root)
-	recorder := newExecutionResourceRecorder(ctx)
+	recorder := newExecutionResourceRecorder(ctx, true)
 	scopes := []*Scope{{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}}}
 
 	recorder.finishAttempt(

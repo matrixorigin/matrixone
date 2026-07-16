@@ -517,10 +517,12 @@ only the sum.
 An Execution publishes one immutable summary to its root owner. Concurrent
 children do not mutate the root vector directly. The root merges a completed
 child and discards the child summary; it does not retain an execution list, so
-compound statement size does not create unbounded accounting memory. Only
-attempt-owning executions contribute `attempt_count`; parent-attributed inline
-SQL contributes its resource facts without turning helper executions into
-parent retries.
+compound statement size does not create unbounded accounting memory. The
+frontend marks the top-level statement Compile as attempt-owner eligible, and
+the root grants ownership at most once. Only that owner contributes
+`attempt_count` and `retry_wall_ns`. Authentication, implicit privilege, DDL,
+and other child SQL contributes its resource facts without turning child
+executions or child retries into top-level statement retries.
 
 An internal execution explicitly selects one mode:
 

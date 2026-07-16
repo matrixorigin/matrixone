@@ -324,7 +324,10 @@ type Compile struct {
 	isPrepare    bool
 	disableRetry bool
 	isInternal   bool
-	hasMergeOp   bool
+	// resourceAttemptOwnerEligible is set only for the top-level statement
+	// Compile. The statement root still arbitrates the single actual owner.
+	resourceAttemptOwnerEligible bool
+	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
 	ncpu int

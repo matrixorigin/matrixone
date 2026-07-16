@@ -101,4 +101,29 @@ sleep(1)    col    seq    key    path    index    value    this
 select sleep(15);
 sleep(15)
 0
+with expected(statement_type) as (
+    select 'Create Index'
+    union all select 'Create Table'
+    union all select 'Drop Database'
+    union all select 'Drop Table'
+)
+select e.statement_type,
+       count(s.statement_id) > 0 as observed,
+       min(cast(json_unquote(json_extract(s.stats, '$[16]')) as bigint)) = 1
+           and max(cast(json_unquote(json_extract(s.stats, '$[16]')) as bigint)) = 1
+           as one_top_level_attempt
+from expected e
+left join system.statement_info s
+    on s.account = 'bvt_query_type'
+    and s.status = 'Success'
+    and s.aggr_count = 0
+    and s.statement_type = e.statement_type
+    and cast(json_unquote(json_extract(s.stats, '$[0]')) as bigint) = 6
+group by e.statement_type
+order by e.statement_type;
+statement_type    observed    one_top_level_attempt
+Create Index    true    true
+Create Table    true    true
+Drop Database    true    true
+Drop Table    true    true
 drop account if exists bvt_query_type;

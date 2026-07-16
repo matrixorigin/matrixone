@@ -201,7 +201,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// update the top context with some trace information and values.
 	execTopContext, span := trace.Start(c.proc.GetTopContext(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	resourceRecorder := newExecutionResourceRecorder(execTopContext)
+	resourceRecorder := newExecutionResourceRecorder(
+		execTopContext,
+		c.resourceAttemptOwnerEligible,
+	)
 	defer resourceRecorder.publish()
 
 	// statistical information record and trace.

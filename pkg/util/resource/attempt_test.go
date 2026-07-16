@@ -109,6 +109,31 @@ func TestRootLifecycle(t *testing.T) {
 	}
 }
 
+func TestRootAttemptOwnerClaimIsUnique(t *testing.T) {
+	root := NewRoot(ConnExternal)
+	const claimants = 64
+	wins := make(chan struct{}, claimants)
+	var wg sync.WaitGroup
+	wg.Add(claimants)
+	for range claimants {
+		go func() {
+			defer wg.Done()
+			if root.TryClaimAttemptOwner() {
+				wins <- struct{}{}
+			}
+		}()
+	}
+	wg.Wait()
+	close(wins)
+	if got := len(wins); got != 1 {
+		t.Fatalf("attempt owner claims = %d, want 1", got)
+	}
+	root.Seal(1)
+	if root.TryClaimAttemptOwner() {
+		t.Fatal("sealed root granted attempt ownership")
+	}
+}
+
 func TestRootMemoryPreviewDoesNotMutateTerminalSummary(t *testing.T) {
 	root := NewRoot(ConnExternal)
 	root.SetMemoryPeakPreview(func() (uint64, bool) {

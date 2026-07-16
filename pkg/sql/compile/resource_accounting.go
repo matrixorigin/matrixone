@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -36,7 +35,10 @@ type remoteTerminalEnvelope struct {
 	MemoryQuality resource.QualityFlags        `json:"memory_quality,omitempty"`
 }
 
-func newExecutionResourceRecorder(ctx context.Context) *executionResourceRecorder {
+func newExecutionResourceRecorder(
+	ctx context.Context,
+	attemptOwnerEligible bool,
+) *executionResourceRecorder {
 	root := resource.RootFromContext(ctx)
 	if root == nil {
 		return nil
@@ -44,7 +46,7 @@ func newExecutionResourceRecorder(ctx context.Context) *executionResourceRecorde
 	recorder := &executionResourceRecorder{
 		root:         root,
 		stats:        statistic.StatsInfoFromContext(ctx),
-		ownsAttempts: !perfcounter.IsInternalExecutor(ctx),
+		ownsAttempts: attemptOwnerEligible && root.TryClaimAttemptOwner(),
 	}
 	if phases, ok := recorder.stats.ClaimRootPhaseResource(); ok {
 		recorder.root.AddLocal(phases)
@@ -56,9 +58,8 @@ func (r *executionResourceRecorder) publish() {
 	if r != nil && !r.published {
 		execution := r.execution
 		if !r.ownsAttempts {
-			// SQL executed by txnExecutor is parent-attributed helper work. Its
-			// resource facts belong to the parent statement, but its compile/run
-			// generations are not retries of that statement.
+			// Child execution resource facts belong to the statement, but child
+			// compile/run generations are not retries of the top-level statement.
 			execution.AttemptCount = 0
 			execution.RetryWallNS = 0
 		}
