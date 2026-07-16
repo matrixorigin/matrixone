@@ -3450,6 +3450,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
+	// Index defs added by EARLIER ADD actions in this same ALTER statement, so a later
+	// action's fulltext engine-conflict (⑤) and duplicate-name checks can see them. This
+	// is kept SEPARATE from tableDef.Indexes on purpose: tableDef is the plan's execution
+	// TableDef, and its Indexes drive the pre-create index-table lock loop in the executor
+	// (compile/ddl.go). A not-yet-created hidden table appended there is locked before
+	// HandleCreateIndex builds it → "no such table". So accumulate here, never in tableDef.
+	var addedIdxDefs []*plan.IndexDef
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -3652,10 +3659,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				indexName := def.Name
 				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
+				// Check not empty constraint name whether is duplicated — against both the
+				// table's existing indexes AND those added by earlier actions in this ALTER.
 				for _, idx := range tableDef.Indexes {
 					nameLower := strings.ToLower(idx.IndexName)
 					constrNames[nameLower] = true
+				}
+				for _, idx := range addedIdxDefs {
+					constrNames[strings.ToLower(idx.IndexName)] = true
 				}
 
 				if err := checkDuplicateConstraint(
@@ -3674,11 +3685,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				// The engine-conflict check (⑤) must see earlier-added indexes too, so pass
+				// tableDef.Indexes + addedIdxDefs as the "existing" set — WITHOUT mutating
+				// tableDef.Indexes (see addedIdxDefs's declaration: doing so makes the
+				// executor lock the new index's not-yet-created hidden table).
+				existed := tableDef.Indexes
+				if len(addedIdxDefs) > 0 {
+					existed = append(append([]*plan.IndexDef{}, tableDef.Indexes...), addedIdxDefs...)
+				}
 				if err := buildFullTextIndexTable(
 					indexInfo,
 					[]*tree.FullTextIndex{def},
 					colMap,
-					tableDef.Indexes,
+					existed,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
@@ -3686,11 +3705,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 
 				// Make this action's new index visible to LATER ADD actions in the SAME
-				// ALTER statement — their conflict (checkFulltextEngineConflict) and
-				// duplicate-name checks read tableDef.Indexes, which is otherwise the
-				// original, so `ALTER … ADD FULLTEXT ft1(a), ADD FULLTEXT2 ft2(a)` would
-				// otherwise slip a classic+v2 pair on the same column past ⑤.
-				tableDef.Indexes = append(tableDef.Indexes, indexInfo.TableDef.Indexes...)
+				// ALTER statement (their ⑤ conflict + duplicate-name checks above), but keep
+				// it OUT of tableDef.Indexes so the executor doesn't lock its hidden table
+				// before HandleCreateIndex creates it (`ALTER … ADD FULLTEXT ft1(a), ADD
+				// FULLTEXT2 ft2(a)` is still rejected via addedIdxDefs).
+				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
