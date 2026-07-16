@@ -12932,3 +12932,36 @@ func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
 		testSelectList(t, types.T_uint64.ToType(), []uint64{1, 1})
 	})
 }
+
+// Regression for the non-transitive interval sort comparator (see PR #25616).
+// The three starts sit inside the 1e-9 epsilon band around 0 and, with the old
+// epsilon comparator, form a cyclic order (A~B, B~C, but A!~C; ends give A>B,
+// B>C, C>A) that could leave a non-minimum-start interval at position 0 and make
+// parameterIntervalsCoverSegment wrongly bail at intervals[0].start > 1e-9.
+// Together with [0.85, 1.0] the intervals cover the whole [0, 1] segment, so
+// coverage must be reported true regardless of the input order.
+func TestParameterIntervalsCoverSegmentNearEpsilonBoundary(t *testing.T) {
+	base := []geometryParamInterval{
+		{start: 0, end: 0.9},
+		{start: 0.9e-9, end: 0.8},
+		{start: 1.8e-9, end: 0.7},
+		{start: 0.85, end: 1.0},
+	}
+	orders := [][]int{
+		{0, 1, 2, 3},
+		{2, 1, 0, 3}, // largest-epsilon start first
+		{3, 2, 1, 0},
+		{1, 3, 2, 0},
+	}
+	for _, ord := range orders {
+		in := make([]geometryParamInterval, len(ord))
+		for i, idx := range ord {
+			in[i] = base[idx]
+		}
+		require.True(t, parameterIntervalsCoverSegment(in), "input order %v should still cover [0,1]", ord)
+	}
+
+	// A genuine gap must still report false: [0,0.4] and [0.6,1.0] leave (0.4,0.6).
+	gap := []geometryParamInterval{{start: 0, end: 0.4}, {start: 0.6, end: 1.0}}
+	require.False(t, parameterIntervalsCoverSegment(gap))
+}

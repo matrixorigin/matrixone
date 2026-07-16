@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -252,6 +253,90 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 
 }
 
+func TestIOEntryReadErrorClearsAllocatedDataOwner(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "truncated")
+	require.NoError(t, os.WriteFile(path, []byte("ab"), 0o644))
+
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	defer file.Close()
+
+	entry := IOEntry{Size: 3}
+	err = entry.ReadFromOSFile(ctx, file, DefaultCacheDataAllocator())
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Nil(t, entry.Data)
+	require.Nil(t, entry.releaseData)
+}
+
+func TestIOEntryAllocatedDataErrorCleanupIsIdempotent(t *testing.T) {
+	entry := IOEntry{Size: 3}
+	finally := entry.prepareData(context.Background())
+	err := io.ErrUnexpectedEOF
+
+	finally(&err)
+	finally(&err)
+
+	require.Nil(t, entry.Data)
+	require.Nil(t, entry.releaseData)
+}
+
+func TestIOEntryCacheConversionErrorClearsAllocatedReader(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "data")
+	require.NoError(t, os.WriteFile(path, []byte("foo"), 0o644))
+
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	defer file.Close()
+
+	var reader io.ReadCloser
+	entry := IOEntry{
+		Size:              3,
+		ReadCloserForRead: &reader,
+		ToCacheData: func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+			return nil, fmt.Errorf("cache conversion failed")
+		},
+	}
+	err = entry.ReadFromOSFile(ctx, file, DefaultCacheDataAllocator())
+	require.EqualError(t, err, "cache conversion failed")
+	require.Nil(t, reader)
+	require.Nil(t, entry.Data)
+	require.Nil(t, entry.releaseData)
+}
+
+func TestDiskCacheReusesRangeFileFromStart(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.Update(ctx, &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset: 99,
+			Size:   3,
+			Data:   []byte("foo"),
+		}},
+	}, false)
+	require.NoError(t, err)
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{Offset: 99, Size: 3},
+			{Offset: 99, Size: 3},
+		},
+	}
+	defer vector.Release()
+
+	require.NoError(t, cache.Read(ctx, vector))
+	for i := range vector.Entries {
+		require.True(t, vector.Entries[i].done)
+		require.Equal(t, []byte("foo"), vector.Entries[i].Data)
+	}
+}
+
 func TestDiskCacheFileCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -343,6 +428,73 @@ func TestDiskCacheSetFileRepairsStaleIndex(t *testing.T) {
 	require.True(t, readVector.Entries[0].done)
 	require.Equal(t, []byte("bar"), readVector.Entries[0].Data)
 	readVector.Release()
+}
+
+func TestDiskCacheCanonicalizesFullFileKeys(t *testing.T) {
+	ctx := context.Background()
+	for _, filePath := range []string{"shared:/foo", "/foo"} {
+		t.Run(filePath, func(t *testing.T) {
+			cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+			require.NoError(t, err)
+			defer cache.Close(ctx)
+
+			err = cache.SetFile(ctx, filePath, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+			})
+			require.NoError(t, err)
+
+			vector := &IOVector{
+				FilePath: "foo",
+				Entries:  []IOEntry{{Offset: 0, Size: 3}},
+			}
+			defer vector.Release()
+			require.NoError(t, cache.Read(ctx, vector))
+			require.True(t, vector.Entries[0].done)
+			require.Equal(t, []byte("foo"), vector.Entries[0].Data)
+
+			require.NoError(t, cache.DeletePaths(ctx, []string{"foo"}))
+			require.False(t, cache.cache.Contains(cache.pathForFile("foo")))
+		})
+	}
+}
+
+func TestDiskCacheRejectsInvalidFullFilePath(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	openReaderCalled := false
+	err = cache.SetFile(ctx, "foo#bar", func(context.Context) (io.ReadCloser, error) {
+		openReaderCalled = true
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "unexpected error: %v", err)
+	require.False(t, openReaderCalled)
+}
+
+func TestDiskCacheDeletePathsRejectsInvalidListAtomically(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "shared:/foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	err = cache.DeletePaths(ctx, []string{"foo", "foo#bar"})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "unexpected error: %v", err)
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 3}},
+	}
+	defer vector.Release()
+	require.NoError(t, cache.Read(ctx, vector))
+	require.True(t, vector.Entries[0].done)
+	require.Equal(t, []byte("foo"), vector.Entries[0].Data)
 }
 
 func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {

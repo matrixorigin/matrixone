@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -26,7 +27,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -368,8 +369,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	nativePath := l.toNativeFilePath(path.File)
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// size

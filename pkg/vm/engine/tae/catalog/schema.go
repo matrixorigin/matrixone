@@ -16,11 +16,11 @@ package catalog
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -118,7 +118,7 @@ func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 		cpk.isPrimary = true
 	}
 	cpk.Defs = append(cpk.Defs, def)
-	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].SortIdx < cpk.Defs[j].SortIdx })
+	slices.SortFunc(cpk.Defs, func(a, b *ColDef) int { return cmp.Compare(a.SortIdx, b.SortIdx) })
 	cpk.search[def.Idx] = int(def.SortIdx)
 	return true
 }
