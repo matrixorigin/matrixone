@@ -91,3 +91,23 @@ execute stmt1;
 3
 deallocate prepare stmt1;
 drop database if exists row_count_db;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+6
+drop database if exists row_count_db;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+0
+create database row_count_empty_db;
+drop database row_count_empty_db;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+0
+create database row_count_drop_db;
+use row_count_drop_db;
+create table d1(id int primary key, v int, index idx_v(v));
+create table d2(id int);
+drop database row_count_drop_db;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+2

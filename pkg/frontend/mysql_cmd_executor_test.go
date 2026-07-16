@@ -3031,6 +3031,59 @@ func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 }
 
+func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	stmtID := uint32(1)
+	stmtName := getPrepareStmtName(stmtID)
+	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?")
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+	require.NoError(t, err)
+	prepareStmt := &PrepareStmt{
+		Name:                stmtName,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
+
+	setRowCount(ses, ses.GetProc(), 7)
+	payload := make([]byte, 6)
+	binary.LittleEndian.PutUint32(payload, stmtID)
+	binary.LittleEndian.PutUint16(payload[4:], 0)
+	payload = append(payload, "long data"...)
+	resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_SEND_LONG_DATA, data: payload})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "malformed packet", data: []byte{1, 2, 3}},
+		{name: "unknown statement", data: []byte{2, 0, 0, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setRowCount(ses, ses.GetProc(), 7)
+			resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_SEND_LONG_DATA, data: tc.data})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Equal(t, ErrorResponse, resp.category)
+			require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+			require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+		})
+	}
+}
+
 func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
 	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
 	// doComQuery will fail (no engine), but we verify the fallthrough happened.
