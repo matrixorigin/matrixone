@@ -26,7 +26,7 @@ import (
 
 var iscpExecutors sync.Map // map[cnUUID]*ISCPTaskExecutor
 
-const DefaultRollbackFenceTTL = 5 * time.Minute
+const DefaultRollbackFenceTTL = 30 * time.Minute
 
 func RegisterExecutorRuntime(cnUUID string, exec *ISCPTaskExecutor) {
 	if cnUUID == "" || exec == nil {
