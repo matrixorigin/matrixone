@@ -22,10 +22,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -228,43 +231,89 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
 	}
 
-	fp, err := os.CreateTemp("", "ft2idx")
+	// Materialize the segment on the fast LOCAL (SSD) fileservice so mmap page faults
+	// come off the 2 GB/s mount, not /tmp (128 MB/s on AWS). path=="" means an
+	// anonymous SSD file (unlinked; munmap frees the inode) — the same
+	// CreateAndRemoveFile the JOIN/mergeorder spill uses.
+	fp, path, err := createLocalTempFile(sqlproc)
 	if err != nil {
 		return nil, err
 	}
-	path := fp.Name()
-	rm := func() { fp.Close(); os.Remove(path) }
+	cleanup := func() {
+		fp.Close()
+		if path != "" {
+			os.Remove(path)
+		}
+	}
 	if err = fp.Truncate(filesize); err != nil {
-		rm()
+		cleanup()
 		return nil, err
 	}
 	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
-		rm()
+		cleanup()
 		return nil, err
 	}
-	if got, cerr := vectorindex.CheckSum(path); cerr != nil {
-		rm()
-		return nil, cerr
-	} else if got != checksum {
-		rm()
-		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
-	}
 	// mmap the file read-only (shared across queries; FST + positions are views into
-	// it, page-cache-backed). The mmap'd Segment OWNS the file: Free() munmaps and
-	// deletes it. The fd is not needed once mapped.
+	// it, page-cache-backed). The fd is not needed once mapped.
 	data, err := mmapReadOnly(fp)
 	fp.Close()
 	if err != nil {
-		os.Remove(path)
+		if path != "" {
+			os.Remove(path)
+		}
 		return nil, err
 	}
+	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
+	if vectorindex.CheckSumFromBuffer(data) != checksum {
+		_ = munmap(data)
+		if path != "" {
+			os.Remove(path)
+		}
+		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
+	}
+	// The Segment OWNS the mapping (+ path for the /tmp fallback): Free() munmaps and,
+	// if linked, deletes it.
 	m := &Segment{Id: id, mmapData: data, mmapPath: path}
 	if err := m.decodeSegment(data); err != nil {
-		m.Free() // munmap + delete + free off-heap
+		m.Free()
 		return nil, err
 	}
 	m.Recency = recency
 	return m, nil
+}
+
+// ft2LocalDir is fulltext2's own subdir under the LOCAL fileservice (on the SSD
+// data-dir) for mmap segment files — sibling to the JOIN spill's "__spill".
+const ft2LocalDir = "__fulltext2"
+
+// createLocalTempFile returns a temp file for the segment's mmap. It prefers the
+// LOCAL fileservice's __fulltext2 subdir (on the SSD data-dir) via the same
+// CreateAndRemoveFile the JOIN spill uses — an ANONYMOUS file (unlinked; the fd +
+// mapping keep the inode alive, Free just munmaps, no os.Remove). Falls back to
+// os.CreateTemp (/tmp, linked → Free deletes by path) when no process/fileservice
+// is attached (tests / one-shot tools). Returns (file, path, err); path=="" for the
+// anonymous SSD file.
+func createLocalTempFile(sqlproc *sqlexec.SqlProcess) (*os.File, string, error) {
+	if sqlproc != nil && sqlproc.Proc != nil {
+		ctx := sqlproc.GetContext()
+		// LOCAL fileservice (SSD data-dir) -> ensure our __fulltext2 subdir -> a
+		// MutableFileService rooted there (mirrors process.GetSpillFileService).
+		if local, e := fileservice.Get[fileservice.MutableFileService](
+			sqlproc.Proc.Base.FileService, defines.LocalFileServiceName); e == nil {
+			if e2 := local.EnsureDir(ctx, ft2LocalDir); e2 == nil {
+				if sub, ok := fileservice.SubPath(local, ft2LocalDir).(fileservice.MutableFileService); ok {
+					if f, e3 := sub.CreateAndRemoveFile(ctx, "ft2idx_"+uuid.NewString()); e3 == nil {
+						return f, "", nil
+					}
+				}
+			}
+		}
+	}
+	f, err := os.CreateTemp("", "ft2idx")
+	if err != nil {
+		return nil, "", err
+	}
+	return f, f.Name(), nil
 }
 
 // LoadTailSegments loads the tag=1 CdcTail: the SELECTed chunk rows are ordered,
