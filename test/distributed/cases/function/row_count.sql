@@ -81,6 +81,7 @@ load data infile '$resources/load_data/row_count.csv' into table load_t fields t
 select row_count();
 
 -- a failed statement (duplicate primary key) makes row_count() return -1
+update t set v = v + 1 where id = 1;
 insert into t values (1,12345);
 select row_count();
 

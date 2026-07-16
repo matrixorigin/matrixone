@@ -184,7 +184,7 @@ func TestRunSQLWithFrontend(t *testing.T) {
 }
 
 func TestRowCountOverMySQLProtocol(t *testing.T) {
-	RunBaseClusterTests(
+	require.NoError(t, RunBaseClusterTests(
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -196,7 +196,8 @@ func TestRowCountOverMySQLProtocol(t *testing.T) {
 			require.NoError(t, err)
 			defer db.Close()
 
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
 			conn, err := db.Conn(ctx)
 			require.NoError(t, err)
 			defer conn.Close()
@@ -221,12 +222,18 @@ func TestRowCountOverMySQLProtocol(t *testing.T) {
 			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
 			require.Equal(t, int64(2), rowCount)
 
+			result, err := conn.ExecContext(ctx, "insert into t values (3)")
+			require.NoError(t, err)
+			affectedRows, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(1), affectedRows)
+
 			_, err = conn.ExecContext(ctx, "insert into t values (1)")
 			require.Error(t, err)
 			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
 			require.Equal(t, int64(-1), rowCount)
 		},
-	)
+	))
 }
 
 func TestGetInitValue(t *testing.T) {
