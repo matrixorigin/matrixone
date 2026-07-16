@@ -112,6 +112,24 @@ func handlePipelineStreamFinish(
 	if !ok {
 		return poison(moerr.NewInvalidStateNoCtx("pipeline stream FIN has no validated stream token"))
 	}
+	return handleValidatedPipelineStreamFinish(ctx, message, cs, messageAcquirer, token)
+}
+
+// handleValidatedPipelineStreamFinish coordinates teardown after the morpc IO
+// loop has authenticated the terminal stream token. Keeping that validation at
+// the public handler boundary makes the coordination state machine testable
+// without exposing a way for application code to manufacture terminal tokens.
+func handleValidatedPipelineStreamFinish(
+	ctx context.Context,
+	message *pipeline.Message,
+	cs morpc.ClientSession,
+	messageAcquirer func() morpc.Message,
+	token morpc.StreamTerminalToken,
+) error {
+	poison := func(err error) error {
+		_ = cs.Close()
+		return err
+	}
 	key := pipelineStreamLifecycleKey{session: cs, id: message.GetID()}
 	value, ok := pipelineStreamLifecycles.Load(key)
 	if !ok {
