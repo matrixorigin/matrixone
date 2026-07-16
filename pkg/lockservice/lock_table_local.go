@@ -198,7 +198,7 @@ func (l *localLockTable) doLock(
 			if lockWaitTimeoutHit {
 				// lock_wait_timeout expired: return ErrLockTimeout directly
 				// (not errors.Join) so upper layers can recognize it via
-				// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
+				// moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout).
 				v.err = ErrLockTimeout
 			}
 		}
@@ -323,6 +323,15 @@ func (l *localLockTable) unlock(
 			}
 
 			if !lock.holders.contains(txn.txnID) {
+				// A remote proxy retries ReplaceTo after an RPC response is lost.
+				// The first request may already have replaced the holder, so make
+				// a stale handoff idempotent instead of treating it as a stale
+				// ordinary unlock. A replacement can itself finish before the
+				// original proxy holder retries, in which case the conditional
+				// handoff is also a safe no-op.
+				if idx != -1 {
+					return true
+				}
 				// 1. txn1 hold key1 on bind version 0
 				// 2. txn1 commit success
 				// 3. dn restart
@@ -344,7 +353,7 @@ func (l *localLockTable) unlock(
 				panic("BUG: missing range end key")
 			}
 
-			if idx != -1 {
+			if idx != -1 && len(mutations[idx].ReplaceTo) > 0 {
 				replaceTo := mutations[idx].ReplaceTo
 				lock.holders.replace(txn.txnID,
 					pb.WaitTxn{TxnID: replaceTo, CreatedOn: txn.remoteService})

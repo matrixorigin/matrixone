@@ -15,8 +15,9 @@
 package shardservice
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -228,8 +229,8 @@ func (r *rt) filterCN(
 	cns []*cn,
 	filters ...filter,
 ) []*cn {
-	sort.Slice(cns, func(i, j int) bool {
-		return cns[i].id < cns[j].id
+	slices.SortFunc(cns, func(a, b *cn) int {
+		return cmp.Compare(a.id, b.id)
 	})
 	for _, f := range filters {
 		cns = f.filter(r, cns)
