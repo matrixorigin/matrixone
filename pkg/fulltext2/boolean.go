@@ -215,8 +215,9 @@ func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs
 // evalClause returns the weighted (doc ord → score) contribution of one clause.
 // A present doc is always a key (even at score 0, so MUST/presence is exact); an
 // absent term yields an empty map. The clause weight (> < ~) scales the result.
-// Term / prefix clauses score with the global corpus idf (gs); a phrase clause keeps
-// its per-segment df (its cross-segment phrase-hit count would need a pre-pass).
+// Term / prefix / phrase clauses all score with the global corpus idf (gs) — a phrase
+// clause via the cross-segment phrase df (gs.phraseDf), so ranking is consistent
+// across a base + CDC tail.
 func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats) (map[int64]float64, error) {
 	raw := make(map[int64]float64)
 	switch c.kind {
@@ -230,7 +231,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 		}
 	case clausePhrase:
 		hits := s.matchPhrase(c.terms)
-		idf2 := idfSquared(s.N, len(hits))
+		idf2 := gs.phraseIdfFor(s, c.terms, len(hits))
 		for _, h := range hits {
 			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
 		}

@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
@@ -199,14 +200,16 @@ func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 // segments (like bm25's gdf) and memoized per query; it is built fresh per query and
 // used sequentially across segments, so the cache needs no lock.
 type globalStats struct {
-	n         int64
-	avgDocLen float64
-	idx       *Index
-	dfCache   map[string]int
+	n             int64
+	avgDocLen     float64
+	idx           *Index
+	dfCache       map[string]int
+	phraseDfCache map[string]int
 }
 
 func (idx *Index) newGlobalStats() *globalStats {
-	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx, dfCache: make(map[string]int)}
+	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx,
+		dfCache: make(map[string]int), phraseDfCache: make(map[string]int)}
 }
 
 // df returns term's corpus-global document frequency (summed over segments). Dead
@@ -235,6 +238,32 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 	return idfSquared(gs.n, gs.df(term))
 }
 
+// phraseDf returns the corpus-global document frequency of a phrase (the number of
+// docs matching the contiguous phrase, summed over segments), memoized per query.
+// Dead copies are counted, matching the term df above.
+func (gs *globalStats) phraseDf(terms []string) int {
+	key := strings.Join(terms, "\x00")
+	if d, ok := gs.phraseDfCache[key]; ok {
+		return d
+	}
+	d := 0
+	for _, seg := range gs.idx.segments {
+		d += len(seg.matchPhrase(terms))
+	}
+	gs.phraseDfCache[key] = d
+	return d
+}
+
+// phraseIdfFor is a phrase clause's idf² under the global corpus stats (global N +
+// cross-segment phrase df), or the segment-local stats when gs is nil — so a phrase
+// clause ranks consistently across a base + CDC tail, like the term/prefix clauses.
+func (gs *globalStats) phraseIdfFor(seg *Segment, terms []string, localHits int) float64 {
+	if gs == nil {
+		return idfSquared(seg.N, localHits)
+	}
+	return idfSquared(gs.n, gs.phraseDf(terms))
+}
+
 // avgdl is the global average doc length, or the segment's own when gs is nil.
 func (gs *globalStats) avgdl(seg *Segment) float64 {
 	if gs == nil {
@@ -248,8 +277,8 @@ func (gs *globalStats) avgdl(seg *Segment) float64 {
 // GLOBAL corpus stats (globalStats), and its walk admits only the LIVE copy of a pk
 // (liveness ANDed into the WHERE prefilter), so a segment's top-k is k live docs on
 // the global scale — the merge below is then the exact global top-k even across a
-// base + CDC tail. (A phrase clause's idf remains per-segment — its cross-segment df
-// would need a pre-pass; term/prefix clauses and the disjunctive WAND path are global.)
+// base + CDC tail. All clause types (term, prefix, phrase, and the disjunctive WAND
+// path) score on global stats — a phrase clause uses the cross-segment phrase df.
 func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil

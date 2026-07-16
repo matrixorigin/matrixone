@@ -136,6 +136,56 @@ func TestMultiSegmentGlobalStats(t *testing.T) {
 	}
 }
 
+// TestMultiSegmentPhraseStats pins the ② fix: a boolean-mode PHRASE clause scores on
+// the cross-segment (global) phrase df, so a phrase query over a base + CDC-tail split
+// ranks identically to the same docs in one segment (before the fix the phrase clause
+// used per-segment idf and diverged).
+func TestMultiSegmentPhraseStats(t *testing.T) {
+	words := func(i int) []string {
+		w := []string{"filler", "text"}
+		if i%3 == 0 {
+			w = append(w, "quick", "brown", "fox") // contiguous "quick brown" phrase
+		}
+		if i%2 == 0 {
+			w = append(w, "quick") // 'quick' alone — not the phrase
+		}
+		return w
+	}
+	build := func(id string, rec int64, lo, hi int) *Segment {
+		b := NewBuilder(id, int32(types.T_int64))
+		for i := lo; i < hi; i++ {
+			feed(t, b, int64(i), words(i)...)
+		}
+		s, err := b.Finish()
+		require.NoError(t, err)
+		s.Recency = rec
+		return s
+	}
+	ref := NewIndex([]*Segment{build("ref", 0, 0, 18)}, nil)
+	split := NewIndex([]*Segment{build("a", 0, 0, 9), build("b", 1, 9, 18)}, nil)
+
+	byPk := func(rs []Result) map[int64]float64 {
+		m := make(map[int64]float64, len(rs))
+		for _, r := range rs {
+			m[r.Pk.(int64)] = r.Score
+		}
+		return m
+	}
+	q := `"quick brown"` // quoted => boolean-mode phrase clause
+	want, err := ref.SearchQuery([]byte(q), true, ParserDefault, BM25, 100, nil)
+	require.NoError(t, err)
+	got, err := split.SearchQuery([]byte(q), true, ParserDefault, BM25, 100, nil)
+	require.NoError(t, err)
+	ws, gsc := byPk(want), byPk(got)
+	require.NotEmpty(t, ws)
+	require.Equal(t, len(ws), len(gsc), "same phrase-matched set")
+	for pk, s := range ws {
+		g, ok := gsc[pk]
+		require.Truef(t, ok, "pk %d present in split", pk)
+		require.InDeltaf(t, s, g, 1e-9, "pk %d: global phrase idf matches single-segment", pk)
+	}
+}
+
 // TestMultiSegmentLiveness pins the liveness-inside-the-walk half of #5: when a pk is
 // UPDATEd (a later, higher-Recency segment holds a fresh copy), a boolean query must
 // score/return only the LIVE copy — the dead copy in the older segment must never
