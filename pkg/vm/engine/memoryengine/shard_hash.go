@@ -15,10 +15,11 @@
 package memoryengine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"hash/fnv"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -67,8 +68,8 @@ func (*HashShard) Batch(
 			primaryAttrs = append(primaryAttrs, attr.Attr)
 		}
 	}
-	sort.Slice(primaryAttrs, func(i, j int) bool {
-		return primaryAttrs[i].Name < primaryAttrs[j].Name
+	slices.SortFunc(primaryAttrs, func(a, b engine.Attribute) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 	if len(primaryAttrs) == 0 {
 		// no shard key
@@ -103,8 +104,8 @@ func (*HashShard) Batch(
 			})
 		}
 	}
-	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].ShardID < shards[j].ShardID
+	slices.SortFunc(shards, func(a, b *Shard) int {
+		return cmp.Compare(a.ShardID, b.ShardID)
 	})
 
 	type batValue struct {
@@ -202,8 +203,8 @@ func (h *HashShard) Vector(
 			})
 		}
 	}
-	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].ShardID < shards[j].ShardID
+	slices.SortFunc(shards, func(a, b *Shard) int {
+		return cmp.Compare(a.ShardID, b.ShardID)
 	})
 	m := make(map[*Shard]*vector.Vector)
 

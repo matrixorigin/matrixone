@@ -190,7 +190,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()

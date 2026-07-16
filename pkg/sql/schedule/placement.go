@@ -14,7 +14,10 @@
 
 package schedule
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 const (
 	ReasonLocalExecType            = "local-exec-type"
@@ -245,8 +248,8 @@ func orderDecisionWorkers(req QueryRequest, workers Workers, reason string) Work
 }
 
 func sortWorkersByAddr(workers Workers) {
-	sort.Slice(workers, func(i, j int) bool {
-		return workers[i].Addr < workers[j].Addr
+	slices.SortFunc(workers, func(a, b Worker) int {
+		return cmp.Compare(a.Addr, b.Addr)
 	})
 }
 
