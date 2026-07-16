@@ -29,6 +29,8 @@ func TestResolveNumericBinaryTypesContextPriority(t *testing.T) {
 		right      types.Type
 		outer      *types.Type
 		wantInputs types.T
+		wantWidth  int32
+		wantScale  int32
 	}{
 		{
 			name:       "no context defaults to double",
@@ -77,14 +79,73 @@ func TestResolveNumericBinaryTypesContextPriority(t *testing.T) {
 			right:      types.T_any.ToType(),
 			wantInputs: types.T_uint64,
 		},
+		{
+			name:       "wider integer sibling wins independent of traversal order",
+			left:       types.T_int32.ToType(),
+			right:      types.T_int64.ToType(),
+			wantInputs: types.T_int64,
+		},
+		{
+			name:       "wider integer sibling wins in reverse order",
+			left:       types.T_int64.ToType(),
+			right:      types.T_int32.ToType(),
+			wantInputs: types.T_int64,
+		},
+		{
+			name:       "signed and unsigned bigint use exact decimal domain",
+			left:       types.T_int64.ToType(),
+			right:      types.T_uint64.ToType(),
+			wantInputs: types.T_decimal128,
+			wantWidth:  38,
+		},
+		{
+			name:       "mixed integers widen to a signed type that contains both",
+			left:       types.T_int16.ToType(),
+			right:      types.T_uint32.ToType(),
+			wantInputs: types.T_int64,
+		},
+		{
+			name:       "small signed plus unsigned bigint uses exact decimal domain",
+			left:       types.T_int8.ToType(),
+			right:      types.T_uint64.ToType(),
+			wantInputs: types.T_decimal128,
+			wantWidth:  38,
+		},
+		{
+			name:       "decimal siblings merge precision and scale",
+			left:       types.New(types.T_decimal64, 10, 2),
+			right:      types.New(types.T_decimal128, 30, 10),
+			wantInputs: types.T_decimal128,
+			wantWidth:  30,
+			wantScale:  10,
+		},
+		{
+			name:       "decimal siblings merge precision and scale in reverse order",
+			left:       types.New(types.T_decimal128, 30, 10),
+			right:      types.New(types.T_decimal64, 10, 2),
+			wantInputs: types.T_decimal128,
+			wantWidth:  30,
+			wantScale:  10,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := resolveNumericBinaryTypes(numericOpAdd, test.left, test.right, test.outer)
 			require.True(t, ok)
-			require.Equal(t, test.wantInputs, got.left.Oid)
-			require.Equal(t, test.wantInputs, got.right.Oid)
+			if test.left.Oid == types.T_any || test.right.Oid == types.T_any {
+				require.Equal(t, test.wantInputs, got.left.Oid)
+				require.Equal(t, test.wantInputs, got.right.Oid)
+			}
+			paramType, ok := InferNumericParameterType([]types.Type{test.left, test.right}, test.outer)
+			require.True(t, ok)
+			require.Equal(t, test.wantInputs, paramType.Oid)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, paramType.Width)
+			}
+			if test.wantScale != 0 {
+				require.Equal(t, test.wantScale, paramType.Scale)
+			}
 		})
 	}
 }
@@ -173,6 +234,50 @@ func TestResolveNumericBinaryTypesRejectsNonNumericInput(t *testing.T) {
 		nil,
 	)
 	require.False(t, ok)
+}
+
+func TestInferNumericParameterTypeRejectsUnrepresentableDecimalDomain(t *testing.T) {
+	_, ok := InferNumericParameterType([]types.Type{
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 76),
+	}, nil)
+	require.False(t, ok)
+}
+
+func TestNumericIntegerTypeHelpers(t *testing.T) {
+	for _, test := range []struct {
+		minBits int
+		want    types.T
+	}{
+		{minBits: 1, want: types.T_int8},
+		{minBits: 9, want: types.T_int16},
+		{minBits: 17, want: types.T_int32},
+		{minBits: 33, want: types.T_int64},
+	} {
+		require.Equal(t, test.want, signedIntegerType(test.minBits).Oid)
+	}
+	for _, test := range []struct {
+		minBits int
+		want    types.T
+	}{
+		{minBits: 1, want: types.T_uint8},
+		{minBits: 9, want: types.T_uint16},
+		{minBits: 17, want: types.T_uint32},
+		{minBits: 33, want: types.T_uint64},
+	} {
+		require.Equal(t, test.want, unsignedIntegerType(test.minBits).Oid)
+	}
+
+	for _, oid := range []types.T{
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	} {
+		bits, _ := integerTypeBits(oid)
+		require.NotZero(t, bits)
+	}
+	bits, signed := integerTypeBits(types.T_float64)
+	require.Zero(t, bits)
+	require.False(t, signed)
 }
 
 func TestResolveNumericBinaryTypesByName(t *testing.T) {

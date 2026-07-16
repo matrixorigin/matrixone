@@ -870,31 +870,52 @@ func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool
 	if b.ctx == nil {
 		return Type{}, false
 	}
+	ctx := b.ctx
+	for ctx != nil {
+		if typ, found, stop := b.numericColumnTypeInContext(ctx, astExpr); found || stop {
+			return typ, found
+		}
+		ctx = ctx.parent
+		for ctx != nil && ctx.binder == nil {
+			ctx = ctx.parent
+		}
+	}
+	return Type{}, false
+}
 
+func (b *baseBinder) numericColumnTypeInContext(
+	ctx *BindContext,
+	astExpr *tree.UnresolvedName,
+) (typ Type, found bool, stop bool) {
 	col := astExpr.ColName()
 	table := astExpr.TblName()
 	if table == "" {
-		if binding, ok := b.ctx.bindingByCol[col]; ok {
-			return bindingColumnType(binding, col)
+		if binding, ok := ctx.bindingByCol[col]; ok {
+			if binding == nil {
+				return Type{}, false, true
+			}
+			typ, found = bindingColumnType(binding, col)
+			return typ, found, true
 		}
-		if alias, ok := b.ctx.aliasMap[col]; ok && int(alias.idx) < len(b.ctx.projects) {
-			return b.ctx.projects[alias.idx].Typ, true
+		if alias, ok := ctx.aliasMap[col]; ok && int(alias.idx) < len(ctx.projects) {
+			return ctx.projects[alias.idx].Typ, true, true
 		}
-		return Type{}, false
+		return Type{}, false, false
 	}
 
-	binding, ok := b.ctx.bindingByTable[table]
-	if !ok && b.ctx.remapOption != nil {
+	binding, ok := ctx.bindingByTable[table]
+	if !ok && ctx.remapOption != nil {
 		db := astExpr.DbName()
 		if db == "" && b.builder != nil {
 			db = b.builder.compCtx.DefaultDatabase()
 		}
-		binding, ok = b.ctx.bindingByTable[db+"."+table]
+		binding, ok = ctx.bindingByTable[db+"."+table]
 	}
 	if !ok {
-		return Type{}, false
+		return Type{}, false, false
 	}
-	return bindingColumnType(binding, col)
+	typ, found = bindingColumnType(binding, col)
+	return typ, found, false
 }
 
 func bindingColumnType(binding *Binding, col string) (Type, bool) {

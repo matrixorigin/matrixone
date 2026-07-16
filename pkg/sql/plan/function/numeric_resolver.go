@@ -47,20 +47,153 @@ func InferNumericParameterType(known []types.Type, outer *types.Type) (types.Typ
 			return types.T_float64.ToType(), true
 		}
 	}
-	for _, typ := range known {
-		if typ.Oid.IsDecimal() {
-			return typ, true
-		}
+	if decimal, found, ok := commonDecimalType(known); found {
+		return decimal, ok
 	}
 	if outer != nil && outer.IsNumeric() {
 		return *outer, true
 	}
-	for _, typ := range known {
-		if typ.Oid.IsInteger() {
-			return typ, true
-		}
+	if integer, ok := commonIntegerType(known); ok {
+		return integer, true
 	}
 	return types.T_float64.ToType(), true
+}
+
+func commonDecimalType(known []types.Type) (types.Type, bool, bool) {
+	found := false
+	maxIntegerDigits := int32(0)
+	maxScale := int32(0)
+	minStorage := types.T_decimal64
+	for _, typ := range known {
+		if !typ.Oid.IsDecimal() {
+			continue
+		}
+		found = true
+		width := typ.Width
+		if width <= 0 {
+			width = decimalStorageWidth(typ.Oid)
+		}
+		maxIntegerDigits = max32(maxIntegerDigits, max32(0, width-typ.Scale))
+		maxScale = max32(maxScale, typ.Scale)
+		if decimalStorageWidth(typ.Oid) > decimalStorageWidth(minStorage) {
+			minStorage = typ.Oid
+		}
+	}
+	if !found {
+		return types.Type{}, false, false
+	}
+
+	width := maxIntegerDigits + maxScale
+	oid := minStorage
+	if width > decimalStorageWidth(oid) {
+		switch {
+		case width <= 38:
+			oid = types.T_decimal128
+		case width <= 76:
+			oid = types.T_decimal256
+		default:
+			return types.Type{}, true, false
+		}
+	}
+	return types.New(oid, width, maxScale), true, true
+}
+
+func decimalStorageWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 76
+	default:
+		return 0
+	}
+}
+
+func commonIntegerType(known []types.Type) (types.Type, bool) {
+	maxSignedBits := 0
+	maxUnsignedBits := 0
+	for _, typ := range known {
+		bits, signed := integerTypeBits(typ.Oid)
+		if bits == 0 {
+			continue
+		}
+		if signed {
+			if bits > maxSignedBits {
+				maxSignedBits = bits
+			}
+		} else if bits > maxUnsignedBits {
+			maxUnsignedBits = bits
+		}
+	}
+	if maxSignedBits == 0 && maxUnsignedBits == 0 {
+		return types.Type{}, false
+	}
+	if maxSignedBits == 0 {
+		return unsignedIntegerType(maxUnsignedBits), true
+	}
+	if maxUnsignedBits == 0 {
+		return signedIntegerType(maxSignedBits), true
+	}
+
+	requiredSignedBits := maxSignedBits
+	if maxUnsignedBits >= requiredSignedBits {
+		requiredSignedBits = maxUnsignedBits + 1
+	}
+	if requiredSignedBits <= 64 {
+		return signedIntegerType(requiredSignedBits), true
+	}
+	return types.New(types.T_decimal128, 38, 0), true
+}
+
+func integerTypeBits(oid types.T) (int, bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true
+	case types.T_int16:
+		return 16, true
+	case types.T_int32:
+		return 32, true
+	case types.T_int64:
+		return 64, true
+	case types.T_uint8:
+		return 8, false
+	case types.T_uint16:
+		return 16, false
+	case types.T_uint32:
+		return 32, false
+	case types.T_uint64:
+		return 64, false
+	default:
+		return 0, false
+	}
+}
+
+func signedIntegerType(minBits int) types.Type {
+	switch {
+	case minBits <= 8:
+		return types.T_int8.ToType()
+	case minBits <= 16:
+		return types.T_int16.ToType()
+	case minBits <= 32:
+		return types.T_int32.ToType()
+	default:
+		return types.T_int64.ToType()
+	}
+}
+
+func unsignedIntegerType(minBits int) types.Type {
+	switch {
+	case minBits <= 8:
+		return types.T_uint8.ToType()
+	case minBits <= 16:
+		return types.T_uint16.ToType()
+	case minBits <= 32:
+		return types.T_uint32.ToType()
+	default:
+		return types.T_uint64.ToType()
+	}
 }
 
 // ResolveNumericBinaryTypes resolves the physical operand and result types for

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -267,6 +268,151 @@ func TestPreparedNumericInspectionPreservesGroupAndAliasState(t *testing.T) {
 	require.Equal(t, []types.T{types.T_int32, types.T_int32}, collectPlanParamTypes(queryPlan))
 }
 
+func TestPreparedNumericContextMergesExactSiblingTypes(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantType  types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name:     "integer siblings",
+			sql:      "select (? + N_REGIONKEY) + cast(0 as signed) from nation",
+			wantType: types.T_int64,
+		},
+		{
+			name:     "integer siblings in reverse order",
+			sql:      "select (cast(0 as signed) + ?) + N_REGIONKEY from nation",
+			wantType: types.T_int64,
+		},
+		{
+			name:      "signed and unsigned bigint siblings",
+			sql:       "select (? + cast(1 as signed)) + cast(0 as unsigned)",
+			wantType:  types.T_decimal128,
+			wantWidth: 38,
+		},
+		{
+			name:      "decimal siblings",
+			sql:       "select (? + cast(1 as decimal(10, 2))) + cast(0 as decimal(30, 10))",
+			wantType:  types.T_decimal128,
+			wantWidth: 30,
+			wantScale: 10,
+		},
+		{
+			name:      "decimal siblings in reverse order",
+			sql:       "select (? + cast(0 as decimal(30, 10))) + cast(1 as decimal(10, 2))",
+			wantType:  types.T_decimal128,
+			wantWidth: 30,
+			wantScale: 10,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			paramTypes := collectPlanParamPlanTypes(queryPlan)
+			require.Len(t, paramTypes, 1)
+			require.Equal(t, int32(test.wantType), paramTypes[0].Id)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, paramTypes[0].Width)
+			}
+			if test.wantScale != 0 {
+				require.Equal(t, test.wantScale, paramTypes[0].Scale)
+			}
+		})
+	}
+}
+
+func TestPreparedNumericContextUsesCorrelatedColumnType(t *testing.T) {
+	for _, sql := range []string{
+		"select (select ? + nation.N_REGIONKEY) from nation",
+		"select (select ? + N_REGIONKEY) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			paramTypes := collectPlanParamTypes(queryPlan)
+			require.NotEmpty(t, paramTypes)
+			for _, typ := range paramTypes {
+				require.Equal(t, types.T_int32, typ)
+			}
+		})
+	}
+}
+
+func TestNumericColumnTypeScopeLookup(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	parent := NewBindContext(builder, nil)
+	parent.binder = NewWhereBinder(builder, parent)
+	parentBinding := numericTestBinding("scope_table", "scope_col", types.T_int64.ToType())
+	parent.bindingByTable[parentBinding.table] = parentBinding
+	parent.bindingByCol["scope_col"] = parentBinding
+
+	middle := NewBindContext(builder, parent)
+	child := NewBindContext(builder, middle)
+	binder := &baseBinder{builder: builder, ctx: child}
+
+	typ, ok := binder.numericColumnType(tree.NewUnresolvedColName("scope_col"))
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_int64), typ.Id)
+
+	qualified := tree.NewUnresolvedName(tree.NewCStr("scope_table", 0), tree.NewCStr("scope_col", 0))
+	typ, ok = binder.numericColumnType(qualified)
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_int64), typ.Id)
+
+	localBinding := numericTestBinding("local_table", "scope_col", types.T_int32.ToType())
+	child.bindingByCol["scope_col"] = localBinding
+	typ, ok = binder.numericColumnType(tree.NewUnresolvedColName("scope_col"))
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_int32), typ.Id)
+
+	child.bindingByCol["scope_col"] = nil
+	_, ok = binder.numericColumnType(tree.NewUnresolvedColName("scope_col"))
+	require.False(t, ok)
+	delete(child.bindingByCol, "scope_col")
+
+	aliasType := makePlan2Type(typePtrForPlanTest(types.T_int16.ToType()))
+	child.aliasMap["alias_col"] = &aliasItem{idx: 0}
+	child.projects = []*planpb.Expr{{Typ: aliasType}}
+	typ, ok = binder.numericColumnType(tree.NewUnresolvedColName("alias_col"))
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_int16), typ.Id)
+
+	missingLocalTable := numericTestBinding("scope_table", "other_col", types.T_int32.ToType())
+	child.bindingByTable["scope_table"] = missingLocalTable
+	typ, ok = binder.numericColumnType(qualified)
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_int64), typ.Id)
+
+	_, ok = binder.numericColumnType(tree.NewUnresolvedColName("missing_col"))
+	require.False(t, ok)
+}
+
+func numericTestBinding(table, col string, typ types.Type) *Binding {
+	planType := makePlan2Type(&typ)
+	return &Binding{
+		table:       table,
+		cols:        []string{col},
+		types:       []*planpb.Type{&planType},
+		colIdByName: map[string]int32{col: 0},
+	}
+}
+
+func typePtrForPlanTest(typ types.Type) *types.Type {
+	return &typ
+}
+
 func collectPlanParamTypes(queryPlan *Plan) []types.T {
 	var result []types.T
 	query := queryPlan.GetQuery()
@@ -289,6 +435,43 @@ func collectPlanParamTypes(queryPlan *Plan) []types.T {
 		}
 	}
 	return result
+}
+
+func collectPlanParamPlanTypes(queryPlan *Plan) []planpb.Type {
+	var result []planpb.Type
+	query := queryPlan.GetQuery()
+	if query == nil {
+		return result
+	}
+	for _, node := range query.Nodes {
+		for _, expr := range node.ProjectList {
+			collectExprEffectiveParamPlanTypes(expr, planpb.Type{}, &result)
+		}
+	}
+	return result
+}
+
+func collectExprEffectiveParamPlanTypes(expr *planpb.Expr, inherited planpb.Type, result *[]planpb.Type) {
+	if expr == nil {
+		return
+	}
+	if expr.GetP() != nil {
+		typ := inherited
+		if typ.Id == 0 {
+			typ = expr.Typ
+		}
+		*result = append(*result, typ)
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		childType := inherited
+		if fn.Func != nil && fn.Func.ObjName == "cast" {
+			childType = expr.Typ
+		}
+		for _, arg := range fn.Args {
+			collectExprEffectiveParamPlanTypes(arg, childType, result)
+		}
+	}
 }
 
 func collectExprParamTypes(expr *planpb.Expr, result *[]types.T) {
