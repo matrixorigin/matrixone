@@ -134,6 +134,29 @@ func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	require.True(t, expr.parameterResults[1].IsConstNull())
 }
 
+func TestEvalIffPropagatesSelectedBranchError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(3)
+
+	condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+	require.NoError(t, err)
+	thenExecutor := &failingExpressionExecutor{}
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 1, proc.Mp())
+	require.NoError(t, err)
+
+	expr := &FunctionExpressionExecutor{}
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, condition))
+	expr.SetParameter(1, thenExecutor)
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	err = expr.EvalIff(proc, []*batch.Batch{bat}, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Equal(t, 1, thenExecutor.calls)
+}
+
 func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.New(nil)

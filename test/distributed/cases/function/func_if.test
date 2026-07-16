@@ -202,19 +202,32 @@ DROP TABLE t1;
 -- IF condition numeric-token semantics. The result file is generated after the implementation lands.
 -- @bvt:issue
 SELECT IF(NULL, 'T', 'F') AS if_null_false;
-SELECT IF('0', 'T', 'F') AS if_string_zero_false,
-       IF('  -2.5 ', 'T', 'F') AS if_string_decimal_true;
-SELECT IF('+0x10', 'T', 'F') AS if_hex_positive_true,
-       IF('-0x10', 'T', 'F') AS if_hex_negative_true,
-       IF('0b1010', 'T', 'F') AS if_binary_prefix_true,
-       IF('0o17', 'T', 'F') AS if_octal_prefix_true;
-SELECT IF('NaN', 'T', 'F') AS if_nan_true,
-       IF('Inf', 'T', 'F') AS if_inf_true;
+SELECT IF('0', 'T', 'F') AS if_string_zero_false;
+SELECT IF('  -2.5 ', 'T', 'F') AS if_string_decimal_true;
+SELECT IF('+0x10', 'T', 'F') AS if_hex_positive_true;
+SELECT IF('-0x10', 'T', 'F') AS if_hex_negative_true;
+SELECT IF('0b1010', 'T', 'F') AS if_binary_prefix_true;
+SELECT IF('0o17', 'T', 'F') AS if_octal_prefix_true;
+SELECT IF('NaN', 'T', 'F') AS if_nan_true;
+SELECT IF('Inf', 'T', 'F') AS if_inf_true;
+
+-- Numeric conditions use nonzero truth semantics, including DECIMAL and BIT.
+SELECT IF(CAST(0 AS DOUBLE), 'T', 'F') AS if_double_zero_false;
+SELECT IF(CAST(-0.1 AS DOUBLE), 'T', 'F') AS if_double_nonzero_true;
+SELECT IF(1E0, 'T', 'F') AS if_double_exponent_true;
+SELECT IF(CAST(0 AS DECIMAL(3,1)), 'T', 'F') AS if_decimal_zero_false;
+SELECT IF(CAST(0.1 AS DECIMAL(3,1)), 'T', 'F') AS if_decimal_nonzero_true;
+CREATE TABLE if_condition_bit(id INT, b BIT(1));
+INSERT INTO if_condition_bit VALUES (1, b'0'), (2, b'1'), (3, NULL);
+SELECT IF(b, 'T', 'F') AS if_bit_zero_false FROM if_condition_bit WHERE id = 1;
+SELECT IF(b, 'T', 'F') AS if_bit_nonzero_true FROM if_condition_bit WHERE id = 2;
+SELECT IF(b, 'T', 'F') AS if_bit_null_false FROM if_condition_bit WHERE id = 3;
+DROP TABLE if_condition_bit;
 
 -- String-family conditions use their actual bytes as complete numeric tokens.
-SELECT IF(CAST('0x10' AS VARBINARY), 'T', 'F') AS if_varbinary_hex_true,
-       IF(CAST('0x10' AS BLOB), 'T', 'F') AS if_blob_hex_true,
-       IF(X'3136', 'T', 'F') AS if_binary_text_16_true;
+SELECT IF(CAST('0x10' AS VARBINARY), 'T', 'F') AS if_varbinary_hex_true;
+SELECT IF(CAST('0x10' AS BLOB), 'T', 'F') AS if_blob_hex_true;
+SELECT IF(X'3136', 'T', 'F') AS if_binary_text_16_true;
 SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_error;
 SELECT IF(CAST('0x10' AS BINARY(8)), 'T', 'F') AS if_fixed_binary_padding_error;
 

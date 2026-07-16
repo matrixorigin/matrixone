@@ -497,6 +497,30 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+
+	floatVec := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{0, -0.1, 1}, nil)
+	floatVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err = IffConditionTruthyAt(floatVec, uint64(row))
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	decimalVec := newVectorByType(proc.Mp(), types.New(types.T_decimal64, 10, 1), []types.Decimal64{0, 1, 1}, nil)
+	decimalVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err = IffConditionTruthyAt(decimalVec, uint64(row))
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	bitVec := newVectorByType(proc.Mp(), types.T_bit.ToType(), []uint64{0, 1, 1}, nil)
+	bitVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err = IffConditionTruthyAt(bitVec, uint64(row))
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestIffFn_StringCondition(t *testing.T) {
@@ -508,6 +532,19 @@ func TestIffFn_StringCondition(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestIffFn_DecimalConditionBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal64, 10, 1), []types.Decimal64{0, 1, 1}, []bool{false, false, true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 22}, nil), iffFn)
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
 }
