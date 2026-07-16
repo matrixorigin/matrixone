@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -137,6 +138,9 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
 		return err
 	}
+	if err = checkZeroTemporalInStrictMode(proc, insertBatch); err != nil {
+		return err
+	}
 	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 	update.addInsertAffectRows(tableType, uint64(newRowCount))
 	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
@@ -219,6 +223,11 @@ func (update *MultiUpdate) insert_table(
 		}
 		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 	}
+	if info.tableType == UpdateMainTable {
+		if err = checkZeroTemporalInStrictMode(proc, writeBatch); err != nil {
+			return err
+		}
+	}
 
 	update.addInsertAffectRows(info.tableType, uint64(writeBatch.RowCount()))
 
@@ -233,6 +242,51 @@ func (update *MultiUpdate) insert_table(
 	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 	return
+}
+
+func checkZeroTemporalInStrictMode(proc *process.Process, bat *batch.Batch) error {
+	if proc == nil || bat == nil || proc.GetResolveVariableFunc() == nil {
+		return nil
+	}
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return nil
+	}
+	modeStr, ok := mode.(string)
+	if !ok {
+		return nil
+	}
+	modeStr = strings.ToUpper(modeStr)
+	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
+	if !hasStrictMode || !strings.Contains(modeStr, "NO_ZERO_DATE") {
+		return nil
+	}
+
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		for row := 0; row < vec.Length(); row++ {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			switch vec.GetType().Oid {
+			case types.T_date:
+				if vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
+				}
+			case types.T_datetime:
+				if vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			case types.T_timestamp:
+				if vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row) == types.ZeroTimestamp {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func isContiguousMapping(cols []int) bool {

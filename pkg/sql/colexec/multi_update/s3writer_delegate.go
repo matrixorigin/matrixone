@@ -329,6 +329,12 @@ func (writer *s3WriterDelegate) append(
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
+				if tableType == UpdateMainTable {
+					if err = checkZeroTemporalInStrictMode(proc, filtered); err != nil {
+						filtered.Clean(mp)
+						return
+					}
+				}
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
 			}
 			filtered.Clean(mp)
@@ -336,6 +342,12 @@ func (writer *s3WriterDelegate) append(
 				return
 			}
 			continue
+		}
+
+		if tableType == UpdateMainTable {
+			if err = checkZeroTemporalInStrictMode(proc, projBat); err != nil {
+				return
+			}
 		}
 
 		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {

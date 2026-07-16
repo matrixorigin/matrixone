@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInsertSimpleTable(t *testing.T) {
@@ -91,6 +92,35 @@ func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 
 	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
 	runTestCases(t, proc, []*testCase{case1})
+}
+
+func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(*testing.T, bool, bool) (*process.Process, *testCase)
+	}{
+		{name: "write table", build: buildInsertTestCase},
+		{name: "write s3", build: buildInsertS3TestCase},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc, c := tc.build(t, false, false)
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+			})
+
+			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_date)}
+			for _, bat := range c.inputBatchs {
+				zeroDates := vector.NewVec(types.T_date.ToType())
+				for i := 0; i < bat.RowCount(); i++ {
+					require.NoError(t, vector.AppendFixed(zeroDates, types.ZeroDate, false, proc.Mp()))
+				}
+				bat.Vecs[3].Free(proc.Mp())
+				bat.Vecs[3] = zeroDates
+			}
+			c.expectErr = true
+			runTestCases(t, proc, []*testCase{c})
+		})
+	}
 }
 
 // ----- util function ----
