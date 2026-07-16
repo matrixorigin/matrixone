@@ -1,0 +1,4 @@
+Physical Plan Deployment:
+Scope 1 (Magic: Remote, addr:cn-a, mcpu: 1, Receiver: [])
+  Pipeline: └── hash build(idx:1) CallNum:1 InRows:1000 SpillRows:0 SpillSize:0bytes
+  Pipeline: └── hash build(idx:2) CallNum:1 InRows:2000 SpillSize:0bytes

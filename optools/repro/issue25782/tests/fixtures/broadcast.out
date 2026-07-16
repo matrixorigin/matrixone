@@ -1,0 +1,11 @@
+Overview: sanitized EXPLAIN PHYPLAN ANALYZE output
+Physical Plan Deployment:
+Scope 1 (Magic: Remote, addr:127.0.0.1:18100, mcpu: 1, Receiver: []) PrepareTimeConsumed: 1ns
+  DataSource: issue25782.t_build[id]
+  Pipeline: └── hash build(idx:2, isFirst:true, isLast:false) CallNum:1
+InRows:132096
+MemSize:10641465bytes
+SpillSize:0bytes
+SpillRows:0
+Scope 1 (Magic: Remote, addr:127.0.0.1:18200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 0ns
+  Pipeline: └── hash build
