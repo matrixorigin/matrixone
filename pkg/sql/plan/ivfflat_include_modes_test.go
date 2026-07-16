@@ -296,6 +296,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 	assert.Equal(t, uint64(0), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
+	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
@@ -331,6 +332,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
+	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }
@@ -369,6 +371,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
+	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindow(t *testing.T) {
@@ -390,6 +394,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindo
 	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Empty(t, tableFuncNode.RuntimeFilterProbeList)
+	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t *testing.T) {
@@ -427,6 +433,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t
 	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
+	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPost(t *testing.T) {

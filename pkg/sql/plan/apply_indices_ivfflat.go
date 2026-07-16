@@ -1590,6 +1590,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
 		probeSpec.UseMembershipFilter = true
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+		// Runtime-filter messages only travel within one CN message board. Keep
+		// this outer join tree on the current CN; the background entries query can
+		// still distribute the serialized membership payload across CNs.
+		tableFuncNode.Stats.ForceOneCN = true
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
 		// could see the raw table scan shape. Once the IVF subtree is constructed, we can
