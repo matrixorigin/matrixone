@@ -517,7 +517,13 @@ func TestCheckpointReaderTestHookSetters(t *testing.T) {
 		require.NotNil(t, gotReader)
 		require.Same(t, entry, gotEntry)
 		require.Contains(t, tableIDs, uint64(9))
-		return map[uint64][]*ObjectEntryInfo{9: []*ObjectEntryInfo{{}}}, map[uint64][]*ObjectEntryInfo{9: []*ObjectEntryInfo{{}}}, nil
+		dataByTable := map[uint64][]*ObjectEntryInfo{
+			9: {{}},
+		}
+		tombByTable := map[uint64][]*ObjectEntryInfo{
+			9: {{}},
+		}
+		return dataByTable, tombByTable, nil
 	})
 	reader.SetGetLogicalViewForTest(func(gotReader *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
 		require.NotNil(t, gotReader)
