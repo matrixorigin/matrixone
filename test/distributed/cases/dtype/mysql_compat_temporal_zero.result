@@ -53,14 +53,15 @@ monthname(cast('0000-00-00 00:00:00' as timestamp)) as zero_monthname_timestamp;
 null  ¦  null  ¦  null
 select dayofmonth(cast('0000-00-00' as date)) as zero_dayofmonth_date,
 dayofmonth(cast('0000-00-00 00:00:00' as datetime)) as zero_dayofmonth_datetime,
+dayofmonth(cast('0000-00-00 00:00:00' as timestamp)) as zero_dayofmonth_timestamp,
 month(cast('0000-00-00' as date)) as zero_month_date,
 month(cast('0000-00-00 00:00:00' as datetime)) as zero_month_datetime,
 quarter(cast('0000-00-00' as date)) as zero_quarter_date,
 quarter(cast('0000-00-00 00:00:00' as datetime)) as zero_quarter_datetime,
 year(cast('0000-00-00' as date)) as zero_year_date,
 year(cast('0000-00-00 00:00:00' as datetime)) as zero_year_datetime;
-➤ zero_dayofmonth_date[-6,8,0]  ¦  zero_dayofmonth_datetime[-6,8,0]  ¦  zero_month_date[-6,8,0]  ¦  zero_month_datetime[-6,8,0]  ¦  zero_quarter_date[-6,8,0]  ¦  zero_quarter_datetime[-6,8,0]  ¦  zero_year_date[-5,64,0]  ¦  zero_year_datetime[-5,64,0]  𝄀
-0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+➤ zero_dayofmonth_date[-6,8,0]  ¦  zero_dayofmonth_datetime[-6,8,0]  ¦  zero_dayofmonth_timestamp[-6,8,0]  ¦  zero_month_date[-6,8,0]  ¦  zero_month_datetime[-6,8,0]  ¦  zero_quarter_date[-6,8,0]  ¦  zero_quarter_datetime[-6,8,0]  ¦  zero_year_date[-5,64,0]  ¦  zero_year_datetime[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
 select cast('0001-01-01' as date) as minimum_date,
 cast('0001-01-01 00:00:00' as datetime) as minimum_datetime;
 ➤ minimum_date[91,64,0]  ¦  minimum_datetime[93,64,0]  𝄀

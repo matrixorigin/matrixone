@@ -39,6 +39,7 @@ select monthname(cast('0000-00-00' as date)) as zero_monthname_date,
 -- Partial-field accessors preserve MySQL's zero result for zero temporals.
 select dayofmonth(cast('0000-00-00' as date)) as zero_dayofmonth_date,
        dayofmonth(cast('0000-00-00 00:00:00' as datetime)) as zero_dayofmonth_datetime,
+       dayofmonth(cast('0000-00-00 00:00:00' as timestamp)) as zero_dayofmonth_timestamp,
        month(cast('0000-00-00' as date)) as zero_month_date,
        month(cast('0000-00-00 00:00:00' as datetime)) as zero_month_datetime,
        quarter(cast('0000-00-00' as date)) as zero_quarter_date,
