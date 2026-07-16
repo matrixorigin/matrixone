@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -227,6 +228,43 @@ func TestLoopJoinConstNullAfterNonEmptyProbe(t *testing.T) {
 	tc.barg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestLoopJoinSingleRejectsMultipleRows(t *testing.T) {
+	for _, withCondition := range []bool{true, false} {
+		name := "without condition"
+		if withCondition {
+			name = "with condition"
+		}
+		t.Run(name, func(t *testing.T) {
+			tc := newTestCase(t,
+				[]bool{false},
+				[]types.Type{types.T_int32.ToType()},
+				[]colexec.ResultPos{colexec.NewResultPos(0, 0)})
+			tc.arg.JoinType = plan.Node_SINGLE
+			if !withCondition {
+				tc.arg.NonEqCond = nil
+			}
+
+			resetChildrenWithBatch(tc.arg, makeInt32LoopJoinBatch(tc.proc.Mp(), []int32{1}))
+			resetHashBuildChildrenWithBatch(tc.barg, makeInt32LoopJoinBatch(tc.proc.Mp(), []int32{1, 1}))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			_, err = vm.Exec(tc.arg, tc.proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrSubqueryNo1Row))
+
+			tc.arg.Reset(tc.proc, true, err)
+			tc.barg.Reset(tc.proc, true, err)
+			tc.arg.Free(tc.proc, true, err)
+			tc.barg.Free(tc.proc, true, err)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestLoopJoinFinalizeResetsAfterPreviousEmptyProbe(t *testing.T) {

@@ -15,12 +15,13 @@
 package compile
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -802,9 +804,7 @@ func (c *Compile) lockTable() error {
 	for tableID := range c.lockTables {
 		tableIDs = append(tableIDs, tableID)
 	}
-	sort.Slice(tableIDs, func(i, j int) bool {
-		return tableIDs[i] < tableIDs[j]
-	})
+	slices.Sort(tableIDs)
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
@@ -2336,8 +2336,8 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		return hiveFileSizeAt(fileSize, indices[i]) > hiveFileSizeAt(fileSize, indices[j])
+	slices.SortStableFunc(indices, func(a, b int) int {
+		return cmp.Compare(hiveFileSizeAt(fileSize, b), hiveFileSizeAt(fileSize, a))
 	})
 
 	for _, fileIdx := range indices {
@@ -2387,16 +2387,16 @@ func splitParquetRowGroupShards(
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		left := rowGroups[indices[i]]
-		right := rowGroups[indices[j]]
-		if parquetRowGroupLoad(left) != parquetRowGroupLoad(right) {
-			return parquetRowGroupLoad(left) > parquetRowGroupLoad(right)
+	slices.SortStableFunc(indices, func(a, b int) int {
+		left := rowGroups[a]
+		right := rowGroups[b]
+		if c := cmp.Compare(parquetRowGroupLoad(right), parquetRowGroupLoad(left)); c != 0 {
+			return c
 		}
-		if left.fileIndex != right.fileIndex {
-			return left.fileIndex < right.fileIndex
+		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
+			return c
 		}
-		return left.rowGroupIndex < right.rowGroupIndex
+		return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
 	})
 
 	for _, rowGroupIdx := range indices {
@@ -2438,13 +2438,11 @@ func splitParquetRowGroupShards(
 		if len(shard.rowGroupShards) == 0 {
 			continue
 		}
-		sort.SliceStable(shard.rowGroupShards, func(i, j int) bool {
-			left := shard.rowGroupShards[i]
-			right := shard.rowGroupShards[j]
-			if left.FileIndex != right.FileIndex {
-				return left.FileIndex < right.FileIndex
+		slices.SortStableFunc(shard.rowGroupShards, func(left, right *pipeline.ParquetRowGroupShard) int {
+			if c := cmp.Compare(left.FileIndex, right.FileIndex); c != 0 {
+				return c
 			}
-			return left.RowGroupStart < right.RowGroupStart
+			return cmp.Compare(left.RowGroupStart, right.RowGroupStart)
 		})
 		shard.rowGroupShards = mergeAdjacentParquetRowGroupShards(shard.rowGroupShards)
 		shard.originalToLocal = nil
@@ -2756,6 +2754,64 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 	return ss, nil
 }
 
+func shouldDispatchIvfSearchMultiCN(
+	node *plan.Node,
+	execType plan2.ExecType,
+	cnList engine.Nodes,
+	workspace client.Workspace,
+) bool {
+	return plan2.IsIvfSearchEntriesInternalScan(node) &&
+		execType == plan2.ExecTypeAP_MULTICN &&
+		len(cnList) > 1 &&
+		(workspace == nil || workspace.Readonly()) &&
+		(node.GetStats() == nil || !node.GetStats().GetForceOneCN())
+}
+
+func partitionedIndexReaderParam(param *plan.IndexReaderParam, cncnt, cnidx int32) *plan.IndexReaderParam {
+	ret := plan2.DeepCopyIndexReaderParam(param)
+	if ret == nil {
+		ret = &plan.IndexReaderParam{}
+	}
+	ret.PartitionCnCnt = cncnt
+	ret.PartitionCnIdx = cnidx
+	return ret
+}
+
+func (c *Compile) compileIvfSearchParallel(node *plan.Node) ([]*Scope, error) {
+	var workspace client.Workspace
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		workspace = txnOp.GetWorkspace()
+	}
+	if !shouldDispatchIvfSearchMultiCN(node, c.execType, c.cnList, workspace) {
+		return c.compileSingleTableFunction(node)
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, 0, len(c.cnList))
+	cncnt := int32(len(c.cnList))
+	for i := range c.cnList {
+		ds := newScope(Remote)
+		ds.NodeInfo = engine.Node{
+			Id:    c.cnList[i].Id,
+			Addr:  c.cnList[i].Addr,
+			Mcpu:  1,
+			CNCNT: cncnt,
+			CNIDX: int32(i),
+		}
+		ds.DataSource = &Source{isConst: true, node: node}
+		ds.Proc = c.proc.NewNoContextChildProc(0)
+		ds.IsTbFunc = true
+
+		op := constructTableFunction(node, c.pn.GetQuery())
+		op.IndexReaderParam = partitionedIndexReaderParam(node.IndexReaderParam, ds.NodeInfo.CNCNT, ds.NodeInfo.CNIDX)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ds.setRootOperator(op)
+		ss = append(ss, ds)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
 func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 
@@ -2775,6 +2831,8 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 				return c.compileSingleTableFunction(node)
 			}
 			return c.compileGenerateSeriesParallel(node, ss, parallelSize, canOpt, offset, step)
+		case ivfflatplan.IVFFLATSearchFuncName:
+			return c.compileIvfSearchParallel(node)
 		default:
 			return c.compileSingleTableFunction(node)
 		}

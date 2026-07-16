@@ -985,6 +985,24 @@ func commitWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn
 	return responses
 }
 
+func TestCommitRequestExpired(t *testing.T) {
+	now := time.Unix(0, 100)
+	req := txn.TxnRequest{CommitRequest: &txn.TxnCommitRequest{DeadlineUnixNano: 99}}
+	require.True(t, commitRequestExpired(&req, now, 0))
+
+	req.CommitRequest.DeadlineUnixNano = 101
+	require.False(t, commitRequestExpired(&req, now, 0))
+
+	// The deadline is produced by CN's wall clock. A TN ahead by the HLC
+	// max-offset must not reject a request that is still valid at CN.
+	req.CommitRequest.DeadlineUnixNano = 100
+	require.False(t, commitRequestExpired(&req, now, 10))
+	require.True(t, commitRequestExpired(&req, time.Unix(0, 110), 10))
+
+	req.CommitRequest.DeadlineUnixNano = 0
+	require.False(t, commitRequestExpired(&req, now, 0))
+}
+
 func rollbackWriteData(t *testing.T, sender rpc.TxnSender, wTxn txn.TxnMeta) []txn.TxnResponse {
 	result, err := sender.Send(context.Background(), []txn.TxnRequest{NewTestRollbackRequest(wTxn)})
 	assert.NoError(t, err)

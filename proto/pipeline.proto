@@ -33,6 +33,16 @@ enum Method {
   BatchMessage = 2;
   PrepareDoneNotifyMessage = 3; // for dispatch
   StopSending = 4;
+  PipelineStreamFinish = 5;
+  PipelineStreamFinishAck = 6;
+}
+
+// StreamTeardownMode negotiates whether a completed logical pipeline stream can
+// be retired without closing its exclusive TCP backend. Zero intentionally
+// preserves the legacy close-the-backend behavior for rolling upgrades.
+enum StreamTeardownMode {
+  LegacyClose = 0;
+  FinishAck = 1;
 }
 
 enum Status {
@@ -53,6 +63,8 @@ message Message {
   bytes uuid = 8;
   bool needNotReply = 9;
   string debugMsg = 10;
+  StreamTeardownMode requested_teardown_mode = 11;
+  StreamTeardownMode accepted_teardown_mode = 12;
 }
 
 message Connector {
@@ -343,6 +355,8 @@ message TableFunction {
   bytes params = 4;
   string name = 5;
   bool is_single = 6;
+  plan.IndexReaderParam index_reader_param = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
 }
 
 message ExternalName2ColIndex {
