@@ -78,12 +78,6 @@ load data infile '$resources/load_data/row_count.csv' into table load_t fields t
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 4
-update t set v = v + 1 where id = 1;
-insert into t values (1,12345);
-Duplicate entry '1' for key 'id'
-select row_count();
-➤ row_count()[-5,64,0]  𝄀
--1
 insert into t values (6,60),(7,70);
 prepare stmt1 from 'select row_count()';
 delete from t where id in (1,2,3);

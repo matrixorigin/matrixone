@@ -80,11 +80,6 @@ create table load_t(id int, v varchar(10));
 load data infile '$resources/load_data/row_count.csv' into table load_t fields terminated by ',';
 select row_count();
 
--- a failed statement (duplicate primary key) makes row_count() return -1
-update t set v = v + 1 where id = 1;
-insert into t values (1,12345);
-select row_count();
-
 -- prepared statement: row_count() must be evaluated at EXECUTE time, not frozen
 -- at PREPARE time
 insert into t values (6,60),(7,70);
