@@ -9399,6 +9399,8 @@ func initTimeFormatTestCase() []tcTemp {
 	t2, _ := types.ParseTime("00:00:00", 6)
 	t3, _ := types.ParseTime("23:59:59.123456", 6)
 	t4, _ := types.ParseTime("12:34:56.789012", 6)
+	t5, _ := types.ParseTime("123:45:06", 6)
+	t6, _ := types.ParseTime("-123:45:06", 6)
 
 	return []tcTemp{
 		{
@@ -9417,12 +9419,24 @@ func initTimeFormatTestCase() []tcTemp {
 			info: "test time_format - %T",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1},
-					[]bool{false}),
+					[]types.Time{t1, t5, t6},
+					[]bool{false, false, false}),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%T"}, []bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45"},
+				[]string{"15:30:45", "123:45:06", "-123:45:06"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test time_format - negative time prefixes complete result",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t6},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"elapsed=%H:%i:%s"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"-elapsed=123:45:06"},
 				[]bool{false}),
 		},
 		{

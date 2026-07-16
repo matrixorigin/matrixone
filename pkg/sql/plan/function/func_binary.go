@@ -4043,7 +4043,10 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // timeFormat: Get the format string corresponding to the time according to format specifiers
 // Only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
 func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buffer) error {
-	hour, minute, sec, msec, _ := t.ClockFormat()
+	hour, minute, sec, msec, isNeg := t.ClockFormat()
+	if isNeg {
+		buf.WriteByte('-')
+	}
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
@@ -4112,7 +4115,7 @@ func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec ui
 	case 'S', 's':
 		FormatInt2BufByWidth(int(sec), 2, buf)
 	case 'T':
-		fmt.Fprintf(buf, "%02d:%02d:%02d", hour%24, minute, sec)
+		fmt.Fprintf(buf, "%02d:%02d:%02d", hour, minute, sec)
 	default:
 		// For unsupported format specifiers, just write the character as-is
 		// This matches MySQL behavior where non-time format specifiers are ignored
