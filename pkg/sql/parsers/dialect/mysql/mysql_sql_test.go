@@ -3774,6 +3774,40 @@ func TestValid(t *testing.T) {
 	}
 }
 
+func TestUnicodeIdentifierAliases(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS qty",
+		"SELECT 1 AS الكمية",
+		"SELECT 1 AS 1数量",
+		"SELECT 1 AS `الكمية`",
+		"SELECT 1 AS `数量`",
+		"CREATE TABLE 数据表 (数量 INT)",
+		"SELECT 数量 FROM 数据表",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestInvalidUnicodeIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS 😀",
+		"SELECT 1 AS `😀`",
+		"SELECT 1 AS 1😀",
+		"SELECT 1 AS 0x😀",
+		"SELECT 1 AS 0b😀",
+		"SELECT 1 AS `a\x00b`",
+		"SELECT 1 AS `\xff`",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)

@@ -74,6 +74,37 @@ func TestLiteralID(t *testing.T) {
 	}
 }
 
+func TestUnicodeIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{name: "unquoted Arabic", input: "الكمية", want: ID},
+		{name: "unquoted Chinese", input: "数量", want: ID},
+		{name: "digit prefix Chinese", input: "1数量", want: ID},
+		{name: "quoted Arabic", input: "`الكمية`", want: QUOTE_ID},
+		{name: "quoted Chinese", input: "`数量`", want: QUOTE_ID},
+		{name: "invalid UTF-8", input: "`\xff`", want: LEX_ERROR},
+		{name: "digit prefix invalid UTF-8", input: "1\xff", want: LEX_ERROR},
+		{name: "NUL", input: "`a\x00b`", want: LEX_ERROR},
+		{name: "supplementary character", input: "`😀`", want: LEX_ERROR},
+		{name: "digit prefix supplementary character", input: "1😀", want: LEX_ERROR},
+		{name: "hex prefix supplementary character", input: "0x😀", want: LEX_ERROR},
+		{name: "binary prefix supplementary character", input: "0b😀", want: LEX_ERROR},
+		{name: "invalid UTF-8 bind variable", input: ":\xff", want: LEX_ERROR},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, _ := NewScanner(dialect.MYSQL, test.input).Scan()
+			if got != test.want {
+				t.Fatalf("Scan(%q) token = %s, want %s", test.input, tokenName(got), tokenName(test.want))
+			}
+		})
+	}
+}
+
 func tokenName(id int) string {
 	if id == STRING {
 		return "STRING"

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -140,7 +141,7 @@ func (s *Scanner) Scan() (int, string) {
 			return tID, ""
 		}
 		return tokenID, tBytes
-	case isLetter(ch):
+	case isIdentifierLetter(ch):
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -551,7 +552,11 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 					return LEX_ERROR, ""
 				}
 				s.inc()
-				return QUOTE_ID, s.buf[start : s.Pos-1]
+				identifier := s.buf[start : s.Pos-1]
+				if !validIdentifier(identifier) {
+					return LEX_ERROR, identifier
+				}
+				return QUOTE_ID, identifier
 			}
 
 			var buf strings.Builder
@@ -597,7 +602,11 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 		}
 		s.inc()
 	}
-	return QUOTE_ID, buf.String()
+	identifier := buf.String()
+	if !validIdentifier(identifier) {
+		return LEX_ERROR, identifier
+	}
+	return QUOTE_ID, identifier
 }
 
 // scanCommentTypeBlock scans a '/*' delimited comment;
@@ -730,7 +739,10 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				s.scanIdentifier(false)
+				typ, _ := s.scanIdentifier(false)
+				if typ == LEX_ERROR {
+					return LEX_ERROR, s.buf[start:s.Pos]
+				}
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
 
@@ -743,7 +755,10 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				s.scanIdentifier(false)
+				typ, _ := s.scanIdentifier(false)
+				if typ == LEX_ERROR {
+					return LEX_ERROR, s.buf[start:s.Pos]
+				}
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
 
@@ -774,10 +789,13 @@ exponent:
 	}
 
 exit:
-	if isLetter(s.cur()) {
+	if isIdentifierLetter(s.cur()) {
 		// TODO: optimize
+		typ, _ := s.scanIdentifier(false)
+		if typ == LEX_ERROR {
+			return LEX_ERROR, s.buf[start:s.Pos]
+		}
 		token = ID
-		s.scanIdentifier(false)
 	}
 
 	return token, strings.ToLower(s.buf[start:s.Pos])
@@ -796,7 +814,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '$' && dollarFlag {
 			break
 		}
-		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
+		if !isIdentifierLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
 		if ch == '@' {
@@ -806,6 +824,9 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
+	if !validIdentifier(keywordName) {
+		return LEX_ERROR, keywordName
+	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
 		// make transaction statements coexist with plsql
@@ -913,6 +934,21 @@ func (s *Scanner) peek(dist int) uint16 {
 		return eofChar
 	}
 	return uint16(s.buf[s.Pos+dist])
+}
+
+func validIdentifier(s string) bool {
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		if r == 0 || r > '\uFFFF' || r == utf8.RuneError && size == 1 {
+			return false
+		}
+		s = s[size:]
+	}
+	return true
+}
+
+func isIdentifierLetter(ch uint16) bool {
+	return isLetter(ch) || ch >= utf8.RuneSelf && ch != eofChar
 }
 
 func isLetter(ch uint16) bool {
