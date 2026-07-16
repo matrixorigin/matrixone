@@ -157,8 +157,25 @@ func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
 }
 
+func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interface{}, error) {
+	columns := make([]interface{}, len(cols))
+	for i, col := range cols {
+		c, err := colDef2MysqlColumn(ctx, col)
+		if err != nil {
+			return nil, err
+		}
+		columns[i] = c
+	}
+	return columns, nil
+}
+
+func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Context) ([]interface{}, []*plan2.ColDef, error) {
+	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	columns, err := columnsToMysqlColumns(ctx, cols)
+	return columns, cols, err
+}
+
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
-	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowColumns:
@@ -186,15 +203,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 			}
 		}
 	}
-	columns := make([]interface{}, len(cols))
-	for i, col := range cols {
-		c, err := colDef2MysqlColumn(ctx, col)
-		if err != nil {
-			return nil, err
-		}
-		columns[i] = c
-	}
-	return columns, err
+	return columnsToMysqlColumns(ctx, cols)
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {

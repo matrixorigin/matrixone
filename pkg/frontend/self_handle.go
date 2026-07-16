@@ -18,11 +18,15 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray, err error) {
-	finishRunSQL := enterFrontendRunSQL(ses, execCtx)
+	finishRunSQL, err := enterFrontendRunSQL(ses, execCtx)
+	if err != nil {
+		return stats, err
+	}
 	defer finishRunSQL()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
@@ -719,17 +723,17 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	return
 }
 
-func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
+func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) (func(), error) {
 	if ses == nil || execCtx == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	txnOp := txnHandler.GetTxn()
 	if txnOp == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	sqlText := execCtx.sqlOfStmt
 	if sqlText == "" {
@@ -740,7 +744,13 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	token, err := client.TryEnterRunSqlWithTokenAndSQL(txnOp, cancel, sqlText)
+	if err != nil {
+		cancel()
+		return func() {}, err
+	}
+	// Legacy TxnOperator implementations may use zero as an opaque/no-op token.
+	// Preserve the pre-admission-API session bookkeeping contract for them.
 	if token != 0 {
 		ses.pushRunSQLToken(token)
 	}
@@ -750,5 +760,5 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
 			ses.popRunSQLToken()
 		}
 		cancel()
-	}
+	}, nil
 }

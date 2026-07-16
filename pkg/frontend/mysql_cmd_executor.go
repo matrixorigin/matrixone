@@ -17,6 +17,7 @@ package frontend
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -30,7 +31,6 @@ import (
 	"reflect"
 	gotrace "runtime/trace"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1150,8 +1150,8 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	//sort by name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0].(string) < rows[j][0].(string)
+	slices.SortFunc(rows, func(a, b []interface{}) int {
+		return cmp.Compare(a[0].(string), b[0].(string))
 	})
 
 	for _, row := range rows {
@@ -2264,8 +2264,8 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	}
 
 	//sort by name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0].(string) < rows[j][0].(string)
+	slices.SortFunc(rows, func(a, b []interface{}) int {
+		return cmp.Compare(a[0].(string), b[0].(string))
 	})
 
 	for _, row := range rows {

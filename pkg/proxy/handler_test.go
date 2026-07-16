@@ -37,6 +37,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/lni/goutils/leaktest"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -46,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type testProxyHandler struct {
@@ -259,8 +261,50 @@ func TestHandler_Handle(t *testing.T) {
 	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
+func TestHandlerCurrentConnections(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		const connectionCount = 3
+		before := testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge)
+		closedBefore := testutil.ToFloat64(metricv2.ProxyConnectClosedCounter)
+		dbs := make([]*sql.DB, 0, connectionCount)
+		defer func() {
+			for _, db := range dbs {
+				_ = db.Close()
+			}
+		}()
+
+		for i := 0; i < connectionCount; i++ {
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+			require.NoError(t, err)
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+			dbs = append(dbs, db)
+			_, err = db.Exec("select 1")
+			require.NoError(t, err)
+		}
+
+		require.Eventually(t, func() bool {
+			return s.counterSet.connTotal.Load() == connectionCount &&
+				testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge) == before+connectionCount &&
+				testutil.ToFloat64(metricv2.ProxyConnectClosedCounter) == closedBefore
+		}, 5*time.Second, 10*time.Millisecond)
+
+		for i, db := range dbs {
+			require.NoError(t, db.Close())
+			expected := connectionCount - i - 1
+			require.Eventually(t, func() bool {
+				return s.counterSet.connTotal.Load() == int64(expected) &&
+					testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge) == before+float64(expected) &&
+					testutil.ToFloat64(metricv2.ProxyConnectClosedCounter) == closedBefore+float64(i+1)
+			}, 5*time.Second, 10*time.Millisecond)
+		}
+	})
+}
+
 func TestHandler_HandleErr(t *testing.T) {
 	defer leaktest.AfterTest(t)()
+	currentBefore := testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge)
+	closedBefore := testutil.ToFloat64(metricv2.ProxyConnectClosedCounter)
 
 	temp := os.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -319,6 +363,11 @@ func TestHandler_HandleErr(t *testing.T) {
 	}()
 	_, err = db.Exec("anystmt")
 	require.Error(t, err)
+	require.Eventually(t, func() bool {
+		return s.counterSet.connTotal.Load() == 0 &&
+			testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge) == currentBefore &&
+			testutil.ToFloat64(metricv2.ProxyConnectClosedCounter) == closedBefore+1
+	}, 5*time.Second, 10*time.Millisecond)
 
 	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 }

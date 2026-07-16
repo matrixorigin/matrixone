@@ -44,4 +44,29 @@ var (
 			Name:      "cleanup_event",
 			Help:      "Total number of abnormal pipeline cleanup events.",
 		}, []string{"event"})
+
+	PipelineStreamTeardownCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "stream_teardown_total",
+			Help:      "Pipeline stream teardown outcomes by event.",
+		}, []string{"event"})
+
+	PipelineStreamLifecycleGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "stream_lifecycle_active",
+			Help:      "Current number of server-side FIN lifecycle registrations.",
+		})
+
+	PipelineStreamFinishDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "stream_finish_duration_seconds",
+			Help:      "FIN to FIN_ACK completion latency in seconds.",
+			Buckets:   getDurationBuckets(),
+		})
 )

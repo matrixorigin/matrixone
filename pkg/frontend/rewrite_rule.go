@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -628,19 +629,19 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 	// primary role, directly granted secondary roles by grant time, then inherited
 	// roles in breadth-first grant-time order. Later rows override incompatible
 	// earlier rows for the same rule_name.
-	sort.SliceStable(ruleRows, func(i, j int) bool {
-		iPriority, iOK := rolePriority[ruleRows[i].roleID]
-		jPriority, jOK := rolePriority[ruleRows[j].roleID]
-		if !iOK {
-			iPriority = len(rolePriority)
+	slices.SortStableFunc(ruleRows, func(a, b rewriteRuleRow) int {
+		aPriority, aOK := rolePriority[a.roleID]
+		bPriority, bOK := rolePriority[b.roleID]
+		if !aOK {
+			aPriority = len(rolePriority)
 		}
-		if !jOK {
-			jPriority = len(rolePriority)
+		if !bOK {
+			bPriority = len(rolePriority)
 		}
-		if iPriority != jPriority {
-			return iPriority < jPriority
+		if aPriority != bPriority {
+			return cmp.Compare(aPriority, bPriority)
 		}
-		return ruleRows[i].ruleName < ruleRows[j].ruleName
+		return cmp.Compare(a.ruleName, b.ruleName)
 	})
 
 	for _, row := range ruleRows {

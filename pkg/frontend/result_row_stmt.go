@@ -51,6 +51,20 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 	return cols, columns, err
 }
 
+func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
+	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
+		if _, ok = txnCW.GetAst().(*tree.Select); ok {
+			return txnCW.getColumnsWithResultColumns(ctx)
+		}
+	}
+
+	columns, err := cw.GetColumns(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -60,7 +74,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
-		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
@@ -68,7 +82,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
-		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)

@@ -116,7 +116,7 @@ func (d *delegate) NotifyMsg(data []byte) {
 func (d *delegate) broadcastData(limit int) []gossip.GossipData {
 	left := limit
 	items, left := d.dataCacheKey.Data(left)
-	data := make([]gossip.GossipData, len(items))
+	data := make([]gossip.GossipData, 0, len(items))
 	for _, item := range items {
 		data = append(data, gossip.GossipData{
 			Data: &gossip.GossipData_CacheKeyItem{
@@ -181,8 +181,8 @@ func (d *delegate) dataCacheState() map[string]*query.CacheKeys {
 }
 
 func (d *delegate) statsInfoState() map[string]*statsinfo.StatsInfoKeys {
-	d.dataCacheKey.mu.Lock()
-	defer d.dataCacheKey.mu.Unlock()
+	d.statsInfoKey.mu.Lock()
+	defer d.statsInfoKey.mu.Unlock()
 	targetStatsInfo := make(map[string]*statsinfo.StatsInfoKeys)
 	for key, target := range d.statsInfoKey.mu.keyTarget {
 		if _, ok := targetStatsInfo[target]; !ok {
