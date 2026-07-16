@@ -15,7 +15,7 @@
 package fulltext2
 
 import (
-	"sort"
+	"container/heap"
 
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
@@ -175,29 +175,29 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		}
 	}
 
-	// Drop MUST-NOT docs; emit ascending ord so the score-desc sort keeps an
-	// ascending-ord tiebreak.
-	ords := make([]int64, 0, len(cand))
-	for ord := range cand {
+	// Bounded top-k via a min-heap keyed by score (ascending-ord tiebreak), instead of
+	// sorting the ENTIRE candidate set: a common term/ngram matches nearly every doc, so
+	// an O(n log n) reflection-based sort of all candidates to keep k dominated the CPU
+	// profile. This is O(n log k), typed (no reflect), O(k) memory, and yields the exact
+	// same top-k (score desc, ties by ascending ord) as the full sort.
+	h := &minScoreHeap{}
+	for ord, score := range cand {
 		if _, bad := mustNot[ord]; bad {
 			continue
 		}
 		if !allowed(allow, ord) { // WHERE prefilter (nil = allow all)
 			continue
 		}
-		ords = append(ords, ord)
+		if h.Len() < k {
+			heap.Push(h, scoredDoc{ord, score})
+		} else if root := (*h)[0]; score > root.score || (score == root.score && ord < root.ord) {
+			// Strictly better, or ties the worst kept score with a smaller ord (the
+			// score-desc / ord-asc tiebreak the full sort produced).
+			heap.Pop(h)
+			heap.Push(h, scoredDoc{ord, score})
+		}
 	}
-	sort.Slice(ords, func(a, b int) bool { return ords[a] < ords[b] })
-
-	results := make([]Result, len(ords))
-	for i, ord := range ords {
-		results[i] = Result{Pk: s.pks[ord], Score: cand[ord]}
-	}
-	sort.SliceStable(results, func(a, b int) bool { return results[a].Score > results[b].Score })
-	if len(results) > k {
-		results = results[:k]
-	}
-	return results, nil
+	return heapToResults(s, h), nil
 }
 
 func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats) ([]map[int64]float64, error) {
