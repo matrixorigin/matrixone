@@ -442,11 +442,12 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx           context.Context
+	builder          *QueryBuilder
+	ctx              *BindContext
+	impl             Binder
+	boundCols        []string
+	numericParamType *Type
 }
 
 type DefaultBinder struct {
