@@ -253,11 +253,15 @@ func (s *store) Close() error {
 	)
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
+		r.cancelStart(false)
 		if e := r.close(false); e != nil {
 			err = errors.Join(e, err)
 		}
 		return true
 	})
+	if s.queryClient != nil {
+		err = errors.Join(err, s.queryClient.Close())
+	}
 	s.task.RLock()
 	ts := s.task.serviceHolder
 	s.task.RUnlock()
@@ -270,11 +274,15 @@ func (s *store) Close() error {
 }
 
 func (s *store) StartTNReplica(shard metadata.TNShard) error {
-	return s.createReplica(shard)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createReplicaLocked(shard)
 }
 
 func (s *store) CloseTNReplica(shard metadata.TNShard) error {
-	return s.removeReplica(shard.ShardID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.removeReplicaLocked(shard.ShardID)
 }
 
 func (s *store) startTNShards() error {
@@ -282,7 +290,7 @@ func (s *store) startTNShards() error {
 	defer s.mu.Unlock()
 
 	for _, shard := range s.mu.metadata.Shards {
-		if err := s.createReplica(shard); err != nil {
+		if err := s.createReplicaLocked(shard); err != nil {
 			return err
 		}
 	}
@@ -302,7 +310,7 @@ func (s *store) getTNShardInfo() []logservicepb.TNShardInfo {
 	return shards
 }
 
-func (s *store) createReplica(shard metadata.TNShard) error {
+func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	r := newReplica(shard, s.rt)
 	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {
@@ -312,21 +320,49 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 		return nil
 	}
 
-	err := s.stopper.RunTask(func(ctx context.Context) {
+	err := s.stopper.RunTask(func(stopperCtx context.Context) {
+		stopCancelPropagation := context.AfterFunc(stopperCtx, func() {
+			r.cancelStart(false)
+		})
+		defer stopCancelPropagation()
+
 		for {
 			select {
-			case <-ctx.Done():
+			case <-stopperCtx.Done():
+				r.cancelStart(false)
+				r.finishStart(stopperCtx.Err())
+				return
+			case <-r.createCtx.Done():
+				r.finishStart(r.createCtx.Err())
 				return
 			default:
-				storage, err := s.createTxnStorage(ctx, shard, s.server)
+				storage, err := s.createTxnStorage(r.createCtx, shard, s.server)
 				if err != nil {
 					r.logger.Error("start DNShard failed",
 						zap.Error(err))
-					time.Sleep(retryCreateStorageInterval)
+					if err := waitCreateRetry(stopperCtx, r.createCtx); err != nil {
+						if stopperCtx.Err() != nil {
+							r.cancelStart(false)
+						}
+						r.finishStart(err)
+						return
+					}
 					continue
 				}
 
-				err = r.start(
+				if stopperCtx.Err() != nil {
+					r.cancelStart(false)
+				}
+				if !r.reserveStart() {
+					if err := r.closeStorage(storage); err != nil {
+						r.logger.Error("close canceled DNShard storage failed",
+							zap.Error(err))
+					}
+					r.finishStart(r.createCtx.Err())
+					return
+				}
+
+				err = r.startReserved(
 					service.NewTxnService(
 						s.cfg.UUID,
 						shard,
@@ -345,6 +381,9 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 		}
 	})
 	if err != nil {
+		r.cancelStart(false)
+		r.finishStart(err)
+		s.replicas.CompareAndDelete(shard.ShardID, r)
 		return err
 	}
 
@@ -352,11 +391,26 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 	return nil
 }
 
-func (s *store) removeReplica(tnShardID uint64) error {
+func waitCreateRetry(stopperCtx, createCtx context.Context) error {
+	timer := time.NewTimer(retryCreateStorageInterval)
+	defer timer.Stop()
+	select {
+	case <-stopperCtx.Done():
+		return stopperCtx.Err()
+	case <-createCtx.Done():
+		return createCtx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *store) removeReplicaLocked(tnShardID uint64) error {
 	if r := s.getReplica(tnShardID); r != nil {
+		r.cancelStart(true)
+		r.waitStartCompleted()
 		err := r.close(true)
-		s.replicas.Delete(tnShardID)
-		s.removeTNShard(tnShardID)
+		s.replicas.CompareAndDelete(tnShardID, r)
+		s.removeTNShardLocked(tnShardID)
 		return err
 	}
 	return nil

@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -49,7 +48,6 @@ type ReceiveInfo struct {
 }
 
 type Server struct {
-	hakeeper      logservice.CNHAKeeperClient
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap

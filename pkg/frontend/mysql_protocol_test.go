@@ -1643,7 +1643,7 @@ func TestMysqlResultSet(t *testing.T) {
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
@@ -2527,11 +2527,86 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
 }
 
+func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
+	const sql = "select json_extract('{\"a\":1}', '$.a') >= ?"
+
+	tests := []struct {
+		name       string
+		makePacket func(*MysqlProtocolImpl) []byte
+		want       string
+		wantNull   bool
+	}{
+		{
+			name: "signed longlong adjacent to two to the fifty-third",
+			makePacket: func(*MysqlProtocolImpl) []byte {
+				return buildLongLongExecutePacket(9007199254740993, false)
+			},
+			want: "9007199254740993",
+		},
+		{
+			name: "unsigned longlong maximum",
+			makePacket: func(*MysqlProtocolImpl) []byte {
+				return buildLongLongExecutePacket(math.MaxUint64, true)
+			},
+			want: "18446744073709551615",
+		},
+		{
+			name: "high precision decimal",
+			makePacket: func(proto *MysqlProtocolImpl) []byte {
+				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_DECIMAL, "0.123456789123456789")
+			},
+			want: "0.123456789123456789",
+		},
+		{
+			name: "invalid var string preserved for cast validation",
+			makePacket: func(proto *MysqlProtocolImpl) []byte {
+				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "not-json")
+			},
+			want: "not-json",
+		},
+		{
+			name: "null",
+			makePacket: func(*MysqlProtocolImpl) []byte {
+				return buildNullExecutePacket(defines.MYSQL_TYPE_LONGLONG)
+			},
+			wantNull: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.TODO()
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, sql)
+			require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, test.makePacket(proto), 0))
+			require.Equal(t, types.T_text, prepareStmt.params.GetType().Oid)
+			require.Equal(t, test.wantNull, prepareStmt.params.GetNulls().Contains(0))
+			if !test.wantNull {
+				require.Equal(t, test.want, prepareStmt.params.GetStringAt(0))
+			}
+		})
+	}
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
 	pos := proto.writeStringLenEnc(data, 9, payload)
 	return data[:pos]
+}
+
+func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
+	data := make([]byte, 17)
+	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_LONGLONG), 0})
+	if unsigned {
+		data[8] = 0x80
+	}
+	binary.LittleEndian.PutUint64(data[9:], value)
+	return data
+}
+
+func buildNullExecutePacket(tp defines.MysqlType) []byte {
+	data := []byte{0, 0, 0, 0, 0, 1, 1, byte(tp), 0}
+	return data
 }
 
 func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {

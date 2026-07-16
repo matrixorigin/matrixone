@@ -70,7 +70,8 @@ type AutoIncrementService interface {
 	Reload(ctx context.Context, tableID uint64) error
 	// Close close the auto increment service
 	Close()
-	// GetLastAllocateTS get last allocate timestamp for columnCache
+	// GetLastAllocateTS gets the oldest allocation timestamp that can still
+	// issue a value from the column cache.
 	GetLastAllocateTS(ctx context.Context, tableID uint64, colName string) (timestamp.Timestamp, error)
 }
 

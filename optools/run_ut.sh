@@ -47,6 +47,7 @@ UT_COUNT="$G_WKSP/$G_TS-UT-Count.out"
 CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
 RAW_COVERAGE="coverage.out"
 IS_BUILD_FAIL=""
+UT_TEST_STATUS=0
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
@@ -120,23 +121,71 @@ function run_tests(){
     make cgo
     make thirdparties
 
+    # Compile and link a CGo-transitive package through the same deterministic
+    # CPU wrapper documented for local development. This catches drift between
+    # libmo's declared native dependencies and the wrapper before the full UT
+    # matrix obscures it among unrelated package output. GPU builds have a
+    # separate, explicit CUDA/cuVS link contract.
+    if [[ "${MO_CL_CUDA:-0}" != "1" ]]; then
+        logger "INF" "Smoke test the deterministic CGo test wrapper"
+        if ! .agents/skills/mo-dev/scripts/mo-cgo-test \
+            -count=1 -timeout=120s ./optools/testdata/mo_cgo_transitive; then
+            logger "ERR" "Deterministic CGo test wrapper smoke failed"
+            exit 1
+        fi
+    fi
+
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
-
     else
         logger "INF" "Run UT with race check"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
     fi
+
+    # run_ut.sh intentionally does not use errexit because post-processing must
+    # still run after a failed package. Preserve go test's status explicitly so
+    # a report-parser failure can never replace the authoritative test result.
+    UT_TEST_STATUS=$?
+    if (( UT_TEST_STATUS != 0 )); then
+        logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
+    fi
+
+    # The caller must continue into ut_summary even when go test failed.
+    return 0
 }
 
 function ut_summary(){
-  go install github.com/matrixorigin/go-ut-analysis@latest
-  go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path  "${BUILD_WKSP}/ut-report" --stdout=false;
-  if find ut-report > /dev/null 2>&1 && ! find ut-report/failed/outputs > /dev/null 2>&1; then
+  local report_path="${BUILD_WKSP}/ut-report"
+  local analysis_status=0
+  local failed_output=""
+
+  # Keep the workflow's always-run report steps well-defined even when the
+  # analyzer cannot parse a truncated/interleaved go test JSON stream.
+  mkdir -p "${report_path}/failed/outputs"
+
+  if ! go install github.com/matrixorigin/go-ut-analysis@latest; then
+    analysis_status=1
+    logger "ERR" "failed to install go-ut-analysis"
+  else
+    go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
+    analysis_status=$?
+  fi
+
+  if (( UT_TEST_STATUS != 0 || analysis_status != 0 )); then
+    logger "ERR" "UT diagnostics: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
+    logger "ERR" "Last 200 Go build events (each truncated to 4096 bytes):"
+    grep -E '"Action":"build-(output|fail)"' "${UT_REPORT}" | tail -n 200 | cut -c 1-4096
+    logger "ERR" "Last 50 raw report lines (each truncated to 4096 bytes):"
+    tail -n 50 "${UT_REPORT}" | cut -c 1-4096
+  fi
+
+  failed_output=$(find "${report_path}/failed/outputs" -type f -print -quit)
+  if (( UT_TEST_STATUS == 0 && analysis_status == 0 )) &&
+     [[ -z "${failed_output}" ]]; then
     logger "INF" "UNIT TESTING SUCCEEDED !!!"
   else
-    logger "INF" "UNIT TESTING FAILED !!!"
+    logger "ERR" "UNIT TESTING FAILED: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
     exit 1;
   fi
 }

@@ -91,6 +91,8 @@ func initTaskMetrics() {
 	registry.MustRegister(transferPageWriteCounter)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
+	registry.MustRegister(TaskMergeOOMPauseCounter)
+	registry.MustRegister(TaskMergeAvailableMemoryGauge)
 
 	registry.MustRegister(moTableStatsDurHistogram)
 	registry.MustRegister(moTableStatsCountingHistogram)
@@ -148,6 +150,8 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnDeadlockDetectorEnqueueCounter)
 	registry.MustRegister(TxnDeadlockOwnerLocalCounter)
 	registry.MustRegister(TxnRemoteLockOwnerTimeoutCounter)
+	registry.MustRegister(TxnLockActiveTxnRecoveryCounter)
+	registry.MustRegister(TxnLockRPCQueueRejectCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
 	registry.MustRegister(txnPKMayBeChangedCounter)
 
@@ -215,6 +219,8 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendUnavailableCounter)
 	registry.MustRegister(rpcCircuitBreakerStateGauge)
 	registry.MustRegister(rpcCircuitBreakerTripsCounter)
+	registry.MustRegister(rpcBackendErrorCounter)
+	registry.MustRegister(lockserviceRemoteRPCErrorCounter)
 
 	registry.MustRegister(rpcBackendPoolSizeGauge)
 	registry.MustRegister(rpcSendingQueueSizeGauge)
@@ -236,6 +242,7 @@ func initRPCMetrics() {
 
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
+	registry.MustRegister(ProxyConnectionsCurrentGauge)
 	registry.MustRegister(proxyDisconnectCounter)
 	registry.MustRegister(proxyTransferCounter)
 	registry.MustRegister(ProxyTransferDurationHistogram)
@@ -243,6 +250,10 @@ func initProxyMetrics() {
 	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
 	registry.MustRegister(ProxyTransferQueueSizeGauge)
 	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
+	registry.MustRegister(ProxyConnectionsTransferIntentGauge)
+	registry.MustRegister(ProxyCNHealthCounter)
+	registry.MustRegister(ProxyBackendHandshakeDurationHistogram)
+	registry.MustRegister(ProxyBackendHandshakeInflightGauge)
 }
 
 func initFrontendMetrics() {

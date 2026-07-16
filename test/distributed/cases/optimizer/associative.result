@@ -41,7 +41,7 @@ Project  𝄀
                     ->  Table Scan on associative.file  𝄀
                           Filter Cond: (f.table_id = 1)  𝄀
                     ->  Table Scan on associative.connector_job  𝄀
-                          Filter Cond: (job.status <> 5), (job.status <> 4)
+                          Filter Cond: (job.status <> 4), (job.status <> 5)
 CREATE TABLE `lineitem` (
 `L_ORDERKEY` bigint NOT NULL,
 `L_PARTKEY` int NOT NULL,

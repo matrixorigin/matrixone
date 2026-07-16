@@ -91,6 +91,7 @@ const (
 	ErrInvalidTz            uint16 = 20312
 	ErrUnsupportedDML       uint16 = 20313
 	ErrOperandColumns       uint16 = 20314
+	ErrSubqueryNo1Row       uint16 = 20315
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -168,6 +169,7 @@ const (
 	ErrBlobCantHaveDefault                      uint16 = 20472
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
+	ErrKeyDoesNotExist                          uint16 = 20475
 
 	// Group 5: rpc errors
 	//
@@ -282,6 +284,8 @@ const (
 	ErrCannotCommitOnInvalidCN uint16 = 20708
 	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
 	ErrRemoteLockWaitTimeout uint16 = 20709
+	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
+	ErrLockWaitTimeout uint16 = 20710
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -395,6 +399,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
+	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -457,6 +462,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
 	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
 	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
 	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
@@ -546,6 +552,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
+	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -1427,6 +1434,10 @@ func NewOperandColumns(ctx context.Context, columns int) *Error {
 	return newError(ctx, ErrOperandColumns, columns)
 }
 
+func NewErrSubqueryNo1Row(ctx context.Context) *Error {
+	return newError(ctx, ErrSubqueryNo1Row)
+}
+
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
 	return newError(ctx, ErrBadFieldError, column, table)
 }
@@ -1505,6 +1516,10 @@ func NewLockConflict(ctx context.Context) *Error {
 
 func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
 	return newError(ctx, ErrRemoteLockWaitTimeout)
+}
+
+func NewLockWaitTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrLockWaitTimeout)
 }
 
 func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {
@@ -1611,6 +1626,10 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrKeyColumnDoesNotExist, k)
+}
+
+func NewErrKeyDoesNotExist(ctx context.Context, key any, table any) *Error {
+	return newError(ctx, ErrKeyDoesNotExist, key, table)
 }
 
 func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {

@@ -61,6 +61,8 @@ const (
 	csvPipelineFreeRatio     = 10
 	csvPipelineMemoryPoll    = 200 * time.Millisecond
 	csvPipelineWorkerMemory  = 256 << 20
+	csvPipelineReorderWindow = 1
+	csvPipelineReorderBytes  = 2 * csvPipelineWorkerMemory
 )
 
 type catalogLayout struct {
@@ -2407,6 +2409,7 @@ func writeCSVChunks(
 	objectDone := make(map[int]bool)
 	nextObjectIdx := 0
 	nextBlockIdx := 0
+	pendingBytes := 0
 
 	writeChunk := func(chunk csvPipelineChunk) error {
 		start := time.Now()
@@ -2451,6 +2454,7 @@ func writeCSVChunks(
 			}
 			if ok {
 				delete(pending, key)
+				pendingBytes -= len(chunk.data)
 				if err := writeChunk(chunk); err != nil {
 					return err
 				}
@@ -2472,10 +2476,34 @@ func writeCSVChunks(
 			done <- err
 			return
 		}
+		if chunk.objectIdx > nextObjectIdx+csvPipelineReorderWindow {
+			cancel()
+			done <- moerr.NewInternalErrorNoCtxf(
+				"csv pipeline reorder window exceeded: next_object=%d chunk_object=%d window=%d",
+				nextObjectIdx,
+				chunk.objectIdx,
+				csvPipelineReorderWindow,
+			)
+			return
+		}
 		if chunk.objectDone {
 			objectDone[chunk.objectIdx] = true
 		} else {
-			pending[chunkKey{objectIdx: chunk.objectIdx, blockIdx: chunk.blockIdx}] = chunk
+			key := chunkKey{objectIdx: chunk.objectIdx, blockIdx: chunk.blockIdx}
+			if previous, ok := pending[key]; ok {
+				pendingBytes -= len(previous.data)
+			}
+			pendingBytes += len(chunk.data)
+			if pendingBytes > csvPipelineReorderBytes {
+				cancel()
+				done <- moerr.NewInternalErrorNoCtxf(
+					"csv pipeline reorder byte budget exceeded: pending_bytes=%d budget=%d",
+					pendingBytes,
+					csvPipelineReorderBytes,
+				)
+				return
+			}
+			pending[key] = chunk
 		}
 		if err := flush(); err != nil {
 			done <- err

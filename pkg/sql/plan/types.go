@@ -183,6 +183,8 @@ type QueryBuilder struct {
 	nameByColRef         map[[2]int32]string
 	protectedScans       map[int32]int
 	projectSpecialGuards map[int32]*specialIndexGuard
+	indexHintsByScan     map[int32]*indexHintSet
+	indexHintOwnerByNode map[int32]int32
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -482,6 +484,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
