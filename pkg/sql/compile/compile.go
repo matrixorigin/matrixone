@@ -2476,13 +2476,13 @@ func splitIcebergDataFileShards(tasks []*pipeline.IcebergDataFileTask, nodes []e
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		left := icebergDataTaskLoad(tasks[indices[i]])
-		right := icebergDataTaskLoad(tasks[indices[j]])
+	slices.SortStableFunc(indices, func(leftIdx, rightIdx int) int {
+		left := icebergDataTaskLoad(tasks[leftIdx])
+		right := icebergDataTaskLoad(tasks[rightIdx])
 		if left != right {
-			return left > right
+			return cmp.Compare(right, left)
 		}
-		return tasks[indices[i]].FilePath < tasks[indices[j]].FilePath
+		return cmp.Compare(tasks[leftIdx].FilePath, tasks[rightIdx].FilePath)
 	})
 
 	for _, taskIdx := range indices {

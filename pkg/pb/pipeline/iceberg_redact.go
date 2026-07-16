@@ -23,6 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
+// pipeline.pb.go intentionally routes the String methods for Message,
+// IcebergDataFileTask, IcebergDeleteFileTask, ExternalScan, Instruction, and
+// Pipeline through the helpers below. protoc regeneration restores
+// proto.CompactTextString and must be followed by restoring those routes until
+// the generator supports per-message redacting stringers. GoString and JSON
+// methods alone are insufficient because logging commonly calls String.
+
 func messageString(m *Message) string {
 	if m == nil {
 		return "<nil>"
