@@ -1,6 +1,6 @@
 ---
 name: unhappy-path-audit
-description: Full-codebase MatrixOne unhappy-path audit for leak, hung, and OOM risks using the Q1-Q3 three-proposition framework. Use when asked to audit resource lifecycle, waits, goroutines, lock/connection cleanup, unbounded growth, or to produce structured risk reports / bug candidates for MatrixOne code.
+description: Full-codebase MatrixOne unhappy-path audit for leak, double cleanup, hung, and OOM risks using the Q1-Q3 framework plus ownership and wait-for graphs. Use for resource lifecycle, cancellation/close/fail-fast paths, goroutines, locks/channels/RPC waits, restart/reuse generations, or unbounded growth audits.
 ---
 
 # Unhappy Path Audit Skill
@@ -11,11 +11,11 @@ description: Full-codebase MatrixOne unhappy-path audit for leak, hung, and OOM 
 
 | Q | Proposition | Violation Consequence |
 |---|-------------|----------------------|
-| **Q1: Every creation has a destruction** | For every resource creation path → a corresponding destruction path, and destruction is guaranteed to reach | **Leak** |
-| **Q2: Every wait event has a termination** | For every potentially blocking synchronization point → there exists a release event that is guaranteed to occur | **Hung** |
+| **Q1: Every creation has one effective destruction owner** | Ownership may transfer or be ref-counted, but each resource reaches cleanup and cleanup executes effectively once | **Leak / double cleanup** |
+| **Q2: Every wait dependency chain has a termination** | Every explicit or implicit blocking edge reaches a guaranteed release, cancellation, or bounded timeout | **Hung** |
 | **Q3: Every accumulation has an upper bound** | For every unbounded-growth container → capacity limit or recycling mechanism | **OOM** |
 
-**Key principle**: Not "looks like it might leak/hang", but "prove it definitely leaks/hangs". Q2 requires **proving the wait does not terminate**, not "looks like it's missing a timeout" — exhaust all bypass paths before ruling.
+**Key principle**: Not "looks like it might leak/hang", but "prove it definitely leaks/hangs". Q1 includes ownership cardinality, not only the presence of a destructor. Q2 includes mutex, channel, callback, RPC, I/O, and retry dependencies, not only functions named `Wait`. Exhaust every bypass and release path before ruling.
 
 ---
 
@@ -53,6 +53,8 @@ Actions:
   1. Trace the complete call chain from entry to exit
   2. Number layers: Layer 1, Layer 2, ... Layer N
   3. Mark each layer's concern dimensions (goroutine/connection/lock/memory/...)
+  4. Draw resource ownership transfers and wait-for edges
+  5. Mark restart/retry/pool generation boundaries
 Output: audit scope matrix
 ```
 
@@ -61,13 +63,13 @@ Output: audit scope matrix
 ```
 For each Layer:
   1. read_file ≤ 6 files (hard limit)
-  2. Execute Q1-Q3 three questions on this layer
+  2. Execute Q1-Q3 on this layer, including ownership cardinality and hidden wait edges
   3. Record verdict + layer number where termination condition is satisfied
   4. If termination depends on a lower layer → mark drill-down target, do not conclude at this layer
   5. Output this layer's audit table → then proceed to the next layer
 ```
 
-**Anti-false-positive rule**: For every wait point, first exhaust all release paths (including defer, cancel watcher, timer goroutine). Only rule it hung when every path is confirmed unreachable.
+**Anti-false-positive rule**: For every wait point, first exhaust all release paths (including defer, cancel watcher, timer goroutine). Follow indirect edges such as `reject → mutex → owner → RPC`; a control path is not fail-fast merely because it returns an error after the owner eventually releases it. Only rule it hung when every path is confirmed unreachable.
 
 ### Phase 3 — Synthesis
 
@@ -130,8 +132,8 @@ Entry
 
 | # | Gate | Verification Action | Anti-Pattern (caught by spill audit) |
 |---|------|---------------------|--------------------------------------|
-| **G1** | **FULL-GRAPH** | Resource ownership traced to ALL terminal nodes — do not stop at the next hop | Bug: traced `spillFiles → JoinMap` but stopped; missed `JoinMap.Destroy()` → `FreeMemory()` → fd close |
-| **G2** | **CAN-FAIL** | Open the alleged failure function body; confirm it CAN actually panic/error/block. If it's nil-check+assign, it cannot fail | Bug: assumed `handOffFd()` could panic; function body is only `nil check + Seek + = nil` |
+| **G1** | **FULL-GRAPH** | Trace ownership to ALL terminal nodes and prove one effective cleanup owner on every path | Bug: found a destructor but missed a second concurrent owner, or stopped before the real terminal holder |
+| **G2** | **CAN-FAIL/BLOCK** | Open the alleged function and every wait-for dependency; confirm it can actually fail, panic, or block | Bug: called a path fail-fast without noticing its mutex owner was blocked in downstream I/O |
 | **G3** | **SYMMETRY** | For every growth claim (append/push/alloc), grep the variable name + `= nil` / `= make` / truncate; confirm NO reset point exists anywhere in the lifecycle | Bug: saw `spillIndex = append(...)`, missed `spillIndex = nil` in `cleanupSpill()` |
 | **G4** | **LINE-REREAD** | Re-read every cited line number AFTER forming the bug hypothesis — do not trust memory from the initial read | Bug: asserted `ctr.state` doesn't become `SendSucceed` on failure; line 127 shows it's unconditional |
 | **G5** | **CALIBRATE-LAST** | Severity (Low/Medium/High) assigned ONLY after G1-G4 pass AND all bugs in the batch are confirmed. Never assign severity during discovery | Bug was Medium → turned out to be false positive (severity meaningless) |
@@ -140,7 +142,7 @@ Entry
 
 ### G1 Detail: Full-Graph Traversal
 
-For every resource (fd, lock, goroutine, memory allocation), construct the complete directed graph:
+For every resource (fd, lock, goroutine, memory allocation), construct the complete directed ownership graph:
 
 ```
 Creation Point ──transfer──→ Holder A ──transfer──→ Holder B ──transfer──→ ...
@@ -154,9 +156,29 @@ Required actions per node:
 1. Identify every transfer function (hand-off, assignment, message send)
 2. For each transfer target, locate its destruction path
 3. Verify destruction path is reachable on error branches too
-4. Repeat until reaching a node with NO further transfer (terminal)
+4. Prove competing branches cannot both execute irreversible cleanup, unless the destructor itself is verified idempotent
+5. Repeat until reaching a node with NO further transfer (terminal)
 
 **Stop condition**: Graph is complete when every leaf is either (a) a verified destructor call, or (b) a GC-managed resource with bounded lifetime.
+
+### Q2 Detail: Wait-For And Control Paths
+
+Construct a wait-for graph for each potentially blocking path:
+
+```
+caller -> mutex/channel/future -> owner/receiver -> RPC/I/O/callback -> release
+```
+
+Cancellation, close, abort, timeout, health-check, and rejection paths must be
+independent of the work they control. If such a path acquires a lock held across
+downstream work, sends into that work's queue, or synchronously waits for its
+cleanup, it inherits the downstream termination condition. Trace to the local
+edge that guarantees progress; a caller context alone is insufficient if the
+blocked primitive does not observe it.
+
+For restart/retry/pooling, include generation edges: old callbacks and handles
+must terminate before reuse, and new state must remain unpublished until all
+admission gates are ready.
 
 ### G3 Detail: Symmetry Check
 
@@ -211,7 +233,7 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 
 | Resource Creation | Destruction Path | Wait Point | Release Event | Accumulation | Bounded By |
 |-------------------|-----------------|------------|---------------|--------------|------------|
-| `txnClient` | `Close()` | `doCreateTxn` in paused state | `cond.Broadcast()` on Resume | active txn count | `MaxActiveTxn` |
+| `txnClient` | `Close()` | `doCreateTxn` in paused state | `pausedC` close on Resume/client Close, or caller context | waiting user txns | request concurrency; entries removed on cancel/close |
 | txn operator | `closeTxn()` commit/rollback path | `doSend()` 2PC commit | caller ctx (SQL executor timeout) | — | — |
 | lock (unlock error path) | `lockService.Unlock()` infinite retry (max backoff 5s) | — | — | — | — |
 
@@ -290,6 +312,9 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 | See `close()` without sending RPC → report resource leak | Check if remote has TTL self-cleanup / bind change detection | — |
 | See RPC wait without timeout → report hung | Trace upward context for deadline, check if caller guarantees cancel | — |
 | See channel send potentially blocking → report hung | Verify non-blocking (select + default), or guarantee receiver always consumes | — |
+| See fail-fast error return → assume prompt rejection | Draw `reject → lock/channel → owner → downstream` and prove the control path has an independent bound | G2 |
+| See one cleanup callback → assume exactly-once cleanup | Trace all public terminal calls, retry paths, and callbacks; prove exclusive ownership or destructor idempotence | G1 |
+| See reset/reopen under a lock → assume generation safety | Trace old callbacks/handles and publication order across restart or pool reuse | G1/G2 |
 | See resource transferred to next holder, close not found in current scope → report leak | Trace ownership to ALL terminal nodes — next holder may have Destroy()/FreeMemory() | G1 |
 | See append/push without bound in current scope → report OOM | Grep variable + `= nil` — cleanup function in sibling file may reset it | G3 |
 | See function call that "might" panic → report fd leak on panic path | Open function body — nil-check+assign or simple arithmetic cannot panic | G2 |

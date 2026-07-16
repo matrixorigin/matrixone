@@ -54,6 +54,32 @@ create table empty_t(v int);
 select 1 from (select sum(v) as discarded from empty_t) s;
 1
 1
+create table carrier_l(payload varchar(1000), id tinyint);
+create table carrier_r(payload varchar(2000), id tinyint);
+insert into carrier_l values ('wide-a', 1), ('wide-b', 2);
+insert into carrier_r values ('wide-c', 3);
+select 1 from carrier_l order by id;
+1
+1
+1
+select 1 from (
+select payload, id from carrier_l
+union all
+select payload, id from carrier_r
+) u;
+1
+1
+1
+1
+select 1 from (select group_concat(payload), count(*) from carrier_l) s;
+1
+1
+select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
+1
+1
+select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+1
+1
 create table tw(ts timestamp, v int);
 insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
 select _wend, max(v) from tw interval(ts, 1, day);

@@ -330,24 +330,69 @@ func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
 	require.Nil(t, dr)
 }
 
-func TestGetDistRangeFromFiltersKeepsDuplicateSideAsResidual(t *testing.T) {
+// Multiple same-side distance bounds must fold into the tightest bound (the
+// intersection), independent of filter order, so the index enforces the correct
+// range and does not depend on which predicate happens to appear first. See
+// issue #25639.
+func TestGetDistRangeFromFiltersKeepsTightestBound(t *testing.T) {
 	const scanTag int32 = 11
 	const partPos int32 = 1
 	const vecVal = "[1,2,3]"
 	vecLitArg := &plan.Expr{
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
 	}
-	first := makeDistFnFilter(">", "l2_distance", scanTag, partPos, vecVal, f32Lit(1))
-	second := makeDistFnFilter(">=", "l2_distance", scanTag, partPos, vecVal, f32Lit(10))
-
 	var builder *QueryBuilder
-	remaining, distRange := builder.getDistRangeFromFilters(
-		[]*plan.Expr{first, second}, partPos, "l2_distance", vecLitArg,
-	)
 
-	require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.LowerBoundType)
-	require.Equal(t, first.GetF().Args[1], distRange.LowerBound)
-	require.Equal(t, []*plan.Expr{second}, remaining)
+	// Two lower bounds: `> 1 AND >= 10` is `>= 10`; keep the tighter (larger).
+	{
+		loose := makeDistFnFilter(">", "l2_distance", scanTag, partPos, vecVal, f32Lit(1))
+		tight := makeDistFnFilter(">=", "l2_distance", scanTag, partPos, vecVal, f32Lit(10))
+		remaining, distRange := builder.getDistRangeFromFilters(
+			[]*plan.Expr{loose, tight}, partPos, "l2_distance", vecLitArg,
+		)
+		require.Empty(t, remaining)
+		require.Equal(t, plan.BoundType_INCLUSIVE, distRange.LowerBoundType)
+		require.Equal(t, tight.GetF().Args[1], distRange.LowerBound)
+	}
+
+	// Two upper bounds, both orders: `< 1.1 AND < 1.2` is `< 1.1`; the tighter
+	// (smaller) upper bound wins regardless of input order (the #25639 case).
+	for _, order := range [][2]float32{{1.1, 1.2}, {1.2, 1.1}} {
+		fa := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(order[0]))
+		fb := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(order[1]))
+		remaining, distRange := builder.getDistRangeFromFilters(
+			[]*plan.Expr{fa, fb}, partPos, "l2_distance", vecLitArg,
+		)
+		require.Empty(t, remaining)
+		require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.UpperBoundType)
+		v, ok := plan.GetLiteralFloat64(distRange.UpperBound)
+		require.True(t, ok)
+		require.InDelta(t, 1.1, v, 1e-6)
+	}
+
+	// A non-literal bound must never be peeled into the range (the reader can't
+	// evaluate it): it stays a residual filter, in both orders, while a literal
+	// bound of the same side still becomes the range. Regression for the
+	// "first bound accepted without validation" case.
+	nonLit := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 7}}}
+	}
+	for _, nonLitFirst := range []bool{true, false} {
+		bad := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, nonLit())
+		good := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(1.1))
+		input := []*plan.Expr{bad, good}
+		if !nonLitFirst {
+			input = []*plan.Expr{good, bad}
+		}
+		remaining, distRange := builder.getDistRangeFromFilters(
+			input, partPos, "l2_distance", vecLitArg,
+		)
+		require.Equal(t, []*plan.Expr{bad}, remaining) // non-literal kept as residual
+		require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.UpperBoundType)
+		v, ok := plan.GetLiteralFloat64(distRange.UpperBound)
+		require.True(t, ok)
+		require.InDelta(t, 1.1, v, 1e-6)
+	}
 }
 
 func TestPeelAndRewriteDistFnFilters_AllOps(t *testing.T) {
