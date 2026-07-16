@@ -689,12 +689,20 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 
 			for cnt := 1; cnt < int(hashJoin.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
-				if v != nil {
-					matchedCnt += v.Count()
-					ctr.rightRowsMatched.Or(v)
-				} else {
+				if v == nil {
+					// A worker was torn down before syncing (its Reset sends
+					// nil) or the context was canceled. The merge is aborted,
+					// but keep draining this generation's remaining messages
+					// so no stale bitmap is left behind in the shared
+					// channel, then bail out without initializing the
+					// iterator — Call routes to End and nothing is finalized.
+					for cnt++; cnt < int(hashJoin.NumCPU); cnt++ {
+						colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
+					}
 					return nil
 				}
+				matchedCnt += v.Count()
+				ctr.rightRowsMatched.Or(v)
 			}
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
