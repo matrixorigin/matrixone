@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"math"
@@ -127,13 +128,17 @@ func writeMember(tw *tar.Writer, name string, data []byte) error {
 // identical to binary.Write(LittleEndian, ...). Mirrors bm25's leBuf.
 type leBuf struct {
 	b   bytes.Buffer
-	tmp [8]byte
+	tmp [binary.MaxVarintLen64]byte
 }
 
 func (w *leBuf) u32(v uint32) { binary.LittleEndian.PutUint32(w.tmp[:4], v); w.b.Write(w.tmp[:4]) }
 func (w *leBuf) u64(v uint64) { binary.LittleEndian.PutUint64(w.tmp[:8], v); w.b.Write(w.tmp[:8]) }
 func (w *leBuf) i32(v int32)  { w.u32(uint32(v)) }
 func (w *leBuf) i64(v int64)  { w.u64(uint64(v)) }
+
+// uvarint appends v as a LEB128 varint (1–10 bytes). Used for the delta-encoded
+// posting streams (docID gaps, position gaps) where values are small.
+func (w *leBuf) uvarint(v uint64) { n := binary.PutUvarint(w.tmp[:], v); w.b.Write(w.tmp[:n]) }
 
 // ---- docmap: pkType + N + ord->pk + ord->docLen ----
 
@@ -189,24 +194,47 @@ func (s *Segment) decodeDocmap(data []byte) error {
 // encodeTermsAndPostings builds the FST (term -> ordinal) and the postings blob
 // in one pass over the sorted terms, so ordinal i in the FST is posting list i in
 // the blob.
+// postingsFormatV2 is the delta+varint posting layout: a 1-byte version, then
+// nterms/totalP/totalPos (fixed i64, so the loader sizes its off-heap buffers in
+// one pass), then per term: df (varint), docID GAPS (varint, ascending ords → tiny
+// deltas), tfs (df raw bytes), and per doc pc (varint) + position GAPS (varint).
+// Delta+varint shrinks the two dominant sections (docIDs ~45%, positions ~48%) by
+// ~4–5×, bringing the index below the source text. fulltext2 is experimental, so
+// the old raw layout is dropped (no on-disk indexes to migrate).
+const postingsFormatV2 byte = 2
+
 func (s *Segment) encodeTermsAndPostings() (fst []byte, postings []byte, err error) {
 	n := len(s.sortedTerms)
 	values := make([]uint64, n)
+	var totalP, totalPos int64
+	for _, term := range s.sortedTerms {
+		tp := s.terms[term]
+		totalP += int64(len(tp.docIDs))
+		for _, p := range tp.positions {
+			totalPos += int64(len(p))
+		}
+	}
 	var w leBuf
+	w.b.WriteByte(postingsFormatV2)
 	w.i64(int64(n))
+	w.i64(totalP)
+	w.i64(totalPos)
 	for i, term := range s.sortedTerms {
 		values[i] = uint64(i)
 		tp := s.terms[term]
-		df := len(tp.docIDs)
-		w.u32(uint32(df))
-		for _, d := range tp.docIDs {
-			w.i64(d)
+		w.uvarint(uint64(len(tp.docIDs)))
+		var prev int64
+		for _, d := range tp.docIDs { // ascending ords → non-negative gaps
+			w.uvarint(uint64(d - prev))
+			prev = d
 		}
-		w.b.Write(tp.tfs) // df bytes
+		w.b.Write(tp.tfs) // df raw bytes
 		for _, pos := range tp.positions {
-			w.u32(uint32(len(pos)))
-			for _, p := range pos {
-				w.i32(p)
+			w.uvarint(uint64(len(pos)))
+			var pp int32
+			for _, p := range pos { // ascending positions → non-negative gaps
+				w.uvarint(uint64(p - pp))
+				pp = p
 			}
 		}
 	}
@@ -221,87 +249,100 @@ func (s *Segment) encodeTermsAndPostings() (fst []byte, postings []byte, err err
 // derived from these postings + docLen by the scorer (P1); here we load only the
 // exact posting data (docIDs, tfs, positions).
 func (s *Segment) decodePostings(data []byte) error {
-	// Pass 1: totals — nterms, totalP (Σ df) and totalPos (Σ position counts) — to
-	// size the off-heap buffers up front. The blob is fully in memory, so seeking
-	// past the fixed-width docIDs/tfs and each position run is cheap, and it keeps
-	// the on-disk format unchanged (no totals stored).
-	r := bytes.NewReader(data)
-	var nterms int64
-	if err := binary.Read(r, binary.LittleEndian, &nterms); err != nil {
-		return err
+	// Header: version + nterms/totalP/totalPos (the totals let the off-heap buffers
+	// be sized without a pre-pass over the variable-length varint streams).
+	if len(data) < 1+24 {
+		if len(data) == 0 {
+			s.loaded = nil
+			return nil
+		}
+		return moerr.NewInternalErrorNoCtx("fulltext2: postings blob too short")
 	}
-	var totalP, totalPos int64
-	for t := int64(0); t < nterms; t++ {
-		var df uint32
-		if err := binary.Read(r, binary.LittleEndian, &df); err != nil {
-			return err
-		}
-		totalP += int64(df)
-		if _, err := r.Seek(int64(df)*8+int64(df), io.SeekCurrent); err != nil { // docIDs + tfs
-			return err
-		}
-		for d := uint32(0); d < df; d++ {
-			var pc uint32
-			if err := binary.Read(r, binary.LittleEndian, &pc); err != nil {
-				return err
-			}
-			totalPos += int64(pc)
-			if _, err := r.Seek(int64(pc)*4, io.SeekCurrent); err != nil { // positions
-				return err
-			}
-		}
+	if data[0] != postingsFormatV2 {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("fulltext2: unsupported postings format %d", data[0]))
 	}
+	p := 1
+	nterms := int64(binary.LittleEndian.Uint64(data[p:]))
+	totalP := int64(binary.LittleEndian.Uint64(data[p+8:]))
+	totalPos := int64(binary.LittleEndian.Uint64(data[p+16:]))
+	p += 24
 
-	// Allocate the segment's off-heap posting buffers once; each term's slices are
-	// views into these, freed by Segment.Free() on eviction.
 	bigDocIDs, bigTfs, bigPos, bigOff, err := s.allocPostings(totalP, totalPos, nterms)
 	if err != nil {
 		return err
 	}
 
-	// Pass 2: fill per-term views into the big buffers.
-	if _, err := r.Seek(8, io.SeekStart); err != nil { // past nterms
-		return err
+	// uv reads one LEB128 varint at p (advancing p); ok=false on a truncated stream.
+	uv := func() (uint64, bool) {
+		v, n := binary.Uvarint(data[p:])
+		if n <= 0 {
+			return 0, false
+		}
+		p += n
+		return v, true
 	}
+	bad := func() error { return moerr.NewInternalErrorNoCtx("fulltext2: corrupt postings stream") }
+
 	s.loaded = make([]*termPostings, nterms)
 	var cp, cpos, coff int64 // running offsets into docIDs/tfs, positions, offsets
 	for t := int64(0); t < nterms; t++ {
-		var df uint32
-		if err := binary.Read(r, binary.LittleEndian, &df); err != nil {
-			return err
+		dfu, ok := uv()
+		if !ok {
+			return bad()
 		}
-		d64 := int64(df)
+		df := int64(dfu)
+		if cp+df > totalP {
+			return bad()
+		}
 		tp := &termPostings{
-			docIDs:  bigDocIDs[cp : cp+d64],
-			tfs:     bigTfs[cp : cp+d64],
+			docIDs:  bigDocIDs[cp : cp+df],
+			tfs:     bigTfs[cp : cp+df],
 			posFlat: bigPos,
-			posOff:  bigOff[coff : coff+d64+1],
+			posOff:  bigOff[coff : coff+df+1],
 		}
-		if err := binary.Read(r, binary.LittleEndian, tp.docIDs); err != nil {
-			return err
+		var prev int64 // docID gaps → absolute ascending ords
+		for j := int64(0); j < df; j++ {
+			g, ok := uv()
+			if !ok {
+				return bad()
+			}
+			prev += int64(g)
+			tp.docIDs[j] = prev
 		}
-		if _, err := io.ReadFull(r, tp.tfs); err != nil {
-			return err
+		if p+int(df) > len(data) {
+			return bad()
 		}
+		copy(tp.tfs, data[p:p+int(df)]) // df raw tf bytes
+		p += int(df)
 		tp.posOff[0] = cpos
-		for d := uint32(0); d < df; d++ {
-			var pc uint32
-			if err := binary.Read(r, binary.LittleEndian, &pc); err != nil {
-				return err
+		for j := int64(0); j < df; j++ {
+			pcu, ok := uv()
+			if !ok {
+				return bad()
 			}
-			if err := binary.Read(r, binary.LittleEndian, bigPos[cpos:cpos+int64(pc)]); err != nil {
-				return err
+			pc := int64(pcu)
+			if cpos+pc > totalPos {
+				return bad()
 			}
-			cpos += int64(pc)
-			tp.posOff[d+1] = cpos
+			var pp int32 // position gaps → absolute ascending positions
+			for m := int64(0); m < pc; m++ {
+				g, ok := uv()
+				if !ok {
+					return bad()
+				}
+				pp += int32(g)
+				bigPos[cpos] = pp
+				cpos++
+			}
+			tp.posOff[j+1] = cpos
 		}
 		// Derive the raw score-UB fields (maxTf / minDocLen / block-max) from the
 		// loaded postings + docLen. docLen is decoded from the docmap member, which
 		// precedes postings in the archive.
 		deriveTermStats(tp, s.docLen)
 		s.loaded[t] = tp
-		cp += d64
-		coff += d64 + 1
+		cp += df
+		coff += df + 1
 	}
 	return nil
 }
