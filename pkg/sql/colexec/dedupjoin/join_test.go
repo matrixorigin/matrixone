@@ -17,6 +17,7 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -50,6 +52,126 @@ type joinTestCase struct {
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.HashBuild
+}
+
+func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+
+	arg := &DedupJoin{}
+	arg.ctr.state = Finalize
+	arg.ctr.buf = []*batch.Batch{bat}
+	arg.ctr.lastPos = 1
+	arg.ctr.spillEngine = spillutil.NewSpillEngine(spillutil.SpillEngineConfig{})
+
+	res, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	require.Nil(t, arg.ctr.buf)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, value int32) *os.File {
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fd, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+	require.NoError(t, err)
+	w := spillutil.BucketWriter{Name: name, Fd: fd}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	var buf bytes.Buffer
+	require.NoError(t, spillutil.FlushBucketBatch(proc, bat, &w, &buf, nil))
+	bat.Clean(proc.Mp())
+	return w.HandOffFd()
+}
+
+func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+		BuildKeyExprs:           conditions[1],
+		NeedBatches:             true,
+		NeedsBuildForEmptyProbe: true,
+		IsDedup:                 true,
+	})
+	engine.InitFromSpilledMap([]*os.File{
+		writeDedupSpillBatch(t, proc, "dedup_bucket_1", 1),
+		writeDedupSpillBatch(t, proc, "dedup_bucket_2", 2),
+	})
+
+	arg := &DedupJoin{
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.state = Finalize
+	arg.ctr.spillEngine = engine
+
+	for _, want := range []int32{1, 2} {
+		res, err := arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecHasMore, res.Status)
+		require.Equal(t, []int32{want}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0]))
+	}
+	res, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	require.Nil(t, arg.ctr.buf)
+
+	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func TestDedupResetClearsBucketState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &DedupJoin{}
+	arg.ctr.batches = []*batch.Batch{batch.EmptyBatch}
+	arg.ctr.batchRowCount = 1
+	arg.ctr.matched = &bitmap.Bitmap{}
+	arg.ctr.matched.InitWithSize(1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.batches)
+	require.Zero(t, arg.ctr.batchRowCount)
+	require.Nil(t, arg.ctr.matched)
+	proc.Free()
+}
+
+func TestDedupPrepareFailureCanRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &DedupJoin{
+		Conditions:        [][]*plan.Expr{{valid}, {valid}},
+		UpdateColExprList: []*plan.Expr{valid, invalid},
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.vecs)
+	require.Nil(t, arg.ctr.evecs)
+	require.Nil(t, arg.ctr.exprExecs)
+
+	arg.UpdateColExprList[1] = valid
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.evecs, 1)
+	require.Len(t, arg.ctr.exprExecs, 2)
+	arg.Free(proc, false, nil)
+	proc.Free()
 }
 
 var (

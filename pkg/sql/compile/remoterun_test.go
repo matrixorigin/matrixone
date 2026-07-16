@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -378,6 +379,50 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, "pk", restoredOp.PkName)
 	})
 
+	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
+		limit := plan.MakePlan2Int64ConstExprWithType(17)
+		op := &table_function.TableFunction{
+			FuncName: "ivf_search",
+			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
+				{Tag: 42, MatchPrefix: true, UpperLimit: 128, NotOnPk: true},
+			},
+			IndexReaderParam: &planpb.IndexReaderParam{
+				PartitionCnCnt: 2,
+				PartitionCnIdx: 1,
+				Limit:          limit,
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(2), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnCnt())
+		require.Equal(t, int32(1), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnIdx())
+		require.Equal(t, int64(17), pipeInstr.TableFunction.GetIndexReaderParam().GetLimit().GetLit().GetI64Val())
+		require.Len(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList(), 1)
+		require.Equal(t, int32(42), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetTag())
+		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetMatchPrefix())
+		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
+		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.NotSame(t, pipeInstr.TableFunction.IndexReaderParam, wireInstr.TableFunction.IndexReaderParam)
+		require.NotSame(t, pipeInstr.TableFunction.RuntimeFilterProbeList[0], wireInstr.TableFunction.RuntimeFilterProbeList[0])
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*table_function.TableFunction)
+		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
+		require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
+		require.Equal(t, int64(17), restoredOp.IndexReaderParam.GetLimit().GetLit().GetI64Val())
+		require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
+		require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
+		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetMatchPrefix())
+		require.Equal(t, int32(128), restoredOp.RuntimeFilterSpecs[0].GetUpperLimit())
+		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
+	})
+
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
@@ -461,6 +506,55 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
 		require.Len(t, restoredOp.OrderBySpecs, 1)
 		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
+	})
+
+	t.Run("HashBuild_SpillThreshold", func(t *testing.T) {
+		for _, threshold := range []int64{0, 4096} {
+			op := &hashbuild.HashBuild{SpillThreshold: threshold}
+			_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+			require.NoError(t, err)
+			require.Equal(t, threshold, pipeInstr.SpillMem)
+
+			restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+			require.NoError(t, err)
+			require.Equal(t, threshold, restored.(*hashbuild.HashBuild).SpillThreshold)
+		}
+	})
+
+	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
+		for name, op := range map[string]vm.Operator{
+			"hashjoin": &hashjoin.HashJoin{
+				EqConds:        [][]*planpb.Expr{{}, {}},
+				SpillThreshold: 4096,
+			},
+			"dedupjoin": &dedupjoin.DedupJoin{
+				Conditions:     [][]*planpb.Expr{{}, {}},
+				SpillThreshold: 4096,
+			},
+			"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
+				Conditions:     [][]*planpb.Expr{{}, {}},
+				SpillThreshold: 4096,
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+				require.NoError(t, err)
+				require.Equal(t, int64(4096), pipeInstr.SpillMem)
+
+				restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+				require.NoError(t, err)
+				switch join := restored.(type) {
+				case *hashjoin.HashJoin:
+					require.Zero(t, join.SpillThreshold)
+				case *dedupjoin.DedupJoin:
+					require.Zero(t, join.SpillThreshold)
+				case *rightdedupjoin.RightDedupJoin:
+					require.Zero(t, join.SpillThreshold)
+				default:
+					t.Fatalf("unexpected restored operator %T", restored)
+				}
+			})
+		}
 	})
 
 	t.Run("Deletion_Engine", func(t *testing.T) {
@@ -1782,6 +1876,7 @@ var _ morpc.Stream = &fakeStreamSender{}
 type fakeStreamSender struct {
 	// how many packages were sent.
 	sentCnt int
+	sent    []morpc.Message
 
 	// return it during next send.
 	nextSendError error
@@ -1791,6 +1886,7 @@ func (s *fakeStreamSender) ID() uint64 { return 0 }
 func (s *fakeStreamSender) Send(ctx context.Context, request morpc.Message) error {
 	if s.nextSendError == nil {
 		s.sentCnt++
+		s.sent = append(s.sent, request)
 	}
 	return s.nextSendError
 }
@@ -1885,6 +1981,42 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	require.True(t, withoutOut)
 }
 
+func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	tf := &table_function.TableFunction{
+		FuncName: "ivf_search",
+		RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
+			{Tag: 42},
+		},
+		IndexReaderParam: &planpb.IndexReaderParam{
+			PartitionCnCnt: 2,
+			PartitionCnIdx: 1,
+		},
+	}
+	conn := connector.NewArgument()
+	conn.AppendChild(tf)
+	s := &Scope{
+		Proc:   proc,
+		RootOp: conn,
+	}
+
+	scopeData, withoutOut, _, _, err := prepareRemoteRunSendingData("", s, proc)
+	require.NoError(t, err)
+	require.False(t, withoutOut)
+
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+	restoredOp := restored.RootOp.(*table_function.TableFunction)
+	require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
+	require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
+	require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
+	require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
+}
+
 func TestGetScopeForRemoteRunEncodingDoesNotMutateOriginalScope(t *testing.T) {
 	root := dispatch.NewArgument()
 	child := value_scan.NewArgument()
@@ -1944,30 +2076,39 @@ func TestBuildRemoteDispatchReceiverRootReusesEarlyRegistration(t *testing.T) {
 
 func Test_MessageSenderSendPipeline(t *testing.T) {
 	sender := messageSenderOnClient{
-		ctx:          context.Background(),
-		streamSender: &fakeStreamSender{},
+		ctx:              context.Background(),
+		streamSender:     &fakeStreamSender{},
+		requestFinishAck: true,
 	}
 
 	{
 		// there should only send one time if this is just a small data.
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).sent = nil
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.Nil(t, err)
 
 		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
+		require.Equal(t, pipeline.StreamTeardownMode_FinishAck,
+			sender.streamSender.(*fakeStreamSender).sent[0].(*pipeline.Message).GetRequestedTeardownMode())
 	}
 
 	{
 		// there should be cut as multiple message to send for a big data.
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).sent = nil
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
 		require.Nil(t, err)
 
 		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
+		for _, sent := range sender.streamSender.(*fakeStreamSender).sent {
+			require.Equal(t, pipeline.StreamTeardownMode_FinishAck,
+				sent.(*pipeline.Message).GetRequestedTeardownMode())
+		}
 	}
 
 	{

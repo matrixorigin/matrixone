@@ -504,6 +504,43 @@ func TestHandleCheckActiveTxn(t *testing.T) {
 	)
 }
 
+func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("txn1")
+			s.activeTxnHolder.getActiveTxn(txnID, true, "")
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       txnID,
+				},
+			}
+			cs := &testClientSession{ctx: context.Background()}
+
+			resp := acquireResponse()
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.False(t, resp.CheckActiveTxn.Active)
+			releaseResponse(resp)
+
+			s.unknownCommitResolver.mu.Lock()
+			s.unknownCommitResolver.mu.pending[string(txnID)] = unknownCommitTxn{id: txnID}
+			s.unknownCommitResolver.mu.Unlock()
+
+			resp = acquireResponse()
+			defer releaseResponse(resp)
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+		},
+	)
+}
+
 func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1254,7 +1291,7 @@ func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
 			elapsed := time.Since(start)
 
 			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
 				"expected lock-timeout, got %v", err)
 			// Must fire well before the 10s coarse tick.
 			require.Less(t, elapsed, 3*time.Second,
@@ -1389,9 +1426,9 @@ func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
 
 			require.Error(t, err)
 			// Must receive lock-timeout, not connectivity/backend error.
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
-				"expected ErrLockTimeout (InvalidState), got %v", err)
-			require.Contains(t, err.Error(), "lock timeout",
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected ErrLockWaitTimeout, got %v", err)
+			require.Contains(t, err.Error(), "Lock wait timeout exceeded",
 				"expected lock timeout message, got %v", err)
 			require.GreaterOrEqual(t, elapsed, time.Second,
 				"should have waited at least LockWaitTimeout")

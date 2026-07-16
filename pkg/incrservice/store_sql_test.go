@@ -329,7 +329,7 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 
 func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
-	panic("implement me")
+	return 1
 }
 
 func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
