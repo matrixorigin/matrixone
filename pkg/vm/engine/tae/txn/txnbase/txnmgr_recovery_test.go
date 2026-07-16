@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +26,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+func TestTxnCtxSnapshotRecoveryIsAtomic(t *testing.T) {
+	ctx := NewTxnCtx([]byte("atomic"), types.BuildTS(1, 0), types.BuildTS(2, 0))
+	ctx.State = txnif.TxnStatePrepared
+	ctx.PrepareTS = types.BuildTS(3, 0)
+	ctx.CommitTS = types.BuildTS(4, 0)
+	ctx.Participants = []uint64{1, 2}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			require.NoError(t, ctx.SetCommitTS(types.BuildTS(int64(4+i), 0)))
+			require.NoError(t, ctx.SetParticipants([]uint64{uint64(i), uint64(i + 1)}))
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		snapshot, ok := ctx.SnapshotRecovery()
+		require.True(t, ok)
+		require.Equal(t, txnif.TxnStatePrepared, snapshot.State)
+		require.Len(t, snapshot.Participants, 2)
+	}
+	wg.Wait()
+
+	ctx.Lock()
+	ctx.State = txnif.TxnStateCommitted
+	ctx.Unlock()
+	_, ok := ctx.SnapshotRecovery()
+	require.False(t, ok)
+}
 
 type transitioningRecoveryTxn struct {
 	txnif.AsyncTxn

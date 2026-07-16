@@ -93,6 +93,67 @@ func TestTableDefVersionFenceAtTNConvergence(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestReplaceDefAdvancesTableVersionAtTN(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Name = "replace_def_version"
+	schema.Extra.FeatureFlag = 17
+	schema.Extra.IndexTables = []uint64{101, 102}
+	schema.Extra.ParentTableID = 99
+	schema.Extra.FromPublication = true
+	schema.FromPublication = true
+	_, createdRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+	tableID := createdRel.ID()
+
+	alterTxn, alterRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
+	require.NoError(t, alterRel.AlterTable(ctx, api.NewReplaceDefReq(0, tableID, nil)))
+	require.NoError(t, alterTxn.Commit(ctx))
+
+	verifyTxn, verifyRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
+	gotSchema := verifyRel.Schema(false).(*catalog.Schema)
+	require.Equal(t, uint32(1), gotSchema.Version)
+	require.Equal(t, uint64(17), gotSchema.Extra.FeatureFlag)
+	require.Equal(t, []uint64{101, 102}, gotSchema.Extra.IndexTables)
+	require.Equal(t, uint64(99), gotSchema.Extra.ParentTableID)
+	require.True(t, gotSchema.Extra.FromPublication)
+	require.True(t, gotSchema.FromPublication)
+	require.NoError(t, verifyTxn.Rollback(ctx))
+
+	combinedSchema := catalog.MockSchemaAll(3, 1)
+	combinedSchema.Name = "replace_def_with_rename"
+	_, combinedRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, combinedSchema, false)
+	combinedTableID := combinedRel.ID()
+	combinedTxn, combinedAlterRel := testutil.GetDefaultRelation(t, h.db, combinedSchema.Name)
+	require.NoError(t, combinedAlterRel.AlterTable(ctx,
+		api.NewReplaceDefReq(0, combinedTableID, nil)))
+	require.NoError(t, combinedAlterRel.AlterTable(ctx,
+		api.NewRenameColumnReq(0, combinedTableID, "mock_0", "renamed", 0)))
+	require.NoError(t, combinedTxn.Commit(ctx))
+
+	combinedVerifyTxn, combinedVerifyRel := testutil.GetDefaultRelation(t, h.db, combinedSchema.Name)
+	combinedGotSchema := combinedVerifyRel.Schema(false).(*catalog.Schema)
+	require.Equal(t, uint32(1), combinedGotSchema.Version)
+	require.Equal(t, 0, combinedGotSchema.GetColIdx("renamed"))
+	require.NoError(t, combinedVerifyTxn.Rollback(ctx))
+
+	rollbackSchema := catalog.MockSchemaAll(3, 1)
+	rollbackSchema.Name = "replace_def_rollback"
+	_, rollbackRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, rollbackSchema, false)
+	rollbackTableID := rollbackRel.ID()
+	rollbackTxn, rollbackAlterRel := testutil.GetDefaultRelation(t, h.db, rollbackSchema.Name)
+	require.NoError(t, rollbackAlterRel.AlterTable(ctx,
+		api.NewReplaceDefReq(0, rollbackTableID, nil)))
+	require.NoError(t, rollbackTxn.Rollback(ctx))
+
+	rollbackVerifyTxn, rollbackVerifyRel := testutil.GetDefaultRelation(t, h.db, rollbackSchema.Name)
+	defer rollbackVerifyTxn.Rollback(ctx)
+	require.Zero(t, rollbackVerifyRel.Schema(false).(*catalog.Schema).Version)
+}
+
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

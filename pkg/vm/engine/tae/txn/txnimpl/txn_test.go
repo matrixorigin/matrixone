@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -304,6 +306,74 @@ func TestTableDefVersionFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing
 	}
 	err := tbl.validateTableDefVersion()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+}
+
+func TestReplayMOTablesTailReconcilesTableVersion(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(
+		catalog.MockTxnStoreFactory(c),
+		catalog.MockTxnFactory(c),
+		types.NewMockHLCClock(1),
+	)
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	txn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("legacy", "", "", txn)
+	assert.NoError(t, err)
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Name = "legacy_replace_def"
+	tableEntry, err := dbEntry.CreateTableEntry(schema, txn, nil)
+	assert.NoError(t, err)
+	dbID, tableID := dbEntry.ID, tableEntry.ID
+	assert.NoError(t, txn.Commit(context.Background()))
+	assert.Zero(t, tableEntry.GetLastestSchema(false).Version)
+
+	mp := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+	cnBat, err := pkgcatalog.GenCreateTableTuple(pkgcatalog.Table{
+		TableId:    tableID,
+		DatabaseId: dbID,
+		Version:    7,
+	}, mp, packer)
+	assert.NoError(t, err)
+	defer cnBat.Clean(mp)
+	tnBat := containers.ToTNBatch(cnBat, mp)
+	defer tnBat.Close()
+
+	store := &replayTxnStore{catalog: c}
+	cmd := &AppendCmd{
+		Data: tnBat,
+		Infos: []*appendInfo{{
+			srcLen: 1,
+			dest: common.ID{
+				DbID:    pkgcatalog.MO_CATALOG_ID,
+				TableID: pkgcatalog.MO_TABLES_ID,
+			},
+		}},
+	}
+	cmd.IsTombstone = true
+	store.captureReplayedMOTablesVersions(cmd)
+	assert.Empty(t, store.replayedTableVersions)
+	cmd.IsTombstone = false
+	store.captureReplayedMOTablesVersions(cmd)
+	assert.Equal(t, uint32(7), store.replayedTableVersions[tableID].version)
+	store.discardReplayedTableVersions()
+	assert.Empty(t, store.replayedTableVersions)
+
+	store.captureReplayedMOTablesVersions(cmd)
+	cmd.Data.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Update(0, uint32(5), false)
+	store.captureReplayedMOTablesVersions(cmd)
+	assert.Equal(t, uint32(7), store.replayedTableVersions[tableID].version)
+	store.reconcileReplayedTableVersions()
+	assert.Equal(t, uint32(7), tableEntry.GetLastestSchema(false).Version)
+
+	store.captureReplayedMOTablesVersions(cmd)
+	store.reconcileReplayedTableVersions()
+	assert.Equal(t, uint32(7), tableEntry.GetLastestSchema(false).Version)
 }
 
 // 1. 30 concurrency

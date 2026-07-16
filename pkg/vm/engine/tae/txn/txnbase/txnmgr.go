@@ -176,6 +176,10 @@ type RecoveringTxn struct {
 	Participants []uint64
 }
 
+type recoveringTxnSnapshotter interface {
+	SnapshotRecovery() (RecoveringTxn, bool)
+}
+
 func NewTxnManager(
 	txnStoreFactory TxnStoreFactory,
 	txnFactory TxnFactory,
@@ -474,6 +478,15 @@ func (mgr *TxnManager) SnapshotRecoveringTxns() []RecoveringTxn {
 		if !txn.IsReplay() || !txn.Is2PC() {
 			return true
 		}
+		if snapshotter, ok := txn.(recoveringTxnSnapshotter); ok {
+			if snapshot, recoverable := snapshotter.SnapshotRecovery(); recoverable {
+				txns = append(txns, snapshot)
+			}
+			return true
+		}
+		// Test doubles and out-of-tree AsyncTxn implementations may not expose
+		// the concrete TxnCtx snapshotter. Keep the stable-state fallback for
+		// them; production Txn values use the single-lock path above.
 		for {
 			state := txn.GetTxnState(false)
 			switch state {

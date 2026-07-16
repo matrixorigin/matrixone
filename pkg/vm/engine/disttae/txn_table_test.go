@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -142,6 +143,22 @@ func TestRollbackLastStatementRestoresAutoIncrementOffsetAndVersion(t *testing.T
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
 	require.Equal(t, uint64(10), tbl.extraInfo.AutoIncrOffset)
 	require.Equal(t, uint32(5), tbl.version)
+}
+
+func TestMarshalAlterTableRequestsForTNPreservesReplaceDef(t *testing.T) {
+	payloads, err := marshalAlterTableRequestsForTN([]*api.AlterTableReq{
+		api.NewReplaceDefReq(7, 42, &plan.TableDef{Name: "cn_only"}),
+		api.NewRenameColumnReq(7, 42, "old", "new", 0),
+	})
+	require.NoError(t, err)
+	require.Len(t, payloads, 2)
+
+	var got api.AlterTableReq
+	require.NoError(t, got.Unmarshal(payloads[0]))
+	require.Equal(t, api.AlterKind_ReplaceDef, got.Kind)
+	require.Nil(t, got.GetReplaceDef().Def)
+	require.NoError(t, got.Unmarshal(payloads[1]))
+	require.Equal(t, api.AlterKind_RenameColumn, got.Kind)
 }
 
 func makeBatchForTest(

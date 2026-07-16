@@ -155,8 +155,8 @@ func (ctx *TxnCtx) MockStartTS(ts types.TS) {
 }
 
 func (ctx *TxnCtx) SetCommitTS(cts types.TS) (err error) {
-	ctx.RLock()
-	defer ctx.RUnlock()
+	ctx.Lock()
+	defer ctx.Unlock()
 	ctx.CommitTS = cts
 	return
 }
@@ -168,10 +168,28 @@ func (ctx *TxnCtx) GetParticipants() []uint64 {
 }
 
 func (ctx *TxnCtx) SetParticipants(ids []uint64) (err error) {
-	ctx.RLock()
-	defer ctx.RUnlock()
+	ctx.Lock()
+	defer ctx.Unlock()
 	ctx.Participants = ids
 	return
+}
+
+// SnapshotRecovery returns one self-consistent recovery record while holding
+// the TxnCtx lock once. Variable-length fields are detached from live state.
+func (ctx *TxnCtx) SnapshotRecovery() (RecoveringTxn, bool) {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	if ctx.State != txnif.TxnStatePrepared && ctx.State != txnif.TxnStateCommittingFinished {
+		return RecoveringTxn{}, false
+	}
+	return RecoveringTxn{
+		ID:           append([]byte(nil), ctx.IDCtx...),
+		SnapshotTS:   ctx.SnapshotTS,
+		PreparedTS:   ctx.PrepareTS,
+		CommitTS:     ctx.CommitTS,
+		State:        ctx.State,
+		Participants: append([]uint64(nil), ctx.Participants...),
+	}, true
 }
 
 func (ctx *TxnCtx) GetPrepareTS() types.TS {

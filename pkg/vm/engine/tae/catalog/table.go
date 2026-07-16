@@ -447,6 +447,18 @@ func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
 	return ret
 }
 
+// ReconcileSchemaVersionOnReplay repairs legacy WAL tails whose committed
+// mo_tables row advanced rel_version without a matching TN schema mutation.
+// It is replay-only and never lowers a catalog schema version.
+func (entry *TableEntry) ReconcileSchemaVersionOnReplay(version uint32) {
+	entry.Lock()
+	defer entry.Unlock()
+	schema := entry.GetLastestSchemaLocked(false)
+	if schema != nil && version > schema.Version {
+		schema.Version = version
+	}
+}
+
 func (entry *TableEntry) GetColDefs() []*ColDef {
 	return entry.GetLastestSchemaLocked(false).ColDefs
 }
@@ -892,7 +904,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
 
 	newSchema = node.BaseNode.Schema
-	if isNewNode {
+	if isNewNode && req.Kind != apipb.AlterKind_ReplaceDef {
 		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
 		var hints []apipb.MergeHint

@@ -14,6 +14,43 @@ This foundation is retained. Broadcast callbacks remain cleanup/optimization onl
 
 In one explicit transaction, `ALTER AUTO_INCREMENT` stages the new offset through its `TxnOperator`, but a subsequent INSERT rebuilds its new-version increment cache through `GetColumns(..., nil)`. It therefore sees the old committed offset. TAE accepts the transaction-local schema version, allowing the ALTER and a too-low generated value to commit together.
 
+## COPY `ReplaceDef` version propagation
+
+The TN fence compares the known `TableDef.Version` carried by a CN write with
+TAE's `Schema.Version`. COPY-style ALTER updates the existing table in place:
+disttae applies `ReplaceDef`, increments `mo_tables.rel_version`, and rewrites
+the catalog rows. The old path explicitly removed `ReplaceDef` from the ALTER
+payload sent to TN. When no other physical ALTER request remained, TN created no
+new table MVCC node and kept version zero. Every later write then presented the
+committed catalog version (for example 1) against TAE version zero and was
+rejected with `ErrTxnNeedRetryWithDefChanged`.
+
+Keep `ReplaceDef` in the existing ALTER payload. TN treats it as a no-op schema
+mutation because executable-definition replacement remains CN-owned, while the
+normal TAE alter path creates one MVCC node and performs its existing single
+version increment. If the COPY ALTER also carries rename or constraint actions,
+they reuse that node and do not increment again. This aligns the two version
+domains without weakening the fence or adding a protobuf field. The CN strips
+the full executable definition from the TN copy of `ReplaceDef`, since TN needs
+only the existing kind and table identity; this avoids redundant wire and log
+amplification.
+
+For rolling upgrades, checkpoint replay already rebuilds TAE schema versions
+from `mo_tables`. A legacy `ReplaceDef` can also remain only in the WAL tail,
+however. WAL replay therefore captures committed, non-tombstone `mo_tables`
+appends and reconciles each existing table to the maximum replayed
+`rel_version`. The reconciliation runs only after that replay transaction
+commits, is discarded on rollback, and never lowers a schema version. This
+repairs pre-fix state without weakening the runtime DML fence.
+
+This recovery repair is not a live mixed-version compatibility protocol. During
+a rolling upgrade, COPY/ALTER DDL must be quiesced while any pre-fix CN can
+still issue it, or all pre-fix CNs must be removed before version-aware CN
+traffic resumes. If an old CN issues a `ReplaceDef`-only ALTER after the TN has
+already upgraded, the resulting legacy drift is repaired only by the final TN
+restart and WAL replay; known-version DML must not bypass the fence before that
+restart. Consequently this PR does not claim zero-downtime mixed-version safety.
+
 ## Architecture
 
 Add transaction-private reset caches to incrservice.
@@ -53,25 +90,20 @@ tables are registered conservatively. Registration is idempotent and the set is
 bounded by the unresolved prepared transactions touching that table.
 
 Commit or rollback removes the transaction only after its replay command has
-successfully applied. Removal also leaves a one-bit pending-resolution fence.
-At AUTO_INCREMENT ALTER prepare:
-
-1. any unresolved prepared DML forces retry;
-2. if the last decision raced after ALTER's MAX snapshot, ALTER consumes the
-   pending bit, publishes its own prepare timestamp into the ordinary
-   watermark, and retries;
-3. later already-started ALTERs are rejected by that published watermark,
-   while the CN retry starts from a causally later global transaction snapshot
-   and can proceed after repeating MAX reconciliation.
+successfully applied. A committed decision first records its commit visibility
+timestamp in the ordinary DML watermark while holding the same lock that
+protects the unresolved set, then removes the transaction. A rollback only
+removes the transaction. At AUTO_INCREMENT ALTER prepare, any unresolved
+prepared DML forces retry; after resolution, a committed watermark newer than
+the ALTER snapshot also forces retry.
 
 This protocol does not compare clocks from separate domains. MatrixOne's TN
-transaction manager assigns start/prepare timestamps from the same monotonic
-HLC timeline, and a retry begun after receipt of the prepare error receives a
-snapshot after the failed ALTER's prepare timestamp. Multiple resolution
-events coalesce safely in the pending bit; while another recovered transaction
-is unresolved, the set remains the stronger fence. Once the decision and one
-retry consume that bit, unknown replay compatibility cannot leave a permanent
-blocker.
+transaction manager assigns snapshot and visibility timestamps from the same
+monotonic HLC timeline. Ordered replay-logtail application guarantees that when
+an ALTER snapshot starts at or after the committed visibility timestamp, the
+resolved rows are already visible to its MAX reconciliation. Publishing the
+commit timestamp and removing the unresolved transaction under one lock closes
+the decision race without a pending bit or an ALTER-owned timestamp.
 
 Legacy live writers with `table_def_version_known=false` remain the documented
 rolling-upgrade compatibility boundary. Recovery is deliberately more
@@ -98,6 +130,7 @@ COPY keeps the current implementation:
 - Commit unknown: private cache is retired, never promoted.
 - Partial or unreachable CN: no acknowledgement is required. A stale known-version write is rejected at TN prepare and must retry with the new definition.
 - Old writers with `table_def_version_known=false` remain a rolling-upgrade limitation. The PR must document that strict fencing requires version-aware CN writers; it must not claim mixed-version safety.
+- Rolling upgrades must quiesce COPY/ALTER DDL until old CNs are gone, and a TN restart/replay is required after any old-CN `ReplaceDef` tail; runtime forward-version mismatches remain retry errors.
 
 ## Compatibility
 
@@ -115,6 +148,9 @@ The public incrservice Go interface changes to pass `TxnOperator` into allocatio
 - Version propagation through memory batch, S3/flush, and compaction paths.
 - Race tests for incrservice lifecycle and allocator changes.
 - Rebase conflict resolution against current `upstream/main`, followed by protobuf regeneration.
+- RED/GREEN coverage that COPY `ReplaceDef` reaches TN and advances the TAE table version exactly once.
+- Recovery coverage for a legacy `mo_tables` WAL tail, `Schema.Extra` preservation, and atomic recovery snapshots under `-race`.
+- Real-MO regression for COPY ALTER followed immediately by INSERT, UPDATE, and DELETE on a table whose only AUTO_INCREMENT column is the hidden fake primary key.
 
 ## Decision log
 
@@ -122,3 +158,5 @@ The public incrservice Go interface changes to pass `TxnOperator` into allocatio
 - Do not implement freeze/ack/update/unfreeze: correctness must not depend on all CNs being reachable.
 - Do not promote private caches on commit: lazy durable rebuild is simpler and prevents callback ordering from affecting correctness.
 - Do not expand this PR into a cluster capability framework; document and test the known/unknown compatibility boundary instead.
+- Do not bypass or scope down the TN version fence to hide COPY mismatches; the existing TAE relation must consume the version-advancing ALTER that CN already records.
+- Do not accept a forward DML version mismatch as an upgrade shortcut; reconcile only from committed durable catalog rows during recovery.

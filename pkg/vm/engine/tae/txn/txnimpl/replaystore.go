@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,6 +40,16 @@ type replayTxnStore struct {
 	ctx            context.Context
 	preparedTables map[uint64]*catalog.TableEntry
 	preparedTxnID  string
+
+	// replayedTableVersions reconciles legacy WAL tails where disttae
+	// persisted a newer mo_tables.rel_version but filtered the CN-only
+	// ReplaceDef request before TN could advance its catalog schema node.
+	replayedTableVersions map[uint64]replayedTableVersion
+}
+
+type replayedTableVersion struct {
+	databaseID uint64
+	version    uint32
 }
 
 func MakeReplayTxn(
@@ -90,6 +101,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
+	store.reconcileReplayedTableVersions()
 	visibilityTS := txn.GetCommitTS()
 	store.resolvePreparedDMLTables(&visibilityTS)
 	return
@@ -97,6 +109,7 @@ func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyRollback()
+	store.discardReplayedTableVersions()
 	store.resolvePreparedDMLTables(nil)
 	return
 }
@@ -164,6 +177,7 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 }
 
 func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
+	store.captureReplayedMOTablesVersions(cmd)
 	hasActive := false
 	_, sarg, _ := fault.TriggerFault("replay debug log")
 	for _, info := range cmd.Infos {
@@ -245,6 +259,57 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			}
 		}
 	}
+}
+
+func (store *replayTxnStore) captureReplayedMOTablesVersions(cmd *AppendCmd) {
+	if cmd.IsTombstone || cmd.Data == nil {
+		return
+	}
+	for _, info := range cmd.Infos {
+		id := info.GetDest()
+		if id.DbID != pkgcatalog.MO_CATALOG_ID || id.TableID != pkgcatalog.MO_TABLES_ID {
+			continue
+		}
+
+		bat := cmd.Data.CloneWindow(int(info.GetSrcOff()), int(info.GetSrcLen()))
+		bat.Compact()
+		tableIDs := bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID)
+		databaseIDs := bat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID)
+		versions := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version)
+		if store.replayedTableVersions == nil {
+			store.replayedTableVersions = make(map[uint64]replayedTableVersion, bat.Length())
+		}
+		for row := 0; row < bat.Length(); row++ {
+			tableID := tableIDs.Get(row).(uint64)
+			version := replayedTableVersion{
+				databaseID: databaseIDs.Get(row).(uint64),
+				version:    versions.Get(row).(uint32),
+			}
+			if current, ok := store.replayedTableVersions[tableID]; !ok || version.version > current.version {
+				store.replayedTableVersions[tableID] = version
+			}
+		}
+		bat.Close()
+	}
+}
+
+func (store *replayTxnStore) reconcileReplayedTableVersions() {
+	for tableID, replayed := range store.replayedTableVersions {
+		database, err := store.catalog.GetDatabaseByID(replayed.databaseID)
+		if err != nil {
+			continue
+		}
+		table, err := database.GetTableEntryByID(tableID)
+		if err != nil {
+			continue
+		}
+		table.ReconcileSchemaVersionOnReplay(replayed.version)
+	}
+	store.replayedTableVersions = nil
+}
+
+func (store *replayTxnStore) discardReplayedTableVersions() {
+	store.replayedTableVersions = nil
 }
 
 func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {

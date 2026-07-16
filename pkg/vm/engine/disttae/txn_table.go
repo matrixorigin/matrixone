@@ -1639,6 +1639,24 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func marshalAlterTableRequestsForTN(reqs []*api.AlterTableReq) ([][]byte, error) {
+	payloads := make([][]byte, 0, len(reqs))
+	for _, req := range reqs {
+		tnReq := req
+		if req.GetKind() == api.AlterKind_ReplaceDef {
+			// TN only needs ReplaceDef as a version-advancing mutation. The full
+			// executable definition remains CN-owned and need not cross the wire.
+			tnReq = api.NewReplaceDefReq(req.DbId, req.TableId, nil)
+		}
+		payload, err := tnReq.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads, nil
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
@@ -1756,17 +1774,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		tbl.version += 1
 		appendDef = append(appendDef, &engine.VersionDef{Version: tbl.version})
 		// For normal Alter, send Alter request to TN
-		reqPayload := make([][]byte, 0, len(reqs))
-		for _, req := range reqs {
-			if req.GetKind() == api.AlterKind_ReplaceDef {
-				// ReplaceDef works only in CN, do not send it to TN
-				continue
-			}
-			payload, err := req.Marshal()
-			if err != nil {
-				return err
-			}
-			reqPayload = append(reqPayload, payload)
+		reqPayload, err := marshalAlterTableRequestsForTN(reqs)
+		if err != nil {
+			return err
 		}
 		bat, err := catalog.GenTableAlterTuple(reqPayload, txn.proc.Mp())
 		if err != nil {

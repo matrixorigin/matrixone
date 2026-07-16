@@ -129,3 +129,28 @@
 - [ ] Run `mo-self-review` over the full branch diff, including unhappy-path Q1-Q3 for private-cache maps, refcounts, allocator waits, callback cleanup, and cancellation.
 - [ ] Dispatch an independent whole-branch reviewer with the original issue, every request-changes invariant, the design, plan, task reports, and full review package.
 - [ ] Fix every Critical/Important finding, rerun covering tests, and repeat review until clean.
+
+### Task 7: Propagate COPY `ReplaceDef` to TN for schema-version convergence
+
+**Files:**
+- Modify: `pkg/vm/engine/disttae/txn_table.go`
+- Modify: `pkg/vm/engine/disttae/txn_table_test.go`
+- Modify: `pkg/vm/engine/tae/catalog/schema.go`
+- Modify: `pkg/vm/engine/tae/catalog/table.go`
+- Modify: `pkg/vm/engine/tae/txn/txnbase/txnctx.go`
+- Modify: `pkg/vm/engine/tae/txn/txnbase/txnmgr.go`
+- Modify: `pkg/vm/engine/tae/txn/txnbase/txnmgr_recovery_test.go`
+- Modify: `pkg/vm/engine/tae/txn/txnimpl/replaystore.go`
+- Modify: `pkg/vm/engine/tae/txn/txnimpl/table.go`
+- Modify: `pkg/vm/engine/tae/txn/txnimpl/txn_test.go`
+- Modify: `pkg/vm/engine/tae/rpc/rpc_test.go`
+
+**Interfaces:** `ReplaceDef` remains a CN-owned executable-definition replacement, but a definition-free copy of its existing ALTER request is also delivered to TN as a no-op schema mutation so the table MVCC node advances exactly once without redundant schema payload.
+
+- [x] Add a failing disttae test requiring `ReplaceDef` to remain in the ALTER payload sent to TN.
+- [x] Add a failing TAE test requiring `ReplaceDef` to advance `Schema.Version` from zero to one.
+- [x] Marshal all ALTER requests to TN; accept `ReplaceDef` as a no-op schema mutation whose MVCC node performs the existing once-per-transaction version increment.
+- [x] Preserve persistent `Schema.Extra` fields on `ReplaceDef`, reconcile legacy WAL-tail versions only after replay commit, and make recovery snapshots atomic under one `TxnCtx` lock.
+- [x] Document the mixed-version boundary: quiesce COPY/ALTER DDL while old CNs remain, and require final TN restart/replay after any legacy `ReplaceDef` tail.
+- [x] Run disttae, TAE catalog/txn/RPC tests, relevant race tests, a full build, real-MO COPY ALTER DML, and old-binary-to-new-binary WAL-tail upgrade regression.
+- [x] Include this task in the full-branch self-review and independent Subagent review before pushing.

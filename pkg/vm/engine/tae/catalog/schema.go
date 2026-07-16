@@ -206,6 +206,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Comment = req.GetUpdateComment().GetComment()
 	case apipb.AlterKind_UpdateAutoIncrement:
 		s.Extra.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+	case apipb.AlterKind_ReplaceDef:
+		// ReplaceDef is applied to the executable definition on CN. TN still
+		// consumes it so the table MVCC node advances to the same version.
 	case apipb.AlterKind_RenameColumn:
 		rename := req.GetRenameCol()
 		var targetCol *ColDef
