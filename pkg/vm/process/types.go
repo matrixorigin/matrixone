@@ -343,6 +343,8 @@ type BaseProcess struct {
 	UdfService               udf.Service
 	WaitPolicy               lock.WaitPolicy
 	messageBoard             *message.MessageBoard
+	hashBuildBudgetMu        sync.Mutex
+	hashBuildBudget          *HashBuildBudgetGeneration
 	logger                   *log.MOLogger
 	TxnOperator              client.TxnOperator
 	CloneTxnOperator         client.TxnOperator
@@ -430,6 +432,12 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
+	proc.Base.hashBuildBudgetMu.Lock()
+	if proc.Base.hashBuildBudget != nil {
+		proc.Base.hashBuildBudget.Close()
+		proc.Base.hashBuildBudget = nil
+	}
+	proc.Base.hashBuildBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
