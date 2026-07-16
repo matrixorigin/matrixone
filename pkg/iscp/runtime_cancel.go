@@ -71,7 +71,7 @@ func (exec *ISCPTaskExecutor) ensureRuntimeMapsLocked() {
 	}
 }
 
-func rollbackFenceTTL() time.Duration {
+func RollbackFenceTTL() time.Duration {
 	ttl := DefaultRollbackFenceTTL
 	if seconds, _, injected := fault.TriggerFault(objectio.FJ_ISCPCancelRollbackFenceTTL); injected && seconds > 0 {
 		ttl = time.Duration(seconds) * time.Second
@@ -116,7 +116,7 @@ func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
 
 	exec.runtimeMu.Lock()
 	exec.ensureRuntimeMapsLocked()
-	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(rollbackFenceTTL())}
+	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(RollbackFenceTTL())}
 	handles := make([]*RunningJobConsumer, 0, 1)
 	if byJobID := exec.runningConsumers[groupKey]; byJobID != nil {
 		for runningJobID, h := range byJobID {
@@ -150,6 +150,18 @@ func (exec *ISCPTaskExecutor) RemoveJobFence(key JobRuntimeKey) {
 	}
 	exec.runtimeMu.Lock()
 	delete(exec.fencedJobs, key)
+	exec.runtimeMu.Unlock()
+}
+
+func (exec *ISCPTaskExecutor) RenewJobFence(key JobRuntimeKey, ttl time.Duration) {
+	if exec == nil || ttl <= 0 {
+		return
+	}
+	exec.runtimeMu.Lock()
+	exec.ensureRuntimeMapsLocked()
+	if _, ok := exec.fencedJobs[key]; ok {
+		exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(ttl)}
+	}
 	exec.runtimeMu.Unlock()
 }
 

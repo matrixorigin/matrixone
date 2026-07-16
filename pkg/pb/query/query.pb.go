@@ -2093,6 +2093,7 @@ type ISCPDrainConsumerRequest struct {
 	JobName         string `protobuf:"bytes,3,opt,name=JobName,proto3" json:"JobName,omitempty"`
 	JobID           uint64 `protobuf:"varint,4,opt,name=JobID,proto3" json:"JobID,omitempty"`
 	RemoveFenceOnly bool   `protobuf:"varint,5,opt,name=RemoveFenceOnly,proto3" json:"RemoveFenceOnly,omitempty"`
+	RenewFenceOnly  bool   `protobuf:"varint,6,opt,name=RenewFenceOnly,proto3" json:"RenewFenceOnly,omitempty"`
 }
 
 func (m *ISCPDrainConsumerRequest) Reset()         { *m = ISCPDrainConsumerRequest{} }
@@ -2159,6 +2160,13 @@ func (m *ISCPDrainConsumerRequest) GetJobID() uint64 {
 func (m *ISCPDrainConsumerRequest) GetRemoveFenceOnly() bool {
 	if m != nil {
 		return m.RemoveFenceOnly
+	}
+	return false
+}
+
+func (m *ISCPDrainConsumerRequest) GetRenewFenceOnly() bool {
+	if m != nil {
+		return m.RenewFenceOnly
 	}
 	return false
 }
@@ -7166,6 +7174,16 @@ func (m *ISCPDrainConsumerRequest) MarshalToSizedBuffer(dAtA []byte) (int, error
 	_ = i
 	var l int
 	_ = l
+	if m.RenewFenceOnly {
+		i--
+		if m.RenewFenceOnly {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x30
+	}
 	if m.RemoveFenceOnly {
 		i--
 		if m.RemoveFenceOnly {
@@ -9877,6 +9895,9 @@ func (m *ISCPDrainConsumerRequest) ProtoSize() (n int) {
 		n += 1 + sovQuery(uint64(m.JobID))
 	}
 	if m.RemoveFenceOnly {
+		n += 2
+	}
+	if m.RenewFenceOnly {
 		n += 2
 	}
 	return n
@@ -15672,6 +15693,26 @@ func (m *ISCPDrainConsumerRequest) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.RemoveFenceOnly = bool(v != 0)
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RenewFenceOnly", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.RenewFenceOnly = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipQuery(dAtA[iNdEx:])

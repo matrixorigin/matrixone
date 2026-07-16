@@ -17,15 +17,18 @@ package compile
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -529,9 +532,15 @@ func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
+	var commitStart client.TxnEventCallback
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
+		},
+	).Times(1)
+	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			commitStart = cb
 		},
 	).Times(1)
 
@@ -554,6 +563,7 @@ func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
 
 	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
 	require.NotNil(t, rollbackCleanup.Func)
+	require.NotNil(t, commitStart.Func)
 	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{CostEvent: true}, nil))
 
 	require.Len(t, qc.requests, 2)
@@ -584,9 +594,15 @@ func TestDrainIndexCdcTaskConsumerRemoteRollbackCleanupIgnoresCanceledCallerCont
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
+	var commitStart client.TxnEventCallback
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
+		},
+	).Times(1)
+	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			commitStart = cb
 		},
 	).Times(1)
 
@@ -608,6 +624,7 @@ func TestDrainIndexCdcTaskConsumerRemoteRollbackCleanupIgnoresCanceledCallerCont
 	}
 
 	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	require.NotNil(t, commitStart.Func)
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.NoError(t, rollbackCleanup.Func(canceledCtx, txnOp, client.TxnEvent{CostEvent: true}, nil))
@@ -677,9 +694,15 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
+	var commitStart client.TxnEventCallback
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
+		},
+	).Times(1)
+	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			commitStart = cb
 		},
 	).Times(1)
 
@@ -702,6 +725,7 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
 	require.True(t, exec.IsJobFenced(key))
 	require.NotNil(t, rollbackCleanup.Func)
+	require.NotNil(t, commitStart.Func)
 
 	require.NoError(t, rollbackCleanup.Func(context.Background(), txnOp, client.TxnEvent{}, nil))
 	require.True(t, exec.IsJobFenced(key))
@@ -709,6 +733,70 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 	require.False(t, exec.IsJobFenced(key))
 	_, ok := exec.RegisterRunningConsumer(key, 7, 1, func() {}, nil)
 	require.True(t, ok)
+}
+
+func TestDrainIndexCdcTaskConsumerRenewsFenceUntilCommitStarts(t *testing.T) {
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL, ":::", "echo", 1, "", false))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL)
+	}()
+
+	exec := &iscp.ISCPTaskExecutor{}
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return exec, true
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+	}()
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	var commitStart client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).Times(1)
+	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			commitStart = cb
+		},
+	).Times(1)
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	c.proc.Base.TxnOperator = txnOp
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
+	defer exec.RemoveJobFence(key)
+	require.NotNil(t, commitStart.Func)
+	require.True(t, exec.IsJobFenced(key))
+
+	time.Sleep(1500 * time.Millisecond)
+	require.True(t, exec.IsJobFenced(key))
+
+	require.NoError(t, commitStart.Func(context.Background(), txnOp, client.TxnEvent{}, nil))
+	require.Eventually(t, func() bool {
+		return !exec.IsJobFenced(key)
+	}, 1500*time.Millisecond, 50*time.Millisecond)
 }
 
 func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {

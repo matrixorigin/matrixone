@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -256,7 +258,12 @@ func drainIndexCdcTaskConsumer(
 			return err
 		}
 		if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+			lease := startISCPJobFenceLease(func() error {
+				exec.RenewJobFence(key, iscp.RollbackFenceTTL())
+				return nil
+			})
 			cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+				lease.Stop()
 				if !event.CostEvent {
 					return nil
 				}
@@ -264,6 +271,12 @@ func drainIndexCdcTaskConsumer(
 				return nil
 			})
 			txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+			txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+				if !event.CostEvent {
+					lease.Stop()
+				}
+				return nil
+			}))
 		}
 		return nil
 	}
@@ -282,11 +295,21 @@ func drainIndexCdcTaskConsumer(
 	if err != nil {
 		return err
 	}
-	if err := sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false); err != nil {
+	if err := sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false); err != nil {
 		return err
 	}
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		lease := startISCPJobFenceLease(func() error {
+			renewCtx, cancel := context.WithTimeoutCause(
+				context.Background(),
+				iscp.RollbackFenceTTL(),
+				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
+			)
+			defer cancel()
+			return sendISCPDrainConsumerRequest(renewCtx, qc, queryAddress, accountID, tableID, jobName, jobID, false, true)
+		})
 		cleanup := client.NewTxnEventCallback(func(ctx context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			lease.Stop()
 			if !event.CostEvent {
 				return nil
 			}
@@ -296,11 +319,60 @@ func drainIndexCdcTaskConsumer(
 				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
 			)
 			defer cancel()
-			return sendISCPDrainConsumerRequest(cleanupCtx, qc, queryAddress, accountID, tableID, jobName, jobID, true)
+			return sendISCPDrainConsumerRequest(cleanupCtx, qc, queryAddress, accountID, tableID, jobName, jobID, true, false)
 		})
 		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+		txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			if !event.CostEvent {
+				lease.Stop()
+			}
+			return nil
+		}))
 	}
 	return nil
+}
+
+type iscpJobFenceLease struct {
+	stop func()
+}
+
+func startISCPJobFenceLease(renew func() error) iscpJobFenceLease {
+	ttl := iscp.RollbackFenceTTL()
+	if ttl <= 0 || renew == nil {
+		return iscpJobFenceLease{stop: func() {}}
+	}
+	interval := ttl / 2
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	stopCh := make(chan struct{})
+	var once sync.Once
+	go func() {
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				if err := renew(); err != nil {
+					logutil.Warnf("failed to renew ISCP job fence lease: %v", err)
+				}
+				timer.Reset(interval)
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+	return iscpJobFenceLease{stop: func() {
+		once.Do(func() {
+			close(stopCh)
+		})
+	}}
+}
+
+func (l iscpJobFenceLease) Stop() {
+	if l.stop != nil {
+		l.stop()
+	}
 }
 
 func getCNQueryAddress(ctx context.Context, service string, cnUUID string) (string, error) {
@@ -336,6 +408,7 @@ func sendISCPDrainConsumerRequest(
 	jobName string,
 	jobID uint64,
 	removeFenceOnly bool,
+	renewFenceOnly bool,
 ) error {
 	req := qc.NewRequest(query.CmdMethod_ISCPDrainConsumer)
 	req.ISCPDrainConsumerRequest = &query.ISCPDrainConsumerRequest{
@@ -344,6 +417,7 @@ func sendISCPDrainConsumerRequest(
 		JobName:         jobName,
 		JobID:           jobID,
 		RemoveFenceOnly: removeFenceOnly,
+		RenewFenceOnly:  renewFenceOnly,
 	}
 	resp, err := qc.SendMessage(ctx, queryAddress, req)
 	if err != nil {

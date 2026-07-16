@@ -222,6 +222,11 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
 	}
+	if r.RenewFenceOnly {
+		exec.RenewJobFence(key, iscp.RollbackFenceTTL())
+		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+		return nil
+	}
 	if err := exec.CancelAndDrainJobConsumer(ctx, r.AccountID, r.TableID, r.JobName, r.JobID); err != nil {
 		exec.RemoveJobFence(key)
 		return err
