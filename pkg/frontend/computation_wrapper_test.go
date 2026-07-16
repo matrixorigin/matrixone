@@ -147,6 +147,8 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 		},
 	}
 	ses.txnCompileCtx.execCtx = execCtx
+	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	return ses, prepareStmt, cw, execCtx
 }
 
@@ -228,7 +230,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, err := buildExecuteUserParams(ses, cw.proc, execPlan.Args)
+	params, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -260,6 +262,37 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("session_only", false, false)
 	require.NoError(t, err)
 	require.True(t, isBin)
+}
+
+func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 105)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVar("local_shadow", "session-binary", "", true))
+	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
+	scopes := []map[string]interface{}{
+		{"local_only": int64(10), "local_shadow": int64(20)},
+	}
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
+
+	args := []*plan.Expr{
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_only"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
+	}
+	params, paramVals, paramIsBin, err := buildExecuteUserParams(cw.proc, args)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+
+	require.Equal(t, []bool{false, false, true}, paramIsBin)
+	require.Equal(t, []any{
+		plan2.ParamValue{Value: int64(10), IsBin: false},
+		plan2.ParamValue{Value: int64(20), IsBin: false},
+		plan2.ParamValue{Value: "session-binary", IsBin: true},
+	}, paramVals)
+	require.Equal(t, "10", params.GetStringAt(0))
+	require.Equal(t, "20", params.GetStringAt(1))
+	require.Equal(t, "session-binary", params.GetStringAt(2))
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

@@ -587,7 +587,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(ses, cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, err
 		}
@@ -602,7 +602,6 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 }
 
 func buildExecuteUserParams(
-	ses *Session,
 	proc *process.Process,
 	args []*plan.Expr,
 ) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
@@ -625,13 +624,12 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
-		if !exprImpl.V.System {
-			var udVar *UserDefinedVar
-			udVar, err = ses.GetUserDefinedVar(exprImpl.V.Name)
+		resolveIsBin := proc.GetResolveVariableIsBinFunc()
+		if resolveIsBin != nil {
+			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 			if err != nil {
 				return
 			}
-			paramIsBin[i] = udVar.IsBin
 		}
 		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
 	}
