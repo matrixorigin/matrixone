@@ -58,12 +58,13 @@ type taeStorageDependencies struct {
 		string,
 		*options.LogtailServerCfg,
 		runtime.Runtime,
-	) (*service.LogtailServer, error)
+	) (logtailServer, error)
 }
 
 type taeStorage struct {
 	shard         metadata.TNShard
 	taeHandler    rpchandle.Handler
+	manifestDB    *db.DB
 	logtailServer logtailServer
 }
 
@@ -122,15 +123,19 @@ func newTAEStorage(
 	if err != nil {
 		return nil, errors.Join(err, taeHandler.HandleClose(ctx))
 	}
+	rpc.RegisterManifestHTTP(tae)
 
 	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
 	if ok {
-		ss.(*status.Server).SetLogtailServer(server)
+		if logtailServer, ok := server.(*service.LogtailServer); ok {
+			ss.(*status.Server).SetLogtailServer(logtailServer)
+		}
 	}
 
 	return &taeStorage{
 		shard:         shard,
 		taeHandler:    taeHandler,
+		manifestDB:    tae,
 		logtailServer: server,
 	}, nil
 }
@@ -146,7 +151,7 @@ func openTAEHandle(
 	client client.QueryClient,
 	opt *options.Options,
 ) (taeHandle, error) {
-	return rpc.NewTAEHandleWithError(ctx, dataDir, client, opt)
+	return rpc.NewTAEHandle(ctx, dataDir, client, opt)
 }
 
 func newTAELogtailServer(
@@ -155,7 +160,7 @@ func newTAELogtailServer(
 	address string,
 	cfg *options.LogtailServerCfg,
 	rt runtime.Runtime,
-) (*service.LogtailServer, error) {
+) (logtailServer, error) {
 	logtailer := logtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
 	return service.NewLogtailServer(address, cfg, logtailer, rt, nil)
 }
@@ -167,6 +172,7 @@ func (s *taeStorage) Start() error {
 
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
+	rpc.UnregisterManifestHTTP(s.manifestDB)
 	return errors.Join(s.logtailServer.Close(), s.taeHandler.HandleClose(ctx))
 }
 

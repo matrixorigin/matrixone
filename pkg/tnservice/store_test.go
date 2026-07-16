@@ -505,7 +505,7 @@ func newTestStore(
 
 	rt := runtime.NewRuntime(
 		metadata.ServiceType_TN,
-		"",
+		uuid,
 		logutil.Adjust(nil),
 		runtime.WithClock(
 			clock.NewHLCClock(
