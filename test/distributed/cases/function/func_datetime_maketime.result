@@ -78,7 +78,7 @@ h    m    s
 DROP TABLE t1;
 SELECT MAKETIME(12.0, 15.0, 30.0) AS float_input;
 float_input
-12:15:30
+12:15:30.0
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
 unsigned_input
 12:15:30
