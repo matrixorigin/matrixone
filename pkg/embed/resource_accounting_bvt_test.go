@@ -223,7 +223,7 @@ func assertPersistedResourceQuality(t *testing.T, db *sql.DB, statements []strin
 		return true
 	}, 20*time.Second, 250*time.Millisecond)
 	if !satisfied {
-		require.FailNow(t, "persisted resource quality did not converge", last)
+		require.FailNowf(t, "persisted resource quality did not converge", "last observation: %s", last)
 	}
 }
 
