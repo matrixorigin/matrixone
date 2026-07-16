@@ -1981,7 +1981,15 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	if loc == nil {
 		loc = time.Local
 	}
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 || v2 == math.MaxInt64 {
@@ -4355,8 +4363,16 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 || v2 == math.MaxInt64 {

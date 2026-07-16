@@ -3155,6 +3155,69 @@ func TestDateSub(t *testing.T) {
 	}
 }
 
+func TestDateSubRespectsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_date.ToType(), []types.Date{
+			types.Date(0),
+			types.DateFromCalendar(2024, 1, 2),
+		}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil),
+	}
+	tc := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_date.ToType(), false, nil, nil),
+		DateSub,
+	)
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, DateSub(tc.parameters, tc.result, proc, tc.fnLength, selectList))
+
+	result := tc.result.GetResultVector()
+	require.True(t, result.IsNull(0))
+	value, isNull := vector.GenerateFunctionFixedTypeParameter[types.Date](result).GetValue(1)
+	require.False(t, isNull)
+	require.Equal(t, types.DateFromCalendar(2024, 1, 1), value)
+
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	require.NoError(t, DateSub(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AllNull: true}))
+	require.Equal(t, tc.fnLength, tc.result.GetResultVector().GetNulls().Count())
+}
+
+func TestTimestampAddRespectsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	timestamp := types.FromClockUTC(2024, 1, 2, 3, 4, 5, 0)
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp, timestamp}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil),
+	}
+	tc := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_timestamp.ToType(), false, nil, nil),
+		TimestampAdd,
+	)
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, TimestampAdd(tc.parameters, tc.result, proc, tc.fnLength, selectList))
+
+	result := tc.result.GetResultVector()
+	require.True(t, result.IsNull(0))
+	value, isNull := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](result).GetValue(1)
+	require.False(t, isNull)
+	require.Equal(t, types.FromClockUTC(2024, 1, 4, 3, 4, 5, 0), value)
+
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	require.NoError(t, TimestampAdd(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AllNull: true}))
+	require.Equal(t, tc.fnLength, tc.result.GetResultVector().GetNulls().Count())
+}
+
 func initFieldTestCase() []tcTemp {
 	return []tcTemp{
 		{
