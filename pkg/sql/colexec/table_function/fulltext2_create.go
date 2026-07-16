@@ -116,11 +116,11 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 	if len(terms) == 0 {
 		return nil
 	}
-	// Feed this doc's tokens contiguously and in order (position = token index),
-	// mirroring bm25_create's per-token builder.Add(word, pk).
+	// Feed this doc's tokens contiguously and in order, each with its BYTE position
+	// (positional phrase queries match by byte offset), mirroring the base build.
 	pk := vector.GetAny(pkVec, nthRow, false)
 	for _, w := range terms {
-		if aerr := u.builder.Add(w, pk); aerr != nil {
+		if aerr := u.builder.Add(w.Word, w.Pos, pk); aerr != nil {
 			return aerr
 		}
 	}
@@ -131,7 +131,7 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 // applying the index's parser. datalink columns are resolved to plain text and
 // json columns to their flattened values; a NULL column yields no tokens (matches
 // the classic tokenizer's per-row NULL handling).
-func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]string, error) {
+func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]fulltext2.WordPos, error) {
 	argVecs := tf.ctr.argVecs
 	for i := 2; i < len(argVecs); i++ {
 		if argVecs[i].IsNull(uint64(nthRow)) {
@@ -195,13 +195,13 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		tok = t
 	}
 
-	var terms []string
+	var terms []fulltext2.WordPos
 	for t, terr := range tok.Tokenize(content.Bytes()) {
 		if terr != nil {
 			return nil, terr
 		}
 		slen := t.TokenBytes[0]
-		terms = append(terms, string(t.TokenBytes[1:slen+1]))
+		terms = append(terms, fulltext2.WordPos{Word: string(t.TokenBytes[1 : slen+1]), Pos: t.BytePos})
 	}
 	return terms, nil
 }

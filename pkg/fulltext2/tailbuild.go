@@ -41,7 +41,7 @@ type TailSegment struct {
 type TailBuilder struct {
 	pkType   int32
 	capacity int64
-	tokenize func(string) []string
+	tokenize func(string) []WordPos
 	dir      string
 	seq      int
 	cur      *Builder // current open segment (nil until the first insert row)
@@ -50,7 +50,7 @@ type TailBuilder struct {
 }
 
 // NewTailBuilder creates a streaming tail builder backed by a private temp dir.
-func NewTailBuilder(pkType int32, capacity int64, tokenize func(string) []string) (*TailBuilder, error) {
+func NewTailBuilder(pkType int32, capacity int64, tokenize func(string) []WordPos) (*TailBuilder, error) {
 	if capacity < 1 {
 		capacity = defaultTailCapacity
 	}
@@ -73,7 +73,7 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 				t.cur = NewBuilder(fmt.Sprintf("cdctail-%d", t.seq), t.pkType)
 			}
 			for _, w := range t.tokenize(e.Text) {
-				if err := t.cur.Add(w, e.Pk); err != nil {
+				if err := t.cur.Add(w.Word, w.Pos, e.Pk); err != nil {
 					return err
 				}
 			}

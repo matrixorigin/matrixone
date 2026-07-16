@@ -58,9 +58,10 @@ const (
 
 type clause struct {
 	kind     clauseKind
-	terms    []string // leaf (term / phrase / prefix)
-	children []clause // group
-	weight   float64  // impact multiplier (1.0 default; > < ~ change it)
+	terms    []string     // leaf (term / prefix)
+	phrase   []phraseSlot // clausePhrase: positional (byte-offset) slots
+	children []clause      // group
+	weight   float64       // impact multiplier (1.0 default; > < ~ change it)
 }
 
 // BoolQuery is a parsed boolean-mode query. adjust holds the ~ clauses, which
@@ -247,9 +248,9 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 	case clausePhrase:
 		var hits []docTf
 		if gs != nil {
-			hits = gs.phraseHits(s, c.terms) // memoized; shared with gs.phraseDf
+			hits = gs.phraseHits(s, c.phrase) // memoized; shared with gs.phraseDf
 		} else {
-			hits = s.matchPhrase(c.terms)
+			hits = s.matchPhrase(c.phrase)
 		}
 		if !scored {
 			for _, h := range hits {
@@ -257,7 +258,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 			}
 			break
 		}
-		idf2 := gs.phraseIdfFor(s, c.terms, len(hits))
+		idf2 := gs.phraseIdfFor(s, c.phrase, len(hits))
 		for _, h := range hits {
 			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
 		}
@@ -423,13 +424,13 @@ func rawToClause(rc rawClause, tok tokenizer.Tokenizer) (clause, bool, error) {
 	}
 	switch {
 	case rc.quoted:
-		return clause{kind: clausePhrase, terms: terms, weight: w}, true, nil
+		return clause{kind: clausePhrase, phrase: tokenizePhraseSlots(tok, []byte(rc.text)), weight: w}, true, nil
 	case rc.star:
 		return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
 	case len(terms) == 1:
 		return clause{kind: clauseTerm, terms: terms, weight: w}, true, nil
 	default:
-		return clause{kind: clausePhrase, terms: terms, weight: w}, true, nil
+		return clause{kind: clausePhrase, phrase: tokenizePhraseSlots(tok, []byte(rc.text)), weight: w}, true, nil
 	}
 }
 

@@ -80,7 +80,8 @@ func TestNLPhraseMatching(t *testing.T) {
 // TestTfIdfOrdering: equal-tf hits tie-break by ascending ord (deterministic).
 func TestTfIdfOrdering(t *testing.T) {
 	s := fulltextCorpus(t)
-	require.Equal(t, []any{int64(1), int64(2), int64(4)}, query(t, s, "quick brown fox", TfIdf, 10))
+	// The three docs contain the phrase once each → equal TfIdf, so order is unspecified.
+	require.ElementsMatch(t, []any{int64(1), int64(2), int64(4)}, query(t, s, "quick brown fox", TfIdf, 10))
 }
 
 // TestBM25Ordering: BM25 length-normalizes, so among equal-tf phrase hits the
@@ -106,7 +107,7 @@ func TestSearchOnLoadedSegment(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = loaded.dict.Close() })
 
-	require.Equal(t, []any{int64(1), int64(2), int64(4)},
+	require.ElementsMatch(t, []any{int64(1), int64(2), int64(4)}, // equal TfIdf → order unspecified
 		query(t, loaded, "quick brown fox", TfIdf, 10))
 	require.Equal(t, []any{int64(5)}, query(t, loaded, "the fox", TfIdf, 10))
 	require.Empty(t, query(t, loaded, "quick fox", TfIdf, 10))

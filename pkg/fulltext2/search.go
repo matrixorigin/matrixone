@@ -68,11 +68,11 @@ func (s *Segment) lookup(term string) (*termPostings, bool) {
 // This is the correctness-first evaluator: it intersects the terms' posting
 // lists and verifies positional adjacency exactly, without WAND block-max early
 // termination (that optimization layers on later without changing results).
-func (s *Segment) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
+func (s *Segment) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int) []Result {
 	if k <= 0 || s.N == 0 {
 		return nil
 	}
-	hits := s.matchPhrase(terms)
+	hits := s.matchPhrase(slots)
 	if len(hits) == 0 {
 		return nil
 	}
@@ -109,52 +109,85 @@ type docTf struct {
 // each with the phrase occurrence count, in ascending doc ord. Returns nil if
 // terms is empty or any term is absent from the segment. Shared by SearchPhrase
 // and the boolean phrase clause.
-func (s *Segment) matchPhrase(terms []string) []docTf {
-	if len(terms) == 0 {
+// phraseSlot is one position of a positional phrase: a term (star=false) or a word*
+// prefix (star=true) that must occur at byte offset `off` from the phrase's first slot.
+// Byte offsets (not token indices) match classic fulltext's ngram phrase JOIN, so a
+// redundant-ngram-removed CJK phrase (with gaps between kept trigrams) and a prefix tail
+// both verify correctly against the doc's byte-position postings.
+type phraseSlot struct {
+	term string
+	star bool
+	off  int32
+}
+
+// matchPhrase verifies a positional phrase against the segment: for a doc to hit, some
+// occurrence of slot[0] at byte position p must have every slot[j] present at p+off[j]
+// (a star slot: ANY term with that prefix at p+off[j]). Returns per-doc phrase counts.
+func (s *Segment) matchPhrase(slots []phraseSlot) []docTf {
+	if len(slots) == 0 {
 		return nil
 	}
-	pls := make([]*termPostings, len(terms))
+	// Per slot, a doc→sorted-byte-positions map, merged over a star slot's expansions.
+	slotPos := make([]map[int64][]int32, len(slots))
 	rare := 0
-	for i, t := range terms {
-		pl, ok := s.lookup(t)
-		if !ok {
-			return nil
+	for i, sl := range slots {
+		var terms []string
+		if sl.star {
+			ts, err := s.prefixTerms(sl.term)
+			if err != nil {
+				return nil
+			}
+			terms = ts
+		} else {
+			terms = []string{sl.term}
 		}
-		pls[i] = pl
-		if pl.df() < pls[rare].df() {
+		m := make(map[int64][]int32)
+		for _, t := range terms {
+			pl, ok := s.lookup(t)
+			if !ok {
+				continue
+			}
+			docs := pl.materializeDocIDs()
+			pos := pl.materializePositions()
+			for di, ord := range docs {
+				m[ord] = append(m[ord], pos[di]...)
+			}
+		}
+		if len(m) == 0 {
+			return nil // a slot no doc satisfies ⇒ the phrase can't occur
+		}
+		for ord := range m { // sortedContains needs ascending positions
+			p := m[ord]
+			sort.Slice(p, func(a, b int) bool { return p[a] < p[b] })
+			m[ord] = p
+		}
+		slotPos[i] = m
+		if len(m) < len(slotPos[rare]) {
 			rare = i
 		}
 	}
-	// Adjacency verification needs positions — materialize each term's positions
-	// ONCE (decoding the loaded-side compressed posRaw transiently; build-side
-	// returns its [][]int32 directly), then index by doc position. WAND ranking
-	// never materializes; only phrase verification does.
-	// docIDs are block-compressed on a loaded segment; materialize each term's docs
-	// (and positions) ONCE here, alongside positions, so the per-candidate binary
-	// search runs over a flat slice instead of re-decoding blocks.
-	mats := make([][][]int32, len(pls))
-	docsPerTerm := make([][]int64, len(pls))
-	for j, pl := range pls {
-		mats[j] = pl.materializePositions()
-		docsPerTerm[j] = pl.materializeDocIDs()
-	}
 	var hits []docTf
-	posLists := make([][]int32, len(terms))
-	for _, ord := range docsPerTerm[rare] {
-		ok := true
-		for j := range pls {
-			pos, has := positionsInDoc(docsPerTerm[j], mats[j], ord)
-			if !has {
-				ok = false
-				break
-			}
-			posLists[j] = pos
-		}
+	for ord := range slotPos[rare] {
+		base, ok := slotPos[0][ord]
 		if !ok {
 			continue
 		}
-		if tf := countPhrase(posLists); tf > 0 {
-			hits = append(hits, docTf{ord, tf})
+		cnt := 0
+		for _, anchor := range base {
+			matched := true
+			for j := 1; j < len(slots); j++ {
+				pj, has := slotPos[j][ord]
+				if !has || !sortedContainsInt32(pj, anchor+slots[j].off) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				cnt++
+			}
+		}
+		if cnt > 0 {
+			hits = append(hits, docTf{ord, cnt})
 		}
 	}
 	return hits
@@ -185,42 +218,6 @@ func (s *Segment) avgDocLenOrMean() float64 {
 		return s.AvgDocLen
 	}
 	return meanDocLen(s.docLen)
-}
-
-// positionsInDoc returns the ascending token positions of a term within the
-// document ord, or ok=false if the term does not occur there. docs is the term's
-// materialized ascending doc ords and mat its parallel per-doc positions (both from
-// materialize* on the posting list). Binary search over docs.
-func positionsInDoc(docs []int64, mat [][]int32, ord int64) (pos []int32, ok bool) {
-	i := sort.Search(len(docs), func(i int) bool { return docs[i] >= ord })
-	if i < len(docs) && docs[i] == ord {
-		return mat[i], true
-	}
-	return nil, false
-}
-
-// countPhrase counts contiguous-phrase occurrences given, per query term j, its
-// ascending positions in one document (posLists[j]). A phrase occurs at anchor p
-// when term j is at p+j for every j. Handles a repeated query term (the same
-// posting list appears at multiple j) correctly.
-func countPhrase(posLists [][]int32) int {
-	if len(posLists) == 1 {
-		return len(posLists[0])
-	}
-	count := 0
-	for _, anchor := range posLists[0] {
-		matched := true
-		for j := 1; j < len(posLists); j++ {
-			if !sortedContainsInt32(posLists[j], anchor+int32(j)) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			count++
-		}
-	}
-	return count
 }
 
 // sortedContainsInt32 reports whether v is in the ascending slice a.

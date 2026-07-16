@@ -64,7 +64,7 @@ func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tok
 				return nil, err
 			}
 			w := tokenWord(tk)
-			local[w] = append(local[w], tk.TokenPos)
+			local[w] = append(local[w], tk.BytePos)
 			ntok++
 		}
 		s.docLen[ord] = ntok
@@ -105,11 +105,7 @@ func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tok
 // segment) and runs an NL exact-phrase search — the convenience entry point that
 // mirrors MATCH(col) AGAINST('query') in natural-language mode.
 func (s *Segment) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int) ([]Result, error) {
-	terms, err := tokenizeToTerms(query, tok)
-	if err != nil {
-		return nil, err
-	}
-	return s.SearchPhrase(terms, algo, k), nil
+	return s.SearchPhrase(tokenizePhraseSlots(tok, query), algo, k), nil
 }
 
 // TokenizedDoc is a document already tokenized into an ordered term slice (the
@@ -117,8 +113,9 @@ func (s *Segment) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 // via the execution-side fulltext2_tokenize TVF (datalink/json/parsers resolved
 // there) and only assembles the segment here.
 type TokenizedDoc struct {
-	Pk    any
-	Terms []string
+	Pk        any
+	Terms     []string
+	Positions []int32 // byte position of Terms[i] (parallel to Terms)
 }
 
 // BuildSegmentFromTokenized builds a segment from pre-tokenized docs (positions
@@ -138,8 +135,12 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc) (*S
 	for ord, d := range docs {
 		s.pks[ord] = d.Pk
 		local := make(map[string][]int32)
-		for pos, w := range d.Terms {
-			local[w] = append(local[w], int32(pos))
+		for i, w := range d.Terms {
+			pos := int32(i) // fall back to token index when Positions is unset
+			if i < len(d.Positions) {
+				pos = d.Positions[i] // byte position
+			}
+			local[w] = append(local[w], pos)
 		}
 		s.docLen[ord] = int32(len(d.Terms))
 		for w, pos := range local {
@@ -205,14 +206,17 @@ func (b *Builder) docOrd(pk any) int64 {
 	return o
 }
 
-// Add records one (word, doc) token occurrence. Tokens of a document must be fed
-// contiguously and in order; the token's position is its index within the doc.
-func (b *Builder) Add(word string, pk any) error {
+// Add records one (word, byte-position, doc) token occurrence. Tokens of a document
+// must be fed contiguously and in order; pos is the token's BYTE position in the doc
+// (so a positional phrase query can match by byte offset, consistent with the base
+// build's tk.BytePos and classic fulltext's byte-position phrase JOIN).
+func (b *Builder) Add(word string, pos int32, pk any) error {
 	if word == "" {
 		return moerr.NewInternalErrorNoCtx("fulltext2 builder: empty word")
 	}
 	ord := b.docOrd(pk)
 	b.docs[ord].Terms = append(b.docs[ord].Terms, word)
+	b.docs[ord].Positions = append(b.docs[ord].Positions, pos)
 	return nil
 }
 

@@ -71,8 +71,8 @@ func TestReconstructLiveDocs(t *testing.T) {
 	// Rebuilding from the reconstruction gives an index with identical results.
 	nb := NewBuilder("merged", int32(types.T_int64))
 	for _, d := range docs {
-		for _, w := range d.Terms {
-			require.NoError(t, nb.Add(w, d.Pk))
+		for i, w := range d.Terms {
+			require.NoError(t, nb.Add(w, d.Positions[i], d.Pk))
 		}
 	}
 	merged, err := nb.Finish()

@@ -26,7 +26,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func wsTokenize(s string) []string { return strings.Fields(s) }
+func wsTokenize(s string) []WordPos {
+	var out []WordPos
+	i := 0
+	for _, f := range strings.Fields(s) {
+		pos := i + strings.Index(s[i:], f)
+		out = append(out, WordPos{Word: f, Pos: int32(pos)})
+		i = pos + len(f)
+	}
+	return out
+}
 
 func TestCdcCodecRoundTrip(t *testing.T) {
 	c := NewCdc(int32(types.T_int64))

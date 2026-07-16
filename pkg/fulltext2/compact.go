@@ -70,8 +70,8 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 	if len(docs) > 0 {
 		b := NewBuilder(uid, pkType)
 		for _, d := range docs {
-			for _, w := range d.Terms {
-				if e := b.Add(w, d.Pk); e != nil {
+			for i, w := range d.Terms {
+				if e := b.Add(w, d.Positions[i], d.Pk); e != nil {
 					return 0, e
 				}
 			}

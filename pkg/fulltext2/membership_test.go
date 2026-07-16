@@ -113,7 +113,7 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 		t.Fatalf("pk %d not in results", pk)
 		return 0
 	}
-	unfiltered := idx.SearchPhrase([]string{"alpha"}, BM25, 100, nil)
+	unfiltered := idx.SearchPhrase(phr("alpha"), BM25, 100, nil)
 	require.Len(t, unfiltered, 4)
 	s0 := scoreOf(unfiltered, 0)
 
@@ -128,7 +128,7 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 	require.NoError(t, err)
 	defer filter.Free()
 
-	filtered := idx.SearchPhrase([]string{"alpha"}, BM25, 100, filter)
+	filtered := idx.SearchPhrase(phr("alpha"), BM25, 100, filter)
 	require.Len(t, filtered, 2, "only the allowed docs are returned")
 	require.InDelta(t, s0, scoreOf(filtered, 0), 1e-9,
 		"doc 0's score must be filter-independent (corpus df, not filtered count)")

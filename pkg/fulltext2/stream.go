@@ -126,13 +126,9 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 			return err
 		}
 		haveQ = true
-	} else if p != ParserGojieba && hasCJK(pat) {
-		var err error
-		if q, err = ngramBagQuery(pat); err != nil {
-			return err
-		}
-		haveQ = true
 	}
+	// NL mode (haveQ stays false) is an exact positional phrase, not a pure disjunction,
+	// so it falls through to the materializing SearchQuery below (same phrase path).
 
 	if haveQ {
 		if terms, ok := disjunctiveTerms(q); ok {

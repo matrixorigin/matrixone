@@ -41,7 +41,7 @@ func TestTemporalPkNoCollision(t *testing.T) {
 	idx := NewIndex([]*Segment{seg}, nil)
 
 	require.Equal(t, int64(2), idx.globalN, "both microsecond-distinct pks must be live")
-	require.Len(t, idx.SearchPhrase([]string{"alpha"}, BM25, 10, nil), 2,
+	require.Len(t, idx.SearchPhrase(phr("alpha"), BM25, 10, nil), 2,
 		"both docs must be returned (neither dropped by a lossy key)")
 }
 

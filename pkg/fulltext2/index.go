@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -133,8 +132,8 @@ func (idx *Index) isLive(si int, ord int64, key any) bool {
 // degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the
 // phrase's document frequency is the number of LIVE documents that match (dead
 // and delete-shadowed copies are excluded), so idf is exact.
-func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) []Result {
-	if k <= 0 || idx.globalN == 0 || len(terms) == 0 {
+func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) []Result {
+	if k <= 0 || idx.globalN == 0 || len(slots) == 0 {
 		return nil
 	}
 	// Collect the live matches across segments (one per pk — the live copy).
@@ -155,7 +154,7 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 	}
 	for si, seg := range idx.segments {
 		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
-		for _, h := range seg.matchPhrase(terms) {
+		for _, h := range seg.matchPhrase(slots) {
 			key := normalizeKey(seg.pks[h.ord])
 			if !idx.isLive(si, h.ord, key) {
 				continue
@@ -225,11 +224,7 @@ func topKResults(results []Result, k int) []Result {
 // SearchText tokenizes query with tok and runs an NL exact-phrase search across
 // the index.
 func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
-	terms, err := tokenizeToTerms(query, tok)
-	if err != nil {
-		return nil, err
-	}
-	return idx.SearchPhrase(terms, algo, k, filter), nil
+	return idx.SearchPhrase(tokenizePhraseSlots(tok, query), algo, k, filter), nil
 }
 
 // globalStats carries the corpus-global scoring inputs (N, average doc length, and
@@ -258,8 +253,8 @@ func (idx *Index) newGlobalStats() *globalStats {
 
 // phraseHits returns seg's matchPhrase hits, memoized per (phrase, segment) so the
 // scoring pass and the phraseDf pass share one scan.
-func (gs *globalStats) phraseHits(seg *Segment, terms []string) []docTf {
-	key := strings.Join(terms, "\x00")
+func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
+	key := slotsKey(slots)
 	m := gs.phraseHitsCache[key]
 	if m == nil {
 		m = make(map[*Segment][]docTf)
@@ -268,7 +263,7 @@ func (gs *globalStats) phraseHits(seg *Segment, terms []string) []docTf {
 	if h, ok := m[seg]; ok {
 		return h
 	}
-	h := seg.matchPhrase(terms)
+	h := seg.matchPhrase(slots)
 	m[seg] = h
 	return h
 }
@@ -302,14 +297,14 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 // phraseDf returns the corpus-global document frequency of a phrase (the number of
 // docs matching the contiguous phrase, summed over segments), memoized per query.
 // Dead copies are counted, matching the term df above.
-func (gs *globalStats) phraseDf(terms []string) int {
-	key := strings.Join(terms, "\x00")
+func (gs *globalStats) phraseDf(slots []phraseSlot) int {
+	key := slotsKey(slots)
 	if d, ok := gs.phraseDfCache[key]; ok {
 		return d
 	}
 	d := 0
 	for _, seg := range gs.idx.segments {
-		d += len(gs.phraseHits(seg, terms)) // shares the memoized scan with scoring
+		d += len(gs.phraseHits(seg, slots)) // shares the memoized scan with scoring
 	}
 	gs.phraseDfCache[key] = d
 	return d
@@ -318,11 +313,11 @@ func (gs *globalStats) phraseDf(terms []string) int {
 // phraseIdfFor is a phrase clause's idf² under the global corpus stats (global N +
 // cross-segment phrase df), or the segment-local stats when gs is nil — so a phrase
 // clause ranks consistently across a base + CDC tail, like the term/prefix clauses.
-func (gs *globalStats) phraseIdfFor(seg *Segment, terms []string, localHits int) float64 {
+func (gs *globalStats) phraseIdfFor(seg *Segment, slots []phraseSlot, localHits int) float64 {
 	if gs == nil {
 		return idfSquared(seg.N, localHits)
 	}
-	return idfSquared(gs.n, gs.phraseDf(terms))
+	return idfSquared(gs.n, gs.phraseDf(slots))
 }
 
 // avgdl is the global average doc length, or the segment's own when gs is nil.
@@ -428,10 +423,12 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 		b := buckets[l]
 		sort.SliceStable(b, func(i, j int) bool { return b[i].pos < b[j].pos })
 		terms := make([]string, len(b))
+		positions := make([]int32, len(b))
 		for i, pt := range b {
 			terms[i] = pt.term
+			positions[i] = pt.pos // byte position, carried through MERGE
 		}
-		out = append(out, TokenizedDoc{Pk: idx.segments[l.si].pks[l.ord], Terms: terms})
+		out = append(out, TokenizedDoc{Pk: idx.segments[l.si].pks[l.ord], Terms: terms, Positions: positions})
 	}
 	return out, nil
 }

@@ -70,9 +70,9 @@ func TestMmapLoad(t *testing.T) {
 
 	idx := NewIndex([]*Segment{s}, nil)
 	// ranking (WAND, docIDs off-heap): "beta" hits all three docs.
-	require.Len(t, idx.SearchPhrase([]string{"beta"}, BM25, 10, nil), 3)
+	require.Len(t, idx.SearchPhrase(phr("beta"), BM25, 10, nil), 3)
 	// phrase (positions from the mmap): only doc 0 has contiguous "alpha beta".
-	ph := idx.SearchPhrase([]string{"alpha", "beta"}, BM25, 10, nil)
+	ph := idx.SearchPhrase(phr("alpha", "beta"), BM25, 10, nil)
 	require.Len(t, ph, 1)
 	require.Equal(t, int64(0), ph[0].Pk)
 

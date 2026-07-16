@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -190,22 +191,29 @@ func IsJSONParser(parser string) bool {
 // (The old form flattened the whole joined multi-column blob once with binary=false,
 // which produced zero tokens for a T_json column and mis-parsed multi-column json — so
 // CDC-inserted json rows were unsearchable.)
-func CdcTokenizer(parser string) (func(string) []string, error) {
+func CdcTokenizer(parser string) (func(string) []WordPos, error) {
 	tok, err := DocTokenizer(parser)
 	if err != nil {
 		return nil, err
 	}
-	return func(text string) []string { return tokenizeWords(tok, []byte(text)) }, nil
+	return func(text string) []WordPos { return tokenizeWords(tok, []byte(text)) }, nil
 }
 
-// tokenizeWords flattens a tokenizer stream into ordered words.
-func tokenizeWords(tok tokenizer.Tokenizer, text []byte) []string {
-	var words []string
+// WordPos is a tokenized word with its BYTE position in the source text — carried
+// through the CDC/merge build so positional phrase queries match by byte offset.
+type WordPos struct {
+	Word string
+	Pos  int32
+}
+
+// tokenizeWords flattens a tokenizer stream into ordered (word, byte-position) pairs.
+func tokenizeWords(tok tokenizer.Tokenizer, text []byte) []WordPos {
+	var words []WordPos
 	for tk, err := range tok.Tokenize(text) {
 		if err != nil {
 			break
 		}
-		words = append(words, tokenWord(tk))
+		words = append(words, WordPos{tokenWord(tk), tk.BytePos})
 	}
 	return words
 }
@@ -262,37 +270,83 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 		return idx.SearchBoolean(q, algo, k, filter)
 	}
 
-	// NL mode.
-	if p != ParserGojieba && hasCJK(pat) {
-		// CJK ngram → bag-of-words over redundant-removed ngrams.
-		q, err := ngramBagQuery(pat)
-		if err != nil {
-			return nil, err
-		}
-		return idx.SearchBoolean(q, algo, k, filter)
-	}
-
-	// Word tokens (gojieba, or Latin) → exact phrase.
-	tok, err := queryTokenizer(p)
+	// NL mode is an exact ORDERED PHRASE for every parser — the deduped, byte-positioned
+	// slots matched positionally, matching classic fulltext's NL semantics (incl. CJK).
+	slots, err := phraseSlots(pat, p)
 	if err != nil {
 		return nil, err
 	}
-	return idx.SearchText(pattern, tok, algo, k, filter)
+	return idx.SearchPhrase(slots, algo, k, filter), nil
 }
 
-// ngramBagQuery turns an NL pattern into a SHOULD-only BoolQuery of TEXT/STAR
-// terms produced by classic fulltext's redundant-ngram removal — a bag-of-words
-// disjunction evaluated by the WAND/boolean engine.
-func ngramBagQuery(pattern string) (BoolQuery, error) {
+// phraseSlots turns an NL pattern into the positional phrase slots to match. For
+// ngram/default/json it uses classic fulltext's ParsePatternInNLMode — redundant-ngram
+// removal to the full trigrams that cover the string (TEXT), with sub-3-char fragments
+// as word* prefixes (STAR), each carrying a BYTE position. For gojieba it tokenizes into
+// words with byte positions. Offsets are relative to the first slot.
+func phraseSlots(pattern, parser string) ([]phraseSlot, error) {
+	if normalizeParser(parser) == ParserGojieba {
+		tok, err := queryTokenizer(ParserGojieba)
+		if err != nil {
+			return nil, err
+		}
+		return tokenizePhraseSlots(tok, []byte(pattern)), nil
+	}
 	ps, err := fulltext.ParsePatternInNLMode(pattern, ParserNgram)
 	if err != nil {
-		return BoolQuery{}, err
+		return nil, err
 	}
-	var q BoolQuery
-	for _, c := range patternsToClauses(ps) {
-		q.should = append(q.should, c)
+	return patternsToPhraseSlots(ps), nil
+}
+
+// patternsToPhraseSlots maps classic NL patterns (TEXT trigrams / STAR word* prefixes,
+// with byte positions) to fulltext2 phrase slots, byte offsets relative to the first.
+func patternsToPhraseSlots(ps []*fulltext.Pattern) []phraseSlot {
+	if len(ps) == 0 {
+		return nil
 	}
-	return q, nil
+	base := ps[0].Position
+	slots := make([]phraseSlot, 0, len(ps))
+	for _, p := range ps {
+		term := p.Text
+		star := p.Operator == fulltext.STAR
+		if star {
+			term = strings.TrimSuffix(term, "*")
+		}
+		slots = append(slots, phraseSlot{term: term, star: star, off: p.Position - base})
+	}
+	return slots
+}
+
+// slotsKey is a deterministic string key for a phrase (term+star+offset per slot), used
+// to memoize phrase hits/df per query.
+func slotsKey(slots []phraseSlot) string {
+	var b strings.Builder
+	for _, s := range slots {
+		b.WriteString(s.term)
+		if s.star {
+			b.WriteByte('*')
+		}
+		b.WriteByte(0)
+		b.WriteString(strconv.Itoa(int(s.off)))
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
+// tokenizePhraseSlots tokenizes text into (word, byte-position) TEXT slots — for gojieba
+// NL and boolean-mode explicit "phrases".
+func tokenizePhraseSlots(tok tokenizer.Tokenizer, text []byte) []phraseSlot {
+	wps := tokenizeWords(tok, text)
+	if len(wps) == 0 {
+		return nil
+	}
+	base := wps[0].Pos
+	slots := make([]phraseSlot, len(wps))
+	for i, wp := range wps {
+		slots[i] = phraseSlot{term: wp.Word, off: wp.Pos - base}
+	}
+	return slots
 }
 
 // patternsToClauses maps classic TEXT/STAR NL patterns to fulltext2 term/prefix
@@ -391,12 +445,28 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 	}
 	switch {
 	case rc.quoted:
-		return clause{kind: clausePhrase, terms: terms, weight: w}, true, nil
+		// Explicit "phrase": positional (byte-offset) slots — deduped/prefixed the same
+		// way NL is, so a CJK phrase matches by byte offset, not fragile token adjacency.
+		slots, serr := phraseSlots(rc.text, parser)
+		if serr != nil {
+			return clause{}, false, serr
+		}
+		if len(slots) == 0 {
+			return clause{}, false, nil
+		}
+		return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
 	case rc.star:
 		return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
 	case len(terms) == 1:
 		return clause{kind: clauseTerm, terms: terms, weight: w}, true, nil
 	default:
-		return clause{kind: clausePhrase, terms: terms, weight: w}, true, nil
+		slots, serr := phraseSlots(rc.text, parser)
+		if serr != nil {
+			return clause{}, false, serr
+		}
+		if len(slots) == 0 {
+			return clause{}, false, nil
+		}
+		return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
 	}
 }
