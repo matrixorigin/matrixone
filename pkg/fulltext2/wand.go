@@ -170,7 +170,18 @@ func chooseSkip(iters []*wandIter, pivot int, target int64) int {
 // score, negated). Equal scores are equally relevant — ties are unspecified.
 type topKHeap = vectorindex.FastMaxHeap[float64, int64]
 
-func newTopKHeap(k int) *topKHeap {
+// newTopKHeap allocates the bounded heap's backing buffers. k is capped to maxDocs (the
+// segment's live doc count) because the heap can never hold more than that many results:
+// FastMaxHeap needs pre-sized buffers, so an absurd pushed LIMIT (e.g. ORDER BY score
+// LIMIT 5e8) would otherwise eagerly allocate 2×k slices (~GBs) and OOM the CN, even on a
+// tiny table. Bounding to maxDocs is the FastMaxHeap analogue of bm25's lazily-grown topK.
+func newTopKHeap(k int, maxDocs int64) *topKHeap {
+	if int64(k) > maxDocs {
+		k = int(maxDocs)
+	}
+	if k < 0 {
+		k = 0
+	}
 	return vectorindex.NewFastMaxHeap[float64, int64](k, make([]int64, k), make([]float64, k))
 }
 
@@ -212,7 +223,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 		return nil
 	}
 
-	h := newTopKHeap(k)
+	h := newTopKHeap(k, s.N)
 	theta := math.Inf(-1) // until the heap holds k, accept everything
 
 	for {

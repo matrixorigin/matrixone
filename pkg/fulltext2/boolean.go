@@ -179,7 +179,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 	// O(n log k), typed (no reflect / no boxing), O(k) memory. Push (dist = -score) fills
 	// then admits the strictly-better internally; equal scores are equally relevant, so
 	// ties are unspecified.
-	h := newTopKHeap(k)
+	h := newTopKHeap(k, s.N)
 	for ord, score := range cand {
 		if _, bad := mustNot[ord]; bad {
 			continue
