@@ -156,6 +156,38 @@ func TestAwsSDKv2BasicObjectOperations(t *testing.T) {
 	require.NoError(t, sdk.Write(context.Background(), "empty", bytes.NewReader(nil), nil, nil))
 }
 
+func TestAwsSDKv2WriteUnknownSizeMultipartCompletes(t *testing.T) {
+	var uploadedParts int
+	var completed bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/bucket/")
+		switch {
+		case r.Method == http.MethodPost && key == "large" && strings.Contains(r.URL.RawQuery, "uploads"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><Bucket>bucket</Bucket><Key>large</Key><UploadId>upload-1</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && key == "large" && strings.Contains(r.URL.RawQuery, "partNumber="):
+			uploadedParts++
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("ETag", `"etag-1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && key == "large" && strings.Contains(r.URL.RawQuery, "uploadId=upload-1"):
+			completed = true
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CompleteMultipartUploadResult><Bucket>bucket</Bucket><Key>large</Key><ETag>"final"</ETag></CompleteMultipartUploadResult>`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	err := sdk.Write(context.Background(), "large", bytes.NewReader([]byte("non-empty")), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, uploadedParts)
+	require.True(t, completed)
+}
+
 func TestAwsSDKv2ConstructorCredentialsAndRetryer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

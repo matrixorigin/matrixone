@@ -91,6 +91,42 @@ func TestQCloudSDK(t *testing.T) {
 
 }
 
+func TestNewQCloudSDKNoBucketValidation(t *testing.T) {
+	sdk, err := NewQCloudSDK(context.Background(), ObjectStorageArguments{
+		Name:               "qcloud-new",
+		Bucket:             "bucket",
+		Region:             "ap-guangzhou",
+		KeyID:              "id",
+		KeySecret:          "secret",
+		SessionToken:       "token",
+		NoBucketValidation: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sdk.name != "qcloud-new" || sdk.client == nil {
+		t.Fatalf("unexpected sdk: %#v", sdk)
+	}
+	if sdk.client.Conf.RetryOpt.Count != 0 {
+		t.Fatalf("expected SDK retry disabled, got %d", sdk.client.Conf.RetryOpt.Count)
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "env-id")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+	t.Setenv("AWS_SESSION_TOKEN", "env-token")
+	sdk, err = NewQCloudSDK(context.Background(), ObjectStorageArguments{
+		Bucket:             "bucket",
+		Region:             "ap-guangzhou",
+		NoBucketValidation: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sdk.client == nil {
+		t.Fatalf("expected client")
+	}
+}
+
 func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
 	data := bytes.Repeat([]byte("x"), int(smallObjectThreshold))
 	size := int64(len(data))
