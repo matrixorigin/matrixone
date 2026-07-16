@@ -304,6 +304,7 @@ type PrepareStmt struct {
 	ColDefData     [][]byte
 	IsCloudNonuser bool
 	proc           *process.Process
+	remapDb        map[string]string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -668,6 +669,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.remapDb = nil
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {

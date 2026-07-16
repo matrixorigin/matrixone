@@ -15,6 +15,9 @@
 package frontend
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -40,6 +43,16 @@ func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
 	for _, stmt := range stmts {
 		remapDbInStmt(stmt, remap)
 	}
+}
+
+func applyRemapDbByStatement(ctx context.Context, stmts []tree.Statement, remaps []map[string]string) error {
+	if len(stmts) != len(remaps) {
+		return moerr.NewInternalError(ctx, "the count of remapdb policies is not equal to statements")
+	}
+	for i, stmt := range stmts {
+		remapDbInStmt(stmt, remaps[i])
+	}
+	return nil
 }
 
 func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
@@ -77,6 +90,8 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 				remapTableName(entry.Table, remap)
 			}
 		}
+	case *tree.PrepareStmt:
+		remapDbInStmt(s.Stmt, remap)
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked

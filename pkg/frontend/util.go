@@ -1568,6 +1568,10 @@ type UserInput struct {
 	isRestoreByTs bool
 	opAccount     uint32
 	toAccount     uint32
+	// remapDb carries the policy captured when a prepared statement was built.
+	// EXECUTE text has no original rewrite hint, so the policy must be restored
+	// explicitly before authorization and planning.
+	remapDb map[string]string
 }
 
 func (ui *UserInput) getSql() string {

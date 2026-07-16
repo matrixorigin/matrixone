@@ -344,6 +344,24 @@ func extractInlineRemapDb(sql string) map[string]string {
 	return payload.RemapDb
 }
 
+// extractRemapDbByStatement returns the effective remap carried by every real
+// statement-bearing fragment. rewriteSQL materializes the role/session/inline
+// merge into each fragment independently, so this preserves those boundaries
+// through parsing and execution.
+func extractRemapDbByStatement(sql string) []map[string]string {
+	fragments := parsers.SplitSqlBySemicolon(sql)
+	remaps := make([]map[string]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		if parsers.FragmentHasStatement(fragment) {
+			remaps = append(remaps, extractInlineRemapDb(fragment))
+		}
+	}
+	if len(remaps) == 0 {
+		return []map[string]string{nil}
+	}
+	return remaps
+}
+
 // leadingHintContent extracts the inner content of the first leading
 // /*+ ... */ or /*!+ ... */ comment in sql. It returns ("", false) when sql
 // does not start with such a hint.

@@ -51,6 +51,11 @@ func TestApplyRemapDb(t *testing.T) {
 		require.NotContains(t, out, "dbyyy")
 	})
 
+	t.Run("prepared statement body", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "prepare s from select * from dbxxx.t", remap)
+		require.Equal(t, "prepare s from select * from dbyyy.t", out)
+	})
+
 	t.Run("qualified ref", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select * from dbxxx.t", remap)
 		require.Contains(t, out, "dbyyy.t")
@@ -237,4 +242,21 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Contains(t, out, "dbxxx")
 		require.NotContains(t, out, "dbyyy")
 	})
+}
+
+func TestApplyRemapDbByStatementKeepsPolicyBoundaries(t *testing.T) {
+	ctx := context.Background()
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL,
+		"select * from src.t; analyze table src.t(id)", 1)
+	require.NoError(t, err)
+	require.NoError(t, applyRemapDbByStatement(ctx, stmts, []map[string]string{
+		{"src": "first_db"},
+		{"src": "second_db"},
+	}))
+	require.Equal(t, "select * from first_db.t", tree.String(stmts[0], dialect.MYSQL))
+	require.Equal(t, "analyze table second_db.t(id)", tree.String(stmts[1], dialect.MYSQL))
+
+	err = applyRemapDbByStatement(ctx, stmts, []map[string]string{{"src": "only_one"}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remapdb policies")
 }

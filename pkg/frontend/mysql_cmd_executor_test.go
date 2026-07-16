@@ -1051,6 +1051,143 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
+func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	tests := []struct {
+		name string
+		sql  string
+		want []map[string]string
+	}{
+		{
+			name: "later statement only",
+			sql:  `select 1; /*+ {"remapdb":{"src":"second_db"}} */ analyze table src.t(id)`,
+			want: []map[string]string{nil, {"src": "second_db"}},
+		},
+		{
+			name: "distinct consecutive overrides",
+			sql: `/*+ {"remapdb":{"src":"first_db"}} */ select * from src.t; ` +
+				`/*+ {"remapdb":{"src":"second_db"}} */ analyze table src.t(id)`,
+			want: []map[string]string{{"src": "first_db"}, {"src": "second_db"}},
+		},
+		{
+			name: "session policy restored after inline override",
+			sql: `/*+ {"remapdb":{"src":"session_db"}} */ select * from src.t; ` +
+				`/*+ {"remapdb":{"src":"inline_db"}} */ analyze table src.t(id); ` +
+				`/*+ {"remapdb":{"src":"session_db"}} */ select * from src.t`,
+			want: []map[string]string{{"src": "session_db"}, {"src": "inline_db"}, {"src": "session_db"}},
+		},
+	}
+
+	type remapCarrier interface {
+		GetRemapDb() map[string]string
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.input = &UserInput{sql: tt.sql}
+			cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
+			require.NoError(t, err)
+			require.Len(t, cws, len(tt.want))
+			defer func() {
+				for _, cw := range cws {
+					cw.Free()
+				}
+			}()
+			for i, cw := range cws {
+				carrier, ok := cw.(remapCarrier)
+				require.True(t, ok, "wrapper %d does not carry statement remap", i)
+				require.Equal(t, tt.want[i], carrier.GetRemapDb(), "wrapper %d", i)
+				if dst := tt.want[i]["src"]; dst != "" {
+					formatted := tree.String(cw.GetAst(), dialect.MYSQL)
+					require.Contains(t, formatted, dst+".t", "wrapper %d AST", i)
+					require.NotContains(t, formatted, "src.t", "wrapper %d AST", i)
+				}
+			}
+		})
+	}
+}
+
+func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.planCache = newPlanCache(1)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sql := `/*+ {"remapdb":{"src":"first_db"}} */ select * from src.t; ` +
+		`/*+ {"remapdb":{"src":"second_db"}} */ select * from src.t`
+	input := &UserInput{sql: sql}
+	input.genHash()
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	ses.planCache.cache(input.getHash(), stmts, []*plan.Plan{{}, {}})
+	t.Cleanup(ses.planCache.clean)
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = input
+	cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 2)
+	type remapCarrier interface {
+		GetRemapDb() map[string]string
+	}
+	for i, want := range []string{"first_db", "second_db"} {
+		carrier, ok := cws[i].(remapCarrier)
+		require.True(t, ok)
+		require.Equal(t, want, carrier.GetRemapDb()["src"], "wrapper %d", i)
+	}
+}
+
+func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	stmt := &tree.Select{}
+	prepareString := tree.NewPrepareString("stmt1", "select 1")
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{
+		sql:         "execute stmt1",
+		stmt:        stmt,
+		preparePlan: preparePlan,
+		remapDb:     map[string]string{"src": "prepared_db"},
+	}
+
+	cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	carrier, ok := cws[0].(interface{ GetRemapDb() map[string]string })
+	require.True(t, ok)
+	require.Equal(t, "prepared_db", carrier.GetRemapDb()["src"])
+	cws[0].Free()
+}
+
+func TestInstallStatementRemapClearsPreviousPolicy(t *testing.T) {
+	execCtx := &ExecCtx{remapDb: map[string]string{"src": "stale_db"}}
+	first := &TxnComputationWrapper{}
+	first.SetRemapDb(map[string]string{"src": "first_db"})
+	second := &TxnComputationWrapper{}
+	second.SetRemapDb(map[string]string{"src": "second_db"})
+	withoutRemap := &TxnComputationWrapper{}
+
+	installStatementRemap(execCtx, first)
+	require.Equal(t, "first_db", execCtx.remapDb["src"])
+	installStatementRemap(execCtx, second)
+	require.Equal(t, "second_db", execCtx.remapDb["src"])
+	installStatementRemap(execCtx, withoutRemap)
+	require.Nil(t, execCtx.remapDb)
+}
+
 func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 	convey.Convey("GetComputationWrapper show global variables", t, func() {
 		sql := "show global variables like 'interactive_timeout'"
@@ -1254,6 +1391,26 @@ func Test_HandlePrepareStmt(t *testing.T) {
 		ec.resper = ses.respr
 		_, err := handlePrepareStmt(ses, ec, stmt, "Prepare stmt1 from select 1, 2")
 		return err
+	})
+}
+
+func TestHandlePrepareStmtStoresRemapPolicy(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, "prepare stmt1 from select 1", 1)
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.remapDb = map[string]string{"src": "prepared_db"}
+
+	runTestHandle("handlePrepareStmt stores remap", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		prepared, err := handlePrepareStmt(ses, execCtx, parsed.(*tree.PrepareStmt), tree.String(parsed, dialect.MYSQL))
+		if err != nil {
+			return err
+		}
+		require.Equal(t, "prepared_db", prepared.remapDb["src"])
+		return nil
 	})
 }
 
