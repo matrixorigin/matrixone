@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -136,6 +137,35 @@ func TestRetryScopePrepareRequestsAreGenerationLocal(t *testing.T) {
 	summary := root.PreResponseSummary()
 	require.Equal(t, uint64(5), summary.Usage.S3Requests[resource.S3Get])
 	require.Equal(t, uint64(2), summary.AttemptCount)
+}
+
+func TestInlineChildDoesNotInflateParentAttemptCount(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx := resource.ContextWithRoot(context.Background(), root)
+	parent := newExecutionResourceRecorder(ctx)
+	parent.finishAttempt(
+		0, time.Now(), 5*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeSuccess, false,
+	)
+	parent.publish()
+
+	childCtx := perfcounter.AttachTxnExecutorKey(ctx)
+	child := newExecutionResourceRecorder(childCtx)
+
+	child.finishAttempt(
+		0, time.Now(), 10*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeError, true,
+	)
+	child.finishAttempt(
+		1, time.Now(), 20*time.Nanosecond, 0, nil, nil, nil, "",
+		resource.OutcomeSuccess, false,
+	)
+	child.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(1), summary.AttemptCount)
+	require.Zero(t, summary.RetryWallNS)
+	require.Equal(t, uint64(35), summary.Usage.ExclusiveActiveNS)
 }
 
 func TestRemoteTerminalEnvelope(t *testing.T) {

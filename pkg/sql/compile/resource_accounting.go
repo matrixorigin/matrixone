@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -21,10 +22,11 @@ import (
 )
 
 type executionResourceRecorder struct {
-	root      *resource.Root
-	stats     *statistic.StatsInfo
-	execution resource.ExecutionSummary
-	published bool
+	root         *resource.Root
+	stats        *statistic.StatsInfo
+	execution    resource.ExecutionSummary
+	published    bool
+	ownsAttempts bool
 }
 
 type remoteTerminalEnvelope struct {
@@ -40,8 +42,9 @@ func newExecutionResourceRecorder(ctx context.Context) *executionResourceRecorde
 		return nil
 	}
 	recorder := &executionResourceRecorder{
-		root:  root,
-		stats: statistic.StatsInfoFromContext(ctx),
+		root:         root,
+		stats:        statistic.StatsInfoFromContext(ctx),
+		ownsAttempts: !perfcounter.IsInternalExecutor(ctx),
 	}
 	if phases, ok := recorder.stats.ClaimRootPhaseResource(); ok {
 		recorder.root.AddLocal(phases)
@@ -51,7 +54,15 @@ func newExecutionResourceRecorder(ctx context.Context) *executionResourceRecorde
 
 func (r *executionResourceRecorder) publish() {
 	if r != nil && !r.published {
-		r.root.MergeExecution(r.execution)
+		execution := r.execution
+		if !r.ownsAttempts {
+			// SQL executed by txnExecutor is parent-attributed helper work. Its
+			// resource facts belong to the parent statement, but its compile/run
+			// generations are not retries of that statement.
+			execution.AttemptCount = 0
+			execution.RetryWallNS = 0
+		}
+		r.root.MergeExecution(execution)
 		r.published = true
 	}
 }
