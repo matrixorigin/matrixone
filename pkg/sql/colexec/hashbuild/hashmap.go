@@ -35,6 +35,8 @@ import (
 type HashmapBuilder struct {
 	needDupVec         bool
 	InputBatchRowCount int
+	TrackNullKeys      bool
+	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
@@ -89,7 +91,9 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	}
 	sels := hb.Sels
 	hb.Sels = message.GroupSels{}
-	return message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm := message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm.SetHasNullKey(hb.HasNullKey)
+	return jm
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -154,6 +158,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
+	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -178,6 +183,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.cachedStrIterator = nil
 	hb.FreeTemporaryVectors(proc)
 	hb.needDupVec = false
+	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -409,6 +415,14 @@ func (hb *HashmapBuilder) buildHashmap(
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)
 		if err != nil {
 			return err
+		}
+		if hb.TrackNullKeys && !hb.HasNullKey {
+			for _, zval := range zvals[:n] {
+				if zval == 0 {
+					hb.HasNullKey = true
+					break
+				}
+			}
 		}
 		if ignoreSurvivorRows != nil {
 			// Iterator result buffers are reused by Find, so preserve the group

@@ -1886,7 +1886,8 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = !arg.HashOnPK
+		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}

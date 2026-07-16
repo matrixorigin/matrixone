@@ -1124,7 +1124,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
-	var newExpr *plan.Expr
+	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -1135,37 +1135,60 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			return nil, moerr.NewInternalError(b.GetContext(), "tuple length mismatch")
 		}
 
-		var andExpr *plan.Expr
+		equalities := make([]*plan.Expr, 0, len(leftTuple.Exprs))
 		for i := 0; i < len(leftTuple.Exprs); i++ {
 			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
 			if err != nil {
 				return nil, err
 			}
-			if andExpr == nil {
-				andExpr = eqExpr
-			} else {
-				andExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{andExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
+			equalities = append(equalities, eqExpr)
 		}
 
-		if newExpr == nil {
-			newExpr = andExpr
-		} else {
-			var err error
-			newExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{newExpr, andExpr})
-			if err != nil {
-				return nil, err
-			}
+		candidate, err := combinePlanExprsBalanced(b.GetContext(), "and", equalities)
+		if err != nil {
+			return nil, err
 		}
+		candidates = append(candidates, candidate)
+	}
+
+	newExpr, err := combinePlanExprsBalanced(b.GetContext(), "or", candidates)
+	if err != nil {
+		return nil, err
 	}
 
 	if isNot {
 		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+// combinePlanExprsBalanced preserves the input order while building a
+// logarithmic-depth boolean tree. Large tuple or mixed-type IN lists used to
+// create a left-deep tree, amplifying binder/optimizer recursion and making
+// otherwise valid statements vulnerable to stack growth.
+func combinePlanExprsBalanced(ctx context.Context, op string, exprs []*plan.Expr) (*plan.Expr, error) {
+	if len(exprs) == 0 {
+		return nil, nil
+	}
+
+	level := exprs
+	for len(level) > 1 {
+		next := make([]*plan.Expr, 0, (len(level)+1)/2)
+		for i := 0; i < len(level); i += 2 {
+			if i+1 == len(level) {
+				next = append(next, level[i])
+				continue
+			}
+
+			combined, err := BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{level[i], level[i+1]})
+			if err != nil {
+				return nil, err
+			}
+			next = append(next, combined)
+		}
+		level = next
+	}
+	return level[0], nil
 }
 
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -2053,40 +2076,32 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				orExprList = append(inExprList, orExprList...)
 			}
 
-			//expand the in list to col=a or col=b or ......
+			// Expand values that cannot safely share the typed IN vector. Keep
+			// the expansion balanced so mixed-type lists do not create an
+			// O(N)-deep OR/AND expression tree.
+			expanded := make([]*plan.Expr, 0, len(orExprList)+1)
+			if newExpr != nil {
+				expanded = append(expanded, newExpr)
+			}
 			if name == "in" {
 				for _, expr := range orExprList {
 					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
 					if err != nil {
 						return nil, err
 					}
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
-						if err != nil {
-							return nil, err
-						}
-					}
+					expanded = append(expanded, tmpExpr)
 				}
+				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
 					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
 					if err != nil {
 						return nil, err
 					}
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
-						if err != nil {
-							return nil, err
-						}
-					}
+					expanded = append(expanded, tmpExpr)
 				}
+				return combinePlanExprsBalanced(ctx, "and", expanded)
 			}
-
-			return newExpr, nil
 		}
 	case "last_day":
 		if len(args) != 1 {
@@ -3018,8 +3033,7 @@ func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
 }
 
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
-	var newExpr *plan.Expr
-	var err error
+	candidates := make([]*plan.Expr, 0, len(rightList.List))
 
 	for _, rightVal := range rightList.List {
 		if rightTuple, ok := rightVal.Expr.(*plan.Expr_List); ok {
@@ -3027,7 +3041,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 				return nil, moerr.NewInternalError(ctx, "tuple length mismatch")
 			}
 
-			var andExpr *plan.Expr
+			equalities := make([]*plan.Expr, 0, len(leftList.List.List))
 			for i := 0; i < len(leftList.List.List); i++ {
 				leftElem := leftList.List.List[i]
 				rightElem := rightTuple.List.List[i]
@@ -3036,32 +3050,24 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 				if err != nil {
 					return nil, err
 				}
-
-				if andExpr == nil {
-					andExpr = eqExpr
-				} else {
-					andExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{andExpr, eqExpr})
-					if err != nil {
-						return nil, err
-					}
-				}
-
+				equalities = append(equalities, eqExpr)
 			}
 
-			if newExpr == nil {
-				newExpr = andExpr
-			} else {
-				newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{newExpr, andExpr})
-				if err != nil {
-					return nil, err
-				}
+			candidate, err := combinePlanExprsBalanced(ctx, "and", equalities)
+			if err != nil {
+				return nil, err
 			}
+			candidates = append(candidates, candidate)
 
 		} else {
 			return nil, moerr.NewInternalError(ctx, "IN list must contain tuples")
 		}
 	}
 
+	newExpr, err := combinePlanExprsBalanced(ctx, "or", candidates)
+	if err != nil {
+		return nil, err
+	}
 	if name == "not_in" {
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}

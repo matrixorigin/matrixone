@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -56,6 +57,8 @@ func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 		}
 	case plan.Node_SINGLE:
 		buf.WriteString(": single join ")
+	case plan.Node_MARK:
+		buf.WriteString(": hash mark join ")
 	case plan.Node_OUTER:
 		buf.WriteString(": full outer join ")
 	}
@@ -120,7 +123,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() {
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
@@ -161,7 +164,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
-				if ctr.mp == nil && !ctr.probeEmitUnmatched {
+				if ctr.mp == nil && !ctr.probeEmitUnmatched && !ctr.probeMark {
 					continue
 				}
 
@@ -284,9 +287,12 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
 	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
 	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
+	ctr.probeMark = hashJoin.IsMark()
+	ctr.buildHasNullKey = false
 
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+		ctr.buildHasNullKey = ctr.mp.HasNullKey()
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
@@ -452,6 +458,28 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			ctr.lastIdx++
 			ctr.vsIdx++
+
+			if ctr.probeMark {
+				markValue := z != 0 && v != 0
+				markNull := !markValue && (z == 0 || ctr.buildHasNullKey)
+				if err = ctr.appendOneMark(hashJoin, proc, row, markValue, markNull); err != nil {
+					return err
+				}
+				resRowCnt++
+
+				if ctr.vsIdx < len(ctr.vs) {
+					ctr.probeState = psBatchRow
+				} else {
+					ctr.probeState = psNextBatch
+				}
+
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
+				continue
+			}
 
 			if z == 0 || v == 0 {
 				if ctr.probeEmitUnmatched {
@@ -660,6 +688,10 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 			if err != nil {
 				return err
 			}
+		} else if rp.Rel == -1 && hashJoin.IsMark() {
+			if err := vector.SetConstFixed(ctr.resBat.Vecs[i], false, rowCnt, proc.Mp()); err != nil {
+				return err
+			}
 		} else {
 			if err := vector.SetConstNull(ctr.resBat.Vecs[i], rowCnt, proc.Mp()); err != nil {
 				return err
@@ -794,6 +826,30 @@ func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, 
 	return nil
 }
 
+func (ctr *container) appendOneMark(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	leftRow int64,
+	value bool,
+	isNull bool,
+) error {
+	for i, rp := range hashJoin.ResultCols {
+		switch rp.Rel {
+		case 0:
+			if err := ctr.resBat.Vecs[i].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp()); err != nil {
+				return err
+			}
+		case -1:
+			if err := vector.AppendFixed(ctr.resBat.Vecs[i], value, isNull, proc.Mp()); err != nil {
+				return err
+			}
+		default:
+			return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
+		}
+	}
+	return nil
+}
+
 func (ctr *container) evalNonEqCondition(bat *batch.Batch, row int64, proc *process.Process, idx1, idx2 int64) (bool, error) {
 	err := colexec.SetJoinBatchValues(ctr.joinBats[0], bat, row, 1, ctr.cfs1)
 	if err != nil {
@@ -839,10 +895,13 @@ func (hashJoin *HashJoin) resetResultBat() {
 		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
 
 		for i, rp := range hashJoin.ResultCols {
-			if rp.Rel == 0 {
+			switch rp.Rel {
+			case 0:
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.LeftTypes[rp.Pos])
-			} else {
+			case 1:
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[rp.Pos])
+			case -1:
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 			}
 		}
 	}

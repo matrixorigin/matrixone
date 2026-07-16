@@ -3379,6 +3379,38 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 	return probeScopes
 }
 
+// canUseHashMarkJoin returns true when equality hashing is sufficient to
+// preserve MARK's three-valued result.
+//
+// A single equality key only needs two hash-side facts: exact membership and
+// whether the build contains NULL. For composite keys, a partially-NULL row
+// can be FALSE or UNKNOWN depending on the other components, so use hash MARK
+// only when every key is statically NOT NULL; otherwise retain LoopJoin.
+func canUseHashMarkJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_MARK || !plan2.IsEquiJoin2(node.OnList) {
+		return false
+	}
+
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+
+	allNotNull := true
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+			return false
+		}
+		leftRel, rightRel := exprRelPos(fn.Args[0]), exprRelPos(fn.Args[1])
+		if !((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
+			return false
+		}
+		allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
+	}
+	return len(conditions) == 1 || allNotNull
+}
+
 func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
@@ -3505,8 +3537,13 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			var op vm.Operator
+			if canUseHashMarkJoin(node) {
+				op = constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			} else {
+				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
+			}
+			op.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
