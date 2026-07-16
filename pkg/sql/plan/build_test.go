@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -29,8 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -138,13 +142,15 @@ func addArithCtxTableForTest(mock *MockOptimizer) {
 	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
 	decType := plan.Type{Id: int32(types.T_decimal128), Width: 30, Scale: 2}
 	i64Type := plan.Type{Id: int32(types.T_int64)}
+	f64Type := plan.Type{Id: int32(types.T_float64)}
 	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
 
 	cols := []*ColDef{
 		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
 		{ColId: 1, Name: "dec", OriginName: "dec", Typ: decType, Default: &plan.Default{NullAbility: true}},
 		{ColId: 2, Name: "i64", OriginName: "i64", Typ: i64Type, Default: &plan.Default{NullAbility: true}},
-		{ColId: 3, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+		{ColId: 3, Name: "f", OriginName: "f", Typ: f64Type, Default: &plan.Default{NullAbility: true}},
+		{ColId: 4, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
 	}
 	tableDef := &TableDef{
 		TableType: catalog.SystemOrdinaryRel,
@@ -913,30 +919,57 @@ func TestPrepareArithUnaryContext(t *testing.T) {
 	}
 }
 
-// TestPrepareArithNonParamPeerKeepsDouble verifies that a literal or column
-// peer participating in the arithmetic disables the rebind, keeping params on
-// the safe DOUBLE promotion. Pushing the outer target onto such a peer would
-// change the result (a fractional literal like 0.6 rounding to an integer) or
-// introduce overflow that float64 avoids (±1e100 cancelling in DOUBLE but
-// overflowing DECIMAL). This guards the round-5 correctness findings.
-//
-// NOTE: verified against MySQL 8.4 that these cases keep params EXACT (e.g.
-// "cast((? + ?) + 1 as decimal(30,0))" with 2^53+1 yields ...994, not ...992).
-// We intentionally diverge to the safe DOUBLE default here: matching MySQL for
-// nested typed-sibling arithmetic needs full type-context inference (a typed
-// sibling can even override the assignment target — "set dec = (? + ?) + f"
-// with f DOUBLE computes in DOUBLE and must not overflow). This divergence is
-// precision-only and never yields a wrong result or an overflow.
-func TestPrepareArithNonParamPeerKeepsDouble(t *testing.T) {
+// TestPrepareArithLiteralPeerContext verifies that a numeric literal peer no
+// longer forces DOUBLE: the arithmetic is re-bound from the AST with the params
+// typed to the exact context and each literal re-derived at its own natural
+// type. So "cast((? + ?) + 1 as decimal(30,0))" retypes the params to decimal
+// (with 2^53+1 this yields the exact ...994, not the float64 ...992 that the
+// reviewer flagged), and the fractional literal in "(? + ?) * 0.6" stays a
+// decimal instead of being rounded to an integer.
+func TestPrepareArithLiteralPeerContext(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []struct {
+		sql       string
+		wantParam int32
+	}{
+		{"prepare s from select cast((? + ?) + 1 as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast((? + ?) + 1 as signed)", int32(types.T_int64)},
+		{"prepare s from select cast((? + ?) * 0.6 as signed)", int32(types.T_int64)},
+		{"prepare s from select cast((? + ?) * 2 as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from insert into arith_ctx_t(id, dec) values(1, (? + ?) + 1)", int32(types.T_decimal128)},
+		{"prepare s from insert into arith_ctx_t(id, i64) values(1, (? + ?) * 2)", int32(types.T_int64)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", tc.sql)
+		for _, id := range ids {
+			assert.Equalf(t, tc.wantParam, id,
+				"%s: literal peer must not force DOUBLE; param should be %d, got %d", tc.sql, tc.wantParam, id)
+		}
+	}
+}
+
+// TestPrepareArithColumnPeerKeepsDouble verifies that a COLUMN peer keeps the
+// params on the safe DOUBLE promotion. A column's type can override the context
+// (a DOUBLE column forces DOUBLE and must not be retyped to an exact type that
+// would overflow — "set dec = (? + ?) + f" with f DOUBLE and params ±1e30
+// cancel in float64 but overflow decimal). Matching MySQL for exact-typed
+// column peers needs full type-context inference; tracked in #25705.
+func TestPrepareArithColumnPeerKeepsDouble(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addArithCtxTableForTest(mock)
 
 	tests := []string{
-		// literal peers in intermediate arithmetic
-		"prepare s from select cast((? + ?) * 0.6 as signed)",
-		"prepare s from select cast((? + ?) + 1 as decimal(20,2))",
-		"prepare s from insert into arith_ctx_t(id, i64) values(1, (? + ?) * 2)",
-		// column peers in intermediate arithmetic
+		"prepare s from update arith_ctx_t set dec = (? + ?) + f where id = 1",
+		"prepare s from update arith_ctx_t set dec = f + (? + ?) where id = 1",
 		"prepare s from update arith_ctx_t set dec = (? + ?) + dec where id = 1",
 		"prepare s from update arith_ctx_t set dec = dec + (? + ?) where id = 1",
 	}
@@ -951,9 +984,93 @@ func TestPrepareArithNonParamPeerKeepsDouble(t *testing.T) {
 		assert.NotEmptyf(t, ids, "%s should cast prepared params", sql)
 		for _, id := range ids {
 			assert.Equalf(t, int32(types.T_float64), id,
-				"%s: a non-param peer must keep params on DOUBLE, got %d", sql, id)
+				"%s: a column peer must keep params on DOUBLE, got %d", sql, id)
 		}
 	}
+}
+
+// evalPreparedProjection builds the plan for a single-projection prepared SELECT,
+// materializes the given text parameters, and evaluates the projection end to
+// end, returning the result vector's string form at row 0.
+func evalPreparedProjection(t *testing.T, sql string, params ...string) (typeId types.T, valStr string) {
+	t.Helper()
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoErrorf(t, err, "%s should build", sql)
+	q := resolveQueryPlan(logicPlan)
+	require.NotNil(t, q)
+
+	var proj *plan.Expr
+	for _, node := range q.GetQuery().Nodes {
+		for _, e := range node.ProjectList {
+			if e.GetF() != nil {
+				proj = e
+			}
+		}
+	}
+	require.NotNilf(t, proj, "%s should have a function projection", sql)
+
+	proc := testutil.NewProcess(t)
+	pv := vector.NewVec(types.T_text.ToType())
+	for _, p := range params {
+		require.NoError(t, vector.AppendBytes(pv, []byte(p), false, proc.Mp()))
+	}
+	proc.SetPrepareParams(pv)
+
+	exec, err := colexec.NewExpressionExecutor(proc, proj)
+	require.NoErrorf(t, err, "%s executor", sql)
+	defer exec.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.SetRowCount(1)
+	res, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoErrorf(t, err, "%s eval", sql)
+
+	typeId = res.GetType().Oid
+	switch typeId {
+	case types.T_decimal128:
+		return typeId, vector.MustFixedColNoTypeCheck[types.Decimal128](res)[0].Format(res.GetType().Scale)
+	case types.T_decimal64:
+		return typeId, vector.MustFixedColNoTypeCheck[types.Decimal64](res)[0].Format(res.GetType().Scale)
+	case types.T_int64:
+		return typeId, fmt.Sprintf("%d", vector.MustFixedColNoTypeCheck[int64](res)[0])
+	case types.T_float64:
+		return typeId, fmt.Sprintf("%.0f", vector.MustFixedColNoTypeCheck[float64](res)[0])
+	default:
+		return typeId, ""
+	}
+}
+
+// TestPrepareArithExecPrecisionAbove2p53 is the execution-level regression the
+// reviewer asked for: it materializes prepared parameters above 2^53 and checks
+// the actual computed value, not just the plan shape.
+//
+// The values are verified against MySQL 8.4 (params 9007199254740993, 0):
+//   - CAST(? + ? AS DECIMAL(30,0))        -> 9007199254740993
+//   - CAST((? + ?) + 1 AS DECIMAL(30,0))  -> 9007199254740994  (reviewer's case)
+//   - top-level ? + ? (no context)        -> 9007199254740992  (DOUBLE, lossy)
+//
+// The last case is the negative control: it proves the DOUBLE route really does
+// lose precision here, so the exact results above are meaningful.
+func TestPrepareArithExecPrecisionAbove2p53(t *testing.T) {
+	const big = "9007199254740993" // 2^53 + 1
+
+	tid, v := evalPreparedProjection(t, "prepare s from select cast(? + ? as decimal(30,0))", big, "0")
+	assert.Equal(t, types.T_decimal128, tid)
+	assert.Equal(t, "9007199254740993", v, "pure dual-param cast must keep exact value")
+
+	tid, v = evalPreparedProjection(t, "prepare s from select cast((? + ?) + 1 as decimal(30,0))", big, "0")
+	assert.Equal(t, types.T_decimal128, tid)
+	assert.Equal(t, "9007199254740994", v, "literal peer must keep params exact (MySQL: ...994)")
+
+	tid, v = evalPreparedProjection(t, "prepare s from select cast((? + ?) * 2 as decimal(30,0))", big, "0")
+	assert.Equal(t, types.T_decimal128, tid)
+	assert.Equal(t, "18014398509481986", v, "int literal peer keeps exactness: (2^53+1)*2")
+
+	// negative control: no exact context -> DOUBLE -> rounds 2^53+1 down to 2^53.
+	tid, v = evalPreparedProjection(t, "prepare s from select ? + ?", big, "0")
+	assert.Equal(t, types.T_float64, tid)
+	assert.Equal(t, "9007199254740992", v, "no-context DOUBLE route is lossy (control)")
 }
 
 // countDoubleCasts counts cast(arg, T_float64) wrappers in expr.

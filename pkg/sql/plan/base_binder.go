@@ -1681,10 +1681,10 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 // runs.  It therefore always promotes to DOUBLE here, which is correct for the
 // no-context case (a top-level "? + ?", for which MySQL returns floating
 // values, e.g. "select ? + ?" → 3.0).  When a precise-numeric type context
-// DOES exist, it later wraps this expression in a cast to the exact type; that
-// cast site (appendCastBeforeExpr / forceCastExprWithName) calls
-// rebindPromotedParamArithToType to rewrite the DOUBLE promotion back onto the
-// exact type, so no float64 rounding happens for decimal/integer contexts.
+// DOES exist, the cast/assignment site calls backfillParamArithForExactContext,
+// which re-binds the arithmetic from the AST with the parameters typed as the
+// exact context type, so no float64 rounding happens for decimal/integer
+// contexts.
 //
 // Mixed cases (e.g. "0 + ?", "? + 5") keep a type-determining literal peer, so
 // they never reach this dual-ParamRef guard and stay on the existing
@@ -1701,12 +1701,6 @@ func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) {
 	}
 }
 
-// arithOpNames is the set of binary arithmetic operators whose unresolved
-// dual-ParamRef form is promoted to DOUBLE by promoteTextParamsForArith.
-var arithOpNames = map[string]bool{
-	"+": true, "-": true, "*": true, "/": true, "%": true, "mod": true, "div": true,
-}
-
 // isPreciseNumericType reports whether t is an exact numeric type (decimal or
 // integer) for which float64 promotion of prepared params would lose precision.
 func isPreciseNumericType(t Type) bool {
@@ -1714,137 +1708,28 @@ func isPreciseNumericType(t Type) bool {
 	return oid.IsDecimal() || oid.IsInteger()
 }
 
-// paramRefUnderFloatCast returns the inner ParamRef expr when e is exactly
-// cast(ParamRef -> float64) (the shape promoteTextParamsForArith produces),
-// otherwise nil.
-func paramRefUnderFloatCast(e *Expr) *Expr {
-	f := e.GetF()
-	if f == nil || f.Func.GetObjName() != "cast" || len(f.Args) != 2 {
-		return nil
-	}
-	if e.Typ.Id != int32(types.T_float64) || f.Args[0].GetP() == nil {
-		return nil
-	}
-	return f.Args[0]
+// binaryArithFuncName maps a tree binary arithmetic operator to the function
+// name used by BindFuncExprImplByPlanExpr (matching bindBinaryExpr).
+var binaryArithFuncName = map[tree.BinaryOp]string{
+	tree.PLUS:        "+",
+	tree.MINUS:       "-",
+	tree.MULTI:       "*",
+	tree.DIV:         "/",
+	tree.INTEGER_DIV: "div",
+	tree.MOD:         "%",
 }
 
-// unaryArithOpNames is the set of unary arithmetic operators that are
-// transparent to the exact-context typing of nested prepared-param arithmetic
-// (e.g. the "-" in "-(? + ?)").
-var unaryArithOpNames = map[string]bool{
-	"unary_minus": true, "unary_plus": true,
-}
-
-// classifyPromotedParamArith walks a DOUBLE-promoted arithmetic tree.  It
-// returns valid=true only when every leaf is a promoted param
-// (cast(ParamRef -> float64)) and every internal node is a unary/binary
-// arithmetic operator; hasParam reports whether at least one promoted param is
-// present.
-//
-// Crucially, literals and column references are NOT accepted as leaves.  The
-// exact-context rebind reinterprets each leaf as the outer target type, which
-// is only semantics-preserving for parameters (whose type is genuinely
-// undetermined).  A literal or column peer participating in the arithmetic must
-// keep its own type: pushing the outer type onto it changes the result (e.g.
-// "cast((? + ?) * 0.6 as signed)" would turn the 0.6 into 1) or introduces
-// overflow that DOUBLE avoided (e.g. "set dec = (? + ?) + f" with f DOUBLE and
-// params ±1e100, which cancel in float64 but overflow decimal).  So any such
-// peer makes the whole expression non-rewritable and it stays on DOUBLE.
-func classifyPromotedParamArith(e *Expr) (valid, hasParam bool) {
-	if paramRefUnderFloatCast(e) != nil {
-		return true, true
-	}
-	f := e.GetF()
-	if f == nil {
-		return false, false
-	}
-	name := f.Func.GetObjName()
-	if arithOpNames[name] && len(f.Args) == 2 {
-		v0, p0 := classifyPromotedParamArith(f.Args[0])
-		v1, p1 := classifyPromotedParamArith(f.Args[1])
-		return v0 && v1, p0 || p1
-	}
-	if unaryArithOpNames[name] && len(f.Args) == 1 {
-		return classifyPromotedParamArith(f.Args[0])
-	}
-	return false, false
-}
-
-// isPromotedParamArith reports whether e is a unary/binary arithmetic tree
-// whose leaves are all DOUBLE-promoted prepared params (no literal or column
-// peers), with at least one promoted param.
-func isPromotedParamArith(e *Expr) bool {
-	valid, hasParam := classifyPromotedParamArith(e)
-	return valid && hasParam
-}
-
-// rebindPromotedParamArithToType rewrites a promoted-param arithmetic expression
-// (see isPromotedParamArith) so that its prepared params are cast to target — an
-// exact numeric type supplied by the surrounding context — instead of float64,
-// then re-resolves each arithmetic operator on the exact types.  This removes
-// the intermediate float64 rounding for contexts like "cast(? + ? as
-// decimal(30,0))", "insert into t(dec) values(? + ?)", or "col = -(? + ?)".
-// Every leaf is a param, so no non-param value is ever reinterpreted.
-//
-// It returns (rewritten, true, nil) on success, or (e, false, nil) when e turns
-// out not to be rewritable.  Callers guard with isPromotedParamArith(e) first.
-func rebindPromotedParamArithToType(ctx context.Context, e *Expr, target Type) (*Expr, bool, error) {
-	if p := paramRefUnderFloatCast(e); p != nil {
-		c, err := appendCastBeforeExpr(ctx, p, target)
-		if err != nil {
-			return nil, false, err
-		}
-		return c, true, nil
-	}
-	f := e.GetF()
-	if f == nil {
-		return e, false, nil
-	}
-	op := f.Func.GetObjName()
-	if !arithOpNames[op] && !unaryArithOpNames[op] {
-		return e, false, nil
-	}
-	newArgs := make([]*Expr, len(f.Args))
-	for i, arg := range f.Args {
-		r, ok, err := rebindPromotedParamArithToType(ctx, arg, target)
-		if err != nil {
-			return nil, false, err
-		}
-		if !ok {
-			return e, false, nil
-		}
-		newArgs[i] = r
-	}
-	newExpr, err := BindFuncExprImplByPlanExpr(ctx, op, newArgs)
-	if err != nil {
-		return nil, false, err
-	}
-	return newExpr, true, nil
-}
-
-// bareParamArithOps is the set of tree.BinaryOp values allowed inside a bare
-// prepared-param arithmetic AST (see isBareParamArithAst).
-var bareParamArithOps = map[tree.BinaryOp]bool{
-	tree.PLUS:        true,
-	tree.MINUS:       true,
-	tree.MULTI:       true,
-	tree.DIV:         true,
-	tree.INTEGER_DIV: true,
-	tree.MOD:         true,
-}
-
-// bareParamUnaryOps is the set of tree.UnaryOp values that are transparent to
-// the exact-context typing of nested prepared-param arithmetic (see
-// isBareParamArithAst).  Bitwise "~" is excluded — it is not plain arithmetic.
-var bareParamUnaryOps = map[tree.UnaryOp]bool{
-	tree.UNARY_MINUS: true,
-	tree.UNARY_PLUS:  true,
+// unaryArithFuncName maps a type-transparent unary arithmetic operator to its
+// function name (matching bindUnaryExpr).  Bitwise "~" is excluded.
+var unaryArithFuncName = map[tree.UnaryOp]string{
+	tree.UNARY_MINUS: "unary_minus",
+	tree.UNARY_PLUS:  "unary_plus",
 }
 
 // bareParamArithFuncs is the set of function-call spellings of an arithmetic
-// operator (e.g. "MOD(a, b)" for "a % b") that the plan classifier rebinds by
-// its resolved operator name.  The AST gate must accept these too, otherwise
-// the function form is silently left on DOUBLE while the infix form is retyped.
+// operator (e.g. "MOD(a, b)" for "a % b") accepted by the AST gate, so the
+// function form is retyped like its infix counterpart instead of being left on
+// DOUBLE.
 var bareParamArithFuncs = map[string]bool{
 	"mod": true,
 }
@@ -1860,22 +1745,22 @@ func funcExprArithName(fe *tree.FuncExpr) string {
 }
 
 // isBareParamArithAst reports whether the AST is a "bare" prepared-param
-// arithmetic expression: internal nodes are only parentheses, unary +/-, and
-// binary arithmetic operators; leaves are only bare parameter markers; and at
-// least one parameter marker is present.  Any other node makes it non-bare.
+// arithmetic expression: internal nodes are only parentheses, unary +/-, binary
+// arithmetic operators, and MOD(a, b); leaves are only bare parameter markers
+// and numeric literals; and at least one parameter marker is present.  Any other
+// node makes it non-bare.
 //
-// Two categories of non-bare node matter:
 //   - An explicit tree.CastExpr (e.g. "CAST(? AS DOUBLE)") must keep its own
 //     semantics; the plan shapes of an explicit and an automatic cast are
 //     identical, so the AST is the only reliable discriminator.
-//   - A numeric literal or a column reference participating in the arithmetic
-//     (e.g. the 0.6 in "(? + ?) * 0.6", or f in "(? + ?) + f") must keep its
-//     own type. Reinterpreting it as the outer target type would change the
-//     result or introduce overflow, so its presence disables the rebind and the
-//     expression stays on the safe DOUBLE promotion.
+//   - A column reference is intentionally NOT accepted: its type can override
+//     the context (a DOUBLE column forces DOUBLE and must not be retyped to an
+//     exact type that would overflow), which needs full type-context inference
+//     (tracked separately). Column-peer arithmetic therefore stays on DOUBLE.
 //
-// Unary +/- is type-transparent and stays allowed (e.g. "CAST(-(? + ?) AS
-// DECIMAL)").
+// Numeric literals ARE accepted: rebinding re-derives each literal's own type
+// from the AST (an int stays int, "0.6" stays decimal), so they are never
+// reinterpreted as the outer target type.
 func isBareParamArithAst(e tree.Expr) bool {
 	hasParam := false
 	var walk func(e tree.Expr) bool
@@ -1884,9 +1769,11 @@ func isBareParamArithAst(e tree.Expr) bool {
 		case *tree.ParenExpr:
 			return walk(n.Expr)
 		case *tree.BinaryExpr:
-			return bareParamArithOps[n.Op] && walk(n.Left) && walk(n.Right)
+			_, ok := binaryArithFuncName[n.Op]
+			return ok && walk(n.Left) && walk(n.Right)
 		case *tree.UnaryExpr:
-			return bareParamUnaryOps[n.Op] && walk(n.Expr)
+			_, ok := unaryArithFuncName[n.Op]
+			return ok && walk(n.Expr)
 		case *tree.FuncExpr:
 			// function-call spelling of an arithmetic operator, e.g. MOD(?, ?)
 			if !bareParamArithFuncs[funcExprArithName(n)] || len(n.Exprs) != 2 {
@@ -1895,6 +1782,8 @@ func isBareParamArithAst(e tree.Expr) bool {
 			return walk(n.Exprs[0]) && walk(n.Exprs[1])
 		case *tree.ParamExpr:
 			hasParam = true
+			return true
+		case *tree.NumVal:
 			return true
 		default:
 			return false
@@ -1943,25 +1832,109 @@ func hasFloatParamCast(e *Expr) bool {
 	return false
 }
 
-// backfillParamArithForExactContext applies MySQL's context-derived typing for
-// prepared params: when target is an exact numeric type, the AST is a bare
-// dual-param arithmetic (no explicit user casts), and bound is its
-// DOUBLE-promoted plan form, the arithmetic is rebound onto target so params
-// are not routed through float64.  Callers invoke it right before casting
-// bound to target (CAST expressions, INSERT VALUES, UPDATE SET), so it runs
-// regardless of whether the arithmetic's result type already equals the target.
+// rebindBareParamArithFromAst re-binds a bare prepared-param arithmetic AST
+// (see isBareParamArithAst) with its parameters typed as target — the exact
+// numeric type supplied by the surrounding context — and its numeric literals
+// re-derived at their own natural type.  Re-binding from the AST is what makes
+// the literal handling correct: the DOUBLE-promoted plan tree has already
+// coerced every literal peer to float64, losing that (say) "1" was an integer
+// and "0.6" a decimal, so it cannot be recovered from the bound tree alone.
 //
-// Any failure — including a rebind that leaves a float64 param cast behind —
-// falls back to the original expression: the DOUBLE promotion is always a
-// valid (if less precise) binding, so this rewrite must never turn a working
+// Parameter binding is stateless (baseBindParam takes the position from the AST
+// node), so re-binding does not disturb parameter numbering.  An approximate
+// (float) literal aborts the rewrite: it forces DOUBLE arithmetic, matching
+// MySQL, so the caller keeps the original promotion.
+func rebindBareParamArithFromAst(nb *DefaultBinder, ast tree.Expr, target Type) (*Expr, bool, error) {
+	ctx := nb.GetContext()
+	switch n := ast.(type) {
+	case *tree.ParenExpr:
+		return rebindBareParamArithFromAst(nb, n.Expr, target)
+	case *tree.UnaryExpr:
+		name, ok := unaryArithFuncName[n.Op]
+		if !ok {
+			return nil, false, nil
+		}
+		a, ok, err := rebindBareParamArithFromAst(nb, n.Expr, target)
+		if err != nil || !ok {
+			return nil, ok, err
+		}
+		e, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{a})
+		if err != nil {
+			return nil, false, err
+		}
+		return e, true, nil
+	case *tree.BinaryExpr:
+		name, ok := binaryArithFuncName[n.Op]
+		if !ok {
+			return nil, false, nil
+		}
+		return rebindBareParamArithBinary(nb, name, n.Left, n.Right, target)
+	case *tree.FuncExpr:
+		if !bareParamArithFuncs[funcExprArithName(n)] || len(n.Exprs) != 2 {
+			return nil, false, nil
+		}
+		return rebindBareParamArithBinary(nb, funcExprArithName(n), n.Exprs[0], n.Exprs[1], target)
+	case *tree.ParamExpr:
+		p, err := nb.baseBindParam(n, 0, false)
+		if err != nil {
+			return nil, false, err
+		}
+		c, err := appendCastBeforeExpr(ctx, p, target)
+		if err != nil {
+			return nil, false, err
+		}
+		return c, true, nil
+	case *tree.NumVal:
+		lit, err := nb.bindNumVal(n, plan.Type{})
+		if err != nil {
+			return nil, false, err
+		}
+		if oid := types.T(lit.Typ.Id); oid == types.T_float32 || oid == types.T_float64 {
+			// approximate literal -> DOUBLE arithmetic (MySQL): keep promotion
+			return nil, false, nil
+		}
+		return lit, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func rebindBareParamArithBinary(nb *DefaultBinder, name string, left, right tree.Expr, target Type) (*Expr, bool, error) {
+	l, ok, err := rebindBareParamArithFromAst(nb, left, target)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	r, ok, err := rebindBareParamArithFromAst(nb, right, target)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	e, err := BindFuncExprImplByPlanExpr(nb.GetContext(), name, []*Expr{l, r})
+	if err != nil {
+		return nil, false, err
+	}
+	return e, true, nil
+}
+
+// backfillParamArithForExactContext applies MySQL's context-derived typing for
+// prepared params: when target is an exact numeric type and the AST is a bare
+// param arithmetic (no explicit user cast, no column peer), and its bound form
+// routed a parameter through float64, it re-binds the arithmetic from the AST
+// with parameters typed as target (see rebindBareParamArithFromAst).  Callers
+// invoke it right before casting bound to target (CAST expressions, INSERT
+// VALUES, UPDATE SET, ON DUPLICATE KEY UPDATE, direct INSERT ... SELECT).
+//
+// Any failure — or a rebind that still leaves a float64 param cast behind (e.g.
+// an approximate literal peer) — falls back to the original DOUBLE promotion,
+// which is always a valid binding, so this rewrite never turns a working
 // statement into an error.
 func backfillParamArithForExactContext(ctx context.Context, ast tree.Expr, bound *Expr, target Type) *Expr {
 	if ast == nil || bound == nil ||
-		!isPreciseNumericType(target) || !isBareParamArithAst(ast) || !isPromotedParamArith(bound) {
+		!isPreciseNumericType(target) || !isBareParamArithAst(ast) || !hasFloatParamCast(bound) {
 		return bound
 	}
-	rebuilt, ok, err := rebindPromotedParamArithToType(ctx, bound, target)
-	if err != nil || !ok || hasFloatParamCast(rebuilt) {
+	nb := NewDefaultBinder(ctx, nil, nil, Type{}, nil)
+	rebuilt, ok, err := rebindBareParamArithFromAst(nb, ast, target)
+	if err != nil || !ok || rebuilt == nil || hasFloatParamCast(rebuilt) {
 		return bound
 	}
 	return rebuilt
