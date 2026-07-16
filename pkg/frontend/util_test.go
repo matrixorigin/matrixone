@@ -1084,6 +1084,16 @@ func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
 }
 
+func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {
+	for code := range errCodeRollbackWholeTxn {
+		err := newErrorRollbackWholeTxn(code)
+		require.True(t, isErrorRollbackWholeTxn(err), "error code %d", code)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "error code %d returned %T", code, err)
+		require.Equal(t, code, moErr.ErrorCode())
+	}
+}
+
 func TestUserInput_getSqlSourceType(t *testing.T) {
 	type fields struct {
 		sql           string
