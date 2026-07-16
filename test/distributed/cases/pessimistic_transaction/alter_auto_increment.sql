@@ -47,4 +47,19 @@ alter table ai_dml_first_retry auto_increment = 1000;
 insert into ai_dml_first_retry(v) values (3);
 select id, v from ai_dml_first_retry order by id;
 
+-- A non-AUTO_INCREMENT inplace ALTER also advances the transaction-local
+-- table version.  If that transaction rolls back, its speculative version
+-- must not remain in the CN's committed auto-increment cache and permanently
+-- retry every insert planned against the restored version.
+create table ai_inplace_rollback(id bigint primary key auto_increment, v int);
+insert into ai_inplace_rollback(v) values (1);
+begin;
+alter table ai_inplace_rollback comment = 'uncommitted';
+insert into ai_inplace_rollback(v) values (2);
+rollback;
+insert into ai_inplace_rollback(v) values (3);
+select count(*) = 2 as rollback_removed_comment_row,
+       sum(v) = 4 as post_rollback_insert_succeeded
+from ai_inplace_rollback;
+
 drop database ai_alter_txn_pessimistic;

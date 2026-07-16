@@ -1397,6 +1397,64 @@ func TestInsertValuesRejectsOlderVersion(t *testing.T) {
 	})
 }
 
+func TestInsertValuesRollbackDiscardsTxnInstalledNewerVersion(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 10}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(8), s.getTableCache(0).version())
+		require.NoError(t, alterTxn.Rollback(ctx))
+
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(7), s.getTableCache(0).version())
+	})
+}
+
+func TestInsertValuesCommitKeepsTxnInstalledNewerVersion(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 10}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(8), s.getTableCache(0).version())
+	})
+}
+
 func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerVersion(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)

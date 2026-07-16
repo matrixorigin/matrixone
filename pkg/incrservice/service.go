@@ -51,6 +51,12 @@ type privateResetCallback struct {
 	registration *privateResetRegistration
 }
 
+type txnVersionCacheCallback struct {
+	tableID      uint64
+	cache        incrTableCache
+	registration *privateResetRegistration
+}
+
 type service struct {
 	sid       string
 	logger    *log.MOLogger
@@ -478,7 +484,7 @@ func (s *service) acquireTableCacheForVersion(
 		}
 		s.mu.Unlock()
 	}
-	return s.getCommittedTableCacheForVersion(ctx, tableID, tableVersion)
+	return s.getCommittedTableCacheForVersion(ctx, tableID, tableVersion, txnOp)
 }
 
 func (s *service) installPrivateReset(
@@ -578,6 +584,30 @@ func (s *service) privateResetClosed(
 	return nil
 }
 
+func (s *service) txnVersionCacheClosed(
+	_ context.Context,
+	_ client.TxnOperator,
+	event client.TxnEvent,
+	v any,
+) error {
+	callback := v.(txnVersionCacheCallback)
+	<-callback.registration.ready
+	if event.Txn.Status == txn.TxnStatus_Committed {
+		return nil
+	}
+
+	s.mu.Lock()
+	if s.mu.tables[callback.tableID] != callback.cache {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.generation[callback.tableID]++
+	delete(s.mu.tables, callback.tableID)
+	s.mu.Unlock()
+	callback.cache.retire()
+	return nil
+}
+
 func (s *service) doCreateLocked(
 	tableID uint64,
 	c incrTableCache,
@@ -637,6 +667,7 @@ func (s *service) getCommittedTableCacheForVersion(
 	ctx context.Context,
 	tableID uint64,
 	tableVersion uint32,
+	txnOp client.TxnOperator,
 ) (incrTableCache, error) {
 	s.mu.Lock()
 	if s.mu.closed {
@@ -702,6 +733,21 @@ func (s *service) getCommittedTableCacheForVersion(
 	if err != nil {
 		return nil, err
 	}
+	var registration *privateResetRegistration
+	if txnOp != nil {
+		registration = &privateResetRegistration{ready: make(chan struct{})}
+		callback := txnVersionCacheCallback{
+			tableID:      tableID,
+			cache:        replacement,
+			registration: registration,
+		}
+		if err := s.appendTxnVersionCacheCallback(txnOp, callback); err != nil {
+			close(registration.ready)
+			_ = replacement.close()
+			return nil, err
+		}
+		defer close(registration.ready)
+	}
 
 	s.mu.Lock()
 	if s.mu.closed || s.mu.generation[tableID] != generation {
@@ -737,6 +783,22 @@ func (s *service) getCommittedTableCacheForVersion(
 		c.retire()
 	}
 	return replacement, nil
+}
+
+func (s *service) appendTxnVersionCacheCallback(
+	txnOp client.TxnOperator,
+	callback txnVersionCacheCallback,
+) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = moerr.NewTxnNeedRetryWithDefChanged(context.Background())
+		}
+	}()
+	txnOp.AppendEventCallback(
+		client.ClosedEvent,
+		client.NewTxnEventCallbackWithValue(s.txnVersionCacheClosed, callback),
+	)
+	return nil
 }
 
 func (s *service) acquireCommittedTableCache(

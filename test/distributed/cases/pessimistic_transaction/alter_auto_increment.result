@@ -45,4 +45,16 @@ id    v
 1    1
 5000    2
 5001    3
+create table ai_inplace_rollback(id bigint primary key auto_increment, v int);
+insert into ai_inplace_rollback(v) values (1);
+begin;
+alter table ai_inplace_rollback comment = 'uncommitted';
+insert into ai_inplace_rollback(v) values (2);
+rollback;
+insert into ai_inplace_rollback(v) values (3);
+select count(*) = 2 as rollback_removed_comment_row,
+sum(v) = 4 as post_rollback_insert_succeeded
+from ai_inplace_rollback;
+rollback_removed_comment_row    post_rollback_insert_succeeded
+1    1
 drop database ai_alter_txn_pessimistic;
