@@ -148,7 +148,7 @@ func openTAEHandle(
 	client client.QueryClient,
 	opt *options.Options,
 ) (taeHandle, error) {
-	return rpc.NewTAEHandleWithError(ctx, dataDir, client, opt)
+	return rpc.NewTAEHandle(ctx, dataDir, client, opt)
 }
 
 func newTAELogtailServer(

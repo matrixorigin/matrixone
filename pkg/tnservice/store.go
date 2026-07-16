@@ -117,7 +117,6 @@ type store struct {
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
 		hakeekerClientFactory   func() (logservice.TNHAKeeperClient, error)
-		queryClientFactory      func(string, morpc.Config) (client.QueryClient, error)
 		backendFilter           func(msg morpc.Message, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
 	}
@@ -210,11 +209,7 @@ func NewService(
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
-	queryClientFactory := client.NewQueryClient
-	if s.options.queryClientFactory != nil {
-		queryClientFactory = s.options.queryClientFactory
-	}
-	if s.queryClient, err = queryClientFactory(s.cfg.UUID, s.cfg.RPC); err != nil {
+	if s.queryClient, err = client.NewQueryClient(s.cfg.UUID, s.cfg.RPC); err != nil {
 		return nil, err
 	}
 

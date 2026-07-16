@@ -125,7 +125,7 @@ func TestNewTAEStorageClosesTAEWhenLogtailServerCreationFails(t *testing.T) {
 	require.NoError(t, err)
 	queryClient.Release(resp)
 
-	handle, err := rpc.NewTAEHandleWithError(
+	handle, err := rpc.NewTAEHandle(
 		ctx,
 		dataDir,
 		nil,
