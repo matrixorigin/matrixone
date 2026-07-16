@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
@@ -225,7 +226,7 @@ func BuildSegmentFromDocsParser(id string, pkType int32, docs []Doc, parser stri
 // Boolean mode (boolean=true): standard +/-/>/</~ operators; a CJK operand under
 // ngram/json expands to an OR-group of its redundant-removed ngrams (rather than
 // a fragile sliding-3-gram phrase).
-func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, k int) ([]Result, error) {
+func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
@@ -237,7 +238,7 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 		if err != nil {
 			return nil, err
 		}
-		return idx.SearchBoolean(q, algo, k)
+		return idx.SearchBoolean(q, algo, k, filter)
 	}
 
 	// NL mode.
@@ -247,7 +248,7 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 		if err != nil {
 			return nil, err
 		}
-		return idx.SearchBoolean(q, algo, k)
+		return idx.SearchBoolean(q, algo, k, filter)
 	}
 
 	// Word tokens (gojieba, or Latin) → exact phrase.
@@ -255,7 +256,7 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 	if err != nil {
 		return nil, err
 	}
-	return idx.SearchText(pattern, tok, algo, k)
+	return idx.SearchText(pattern, tok, algo, k, filter)
 }
 
 // ngramBagQuery turns an NL pattern into a SHOULD-only BoolQuery of TEXT/STAR

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
 
@@ -103,7 +104,7 @@ func (idx *Index) isLive(si int, ord int64, key string) bool {
 // degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the
 // phrase's document frequency is the number of LIVE documents that match (dead
 // and delete-shadowed copies are excluded), so idf is exact.
-func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
+func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) []Result {
 	if k <= 0 || idx.globalN == 0 || len(terms) == 0 {
 		return nil
 	}
@@ -115,7 +116,11 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
 	}
 	matched := make(map[string]match)
 	for si, seg := range idx.segments {
+		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
 		for _, h := range seg.matchPhrase(terms) {
+			if !allowed(allow, h.ord) {
+				continue
+			}
 			key := keyOf(seg.pks[h.ord])
 			if idx.isLive(si, h.ord, key) {
 				matched[key] = match{seg, h.ord, h.tf}
@@ -150,12 +155,12 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
 
 // SearchText tokenizes query with tok and runs an NL exact-phrase search across
 // the index.
-func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int) ([]Result, error) {
+func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
 	terms, err := tokenizeToTerms(query, tok)
 	if err != nil {
 		return nil, err
 	}
-	return idx.SearchPhrase(terms, algo, k), nil
+	return idx.SearchPhrase(terms, algo, k, filter), nil
 }
 
 // SearchBoolean runs a parsed boolean-mode query across the index: each segment
@@ -166,13 +171,13 @@ func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 // is exact (the one segment's stats ARE the global stats); across many segments
 // the per-clause global df is an approximation — a cross-segment global-stats
 // boolean pass is a follow-up (as for the delete-frame folding).
-func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
+func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
 	matched := make(map[string]Result)
 	for si, seg := range idx.segments {
-		res, err := seg.SearchBoolean(q, algo, k)
+		res, err := seg.SearchBoolean(q, algo, k, mkAllow(seg, filter))
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +215,7 @@ func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 	if err != nil {
 		return nil, err
 	}
-	return idx.SearchBoolean(q, algo, k)
+	return idx.SearchBoolean(q, algo, k, nil) // convenience entry: no WHERE prefilter
 }
 
 // ReconstructLiveDocs reconstructs each LIVE document as (pk, ordered terms) from

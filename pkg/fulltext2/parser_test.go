@@ -46,13 +46,13 @@ func zhCorpus(t *testing.T, parser string) *Index {
 }
 
 func nlIDs(t *testing.T, idx *Index, parser, q string) []any {
-	res, err := idx.SearchQuery([]byte(q), false, parser, BM25, 100)
+	res, err := idx.SearchQuery([]byte(q), false, parser, BM25, 100, nil)
 	require.NoError(t, err)
 	return resultIDs(res)
 }
 
 func boolIDs(t *testing.T, idx *Index, parser, q string) []any {
-	res, err := idx.SearchQuery([]byte(q), true, parser, BM25, 100)
+	res, err := idx.SearchQuery([]byte(q), true, parser, BM25, 100, nil)
 	require.NoError(t, err)
 	return resultIDs(res)
 }

@@ -194,8 +194,12 @@ func (h *minScoreHeap) Pop() any {
 }
 
 // searchWAND runs WAND over the disjunctive single-term SHOULD clauses and
-// returns the top-k, score desc (ties by ascending ord).
-func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int) []Result {
+// returns the top-k, score desc (ties by ascending ord). allow (nil = allow all) is
+// the WHERE-clause prefilter: a doc is admitted to the top-k only if its ord passes,
+// so the LIMIT bounds the FILTERED set. Block-skip stays valid — blockSum is a score
+// upper bound over every doc in the region regardless of the filter, so a skipped
+// region contains no admissible doc that could beat θ.
+func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Membership) []Result {
 	avgDocLen := s.avgDocLenOrMean()
 
 	iters := make([]*wandIter, 0, len(clauses))
@@ -285,23 +289,26 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int) []Result {
 		}
 
 		if iters[0].doc() == pivotDoc {
-			// All cursors before the pivot are already on pivotDoc → score it
-			// fully across every cursor positioned there, then advance them.
-			var score float64
-			for _, it := range iters {
-				if it.doc() == pivotDoc {
-					score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, pivotDoc, avgDocLen)
+			// All cursors before the pivot are already on pivotDoc. Score + admit it
+			// only if it passes the WHERE prefilter; the cursor advance always runs so a
+			// filtered-out pivot never stalls the walk.
+			if allowed(allow, pivotDoc) {
+				var score float64
+				for _, it := range iters {
+					if it.doc() == pivotDoc {
+						score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, pivotDoc, avgDocLen)
+					}
 				}
-			}
-			if h.Len() < k {
-				heap.Push(h, scoredDoc{pivotDoc, score})
-				if h.Len() == k {
+				if h.Len() < k {
+					heap.Push(h, scoredDoc{pivotDoc, score})
+					if h.Len() == k {
+						theta = (*h)[0].score
+					}
+				} else if score > theta {
+					heap.Pop(h)
+					heap.Push(h, scoredDoc{pivotDoc, score})
 					theta = (*h)[0].score
 				}
-			} else if score > theta {
-				heap.Pop(h)
-				heap.Push(h, scoredDoc{pivotDoc, score})
-				theta = (*h)[0].score
 			}
 			for _, it := range iters {
 				if it.doc() == pivotDoc {

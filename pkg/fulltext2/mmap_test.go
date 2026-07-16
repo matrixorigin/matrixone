@@ -70,9 +70,9 @@ func TestMmapLoad(t *testing.T) {
 
 	idx := NewIndex([]*Segment{s}, nil)
 	// ranking (WAND, docIDs off-heap): "beta" hits all three docs.
-	require.Len(t, idx.SearchPhrase([]string{"beta"}, BM25, 10), 3)
+	require.Len(t, idx.SearchPhrase([]string{"beta"}, BM25, 10, nil), 3)
 	// phrase (positions from the mmap): only doc 0 has contiguous "alpha beta".
-	ph := idx.SearchPhrase([]string{"alpha", "beta"}, BM25, 10)
+	ph := idx.SearchPhrase([]string{"alpha", "beta"}, BM25, 10, nil)
 	require.Len(t, ph, 1)
 	require.Equal(t, int64(0), ph[0].Pk)
 
@@ -130,7 +130,7 @@ func TestConcurrentBlockDecode(t *testing.T) {
 		sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
 		return out
 	}
-	ref, err := idx.SearchQuery([]byte("alpha beta gamma"), true, "default", BM25, 100)
+	ref, err := idx.SearchQuery([]byte("alpha beta gamma"), true, "default", BM25, 100, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, ref)
 	want := pkset(ref)
@@ -141,7 +141,7 @@ func TestConcurrentBlockDecode(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for it := 0; it < 40; it++ {
-				got, e := idx.SearchQuery([]byte("alpha beta gamma"), true, "default", BM25, 100)
+				got, e := idx.SearchQuery([]byte("alpha beta gamma"), true, "default", BM25, 100, nil)
 				require.NoError(t, e)
 				require.Equal(t, want, pkset(got)) // same top-k SET (ties aside)
 			}

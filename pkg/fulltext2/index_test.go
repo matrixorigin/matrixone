@@ -32,7 +32,7 @@ func buildSeg(t *testing.T, id string, rec int64, docs []Doc) *Segment {
 
 func iquery(t *testing.T, idx *Index, q string) []any {
 	t.Helper()
-	rs, err := idx.SearchText([]byte(q), tokenizer.NewSimpleTokenizer(), TfIdf, 10)
+	rs, err := idx.SearchText([]byte(q), tokenizer.NewSimpleTokenizer(), TfIdf, 10, nil)
 	require.NoError(t, err)
 	return pkslice(rs)
 }
@@ -77,7 +77,7 @@ func TestIndexGlobalStats(t *testing.T) {
 	// "cat" is in pk1 and pk3 across the two segments.
 	require.Equal(t, []any{int64(1), int64(3)}, iquery(t, idx, "cat"))
 	// idf uses the GLOBAL df (=2) and N (=4), not a per-segment count.
-	rs, err := idx.SearchText([]byte("cat"), tokenizer.NewSimpleTokenizer(), TfIdf, 10)
+	rs, err := idx.SearchText([]byte("cat"), tokenizer.NewSimpleTokenizer(), TfIdf, 10, nil)
 	require.NoError(t, err)
 	want := idfSquared(4, 2) // tf=1
 	require.InDelta(t, want, rs[0].Score, 1e-9)

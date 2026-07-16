@@ -79,7 +79,7 @@ func TestReconstructLiveDocs(t *testing.T) {
 	require.NoError(t, err)
 	midx := NewIndex([]*Segment{merged}, nil)
 	q := func(w string) []any {
-		res, qerr := midx.SearchQuery([]byte(w), false, ParserDefault, BM25, 100)
+		res, qerr := midx.SearchQuery([]byte(w), false, ParserDefault, BM25, 100, nil)
 		require.NoError(t, qerr)
 		return resultIDs(res)
 	}

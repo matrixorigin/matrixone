@@ -45,9 +45,9 @@ func TestBuilderSingleSegment(t *testing.T) {
 	idx := NewIndex([]*Segment{seg}, nil)
 
 	// exact phrase "brown fox" is contiguous in docs 0 and 1, not 2.
-	require.ElementsMatch(t, []any{int64(0), int64(1)}, resultIDs(idx.SearchPhrase([]string{"brown", "fox"}, BM25, 10)))
+	require.ElementsMatch(t, []any{int64(0), int64(1)}, resultIDs(idx.SearchPhrase([]string{"brown", "fox"}, BM25, 10, nil)))
 	// single term.
-	require.ElementsMatch(t, []any{int64(0), int64(2)}, resultIDs(idx.SearchPhrase([]string{"quick"}, BM25, 10)))
+	require.ElementsMatch(t, []any{int64(0), int64(2)}, resultIDs(idx.SearchPhrase([]string{"quick"}, BM25, 10, nil)))
 }
 
 // TestBuilderCapacitySplit: FinishSegments(capacity) splits by contiguous doc-ord
@@ -64,7 +64,7 @@ func TestBuilderCapacitySplit(t *testing.T) {
 	require.Equal(t, int64(1), segs[3].N) // remainder
 
 	idx := NewIndex(segs, nil)
-	got := resultIDs(idx.SearchPhrase([]string{"brown"}, BM25, 100))
+	got := resultIDs(idx.SearchPhrase([]string{"brown"}, BM25, 100, nil))
 	require.Len(t, got, 10) // all docs across the 4 bases
 }
 

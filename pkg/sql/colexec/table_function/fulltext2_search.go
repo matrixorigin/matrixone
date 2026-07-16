@@ -38,13 +38,14 @@ import (
 // (doc_id, score) rows. Step-4 first cut: load-and-materialize each query (no
 // VectorIndexCache yet); the top-k is bounded by the pushed LIMIT.
 type fulltext2SearchState struct {
-	inited    bool
-	tblcfg    fulltext2.TableConfig
-	limit     uint64
-	offset    int
-	keys      []any
-	distances []float64
-	batch     *batch.Batch
+	inited      bool
+	tblcfg      fulltext2.TableConfig
+	limit       uint64
+	offset      int
+	keys        []any
+	distances   []float64
+	filterBytes []byte // serialized docfilter membership (WHERE-clause prefilter), if any
+	batch       *batch.Batch
 }
 
 func (u *fulltext2SearchState) end(tf *TableFunction, proc *process.Process) error { return nil }
@@ -56,6 +57,7 @@ func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.offset = 0
 	u.keys = nil
 	u.distances = nil
+	u.filterBytes = nil
 }
 
 func (u *fulltext2SearchState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -138,6 +140,20 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	}
 	pattern := patVec.GetStringAt(nthRow)
 
+	// Prefilter pushdown: when the WHERE clause is pushed down as a unique-join-keys
+	// runtime filter, wait for it and build the docfilter membership bytes — the same
+	// mechanism bm25_search / fulltext_index_scan use. Applied INSIDE the WAND walk so
+	// the returned top-K is already filtered (no over-fetch).
+	if u.filterBytes == nil && len(tf.RuntimeFilterSpecs) > 0 {
+		res, ferr := waitFulltextMembershipFilter(proc, tf.RuntimeFilterSpecs)
+		if ferr != nil {
+			return ferr
+		}
+		if res != nil {
+			u.filterBytes = res.membershipFilterBytes
+		}
+	}
+
 	// Run the query through the shared VectorIndexCache: the index (base + CDC tail)
 	// is loaded ONCE and reused across queries, evicted on CDC append / compaction /
 	// rebuild (fulltext2_{create,compact} + the CDC consumer call Cache.Remove).
@@ -154,9 +170,10 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	}
 	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
 	q := fulltext2.Fulltext2Query{
-		Pattern: []byte(pattern),
-		Boolean: mode == int64(tree.FULLTEXT_BOOLEAN),
-		Algo:    fulltext2ScoreAlgo(proc),
+		Pattern:     []byte(pattern),
+		Boolean:     mode == int64(tree.FULLTEXT_BOOLEAN),
+		Algo:        fulltext2ScoreAlgo(proc),
+		FilterBytes: u.filterBytes,
 	}
 	// u.limit==0 means "no pushed LIMIT" → Fulltext2Search.Search returns all docs.
 	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}

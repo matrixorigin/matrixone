@@ -65,7 +65,7 @@ func TestConcurrentSearchQuery(t *testing.T) {
 	// Single-threaded baseline: the canonical (pk-set) answer for each query.
 	baseline := make([]map[any]struct{}, len(queries))
 	for i, q := range queries {
-		res, err := idx.SearchQuery([]byte(q.pattern), q.boolean, ParserDefault, BM25, 100)
+		res, err := idx.SearchQuery([]byte(q.pattern), q.boolean, ParserDefault, BM25, 100, nil)
 		require.NoError(t, err, "baseline %q", q.pattern)
 		m := make(map[any]struct{}, len(res))
 		for _, r := range res {
@@ -83,7 +83,7 @@ func TestConcurrentSearchQuery(t *testing.T) {
 			defer wg.Done()
 			for it := 0; it < iters; it++ {
 				q := queries[it%len(queries)]
-				res, err := idx.SearchQuery([]byte(q.pattern), q.boolean, ParserDefault, BM25, 100)
+				res, err := idx.SearchQuery([]byte(q.pattern), q.boolean, ParserDefault, BM25, 100, nil)
 				if err != nil {
 					errCh <- fmt.Errorf("query %q: %w", q.pattern, err)
 					return

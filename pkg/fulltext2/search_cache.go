@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -32,6 +33,10 @@ type Fulltext2Query struct {
 	Pattern []byte
 	Boolean bool
 	Algo    ScoreAlgo
+	// FilterBytes is the optional serialized docfilter membership — the WHERE-clause
+	// prefilter pushed down as a runtime filter (built in C from the eligible pks),
+	// applied INSIDE the search so a pushed LIMIT bounds the filtered set. nil = none.
+	FilterBytes []byte
 }
 
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
@@ -99,7 +104,19 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	} else if k <= 0 {
 		k = int(s.idx.NumDocs())
 	}
-	results, err := s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k)
+	// Build the WHERE prefilter once per query from the pushed-down membership bytes;
+	// it resolves against each segment's ord→pk dict inside SearchQuery. Freed here so
+	// the C-backed filter never outlives the query (the cached Index is shared, so the
+	// filter must be per-query local, never stored on s.idx).
+	var filter docfilter.MembershipFilter
+	if len(q.FilterBytes) > 0 {
+		filter, err = docfilter.New(q.FilterBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer filter.Free()
+	}
+	results, err := s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, filter)
 	if err != nil {
 		return nil, nil, err
 	}

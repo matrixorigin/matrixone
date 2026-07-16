@@ -84,14 +84,14 @@ type BoolQuery struct {
 // no phrase/prefix/group) is routed to the WAND top-k (searchWAND), which
 // early-terminates via term max-impact bounds and returns the identical ranking
 // as the full scan. Everything else uses the full evaluator.
-func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
+func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Membership) ([]Result, error) {
 	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0) {
 		return nil, nil
 	}
 	if terms, ok := disjunctiveTerms(q); ok {
-		return s.searchWAND(terms, algo, k), nil
+		return s.searchWAND(terms, algo, k, allow), nil
 	}
-	return s.searchBooleanFull(q, algo, k)
+	return s.searchBooleanFull(q, algo, k, allow)
 }
 
 // disjunctiveTerms reports whether q is a pure OR of single-term SHOULD clauses
@@ -108,7 +108,7 @@ func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
 	return q.should, true
 }
 
-func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
+func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership) ([]Result, error) {
 	avgDocLen := s.avgDocLenOrMean()
 
 	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen)
@@ -180,6 +180,9 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int) ([]Resul
 	ords := make([]int64, 0, len(cand))
 	for ord := range cand {
 		if _, bad := mustNot[ord]; bad {
+			continue
+		}
+		if !allowed(allow, ord) { // WHERE prefilter (nil = allow all)
 			continue
 		}
 		ords = append(ords, ord)
@@ -286,7 +289,7 @@ func (s *Segment) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 	if err != nil {
 		return nil, err
 	}
-	return s.SearchBoolean(q, algo, k)
+	return s.SearchBoolean(q, algo, k, nil) // convenience entry: no WHERE prefilter
 }
 
 // ---- parser ----

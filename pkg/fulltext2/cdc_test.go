@@ -116,7 +116,7 @@ func TestTailBuilderLiveness(t *testing.T) {
 
 	idx := NewIndex(tails, deletes)
 	q := func(w string) []any {
-		res, qerr := idx.SearchQuery([]byte(w), false, ParserDefault, BM25, 100)
+		res, qerr := idx.SearchQuery([]byte(w), false, ParserDefault, BM25, 100, nil)
 		require.NoError(t, qerr)
 		return resultIDs(res)
 	}
