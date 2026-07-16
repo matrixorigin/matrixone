@@ -19,20 +19,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
-// allocPostings allocates a LOADED segment's posting buffers OFF the Go heap (C
-// allocator) so a multi-GB cached index is not GC-scanned and releases RSS
-// deterministically on eviction (Free → the OS immediately, unlike Go's
-// scavenger). Mirrors bm25's WandModel decode.
-//
-//   - docIDs:  totalP int64   (all terms' doc ords, concatenated; delta-decoded)
-//   - tfs:     totalP uint8
-//   - posBuf:  posBytes []byte (the COMPRESSED positions section, kept as-is; each
-//     term's posRaw slices into it and is decoded on demand — positions
-//     are never expanded into RAM at load)
-//
-// The deallocators are recorded on the segment and released by Free(); on a
-// partial-allocation error Free() unwinds what was taken. Zero sizes return nil.
-func (s *Segment) allocPostings(totalP, posBytes int64) (docIDs []int64, tfs []uint8, posBuf []byte, err error) {
+// allocPostings allocates a LOADED segment's docID/tf buffers OFF the Go heap (C
+// allocator) so a large cached index is not GC-scanned and releases RSS
+// deterministically on eviction. docIDs are delta-decoded into these buffers;
+// positions are NOT copied here — they stay compressed in the segment's backing
+// bytes (mmap for a base, the read blob for a tail) and each term's posRaw slices
+// into that. Mirrors bm25's WandModel decode. The deallocators are recorded on the
+// segment and released by Free(); on a partial-allocation error Free() unwinds.
+func (s *Segment) allocPostings(totalP int64) (docIDs []int64, tfs []uint8, err error) {
+	if totalP <= 0 {
+		return nil, nil, nil
+	}
 	alloc := malloc.NewCAllocator()
 	take := func(nbytes uint64) ([]byte, error) {
 		b, dec, e := alloc.Allocate(nbytes, malloc.NoClear)
@@ -42,29 +39,17 @@ func (s *Segment) allocPostings(totalP, posBytes int64) (docIDs []int64, tfs []u
 		s.deallocators = append(s.deallocators, dec)
 		return b, nil
 	}
-	fail := func(e error) ([]int64, []uint8, []byte, error) {
-		s.Free() // release whatever was already taken; idempotent
-		return nil, nil, nil, e
+	db, e := take(uint64(totalP) * uint64(util.UnsafeSizeOf[int64]()))
+	if e != nil {
+		s.Free()
+		return nil, nil, e
 	}
-
-	if totalP > 0 {
-		db, e := take(uint64(totalP) * uint64(util.UnsafeSizeOf[int64]()))
-		if e != nil {
-			return fail(e)
-		}
-		docIDs = util.UnsafeSliceCastToLength[int64](db, int(totalP))
-		tb, e := take(uint64(totalP))
-		if e != nil {
-			return fail(e)
-		}
-		tfs = util.UnsafeSliceCastToLength[uint8](tb, int(totalP))
+	docIDs = util.UnsafeSliceCastToLength[int64](db, int(totalP))
+	tb, e := take(uint64(totalP))
+	if e != nil {
+		s.Free()
+		return nil, nil, e
 	}
-	if posBytes > 0 {
-		pb, e := take(uint64(posBytes))
-		if e != nil {
-			return fail(e)
-		}
-		posBuf = pb
-	}
-	return docIDs, tfs, posBuf, nil
+	tfs = util.UnsafeSliceCastToLength[uint8](tb, int(totalP))
+	return docIDs, tfs, nil
 }

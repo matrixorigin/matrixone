@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -234,23 +233,34 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, err
 	}
 	path := fp.Name()
-	defer func() { fp.Close(); os.Remove(path) }()
+	rm := func() { fp.Close(); os.Remove(path) }
 	if err = fp.Truncate(filesize); err != nil {
+		rm()
 		return nil, err
 	}
 	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
+		rm()
 		return nil, err
 	}
 	if got, cerr := vectorindex.CheckSum(path); cerr != nil {
+		rm()
 		return nil, cerr
 	} else if got != checksum {
+		rm()
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
 	}
-	if _, err = fp.Seek(0, io.SeekStart); err != nil {
+	// mmap the file read-only (shared across queries; FST + positions are views into
+	// it, page-cache-backed). The mmap'd Segment OWNS the file: Free() munmaps and
+	// deletes it. The fd is not needed once mapped.
+	data, err := mmapReadOnly(fp)
+	fp.Close()
+	if err != nil {
+		os.Remove(path)
 		return nil, err
 	}
-	m, err := Deserialize(id, fp)
-	if err != nil {
+	m := &Segment{Id: id, mmapData: data, mmapPath: path}
+	if err := m.decodeSegment(data); err != nil {
+		m.Free() // munmap + delete + free off-heap
 		return nil, err
 	}
 	m.Recency = recency

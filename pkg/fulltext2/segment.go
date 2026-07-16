@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"encoding/binary"
+	"os"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -135,12 +136,18 @@ type Segment struct {
 	dict   *termDict
 	loaded []*termPostings
 
-	// deallocators frees the off-heap (C-allocated) posting buffers of a LOADED
-	// segment (Deserialize keeps docIDs/tfs/positions off the Go heap so a
-	// multi-GB cached index is not GC-scanned and releases RSS deterministically
-	// on eviction — mirrors bm25's WandModel). A build-side segment leaves this
-	// nil, so Free() is a no-op there.
+	// deallocators frees the off-heap (C-allocated) docID/tf buffers of a LOADED
+	// segment (kept off the Go heap so a large cached index is not GC-scanned and
+	// releases RSS deterministically). A build-side segment leaves this nil.
 	deallocators []malloc.Deallocator
+
+	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
+	// FST + the compressed positions section are views into it (page-cache-backed,
+	// reclaimable, shared by all concurrent queries — no copy). mmapPath is that
+	// file. Both are released by Free() under the cache's eviction write-lock (no
+	// reader in flight). nil on a build-side or in-memory (tail) segment.
+	mmapData []byte
+	mmapPath string
 }
 
 // Free releases a loaded segment's off-heap posting buffers. Safe on a build-side
@@ -152,6 +159,14 @@ func (s *Segment) Free() {
 		d.Deallocate()
 	}
 	s.deallocators = nil
+	if s.mmapData != nil {
+		_ = munmap(s.mmapData)
+		s.mmapData = nil
+	}
+	if s.mmapPath != "" {
+		_ = os.Remove(s.mmapPath)
+		s.mmapPath = ""
+	}
 	s.loaded = nil
 }
 

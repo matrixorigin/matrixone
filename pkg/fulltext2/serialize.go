@@ -81,44 +81,73 @@ func (s *Segment) Serialize() ([]byte, error) {
 // unset — it is a cross-segment aggregate computed when all segments are loaded
 // (§4), not a per-segment value.
 func Deserialize(id string, r io.Reader) (*Segment, error) {
-	s := &Segment{Id: id}
-	var fstBytes, ranking, positions []byte
-	tr := tar.NewReader(r)
-	for {
-		h, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		b := make([]byte, h.Size)
-		if _, err := io.ReadFull(tr, b); err != nil {
-			return nil, err
-		}
-		switch h.Name {
-		case memberDocmap:
-			if err := s.decodeDocmap(b); err != nil {
-				return nil, err
-			}
-		case memberTermDict:
-			fstBytes = b
-		case memberPostings:
-			ranking = b
-		case memberPositions:
-			positions = b
-		}
-	}
-	if err := s.decodePostings(ranking, positions); err != nil {
-		return nil, err
-	}
-	dict, err := loadTermDict(fstBytes)
+	// In-memory path (tail deltas, tests): read the whole archive to a Go slice and
+	// point the FST + positions at it (no mmap). Bases use the mmap path in storage.
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
+	s := &Segment{Id: id}
+	if err := s.decodeSegment(data); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// sliceMembers returns the FST / docmap / ranking / positions members as SLICES
+// into data (zero-copy) by walking the tar and tracking the reader offset, so the
+// same code serves an in-memory blob or an mmap'd file.
+func sliceMembers(data []byte) (docmap, fst, ranking, positions []byte, err error) {
+	br := bytes.NewReader(data)
+	tr := tar.NewReader(br)
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return nil, nil, nil, nil, e
+		}
+		off := int64(len(data)) - int64(br.Len()) // tar positions br at the content
+		if off < 0 || off+h.Size > int64(len(data)) {
+			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtx("fulltext2: member out of range")
+		}
+		seg := data[off : off+h.Size]
+		switch h.Name {
+		case memberDocmap:
+			docmap = seg
+		case memberTermDict:
+			fst = seg
+		case memberPostings:
+			ranking = seg
+		case memberPositions:
+			positions = seg
+		}
+	}
+	return docmap, fst, ranking, positions, nil
+}
+
+// decodeSegment builds the loaded segment over data (an in-memory blob or an mmap):
+// docIDs/tfs expand off-heap, the FST + compressed positions stay as views into
+// data. Callers keep data alive (mmapData for a base, GC for a tail).
+func (s *Segment) decodeSegment(data []byte) error {
+	docmap, fst, ranking, positions, err := sliceMembers(data)
+	if err != nil {
+		return err
+	}
+	if err := s.decodeDocmap(docmap); err != nil {
+		return err
+	}
+	if err := s.decodePostings(ranking, positions); err != nil {
+		return err
+	}
+	dict, err := loadTermDict(fst)
+	if err != nil {
+		return err
+	}
 	s.dict = dict
 	s.N = int64(len(s.pks))
-	return s, nil
+	return nil
 }
 
 func writeMember(tw *tar.Writer, name string, data []byte) error {
@@ -271,13 +300,13 @@ func (s *Segment) decodePostings(ranking, positions []byte) error {
 	totalP := int64(binary.LittleEndian.Uint64(ranking[p+8:]))
 	p += 16
 
-	// docIDs/tfs off-heap (contiguous, per-term views); positions copied off-heap as
-	// COMPRESSED bytes (per-term posRaw slices into it). Freed by Segment.Free().
-	bigDocIDs, bigTfs, posBuf, err := s.allocPostings(totalP, int64(len(positions)))
+	// docIDs/tfs off-heap (contiguous, per-term views). Positions are NOT copied:
+	// each term's posRaw slices directly into `positions` (the caller keeps it alive
+	// — the shared mmap for a base, the read blob for a tail).
+	bigDocIDs, bigTfs, err := s.allocPostings(totalP)
 	if err != nil {
 		return err
 	}
-	copy(posBuf, positions)
 
 	uv := func() (uint64, bool) {
 		v, n := binary.Uvarint(ranking[p:])
@@ -319,10 +348,10 @@ func (s *Segment) decodePostings(ranking, positions []byte) error {
 		copy(tp.tfs, ranking[p:p+int(df)]) // df raw tf bytes
 		p += int(df)
 		posLen, ok := uv() // byte length of this term's compressed positions
-		if !ok || cpos+int64(posLen) > int64(len(posBuf)) {
+		if !ok || cpos+int64(posLen) > int64(len(positions)) {
 			return bad()
 		}
-		tp.posRaw = posBuf[cpos : cpos+int64(posLen)]
+		tp.posRaw = positions[cpos : cpos+int64(posLen)]
 		cpos += int64(posLen)
 		// Derive the raw score-UB fields (maxTf / minDocLen / block-max) from the
 		// loaded postings + docLen (docmap precedes postings in the archive).
