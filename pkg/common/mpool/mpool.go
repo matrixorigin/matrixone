@@ -674,7 +674,7 @@ func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 
 func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz+kMemHdrSz > int64(CapLimit) {
+	if sz < 0 || sz > int64(CapLimit)-kMemHdrSz {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
@@ -922,12 +922,27 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		)
 	}
 
+	// C realloc may allocate the replacement before releasing the old block.
+	// Admit the complete temporary peak before entering the allocator, then
+	// retain the new-size charge and release only the old-size charge on success.
+	if globalStats.RecordAlloc("global", int64(sz)) > GlobalCap() {
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewOOMNoCtx()
+	}
+	if mp.stats.RecordAlloc(mp.tag, int64(sz)) > mp.Cap() {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
+	}
+
 	newbs, err := simpleCAllocator().ReallocZero(
 		fullAllocation[:oldLength],
 		uint64(oldSize),
 		uint64(sz),
 	)
 	if err != nil {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
 		return nil, err
 	}
 	newptr := unsafe.Pointer(&newbs[0])
@@ -949,8 +964,6 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
-	globalStats.RecordAlloc("global", int64(sz))
-	mp.stats.RecordAlloc(mp.tag, int64(sz))
 	mp.resource.recordFree(int64(oldSize))
 	mp.recordResourcePeak(mp.resource.recordAlloc(int64(sz)))
 	return newbs, nil

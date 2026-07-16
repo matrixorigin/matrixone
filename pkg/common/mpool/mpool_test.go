@@ -16,6 +16,7 @@ package mpool
 
 import (
 	"bytes"
+	"math"
 	"sync"
 	"testing"
 	"unsafe"
@@ -355,6 +356,64 @@ func TestMPoolNoLock(t *testing.T) {
 
 	mp2.Free(bs22)
 	require.Equal(t, int64(0), mp2.CurrNB())
+}
+
+func TestReallocZeroHonorsPoolCapBeforeMutation(t *testing.T) {
+	const poolCap = 1 * MB
+	const oldSize = 400 * KB
+
+	t.Run("exact temporary peak is admitted", func(t *testing.T) {
+		mp, err := NewMPool("realloc-zero-exact-cap", poolCap, NoLock)
+		require.NoError(t, err)
+		defer DeleteMPool(mp)
+
+		old, err := mp.Alloc(oldSize, true)
+		require.NoError(t, err)
+		for i := range old {
+			old[i] = 0x5a
+		}
+
+		resized, err := mp.ReallocZero(old, poolCap-oldSize, true)
+		require.NoError(t, err)
+		require.Equal(t, int64(poolCap-oldSize), mp.CurrNB())
+		require.Equal(t, byte(0x5a), resized[oldSize-1])
+		require.Zero(t, resized[oldSize])
+		mp.Free(resized)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	t.Run("limit plus one rejects and preserves old allocation", func(t *testing.T) {
+		mp, err := NewMPool("realloc-zero-over-cap", poolCap, NoLock)
+		require.NoError(t, err)
+		defer DeleteMPool(mp)
+
+		old, err := mp.Alloc(oldSize, true)
+		require.NoError(t, err)
+		old[0] = 0x5a
+		before := mp.CurrNB()
+
+		resized, err := mp.ReallocZero(old, poolCap-oldSize+1, true)
+		require.Error(t, err)
+		require.Nil(t, resized)
+		require.Equal(t, before, mp.CurrNB())
+		require.Equal(t, byte(0x5a), old[0])
+		mp.Free(old)
+		require.Zero(t, mp.CurrNB())
+	})
+}
+
+func TestReallocZeroRejectsOverflowSize(t *testing.T) {
+	mp := MustNewNoLock("realloc-zero-overflow")
+	defer DeleteMPool(mp)
+	old, err := mp.Alloc(8, true)
+	require.NoError(t, err)
+	before := mp.CurrNB()
+
+	resized, err := mp.ReallocZero(old, math.MaxInt, true)
+	require.Error(t, err)
+	require.Nil(t, resized)
+	require.Equal(t, before, mp.CurrNB())
+	mp.Free(old)
 }
 
 // TestCrossPoolFreeOffHeap tests that cross-pool free correctly deallocates offHeap memory.
