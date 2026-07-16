@@ -282,7 +282,7 @@ const (
 		`AND table_id = %d ` +
 		`AND job_name = '%s'` +
 		`AND job_id = %d ` +
-		`AND job_state != 4 ` +
+		`AND job_state NOT IN (4, 5, 6) ` +
 		`AND  JSON_EXTRACT(job_status, '$.LSN') = '%d'`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
@@ -292,7 +292,15 @@ const (
 		`AND job_name = '%s'` +
 		`AND job_id = %d`
 	CDCUpdateMOISCPLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_state = %d,` +
 		`drop_at = now()` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
+	CDCUpdateMOISCPLogStateSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_state = %d ` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
@@ -348,8 +356,9 @@ const (
 	CDCGetTableIDTemplate_Idx                       = 29
 	CDCUpdateTaskStateByTaskIdSQL_Idx               = 30
 	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx       = 31
+	CDCUpdateMOISCPLogStateSqlTemplate_Idx          = 32
 
-	CDCSqlTemplateCount = 32
+	CDCSqlTemplateCount = 33
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -477,6 +486,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx: {
 		SQL: CDCUpdateMOISCPLogDropAtSqlTemplate,
+	},
+	CDCUpdateMOISCPLogStateSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogStateSqlTemplate,
 	},
 	CDCDeleteMOISCPLogSqlTemplate_Idx: {
 		SQL: CDCDeleteMOISCPLogSqlTemplate,
@@ -961,9 +973,28 @@ func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
 	tableID uint64,
 	jobName string,
 	jobID uint64,
+	jobState int8,
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogDropAtSqlTemplate_Idx].SQL,
+		jobState,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateStateSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	jobState int8,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogStateSqlTemplate_Idx].SQL,
+		jobState,
 		accountID,
 		tableID,
 		jobName,

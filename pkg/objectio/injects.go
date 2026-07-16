@@ -77,6 +77,8 @@ const (
 	FJ_ISCPCancelLongHnswBeforeUpdate  = "fj/iscp/cancel/long/hnsw-before-update"
 	FJ_ISCPCancelLongHnswBeforeSave    = "fj/iscp/cancel/long/hnsw-before-save"
 	FJ_ISCPCancelLongBeforeWatermark   = "fj/iscp/cancel/long/before-watermark"
+	FJ_ISCPCancelBeforeMarkCanceled    = "fj/iscp/cancel/before-mark-canceled"
+	FJ_ISCPCancelMarkCanceledError     = "fj/iscp/cancel/mark-canceled-error"
 
 	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
 

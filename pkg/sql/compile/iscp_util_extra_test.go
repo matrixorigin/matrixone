@@ -477,6 +477,42 @@ func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {
 	assert.Equal(t, 1, dropCount, "duplicate index names should be deduplicated")
 }
 
+func TestDropAllIndexCdcTasksNoLocalExecutorContinuesAfterUnregister(t *testing.T) {
+	dropCount := 0
+	iscpUnregisterJobFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (bool, error) {
+		dropCount++
+		return true, nil
+	}
+	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 1, true, true, nil
+	}
+	defer func() {
+		iscpUnregisterJobFunc = iscp.UnregisterJob
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DropAllIndexCdcTasks(c, tbldef, "db", "tbl"))
+	require.Equal(t, 1, dropCount)
+}
+
 func TestCoverage_DropAllIndexCdcTasks_MixedIndexes(t *testing.T) {
 	dropCount := 0
 	iscpUnregisterJobFunc = func(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {

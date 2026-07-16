@@ -629,6 +629,7 @@ func unregisterJob(
 		tableID,
 		jobID.JobName,
 		internalJobID,
+		ISCPJobState_Canceling,
 	)
 	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {

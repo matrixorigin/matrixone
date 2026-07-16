@@ -60,6 +60,7 @@ const (
 	DefaultSyncTaskInterval       = time.Second * 10
 	DefaultFlushWatermarkInterval = time.Hour
 	DefaultFlushWatermarkTTL      = time.Hour
+	DefaultCancelJobQueueSize     = 1024
 
 	DefaultRetryTimes    = 5
 	DefaultRetryInterval = time.Second
@@ -191,6 +192,8 @@ func NewISCPTaskExecutor(
 		runningConsumers: make(
 			map[JobRuntimeKey]map[uint64]*RunningJobConsumer,
 		),
+		cancelJobs:    make(chan JobRuntimeKey, DefaultCancelJobQueueSize),
+		cancelingJobs: make(map[JobRuntimeKey]struct{}),
 	}
 	return exec, nil
 }
@@ -380,7 +383,7 @@ func (exec *ISCPTaskExecutor) stopLocked() {
 func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	sql := fmt.Sprintf(
+	activeJobsSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_iscp_log
         SET job_state = %d
         WHERE job_state IN (%d, %d);
@@ -388,6 +391,14 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 		ISCPJobState_Completed,
 		ISCPJobState_Pending,
 		ISCPJobState_Running,
+	)
+	droppedJobsSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_iscp_log
+        SET job_state = %d
+        WHERE drop_at IS NOT NULL AND job_state != %d;
+        `,
+		ISCPJobState_Canceled,
+		ISCPJobState_Canceled,
 	)
 	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
@@ -412,11 +423,16 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	if err != nil {
 		return
 	}
-	result, err := ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
+	result, err := ExecWithResult(ctxWithTimeout, activeJobsSQL, exec.cnUUID, txnOp)
 	if err != nil {
 		return
 	}
-	defer result.Close()
+	result.Close()
+	result, err = ExecWithResult(ctxWithTimeout, droppedJobsSQL, exec.cnUUID, txnOp)
+	if err != nil {
+		return
+	}
+	result.Close()
 	return nil
 }
 
@@ -446,6 +462,18 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 		select {
 		case <-ctx.Done():
 			return
+		case key := <-exec.cancelJobs:
+			if err := exec.finishCanceledJob(ctx, key); err != nil {
+				logutil.Error(
+					"ISCP-Task cancel job failed",
+					zap.Uint32("accountID", key.AccountID),
+					zap.Uint64("tableID", key.TableID),
+					zap.String("jobName", key.JobName),
+					zap.Uint64("jobID", key.JobID),
+					zap.Error(err),
+				)
+				exec.requeueCancelJob(ctx, key)
+			}
 		case <-syncTaskTrigger.C:
 			// apply iscp log
 			from := exec.iscpLogWm.Next()
@@ -908,6 +936,9 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 	if state == ISCPJobState_Pending || state == ISCPJobState_Running {
 		state = ISCPJobState_Completed
 	}
+	if dropAt != 0 && state != ISCPJobState_Canceled {
+		state = ISCPJobState_Canceled
+	}
 	return exec.addOrUpdateJob(
 		accountID,
 		tableID,
@@ -972,6 +1003,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	notPrint bool,
 ) error {
 	var newCreate bool
+	key := NewJobRuntimeKey(accountID, tableID, jobName, jobID)
 
 	var watermark types.TS
 	defer func() {
@@ -997,6 +1029,9 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	jobStatus, err := UnmarshalJobStatus(jobStatusStr)
 	if err != nil {
 		return err
+	}
+	if dropAt != 0 && state != ISCPJobState_Canceled {
+		exec.enqueueCancelJob(key)
 	}
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
