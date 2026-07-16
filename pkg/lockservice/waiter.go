@@ -98,8 +98,8 @@ type waiter struct {
 	enableChecker bool
 
 	// lockWaitTimeout is the session-level SET lock_wait_timeout value.
-	// A zero value means no session-level timeout is enforced here; in that
-	// case waiting relies on the context or other external cancellation.
+	// A zero value means no caller timeout was attached at this raw lock-table
+	// layer; service entry points normally replace it with the safety ceiling.
 	// Set in waiterEvents.add() from the lockContext and checked in
 	// waiterEvents.check() to enforce timeouts on the async (remote) lock path.
 	lockWaitTimeout     time.Duration
@@ -107,6 +107,9 @@ type waiter struct {
 	lockWaitGranularity pb.Granularity
 	lockWaitMode        pb.LockMode
 	lockWaitTimer       atomic.Pointer[time.Timer]
+	// waitTooLongLogged is per waiter lifecycle and is reset before reuse.
+	// It suppresses repeated diagnostics without disabling orphan checks.
+	waitTooLongLogged atomic.Bool
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -320,6 +323,7 @@ func (w *waiter) reset() {
 	w.lockWaitTimeoutErr = nil
 	w.lockWaitGranularity = pb.Granularity_Row
 	w.lockWaitMode = pb.LockMode_Exclusive
+	w.waitTooLongLogged.Store(false)
 	w.stopLockWaitTimer()
 }
 

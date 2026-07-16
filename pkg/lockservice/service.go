@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // WithWait setup wait func to wait some condition ready
@@ -47,19 +48,22 @@ func WithWait(wait func()) Option {
 }
 
 type service struct {
-	cfg                  Config
-	serviceID            string
-	tableGroups          *lockTableHolders
-	activeTxnHolder      activeTxnHolder
-	fsp                  *fixedSlicePool
-	deadlockDetector     *detector
-	events               *waiterEvents
-	clock                clock.Clock
-	stopper              *stopper.Stopper
-	stopOnce             sync.Once
-	bindChangeMu         sync.RWMutex
-	fetchWhoWaitingListC chan who
-	logger               *log.MOLogger
+	cfg              Config
+	serviceID        string
+	tableGroups      *lockTableHolders
+	activeTxnHolder  activeTxnHolder
+	fsp              *fixedSlicePool
+	deadlockDetector *detector
+	events           *waiterEvents
+	clock            clock.Clock
+	stopper          *stopper.Stopper
+	stopOnce         sync.Once
+	// lockWaitCeilingWarned prevents a large explicit timeout from logging on
+	// every lock operation. The metric still counts every clamped request.
+	lockWaitCeilingWarned atomic.Bool
+	bindChangeMu          sync.RWMutex
+	fetchWhoWaitingListC  chan who
+	logger                *log.MOLogger
 
 	remote struct {
 		client Client
@@ -132,6 +136,7 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
+	options = s.applyLockWaitTimeoutCeiling(options)
 
 	if !s.canLockOnServiceStatus(txnID, options, tableID, rows) {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
@@ -216,6 +221,62 @@ func (s *service) Lock(
 		}
 	}
 	return result, err
+}
+
+// applyLockWaitTimeoutCeiling bounds missing or oversized wait budgets and
+// puts the effective absolute deadline in the returned options. Carrying that
+// deadline keeps local-to-remote/forward hops on one budget. Lock receives
+// options by value, so callers that retry by invoking Lock again must propagate
+// their own deadline; this service-side safety net cannot update their copy.
+func (s *service) applyLockWaitTimeoutCeiling(options pb.LockOptions) pb.LockOptions {
+	ceiling := s.cfg.MaxLockWaitDuration.Duration
+	if ceiling <= 0 {
+		return options
+	}
+	// LockWaitTimeout is encoded as whole seconds. Round up so a positive
+	// sub-second ceiling or remaining budget never becomes an unbounded zero.
+	seconds := int64(ceiling / time.Second)
+	if ceiling%time.Second != 0 {
+		seconds++
+	}
+	if seconds <= 0 {
+		seconds = 1
+	}
+
+	now := time.Now()
+	requested := options.LockWaitTimeout
+	effectiveSeconds := requested
+	if effectiveSeconds <= 0 || effectiveSeconds > seconds {
+		effectiveSeconds = seconds
+	}
+	effectiveDeadline := now.Add(time.Duration(effectiveSeconds) * time.Second)
+	if options.LockWaitDeadline > 0 {
+		callerDeadline := time.Unix(0, options.LockWaitDeadline)
+		if callerDeadline.Before(effectiveDeadline) {
+			effectiveDeadline = callerDeadline
+			effectiveSeconds = int64(effectiveDeadline.Sub(now) / time.Second)
+			if effectiveDeadline.Sub(now)%time.Second != 0 {
+				effectiveSeconds++
+			}
+			if effectiveSeconds <= 0 {
+				effectiveSeconds = 1
+			}
+		}
+	}
+	options.LockWaitTimeout = effectiveSeconds
+	options.LockWaitDeadline = effectiveDeadline.UnixNano()
+
+	if requested > seconds {
+		v2.TxnLockWaitTimeoutCeilingClampedCounter.Inc()
+		if s.lockWaitCeilingWarned.CompareAndSwap(false, true) && s.logger != nil {
+			s.logger.Warn("lock wait timeout exceeds lockservice safety ceiling; request was clamped",
+				zap.Int64("requested-seconds", requested),
+				zap.Duration("max-lock-wait-duration", ceiling),
+				zap.Int64("effective-seconds", effectiveSeconds),
+				zap.Time("effective-deadline", effectiveDeadline))
+		}
+	}
+	return options
 }
 
 func (s *service) Unlock(

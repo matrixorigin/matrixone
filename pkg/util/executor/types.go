@@ -71,6 +71,8 @@ type Options struct {
 	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	adjustTableExtraFunc    func(*api.SchemaExtra) error
 	keepTxnAlive            bool
+	lockWaitTimeout         time.Duration
+	hasLockWaitTimeout      bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is

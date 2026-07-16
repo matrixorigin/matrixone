@@ -391,6 +391,7 @@ func (exec *txnExecutor) Exec(
 	// background paths set resolvers too (idxcron's task.Metadata,
 	// ProcessInitSQL's executor.DefaultResolveVariable).
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 
 	prepared := false
 	if statementOption.HasParams() {
@@ -605,12 +606,32 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.taskservice,
 	)
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+// applyExecutorLockWaitTimeout copies a per-execution background budget into
+// SessionInfo, whose background lock-timeout precedence is above the default
+// variable resolver. SessionInfo stores whole seconds, so positive fractions
+// are rounded up rather than silently becoming an unbounded zero.
+func applyExecutorLockWaitTimeout(proc *process.Process, opts executor.Options) {
+	if proc == nil || !opts.HasLockWaitTimeout() {
+		return
+	}
+	timeout := opts.LockWaitTimeout()
+	seconds := int64(timeout / time.Second)
+	if timeout%time.Second != 0 {
+		seconds++
+	}
+	if seconds <= 0 {
+		seconds = 1
+	}
+	proc.Base.SessionInfo.LockWaitTimeout = seconds
 }
 
 func (exec *txnExecutor) Txn() client.TxnOperator {

@@ -97,6 +97,7 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 		nil,
 		nil,
 		nil)
+	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		require.Equal(t, "lock_wait_timeout", varName)
 		require.True(t, isSystemVar)
@@ -111,6 +112,16 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 
 	proc.GetSessionInfo().LockWaitTimeout = 0
 	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(2), nil
+	})
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp),
+		"background per-execution txn option must override the default resolver")
+	proc.GetSessionInfo().LockWaitTimeout = 4
+	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
+		"background process-level per-execution option must have highest priority")
 }
 
 func TestLockOpHelpers(t *testing.T) {
