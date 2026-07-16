@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -61,6 +62,10 @@ type HashmapBuilder struct {
 	dedupDeleteMarkerColIdx   int32
 	dedupDeleteKeepColIdxList []int32
 	DelRows                   *bitmap.Bitmap
+	budget                    *process.HashBuildBudgetGeneration
+	mapReservation            *hashMapReservationOwner
+	batchReservations         []*process.HashBuildReservation
+	auxReservation            *process.HashBuildReservation
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -93,6 +98,21 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.Sels = message.GroupSels{}
 	jm := message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
 	jm.SetHasNullKey(hb.HasNullKey)
+	hb.IntHashMap = nil
+	hb.StrHashMap = nil
+	hb.DelRows = nil
+	hb.Batches.Reset()
+	// Iterators are producer scratch and are not part of JoinMap ownership.
+	// Drop budgeted cached backing before transferring the encompassing aux
+	// reservation to a consumer that may free it immediately after publication.
+	hb.detachAndPruneCachedIterators()
+	hb.IgnoreRows = nil
+	hb.uniqueSels = nil
+	hb.curVecs = nil
+	release := hb.detachReservations()
+	jm.SetMemoryRelease(func() {
+		release()
+	})
 	return jm
 }
 
@@ -132,7 +152,14 @@ func (hb *HashmapBuilder) Prepare(
 		keyWidth := 0
 		for i, expr := range keyCols {
 			if _, ok := keyCols[i].Expr.(*plan.Expr_Col); !ok {
-				needDupVec = true
+				// Expression evaluation can allocate unbounded intermediates (for
+				// example repeat(col, N)) before the final vector exists. Until the
+				// expression engine accepts a budget-capped allocator or exposes a
+				// sound peak estimator, fail closed before evaluating it.
+				return &process.HashBuildBudgetError{
+					Kind:    process.HashBuildBudgetErrorInvalid,
+					Message: "hash build expression key has no bounded memory estimator",
+				}
 			}
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
@@ -196,6 +223,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.detachAndPruneCachedIterators()
 	hb.cachedIntIterator = nil
 	hb.cachedStrIterator = nil
+	hb.FreeHashMapAndBatches(proc)
 	hb.FreeTemporaryVectors(proc)
 	hb.needDupVec = false
 	hb.HasNullKey = false
@@ -242,6 +270,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	}
 	hb.Sels.Free(proc.Mp())
 	hb.Batches.Clean(proc.Mp())
+	hb.releaseReservations()
 }
 
 // evalBatch evaluates join key expressions for one batch, storing results in hb.curVecs.
@@ -289,6 +318,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
+	if err := hb.reserveBuildAux(); err != nil {
+		return err
+	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
 		if retErr != nil {
@@ -308,7 +340,16 @@ func (hb *HashmapBuilder) buildHashmap(
 	var err error
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
+		if err = hb.reserveInitialMap(int64(hashtable.Int64HashMapInitialAllocationBytes())); err != nil {
+			return err
+		}
 		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
+			hb.releaseMapReservation()
+			return err
+		}
+		if err = hb.attachIntHashMapAdmission(hb.IntHashMap); err != nil {
+			hb.IntHashMap.Free()
+			hb.IntHashMap = nil
 			return err
 		}
 		if hb.cachedIntIterator != nil {
@@ -319,7 +360,16 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.cachedIntIterator = itr
 		}
 	} else {
+		if err = hb.reserveInitialMap(int64(hashtable.StringHashMapInitialAllocationBytes())); err != nil {
+			return err
+		}
 		if hb.StrHashMap, err = hashmap.NewStrHashMap(false, proc.Mp()); err != nil {
+			hb.releaseMapReservation()
+			return err
+		}
+		if err = hb.attachStrHashMapAdmission(hb.StrHashMap); err != nil {
+			hb.StrHashMap.Free()
+			hb.StrHashMap = nil
 			return err
 		}
 		if hb.cachedStrIterator != nil {
@@ -678,6 +728,7 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 		hb.StrHashMap.Free()
 		hb.StrHashMap = nil
 	}
+	hb.releaseMapReservation()
 	hb.Sels.Free(proc.Mp())
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
@@ -742,7 +793,7 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 	if err := hb.Batches.Shrink(hb.IgnoreRows, proc); err != nil {
 		return err
 	}
-	if err := hb.Batches.CopyIntoBatches(deleteOnlyBat, proc); err != nil {
+	if err := hb.copyBuildBatch(deleteOnlyBat, proc); err != nil {
 		return err
 	}
 
@@ -825,5 +876,12 @@ func (hb *HashmapBuilder) detachAndPruneCachedIterators() {
 			return
 		}
 		hashmap.IteratorClearOwner(hb.cachedStrIterator)
+	}
+	if hb.budget != nil {
+		// Budgeted builds charge iterator scratch only for the execution that
+		// allocated it. Do not retain Go backing arrays in the pooled operator
+		// after that reservation is released or transferred.
+		hb.cachedIntIterator = nil
+		hb.cachedStrIterator = nil
 	}
 }

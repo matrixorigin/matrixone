@@ -19,6 +19,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -148,17 +149,19 @@ func (sels *GroupSels) Get(k int32) []int32 {
 
 // JoinMap is used for join
 type JoinMap struct {
-	runtimeFilter_In bool
-	valid            bool
-	hasNullKey       bool
-	rowCnt           int64 // for debug purpose
-	refCnt           int64
-	mpool            *mpool.MPool
-	shm              *hashmap.StrHashMap
-	ihm              *hashmap.IntHashMap
-	sels             GroupSels
-	delRows          *bitmap.Bitmap
-	batches          []*batch.Batch
+	runtimeFilter_In  bool
+	valid             bool
+	hasNullKey        bool
+	rowCnt            int64 // for debug purpose
+	refCnt            int64
+	mpool             *mpool.MPool
+	shm               *hashmap.StrHashMap
+	ihm               *hashmap.IntHashMap
+	sels              GroupSels
+	delRows           *bitmap.Bitmap
+	batches           []*batch.Batch
+	memoryRelease     func()
+	memoryReleaseOnce sync.Once
 
 	// spill support
 	Spilled       bool
@@ -268,6 +271,12 @@ func (jm *JoinMap) IsSpilled() bool {
 	return jm.Spilled
 }
 
+// SetMemoryRelease attaches accounting ownership to the JoinMap. The callback
+// runs exactly once when the map's physical memory is released.
+func (jm *JoinMap) SetMemoryRelease(release func()) {
+	jm.memoryRelease = release
+}
+
 // TakeSpillBuildFds transfers ownership of anonymous build-side file
 // descriptors from the JoinMap to the caller. After this call the JoinMap
 // no longer owns the fds; FreeMemory will not close them.
@@ -282,6 +291,12 @@ func (jm *JoinMap) IsDeleted(row uint64) bool {
 }
 
 func (jm *JoinMap) FreeMemory() {
+	defer jm.memoryReleaseOnce.Do(func() {
+		if jm.memoryRelease != nil {
+			jm.memoryRelease()
+			jm.memoryRelease = nil
+		}
+	})
 	for i, fd := range jm.SpillBuildFds {
 		if fd != nil {
 			fd.Close()
@@ -336,6 +351,20 @@ type JoinMapMsg struct {
 	ShuffleIdx int32
 	Tag        int32
 	Spilled    bool
+	// Result is the terminal dependency state.  The zero value is retained for
+	// source compatibility with older direct JoinMapMsg literals; those are
+	// interpreted as an explicit successful result (including nil for an empty
+	// build) by terminalResult.
+	Result JoinMapResult
+}
+
+func (t JoinMapMsg) terminalResult() JoinMapResult {
+	if t.Result.Finalized() {
+		return t.Result
+	}
+	// Legacy messages predate the explicit result field.  A nil JoinMap in a
+	// legacy message is the established empty-build success convention.
+	return NewJoinMapResult(t.JoinMapPtr)
 }
 
 func (t JoinMapMsg) Serialize() []byte {
@@ -351,8 +380,12 @@ func (t JoinMapMsg) NeedBlock() bool {
 }
 
 func (t JoinMapMsg) Destroy() {
-	if t.JoinMapPtr != nil {
-		t.JoinMapPtr.FreeMemory()
+	jm := t.JoinMapPtr
+	if jm == nil && t.Result.IsSuccess() {
+		jm = t.Result.JoinMap()
+	}
+	if jm != nil {
+		jm.FreeMemory()
 	}
 }
 
@@ -369,6 +402,8 @@ func (t JoinMapMsg) DebugString() string {
 	if t.JoinMapPtr != nil {
 		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowCnt)) + "\n")
 		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
+	} else if t.Result.IsBuildError() {
+		buf.WriteString("joinmap build error " + t.Result.BuildError().Error() + "\n")
 	} else {
 		buf.WriteString("joinmapPtr is nil \n")
 	}
@@ -380,14 +415,31 @@ func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
 }
 
 func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) (*JoinMap, error) {
+	result, err := ReceiveJoinMapResult(tag, isShuffle, shuffleIdx, mb, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if buildErr := result.BuildError(); buildErr != nil {
+		return nil, buildErr.AsMoErr()
+	}
+	return result.JoinMap(), nil
+}
+
+// ReceiveJoinMapResult waits for the immutable terminal dependency result.
+// Every receiver has its own MessageReceiver offset, but receives the same
+// JoinMapResult and (for failures) the same JoinMapBuildError pointer.
+func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) (JoinMapResult, error) {
 	msgReceiver := NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN(), mb)
 	for {
 		msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, ctx)
 		if err != nil {
-			return nil, err
+			return JoinMapResult{}, err
 		}
 		if ctxDone {
-			return nil, nil
+			if err := ctx.Err(); err != nil {
+				return JoinMapResult{}, err
+			}
+			return JoinMapResult{}, nil
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -399,20 +451,58 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 					continue
 				}
 			}
-			jm := msg.JoinMapPtr
+			result := msg.terminalResult()
+			if !result.Finalized() {
+				// A malformed/zero result must not be interpreted as empty.  Keep
+				// waiting for the producer's terminal publication.
+				continue
+			}
+			jm := result.JoinMap()
+			if result.IsBuildError() {
+				return result, nil
+			}
 			if jm == nil {
-				return nil, nil
+				return result, nil
 			}
 			if !jm.IsValid() {
 				panic("join receive a joinmap which has been freed!")
 			}
-			return jm, nil
+			return result, nil
 		}
 	}
 }
 
+// SendJoinMapResult publishes one terminal dependency value without waiting
+// for any consumer acknowledgement.  The caller owns exactly-once admission
+// (typically an atomic generation gate in HashBuild); this function only
+// performs the non-blocking MessageBoard publication.
+func SendJoinMapResult(result JoinMapResult, tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard) {
+	if !result.Finalized() {
+		return
+	}
+	msg := JoinMapMsg{
+		JoinMapPtr: result.JoinMap(),
+		IsShuffle:  isShuffle,
+		ShuffleIdx: shuffleIdx,
+		Tag:        tag,
+		Result:     result,
+	}
+	if jm := result.JoinMap(); jm != nil {
+		msg.Spilled = jm.IsSpilled()
+	}
+	SendMessage(msg, mb)
+}
+
+// FinalizeJoinMapBuildError publishes a typed BuildError terminal value.
+// It is kept separate from FinalizeJoinMapMessage so legacy nil-map empty
+// build compatibility cannot accidentally turn an admission failure into a
+// successful empty dependency.
+func FinalizeJoinMapBuildError(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, err error) {
+	SendJoinMapResult(NewJoinMapBuildErrorResult(err), tag, isShuffle, shuffleIdx, mb)
+}
+
 func FinalizeJoinMapMessage(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, sendMapSucceed bool) {
 	if !sendMapSucceed {
-		SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: isShuffle, ShuffleIdx: shuffleIdx, Tag: tag}, mb)
+		SendJoinMapResult(NewJoinMapResult(nil), tag, isShuffle, shuffleIdx, mb)
 	}
 }

@@ -17,7 +17,10 @@ package hashbuild
 import (
 	"bytes"
 	"os"
+	"sync"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,11 +44,17 @@ const (
 type container struct {
 	state           int
 	runtimeFilterIn bool
-	hashmapBuilder  HashmapBuilder
-	spilledFds      []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
-	spillFS         fileservice.MutableFileService
-	spillUUID       string // unique prefix for anonymous file paths
-	spillThreshold  int64
+	// terminalPublished is the per-execution generation gate for the JoinMap
+	// dependency.  A successful JoinMap or a BuildError wins this gate exactly
+	// once; Reset/Free/cancel paths cannot replace or duplicate it.
+	terminalPublished uint32
+	terminalMu        sync.Mutex
+	runtimeFilterDone bool
+	hashmapBuilder    HashmapBuilder
+	spilledFds        []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
+	spillFS           fileservice.MutableFileService
+	spillUUID         string // unique prefix for anonymous file paths
+	spillThreshold    int64
 
 	// reusable buffers for spill operations
 	spillHashValues   []uint64
@@ -106,7 +115,7 @@ func init() {
 	)
 }
 
-func (hashBuild HashBuild) TypeName() string {
+func (hashBuild *HashBuild) TypeName() string {
 	return opName
 }
 
@@ -121,8 +130,26 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.ctr.terminalMu.Lock()
+	defer hashBuild.ctr.terminalMu.Unlock()
 	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
 	mapSucceed := hashBuild.ctr.state == SendSucceed
+
+	// Call does not publish pipeline terminal signals.  Reset owns dependency
+	// finalization and is intentionally non-blocking: publication only appends
+	// one immutable value to the current-CN MessageBoard.
+	if !mapSucceed {
+		if pipelineFailed || err != nil {
+			if err == nil {
+				err = moerr.NewQueryInterrupted(proc.Ctx)
+			}
+			hashBuild.publishBuildError(proc, err)
+		} else {
+			// Preserve the established nil JoinMap convention for a true empty
+			// build and for legacy cleanup paths that completed without a map.
+			hashBuild.publishJoinMap(proc, nil)
+		}
+	}
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
 	// Only clean up build files when the join map was NOT successfully sent.
@@ -133,16 +160,64 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.spilledFds = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, hashBuild.IsShuffle, hashBuild.ShuffleIdx, mapSucceed)
+	if !hashBuild.ctr.runtimeFilterDone {
+		if pipelineFailed || err != nil {
+			// A failed build must complete the runtime-filter dependency with
+			// PASS.  DROP would incorrectly filter all probe rows because no
+			// unique keys were published.
+			message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		} else {
+			message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+		}
+	}
+	hashBuild.ctr.runtimeFilterDone = false
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.ctr.terminalMu.Lock()
+	defer hashBuild.ctr.terminalMu.Unlock()
+	// Normally Reset runs before Free.  Keep Free as a safe fallback for
+	// cancellation/error cleanup paths that bypass Reset, while preserving the
+	// exactly-once generation gate.
+	if atomic.LoadUint32(&hashBuild.ctr.terminalPublished) == 0 && (pipelineFailed || err != nil) {
+		if err == nil {
+			err = moerr.NewQueryInterrupted(proc.Ctx)
+		}
+		hashBuild.publishBuildError(proc, err)
+	}
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.spillKeyVecs = nil
 	hashBuild.ctr.spillHashValues = nil
 	hashBuild.ctr.spillBucketRowIds = nil
+}
+
+func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
+	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
+		return false
+	}
+	message.SendJoinMapResult(
+		message.NewJoinMapResult(jm),
+		hashBuild.JoinMapTag,
+		hashBuild.IsShuffle,
+		hashBuild.ShuffleIdx,
+		proc.GetMessageBoard(),
+	)
+	return true
+}
+
+func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) bool {
+	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
+		return false
+	}
+	message.FinalizeJoinMapBuildError(
+		proc.GetMessageBoard(),
+		hashBuild.JoinMapTag,
+		hashBuild.IsShuffle,
+		hashBuild.ShuffleIdx,
+		err,
+	)
+	return true
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {

@@ -300,12 +300,18 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &hashJoin.ctr
-	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	dep, err := process.MeasureWait(analyzer, resource.WaitOther, func() (message.JoinMapResult, error) {
+		return message.ReceiveJoinMapResult(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	})
 	if err != nil {
 		return err
 	}
+	if buildErr := dep.BuildError(); buildErr != nil {
+		// A terminal BuildError is a failed dependency, never an empty build.
+		// Return before consuming probe input so no successful rows can escape.
+		return buildErr.AsMoErr()
+	}
+	ctr.mp = dep.JoinMap()
 
 	// Pre-compute per-query flags for the probe loop.
 	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()

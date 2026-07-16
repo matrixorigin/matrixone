@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -52,6 +53,102 @@ func TestBuildHashMap(t *testing.T) {
 	hb.Reset(proc, true)
 	hb.Free(proc)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBuildHashMapBudgetRejectsResizeAndReleasesOnReset(t *testing.T) {
+	const budgetCap = uint64(1 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 10_000, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+
+	err = hb.BuildHashmap(false, false, false, proc)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, process.ErrHashBuildBudgetAdmission))
+	require.Greater(t, generation.Used(), uint64(0))
+
+	hb.Reset(proc, true)
+	require.Zero(t, generation.Used())
+}
+
+func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 100, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+
+	jm := hb.GetJoinMap(proc.Mp())
+	require.NotNil(t, jm)
+	jm.IncRef(1)
+	usedBeforeResize := generation.Used()
+	secondGeneration, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	hb.setBudget(secondGeneration)
+	require.NoError(t, jm.PreAlloc(100_000))
+	require.Greater(t, generation.Used(), usedBeforeResize)
+	require.Zero(t, secondGeneration.Used(), "published map must retain its original generation")
+	jm.Free()
+	require.Zero(t, generation.Used())
+
+	hb.Reset(proc, false)
+}
+
+func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
+	const budgetCap = uint64(32 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, rows := range []int{colexec.DefaultBatchSize, colexec.DefaultBatchSize, 100} {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 3)
+	require.Equal(t, 100, hb.Batches.Buf[2].RowCount())
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionHashKeyFailsClosedBeforeEvaluatorAllocation(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	err := hb.Prepare([]*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_F{F: &plan.Function{}},
+	}}, -1, -1, nil, proc)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, process.ErrHashBuildBudgetInvalid))
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestGetJoinMapTransfersGroupSels(t *testing.T) {

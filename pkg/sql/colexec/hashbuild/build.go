@@ -18,12 +18,11 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"sync/atomic"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,6 +40,14 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	// A HashBuild can be reused after Reset.  The terminal gate belongs to the
+	// new execution generation; the old MessageBoard is reset by the pipeline
+	// before this generation's consumers are started.
+	hashBuild.ctr.terminalMu.Lock()
+	atomic.StoreUint32(&hashBuild.ctr.terminalPublished, 0)
+	hashBuild.ctr.runtimeFilterDone = false
+	hashBuild.ctr.terminalMu.Unlock()
+
 	if hashBuild.OpAnalyzer == nil {
 		hashBuild.OpAnalyzer = process.NewAnalyzer(hashBuild.GetIdx(), hashBuild.IsFirst, hashBuild.IsLast, "hash build")
 	} else {
@@ -49,6 +56,11 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 
+	budget, err := proc.GetHashBuildBudget()
+	if err != nil {
+		return err
+	}
+	hashBuild.ctr.hashmapBuilder.setBudget(budget)
 	if !hashBuild.NeedHashMap {
 		return nil
 	}
@@ -81,6 +93,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case BuildHashMap:
 			if err := hashBuild.build(proc, analyzer); err != nil {
+				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
 			}
 
@@ -88,14 +101,21 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case HandleRuntimeFilter:
 			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
+				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
 			}
 
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
+			ctr.terminalMu.Lock()
 			if hashBuild.JoinMapTag <= 0 {
+				ctr.terminalMu.Unlock()
 				return result, moerr.NewInternalError(proc.Ctx, "wrong joinmap message tag!")
+			}
+			if atomic.LoadUint32(&ctr.terminalPublished) != 0 {
+				ctr.terminalMu.Unlock()
+				return result, moerr.NewQueryInterrupted(proc.Ctx)
 			}
 
 			var jm *message.JoinMap
@@ -118,21 +138,36 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 
-			message.SendMessage(message.JoinMapMsg{
-				JoinMapPtr: jm,
-				IsShuffle:  hashBuild.IsShuffle,
-				ShuffleIdx: hashBuild.ShuffleIdx,
-				Tag:        hashBuild.JoinMapTag,
-				Spilled:    spillMode,
-			}, proc.GetMessageBoard())
+			if !hashBuild.publishJoinMap(proc, jm) {
+				// Reset/Free may have won the terminal gate concurrently during
+				// cancellation.  Keep the producer side successful only if this
+				// publication won; consumers must never see two terminal values.
+				ctr.terminalMu.Unlock()
+				return result, moerr.NewQueryInterrupted(proc.Ctx)
+			}
 
 			ctr.state = SendSucceed
+			ctr.terminalMu.Unlock()
 
 		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
+	}
+}
+
+// finalizeBuildFailure publishes every producer-side dependency before Call
+// returns. Consumers may already be blocked in ReceiveJoinMap/RuntimeFilter;
+// deferring publication until Reset could deadlock a pipeline scheduler that
+// waits for those consumers before cleanup.
+func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) {
+	hashBuild.ctr.terminalMu.Lock()
+	defer hashBuild.ctr.terminalMu.Unlock()
+	hashBuild.publishBuildError(proc, err)
+	if !hashBuild.ctr.runtimeFilterDone {
+		message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		hashBuild.ctr.runtimeFilterDone = hashBuild.RuntimeFilterSpec != nil
 	}
 }
 
@@ -181,40 +216,21 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 
 		// Store original batch
-		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
+		err = ctr.hashmapBuilder.copyBuildBatch(result.Batch, proc)
 		if err != nil {
 			return err
 		}
 
 		// Check if we should enter spill mode based on batch memory size
 		if hashBuild.shouldSpillBatches() {
-			spillMode = true
-			// Initialize spill executors once for reuse across all batches
-			if ctr.spillExprExecs == nil {
-				if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
-					return err
-				}
+			// The existing spill implementation grows expression scratch, 32
+			// bucket batches, Go row-index slices, and a full marshal buffer
+			// outside the HashBuild budget. Until bounded/re-spill accounting is
+			// installed, fail closed before entering that allocation path.
+			return &process.HashBuildBudgetError{
+				Kind:    process.HashBuildBudgetErrorAdmission,
+				Message: "hash build spill requires bounded scratch admission",
 			}
-			// Generate unique prefix for anonymous file paths
-			uid, err := uuid.NewV7()
-			if err != nil {
-				return err
-			}
-			ctr.spillUUID = uid.String()
-			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
-
-			spillFiles = make([]*os.File, spillNumBuckets)
-			spillBuffers = make([]*batch.Batch, spillNumBuckets)
-
-			// Spill all batches collected so far
-			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
-				if err != nil {
-					return err
-				}
-			}
-			// Clear batches to save memory
-			ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 		}
 	}
 
@@ -258,7 +274,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	}
 
 	if !hashBuild.NeedBatches {
-		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+		ctr.hashmapBuilder.cleanBatches(proc)
 	}
 
 	analyzer.Alloc(ctr.hashmapBuilder.GetSize())
@@ -292,7 +308,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		var runtimeFilter message.RuntimeFilterMessage
 		runtimeFilter.Tag = hashBuild.RuntimeFilterSpec.Tag
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		hashBuild.sendRuntimeFilter(runtimeFilter, hashBuild.RuntimeFilterSpec, proc)
 		return nil
 	}
 
@@ -311,7 +327,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		// composite key still uses original IN / PASS logic
 		if spec.Expr != nil && spec.Expr.GetF() != nil {
 			runtimeFilter.Typ = message.RuntimeFilter_PASS
-			message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 			return nil
 		}
 
@@ -320,35 +336,42 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 			len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 ||
 			ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
 			runtimeFilter.Typ = message.RuntimeFilter_DROP
-			message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 			return nil
 		}
 
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
+		defer func() {
+			for i := range ctr.hashmapBuilder.UniqueJoinKeys {
+				ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
+			}
+			ctr.hashmapBuilder.UniqueJoinKeys = nil
+		}()
 
 		// Always send the unique join keys; the consumer (ivfflat / fulltext
 		// search) decides whether to use them as an exact pk IN filter or to
 		// build a membership filter, based on its own threshold.
 		runtimeFilter.Typ = message.RuntimeFilter_UNIQUEJOINKEYS
 
-		data, err := keyVec.MarshalBinary()
+		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
 		if err != nil {
 			return err
 		}
 		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
-		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+		runtimeFilter.SetMemoryRelease(release)
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
 
 	if spec.Expr == nil {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	} else if ctr.hashmapBuilder.InputBatchRowCount == 0 || len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 || ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
-		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
 
@@ -364,34 +387,22 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 
 	if hashmapCount > uint64(inFilterCardLimit) {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	} else {
+		if spec.Expr.GetF() != nil {
+			// Composite runtime-filter expression evaluation has no sound peak
+			// estimator yet. PASS preserves query correctness without allocating
+			// unaccounted expression intermediates.
+			runtimeFilter.Typ = message.RuntimeFilter_PASS
+			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+			return nil
+		}
 		rowCount := ctr.hashmapBuilder.UniqueJoinKeys[0].Length()
 
-		var data []byte
-		var err error
-		// Composite primary key
-		if spec.Expr.GetF() != nil {
-			bat := batch.NewOffHeapWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
-			bat.SetRowCount(rowCount)
-			copy(bat.Vecs, ctr.hashmapBuilder.UniqueJoinKeys)
-
-			vec, free, erg := colexec.GetReadonlyResultFromExpression(proc, spec.Expr, []*batch.Batch{bat})
-			if erg != nil {
-				return erg
-			}
-			// InplaceSort reorders data but NOT the null bitmap.
-			// NULLs are irrelevant for IN-filter: clear bitmap before sort.
-			vec.GetNulls().Reset()
-			vec.InplaceSort()
-			data, err = vec.MarshalBinary()
-			free()
-		} else {
-			ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
-			ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
-			data, err = ctr.hashmapBuilder.UniqueJoinKeys[0].MarshalBinary()
-		}
+		ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
+		ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
+		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(ctr.hashmapBuilder.UniqueJoinKeys[0])
 
 		if err != nil {
 			return err
@@ -400,8 +411,16 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
-		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+		runtimeFilter.SetMemoryRelease(release)
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		ctr.runtimeFilterIn = true
 	}
 	return nil
+}
+
+func (hashBuild *HashBuild) sendRuntimeFilter(rt message.RuntimeFilterMessage, spec *plan.RuntimeFilterSpec, proc *process.Process) {
+	message.SendRuntimeFilter(rt, spec, proc.GetMessageBoard())
+	if spec != nil {
+		hashBuild.ctr.runtimeFilterDone = true
+	}
 }
