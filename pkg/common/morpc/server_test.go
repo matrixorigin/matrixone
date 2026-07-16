@@ -492,7 +492,7 @@ func TestFinishStreamFlushesAckAndRetiresSequenceState(t *testing.T) {
 			cs.streamStateMu.Lock()
 			_, receivedExists := cs.receivedStreamSequences[stream.ID()]
 			cs.streamStateMu.Unlock()
-			_, sentExists := cs.sentStreamSequences.Load(stream.ID())
+			sentExists := cs.sentStreams.contains(stream.ID())
 			require.False(t, receivedExists)
 			require.False(t, sentExists)
 		case <-ctx.Done():
@@ -533,34 +533,97 @@ func TestCanceledStreamResponseDoesNotCreateSequenceGap(t *testing.T) {
 	})
 }
 
-func TestAssignStreamSequenceRejectsClosedSession(t *testing.T) {
-	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
-	defer cs.cancel()
-	cs.sentStreamSequences.Store(uint64(11), uint32(0))
-	msg := RPCMessage{Message: newTestMessage(11)}
+func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) {
+	cs := newClientSession(
+		newServerMetrics("test"),
+		newTestIOSession(nil, nil),
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	cs.c = make(chan *Future, 1)
+	require.True(t, cs.sentStreams.start(11))
 
-	cs.mu.Lock()
-	started := make(chan struct{})
+	queued := newFuture(nil)
+	queued.init(RPCMessage{
+		Ctx:     context.Background(),
+		Message: newTestMessage(10),
+		oneWay:  true,
+	})
+	cs.c <- queued
+
+	senderDone := make(chan error, 1)
+	go func() {
+		senderDone <- cs.AsyncWrite(newTestMessage(12))
+	}()
+	senderBlocked := assert.Eventually(t, func() bool {
+		if cs.mu.TryLock() {
+			cs.mu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- cs.Close()
+	}()
+	closeWaiting := assert.Eventually(t, func() bool {
+		if cs.mu.TryRLock() {
+			cs.mu.RUnlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+
+	msg := RPCMessage{Message: newTestMessage(11)}
 	assigned := make(chan bool, 1)
 	go func() {
-		close(started)
 		assigned <- cs.assignStreamSequence(&msg)
 	}()
-	<-started
-	cs.mu.closed = true
-	cs.sentStreamSequences.Clear()
-	cs.mu.Unlock()
+	var assignProgressed bool
+	select {
+	case assignProgressed = <-assigned:
+	case <-time.After(time.Second):
+	}
 
-	require.False(t, <-assigned)
-	require.False(t, msg.stream)
-	_, exists := cs.sentStreamSequences.Load(uint64(11))
-	require.False(t, exists)
+	if f, ok := <-cs.c; ok && f != nil {
+		f.Close()
+	}
+
+	var senderErr, closeErr error
+	select {
+	case senderErr = <-senderDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked sender did not finish")
+	}
+	select {
+	case closeErr = <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("session close did not finish")
+	}
+
+	require.True(t, senderBlocked)
+	require.True(t, closeWaiting)
+	require.True(t, assignProgressed)
+	require.True(t, msg.stream)
+	require.Equal(t, uint32(1), msg.streamSequence)
+	require.NoError(t, senderErr)
+	require.NoError(t, closeErr)
+
+	late := RPCMessage{Message: newTestMessage(11)}
+	require.False(t, cs.assignStreamSequence(&late))
+	require.False(t, late.stream)
+	require.False(t, cs.sentStreams.contains(11))
 }
 
 func TestFinishStreamPoisonsSessionWithPendingCache(t *testing.T) {
 	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
 	cs.receivedStreamSequences[11] = 2
-	cs.sentStreamSequences.Store(uint64(11), uint32(1))
+	require.True(t, cs.sentStreams.start(11))
+	_, stream, open := cs.sentStreams.next(11)
+	require.True(t, open)
+	require.True(t, stream)
 	_, err := cs.CreateCache(context.Background(), 11)
 	require.NoError(t, err)
 	token := StreamTerminalToken{owner: cs, streamID: 11, sequence: 2}
