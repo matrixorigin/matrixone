@@ -361,6 +361,13 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 		if !ok {
 			return bad()
 		}
+		// Guard the directory against a corrupt/bit-rotted blob (that still passed the
+		// outer CRC): a length whose high bit is set would cast to a negative int and
+		// slip past later bound checks, and an absurd count would make() a huge slice.
+		// df and nblk can never exceed the blocks byte length (each posting is >= 1 byte).
+		if dfu > uint64(len(blocks)) || nblku > uint64(len(blocks)) {
+			return bad()
+		}
 		df, nblk := int(dfu), int(nblku)
 		tp := &termPostings{ndoc: df}
 		if nblk > 0 {
@@ -391,7 +398,7 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 			}
 			tp.blockMinDocLn[b] = int32(minDL)
 			blkLen, ok := uv()
-			if !ok {
+			if !ok || blkLen > uint64(len(blocks)) { // uint guard: avoid int64(blkLen)<0 overflow
 				return bad()
 			}
 			tp.blockOff[b] = int32(cb - blkBase)
@@ -413,7 +420,9 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 			tp.minDocLen = termMinDL
 		}
 		posLen, ok := uv() // byte length of this term's compressed positions
-		if !ok || cpos+int64(posLen) > int64(len(positions)) {
+		// uint guard first: a high-bit posLen casts to negative int64 and would slip
+		// past the cumulative bound check, then panic in the slice expression.
+		if !ok || posLen > uint64(len(positions)) || cpos+int64(posLen) > int64(len(positions)) {
 			return bad()
 		}
 		tp.posRaw = positions[cpos : cpos+int64(posLen)]

@@ -34,12 +34,17 @@ import (
 //     results and never contribute to a phrase's document frequency.
 type Index struct {
 	segments []*Segment
-	deletes  map[string]int64 // pk key -> recency at/after which older copies are dead
+	deletes  map[any]int64 // normalizeKey(pk) -> recency at/after which older copies are dead
 
 	globalN         int64
 	globalAvgDocLen float64
-	// liveLoc maps a live pk key to the (segment index, doc ord) of its live copy.
-	liveLoc map[string]docLoc
+	// liveLoc maps a live pk key (normalizeKey) to the (segment index, doc ord) of its live copy.
+	liveLoc map[any]docLoc
+	// liveOrd[si] is a per-segment ord-indexed liveness bitmap (built once in resolve),
+	// so the boolean walk's livenessMembership is O(1) and allocation-free — no per-
+	// candidate keyOf + map lookup. A fully-live segment keeps liveOrd[si]==nil ("all
+	// live" fast path). Mirrors bm25's ComputeLiveness []Membership.
+	liveOrd [][]bool
 }
 
 type docLoc struct {
@@ -50,7 +55,7 @@ type docLoc struct {
 // NewIndex builds an index over the given loaded segments (each carrying its
 // Recency) and delete set, computing global stats and the liveness map. deletes
 // may be nil.
-func NewIndex(segments []*Segment, deletes map[string]int64) *Index {
+func NewIndex(segments []*Segment, deletes map[any]int64) *Index {
 	idx := &Index{segments: segments, deletes: deletes}
 	idx.resolve()
 	return idx
@@ -64,10 +69,10 @@ func (idx *Index) resolve() {
 		rec int64
 		loc docLoc
 	}
-	top := make(map[string]best)
+	top := make(map[any]best)
 	for si, seg := range idx.segments {
 		for ord := range seg.pks {
-			key := keyOf(seg.pks[ord])
+			key := normalizeKey(seg.pks[ord])
 			cand := best{seg.Recency, docLoc{si, int64(ord)}}
 			if cur, ok := top[key]; !ok || cand.rec > cur.rec {
 				top[key] = cand
@@ -75,7 +80,7 @@ func (idx *Index) resolve() {
 		}
 	}
 
-	idx.liveLoc = make(map[string]docLoc, len(top))
+	idx.liveLoc = make(map[any]docLoc, len(top))
 	var sumDocLen int64
 	for key, b := range top {
 		if d, ok := idx.deletes[key]; ok && b.rec < d {
@@ -91,10 +96,30 @@ func (idx *Index) resolve() {
 	for _, seg := range idx.segments {
 		seg.AvgDocLen = idx.globalAvgDocLen
 	}
+
+	// Per-segment liveness bitmap (mirrors bm25's ComputeLiveness): a fully-live
+	// segment keeps liveOrd[si]==nil (the common single-base / append-only case) so it
+	// costs no O(doc-count) allocation; otherwise mark each live ord true. The boolean
+	// walk's livenessMembership then indexes this O(1) instead of keyOf+map per candidate.
+	idx.liveOrd = make([][]bool, len(idx.segments))
+	liveCount := make([]int, len(idx.segments))
+	for _, loc := range idx.liveLoc {
+		liveCount[loc.si]++
+	}
+	for si, seg := range idx.segments {
+		if liveCount[si] < len(seg.pks) { // some dead ord in this segment → need the bitmap
+			idx.liveOrd[si] = make([]bool, len(seg.pks))
+		}
+	}
+	for _, loc := range idx.liveLoc {
+		if b := idx.liveOrd[loc.si]; b != nil {
+			b[loc.ord] = true
+		}
+	}
 }
 
-// isLive reports whether (si, ord) is the live copy of key.
-func (idx *Index) isLive(si int, ord int64, key string) bool {
+// isLive reports whether (si, ord) is the live copy of key (a normalizeKey value).
+func (idx *Index) isLive(si int, ord int64, key any) bool {
 	l, ok := idx.liveLoc[key]
 	return ok && l.si == si && l.ord == ord
 }
@@ -114,14 +139,14 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 		ord int64
 		tf  int
 	}
-	matched := make(map[string]match)
+	matched := make(map[any]match)
 	for si, seg := range idx.segments {
 		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
 		for _, h := range seg.matchPhrase(terms) {
 			if !allowed(allow, h.ord) {
 				continue
 			}
-			key := keyOf(seg.pks[h.ord])
+			key := normalizeKey(seg.pks[h.ord])
 			if idx.isLive(si, h.ord, key) {
 				matched[key] = match{seg, h.ord, h.tf}
 			}
@@ -132,25 +157,29 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 	}
 
 	idf2 := idfSquared(idx.globalN, len(matched)) // df = live matched docs (exact)
-	keys := make([]string, 0, len(matched))
-	for key := range matched {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys) // deterministic tiebreak
-
-	results := make([]Result, len(keys))
-	for i, key := range keys {
-		m := matched[key]
-		results[i] = Result{
+	results := make([]Result, 0, len(matched))
+	for _, m := range matched {
+		results = append(results, Result{
 			Pk:    m.seg.pks[m.ord],
 			Score: m.seg.scoreTerm(algo, float64(m.tf), idf2, m.ord, idx.globalAvgDocLen),
-		}
+		})
 	}
-	sort.SliceStable(results, func(a, b int) bool { return results[a].Score > results[b].Score })
+	sortResults(results) // score desc, ties by ascending pk (deterministic)
 	if len(results) > k {
 		results = results[:k]
 	}
 	return results
+}
+
+// sortResults orders results by score descending, breaking ties by the pk's sortKey
+// (ascending) for a deterministic, reproducible order.
+func sortResults(results []Result) {
+	sort.Slice(results, func(a, b int) bool {
+		if results[a].Score != results[b].Score {
+			return results[a].Score > results[b].Score
+		}
+		return sortKey(results[a].Pk) < sortKey(results[b].Pk)
+	})
 }
 
 // SearchText tokenizes query with tok and runs an NL exact-phrase search across
@@ -226,7 +255,7 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfi
 		return nil, nil
 	}
 	gs := idx.newGlobalStats()
-	matched := make(map[string]Result)
+	matched := make(map[any]Result)
 	for si, seg := range idx.segments {
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
 		res, err := seg.SearchBoolean(q, algo, k, allow, gs)
@@ -234,22 +263,17 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfi
 			return nil, err
 		}
 		for _, r := range res {
-			matched[keyOf(r.Pk)] = r // liveness inside the walk → one live copy per pk
+			matched[normalizeKey(r.Pk)] = r // liveness inside the walk → one live copy per pk
 		}
 	}
 	if len(matched) == 0 {
 		return nil, nil
 	}
-	keys := make([]string, 0, len(matched))
-	for key := range matched {
-		keys = append(keys, key)
+	results := make([]Result, 0, len(matched))
+	for _, r := range matched {
+		results = append(results, r)
 	}
-	sort.Strings(keys)
-	results := make([]Result, len(keys))
-	for i, key := range keys {
-		results[i] = matched[key]
-	}
-	sort.SliceStable(results, func(a, b int) bool { return results[a].Score > results[b].Score })
+	sortResults(results)
 	if len(results) > k {
 		results = results[:k]
 	}
@@ -301,11 +325,11 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 		}
 	}
 
-	keys := make([]string, 0, len(idx.liveLoc))
+	keys := make([]any, 0, len(idx.liveLoc))
 	for k := range idx.liveLoc {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool { return sortKey(keys[i]) < sortKey(keys[j]) }) // deterministic output
 	out := make([]TokenizedDoc, 0, len(keys))
 	for _, k := range keys {
 		l := idx.liveLoc[k]
@@ -332,10 +356,25 @@ func (idx *Index) Free() {
 	}
 }
 
-// keyOf produces a stable string key for a primary-key value, used for
-// cross-segment liveness and result dedup. Bytes/strings pass through; other
-// types use their default formatting (deterministic for the scalar pk types).
-func keyOf(pk any) string {
+// normalizeKey converts a pk to a comparable map key ([]byte -> string) and is the
+// key for every pk-keyed map (liveness, deletes, dedup). Keying by the pk VALUE (not
+// its String()) makes it INJECTIVE for every comparable pk type via Go == : a
+// microsecond-precision DATETIME/TIME/TIMESTAMP (whose String() truncates to whole
+// seconds), a raw uuid ([16]byte), a decimal128 struct — all key by their exact value
+// and can never collide, so no distinct live document is dropped. Mirrors bm25's
+// normalizeKey exactly (the complete port; a %v/String() key was lossy).
+func normalizeKey(pk any) any {
+	if b, ok := pk.([]byte); ok {
+		return string(b)
+	}
+	return pk
+}
+
+// sortKey is a deterministic STRING projection of a pk, used ONLY to order equal-score
+// results (and MERGE output) reproducibly — never as a map key. It need not be
+// injective: the value-keyed maps already dedup distinct pks, so a lossy tie between
+// two pks only makes their relative order arbitrary, with both still present.
+func sortKey(pk any) string {
 	switch v := pk.(type) {
 	case []byte:
 		return string(v)

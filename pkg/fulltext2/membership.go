@@ -107,11 +107,11 @@ type livenessMembership struct {
 }
 
 func (l *livenessMembership) Contains(ord int64) bool {
-	seg := l.idx.segments[l.si]
-	if ord < 0 || ord >= int64(len(seg.pks)) {
-		return false
+	b := l.idx.liveOrd[l.si]
+	if b == nil {
+		return true // fully-live segment (no dead copies) — the fast path
 	}
-	return l.idx.isLive(l.si, ord, keyOf(seg.pks[ord]))
+	return ord >= 0 && ord < int64(len(b)) && b[ord]
 }
 
 // andMembership is the conjunction of two memberships (either may be nil = allow all).

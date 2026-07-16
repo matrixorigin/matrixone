@@ -48,7 +48,7 @@ func TestSinkInsertUpdateDelete(t *testing.T) {
 	tailSeg, tailDel, err := tail.Build("tail", 1)
 	require.NoError(t, err)
 	// pk2 was reinserted (UPDATE) → no tombstone; pk3 is a pure delete.
-	require.Equal(t, map[string]int64{keyOf(int64(3)): 1}, tailDel)
+	require.Equal(t, map[any]int64{normalizeKey(int64(3)): 1}, tailDel)
 
 	idx := NewIndex([]*Segment{baseSeg, tailSeg}, MergeDeletes(baseDel, tailDel))
 

@@ -180,12 +180,26 @@ func (p *termPostings) materializePositions() [][]int32 {
 	out := make([][]int32, df)
 	off := 0
 	for i := 0; i < df; i++ {
+		if off >= len(p.posRaw) {
+			break // truncated/corrupt (defense-in-depth on already-checksummed data)
+		}
 		pc, n := binary.Uvarint(p.posRaw[off:])
+		if n <= 0 {
+			break
+		}
 		off += n
+		// A doc's position count cannot exceed the remaining bytes (each gap is >= 1
+		// varint byte), so a garbage pc can't make() an unbounded slice.
+		if pc > uint64(len(p.posRaw)-off) {
+			pc = uint64(len(p.posRaw) - off)
+		}
 		doc := make([]int32, pc)
 		var pp int32
 		for m := uint64(0); m < pc; m++ {
 			g, k := binary.Uvarint(p.posRaw[off:])
+			if k <= 0 {
+				break
+			}
 			off += k
 			pp += int32(g)
 			doc[m] = pp

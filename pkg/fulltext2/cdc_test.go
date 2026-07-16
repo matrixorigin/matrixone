@@ -63,7 +63,7 @@ func TestDeleteLogRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, got, len(tc.recs))
 		for i := range tc.recs {
-			require.Equal(t, keyOf(tc.recs[i].Pk), keyOf(got[i].Pk))
+			require.Equal(t, normalizeKey(tc.recs[i].Pk), normalizeKey(got[i].Pk))
 		}
 	}
 }
@@ -98,7 +98,7 @@ func TestTailBuilderLiveness(t *testing.T) {
 	// Persist simulation: assign recencies in Finish() order (delete frame first,
 	// then insert segments), all above the base recency (0).
 	tails := []*Segment{base}
-	deletes := map[string]int64{}
+	deletes := map[any]int64{}
 	recency := int64(100)
 	for i, ts := range segs {
 		framed, rerr := os.ReadFile(ts.Path)

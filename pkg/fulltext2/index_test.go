@@ -49,7 +49,7 @@ func TestIndexLiveness(t *testing.T) {
 		{int64(2), []byte("omega")}, // new text for pk 2
 		{int64(4), []byte("beta")},
 	})
-	idx := NewIndex([]*Segment{base, tail}, map[string]int64{keyOf(int64(3)): 1})
+	idx := NewIndex([]*Segment{base, tail}, map[any]int64{normalizeKey(int64(3)): 1})
 
 	require.Equal(t, int64(3), idx.NumDocs()) // pk 1, 2(new), 4 live; pk 3 deleted
 

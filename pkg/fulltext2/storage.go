@@ -320,7 +320,7 @@ func createLocalTempFile(sqlproc *sqlexec.SqlProcess) (*os.File, string, error) 
 // reassembled into frames, and each insert frame decoded into a segment (its
 // Recency = the frame's first chunk_id). Delete frames are folded into the pk
 // tombstone map. Empty tail → (nil, nil, nil).
-func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, map[string]int64, error) {
+func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, map[any]int64, error) {
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
@@ -355,7 +355,7 @@ func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment,
 	}
 
 	var segs []*Segment
-	deletes := make(map[string]int64)
+	deletes := make(map[any]int64)
 	for _, f := range frames {
 		records, _, nInserts, nDeletes, _, uerr := cuvscdc.UnframeCdcChunk(f.Data)
 		if uerr != nil {

@@ -116,17 +116,17 @@ func DecodeDeleteLog(buf []byte) ([]DeleteRecord, error) {
 // foldDeleteFrame folds one decoded delete frame (all records share the frame's
 // chunk_id) into the pk-key -> max-delete-chunk_id map that Index liveness
 // consumes: a copy with Recency < the delete chunk_id is shadowed. Keyed by
-// keyOf(pk) (matching resolve()); the max chunk_id wins, so re-delivered deletes
+// normalizeKey(pk) (matching resolve()); the max chunk_id wins, so re-delivered deletes
 // only raise the bound. Mirrors bm25's FoldDeleteFrame (string-keyed here).
-func foldDeleteFrame(m map[string]int64, recs []DeleteRecord, chunkId int64) map[string]int64 {
+func foldDeleteFrame(m map[any]int64, recs []DeleteRecord, chunkId int64) map[any]int64 {
 	if len(recs) == 0 {
 		return m
 	}
 	if m == nil {
-		m = make(map[string]int64)
+		m = make(map[any]int64)
 	}
 	for _, r := range recs {
-		k := keyOf(r.Pk)
+		k := normalizeKey(r.Pk)
 		if cur, ok := m[k]; !ok || chunkId > cur {
 			m[k] = chunkId
 		}

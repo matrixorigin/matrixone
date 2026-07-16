@@ -53,19 +53,19 @@ func TestReconstructLiveDocs(t *testing.T) {
 	tail.Recency = 100
 
 	// delete doc 0 at recency 100.
-	idx := NewIndex([]*Segment{base, tail}, map[string]int64{keyOf(int64(0)): 100})
+	idx := NewIndex([]*Segment{base, tail}, map[any]int64{normalizeKey(int64(0)): 100})
 
 	docs, err := idx.ReconstructLiveDocs()
 	require.NoError(t, err)
 
-	got := map[string][]string{}
+	got := map[any][]string{}
 	for _, d := range docs {
-		got[keyOf(d.Pk)] = d.Terms
+		got[normalizeKey(d.Pk)] = d.Terms
 	}
 	// doc 0 deleted, doc 1 = updated tail copy, doc 2 inserted. Term ORDER preserved.
-	require.NotContains(t, got, keyOf(int64(0)))
-	require.Equal(t, []string{"blueberry", "muffin"}, got[keyOf(int64(1))])
-	require.Equal(t, []string{"cherry", "cake"}, got[keyOf(int64(2))])
+	require.NotContains(t, got, normalizeKey(int64(0)))
+	require.Equal(t, []string{"blueberry", "muffin"}, got[normalizeKey(int64(1))])
+	require.Equal(t, []string{"cherry", "cake"}, got[normalizeKey(int64(2))])
 	require.Len(t, docs, 2)
 
 	// Rebuilding from the reconstruction gives an index with identical results.

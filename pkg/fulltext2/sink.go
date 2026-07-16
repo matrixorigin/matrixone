@@ -42,8 +42,8 @@ type Sink struct {
 	pkType     int32
 	tok        tokenizer.Tokenizer
 	inserts    []Doc
-	insertKeys map[string]bool
-	deleteKeys map[string]bool
+	insertKeys map[any]bool
+	deleteKeys map[any]bool
 }
 
 // NewSink creates a sink for a batch. pkType is the source pk's types.T; tok is
@@ -52,14 +52,14 @@ func NewSink(pkType int32, tok tokenizer.Tokenizer) *Sink {
 	return &Sink{
 		pkType:     pkType,
 		tok:        tok,
-		insertKeys: make(map[string]bool),
-		deleteKeys: make(map[string]bool),
+		insertKeys: make(map[any]bool),
+		deleteKeys: make(map[any]bool),
 	}
 }
 
 // Add feeds one row event into the batch.
 func (s *Sink) Add(ev RowEvent) {
-	key := keyOf(ev.Pk)
+	key := normalizeKey(ev.Pk)
 	if ev.Delete {
 		s.deleteKeys[key] = true
 		return
@@ -71,20 +71,20 @@ func (s *Sink) Add(ev RowEvent) {
 // Build finalizes the batch into a segment (the inserted rows, at the given
 // recency) and the tombstone set (pk key → recency) for pks deleted but not
 // reinserted in this batch.
-func (s *Sink) Build(id string, recency int64) (*Segment, map[string]int64, error) {
+func (s *Sink) Build(id string, recency int64) (*Segment, map[any]int64, error) {
 	seg, err := BuildSegmentFromDocs(id, s.pkType, s.inserts, s.tok)
 	if err != nil {
 		return nil, nil, err
 	}
 	seg.Recency = recency
 
-	var deletes map[string]int64
+	var deletes map[any]int64
 	for key := range s.deleteKeys {
 		if s.insertKeys[key] {
 			continue // reinserted in the same batch → an UPDATE, not a tombstone
 		}
 		if deletes == nil {
-			deletes = make(map[string]int64)
+			deletes = make(map[any]int64)
 		}
 		deletes[key] = recency
 	}
@@ -93,8 +93,8 @@ func (s *Sink) Build(id string, recency int64) (*Segment, map[string]int64, erro
 
 // MergeDeletes folds several per-batch delete maps into one (latest recency
 // wins), for feeding NewIndex.
-func MergeDeletes(maps ...map[string]int64) map[string]int64 {
-	out := make(map[string]int64)
+func MergeDeletes(maps ...map[any]int64) map[any]int64 {
+	out := make(map[any]int64)
 	for _, m := range maps {
 		for key, rec := range m {
 			if cur, ok := out[key]; !ok || rec > cur {

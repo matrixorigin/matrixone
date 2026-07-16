@@ -15,11 +15,35 @@
 package fulltext2
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+// TestTemporalPkNoCollision pins the value-keyed liveness fix: two DATETIME pks that
+// differ only in microseconds render to the SAME %v/String() (which truncates to
+// whole seconds), so a string-keyed liveness map would collide them and silently drop
+// one live doc. normalizeKey keys by the pk VALUE, so both stay distinct.
+func TestTemporalPkNoCollision(t *testing.T) {
+	const sec = int64(63745056000)           // arbitrary second count
+	dt1 := types.Datetime(sec*1_000_000 + 1) // ...000001 microseconds
+	dt2 := types.Datetime(sec*1_000_000 + 2) // ...000002 microseconds
+	require.Equal(t, fmt.Sprintf("%v", dt1), fmt.Sprintf("%v", dt2),
+		"precondition: the two pks DO collide under %%v (String drops microseconds)")
+
+	b := NewBuilder("dt", int32(types.T_datetime))
+	feed(t, b, dt1, "alpha")
+	feed(t, b, dt2, "alpha")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	idx := NewIndex([]*Segment{seg}, nil)
+
+	require.Equal(t, int64(2), idx.globalN, "both microsecond-distinct pks must be live")
+	require.Len(t, idx.SearchPhrase([]string{"alpha"}, BM25, 10, nil), 2,
+		"both docs must be returned (neither dropped by a lossy key)")
+}
 
 // docWords are 24 docs with skewed term frequencies (alpha common, beta medium,
 // gamma/delta rarer) and varying lengths, so idf and the BM25 length-norm both
