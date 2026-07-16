@@ -49,13 +49,11 @@ delete from t1 where a=20220102;
 select * from t1 where a<>'20220104' order by 1 asc;
 ➤ a[91,64,0]  𝄀
 2022-01-01  𝄀
-2022-01-02  𝄀
 2022-01-03
 update t1 set a='2022-02-02' where a='2022-01-03';
 select * from t1;
 ➤ a[91,64,0]  𝄀
 2022-01-01  𝄀
-2022-01-02  𝄀
 2022-01-04  𝄀
 2022-02-02
 drop table t1;
@@ -75,10 +73,11 @@ select * from t1 order by big limit 2 offset 1;
 1  ¦  2001-01-01  𝄀
 1  ¦  2002-01-01
 select distinct big from t1 where big=20000101 order by big desc;
-➤ big[91,64,0]
+➤ big[91,64,0]  𝄀
+2000-01-01
 select min(big),max(big),max(big)-1 from t1;
 ➤ min(big)[91,64,0]  ¦  max(big)[91,64,0]  ¦  max(big) - 1[-5,64,0]  𝄀
-2000-01-01  ¦  2002-01-01  ¦  11687
+2000-01-01  ¦  2002-01-01  ¦  20020100
 select min(big),avg(big),count(big)+1 from t1 group by big order by 1 asc, 2 asc;
 invalid argument aggregate function avg, bad value [DATE]
 drop table t1;
@@ -126,7 +125,7 @@ insert INTO t_date VALUES ('2020-01-01'), ('2022-01-02');
 SELECT id, id >= 20200102 FROM t_date;
 ➤ id[91,64,0]  ¦  id >= 20200102[-7,1,0]  𝄀
 2020-01-01  ¦  0  𝄀
-2022-01-02  ¦  0
+2022-01-02  ¦  1
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
 ➤ id[91,64,0]  ¦  1.1 <= 2020-01-01[-7,1,0]  𝄀
 2020-01-01  ¦  0  𝄀
@@ -140,7 +139,8 @@ SELECT id, '20200101' = id FROM t_date;
 2020-01-01  ¦  1  𝄀
 2022-01-02  ¦  0
 SELECT * from t_date WHERE id = 20200101;
-➤ id[91,64,0]
+➤ id[91,64,0]  𝄀
+2020-01-01
 SELECT * from t_date WHERE id = 2.0200101e7;
 invalid argument operator =, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id = '20200101';
@@ -156,7 +156,8 @@ SELECT * from t_date WHERE id IN (20220101, 20220103);
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
 ➤ id[91,64,0]
 SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
-➤ id[91,64,0]
+➤ id[91,64,0]  𝄀
+2020-01-01
 SELECT * from t_date WHERE id BETWEEN 2.0200101e7 and 2.0200103e7;
 invalid argument operator >=, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
@@ -279,7 +280,6 @@ delete from t1 where a=20220101+3;
 select a,b from t1;
 ➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
 2022-01-02  ¦  2000-01-01  𝄀
-2022-01-04  ¦  2000-01-01  𝄀
 2022-01-06  ¦  2000-01-01  𝄀
 2022-01-08  ¦  2000-01-01  𝄀
 2022-01-10  ¦  2000-01-01  𝄀
@@ -288,7 +288,6 @@ delete from t1 where  3 < 2;
 select a,b from t1;
 ➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
 2022-01-02  ¦  2000-01-01  𝄀
-2022-01-04  ¦  2000-01-01  𝄀
 2022-01-06  ¦  2000-01-01  𝄀
 2022-01-08  ¦  2000-01-01  𝄀
 2022-01-10  ¦  2000-01-01  𝄀

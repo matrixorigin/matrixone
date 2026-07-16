@@ -136,6 +136,8 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 	}
 
 	sr.reset(requests)
+	commitResponsesPending := 0
+	var commitTxnID []byte
 	for idx := range requests {
 		tn := requests[idx].GetTargetTN()
 		st := sr.getStream(tn.ShardID)
@@ -152,7 +154,17 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		requests[idx].RequestID = st.ID()
 		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
+			if requests[idx].Method == txn.TxnMethod_Commit {
+				// Stream.Send waits for the backend write/flush completion. A
+				// failure here can therefore be reported after part or all of the
+				// Commit reached TN; it is not proof that Commit was not sent.
+				return nil, newTxnUnknownError(ctx, requests[idx].Txn.ID)
+			}
 			return nil, err
+		}
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending++
+			commitTxnID = requests[idx].Txn.ID
 		}
 	}
 
@@ -161,15 +173,29 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		c, err := st.Receive()
 		if err != nil {
 			sr.Release()
+			if commitResponsesPending > 0 {
+				// Commit was accepted by the stream, so a response-path error
+				// cannot prove whether TN applied it.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, err
 		}
 		v, ok := <-c
-		if !ok {
+		if !ok || v == nil {
+			sr.Release()
+			if commitResponsesPending > 0 {
+				// A closed stream after Commit was sent has the same unknown
+				// outcome as a Receive error.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, moerr.NewStreamClosedNoCtx()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
 		s.releaseResponse(resp)
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending--
+		}
 	}
 	return sr, nil
 }
