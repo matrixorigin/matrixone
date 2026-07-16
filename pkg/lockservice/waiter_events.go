@@ -209,6 +209,8 @@ func (mw *waiterEvents) close() {
 	for _, w := range mw.mu.blockedWaiters {
 		w.close("waiterEvents close", mw.logger)
 	}
+	clear(mw.mu.blockedWaiters)
+	mw.mu.blockedWaiters = nil
 	mw.mu.Unlock()
 }
 
