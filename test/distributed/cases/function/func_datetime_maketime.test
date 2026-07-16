@@ -16,7 +16,7 @@ SELECT MAKETIME(12, 15, 0) AS time6;
 SELECT MAKETIME(838, 59, 59) AS time7;
 SELECT MAKETIME(100, 0, 0) AS time8;
 
-# Invalid values (should return NULL)
+# Negative hours are valid; other invalid values return NULL
 SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 SELECT MAKETIME(12, 15, 60) AS invalid_second;
@@ -28,8 +28,11 @@ SELECT MAKETIME(12, NULL, 30) AS null_minute;
 SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
-# Float values (should truncate)
+# Float hour and minute values truncate; fractional seconds are preserved
 SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
+SELECT MAKETIME(12, 34, 56.789012) AS fractional_seconds;
+SELECT MAKETIME(-12, 34, 56.789012) AS negative_fractional;
+SELECT MAKETIME(12, 59, 59.9999996) AS fractional_carry;
 
 # Table usage
 CREATE TABLE t1(h INT, m INT, s INT);

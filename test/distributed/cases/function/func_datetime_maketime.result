@@ -27,7 +27,7 @@ time8
 100:00:00
 SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
 invalid_hour
-null
+-01:15:30
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 invalid_minute
 null
@@ -51,7 +51,16 @@ null_all
 null
 SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
 float_values
-12:15:30
+12:15:30.9
+SELECT MAKETIME(12, 34, 56.789012) AS fractional_seconds;
+fractional_seconds
+12:34:56.789012
+SELECT MAKETIME(-12, 34, 56.789012) AS negative_fractional;
+negative_fractional
+-12:34:56.789012
+SELECT MAKETIME(12, 59, 59.9999996) AS fractional_carry;
+fractional_carry
+13:00:00.000000
 CREATE TABLE t1(h INT, m INT, s INT);
 INSERT INTO t1 VALUES (12, 15, 30), (0, 0, 0), (23, 59, 59);
 SELECT MAKETIME(h, m, s) AS time_value FROM t1;
