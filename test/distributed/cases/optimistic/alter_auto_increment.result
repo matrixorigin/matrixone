@@ -46,4 +46,13 @@ id    v
 1    1
 5000    2
 5001    3
+create table ai_expression_default(
+id bigint primary key auto_increment,
+label varchar(20) default (concat('x', 'y'))
+);
+alter table ai_expression_default auto_increment = 1000;
+insert into ai_expression_default values (default, default);
+select id, label from ai_expression_default;
+id    label
+1000    xy
 drop database ai_alter_txn_optimistic;

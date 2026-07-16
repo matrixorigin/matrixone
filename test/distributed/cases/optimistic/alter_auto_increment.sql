@@ -47,4 +47,14 @@ alter table ai_dml_first_retry auto_increment = 1000;
 insert into ai_dml_first_retry(v) values (3);
 select id, v from ai_dml_first_retry order by id;
 
+-- #25675 also changes ALTER TABLE's table-definition rewrite.  Keep an
+-- expression default intact when AUTO_INCREMENT changes in the same table.
+create table ai_expression_default(
+    id bigint primary key auto_increment,
+    label varchar(20) default (concat('x', 'y'))
+);
+alter table ai_expression_default auto_increment = 1000;
+insert into ai_expression_default values (default, default);
+select id, label from ai_expression_default;
+
 drop database ai_alter_txn_optimistic;
