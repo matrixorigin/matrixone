@@ -529,7 +529,6 @@ func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
-	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb
@@ -559,6 +558,61 @@ func TestDrainIndexCdcTaskConsumerRemoteFenceCleanupOnTxnEvent(t *testing.T) {
 
 	require.Len(t, qc.requests, 2)
 	require.False(t, qc.requests[0].ISCPDrainConsumerRequest.RemoveFenceOnly)
+	require.True(t, qc.requests[1].ISCPDrainConsumerRequest.RemoveFenceOnly)
+}
+
+func TestDrainIndexCdcTaskConsumerRemoteRollbackCleanupIgnoresCanceledCallerContext(t *testing.T) {
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetCNQueryAddress = func(context.Context, string, string) (string, error) {
+		return "runner-cn:18101", nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetCNQueryAddress = getCNQueryAddress
+	}()
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	var rollbackCleanup client.TxnEventCallback
+	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			rollbackCleanup = cb
+		},
+	).Times(1)
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	c.proc.Base.TxnOperator = txnOp
+	qc := &iscpDrainTestQueryClient{serviceID: "ddl-cn"}
+	c.proc.Base.QueryClient = qc
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, rollbackCleanup.Func(canceledCtx, txnOp, client.TxnEvent{CostEvent: true}, nil))
+
+	require.Len(t, qc.requests, 2)
 	require.True(t, qc.requests[1].ISCPDrainConsumerRequest.RemoveFenceOnly)
 }
 
@@ -623,7 +677,6 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	var rollbackCleanup client.TxnEventCallback
-	txnOp.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).Times(1)
 	txnOp.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).DoAndReturn(
 		func(_ client.EventType, cb client.TxnEventCallback) {
 			rollbackCleanup = cb

@@ -187,7 +187,7 @@ func NewISCPTaskExecutor(
 		tableMu:     sync.RWMutex{},
 		option:      option,
 		mp:          mp,
-		fencedJobs:  make(map[JobRuntimeKey]struct{}),
+		fencedJobs:  make(map[JobRuntimeKey]JobFence),
 		runningConsumers: make(
 			map[JobRuntimeKey]map[uint64]*RunningJobConsumer,
 		),
@@ -972,6 +972,9 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	notPrint bool,
 ) error {
 	var newCreate bool
+	if dropAt != 0 {
+		exec.RemoveJobFence(NewJobRuntimeKey(accountID, tableID, jobName, jobID))
+	}
 
 	var watermark types.TS
 	defer func() {

@@ -212,6 +212,12 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 	}
 	key := iscp.NewJobRuntimeKey(r.AccountID, r.TableID, r.JobName, r.JobID)
 	if r.RemoveFenceOnly {
+		if _, msg, injected := fault.TriggerFault(objectio.FJ_ISCPCancelRemoveFenceError); injected {
+			if msg == "" {
+				msg = objectio.FJ_ISCPCancelRemoveFenceError
+			}
+			return moerr.NewInternalErrorNoCtxf("injected ISCP remove fence error: %s", msg)
+		}
 		exec.RemoveJobFence(key)
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil

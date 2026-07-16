@@ -263,7 +263,6 @@ func drainIndexCdcTaskConsumer(
 				exec.RemoveJobFence(key)
 				return nil
 			})
-			txnOp.AppendEventCallback(client.CommitEvent, cleanup)
 			txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
 		}
 		return nil
@@ -291,12 +290,14 @@ func drainIndexCdcTaskConsumer(
 			if !event.CostEvent {
 				return nil
 			}
-			if ctx == nil {
-				ctx = c.proc.Ctx
-			}
-			return sendISCPDrainConsumerRequest(ctx, qc, queryAddress, accountID, tableID, jobName, jobID, true)
+			cleanupCtx, cancel := context.WithTimeoutCause(
+				context.Background(),
+				iscp.DefaultRollbackFenceTTL,
+				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
+			)
+			defer cancel()
+			return sendISCPDrainConsumerRequest(cleanupCtx, qc, queryAddress, accountID, tableID, jobName, jobID, true)
 		})
-		txnOp.AppendEventCallback(client.CommitEvent, cleanup)
 		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
 	}
 	return nil

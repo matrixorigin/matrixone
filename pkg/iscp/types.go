@@ -161,7 +161,7 @@ type ISCPTaskExecutor struct {
 	runningMu sync.Mutex
 
 	runtimeMu        sync.Mutex
-	fencedJobs       map[JobRuntimeKey]struct{}
+	fencedJobs       map[JobRuntimeKey]JobFence
 	runningConsumers map[JobRuntimeKey]map[uint64]*RunningJobConsumer
 }
 
@@ -170,6 +170,10 @@ type JobRuntimeKey struct {
 	TableID   uint64
 	JobName   string
 	JobID     uint64
+}
+
+type JobFence struct {
+	ExpireAt time.Time
 }
 
 type RunningJobConsumer struct {

@@ -17,11 +17,16 @@ package iscp
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 var iscpExecutors sync.Map // map[cnUUID]*ISCPTaskExecutor
+
+const DefaultRollbackFenceTTL = 5 * time.Minute
 
 func RegisterExecutorRuntime(cnUUID string, exec *ISCPTaskExecutor) {
 	if cnUUID == "" || exec == nil {
@@ -59,11 +64,19 @@ func (key JobRuntimeKey) consumerGroupKey() JobRuntimeKey {
 
 func (exec *ISCPTaskExecutor) ensureRuntimeMapsLocked() {
 	if exec.fencedJobs == nil {
-		exec.fencedJobs = make(map[JobRuntimeKey]struct{})
+		exec.fencedJobs = make(map[JobRuntimeKey]JobFence)
 	}
 	if exec.runningConsumers == nil {
 		exec.runningConsumers = make(map[JobRuntimeKey]map[uint64]*RunningJobConsumer)
 	}
+}
+
+func rollbackFenceTTL() time.Duration {
+	ttl := DefaultRollbackFenceTTL
+	if seconds, _, injected := fault.TriggerFault(objectio.FJ_ISCPCancelRollbackFenceTTL); injected && seconds > 0 {
+		ttl = time.Duration(seconds) * time.Second
+	}
+	return ttl
 }
 
 func (exec *ISCPTaskExecutor) IsJobFenced(key JobRuntimeKey) bool {
@@ -72,8 +85,19 @@ func (exec *ISCPTaskExecutor) IsJobFenced(key JobRuntimeKey) bool {
 	}
 	exec.runtimeMu.Lock()
 	defer exec.runtimeMu.Unlock()
-	_, ok := exec.fencedJobs[key]
-	return ok
+	return exec.isJobFencedLocked(key, time.Now())
+}
+
+func (exec *ISCPTaskExecutor) isJobFencedLocked(key JobRuntimeKey, now time.Time) bool {
+	fence, ok := exec.fencedJobs[key]
+	if !ok {
+		return false
+	}
+	if !fence.ExpireAt.IsZero() && now.After(fence.ExpireAt) {
+		delete(exec.fencedJobs, key)
+		return false
+	}
+	return true
 }
 
 func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
@@ -92,7 +116,7 @@ func (exec *ISCPTaskExecutor) CancelAndDrainJobConsumer(
 
 	exec.runtimeMu.Lock()
 	exec.ensureRuntimeMapsLocked()
-	exec.fencedJobs[key] = struct{}{}
+	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(rollbackFenceTTL())}
 	handles := make([]*RunningJobConsumer, 0, 1)
 	if byJobID := exec.runningConsumers[groupKey]; byJobID != nil {
 		for runningJobID, h := range byJobID {
@@ -155,7 +179,7 @@ func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
 	exec.runtimeMu.Lock()
 	defer exec.runtimeMu.Unlock()
 	exec.ensureRuntimeMapsLocked()
-	if _, fenced := exec.fencedJobs[key]; fenced {
+	if exec.isJobFencedLocked(key, time.Now()) {
 		return nil, false
 	}
 	groupKey := key.consumerGroupKey()
