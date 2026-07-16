@@ -114,7 +114,14 @@ func DecodeCdc(buf []byte) (*Cdc, error) {
 	if n < 0 {
 		return nil, moerr.NewInternalErrorNoCtx("fulltext2 cdc: bad count")
 	}
-	c.Events = make([]CdcEvent, 0, n)
+	// n is read straight off a (possibly corrupt) blob; a bogus huge count would make()
+	// gigabytes up front. Cap the pre-alloc hint — append grows it for a genuinely large
+	// frame, and a truncated stream errors out per-event in the loop below.
+	capHint := n
+	if capHint > 4096 {
+		capHint = 4096
+	}
+	c.Events = make([]CdcEvent, 0, capHint)
 	for i := int64(0); i < n; i++ {
 		op, err := r.ReadByte()
 		if err != nil {

@@ -86,7 +86,7 @@ func indexMetadataType(unique bool, algo string) string {
 		return INDEX_TYPE_UNIQUE
 	case catalog.IsRTreeIndexAlgo(algo):
 		return INDEX_TYPE_SPATIAL
-	case catalog.IsFullTextIndexAlgo(algo):
+	case catalog.IsFullTextIndexAlgo(algo) || catalog.IsFullText2IndexAlgo(algo):
 		return INDEX_TYPE_FULLTEXT
 	default:
 		return INDEX_TYPE_MULTIPLE

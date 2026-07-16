@@ -89,6 +89,16 @@ func DecodeDeleteLog(buf []byte) ([]DeleteRecord, error) {
 		return nil, moerr.NewInternalErrorNoCtx("fulltext2 delete log: bad count")
 	}
 	width, fixed := pkFixedWidth(pkType)
+	// n is off the blob; each record is >= minRec bytes (a fixed pk, or the 4-byte length
+	// prefix of a varlen pk), so a count that can't fit in the remaining buffer is corrupt.
+	// Reject it before make() / the loop so a bogus count can't drive a huge allocation.
+	minRec := 4
+	if fixed {
+		minRec = width
+	}
+	if minRec > 0 && n > int64((len(body)-16)/minRec) {
+		return nil, moerr.NewInternalErrorNoCtx("fulltext2 delete log: count exceeds buffer")
+	}
 	pos := 16
 	out := make([]DeleteRecord, 0, n)
 	for i := int64(0); i < n; i++ {

@@ -83,7 +83,11 @@ type BoolQuery struct {
 // early-terminates via term max-impact bounds and returns the identical ranking
 // as the full scan. Everything else uses the full evaluator.
 func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
-	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0) {
+	// A query with no clauses at all returns nothing. A ~-only query (adjust, no MUST/
+	// SHOULD) still returns its matching rows ranked low — classic/MySQL "~ rates lower
+	// but does not exclude" — so it must NOT early-out here (searchBooleanFull's no-MUST
+	// candidate set unions the adjust terms).
+	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0 && len(q.adjust) == 0) {
 		return nil, nil
 	}
 	if terms, ok := disjunctiveTerms(q); ok {
@@ -109,19 +113,20 @@ func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
 func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
 	avgDocLen := gs.avgdl(s)
 
-	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen, gs)
+	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen, gs, true)
 	if err != nil {
 		return nil, err
 	}
-	shouldMaps, err := s.evalClauses(q.should, algo, avgDocLen, gs)
+	shouldMaps, err := s.evalClauses(q.should, algo, avgDocLen, gs, true)
 	if err != nil {
 		return nil, err
 	}
-	adjustMaps, err := s.evalClauses(q.adjust, algo, avgDocLen, gs)
+	adjustMaps, err := s.evalClauses(q.adjust, algo, avgDocLen, gs, true)
 	if err != nil {
 		return nil, err
 	}
-	notMaps, err := s.evalClauses(q.mustNot, algo, avgDocLen, gs)
+	// MUST-NOT: only the matched ord SET is used (to exclude), never the score → skip scoring.
+	notMaps, err := s.evalClauses(q.mustNot, algo, avgDocLen, gs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -150,10 +155,17 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 			}
 		}
 	} else {
-		for _, m := range shouldMaps { // union of SHOULD clauses
-			for ord := range m {
-				if _, seen := cand[ord]; !seen {
-					cand[ord] = 0
+		// Union of SHOULD *and* ADJUST clauses. A ~ (ADJUST) term lowers a row's score but
+		// does NOT exclude it (MySQL: "rated lower ... but not excluded, as it would be
+		// with -"), so with no MUST a row matching only a ~term is still a candidate
+		// (ranked low by its negative contribution) — matching classic fulltext. Excluding
+		// it here made `AGAINST('fox ~lazy')` drop lazy-only rows that classic returns.
+		for _, maps := range [][]map[int64]float64{shouldMaps, adjustMaps} {
+			for _, m := range maps {
+				for ord := range m {
+					if _, seen := cand[ord]; !seen {
+						cand[ord] = 0
+					}
 				}
 			}
 		}
@@ -192,10 +204,10 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 	return heapToResults(s, h), nil
 }
 
-func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats) ([]map[int64]float64, error) {
+func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool) ([]map[int64]float64, error) {
 	out := make([]map[int64]float64, len(cs))
 	for i, c := range cs {
-		m, err := s.evalClause(c, algo, avgDocLen, gs)
+		m, err := s.evalClause(c, algo, avgDocLen, gs, scored)
 		if err != nil {
 			return nil, err
 		}
@@ -210,13 +222,24 @@ func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs
 // Term / prefix / phrase clauses all score with the global corpus idf (gs) — a phrase
 // clause via the cross-segment phrase df (gs.phraseDf), so ranking is consistent
 // across a base + CDC tail.
-func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats) (map[int64]float64, error) {
+//
+// scored=false skips the per-doc score computation (idf + scoreTerm) and returns a
+// presence-only map (all 0 values). MUST-NOT clauses use this: only the ord set is read
+// there, so scoring every doc of a common negated term (e.g. `-the`) was wasted work.
+func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool) (map[int64]float64, error) {
 	raw := make(map[int64]float64)
 	switch c.kind {
 	case clauseTerm:
 		if pl, ok := s.lookup(c.terms[0]); ok {
+			docs := pl.materializeDocIDs()
+			if !scored {
+				for _, ord := range docs {
+					raw[ord] = 0
+				}
+				break
+			}
 			idf2 := gs.idfFor(s, c.terms[0], pl)
-			docs, tfs := pl.materializeDocIDs(), pl.materializeTfs()
+			tfs := pl.materializeTfs()
 			for i, ord := range docs {
 				raw[ord] = s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
 			}
@@ -227,6 +250,12 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 			hits = gs.phraseHits(s, c.terms) // memoized; shared with gs.phraseDf
 		} else {
 			hits = s.matchPhrase(c.terms)
+		}
+		if !scored {
+			for _, h := range hits {
+				raw[h.ord] = 0
+			}
+			break
 		}
 		idf2 := gs.phraseIdfFor(s, c.terms, len(hits))
 		for _, h := range hits {
@@ -242,8 +271,15 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 			if !ok {
 				continue
 			}
+			docs := pl.materializeDocIDs()
+			if !scored {
+				for _, ord := range docs {
+					raw[ord] = 0
+				}
+				continue
+			}
 			idf2 := gs.idfFor(s, t, pl)
-			docs, tfs := pl.materializeDocIDs(), pl.materializeTfs()
+			tfs := pl.materializeTfs()
 			for i, ord := range docs {
 				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
 				if cur, seen := raw[ord]; !seen || sc > cur {
@@ -253,7 +289,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 		}
 	case clauseGroup:
 		for _, ch := range c.children { // OR of children, score = MAX (§6)
-			m, err := s.evalClause(ch, algo, avgDocLen, gs)
+			m, err := s.evalClause(ch, algo, avgDocLen, gs, scored)
 			if err != nil {
 				return nil, err
 			}
