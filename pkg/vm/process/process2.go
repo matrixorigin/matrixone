@@ -239,6 +239,7 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
+	proc.setPrepareParams(nil, nil, false)
 }
 
 type QueryBaseContext struct {

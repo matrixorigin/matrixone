@@ -566,7 +566,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.SetPrepareParamsWithIsBin(pHelper.prepareParams, pHelper.prepareParamsIsBin)
+	proc.SetOwnedPrepareParamsWithIsBin(pHelper.prepareParams, pHelper.prepareParamsIsBin)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
@@ -682,6 +682,14 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		accountId: procInfo.AccountId,
 		txnClient: cli,
 	}
+	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
+	if err != nil {
+		return processHelper{}, err
+	}
+	result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)
+	if err != nil {
+		return processHelper{}, err
+	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(
 			types.T_text.ToType(),
@@ -695,14 +703,6 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 			}
 		}
 		result.prepareParamsIsBin = append(result.prepareParamsIsBin, procInfo.PrepareParams.IsBin...)
-	}
-	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
-	if err != nil {
-		return processHelper{}, err
-	}
-	result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)
-	if err != nil {
-		return processHelper{}, err
 	}
 	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)

@@ -330,6 +330,7 @@ type BaseProcess struct {
 	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
 	prepareParams            *vector.Vector
 	prepareParamsIsBin       []bool
+	prepareParamsOwned       bool
 	QueryClient              qclient.QueryClient
 	Hakeeper                 logservice.CNHAKeeperClient
 	UdfService               udf.Service

@@ -190,15 +190,25 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
+	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
+	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
+	require.Nil(t, params.GetData())
+	require.False(t, cw.proc.GetPrepareParamIsBin(0))
+	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
+
+	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
+	require.Zero(t, current.Length())
+	require.Nil(t, current.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
-	params.Free(cw.proc.Mp())
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
 }
 
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
 	defer prepareStmt.Close()
 	require.NoError(t, ses.SetUserDefinedVar("first", "allocated", ""))
 	cw.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -218,11 +228,11 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	before := cw.proc.Mp().CurrNB()
-
-	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	params, _, _, err := buildExecuteUserParams(ses, cw.proc, execPlan.Args)
 	require.ErrorIs(t, err, assert.AnError)
-	require.Equal(t, before, cw.proc.Mp().CurrNB())
+	require.Zero(t, params.Length())
+	require.Nil(t, params.GetData())
+	require.Nil(t, params.GetArea())
 }
 
 func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {

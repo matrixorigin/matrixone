@@ -135,7 +135,7 @@ func TestHasTrailingZeros(t *testing.T) {
 	}
 }
 
-func TestFillValuesOfParamsInPlanPreservesBinaryFlag(t *testing.T) {
+func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	queryPlan := &plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{
 			Steps: []int32{0},
@@ -146,14 +146,38 @@ func TestFillValuesOfParamsInPlanPreservesBinaryFlag(t *testing.T) {
 		}},
 	}
 
-	_, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
-		ParamValue{Value: "AB\x00\x00", IsBin: true},
-	})
-	require.NoError(t, err)
-	literal := queryPlan.GetQuery().Nodes[0].Limit.GetLit()
-	require.NotNil(t, literal)
-	require.True(t, literal.GetIsBin())
-	require.Equal(t, "AB\x00\x00", literal.GetSval())
+	tests := []struct {
+		value string
+		isBin bool
+	}{
+		{value: "AB\x00\x00", isBin: true},
+		{value: "text", isBin: false},
+		{value: "CD\x00\x00", isBin: true},
+	}
+	for _, test := range tests {
+		filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+			ParamValue{Value: test.value, IsBin: test.isBin},
+		})
+		require.NoError(t, err)
+		literal := filled.GetQuery().Nodes[0].Limit.GetLit()
+		require.NotNil(t, literal)
+		require.Equal(t, test.isBin, literal.GetIsBin())
+		require.Equal(t, test.value, literal.GetSval())
+		require.NotSame(t, queryPlan, filled)
+		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
+	}
+}
+
+func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
+	_, err := FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
+		Plan: &plan.Plan_Tcl{Tcl: &plan.TransationControl{}},
+	}, nil)
+	require.Error(t, err)
+
+	_, err = FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
+		Plan: &plan.Plan_Dcl{Dcl: &plan.DataControl{}},
+	}, nil)
+	require.Error(t, err)
 }
 
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {

@@ -578,36 +578,11 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params := vector.NewVec(types.T_text.ToType())
-		paramsOwned := true
-		defer func() {
-			if paramsOwned {
-				params.Free(cwft.proc.Mp())
-			}
-		}()
-		paramVals := make([]any, numParams)
-		paramIsBin := make([]bool, numParams)
-		for i, arg := range execPlan.Args {
-			exprImpl := arg.Expr.(*plan.Expr_V)
-			param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			err = util.AppendAnyToStringVector(cwft.proc, param, params)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			if !exprImpl.V.System {
-				udVar, getErr := ses.GetUserDefinedVar(exprImpl.V.Name)
-				if getErr != nil {
-					return nil, nil, nil, originSQL, getErr
-				}
-				paramIsBin[i] = udVar.IsBin
-			}
-			paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(ses, cwft.proc, execPlan.Args)
+		if err != nil {
+			return nil, nil, nil, originSQL, err
 		}
-		cwft.proc.SetPrepareParamsWithIsBin(params, paramIsBin)
-		paramsOwned = false
+		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -615,6 +590,43 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func buildExecuteUserParams(
+	ses *Session,
+	proc *process.Process,
+	args []*plan.Expr,
+) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
+	params = vector.NewVec(types.T_text.ToType())
+	defer func() {
+		if err != nil {
+			params.Free(proc.Mp())
+		}
+	}()
+	paramVals = make([]any, len(args))
+	paramIsBin = make([]bool, len(args))
+	for i, arg := range args {
+		exprImpl := arg.Expr.(*plan.Expr_V)
+		var param any
+		param, err = proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+		if err != nil {
+			return
+		}
+		err = util.AppendAnyToStringVector(proc, param, params)
+		if err != nil {
+			return
+		}
+		if !exprImpl.V.System {
+			var udVar *UserDefinedVar
+			udVar, err = ses.GetUserDefinedVar(exprImpl.V.Name)
+			if err != nil {
+				return
+			}
+			paramIsBin[i] = udVar.IsBin
+		}
+		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+	}
+	return
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {
