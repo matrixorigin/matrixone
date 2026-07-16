@@ -1,0 +1,16 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_conflict;
+create database ft2_conflict;
+use ft2_conflict;
+create table t (id bigint primary key, body text, title text);
+create fulltext index ft1 on t(body);
+create fulltext2 index ft2 on t(body);
+invalid input: cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first
+create fulltext2 index ft3 on t(title);
+create table t2 (id bigint primary key, body text);
+create fulltext2 index f2 on t2(body);
+create fulltext index f1 on t2(body);
+invalid input: cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first
+create table t3 (id bigint primary key, body text, fulltext(body), fulltext2(body));
+invalid input: cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first
+drop database ft2_conflict;

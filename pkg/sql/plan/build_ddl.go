@@ -1823,6 +1823,9 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 // lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
 // batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
+	if err := checkFulltextEngineConflict(indexInfos, existedIndexes, ctx); err != nil {
+		return err
+	}
 	for _, indexInfo := range indexInfos {
 		// CREATE FULLTEXT2 INDEX (IsV2) routes to the distinct fulltext2 plugin;
 		// classic CREATE FULLTEXT INDEX to the fulltext plugin.
@@ -1842,6 +1845,46 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
+	}
+	return nil
+}
+
+// ftColSetKey is an order-independent key for a fulltext index's column set, so
+// MATCH(a,b) and MATCH(b,a) map to the same key.
+func ftColSetKey(cols []string) string {
+	c := append([]string(nil), cols...)
+	slices.Sort(c)
+	return strings.Join(c, "\x00")
+}
+
+// checkFulltextEngineConflict rejects creating a classic FULLTEXT and a FULLTEXT2
+// index over the SAME column set — on the same table they would both resolve the same
+// MATCH(...) verb, so the engine (classic SQL fulltext vs WAND positional) that answers
+// the query would depend on index enumeration order and could flip across DDL/catalog
+// reloads, giving inconsistent scores/rows. This covers CREATE TABLE (all indexes in
+// indexInfos, existedIndexes nil) and CREATE INDEX / ALTER ADD (one new index vs the
+// table's existing indexes) since every fulltext creation routes through here.
+func checkFulltextEngineConflict(indexInfos []*tree.FullTextIndex, existedIndexes []*plan.IndexDef, ctx CompilerContext) error {
+	// colSet -> the fulltext engine (isV2) already claiming it (existing indexes).
+	engine := make(map[string]bool)
+	for _, idx := range existedIndexes {
+		v2 := catalog.IsFullText2IndexAlgo(idx.IndexAlgo)
+		if !v2 && !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		engine[ftColSetKey(idx.Parts)] = v2
+	}
+	for _, info := range indexInfos {
+		cols := make([]string, 0, len(info.KeyParts))
+		for _, kp := range info.KeyParts {
+			cols = append(cols, kp.ColName.ColName())
+		}
+		key := ftColSetKey(cols)
+		if prev, ok := engine[key]; ok && prev != info.IsV2 {
+			return moerr.NewInvalidInput(ctx.GetContext(),
+				"cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first")
+		}
+		engine[key] = info.IsV2 // also catches two conflicting indexes in one CREATE TABLE
 	}
 	return nil
 }
