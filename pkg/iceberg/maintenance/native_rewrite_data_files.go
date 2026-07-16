@@ -367,13 +367,6 @@ func rewriteDataFilesSourcePathSet(rewrites []RewriteDataFileRewrite) map[string
 	return out
 }
 
-func materializeRewriteDataFilesPreservedManifests(meta *api.TableMetadata, basePath string, preserved []RewriteDataFilesPreservedManifest, removedPaths map[string]struct{}) ([]api.ManifestFile, []ObjectWrite, error) {
-	memoryUsed := int64(0)
-	return materializeRewriteDataFilesPreservedManifestsWithBudget(
-		meta, basePath, preserved, removedPaths, &memoryUsed, defaultMaintenancePlanningMemory,
-	)
-}
-
 func materializeRewriteDataFilesPreservedManifestsWithBudget(meta *api.TableMetadata, basePath string, preserved []RewriteDataFilesPreservedManifest, removedPaths map[string]struct{}, memoryUsed *int64, memoryLimit int64) ([]api.ManifestFile, []ObjectWrite, error) {
 	if len(preserved) == 0 {
 		return nil, nil, nil
@@ -1117,15 +1110,6 @@ func rewriteDataFilesTimestampMS(timestampMS int64) int64 {
 		return timestampMS
 	}
 	return time.Now().UTC().UnixMilli()
-}
-
-func cloneRewriteDataFilesManifests(in []api.ManifestFile) []api.ManifestFile {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]api.ManifestFile, len(in))
-	copy(out, in)
-	return out
 }
 
 type rewriteDataFilesManifestMetrics struct {

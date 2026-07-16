@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
@@ -62,6 +64,64 @@ func TestFakeFacadeContracts(t *testing.T) {
 	if err != nil || result.SnapshotID != 8 {
 		t.Fatalf("fake commit result=%+v err=%v", result, err)
 	}
+}
+
+func TestNativeFacadeReadsMetadataObjectsAndEnforcesLimits(t *testing.T) {
+	facade := NativeFacade{}
+	manifestList := encodeOCF(t, manifestListTestSchema, []map[string]any{validManifestListTestRecord()})
+	manifests, err := facade.ReadManifestList(context.Background(), manifestList)
+	require.NoError(t, err)
+	require.Len(t, manifests, 1)
+	manifests, err = facade.ReadManifestListBounded(context.Background(), manifestList, 10)
+	require.NoError(t, err)
+	require.Len(t, manifests, 1)
+	_, err = facade.ReadManifestListWithLimits(context.Background(), manifestList, 10, 1)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+
+	manifest := encodeOCF(t, manifestEntryTestSchema, []map[string]any{manifestEntryTestRecord(1, 0, 1, 1)})
+	entries, err := facade.ReadManifest(context.Background(), manifest)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	entries, err = facade.ReadManifestBounded(context.Background(), manifest, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	_, err = facade.ReadManifestWithLimits(context.Background(), manifest, 10, 1)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+
+	allowance, err := ocfDecodedMemoryAllowance(0, 1)
+	require.NoError(t, err)
+	require.Greater(t, allowance, int64(0))
+	_, err = ocfDecodedMemoryAllowance(10, 9)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+}
+
+func TestNativeFacadeHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	facade := NativeFacade{}
+	_, err := facade.ParseTableMetadata(ctx, nil, "s3://warehouse/secret/metadata.json?token=secret")
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	_, err = facade.ReadManifestList(ctx, nil)
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	_, err = facade.ReadManifestListWithLimits(ctx, nil, 1, 1024)
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	_, err = facade.ReadManifest(ctx, nil)
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	_, err = facade.ReadManifestWithLimits(ctx, nil, 1, 1024)
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	_, err = facade.ResolveSnapshot(ctx, nil, api.SnapshotSelector{})
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	_, err = facade.DetectUnsupportedP0(ctx, nil, nil, nil)
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+}
+
+func TestNativeFacadeCollectsUnsupportedManifestAndFileFeatures(t *testing.T) {
+	features, err := (NativeFacade{}).DetectUnsupportedP0(context.Background(), &api.TableMetadata{FormatVersion: 2},
+		[]api.ManifestFile{{Content: api.ManifestContentDeletes, ManifestPathRedacted: "redacted-manifest"}},
+		[]api.DataFile{{Content: 3, FilePathRedacted: "redacted-file"}},
+	)
+	require.NoError(t, err)
+	require.Len(t, features, 2)
 }
 
 type fakeMetadataFacade struct{}

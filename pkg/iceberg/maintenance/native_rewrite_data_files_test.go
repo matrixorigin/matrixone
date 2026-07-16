@@ -946,6 +946,248 @@ func TestRewriteDataFilesSelectorValidatesOptionsAndManifestList(t *testing.T) {
 	require.Contains(t, err.Error(), "must not exceed max_rewrite_bytes")
 }
 
+func TestRewriteDataFilesPartitionScopeCanonicalization(t *testing.T) {
+	equivalentIntegers := []any{int(7), int8(7), int16(7), int32(7), int64(7), uint(7), uint8(7), uint16(7), uint32(7), uint64(7)}
+	for _, value := range equivalentIntegers {
+		require.Equal(t, "i:7", rewriteDataFilesPartitionScopeValue(value), "value=%T", value)
+	}
+	require.Equal(t, "null", rewriteDataFilesPartitionScopeValue(nil))
+	require.Equal(t, "b:true", rewriteDataFilesPartitionScopeValue(true))
+	require.Equal(t, "f:1.5", rewriteDataFilesPartitionScopeValue(float32(1.5)))
+	require.Equal(t, "f:1.5", rewriteDataFilesPartitionScopeValue(float64(1.5)))
+	require.Equal(t, "s:value", rewriteDataFilesPartitionScopeValue("value"))
+	require.Equal(t, "bytes:value", rewriteDataFilesPartitionScopeValue([]byte("value")))
+	require.Equal(t, "u:18446744073709551615", rewriteDataFilesPartitionScopeValue(uint64(math.MaxUint64)))
+	require.Contains(t, rewriteDataFilesPartitionScopeValue(struct{ Value int }{1}), "struct")
+
+	require.True(t, rewriteDataFilesSamePartitionScope(nil, map[string]any{"part": 1}))
+	require.True(t, rewriteDataFilesSamePartitionScope(map[string]any{"part": int32(7)}, map[string]any{"part": int64(7)}))
+	require.False(t, rewriteDataFilesSamePartitionScope(map[string]any{"part": 7}, nil))
+	require.False(t, rewriteDataFilesSamePartitionScope(map[string]any{"part": 7}, map[string]any{"other": 7}))
+	require.False(t, rewriteDataFilesSamePartitionScope(map[string]any{"part": 7}, map[string]any{"part": 8}))
+}
+
+func TestRewriteDataFilesRowScalarConversions(t *testing.T) {
+	stringRow := parquet.Row{parquet.ValueOf("value").Level(0, 0, 0)}
+	value, ok := rewriteDataFilesRowString(stringRow, 0)
+	require.True(t, ok)
+	require.Equal(t, "value", value)
+	_, ok = rewriteDataFilesRowString(stringRow, 1)
+	require.False(t, ok)
+	_, ok = rewriteDataFilesRowString(parquet.Row{parquet.Int64Value(1).Level(0, 0, 0)}, 0)
+	require.False(t, ok)
+
+	int64Value, ok := rewriteDataFilesRowInt64(parquet.Row{parquet.Int64Value(9).Level(0, 0, 0)}, 0)
+	require.True(t, ok)
+	require.Equal(t, int64(9), int64Value)
+	int64Value, ok = rewriteDataFilesRowInt64(parquet.Row{parquet.Int32Value(8).Level(0, 0, 0)}, 0)
+	require.True(t, ok)
+	require.Equal(t, int64(8), int64Value)
+	_, ok = rewriteDataFilesRowInt64(stringRow, 0)
+	require.False(t, ok)
+	_, ok = rewriteDataFilesRowInt64(nil, 0)
+	require.False(t, ok)
+}
+
+func TestRewriteDataFilesPlannerPathAndSelectionHelpers(t *testing.T) {
+	planner := NativeRewriteDataFilesPlanner{PathPrefix: "s3://warehouse/custom/"}
+	path, err := planner.rewriteBasePath(nil, api.Snapshot{SnapshotID: 7}, Request{IdempotencyKey: "statement"})
+	require.NoError(t, err)
+	require.Contains(t, path, "s3://warehouse/custom/mo-rewrite-data-files/rw-")
+	planner.PathPrefix = ""
+	path, err = planner.rewriteBasePath(&api.TableMetadata{Location: "s3://warehouse/table"}, api.Snapshot{SnapshotID: 7}, Request{})
+	require.NoError(t, err)
+	require.Contains(t, path, "s3://warehouse/table/metadata/mo-rewrite-data-files/")
+	path, err = planner.rewriteBasePath(nil, api.Snapshot{SnapshotID: 7, ManifestList: "s3://warehouse/table/metadata/snap.avro"}, Request{})
+	require.NoError(t, err)
+	require.Contains(t, path, "s3://warehouse/table/metadata/mo-rewrite-data-files/")
+	_, err = planner.rewriteBasePath(nil, api.Snapshot{SnapshotID: 7}, Request{})
+	require.Error(t, err)
+
+	require.Nil(t, rewriteDataFilesSourcePathSet(nil))
+	paths := rewriteDataFilesSourcePathSet([]RewriteDataFileRewrite{{Group: RewriteDataFileGroup{Candidates: []RewriteDataFileCandidate{
+		{File: api.DataFile{FilePath: "  s3://warehouse/table/data.parquet  "}},
+		{File: api.DataFile{FilePath: " "}},
+	}}}})
+	require.Contains(t, paths, "s3://warehouse/table/data.parquet")
+	require.Len(t, paths, 1)
+
+	valid, err := parseRewriteDataFilesSelectionOptions(map[string]string{
+		"target_file_size": "100", "min_input_files": "2", "max_group_size": "50", "max_rewrite_bytes": "200",
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), valid.maxGroupSizeBytes)
+	for _, options := range []map[string]string{
+		{"target_file_size": "invalid"}, {"target_file_size": "0"},
+		{"min_input_files": "invalid"}, {"min_input_files": "0"},
+		{"max_group_size": "invalid"}, {"max_group_size": "0"},
+		{"max_rewrite_bytes": "invalid"}, {"max_rewrite_bytes": "0"},
+		{"target_file_size": "200", "max_rewrite_bytes": "100"},
+	} {
+		_, err := parseRewriteDataFilesSelectionOptions(options)
+		require.Error(t, err, "options=%v", options)
+	}
+}
+
+func TestRewriteDataFilesCandidateBoundingAndPartitionValues(t *testing.T) {
+	opts := rewriteDataFilesSelectionOptions{targetFileSizeBytes: 100}
+	require.False(t, isRewriteDataFilesCandidate(api.DataFile{}, opts))
+	require.False(t, isRewriteDataFilesCandidate(api.DataFile{FileSizeInBytes: 101, FileFormat: "parquet"}, opts))
+	require.False(t, isRewriteDataFilesCandidate(api.DataFile{FileSizeInBytes: 10, FileFormat: "orc"}, opts))
+	require.True(t, isRewriteDataFilesCandidate(api.DataFile{FileSizeInBytes: 10}, opts))
+
+	require.Nil(t, boundRewriteDataFileGroups(nil, 100))
+	require.Nil(t, boundRewriteDataFileGroups([]RewriteDataFileGroup{{TotalSizeBytes: 1}}, 0))
+	groups := boundRewriteDataFileGroups([]RewriteDataFileGroup{
+		{TotalSizeBytes: 0}, {TotalSizeBytes: 40}, {TotalSizeBytes: 50}, {TotalSizeBytes: 20},
+	}, 100)
+	require.Len(t, groups, 2)
+	require.Empty(t, boundRewriteDataFileGroups([]RewriteDataFileGroup{{TotalSizeBytes: 101}}, 100))
+
+	values := []struct {
+		value any
+		want  string
+	}{
+		{nil, "null"}, {true, "b:1"}, {false, "b:0"},
+		{int(1), "i:1"}, {int32(2), "i:2"}, {int64(3), "i:3"},
+		{uint(4), "u:4"}, {uint32(5), "u:5"}, {uint64(6), "u:6"},
+		{"value", "s:value"}, {float64(1.5), "x:1.5"},
+	}
+	for _, test := range values {
+		require.Equal(t, test.want, rewriteDataFilesPartitionValue(test.value), "value=%T", test.value)
+	}
+}
+
+func TestRewriteDataFilesParquetWriterSchemaHelpers(t *testing.T) {
+	require.True(t, (ParquetConcatRewriteDataFilesCompactor{}).SupportsDeleteManifests())
+	fields := []api.SchemaField{
+		{ID: 1, Name: "required_bool", Required: true, Type: api.IcebergType{Kind: api.TypeBoolean}},
+		{ID: 2, Name: "optional_int", Type: api.IcebergType{Kind: api.TypeInt}},
+		{ID: 3, Name: "long", Type: api.IcebergType{Kind: api.TypeLong}},
+		{ID: 4, Name: "float", Type: api.IcebergType{Kind: api.TypeFloat}},
+		{ID: 5, Name: "double", Type: api.IcebergType{Kind: api.TypeDouble}},
+		{ID: 6, Name: "string", Type: api.IcebergType{Kind: api.TypeString}},
+		{ID: 7, Name: "date", Type: api.IcebergType{Kind: api.TypeDate}},
+		{ID: 8, Name: "timestamp", Type: api.IcebergType{Kind: api.TypeTimestamp}},
+		{ID: 9, Name: "timestamptz", Type: api.IcebergType{Kind: api.TypeTimestampTZ}},
+	}
+	meta := &api.TableMetadata{CurrentSchemaID: 1, Schemas: []api.Schema{{SchemaID: 1, Fields: fields}}}
+	schema, err := rewriteDataFilesWriterSchema(meta, nil)
+	require.NoError(t, err)
+	require.Len(t, schema.Columns(), len(fields))
+
+	unsupported := &api.TableMetadata{CurrentSchemaID: 1, Schemas: []api.Schema{{SchemaID: 1, Fields: []api.SchemaField{{
+		ID: 1, Name: "binary", Type: api.IcebergType{Kind: api.TypeBinary},
+	}}}}}
+	_, err = rewriteDataFilesWriterSchema(unsupported, nil)
+	require.Error(t, err)
+	_, err = rewriteDataFilesWriterSchema(nil, nil)
+	require.Error(t, err)
+	_, err = rewriteDataFilesPlainParquetNode(nil)
+	require.Error(t, err)
+
+	fallback := parquet.NewSchema("fallback", parquet.Group{
+		"required": parquet.FieldID(parquet.Required(parquet.Leaf(parquet.Int64Type)), 1),
+		"optional": parquet.Optional(parquet.String()),
+		"repeated": parquet.Repeated(parquet.Leaf(parquet.Int32Type)),
+	})
+	cloned, err := rewriteDataFilesWriterSchema(nil, fallback)
+	require.NoError(t, err)
+	require.Equal(t, "fallback", cloned.Name())
+
+	_, err = rewriteDataFilesWriterMemoryReservation(nil)
+	require.Error(t, err)
+	reservation, err := rewriteDataFilesWriterMemoryReservation(schema)
+	require.NoError(t, err)
+	require.Greater(t, reservation, uint64(0))
+	total, overflow := addRewriteMemory(1, 2)
+	require.False(t, overflow)
+	require.Equal(t, uint64(3), total)
+	_, overflow = addRewriteMemory(math.MaxUint64, 1)
+	require.True(t, overflow)
+}
+
+func TestRewriteDataFilesParquetOutputAndMemoryHelpers(t *testing.T) {
+	compactor := ParquetConcatRewriteDataFilesCompactor{OutputPrefix: "s3://warehouse/custom/"}
+	location, err := compactor.outputLocation(RewriteDataFilesCompactRequest{Snapshot: api.Snapshot{SnapshotID: 7}}, RewriteDataFileGroup{PartitionKey: "p"}, 0)
+	require.NoError(t, err)
+	require.Contains(t, location, "s3://warehouse/custom/mo-rewrite-data-files/")
+	compactor.OutputPrefix = ""
+	location, err = compactor.outputLocation(RewriteDataFilesCompactRequest{
+		Metadata: &api.TableMetadata{Location: "s3://warehouse/table"}, Snapshot: api.Snapshot{SnapshotID: 7},
+	}, RewriteDataFileGroup{}, 1)
+	require.NoError(t, err)
+	require.Contains(t, location, "s3://warehouse/table/data/mo-rewrite-data-files/")
+	location, err = compactor.outputLocation(RewriteDataFilesCompactRequest{
+		Snapshot: api.Snapshot{SnapshotID: 7, ManifestList: "s3://warehouse/table/metadata/snap.avro"},
+	}, RewriteDataFileGroup{}, 2)
+	require.NoError(t, err)
+	require.Contains(t, location, "s3://warehouse/table/metadata/mo-rewrite-data-files/")
+	_, err = compactor.outputLocation(RewriteDataFilesCompactRequest{Snapshot: api.Snapshot{SnapshotID: 7}}, RewriteDataFileGroup{}, 0)
+	require.Error(t, err)
+
+	buffer := boundedRewriteBuffer{maxMemoryBytes: 10, reservedBytes: 4}
+	require.NoError(t, buffer.checkMemory(6))
+	require.Error(t, buffer.checkMemory(7))
+	buffer.reservedBytes = 11
+	require.Error(t, buffer.checkMemory(0))
+	_, err = rewriteDataFilesMaxRowGroupBytes(nil)
+	require.Error(t, err)
+	parquetData := rewriteDataFilesParquetBytes(t, []int64{1, 2})
+	file, err := parquet.OpenFile(bytes.NewReader(parquetData), int64(len(parquetData)))
+	require.NoError(t, err)
+	maxRowGroupBytes, err := rewriteDataFilesMaxRowGroupBytes(file)
+	require.NoError(t, err)
+	require.Greater(t, maxRowGroupBytes, uint64(0))
+}
+
+func TestBuildRewriteDataFilesManifestCommitRejectsInvalidRequests(t *testing.T) {
+	valid := func() RewriteDataFilesMaterializeRequest {
+		source := rewriteDataFileEntry("s3://warehouse/orders/data/source.parquet", 10, nil, api.ManifestEntryExisting)
+		return RewriteDataFilesMaterializeRequest{
+			Snapshot: api.Snapshot{SnapshotID: 10}, FormatVersion: 2,
+			Schema:         api.Schema{SchemaID: 1, Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}},
+			PartitionSpecs: []api.PartitionSpec{{SpecID: 0}}, SnapshotID: 11, SequenceNumber: 12, SchemaID: 1,
+			IdempotencyKey: "idem", DataManifestPath: "s3://warehouse/orders/metadata/data.avro",
+			ManifestListPath: "s3://warehouse/orders/metadata/snap.avro",
+			Rewrites: []RewriteDataFileRewrite{{
+				Group:            RewriteDataFileGroup{Candidates: []RewriteDataFileCandidate{{Entry: source, File: source.DataFile}}},
+				ReplacementFiles: []api.DataFile{{FilePath: "s3://warehouse/orders/data/replacement.parquet", FileFormat: "parquet", RecordCount: 10, FileSizeInBytes: 10}},
+			}},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*RewriteDataFilesMaterializeRequest)
+	}{
+		{"snapshot", func(req *RewriteDataFilesMaterializeRequest) { req.SnapshotID = 0 }},
+		{"paths", func(req *RewriteDataFilesMaterializeRequest) { req.DataManifestPath = "" }},
+		{"idempotency", func(req *RewriteDataFilesMaterializeRequest) { req.IdempotencyKey = "" }},
+		{"initial memory", func(req *RewriteDataFilesMaterializeRequest) { req.MaxMemoryBytes, req.InitialMemoryBytes = 1, 2 }},
+		{"empty rewrites", func(req *RewriteDataFilesMaterializeRequest) { req.Rewrites = nil }},
+		{"empty sources", func(req *RewriteDataFilesMaterializeRequest) { req.Rewrites[0].Group.Candidates = nil }},
+		{"empty replacements", func(req *RewriteDataFilesMaterializeRequest) { req.Rewrites[0].ReplacementFiles = nil }},
+		{"source path", func(req *RewriteDataFilesMaterializeRequest) { req.Rewrites[0].Group.Candidates[0].File.FilePath = "" }},
+		{"replacement path", func(req *RewriteDataFilesMaterializeRequest) { req.Rewrites[0].ReplacementFiles[0].FilePath = "" }},
+		{"missing spec", func(req *RewriteDataFilesMaterializeRequest) {
+			req.Rewrites[0].ReplacementFiles[0].SpecID = 99
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := valid()
+			test.mutate(&req)
+			_, err := BuildRewriteDataFilesManifestCommit(req)
+			require.Error(t, err)
+		})
+	}
+
+	_, err := rewriteDataFilesManifestWriteOptions(valid(), 99)
+	require.Error(t, err)
+	require.Equal(t, "manifest-spec-2.avro", rewriteDataFilesManifestPath("manifest.avro", 2, 2))
+	require.Equal(t, "manifest-spec-2", rewriteDataFilesManifestPath("manifest", 2, 2))
+}
+
 func rewriteDataFileEntry(path string, size int64, partition map[string]any, status api.ManifestEntryStatus) api.ManifestEntry {
 	return api.ManifestEntry{
 		Status:         status,

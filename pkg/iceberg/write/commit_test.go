@@ -76,6 +76,62 @@ func TestValidateAppendPreflightRunsBeforeDataFilesExist(t *testing.T) {
 	require.Contains(t, err.Error(), "single-writer owner")
 }
 
+func TestAppendValidationRejectsMalformedSchemaSpecAndFiles(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*api.AppendRequest)
+	}{
+		{"table", func(req *api.AppendRequest) { req.Table = "" }},
+		{"namespace", func(req *api.AppendRequest) { req.Namespace = nil }},
+		{"idempotency", func(req *api.AppendRequest) { req.IdempotencyKey = "" }},
+		{"schema mismatch", func(req *api.AppendRequest) { req.BaseSchema.SchemaID++ }},
+		{"schema field id", func(req *api.AppendRequest) { req.BaseSchema.Fields[0].ID = 0 }},
+		{"schema field name", func(req *api.AppendRequest) { req.BaseSchema.Fields[0].Name = "" }},
+		{"duplicate schema field", func(req *api.AppendRequest) {
+			req.BaseSchema.Fields = append(req.BaseSchema.Fields, req.BaseSchema.Fields[0])
+		}},
+		{"spec mismatch", func(req *api.AppendRequest) { req.BaseSpec.SpecID++ }},
+		{"invalid spec field", func(req *api.AppendRequest) { req.BaseSpec.Fields[0].FieldID = 0 }},
+		{"duplicate spec field", func(req *api.AppendRequest) {
+			req.BaseSpec.Fields = append(req.BaseSpec.Fields, req.BaseSpec.Fields[0])
+		}},
+		{"unknown source field", func(req *api.AppendRequest) { req.BaseSpec.Fields[0].SourceID = 999 }},
+		{"no data files", func(req *api.AppendRequest) { req.DataFiles = nil }},
+		{"file path", func(req *api.AppendRequest) { req.DataFiles[0].FilePath = "" }},
+		{"file content", func(req *api.AppendRequest) { req.DataFiles[0].Content = api.DataFileContentPositionDelete }},
+		{"file format", func(req *api.AppendRequest) { req.DataFiles[0].FileFormat = "orc" }},
+		{"negative rows", func(req *api.AppendRequest) { req.DataFiles[0].RecordCount = -1 }},
+		{"missing size", func(req *api.AppendRequest) { req.DataFiles[0].FileSizeInBytes = 0 }},
+		{"missing partition field", func(req *api.AppendRequest) { delete(req.DataFiles[0].Partition, "id") }},
+		{"negative column metric", func(req *api.AppendRequest) { req.DataFiles[0].ColumnSizes = map[int]int64{1: -1} }},
+		{"required null metric", func(req *api.AppendRequest) {
+			req.DataFiles[0].NullValueCounts[1] = 1
+			req.DataFiles[0].ValueCounts[1] = 0
+			req.BaseSchema.Fields[0].Required = true
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := appendRequest()
+			test.mutate(&req)
+			require.Error(t, ValidateAppendRequest(req))
+		})
+	}
+
+	req := appendRequest()
+	req.Catalog.AccountID = 0
+	req.WriterOwnerAccountID = 0
+	require.NoError(t, ValidateAppendRequest(req))
+	req.BaseSchemaID = 0
+	req.BaseSchema = api.Schema{}
+	req.BaseSpecID = 0
+	req.BaseSpec = api.PartitionSpec{}
+	req.KnownPartitionSpecs = nil
+	req.DataFiles[0].Partition = nil
+	require.NoError(t, ValidateAppendRequest(req))
+	require.Nil(t, countsOrNil(nil))
+}
+
 func TestAppendBuilderUsesRefNotExistsForEmptyTable(t *testing.T) {
 	req := appendRequest()
 	req.BaseSnapshotID = 0

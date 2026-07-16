@@ -376,13 +376,6 @@ func snapshotIDString(result *api.CommitResult) string {
 	return strconv.FormatInt(result.SnapshotID, 10)
 }
 
-func commitIDString(result *api.CommitResult) string {
-	if result == nil {
-		return ""
-	}
-	return result.CommitID
-}
-
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

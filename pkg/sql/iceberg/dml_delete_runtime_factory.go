@@ -758,7 +758,6 @@ func readDMLBaseManifests(ctx context.Context, reader objectIORefDMLObjectWriter
 	if err := checkDMLBaseManifestMemory(ctx, retainedBytes, int64(cap(data)), maxMemory); err != nil {
 		return nil, nil, 0, err
 	}
-	data = nil
 	sources := make([]dml.PreservedManifestSource, 0, len(manifests))
 	for _, manifest := range manifests {
 		if manifest.Content != "" && manifest.Content != api.ManifestContentData {

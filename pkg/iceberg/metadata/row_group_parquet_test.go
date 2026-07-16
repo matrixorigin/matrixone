@@ -60,11 +60,56 @@ func TestParquetValuePruneValueCoversSupportedBounds(t *testing.T) {
 			ok:   true,
 		},
 		{
+			name: "int64 to iceberg timestamp",
+			typ:  api.TypeTimestamp,
+			val:  parquet.Int64Value(35),
+			want: pruneValue{kind: pruneValueInt64, i64: 35},
+			ok:   true,
+		},
+		{
+			name: "wrong physical type for long",
+			typ:  api.TypeLong,
+			val:  parquet.BooleanValue(true),
+			ok:   false,
+		},
+		{
+			name: "double to iceberg float",
+			typ:  api.TypeFloat,
+			val:  parquet.DoubleValue(1.75),
+			want: pruneValue{kind: pruneValueFloat64, f64: 1.75},
+			ok:   true,
+		},
+		{
+			name: "wrong physical type for float",
+			typ:  api.TypeFloat,
+			val:  parquet.Int32Value(1),
+			ok:   false,
+		},
+		{
 			name: "float to iceberg double",
 			typ:  api.TypeDouble,
 			val:  parquet.FloatValue(1.25),
 			want: pruneValue{kind: pruneValueFloat64, f64: 1.25},
 			ok:   true,
+		},
+		{
+			name: "double to iceberg double",
+			typ:  api.TypeDouble,
+			val:  parquet.DoubleValue(2.25),
+			want: pruneValue{kind: pruneValueFloat64, f64: 2.25},
+			ok:   true,
+		},
+		{
+			name: "nan double is not prunable",
+			typ:  api.TypeDouble,
+			val:  parquet.DoubleValue(math.NaN()),
+			ok:   false,
+		},
+		{
+			name: "wrong physical type for double",
+			typ:  api.TypeDouble,
+			val:  parquet.Int64Value(1),
+			ok:   false,
 		},
 		{
 			name: "nan is not prunable",
@@ -90,6 +135,18 @@ func TestParquetValuePruneValueCoversSupportedBounds(t *testing.T) {
 			name: "unsupported bool",
 			typ:  api.TypeBoolean,
 			val:  parquet.BooleanValue(true),
+			ok:   false,
+		},
+		{
+			name: "wrong physical type for string",
+			typ:  api.TypeString,
+			val:  parquet.Int32Value(1),
+			ok:   false,
+		},
+		{
+			name: "null value",
+			typ:  api.TypeLong,
+			val:  parquet.Value{},
 			ok:   false,
 		},
 	}
@@ -135,6 +192,39 @@ func TestEncodePruneBoundCoversIcebergPrimitiveEncodings(t *testing.T) {
 	}
 	if _, ok := encodePruneBound(api.IcebergType{Kind: api.TypeBoolean}, pruneValue{kind: pruneValueInt64, i64: 1}); ok {
 		t.Fatalf("unsupported boolean bound should not encode")
+	}
+	for _, test := range []struct {
+		typ   api.IcebergTypeKind
+		value pruneValue
+	}{
+		{api.TypeLong, pruneValue{kind: pruneValueString, str: "wrong"}},
+		{api.TypeFloat, pruneValue{kind: pruneValueInt64, i64: 1}},
+		{api.TypeDouble, pruneValue{kind: pruneValueInt64, i64: 1}},
+		{api.TypeString, pruneValue{kind: pruneValueInt64, i64: 1}},
+	} {
+		if _, ok := encodePruneBound(api.IcebergType{Kind: test.typ}, test.value); ok {
+			t.Fatalf("wrong prune value kind should not encode for %s", test.typ)
+		}
+	}
+}
+
+func TestRowGroupMemoryHelpers(t *testing.T) {
+	if err := reserveRowGroupTaskMemory(nil, 1, api.ServerPlanningOff, api.RowGroupSplit{}); err != nil {
+		t.Fatalf("nil accounting must be accepted: %v", err)
+	}
+	split := api.RowGroupSplit{
+		LowerBounds: map[int][]byte{1: {1}}, UpperBounds: map[int][]byte{1: {2}},
+		NullValueCounts: map[int]int64{1: 0}, ValueCounts: map[int]int64{1: 1},
+	}
+	if got := rowGroupSplitMemory(split); got <= 160 {
+		t.Fatalf("expected nested split memory, got %d", got)
+	}
+	fields := schemaFieldsByID(api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id"}}})
+	if fields[1].Name != "id" {
+		t.Fatalf("unexpected schema fields: %+v", fields)
+	}
+	if ids := parquetLeafColumnFieldIDs(nil, fields); ids != nil {
+		t.Fatalf("nil parquet root must return nil ids: %v", ids)
 	}
 }
 

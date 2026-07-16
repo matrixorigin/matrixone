@@ -187,6 +187,33 @@ func TestPlannerFallsBackWhenIcebergGoAdapterCannotBuildRowDelta(t *testing.T) {
 	require.Equal(t, []ActionKind{ActionAddEqualityDelete}, actionKinds(stream.Actions))
 }
 
+func TestPlannerUsesRowDeltaAdapterForEveryDMLKind(t *testing.T) {
+	adapter := fakeRowDeltaAdapter{supported: true, handled: true, stream: &ActionStream{}}
+	stream, err := (Planner{Adapter: adapter}).PlanDelete(context.Background(), DeleteRequest{})
+	require.NoError(t, err)
+	require.True(t, stream.Profile.UsedAdapter)
+	require.Equal(t, "iceberg-go", stream.Profile.AdapterName)
+	stream, err = (Planner{Adapter: adapter}).PlanUpdate(context.Background(), UpdateRequest{})
+	require.NoError(t, err)
+	require.True(t, stream.Profile.UsedAdapter)
+	stream, err = (Planner{Adapter: adapter}).PlanMerge(context.Background(), MergeRequest{})
+	require.NoError(t, err)
+	require.True(t, stream.Profile.UsedAdapter)
+
+	adapterErr := api.NewError(api.ErrUnsupportedFeature, "adapter failed", nil)
+	_, err = (Planner{Adapter: fakeRowDeltaAdapter{supported: true, err: adapterErr}}).PlanUpdate(context.Background(), UpdateRequest{})
+	require.ErrorIs(t, err, adapterErr)
+	_, err = (Planner{Adapter: fakeRowDeltaAdapter{supported: true, err: adapterErr}}).PlanMerge(context.Background(), MergeRequest{})
+	require.ErrorIs(t, err, adapterErr)
+
+	_, handled, err := (Planner{}).tryAdapterUpdate(context.Background(), UpdateRequest{})
+	require.NoError(t, err)
+	require.False(t, handled)
+	_, handled, err = (Planner{Adapter: fakeRowDeltaAdapter{}}).tryAdapterMerge(context.Background(), MergeRequest{})
+	require.NoError(t, err)
+	require.False(t, handled)
+}
+
 func TestDMLCommitIntentRejectsTagWritesByDefault(t *testing.T) {
 	base := testBase()
 	base.TargetRef = "tag:release"
@@ -566,6 +593,9 @@ func TestBuildManifestCommitAttemptRequiresDeleteManifestPath(t *testing.T) {
 
 type fakeRowDeltaAdapter struct {
 	supported bool
+	handled   bool
+	stream    *ActionStream
+	err       error
 }
 
 func (a fakeRowDeltaAdapter) Name() string { return "iceberg-go" }
@@ -573,15 +603,15 @@ func (a fakeRowDeltaAdapter) Name() string { return "iceberg-go" }
 func (a fakeRowDeltaAdapter) SupportsRowDelta() bool { return a.supported }
 
 func (a fakeRowDeltaAdapter) BuildDelete(ctx context.Context, req DeleteRequest) (*ActionStream, bool, error) {
-	return nil, false, nil
+	return a.stream, a.handled, a.err
 }
 
 func (a fakeRowDeltaAdapter) BuildUpdate(ctx context.Context, req UpdateRequest) (*ActionStream, bool, error) {
-	return nil, false, nil
+	return a.stream, a.handled, a.err
 }
 
 func (a fakeRowDeltaAdapter) BuildMerge(ctx context.Context, req MergeRequest) (*ActionStream, bool, error) {
-	return nil, false, nil
+	return a.stream, a.handled, a.err
 }
 
 func testBase() CommitBase {

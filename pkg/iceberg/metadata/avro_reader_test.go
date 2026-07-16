@@ -17,12 +17,23 @@ package metadata
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
+	"io"
+	"math"
+	"strconv"
 	"testing"
+	"testing/iotest"
 
+	"github.com/golang/snappy"
 	"github.com/hamba/avro/v2/ocf"
+	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
+
+type avroNamedStringMap map[string]int
 
 const manifestListTestSchema = `{
   "type": "record",
@@ -333,6 +344,314 @@ func TestReadOCFRecordsRejectsNonPositiveAndUnderdeclaredBlocks(t *testing.T) {
 	underdeclared[blockOffset] = 2 // Avro zig-zag encoding for a declared count of one.
 	err = readOCFRecords(bytes.NewReader(underdeclared), "underdeclared", 10, 1<<20, func(int, map[string]any) error { return nil })
 	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+}
+
+func TestAvroRecordConversionHelpers(t *testing.T) {
+	require.Equal(t, map[string]any{"value": 1}, optionalRecordValue(
+		map[string]any{"record": map[string]any{"value": 1}}, "record",
+	))
+	require.Equal(t, map[string]any{"value": 2}, optionalRecordValue(
+		map[string]any{"record": avroNamedStringMap{"value": 2}}, "record",
+	))
+	require.Equal(t, map[string]any{"record": avroNamedStringMap{"value": 3}}, optionalRecordValue(
+		map[string]any{"record": map[string]any{"record": avroNamedStringMap{"value": 3}}}, "record",
+	))
+	require.Nil(t, optionalRecordValue(map[string]any{"record": 1}, "record"))
+	require.Nil(t, stringKeyMap(nil))
+	require.Nil(t, stringKeyMap(map[int]string{1: "value"}))
+
+	require.Equal(t, "value", optionalStringValue(map[string]any{"field": map[string]any{"string": "value"}}, "field"))
+	require.Empty(t, optionalStringValue(map[string]any{"field": 1}, "field"))
+	require.True(t, optionalBoolValue(map[string]any{"field": true}, "field"))
+	require.False(t, optionalBoolValue(map[string]any{"field": "true"}, "field"))
+	require.Equal(t, 7, optionalIntValue(map[string]any{"field": int32(7)}, "field"))
+	require.Zero(t, optionalIntValue(map[string]any{"field": "7"}, "field"))
+	require.Equal(t, int64(8), optionalInt64Value(map[string]any{"field": 8}, "field"))
+	require.Zero(t, optionalInt64Value(map[string]any{"field": "8"}, "field"))
+	require.Equal(t, []byte("bytes"), optionalBytesValue(map[string]any{"field": "bytes"}, "field"))
+
+	_, err := requiredString(map[string]any{"field": "  "}, "field")
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	require.Nil(t, anySlice(nil))
+	require.Nil(t, anySlice("not-a-list"))
+	require.Equal(t, []any{1}, anySlice([]any{1}))
+}
+
+func TestAvroNumericAndListConversionHelpers(t *testing.T) {
+	for _, input := range []any{int(1), int32(2), int64(3)} {
+		value, ok := intFromAny(input)
+		require.True(t, ok)
+		require.Greater(t, value, 0)
+		value64, ok := int64FromAny(input)
+		require.True(t, ok)
+		require.Greater(t, value64, int64(0))
+	}
+	_, ok := intFromAny("1")
+	require.False(t, ok)
+	_, ok = int64FromAny("1")
+	require.False(t, ok)
+	if strconv.IntSize == 32 {
+		_, ok = intFromAny(int64(math.MaxInt64))
+		require.False(t, ok)
+	}
+	require.Equal(t, []byte{1, 2}, bytesFromAny([]byte{1, 2}))
+	require.Equal(t, []byte("value"), bytesFromAny("value"))
+	require.Nil(t, bytesFromAny(1))
+
+	values, err := intSlice([]any{int32(1), int64(2)})
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2}, values)
+	values, err = intSlice([]any{})
+	require.NoError(t, err)
+	require.Nil(t, values)
+	values, err = intSlice(nil)
+	require.NoError(t, err)
+	require.Nil(t, values)
+	_, err = intSlice("not-a-list")
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	_, err = intSlice([]any{0})
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+}
+
+func TestReadOCFRecordsGuardAndVisitorErrors(t *testing.T) {
+	visit := func(int, map[string]any) error { return nil }
+	assertIcebergCode(t, readOCFRecords(nil, "nil", 1, 1<<20, visit), api.ErrMetadataInvalid)
+	assertIcebergCode(t, readOCFRecords(bytes.NewReader(nil), "zero", 1, 0, visit), api.ErrPlanningLimitExceeded)
+	assertIcebergCode(t, readOCFRecords(bytes.NewReader(nil), "record-memory", 1, 1, visit), api.ErrPlanningLimitExceeded)
+	assertIcebergCode(t, readOCFRecords(bytes.NewReader([]byte("bad!")), "magic", 1, 1<<20, visit), api.ErrMetadataInvalid)
+
+	const schema = `{"type":"record","name":"item","fields":[{"name":"id","type":"long"}]}`
+	data := encodeOCF(t, schema, []map[string]any{{"id": int64(1)}, {"id": int64(2)}})
+	assertIcebergCode(t, readOCFRecords(bytes.NewReader(data), "records", 1, 1<<20, visit), api.ErrPlanningLimitExceeded)
+	visitErr := api.NewError(api.ErrMetadataInvalid, "visit failed", nil)
+	err := readOCFRecords(bytes.NewReader(data), "visitor", 10, 1<<20, func(int, map[string]any) error { return visitErr })
+	require.ErrorIs(t, err, visitErr)
+
+	var primitive bytes.Buffer
+	encoder, err := ocf.NewEncoder(`"long"`, &primitive)
+	require.NoError(t, err)
+	require.NoError(t, encoder.Encode(int64(1)))
+	require.NoError(t, encoder.Close())
+	assertIcebergCode(t, readOCFRecords(bytes.NewReader(primitive.Bytes()), "primitive", 10, 1<<20, visit), api.ErrMetadataInvalid)
+}
+
+func TestAvroLongAndBoundedBytesValidation(t *testing.T) {
+	value, err := readAvroLong(bufio.NewReader(bytes.NewReader(encodeTestAvroLong(-123))))
+	require.NoError(t, err)
+	require.Equal(t, int64(-123), value)
+	_, err = readAvroLong(bufio.NewReader(bytes.NewReader(nil)))
+	require.ErrorIs(t, err, io.EOF)
+	_, err = readAvroLong(bufio.NewReader(bytes.NewReader([]byte{0x80})))
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	_, err = readAvroLong(bufio.NewReader(bytes.NewReader([]byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02})))
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+
+	data, err := readBoundedAvroBytes(bufio.NewReader(bytes.NewReader(append(encodeTestAvroLong(3), "abc"...))), 3, "bytes")
+	require.NoError(t, err)
+	require.Equal(t, []byte("abc"), data)
+	_, err = readBoundedAvroBytes(bufio.NewReader(bytes.NewReader(encodeTestAvroLong(-1))), 10, "negative")
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	_, err = readBoundedAvroBytes(bufio.NewReader(bytes.NewReader(encodeTestAvroLong(11))), 10, "limit")
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+	_, err = readBoundedAvroBytes(bufio.NewReader(bytes.NewReader(append(encodeTestAvroLong(3), "a"...))), 10, "truncated")
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+}
+
+func TestDecodeOCFBlockCodecsAndLimits(t *testing.T) {
+	plain := []byte("decoded payload")
+	decoded, err := decodeOCFBlock("null", plain, int64(len(plain)), "null")
+	require.NoError(t, err)
+	require.Equal(t, plain, decoded)
+	_, err = decodeOCFBlock("null", plain, int64(len(plain)-1), "null-limit")
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+	_, err = decodeOCFBlock("unsupported", plain, 1<<20, "unsupported")
+	assertIcebergCode(t, err, api.ErrUnsupportedFeature)
+	_, err = decodeOCFBlock("deflate", plain, int64(len(plain)), "compressed-limit")
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+	_, err = decodeOCFBlock("deflate", []byte("invalid"), 1<<20, "bad-deflate")
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+
+	snappyPayload := snappy.Encode(nil, plain)
+	snappyBlock := append([]byte(nil), snappyPayload...)
+	checksum := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksum, crc32.ChecksumIEEE(plain))
+	snappyBlock = append(snappyBlock, checksum...)
+	decoded, err = decodeOCFBlock("snappy", snappyBlock, 1<<20, "snappy")
+	require.NoError(t, err)
+	require.Equal(t, plain, decoded)
+	_, err = decodeOCFBlock("snappy", []byte{1, 2, 3}, 1<<20, "short-snappy")
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	snappyBlock[len(snappyBlock)-1] ^= 1
+	_, err = decodeOCFBlock("snappy", snappyBlock, 1<<20, "checksum")
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+
+	zstdWriter, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	zstdBlock := zstdWriter.EncodeAll(plain, nil)
+	zstdWriter.Close()
+	decoded, err = decodeOCFBlock("zstandard", zstdBlock, 1<<20, "zstandard")
+	require.NoError(t, err)
+	require.Equal(t, plain, decoded)
+	_, err = decodeOCFBlock("zstandard", zstdBlock, ocfZstdFixedScratchBytes+1, "zstandard-limit")
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+
+	readErr := api.NewError(api.ErrMetadataInvalid, "read failed", nil)
+	_, err = readDecodedBlock(iotest.ErrReader(readErr), 1024)
+	require.ErrorIs(t, err, readErr)
+	_, err = readDecodedBlock(bytes.NewReader(bytes.Repeat([]byte{'x'}, 10)), 5)
+	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+}
+
+func TestBoundedOCFHeaderValidation(t *testing.T) {
+	_, err := readBoundedOCFHeader(bufio.NewReader(bytes.NewReader(nil)), "truncated", 1<<20)
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	_, err = readBoundedOCFHeader(bufio.NewReader(bytes.NewReader([]byte("bad!"))), "magic", 1<<20)
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+
+	missingSchema := append([]byte{'O', 'b', 'j', 1, 0}, make([]byte, 16)...)
+	_, err = readBoundedOCFHeader(bufio.NewReader(bytes.NewReader(missingSchema)), "schema", 1<<20)
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	truncatedSync := []byte{'O', 'b', 'j', 1, 0}
+	_, err = readBoundedOCFHeader(bufio.NewReader(bytes.NewReader(truncatedSync)), "sync", 1<<20)
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+}
+
+func TestManifestRecordValidationHelpers(t *testing.T) {
+	manifest := validManifestListTestRecord()
+	manifest["content"] = int32(1)
+	manifest["first_row_id"] = int64(5)
+	decodedManifest, err := manifestFileFromRecord(manifest)
+	require.NoError(t, err)
+	require.Equal(t, api.ManifestContentDeletes, decodedManifest.Content)
+	require.Equal(t, int64(5), *decodedManifest.FirstRowID)
+	for _, mutate := range []func(map[string]any){
+		func(record map[string]any) { record["manifest_path"] = "" },
+		func(record map[string]any) { record["content"] = int32(2) },
+		func(record map[string]any) { record["first_row_id"] = int64(-1) },
+		func(record map[string]any) { record["manifest_length"] = int64(-1) },
+	} {
+		record := validManifestListTestRecord()
+		mutate(record)
+		_, err := manifestFileFromRecord(record)
+		assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	}
+
+	require.Len(t, partitionSummaries([]any{
+		"invalid",
+		map[string]any{"contains_null": true, "contains_nan": true, "lower_bound": "a", "upper_bound": []byte("z")},
+	}), 1)
+	require.Nil(t, partitionSummaries(nil))
+
+	_, err = manifestEntryFromRecord(map[string]any{})
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	entryRecord := manifestEntryTestRecord(1, 0, 1, 1)
+	entryRecord["sequence_number"] = int64(-1)
+	_, err = manifestEntryFromRecord(entryRecord)
+	assertIcebergCode(t, err, api.ErrMetadataInvalid)
+}
+
+func TestDataFileRecordValidationHelpers(t *testing.T) {
+	valid := func() map[string]any {
+		return map[string]any{
+			"content": int32(0), "file_path": "s3://warehouse/t/data.parquet", "file_format": "PARQUET",
+			"record_count": int64(1), "file_size_in_bytes": int64(1),
+			"column_sizes": []any{}, "value_counts": []any{}, "null_value_counts": []any{}, "nan_value_counts": []any{},
+			"lower_bounds": []any{}, "upper_bounds": []any{}, "split_offsets": []any{}, "equality_ids": []any{},
+			"sort_order_id": int32(0), "spec_id": int32(0), "delete_schema_id": int32(0),
+		}
+	}
+	record := valid()
+	record["first_row_id"] = int64(2)
+	record["deletion_vector"] = map[string]any{"record": map[string]any{"path": "dv.puffin"}}
+	file, err := dataFileFromRecord(record)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), *file.FirstRowID)
+	require.Equal(t, "present", file.DeletionVectorPath)
+
+	tests := []func(map[string]any){
+		func(record map[string]any) { record["file_path"] = "" },
+		func(record map[string]any) { record["content"] = int32(3) },
+		func(record map[string]any) { record["column_sizes"] = "invalid" },
+		func(record map[string]any) { record["value_counts"] = "invalid" },
+		func(record map[string]any) { record["null_value_counts"] = "invalid" },
+		func(record map[string]any) { record["nan_value_counts"] = "invalid" },
+		func(record map[string]any) { record["lower_bounds"] = "invalid" },
+		func(record map[string]any) { record["upper_bounds"] = "invalid" },
+		func(record map[string]any) { record["split_offsets"] = "invalid" },
+		func(record map[string]any) { record["equality_ids"] = "invalid" },
+		func(record map[string]any) { record["first_row_id"] = int64(-1) },
+		func(record map[string]any) { record["record_count"] = int64(-1) },
+		func(record map[string]any) { record["file_size_in_bytes"] = int64(0) },
+		func(record map[string]any) { record["sort_order_id"] = int32(-1) },
+	}
+	for _, mutate := range tests {
+		record := valid()
+		mutate(record)
+		_, err := dataFileFromRecord(record)
+		assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	}
+}
+
+func TestAvroMetricCollectionValidation(t *testing.T) {
+	longValues, err := intLongMap([]any{map[string]any{"key": int32(1), "value": int64(2)}})
+	require.NoError(t, err)
+	require.Equal(t, map[int]int64{1: 2}, longValues)
+	for _, raw := range []any{
+		"invalid", []any{"invalid"}, []any{map[string]any{"key": 0, "value": int64(1)}},
+		[]any{map[string]any{"key": 1, "value": int64(-1)}},
+		[]any{map[string]any{"key": 1, "value": int64(1)}, map[string]any{"key": 1, "value": int64(2)}},
+	} {
+		_, err := intLongMap(raw)
+		assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	}
+	longValues, err = intLongMap([]any{})
+	require.NoError(t, err)
+	require.Nil(t, longValues)
+	longValues, err = intLongMap(nil)
+	require.NoError(t, err)
+	require.Nil(t, longValues)
+
+	byteValues, err := intBytesMap([]any{map[string]any{"key": int32(1), "value": "bound"}})
+	require.NoError(t, err)
+	require.Equal(t, map[int][]byte{1: []byte("bound")}, byteValues)
+	for _, raw := range []any{
+		"invalid", []any{"invalid"}, []any{map[string]any{"key": 0, "value": []byte{1}}},
+		[]any{map[string]any{"key": 1, "value": 1}},
+		[]any{map[string]any{"key": 1, "value": []byte{1}}, map[string]any{"key": 1, "value": []byte{2}}},
+	} {
+		_, err := intBytesMap(raw)
+		assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	}
+	byteValues, err = intBytesMap([]any{})
+	require.NoError(t, err)
+	require.Nil(t, byteValues)
+	byteValues, err = intBytesMap(nil)
+	require.NoError(t, err)
+	require.Nil(t, byteValues)
+
+	longs, err := int64Slice([]any{int32(1), int64(2)})
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, longs)
+	for _, raw := range []any{"invalid", []any{-1}, []any{"invalid"}} {
+		_, err := int64Slice(raw)
+		assertIcebergCode(t, err, api.ErrMetadataInvalid)
+	}
+	longs, err = int64Slice([]any{})
+	require.NoError(t, err)
+	require.Nil(t, longs)
+	longs, err = int64Slice(nil)
+	require.NoError(t, err)
+	require.Nil(t, longs)
+}
+
+func encodeTestAvroLong(value int64) []byte {
+	encoded := uint64(value<<1) ^ uint64(value>>63)
+	out := make([]byte, 0, 10)
+	for encoded >= 0x80 {
+		out = append(out, byte(encoded)|0x80)
+		encoded >>= 7
+	}
+	return append(out, byte(encoded))
 }
 
 func firstOCFBlockOffset(t *testing.T, data []byte) int {
