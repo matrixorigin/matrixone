@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"encoding/binary"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -45,12 +46,13 @@ type termPostings struct {
 	tfs       []uint8   // parallel, capped tf (<= MaxCappedTf)
 	positions [][]int32 // BUILD-side per-doc positions (len == df); nil on a LOADED segment
 
-	// LOADED-side positions (Deserialize): a flat buffer shared across the
-	// segment's terms (points into the segment's off-heap bigPos), indexed by
-	// per-term absolute offsets posOff (len df+1): doc i's positions are
-	// posFlat[posOff[i]:posOff[i+1]]. nil on a build-side segment. Use posAt().
-	posFlat []int32
-	posOff  []int64
+	// LOADED-side positions (Deserialize): this term's positions kept COMPRESSED
+	// (delta+varint, per doc: pc + position gaps), a view into the segment's
+	// resident positions buffer. Positions are the largest section (~48%) and are
+	// needed ONLY for phrase verification / MERGE — never for WAND ranking — so they
+	// are NOT expanded into RAM at load; callers decode on demand via
+	// materializePositions(). nil on a build-side segment.
+	posRaw []byte
 
 	// Term-level score-UB inputs (raw, scorer-agnostic).
 	maxTf     uint8 // max tf over all postings
@@ -66,13 +68,33 @@ type termPostings struct {
 // df is the document frequency (number of docs containing the term).
 func (p *termPostings) df() int { return len(p.docIDs) }
 
-// posAt returns doc i's ascending token positions — from the build-side
-// per-doc [][]int32, or a view into the loaded-side flat off-heap buffer.
-func (p *termPostings) posAt(i int) []int32 {
+// materializePositions decodes this term's per-doc token positions (df entries):
+// the build-side stored [][]int32 as-is, or the loaded-side compressed posRaw
+// (delta+varint) transiently. Positions are NOT resident on a loaded segment, so a
+// caller that needs them (phrase verification, MERGE) materializes ONCE per query
+// and discards — WAND ranking never calls this. Panics on a build-side... no: a
+// build-side segment returns tp.positions directly.
+func (p *termPostings) materializePositions() [][]int32 {
 	if p.positions != nil {
-		return p.positions[i]
+		return p.positions
 	}
-	return p.posFlat[p.posOff[i]:p.posOff[i+1]]
+	df := len(p.docIDs)
+	out := make([][]int32, df)
+	off := 0
+	for i := 0; i < df; i++ {
+		pc, n := binary.Uvarint(p.posRaw[off:])
+		off += n
+		doc := make([]int32, pc)
+		var pp int32
+		for m := uint64(0); m < pc; m++ {
+			g, k := binary.Uvarint(p.posRaw[off:])
+			off += k
+			pp += int32(g)
+			doc[m] = pp
+		}
+		out[i] = doc
+	}
+	return out
 }
 
 // Segment is one loadable in-memory fulltext v2 index unit — a tag=0 base sub or

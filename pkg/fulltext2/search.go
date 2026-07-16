@@ -125,12 +125,20 @@ func (s *Segment) matchPhrase(terms []string) []docTf {
 			rare = i
 		}
 	}
+	// Adjacency verification needs positions — materialize each term's positions
+	// ONCE (decoding the loaded-side compressed posRaw transiently; build-side
+	// returns its [][]int32 directly), then index by doc position. WAND ranking
+	// never materializes; only phrase verification does.
+	mats := make([][][]int32, len(pls))
+	for j, pl := range pls {
+		mats[j] = pl.materializePositions()
+	}
 	var hits []docTf
 	posLists := make([][]int32, len(terms))
 	for _, ord := range pls[rare].docIDs {
 		ok := true
 		for j, pl := range pls {
-			pos, has := positionsInDoc(pl, ord)
+			pos, has := positionsInDoc(pl, mats[j], ord)
 			if !has {
 				ok = false
 				break
@@ -177,10 +185,10 @@ func (s *Segment) avgDocLenOrMean() float64 {
 // positionsInDoc returns the ascending token positions of the term (whose posting
 // list is pl) within the document ord, or ok=false if the term does not occur in
 // that doc. Binary search over the ascending docIDs.
-func positionsInDoc(pl *termPostings, ord int64) (pos []int32, ok bool) {
+func positionsInDoc(pl *termPostings, mat [][]int32, ord int64) (pos []int32, ok bool) {
 	i := sort.Search(len(pl.docIDs), func(i int) bool { return pl.docIDs[i] >= ord })
 	if i < len(pl.docIDs) && pl.docIDs[i] == ord {
-		return pl.posAt(i), true
+		return mat[i], true
 	}
 	return nil, false
 }

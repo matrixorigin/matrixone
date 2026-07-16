@@ -47,19 +47,22 @@ func TestOffHeapPostings(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, loaded.deallocators, "loaded segment holds off-heap buffers")
 
-	// Every loaded term: positions field is nil (off-heap), but posAt reproduces the
-	// build-side positions exactly, and the flat buffer is contiguous & consistent.
+	// Every loaded term: docIDs/tfs off-heap; positions kept COMPRESSED (posRaw, the
+	// [][]int32 field nil) and materialized on demand to reproduce the build-side
+	// positions exactly.
 	for _, term := range built.sortedTerms {
 		want, ok := built.Lookup(term)
 		require.True(t, ok, term)
 		got, ok := loaded.LookupLoaded(term)
 		require.True(t, ok, term)
-		require.Nil(t, got.positions, "%s: loaded positions must be off-heap (nil field)", term)
+		require.Nil(t, got.positions, "%s: loaded positions must be lazy (nil [][]int32)", term)
+		require.NotNil(t, got.posRaw, "%s: loaded positions kept compressed in posRaw", term)
 		require.Equal(t, want.docIDs, got.docIDs, term)
 		require.Equal(t, want.tfs, got.tfs, term)
-		require.Equal(t, got.df()+1, len(got.posOff), "%s: posOff is df+1", term)
+		gotPos := got.materializePositions()
+		require.Equal(t, len(want.positions), len(gotPos), term)
 		for i := range want.positions {
-			require.Equalf(t, want.positions[i], got.posAt(i), "%s positions[%d]", term, i)
+			require.Equalf(t, want.positions[i], gotPos[i], "%s positions[%d]", term, i)
 		}
 	}
 

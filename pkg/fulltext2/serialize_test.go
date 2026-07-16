@@ -54,9 +54,10 @@ func assertPostingsEqual(t *testing.T, want, got *termPostings) {
 	t.Helper()
 	require.Equal(t, want.docIDs, got.docIDs)
 	require.Equal(t, want.tfs, got.tfs)
-	require.Equal(t, len(want.positions), got.df())
+	gotPos := got.materializePositions()
+	require.Equal(t, len(want.positions), len(gotPos))
 	for i := range want.positions {
-		require.Equalf(t, want.positions[i], got.posAt(i), "positions[%d]", i)
+		require.Equalf(t, want.positions[i], gotPos[i], "positions[%d]", i)
 	}
 }
 
