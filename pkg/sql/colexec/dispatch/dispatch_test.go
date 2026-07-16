@@ -301,6 +301,67 @@ func TestWaitRemoteRegsReadyFailsWhenRegistrationChannelCloses(t *testing.T) {
 	require.Empty(t, d.ctr.remoteReceivers)
 }
 
+func TestWaitRemoteRegsReadyTimesOutWhenRegistrationNeverArrives(t *testing.T) {
+	stub := gostub.Stub(&waitRemoteRegTimeout, 20*time.Millisecond)
+	defer stub.Reset()
+
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	uid := uuid.Must(uuid.NewV7())
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+		ctr: &container{
+			remoteInfo: make(process.RemotePipelineInformationChannel),
+		},
+	}
+
+	type result struct {
+		end bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		end, err := d.waitRemoteRegsReady(proc)
+		done <- result{end: end, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.False(t, got.end)
+		require.Error(t, got.err)
+		require.Contains(t, got.err.Error(), "1 of 1 remote receivers were not registered within 20ms")
+		require.False(t, d.ctr.prepared)
+		require.Empty(t, d.ctr.remoteReceivers)
+	case <-time.After(time.Second):
+		t.Fatal("waitRemoteRegsReady did not observe its registration timeout")
+	}
+}
+
+func TestWaitRemoteRegsReadyTimesOutAfterPartialRegistration(t *testing.T) {
+	stub := gostub.Stub(&waitRemoteRegTimeout, 20*time.Millisecond)
+	defer stub.Reset()
+
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	remoteInfo := make(process.RemotePipelineInformationChannel, 1)
+	attached := &process.WrapCs{Uid: uuid.Must(uuid.NewV7())}
+	remoteInfo <- attached
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: attached.Uid},
+			{Uuid: uuid.Must(uuid.NewV7())},
+		},
+		ctr: &container{remoteInfo: remoteInfo},
+	}
+
+	end, err := d.waitRemoteRegsReady(proc)
+	require.False(t, end)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "1 of 2 remote receivers were not registered within 20ms")
+	require.False(t, d.ctr.prepared)
+	require.Equal(t, []*process.WrapCs{attached}, d.ctr.remoteReceivers)
+}
+
 func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	_ = colexec.NewServer("")
 

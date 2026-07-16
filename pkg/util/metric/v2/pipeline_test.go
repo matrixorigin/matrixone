@@ -31,9 +31,9 @@ func TestPipelineRemoteReceiverWaitHistogramStaysCompact(t *testing.T) {
 		if family.GetName() != "mo_pipeline_remote_receiver_wait_duration_seconds" {
 			continue
 		}
-		require.Len(t, family.Metric, 5)
+		require.Len(t, family.Metric, 6)
 		for _, metric := range family.Metric {
-			require.Len(t, metric.GetHistogram().Bucket, 14)
+			require.Len(t, metric.GetHistogram().Bucket, 15)
 		}
 		return
 	}

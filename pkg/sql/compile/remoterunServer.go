@@ -791,6 +791,16 @@ func isRemoteDispatchNotRegisteredYetError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrRemoteDispatchNotRegistered)
 }
 
+var remoteDispatchRegistrationTimeout = colexec.RemoteReceiverRegistrationTimeout
+
+func newRemoteDispatchRegistrationTimeoutError(uid uuid.UUID, timeout time.Duration) error {
+	return moerr.NewInternalErrorNoCtxf(
+		"remote dispatch receiver %s was not registered within %s",
+		uid.String(),
+		timeout,
+	)
+}
+
 func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
 	dispatchProc, notifyChannel, state, waiter := receiver.colexecServer.AttachProcByUuidOrWait(uid)
 	waiter.Close()
@@ -814,11 +824,56 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	connectionDone := contextDone(receiver.connectionCtx)
 	messageDone := contextDone(receiver.messageCtx)
 	start := time.Now()
+	timeout := remoteDispatchRegistrationTimeout
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
 	var publishedWaiter *colexec.RemoteReceiverWaiter
 	releasePublishedWaiter := func() {
 		if publishedWaiter != nil {
 			publishedWaiter.Close()
 			publishedWaiter = nil
+		}
+	}
+	handleAttachState := func(
+		dispatchProc *process.Process,
+		notifyChannel process.RemotePipelineInformationChannel,
+		state colexec.RemoteReceiverAttachState,
+	) (
+		*process.Process,
+		process.RemotePipelineInformationChannel,
+		bool,
+		error,
+	) {
+		switch state {
+		case colexec.RemoteReceiverAttachedNow:
+			releasePublishedWaiter()
+			select {
+			case <-connectionDone:
+				err := moerr.NewStreamClosed(receiver.getMessageContext())
+				receiver.cancelConsumedDispatchRegistration(dispatchProc, err)
+				v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
+				return nil, nil, true, err
+			case <-messageDone:
+				err := remoteRegistrationContextError(receiver.getMessageContext())
+				receiver.cancelConsumedDispatchRegistration(dispatchProc, err)
+				v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
+				return nil, nil, true, err
+			default:
+			}
+			v2.PipelineRemoteReceiverWaitReadyHistogram.Observe(time.Since(start).Seconds())
+			return dispatchProc, notifyChannel, true, nil
+		case colexec.RemoteReceiverAlreadyAttached:
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitAlreadyAttachedHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, true, moerr.NewInvalidStateNoCtxf(
+				"remote dispatch receiver %s is already attached", uid.String())
+		case colexec.RemoteReceiverAlreadyClosed:
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitAlreadyClosedHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, true, moerr.NewInvalidStateNoCtxf(
+				"remote dispatch receiver %s is already closed", uid.String())
+		default:
+			return nil, nil, false, nil
 		}
 	}
 	for {
@@ -835,36 +890,9 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 		}
 
 		dispatchProc, notifyChannel, state, waiter := receiver.colexecServer.AttachProcByUuidOrWait(uid)
-		switch state {
-		case colexec.RemoteReceiverAttachedNow:
-			releasePublishedWaiter()
-			select {
-			case <-connectionDone:
-				receiver.cancelConsumedDispatchRegistration(
-					dispatchProc,
-					moerr.NewStreamClosed(receiver.getMessageContext()),
-				)
-				v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
-				return nil, nil, moerr.NewStreamClosed(receiver.getMessageContext())
-			case <-messageDone:
-				err := remoteRegistrationContextError(receiver.getMessageContext())
-				receiver.cancelConsumedDispatchRegistration(dispatchProc, err)
-				v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
-				return nil, nil, err
-			default:
-			}
-			v2.PipelineRemoteReceiverWaitReadyHistogram.Observe(time.Since(start).Seconds())
-			return dispatchProc, notifyChannel, nil
-		case colexec.RemoteReceiverAlreadyAttached:
-			releasePublishedWaiter()
-			v2.PipelineRemoteReceiverWaitAlreadyAttachedHistogram.Observe(time.Since(start).Seconds())
-			return nil, nil, moerr.NewInvalidStateNoCtxf(
-				"remote dispatch receiver %s is already attached", uid.String())
-		case colexec.RemoteReceiverAlreadyClosed:
-			releasePublishedWaiter()
-			v2.PipelineRemoteReceiverWaitAlreadyClosedHistogram.Observe(time.Since(start).Seconds())
-			return nil, nil, moerr.NewInvalidStateNoCtxf(
-				"remote dispatch receiver %s is already closed", uid.String())
+		if proc, ch, done, err := handleAttachState(dispatchProc, notifyChannel, state); done {
+			waiter.Close()
+			return proc, ch, err
 		}
 		if publishedWaiter != nil {
 			waiter.Close()
@@ -882,6 +910,25 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 			waiter.Close()
 			v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, remoteRegistrationContextError(receiver.getMessageContext())
+		case <-deadline.C:
+			// Prefer a receiver published at the timeout boundary. The registry
+			// lock is the ownership linearization point; keep the current waiter
+			// alive during the final lookup so a just-closed published receiver
+			// retains its terminal state until we observe it.
+			dispatchProc, notifyChannel, state, finalWaiter :=
+				receiver.colexecServer.AttachProcByUuidOrWait(uid)
+			finalWaiter.Close()
+			if proc, ch, done, err := handleAttachState(dispatchProc, notifyChannel, state); done {
+				waiter.Close()
+				return proc, ch, err
+			}
+			waiter.Close()
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitTimeoutHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, newRemoteDispatchRegistrationTimeoutError(
+				uid,
+				timeout,
+			)
 		case <-waiter.Done():
 			publishedWaiter = waiter
 		}

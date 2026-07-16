@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -29,6 +30,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// RemoteReceiverRegistrationTimeout bounds only the admission phase in which
+// a dispatch waits for its remote receiver to register. It does not limit the
+// lifetime of the query or of an attached stream.
+const RemoteReceiverRegistrationTimeout = 120 * time.Second
 
 type ResultPos struct {
 	Rel int32

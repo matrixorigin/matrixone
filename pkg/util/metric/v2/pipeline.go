@@ -77,11 +77,10 @@ var (
 			Name:      "remote_receiver_wait_duration_seconds",
 			Help:      "Remote receiver registration wait duration by terminal outcome.",
 			// Registration is normally sub-millisecond but may legitimately
-			// wait through scheduler or overload delays. A compact dedicated
-			// range keeps the five fixed outcomes observable without multiplying
-			// the repository-wide high-resolution duration buckets into
-			// thousands of time series per CN.
-			Buckets: prometheus.ExponentialBuckets(0.000001, 4, 14),
+			// wait through scheduler or overload delays. This compact range
+			// reaches beyond the admission timeout while avoiding the
+			// repository-wide high-resolution duration buckets.
+			Buckets: prometheus.ExponentialBuckets(0.000001, 4, 15),
 		}, []string{"outcome"})
 	PipelineRemoteReceiverWaitReadyHistogram            = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues("ready")
 	PipelineRemoteReceiverWaitConnectionClosedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
@@ -95,6 +94,9 @@ var (
 	)
 	PipelineRemoteReceiverWaitAlreadyClosedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
 		"already_closed",
+	)
+	PipelineRemoteReceiverWaitTimeoutHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
+		"timeout",
 	)
 
 	PipelineRemoteNotifyRetryCounter = prometheus.NewCounter(
