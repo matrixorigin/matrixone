@@ -107,9 +107,10 @@ measurable resource, quality, and retry quantities:
 Version 6 preserves existing positions while defining these changes:
 
 - index 1 is `exclusive_active_ns`, never reconstructed “CPU”;
-- index 2 is the maximum attributable isolated-MPool peak live bytes observed in
-  the statement, exposed by new code as `PeakMemoryBytes` while retaining the
-  serialized `MemorySize` position;
+- index 2 is the maximum MPool live-byte occupancy observed in the statement:
+  exact for isolated execution MPools and an absolute occupancy peak for the
+  request-serialized session MPool. New code exposes it as `PeakMemoryBytes`
+  while retaining the serialized `MemorySize` position;
 - index 5 becomes actual accepted protocol bytes as defined in section 5.2;
 - index 10 includes DELETE and DELETE_MULTI;
 - index 11 makes completeness and invariant quality visible;
@@ -249,9 +250,12 @@ wait plus child-call wall exceeds call wall, the contribution is zero and an
 invariant flag is set. Producers cannot cast a negative duration to `uint64` or
 implement their own subtraction.
 
-Parse, plan, or compile work contributes to active time only when a producer can
-measure a non-overlapping local interval. Otherwise it reports wall latency
-only. Completeness is preferable to fabricated CPU precision.
+Parse, plan, compile, and pre-run work contributes to active time only when a
+producer can measure a non-overlapping local interval. Legacy I/O/lock counters
+may aggregate parallel waits and therefore exceed coordinator wall time. In
+that case the measured wait is retained, the phase contributes no active
+interval, and no invariant is raised: the inputs describe different scopes,
+not broken arithmetic. Completeness is preferable to fabricated CPU precision.
 
 Wait totals remain in the typed summary and are projected into the persisted
 `exec_plan` resource-diagnostics section and `EXPLAIN ANALYZE`; they are not
@@ -315,13 +319,17 @@ hold. Any cross-pool free makes attribution invalid and sets an invariant.
 `spill_bytes` is separately additive and comes from the operator spill boundary,
 not from MPool or a peak-derived estimate.
 
-These values may only come from an allocator domain backed by one actual MPool.
-The local statement root establishes one epoch on the serialized session MPool
-only when it is zero-live at statement registration. That epoch includes plan,
-all retries, local fragments, and nested work caused by the statement; retries
-never reset it. If the pool already contains live allocations, local memory is
-marked missing instead of estimated. Independent remote pipeline MPools remain
-isolated domains and publish their terminal summaries with the fragment.
+Exact allocation/free/live-at-seal values may only come from an isolated
+allocator domain backed by one actual MPool. Independent remote pipeline MPools
+are such domains and publish their terminal summaries with the fragment.
+
+The local session MPool is request-serialized but not isolated: prepared plans
+and other session state may be retained across statements. At request start its
+high-water mark is rebased to current live bytes, and index 2 receives the
+maximum absolute occupancy observed through response completion. This value is
+useful for OOM correlation and remains valid for `PREPARE`, `EXECUTE`, and
+`DEALLOCATE`; it is not an incremental allocation claim. The session pool does
+not publish fabricated allocation/free/live-at-seal facts.
 
 The MPool high-water update is a real atomic-max CAS loop. `peak_live_bytes`
 advances only after an allocation succeeds; a failed capacity reservation does
@@ -329,16 +337,15 @@ not appear as live memory. If reservation pressure is useful, it is separately
 named `peak_reserved_bytes` and is diagnostic only. The adapter adds no clock
 read or second independent accounting vector per allocation.
 
-The session epoch can be reset for the next statement only when
-`CurrNB()==0`. A non-zero start is never normalized with a baseline delta,
-because overlap makes such a delta unattributable.
+Starting with non-zero session occupancy is normal. The rebase is safe at the
+serialized request boundary and does not reset allocation/free counters.
 
 Pre-response consumers such as `EXPLAIN PHYPLAN ANALYZE` read only the atomic
 peak of the same open epoch. The live preview never calls the terminal snapshot
 or exposes allocated, freed, cross-pool-free, or live-at-seal fields. It is
 never merged into the root; response completion clears it and publishes the
-quiescent terminal domain exactly once. An exact peak of zero is valid when the
-statement performs no chargeable MPool allocation after the epoch begins.
+terminal peak observation exactly once. A peak of zero is valid for an empty
+session pool with no allocation after the epoch begins.
 
 Peaks are not additive. Attempt and root summaries expose
 `max_domain_peak_live_bytes` and
@@ -1098,9 +1105,9 @@ The representations and their limits are:
 
 - Active work is `exclusive_active_ns`: non-negative, additive producer-local
   intervals. It is not OS-thread CPU time and may exceed wall time.
-- Statement memory is `max_domain_peak_live_bytes`: the exact maximum of
-  attributable isolated-MPool peaks. It is not CN RSS or a synchronized
-  multi-CN total peak.
+- Statement memory is the maximum of exact isolated-MPool peaks and the local
+  serialized session-MPool occupancy peak. The latter includes retained
+  session state. It is not CN RSS or a synchronized multi-CN total peak.
 - `sum_domain_peak_live_bytes_upper_bound` is retained in memory and diagnostic
   events as an additive bound. It is not persisted as `MemorySize` or presented
   as a peak.
@@ -1209,7 +1216,7 @@ CI must check:
   buffer or queue;
 - reducer benchmarks at 1, 8, and 64 concurrent fragment publishers;
 - atomic-max MPool allocation at 1, 8, and 64 concurrent writers;
-- zero-live MPool epoch recycle versus NewMPool/DeleteMPool;
+- non-zero session baseline peak rebase and isolated MPool snapshots;
 - AsyncLease acquire/release and terminal protobuf marshal/unmarshal allocs/op;
 - end-to-end `EndStatement + CU + group merge + FillRow`;
 - queue-full `TryCollect`, high-water crossing, and cancellation-storm retained
@@ -1279,6 +1286,8 @@ preserving the same expected total.
 - seal is single-owner and cannot execute twice;
 - a conservation mismatch sets an invariant failure and fails tests;
 - checked active subtraction reports invariant instead of unsigned underflow;
+- aggregate phase wait exceeding coordinator wall retains wait, omits that
+  phase's active contribution, and does not report a false invariant;
 - AttemptSummary merges into Execution once and is never also merged into root;
 - no late writer can affect the next attempt;
 - serializer performs no resource inference.
@@ -1397,7 +1406,8 @@ Assert:
 | Question | Created/waiting/growing object | Required terminal or bound |
 | --- | --- | --- |
 | Q1 destruction | LocalRecorder/analyzer | existing Reset/Release after seal |
-| Q1 destruction | execution MPool epoch | quiescent; zero required for reuse, non-zero snapshotted before destruction |
+| Q1 destruction | isolated execution MPool epoch | quiescent; non-zero live bytes retained as an invariant before destruction |
+| Q1 destruction | serialized session MPool peak epoch | terminal peak captured; retained live bytes are normal session state |
 | Q1 destruction | LeaseGroup/tombstone | every owner has Release defer; refcount reaches zero |
 | Q1 destruction | fragment slots | released when Attempt seals |
 | Q1 destruction | pooled JSON buffer | returned by exporter on success/drop/error |
@@ -1420,9 +1430,8 @@ Assert:
 ### Preflight: one-week spikes and consumer inventory
 
 - benchmark compact Usage, dense slots, and sparse terminal protobuf;
-- prove the isolated-MPool ownership boundary, per-pool domain registration,
-  successful-allocation atomic-max high-water, and zero-live epoch reuse on local
-  and remote execution;
+- prove isolated-MPool ownership and per-pool domain registration, plus the
+  request-serialized session-MPool peak boundary and atomic-max high-water;
 - inventory every `StatsArray`, `mo_cu*`, `cu_v1`, and statement-CU metric
   consumer; identify aggregate calls that cannot reconstruct component CU;
 - inventory every `StatsArray.Add`, `GetExecStatsArray`, composite-statement
@@ -1457,10 +1466,10 @@ Assert:
 - migrate operator and coordinator active/wait;
 - migrate fileservice S3 operations/bytes;
 - migrate protocol client egress;
-- split session/cache memory from the exact execution-MPool domain and publish
-  its alloc/free/high-water/seal facts;
+- split session/cache memory from exact execution-MPool domains; publish only
+  the session occupancy peak and keep alloc/free/live facts isolated;
 - fix MPool high-water to successful-allocation atomic-max, remove synchronous
-  allocator-threshold reports, and add zero-live epoch reuse;
+  allocator-threshold reports, and add session-boundary peak rebasing;
 - add attempt generation, dense fragment slots, and the atomic remote terminal
   envelope;
 - project the sealed root into StatsArray version 6 in existing
@@ -1577,9 +1586,11 @@ logs/traces, not metric labels.
     expired request deadline cannot force systematic partial summaries.
 25. StatsArray JSON, exporter accounting bytes, joined leases, and tombstones have
     explicit mechanical bounds.
-26. Memory allocation/free/high-water values come from one domain per actual
-    isolated execution MPool; successful-allocation high-water uses atomic-max,
-    and `live_bytes_at_seal` is zero or an explicit invariant.
+26. Memory allocation/free/live-at-seal values come from one domain per actual
+    isolated execution MPool. The serialized session MPool contributes only an
+    absolute occupancy high-water; successful-allocation high-water uses
+    atomic-max, and isolated `live_bytes_at_seal` is zero or an explicit
+    invariant.
 27. StatsArray v6 persists no `oom` boolean; reliable process-death evidence is
     the CN/missing-domain signal, with high-water events explicitly best effort.
 28. `StatementResourceSummary.Merge` is the only live statement/group merge
@@ -1793,9 +1804,9 @@ unchanged, and the old accounting path is absent from the built binary.
 
 ## 20. Decisions Required Before Implementation or Rollout
 
-1. Does the isolated-MPool prototype register every actual local/remote domain,
-   produce successful-allocation atomic-max high-water, and reuse zero-live
-   epochs within the overhead gates?
+1. Does the prototype register every isolated remote domain, rebase the local
+   serialized session peak safely, and keep atomic-max overhead within the
+   gates?
 2. Do all StatsArray/CU consumers use authoritative v6 total CU and reject
    mathematically unrecoverable aggregate component recalculation?
 3. Does the real statement completion path remain non-blocking under collector
@@ -1826,8 +1837,9 @@ ownership, remote terminal envelope, or harness.
 9. Version 6 preserves the first 11 positions and appends six compact,
    independently meaningful quantities; no second persistence table/schema is
    introduced.
-10. Memory v6 records exact allocator-domain facts for diagnosis. It contains no
-    byte-time estimate, peak-duration proxy, price, or charge.
+10. Memory v6 records exact isolated allocator-domain facts plus the serialized
+    session-pool occupancy peak for diagnosis. It contains no byte-time
+    estimate, peak-duration proxy, price, or charge.
 11. CU remains the current deterministic downstream formula over sealed v6
     quantities and duration. It does not participate in producer accounting or
     merge back into the resource summary.

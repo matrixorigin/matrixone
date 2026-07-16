@@ -16,6 +16,7 @@ package embed
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +38,20 @@ func TestResourceAccountingBVTSingleCN(t *testing.T) {
 	plan := queryExplainResource(t, db, "select sum(result) from generate_series(1, 10000) g")
 	assertResourceOverview(t, plan)
 	require.NotContains(t, plan, "REMOTE SCOPES:")
+
+	require.NoError(t, execStatements(db,
+		"drop database if exists resource_accounting_lifecycle",
+		"create database resource_accounting_lifecycle",
+		"create table resource_accounting_lifecycle.t (id bigint)",
+		"prepare resource_accounting_stmt from 'select 1'",
+		"execute resource_accounting_stmt",
+		"deallocate prepare resource_accounting_stmt",
+	))
+	assertPersistedResourceQuality(t, db, []string{
+		"create database resource_accounting_lifecycle",
+		"create table resource_accounting_lifecycle.t (id bigint)",
+		"deallocate prepare resource_accounting_stmt",
+	})
 }
 
 func TestResourceAccountingBVTMultiCN(t *testing.T) {
@@ -163,4 +179,58 @@ func assertResourceOverview(t *testing.T, plan string) {
 			require.Positive(t, value, "%s must be positive", field)
 		}
 	}
+}
+
+func assertPersistedResourceQuality(t *testing.T, db *sql.DB, statements []string) {
+	t.Helper()
+	wanted := make(map[string]struct{}, len(statements))
+	for _, statement := range statements {
+		wanted[statement] = struct{}{}
+	}
+	last := "no rows"
+	satisfied := assert.Eventually(t, func() bool {
+		rows, err := db.Query(`select statement, stats from system.statement_info
+			where status != 'Running' and statement in (` + sqlStringList(statements) + `)`)
+		if err != nil {
+			last = err.Error()
+			return false
+		}
+		defer rows.Close()
+		seen := make(map[string]struct{}, len(statements))
+		observed := make([]string, 0, len(statements))
+		for rows.Next() {
+			var statement, encoded string
+			if rows.Scan(&statement, &encoded) != nil {
+				return false
+			}
+			observed = append(observed, statement+"="+encoded)
+			var stats []float64
+			if json.Unmarshal([]byte(encoded), &stats) != nil || len(stats) <= 11 ||
+				stats[0] != 6 || stats[11] != 0 {
+				return false
+			}
+			seen[statement] = struct{}{}
+		}
+		last = strings.Join(observed, "; ")
+		if rows.Err() != nil {
+			return false
+		}
+		for statement := range wanted {
+			if _, ok := seen[statement]; !ok {
+				return false
+			}
+		}
+		return true
+	}, 20*time.Second, 250*time.Millisecond)
+	if !satisfied {
+		require.FailNow(t, "persisted resource quality did not converge", last)
+	}
+}
+
+func sqlStringList(values []string) string {
+	quoted := make([]string, len(values))
+	for i, value := range values {
+		quoted[i] = "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	}
+	return strings.Join(quoted, ",")
 }
