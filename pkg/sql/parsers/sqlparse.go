@@ -203,6 +203,10 @@ func SplitSqlBySemicolon(sql string) []string {
 	return ret
 }
 
+func SplitSqlByStatement(ctx context.Context, sql string) ([]string, error) {
+	return mysql.SplitSqlByStatement(ctx, sql, 1)
+}
+
 // FragmentHasStatement reports whether a semicolon-separated fragment carries an
 // actual statement rather than being blank or comment-only. The scanner skips
 // every comment form (-- , #, //, /* */, /*+ */) so the first token of a
@@ -225,12 +229,15 @@ func FragmentHasStatement(fragment string) bool {
 // of the leading /*+ ... */ (or /*! ... */) hint on that statement, or "" if it
 // has none. Blank/comment-only fragments carry no statement and are skipped so
 // the returned slice lines up positionally with the parser's statement list.
-func extractLeadingHints(sql string) []string {
+func extractLeadingHints(ctx context.Context, sql string) ([]string, error) {
 	if len(sql) == 0 {
-		return []string{""}
+		return []string{""}, nil
 	}
 
-	fragments := SplitSqlBySemicolon(sql)
+	fragments, err := SplitSqlByStatement(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
 	stmts := make([]string, 0, len(fragments))
 	for _, f := range fragments {
 		if FragmentHasStatement(f) {
@@ -299,7 +306,7 @@ func extractLeadingHints(sql string) []string {
 		}
 	}
 
-	return results
+	return results, nil
 }
 
 type RewriteMap struct {
@@ -459,7 +466,10 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 }
 
 func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) error {
-	hints := extractLeadingHints(sql)
+	hints, err := extractLeadingHints(ctx, sql)
+	if err != nil {
+		return err
+	}
 	if len(hints) != len(stmts) {
 		// A SQL that is entirely blank/comments carries no statement-bearing
 		// fragment, so hints is empty while the parser returns a single
@@ -544,4 +554,16 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 		}
 	}
 	return nil
+}
+
+func HandleSqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
+	fragments, err := SplitSqlByStatement(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]string, len(fragments))
+	for i, fragment := range fragments {
+		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
+	}
+	return records, nil
 }

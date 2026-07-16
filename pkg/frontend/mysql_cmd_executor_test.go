@@ -212,7 +212,7 @@ func Test_mce(t *testing.T) {
 		defer rsStubs.Reset()
 
 		srStub := gostub.Stub(&parsers.HandleSqlForRecord, func(sql string) []string {
-			return make([]string, 7)
+			return []string{sql}
 		})
 		defer srStub.Reset()
 
@@ -256,6 +256,8 @@ func Test_mce(t *testing.T) {
 		}
 		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		use_t.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
+		use_t.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()
+		use_t.EXPECT().Free().AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -374,7 +376,19 @@ func Test_mce(t *testing.T) {
 			cws = append(cws, select_2)
 		}
 
-		stubs := gostub.StubFunc(&GetComputationWrapper, cws, nil)
+		stubs := gostub.Stub(&GetComputationWrapper, func(
+			execCtx *ExecCtx,
+			db string,
+			user string,
+			eng engine.Engine,
+			proc *process.Process,
+			ses *Session,
+		) ([]ComputationWrapper, error) {
+			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
+				return []ComputationWrapper{use_t}, nil
+			}
+			return cws, nil
+		})
 		defer stubs.Reset()
 
 		pu, err = getParameterUnit("test/system_vars_config.toml", eng, txnClient)
@@ -401,9 +415,11 @@ func Test_mce(t *testing.T) {
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 
 		// A mock autoincrcache manager.
+		query := "create table A(a varchar(100),b int,c float);select a,b,c from A;" +
+			strings.Join(self_handle_sql, ";")
 		req := &Request{
 			cmd:  COM_QUERY,
-			data: []byte("test anywhere"),
+			data: []byte(query),
 		}
 
 		ec := newTestExecCtx(ctx, ctrl)

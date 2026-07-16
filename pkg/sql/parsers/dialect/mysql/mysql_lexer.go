@@ -110,11 +110,12 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 }
 
 type Lexer struct {
-	scanner    *Scanner
-	stmts      []tree.Statement
-	paramIndex int
-	lower      int64
-	lastToken  int
+	scanner               *Scanner
+	stmts                 []tree.Statement
+	paramIndex            int
+	lower                 int64
+	lastToken             int
+	topLevelSemicolonEnds []int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -142,6 +143,7 @@ func (l *Lexer) setScanner(s *Scanner, lower int64) {
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
+	l.topLevelSemicolonEnds = nil
 }
 
 func (l *Lexer) GetParamIndex() int {
@@ -151,6 +153,7 @@ func (l *Lexer) GetParamIndex() int {
 
 func (l *Lexer) Lex(lval *yySymType) int {
 	typ, str := l.scanner.Scan()
+	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 
 	switch typ {
@@ -198,6 +201,41 @@ func (l *Lexer) Error(err string) {
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
 	l.stmts = append(l.stmts, stmt)
+}
+
+func (l *Lexer) AppendTopLevelSemicolon(end int) {
+	l.topLevelSemicolonEnds = append(l.topLevelSemicolonEnds, end)
+}
+
+func SplitSqlByStatement(ctx context.Context, sql string, lower int64) ([]string, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	defer PutScanner(lexer.scanner)
+	if yyParse(lexer) != 0 {
+		for _, stmt := range lexer.stmts {
+			stmt.Free()
+		}
+		return nil, lexer.scanner.LastError
+	}
+	defer func() {
+		for _, stmt := range lexer.stmts {
+			stmt.Free()
+		}
+	}()
+
+	fragments := make([]string, 0, len(lexer.topLevelSemicolonEnds)+1)
+	start := 0
+	for _, end := range lexer.topLevelSemicolonEnds {
+		fragments = append(fragments, strings.TrimSpace(sql[start:end-1]))
+		start = end
+	}
+	tail := strings.TrimSpace(sql[start:])
+	if len(lexer.topLevelSemicolonEnds) == 0 || tail != "" {
+		fragments = append(fragments, tail)
+	}
+	if len(fragments) == 0 {
+		return []string{""}, nil
+	}
+	return fragments, nil
 }
 
 func (l *Lexer) toInt(lval *yySymType, str string) int {

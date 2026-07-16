@@ -1626,7 +1626,11 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
-		remaps := extractRemapDbByStatement(rewritten)
+		remaps, err := extractRemapDbByStatement(execCtx.reqCtx, rewritten)
+		if err != nil {
+			stmts[0].Free()
+			return rewritten, nil, nil, err
+		}
 		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
@@ -2729,7 +2733,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		cws = append(cws, tcw)
 		return cws, nil
 	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
-		statementRemaps = extractRemapDbByStatement(execCtx.input.getSql())
+		var remapErr error
+		statementRemaps, remapErr = extractRemapDbByStatement(execCtx.reqCtx, execCtx.input.getSql())
+		if remapErr != nil {
+			return nil, remapErr
+		}
 		if len(statementRemaps) != len(cached.stmts) {
 			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of remapdb policies is not equal to cached statements")
 		}
@@ -2824,7 +2832,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// travels with its computation wrapper and is installed on execCtx
 			// before authorization/planning, so DefaultDatabase can remap the
 			// current database for UNQUALIFIED references (USE is not remapped).
-			statementRemaps = extractRemapDbByStatement(execCtx.input.getSql())
+			statementRemaps, err = extractRemapDbByStatement(execCtx.reqCtx, execCtx.input.getSql())
+			if err != nil {
+				return nil, err
+			}
 			// COM_STMT_PREPARE rewrites the statement before wrapping it in
 			// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
 			// so use the policy captured on UserInput for its single nested stmt.
@@ -3837,7 +3848,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 		}
 	}()
-	sqlRecord := sqlForRecordByStatement(input.getSql())
+	sqlRecord, err := sqlForRecordByStatement(execCtx.reqCtx, input.getSql())
+	if err != nil {
+		return err
+	}
 
 	for i, cw := range cws {
 		// Install the policy that belongs to this wrapper before authorization and
@@ -3951,11 +3965,23 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 // the parser's AST list. HandleSqlForRecord intentionally preserves blank and
 // comment-only semicolon fragments for its existing callers; execution skips
 // those fragments, so filter them here before indexing by computation wrapper.
-func sqlForRecordByStatement(sql string) []string {
-	fragments := parsers.SplitSqlBySemicolon(sql)
-	records := parsers.HandleSqlForRecord(sql)
+func sqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
+	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
+		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
+		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
+		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
+		return parsers.HandleSqlForRecord(sql), nil
+	}
+	fragments, err := parsers.SplitSqlByStatement(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	records, err := parsers.HandleSqlForRecordByStatement(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
 	if len(fragments) == 1 {
-		return records
+		return records, nil
 	}
 	byStatement := make([]string, 0, len(records))
 	for i, fragment := range fragments {
@@ -3964,9 +3990,9 @@ func sqlForRecordByStatement(sql string) []string {
 		}
 	}
 	if len(byStatement) == 0 {
-		return []string{""}
+		return []string{""}, nil
 	}
-	return byStatement
+	return byStatement, nil
 }
 
 func checkNodeCanCache(p *plan2.Plan) bool {

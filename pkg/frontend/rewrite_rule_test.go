@@ -617,7 +617,8 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
 		require.NoError(t, err)
 		require.Len(t, stmts, 2)
-		records := sqlForRecordByStatement(rewritten)
+		records, err := sqlForRecordByStatement(ctx, rewritten)
+		require.NoError(t, err)
 		require.Len(t, records, 2)
 		require.Contains(t, records[0], "select ';' as semi /* block ; */")
 		require.Contains(t, records[1], "analyze table db.t(id)")
@@ -633,13 +634,63 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	})
 
 	t.Run("single synthetic blank record stays available", func(t *testing.T) {
-		require.Equal(t, []string{""}, sqlForRecordByStatement(""))
+		records, err := sqlForRecordByStatement(ctx, "")
+		require.NoError(t, err)
+		require.Equal(t, []string{""}, records)
 	})
 
 	t.Run("multi blank and comment fragments keep empty statement record", func(t *testing.T) {
 		for _, sql := range []string{";;", "/* comment */; -- another comment"} {
-			require.Equal(t, []string{""}, sqlForRecordByStatement(sql), sql)
+			records, err := sqlForRecordByStatement(ctx, sql)
+			require.NoError(t, err)
+			require.Equal(t, []string{""}, records, sql)
 		}
+	})
+
+	t.Run("compound create task is one policy boundary", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		sql := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+			"  insert into gate_sink select 'gate-ok';\n" +
+			"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+			"end"
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		require.Equal(t, 1, strings.Count(rewritten, `/*+ {"rewrites"`))
+
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer func() {
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+		}()
+		require.Len(t, stmts, 1)
+		require.IsType(t, &tree.CreateSQLTask{}, stmts[0])
+		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, rewritten))
+	})
+
+	t.Run("compound boundary preserves following remap", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		compound := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+			"  insert into gate_sink select 'gate-ok';\n" +
+			"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+			"end"
+		sql := compound + `; /*+ {"remapdb":{"src":"dst"}} */ select * from src.t`
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		remaps, err := extractRemapDbByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, remaps, 2)
+		require.Empty(t, remaps[0])
+		require.Equal(t, "dst", remaps[1]["src"])
+
+		records, err := sqlForRecordByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Contains(t, records[0], "insert into gate_sink")
+		require.Contains(t, records[0], "select case when")
 	})
 }
 

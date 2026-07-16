@@ -75,6 +75,7 @@ func sqlTaskInt64(v any) int64 {
     id  int
     str string
     item interface{}
+    pos int
 }
 
 %union {
@@ -952,6 +953,7 @@ stmt_list:
     }
 |   stmt_list ';' stmt
     {
+        yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
         if $3 != nil {
             yylex.(*Lexer).AppendStmt($3)
         }
