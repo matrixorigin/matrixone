@@ -226,6 +226,21 @@ func TestCheckpointReaderBasicAccessorsAndFork(t *testing.T) {
 	require.Equal(t, customCtx, fork.ctx)
 }
 
+func TestCheckpointReaderCloseWithOwnedFileService(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	reader := &CheckpointReader{
+		ctx:     ctx,
+		fs:      fs,
+		closeFS: true,
+		entries: []*checkpoint.CheckpointEntry{{}},
+	}
+	require.NoError(t, reader.Close())
+	require.Nil(t, reader.entries)
+}
+
 func TestCheckpointReaderInfoSummarizesEntries(t *testing.T) {
 	reader := &CheckpointReader{
 		dir: "/ckp",
@@ -498,6 +513,17 @@ func TestCheckpointReaderTestHookSetters(t *testing.T) {
 		require.Equal(t, uint64(9), tableID)
 		return []*ObjectEntryInfo{{}}, []*ObjectEntryInfo{{}}, nil
 	})
+	reader.SetGetObjectsForTablesTest(func(gotReader *CheckpointReader, gotEntry *checkpoint.CheckpointEntry, tableIDs map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+		require.NotNil(t, gotReader)
+		require.Same(t, entry, gotEntry)
+		require.Contains(t, tableIDs, uint64(9))
+		return map[uint64][]*ObjectEntryInfo{9: []*ObjectEntryInfo{{}}}, map[uint64][]*ObjectEntryInfo{9: []*ObjectEntryInfo{{}}}, nil
+	})
+	reader.SetGetLogicalViewForTest(func(gotReader *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
+		require.NotNil(t, gotReader)
+		require.Equal(t, uint64(9), tableID)
+		return &LogicalTableView{Headers: []string{"id"}}, nil
+	})
 
 	gotRanges, err := reader.GetTableRanges(entry)
 	require.NoError(t, err)
@@ -523,11 +549,25 @@ func TestCheckpointReaderTestHookSetters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, data, 1)
 	require.Len(t, tomb, 1)
+	dataByTable, tombByTable, err := reader.GetObjectEntriesForTables(entry, map[uint64]struct{}{9: {}})
+	require.NoError(t, err)
+	require.Len(t, dataByTable[9], 1)
+	require.Len(t, tombByTable[9], 1)
+	view, err := reader.getTableLogicalView(context.Background(), 9, types.BuildTS(1, 0))
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, view.Headers)
 
 	fork := reader.Fork(context.Background())
 	gotRanges, err = fork.GetTableRanges(entry)
 	require.NoError(t, err)
 	require.Equal(t, ranges, gotRanges)
+	view, err = fork.getTableLogicalView(context.Background(), 9, types.BuildTS(1, 0))
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, view.Headers)
+	dataByTable, tombByTable, err = fork.GetObjectEntriesForTables(entry, map[uint64]struct{}{9: {}})
+	require.NoError(t, err)
+	require.Len(t, dataByTable[9], 1)
+	require.Len(t, tombByTable[9], 1)
 }
 
 func testCheckpointObjectStats(t *testing.T, idByte byte) objectio.ObjectStats {

@@ -49,6 +49,10 @@ type CheckpointReader struct {
 	getTableRangesForTest   func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]ckputil.TableRange, error)
 	getTablesForTest        func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]*TableInfo, error)
 	getObjectEntriesForTest func(*CheckpointReader, *checkpoint.CheckpointEntry, uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error)
+	getObjectsForTablesTest func(*CheckpointReader, *checkpoint.CheckpointEntry, map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error)
+	getLogicalViewForTest   func(*CheckpointReader, uint64) (*LogicalTableView, error)
+	filterTombstonesForTest func(*objectio.ObjectId, []objectio.ObjectStats) ([]objectio.ObjectStats, error)
+	buildDeleteMaskForTest  func(*types.TS, objectio.ObjectStats, uint16, []objectio.ObjectStats) (objectio.Bitmap, error)
 }
 
 func (r *CheckpointReader) SetGetTableRangesForTest(fn func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]ckputil.TableRange, error)) {
@@ -61,6 +65,14 @@ func (r *CheckpointReader) SetGetTablesForTest(fn func(*CheckpointReader, *check
 
 func (r *CheckpointReader) SetGetObjectEntriesForTest(fn func(*CheckpointReader, *checkpoint.CheckpointEntry, uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error)) {
 	r.getObjectEntriesForTest = fn
+}
+
+func (r *CheckpointReader) SetGetObjectsForTablesTest(fn func(*CheckpointReader, *checkpoint.CheckpointEntry, map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error)) {
+	r.getObjectsForTablesTest = fn
+}
+
+func (r *CheckpointReader) SetGetLogicalViewForTest(fn func(*CheckpointReader, uint64) (*LogicalTableView, error)) {
+	r.getLogicalViewForTest = fn
 }
 
 // Option configures CheckpointReader
@@ -167,6 +179,10 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 		getTableRangesForTest:   r.getTableRangesForTest,
 		getTablesForTest:        r.getTablesForTest,
 		getObjectEntriesForTest: r.getObjectEntriesForTest,
+		getObjectsForTablesTest: r.getObjectsForTablesTest,
+		getLogicalViewForTest:   r.getLogicalViewForTest,
+		filterTombstonesForTest: r.filterTombstonesForTest,
+		buildDeleteMaskForTest:  r.buildDeleteMaskForTest,
 	}
 }
 
@@ -643,6 +659,9 @@ func (r *CheckpointReader) GetObjectEntriesForTables(
 	entry *checkpoint.CheckpointEntry,
 	tableIDs map[uint64]struct{},
 ) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+	if r.getObjectsForTablesTest != nil {
+		return r.getObjectsForTablesTest(r, entry, tableIDs)
+	}
 	loc := entry.GetLocation()
 	if loc.IsEmpty() {
 		return nil, nil, nil

@@ -133,6 +133,45 @@ func TestFilterTombstonesAndDeleteMaskEmptyInputs(t *testing.T) {
 	require.False(t, mask.IsValid())
 }
 
+func TestFilterTombstonesAndDeleteMaskHooks(t *testing.T) {
+	stats := testCheckpointObjectStats(t, 7)
+	objectID := stats.ObjectName().ObjectId()
+	reader := &CheckpointReader{
+		filterTombstonesForTest: func(gotID *objectio.ObjectId, gotStats []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+			require.Equal(t, objectID, gotID)
+			require.Len(t, gotStats, 1)
+			return gotStats, nil
+		},
+		buildDeleteMaskForTest: func(snapshotTS *types.TS, gotStats objectio.ObjectStats, blockIdx uint16, gotTombstones []objectio.ObjectStats) (objectio.Bitmap, error) {
+			require.NotNil(t, snapshotTS)
+			require.Equal(t, stats.ObjectName().String(), gotStats.ObjectName().String())
+			require.Equal(t, uint16(2), blockIdx)
+			require.Len(t, gotTombstones, 1)
+			return objectio.NullBitmap, nil
+		},
+	}
+
+	relevant, err := reader.filterTombstonesForObject(context.Background(), objectID, []objectio.ObjectStats{stats})
+	require.NoError(t, err)
+	require.Len(t, relevant, 1)
+
+	mask, err := reader.buildDeleteMaskForBlock(context.Background(), &types.TS{}, stats, 2, []objectio.ObjectStats{stats})
+	require.NoError(t, err)
+	require.False(t, mask.IsValid())
+
+	reader.filterTombstonesForTest = func(*objectio.ObjectId, []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+		return nil, assert.AnError
+	}
+	_, err = reader.filterTombstonesForObject(context.Background(), objectID, []objectio.ObjectStats{stats})
+	require.ErrorIs(t, err, assert.AnError)
+
+	reader.buildDeleteMaskForTest = func(*types.TS, objectio.ObjectStats, uint16, []objectio.ObjectStats) (objectio.Bitmap, error) {
+		return objectio.NullBitmap, assert.AnError
+	}
+	_, err = reader.buildDeleteMaskForBlock(context.Background(), &types.TS{}, stats, 2, []objectio.ObjectStats{stats})
+	require.ErrorIs(t, err, assert.AnError)
+}
+
 func TestBuildLogicalTableViewReadsVisibleRows(t *testing.T) {
 	ctx := context.Background()
 	fs, stats := writeLogicalTableTestObject(t, "logical.obj")
@@ -167,6 +206,73 @@ func TestBuildLogicalTableViewReadsVisibleRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, view.Rows)
 	require.Zero(t, view.PhysicalRows)
+}
+
+func TestBuildLogicalTableViewAppliesDeleteMaskHook(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "logical-delete.obj")
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+		filterTombstonesForTest: func(_ *objectio.ObjectId, tombstones []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+			return tombstones, nil
+		},
+		buildDeleteMaskForTest: func(_ *types.TS, _ objectio.ObjectStats, blockIdx uint16, tombstones []objectio.ObjectStats) (objectio.Bitmap, error) {
+			require.Equal(t, uint16(0), blockIdx)
+			require.Len(t, tombstones, 1)
+			mask := objectio.GetReusableBitmap()
+			mask.Add(1)
+			return mask, nil
+		},
+	}
+	view, err := reader.BuildLogicalTableView(ctx, types.BuildTS(200, 0), []*ObjectEntryInfo{
+		{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		},
+	}, []*ObjectEntryInfo{
+		{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, view.PhysicalRows)
+	require.Equal(t, 1, view.DeletedRows)
+	require.Equal(t, 1, view.VisibleRows)
+	require.Len(t, view.Rows, 1)
+	require.Equal(t, []string{"1", "alice"}, view.DataRow(view.Rows[0]))
+}
+
+func TestScanLogicalTableTombstoneHookErrors(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "logical-hook-errors.obj")
+	defer fs.Close(ctx)
+	entries := []*ObjectEntryInfo{{ObjectStats: stats, CreateTime: types.BuildTS(1, 0)}}
+	tombstones := []*ObjectEntryInfo{{ObjectStats: stats, CreateTime: types.BuildTS(1, 0)}}
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+		filterTombstonesForTest: func(*objectio.ObjectId, []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+			return nil, assert.AnError
+		},
+	}
+	_, err := reader.scanLogicalTable(ctx, types.BuildTS(200, 0), entries, tombstones, nil, nil)
+	require.ErrorIs(t, err, assert.AnError)
+
+	reader.filterTombstonesForTest = func(_ *objectio.ObjectId, tombstones []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+		return tombstones, nil
+	}
+	reader.buildDeleteMaskForTest = func(*types.TS, objectio.ObjectStats, uint16, []objectio.ObjectStats) (objectio.Bitmap, error) {
+		return objectio.NullBitmap, assert.AnError
+	}
+	_, err = reader.scanLogicalTable(ctx, types.BuildTS(200, 0), entries, tombstones, nil, nil)
+	require.ErrorIs(t, err, assert.AnError)
 }
 
 func TestScanLogicalTableCallbacksAndSnapshotCutoff(t *testing.T) {

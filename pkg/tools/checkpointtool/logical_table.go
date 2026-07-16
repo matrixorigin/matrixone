@@ -334,6 +334,9 @@ func (r *CheckpointReader) filterTombstonesForObject(
 	if len(tombstoneStats) == 0 {
 		return nil, nil
 	}
+	if r.filterTombstonesForTest != nil {
+		return r.filterTombstonesForTest(objectID, tombstoneStats)
+	}
 	selection, err := objectioutil.FindTombstonesOfObject(ctx, objectID, tombstoneStats, r.fs)
 	if err != nil {
 		return nil, err
@@ -359,6 +362,9 @@ func (r *CheckpointReader) buildDeleteMaskForBlock(
 ) (objectio.Bitmap, error) {
 	if len(tombstoneStats) == 0 {
 		return objectio.NullBitmap, nil
+	}
+	if r.buildDeleteMaskForTest != nil {
+		return r.buildDeleteMaskForTest(snapshotTS, stats, blockIdx, tombstoneStats)
 	}
 
 	mask := objectio.GetReusableBitmap()

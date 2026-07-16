@@ -1125,6 +1125,9 @@ func (r *CheckpointReader) getTableLogicalView(
 	tableID uint64,
 	snapshotTS types.TS,
 ) (*LogicalTableView, error) {
+	if r.getLogicalViewForTest != nil {
+		return r.getLogicalViewForTest(r, tableID)
+	}
 	allData, allTomb, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
 	if err != nil {
 		return nil, err

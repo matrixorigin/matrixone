@@ -27,6 +27,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -254,6 +255,38 @@ func TestRestoreCreateTableDDLViewRequiresCreateViewSQL(t *testing.T) {
 	assert.Contains(t, err.Error(), "rel_createsql is not CREATE VIEW")
 }
 
+func TestResolveTableByIDAndRestoreFallback(t *testing.T) {
+	ctx := context.Background()
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *checkpointtool.CheckpointReader, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+		if tableID != 2 {
+			return nil, fmt.Errorf("unexpected table %d", tableID)
+		}
+		return &checkpointtool.LogicalTableView{
+			Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+			Rows: [][]string{
+				ckpMoTablesRow(t, "2", catalog.MO_TABLES, catalog.MO_CATALOG, "1", "r", "0"),
+				ckpMoTablesRow(t, "42", "target", "db", "7", "r", "1"),
+			},
+		}, nil
+	})
+
+	table, err := resolveTableByID(ctx, reader, types.BuildTS(1, 0), 42)
+	require.NoError(t, err)
+	require.Equal(t, "target", table.TableName)
+	_, err = resolveTableByID(ctx, reader, types.BuildTS(1, 0), 999)
+	require.ErrorContains(t, err, "table 999 not found")
+
+	ddl, err := restoreCreateTableDDL(ctx, reader, checkpointtool.TableCatalogEntry{
+		TableID:      2,
+		DatabaseName: catalog.MO_CATALOG,
+		TableName:    catalog.MO_TABLES,
+		RelKind:      "r",
+	}, nil, types.BuildTS(1, 0))
+	require.NoError(t, err)
+	require.Contains(t, ddl, "CREATE TABLE `mo_catalog`.`mo_tables`")
+}
+
 func TestShouldWriteLoadDataSkipsExternalAndViewRelations(t *testing.T) {
 	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "e"}))
 	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "external"}))
@@ -369,6 +402,22 @@ func TestDumpCommandRunsUntilResolveSnapshotValidation(t *testing.T) {
 	require.ErrorContains(t, err, "resolve --ts")
 }
 
+func TestListAndShowCreateCommandsReachSnapshotValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	listCmd := listCommand(&toolfs.StorageOptions{})
+	listCmd.SetArgs([]string{"--type=databases", "--account-id=1", dir})
+	listCmd.SetOut(&bytes.Buffer{})
+	listCmd.SetErr(&bytes.Buffer{})
+	require.ErrorContains(t, listCmd.Execute(), "resolve --ts")
+
+	showCmd := showCreateTableCommand(&toolfs.StorageOptions{})
+	showCmd.SetArgs([]string{"--table-id=1", dir})
+	showCmd.SetOut(&bytes.Buffer{})
+	showCmd.SetErr(&bytes.Buffer{})
+	require.ErrorContains(t, showCmd.Execute(), "resolve --ts")
+}
+
 func TestDumpOutputLocalCreateMkdirAndClose(t *testing.T) {
 	ctx := context.Background()
 	out, err := openDumpOutput(ctx, toolfs.StorageOptions{})
@@ -438,12 +487,29 @@ func TestOpenReaderResolveSnapshotAndFileServiceWriteCloser(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported backend")
 	_, err = openReader(ctx, ".", toolfs.StorageOptions{Backend: "S3"}, objectio.OfflineKindLocal)
 	require.ErrorContains(t, err, "missing --s3 arguments")
+	_, err = openReader(ctx, ".", toolfs.StorageOptions{FSConfig: filepath.Join(t.TempDir(), "missing.toml")}, objectio.OfflineKindLocal)
+	require.Error(t, err)
 
 	_, err = openDumpOutput(ctx, toolfs.StorageOptions{Backend: "GCS"})
 	require.ErrorContains(t, err, "unsupported backend")
 
 	_, err = openDumpOutput(ctx, toolfs.StorageOptions{Backend: "S3"})
 	require.ErrorContains(t, err, "missing --s3 arguments")
+	_, err = openDumpOutput(ctx, toolfs.StorageOptions{FSConfig: filepath.Join(t.TempDir(), "missing.toml")})
+	require.Error(t, err)
+}
+
+func TestRunViewerReportsOpenReaderError(t *testing.T) {
+	err := runViewer(".", toolfs.StorageOptions{Backend: "GCS"}, objectio.OfflineKindLocal)
+	require.ErrorContains(t, err, "open checkpoint dir")
+}
+
+func TestSetupLogFileReportsMkdirError(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "not-a-dir"))
+	require.NoError(t, os.WriteFile(os.Getenv("HOME"), []byte("x"), 0o644))
+
+	_, err := setupLogFile()
+	require.Error(t, err)
 }
 
 func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
@@ -552,6 +618,115 @@ func TestWriteRestoreScriptForViewAndErrors(t *testing.T) {
 	require.ErrorContains(t, err, "empty database name")
 }
 
+func TestWriteRestoreScriptForExternalTablePackagesSource(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	sourcePath := filepath.Join(tmpDir, "source.csv")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("id\n1\n"), 0o644))
+
+	paramJSON, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"filepath", sourcePath, "format", "csv", "compression", "none"},
+		},
+	})
+	require.NoError(t, err)
+
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseID:   2,
+		TableID:      3,
+		DatabaseName: "db",
+		TableName:    "ext_t",
+		RelKind:      "e",
+	}
+	dumpDataByTable := map[uint64]*checkpointtool.TableDumpData{
+		table.TableID: {
+			TableID: table.TableID,
+			Schema: &checkpointtool.TableSchema{
+				TableName: "old_ext",
+				CreateSQL: string(paramJSON),
+				Columns: []checkpointtool.TableColumn{
+					{Name: "id", SQLType: "INT", Position: 1},
+				},
+			},
+		},
+	}
+
+	scriptPath, err := writeRestoreScript(
+		ctx,
+		&checkpointtool.CheckpointReader{},
+		&dumpOutput{},
+		[]checkpointtool.TableCatalogEntry{table},
+		dumpDataByTable,
+		types.BuildTS(1, 0),
+		filepath.Join(tmpDir, "scripts"),
+		filepath.Join(tmpDir, "csv"),
+		loadDataPathResolver{},
+		true,
+		true,
+	)
+	require.ErrorContains(t, err, "show create indexes for table 3")
+	require.Empty(t, scriptPath)
+}
+
+func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseID:   2,
+		TableID:      3,
+		DatabaseName: "db",
+		TableName:    "t1",
+		RelKind:      "r",
+	}
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *checkpointtool.CheckpointReader, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+		if tableID != 2 {
+			return nil, fmt.Errorf("unexpected table %d", tableID)
+		}
+		return &checkpointtool.LogicalTableView{
+			Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+			Rows: [][]string{
+				ckpMoTablesRow(t, "3", "t1", "db", "2", "r", "1"),
+			},
+		}, nil
+	})
+
+	path, err := writeRestoreScript(
+		ctx,
+		reader,
+		&dumpOutput{},
+		[]checkpointtool.TableCatalogEntry{table},
+		map[uint64]*checkpointtool.TableDumpData{
+			table.TableID: {
+				TableID: table.TableID,
+				Schema: &checkpointtool.TableSchema{
+					TableName:    "old_t",
+					DatabaseName: "old_db",
+					Columns: []checkpointtool.TableColumn{
+						{Name: "id", SQLType: "INT", Position: 1},
+					},
+				},
+			},
+		},
+		types.BuildTS(1, 0),
+		filepath.Join(tmpDir, "scripts"),
+		filepath.Join(tmpDir, "csv"),
+		loadDataPathResolver{},
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	script, err := os.ReadFile(path)
+	require.NoError(t, err)
+	got := string(script)
+	require.Contains(t, got, "CREATE TABLE `db`.`t1`")
+	require.Contains(t, got, "LOAD DATA INFILE")
+	require.Contains(t, got, "IGNORE 1 LINES")
+	require.Contains(t, got, "parallel 'true'")
+}
+
 func TestDumpTablesConcurrentlySkipsViews(t *testing.T) {
 	var out bytes.Buffer
 	err := dumpTablesConcurrently(
@@ -658,6 +833,13 @@ func TestPrepareTableDumpPlansEmptySelection(t *testing.T) {
 	require.Empty(t, plans)
 }
 
+func TestPrepareTableDumpPlansReportsPrepareFailure(t *testing.T) {
+	reader := &checkpointtool.CheckpointReader{}
+	table := checkpointtool.TableCatalogEntry{TableID: 99, DatabaseName: "db", TableName: "missing"}
+	_, err := prepareTableDumpPlans(context.Background(), reader, []checkpointtool.TableCatalogEntry{table}, types.BuildTS(1, 0))
+	require.Error(t, err)
+}
+
 func TestWriteRestoreScriptForView(t *testing.T) {
 	ctx := context.Background()
 	dumpOut, err := openDumpOutput(ctx, toolfs.StorageOptions{})
@@ -728,12 +910,61 @@ func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {
 	assert.Equal(t, "id,name\n1,a\n", string(data))
 }
 
+func TestPackageExternalTableSourceErrorBranches(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseID:   2,
+		TableID:      3,
+		DatabaseName: "db",
+		TableName:    "ext",
+		RelKind:      "e",
+	}
+	_, err := packageExternalTableSource(context.Background(), &dumpOutput{}, t.TempDir(), table, "CREATE EXTERNAL TABLE ext (id INT)")
+	require.ErrorContains(t, err, "does not contain INFILE filepath")
+
+	ddl := "CREATE EXTERNAL TABLE ext (id INT) INFILE {'filepath'='/tmp/missing.csv'}"
+	_, err = packageExternalTableSource(context.Background(), &dumpOutput{remote: true}, t.TempDir(), table, ddl)
+	require.ErrorContains(t, err, "remote dump output")
+}
+
+func TestCopyLocalFileToDumpOutputErrors(t *testing.T) {
+	ctx := context.Background()
+	err := copyLocalFileToDumpOutput(ctx, &dumpOutput{}, filepath.Join(t.TempDir(), "missing.csv"), filepath.Join(t.TempDir(), "out.csv"))
+	require.Error(t, err)
+
+	source := filepath.Join(t.TempDir(), "source.csv")
+	require.NoError(t, os.WriteFile(source, []byte("id\n"), 0o644))
+	err = copyLocalFileToDumpOutput(ctx, &dumpOutput{}, source, filepath.Join(t.TempDir(), "missing-dir", "out.csv"))
+	require.Error(t, err)
+}
+
 func TestExternalTableFilepathValueRange(t *testing.T) {
 	ddl := "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/tmp/a.csv'}"
 	value, start, end, ok := externalTableFilepathValueRange(ddl)
 	require.True(t, ok)
 	assert.Equal(t, "/tmp/a.csv", value)
 	assert.Equal(t, "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/new.csv'}", ddl[:start]+quoteSQLString("/new.csv")+ddl[end:])
+}
+
+func ckpMoTablesRow(t *testing.T, relID, relName, dbName, dbID, relKind, accountID string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoTablesSchema))
+	set := func(name, value string) {
+		for i, header := range catalog.MoTablesSchema {
+			if header == name {
+				data[i] = value
+				return
+			}
+		}
+		t.Fatalf("missing mo_tables header %s", name)
+	}
+	set(catalog.SystemRelAttr_ID, relID)
+	set(catalog.SystemRelAttr_Name, relName)
+	set(catalog.SystemRelAttr_DBName, dbName)
+	set(catalog.SystemRelAttr_DBID, dbID)
+	set(catalog.SystemRelAttr_Kind, relKind)
+	set(catalog.SystemRelAttr_AccID, accountID)
+	return append([]string{"obj", "0", relID}, data...)
 }
 
 func TestExternalParamOptionsAndS3Rendering(t *testing.T) {
@@ -811,6 +1042,8 @@ func TestExternalParamDefaultsAndDecodeErrors(t *testing.T) {
 }
 
 func TestSQLValueAndIdentifierHelpers(t *testing.T) {
+	require.Equal(t, strings.Repeat("x", 240)+"...", summarizeSQLForError(strings.Repeat("x", 300)))
+
 	value, end, ok := readSQLStringOrBareValue(`'a''b\\c' tail`, 0)
 	require.True(t, ok)
 	assert.Equal(t, `a'b\c`, value)

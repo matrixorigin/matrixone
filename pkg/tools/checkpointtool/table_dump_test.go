@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,43 @@ func TestWriteCSVChunksRejectsUnboundedFutureObjects(t *testing.T) {
 	assert.Empty(t, buf.String())
 }
 
+func TestWriteCSVChunksRejectsReorderByteBudgetAndWriteError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chunks := make(chan csvPipelineChunk, 1)
+	done := make(chan error, 1)
+	counters := &csvPipelineCounters{}
+	go writeCSVChunks(ctx, io.Discard, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{
+		objectIdx: 1,
+		blockIdx:  0,
+		data:      bytes.Repeat([]byte("x"), csvPipelineReorderBytes+1),
+	}
+
+	err := <-done
+	require.Error(t, err)
+	require.ErrorContains(t, err, "reorder byte budget exceeded")
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	chunks = make(chan csvPipelineChunk, 2)
+	done = make(chan error, 1)
+	writeErr := errors.New("write failed")
+	go writeCSVChunks(ctx, errWriter{err: writeErr}, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("a\n")}
+	close(chunks)
+	require.ErrorIs(t, <-done, writeErr)
+}
+
+type errWriter struct {
+	err error
+}
+
+func (w errWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
 func TestProcessCSVObjectChunksFailsMissingVisibleObject(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
@@ -279,6 +317,18 @@ func TestCSVOptionsAndSmallHelperBranches(t *testing.T) {
 	require.Equal(t, 1, compareCSVRowsLexical([]string{"a", "b"}, []string{"a"}))
 	require.Equal(t, -1, compareCSVRowsLexical([]string{"a"}, []string{"a", "b"}))
 	require.Equal(t, 0, compareCSVRowsLexical([]string{"a"}, []string{"a"}))
+	require.Equal(t, "", cellAt([]string{"a"}, -1))
+	require.Equal(t, "", cellAt([]string{"a"}, 1))
+	require.Equal(t, "a", cellAt([]string{"a"}, 0))
+	require.Equal(t, 9, parseIntCellDefault("bad", 9))
+	require.True(t, needsExplicitPartitionDefinitions(" RANGE "))
+	require.True(t, needsExplicitPartitionDefinitions("list"))
+	require.False(t, needsExplicitPartitionDefinitions("hash"))
+	require.True(t, isFullTextIndex(&indexDDLInfo{algo: catalog.MOIndexFullTextAlgo.ToString()}))
+	require.True(t, isFullTextIndex(&indexDDLInfo{indexType: "FULLTEXT"}))
+	require.False(t, isFullTextIndex(nil))
+	require.Equal(t, "TIME", scaledSQLType("TIME", 0))
+	require.Equal(t, "TIME(6)", scaledSQLType("TIME", 6))
 	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(0, false))
 	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(8<<30, true))
 	require.Equal(t, uint64(2<<30), csvPipelineMemoryFloorFromTotal(20<<30, true))
@@ -388,6 +438,21 @@ func TestDumpPreparedTableCSVWithRealObjectData(t *testing.T) {
 
 	require.ErrorContains(t, reader.DumpPreparedTableCSV(ctx, &out, nil, types.BuildTS(200, 0)), "missing prepared")
 	require.ErrorContains(t, reader.DumpPreparedTableCSV(ctx, &out, &TableDumpData{TableID: 7}, types.BuildTS(200, 0)), "cannot resolve visible columns")
+}
+
+func TestPrepareTableDumpDataForTablesEmptySelection(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42}}, nil
+		},
+	}
+
+	data, err := reader.PrepareTableDumpDataForTables(context.Background(), nil, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Empty(t, data)
 }
 
 func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
@@ -617,6 +682,26 @@ func TestCatalogMergeHelpers(t *testing.T) {
 		TableCatalogEntry{TableID: 3},
 		TableCatalogEntry{TableID: 3, DatabaseID: 9, DatabaseName: "db", TableName: "t", RelKind: "e"},
 	))
+
+	childConstraint := encodedConstraint(t, &engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{
+		{Cols: []uint64{1, 2}, ForeignTbl: 10, ForeignCols: []uint64{1}},
+		{Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{1}, OnDelete: plan.ForeignKeyDef_SET_NULL},
+	}})
+	fks := decodeForeignKeysFromMoTablesConstraint(
+		childConstraint,
+		20,
+		map[uint64]TableCatalogEntry{10: {DatabaseName: "db", TableName: "parent"}},
+		map[uint64]map[uint64]string{
+			20: {1: "parent_id"},
+			10: {1: "id"},
+		},
+	)
+	require.Len(t, fks, 1)
+	require.Equal(t, "parent_id", fks[0].Name)
+	require.Equal(t, []string{"parent_id"}, fks[0].Columns)
+	require.Equal(t, []string{"id"}, fks[0].ReferColumns)
+	require.Empty(t, decodeForeignKeysFromMoTablesConstraint("bad", 20, nil, nil))
+	require.Nil(t, namesForColumnIDs(map[uint64]string{1: ""}, []uint64{1}))
 }
 
 func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
@@ -675,6 +760,69 @@ func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
 	assert.Equal(t, []string{"object", "block", "row", "x", "y"}, fallbackView.Headers)
 }
 
+func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
+	ctx := context.Background()
+	moTablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		Rows: [][]string{
+			moTablesCatalogTestRow(t, "100", "users", "appdb", "10", "r", "1", ""),
+			moTablesCatalogTestRow(t, "200", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "0", ""),
+		},
+	}
+	moDatabaseView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoDatabaseSchema...),
+		Rows: [][]string{
+			moDatabaseCatalogTestRow(t, "10", "appdb", "1"),
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "100", "users", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
+			moColumnsTestRow(t, "100", "users", "name", encodedSQLType(t, types.New(types.T_varchar, 50, 0)), "2", "0", "1"),
+		},
+	}
+	moIndexesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...),
+		Rows: [][]string{
+			moIndexesCatalogTestRow(t, "1", "100", "idx_users_name", "INDEX", "", "", "name", "1"),
+		},
+	}
+	reader := &CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
+		switch tableID {
+		case moTablesID:
+			return moTablesView, nil
+		case moDatabaseID:
+			return moDatabaseView, nil
+		case moColumnsID:
+			return moColumnsView, nil
+		case 200:
+			return moIndexesView, nil
+		default:
+			return nil, moerr.NewInternalErrorNoCtxf("missing table %d", tableID)
+		}
+	})
+
+	tables, err := reader.ListCatalogTables(ctx, types.BuildTS(10, 0), TableListOptions{})
+	require.NoError(t, err)
+	require.Len(t, tables, 2)
+	require.Contains(t, []string{tables[0].TableName, tables[1].TableName}, "users")
+
+	dbs, err := reader.ListCatalogDatabases(ctx, types.BuildTS(10, 0), TableListOptions{})
+	require.NoError(t, err)
+	require.Contains(t, []string{dbs[0].DatabaseName, dbs[1].DatabaseName}, "appdb")
+
+	ddl, err := reader.ShowCreateTable(ctx, 100, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Contains(t, ddl, "CREATE TABLE `users`")
+	require.Contains(t, ddl, "`name` VARCHAR(50)")
+
+	indexes, err := reader.ShowCreateIndexStatements(ctx, 100, "users", types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `users` ADD KEY `idx_users_name`(`name`);"}, indexes)
+}
+
 func TestMoColumnExpressionDecoders(t *testing.T) {
 	assert.Empty(t, decodeMoColumnDefault(""))
 	assert.Equal(t, "42", decodeMoColumnDefault(encodedDefault(t, " 42 ", true)))
@@ -707,12 +855,64 @@ func TestMoColumnExpressionDecoders(t *testing.T) {
 	typ := types.T_decimal64.ToTypeWithScale(2)
 	raw, err := types.Encode(&typ)
 	require.NoError(t, err)
+	sqlType, ok := decodeMoColumnSQLType(string(raw))
+	require.True(t, ok)
+	require.Equal(t, "DECIMAL(18,2)", sqlType)
+	_, ok = decodeMoColumnSQLType(string([]byte{0xff}))
+	require.False(t, ok)
 	debug := debugMoColumnTypeCell(string(raw), []string{"obj", "3", "7"})
 	assert.Contains(t, debug, "decode_err=<nil>")
 	assert.Contains(t, debug, "DECIMAL64")
 	assert.Contains(t, debug, "block=3")
 	assert.Contains(t, debug, "row=7")
 	assert.Equal(t, "616263", debugHexPrefix("abcdef", 3))
+}
+
+func moTablesCatalogTestRow(t *testing.T, relID, relName, dbName, dbID, relKind, accountID, createSQL string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoTablesSchema))
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_ID, relID)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_Name, relName)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_DBName, dbName)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_DBID, dbID)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_Kind, relKind)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_AccID, accountID)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_CreateSQL, createSQL)
+	return append([]string{"obj", "0", relID}, data...)
+}
+
+func moDatabaseCatalogTestRow(t *testing.T, dbID, dbName, accountID string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoDatabaseSchema))
+	setCatalogCell(t, catalog.MoDatabaseSchema, data, catalog.SystemDBAttr_ID, dbID)
+	setCatalogCell(t, catalog.MoDatabaseSchema, data, catalog.SystemDBAttr_Name, dbName)
+	setCatalogCell(t, catalog.MoDatabaseSchema, data, catalog.SystemDBAttr_AccID, accountID)
+	return append([]string{"obj", "0", dbID}, data...)
+}
+
+func moIndexesCatalogTestRow(t *testing.T, id, tableID, name, indexType, algo, params, columnName, ordinal string) []string {
+	t.Helper()
+	data := make([]string, len(moIndexesHeaders))
+	setCatalogCell(t, moIndexesHeaders, data, "id", id)
+	setCatalogCell(t, moIndexesHeaders, data, "table_id", tableID)
+	setCatalogCell(t, moIndexesHeaders, data, "name", name)
+	setCatalogCell(t, moIndexesHeaders, data, "type", indexType)
+	setCatalogCell(t, moIndexesHeaders, data, catalog.IndexAlgoName, algo)
+	setCatalogCell(t, moIndexesHeaders, data, catalog.IndexAlgoParams, params)
+	setCatalogCell(t, moIndexesHeaders, data, "column_name", columnName)
+	setCatalogCell(t, moIndexesHeaders, data, "ordinal_position", ordinal)
+	return append([]string{"obj", "0", id}, data...)
+}
+
+func setCatalogCell(t *testing.T, headers []string, row []string, name string, value string) {
+	t.Helper()
+	for i, header := range headers {
+		if header == name {
+			row[i] = value
+			return
+		}
+	}
+	t.Fatalf("missing catalog header %s", name)
 }
 
 // TestWriteCSV_empty tests writing an empty logical view to CSV.

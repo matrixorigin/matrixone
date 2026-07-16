@@ -97,6 +97,19 @@ func TestOpenRejectsInvalidRemoteOptions(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOpenRemoteS3Options(t *testing.T) {
+	fs, display, err := Open(context.Background(), StorageOptions{
+		FSName:  "OUT",
+		Backend: "MINIO",
+		S3:      "bucket=bucket-a,endpoint=http://127.0.0.1:1,key-id=k,key-secret=s,prefix=dump/,no-bucket-validation=true",
+	})
+	require.NoError(t, err)
+	defer fs.Close(context.Background())
+
+	assert.Equal(t, "OUT", fs.Name())
+	assert.Equal(t, "minio:dump/", display)
+}
+
 func TestOpenFromConfigReportsMissingFileService(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeConfig(t, `
@@ -112,6 +125,20 @@ name = "LOCAL"
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "available: LOCAL")
+}
+
+func TestOpenFromConfigRejectsBadConfigAndEmptyConfig(t *testing.T) {
+	_, _, err := Open(context.Background(), StorageOptions{FSConfig: filepath.Join(t.TempDir(), "missing.toml")})
+	require.Error(t, err)
+
+	badConfig := writeConfig(t, `[[fileservice]`)
+	_, _, err = Open(context.Background(), StorageOptions{FSConfig: badConfig})
+	require.Error(t, err)
+
+	emptyConfig := writeConfig(t, ``)
+	_, _, err = Open(context.Background(), StorageOptions{FSConfig: emptyConfig})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `fileservice "SHARED" not found`)
 }
 
 func TestParseS3Arguments(t *testing.T) {
