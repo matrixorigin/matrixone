@@ -110,6 +110,9 @@ func newTAEStorage(
 	if rt.ServiceUUID() != opt.SID {
 		panic(fmt.Sprintf("service uuid mismatch, %s != %s", rt.ServiceUUID(), opt.SID))
 	}
+	if err := service.ValidateRPCMaxMessageSize(logtailServerCfg.RpcMaxMessageSize); err != nil {
+		return nil, err
+	}
 	taeHandler, err := deps.newTAEHandle(ctx, dataDir, client, opt)
 	if err != nil {
 		return nil, err
