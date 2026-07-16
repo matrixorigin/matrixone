@@ -69,4 +69,39 @@ var (
 			Help:      "FIN to FIN_ACK completion latency in seconds.",
 			Buckets:   getDurationBuckets(),
 		})
+
+	PipelineRemoteReceiverWaitDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "remote_receiver_wait_duration_seconds",
+			Help:      "Remote receiver registration wait duration by terminal outcome.",
+			// Registration is normally sub-millisecond but may legitimately
+			// wait through scheduler or overload delays. A compact dedicated
+			// range keeps the five fixed outcomes observable without multiplying
+			// the repository-wide high-resolution duration buckets into
+			// thousands of time series per CN.
+			Buckets: prometheus.ExponentialBuckets(0.000001, 4, 14),
+		}, []string{"outcome"})
+	PipelineRemoteReceiverWaitReadyHistogram            = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues("ready")
+	PipelineRemoteReceiverWaitConnectionClosedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
+		"connection_closed",
+	)
+	PipelineRemoteReceiverWaitMessageCanceledHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
+		"message_canceled",
+	)
+	PipelineRemoteReceiverWaitAlreadyAttachedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
+		"already_attached",
+	)
+	PipelineRemoteReceiverWaitAlreadyClosedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
+		"already_closed",
+	)
+
+	PipelineRemoteNotifyRetryCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "remote_notify_legacy_retry_total",
+			Help:      "Total compatibility retries after a peer reports that a remote receiver is not registered yet.",
+		})
 )

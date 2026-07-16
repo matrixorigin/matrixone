@@ -278,6 +278,29 @@ func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
 	}
 }
 
+func TestWaitRemoteRegsReadyFailsWhenRegistrationChannelCloses(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	remoteInfo := make(process.RemotePipelineInformationChannel)
+	close(remoteInfo)
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+		ctr: &container{
+			remoteInfo: remoteInfo,
+		},
+	}
+
+	end, err := d.waitRemoteRegsReady(proc)
+	require.False(t, end)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "registration channel closed")
+	require.False(t, d.ctr.prepared)
+	require.Empty(t, d.ctr.remoteReceivers)
+}
+
 func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	_ = colexec.NewServer("")
 
