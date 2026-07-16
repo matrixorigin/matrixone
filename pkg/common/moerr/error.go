@@ -91,6 +91,7 @@ const (
 	ErrInvalidTz            uint16 = 20312
 	ErrUnsupportedDML       uint16 = 20313
 	ErrOperandColumns       uint16 = 20314
+	ErrSubqueryNo1Row       uint16 = 20315
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -398,6 +399,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
+	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1426,6 +1428,10 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 
 func NewOperandColumns(ctx context.Context, columns int) *Error {
 	return newError(ctx, ErrOperandColumns, columns)
+}
+
+func NewErrSubqueryNo1Row(ctx context.Context) *Error {
+	return newError(ctx, ErrSubqueryNo1Row)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {

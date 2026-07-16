@@ -1704,3 +1704,41 @@ func TestGetExprNdv(t *testing.T) {
 		require.Equal(t, -1.0, ndv)
 	})
 }
+
+// compareStats must be a valid strict weak ordering (transitive + antisymmetric)
+// so it is safe to use with slices.SortFunc. See issue #25702.
+func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
+	// The review counter-example that broke the old sliding-window comparator:
+	// A~B and B~C (within 0.01) but A and C fall in different buckets. With the
+	// 0.01-grid bucketing there is no cycle.
+	a := &Stats{Selectivity: 0.000, Outcnt: 3}
+	b := &Stats{Selectivity: 0.009, Outcnt: 2}
+	c := &Stats{Selectivity: 0.018, Outcnt: 1}
+	// a and b share selectivity bucket 0 -> compare outcnt (3 vs 2) -> b before a.
+	require.True(t, compareStats(b, a) < 0)
+	require.True(t, compareStats(a, b) > 0)
+	require.True(t, compareStats(b, c) < 0) // bucket 0 < bucket 1
+	require.True(t, compareStats(a, c) < 0) // bucket 0 < bucket 1
+	// consistent order b < a < c (the old comparator produced a b<a<c<b cycle).
+
+	// antisymmetry + transitivity over a grid of selectivity/outcnt values.
+	var xs []*Stats
+	for _, s := range []float64{-0.01, 0, 0.004, 0.009, 0.01, 0.015, 0.02, 0.099, 0.1, 0.5, 1.0} {
+		for _, o := range []float64{0, 1, 2, 100} {
+			xs = append(xs, &Stats{Selectivity: s, Outcnt: o})
+		}
+	}
+	lt := func(x, y *Stats) bool { return compareStats(x, y) < 0 }
+	for _, x := range xs {
+		for _, y := range xs {
+			// antisymmetry: not (x<y and y<x)
+			require.False(t, lt(x, y) && lt(y, x))
+			for _, z := range xs {
+				// transitivity: x<y and y<z => x<z
+				if lt(x, y) && lt(y, z) {
+					require.True(t, lt(x, z), "transitivity: %+v < %+v < %+v", x, y, z)
+				}
+			}
+		}
+	}
+}

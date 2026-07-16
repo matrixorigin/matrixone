@@ -1943,7 +1943,7 @@ func (n *noopTxnOperator) NextSequence() uint64 {
 }
 
 func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
-	return 0
+	return 1
 }
 func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
 func (n *noopTxnOperator) EnterIncrStmt()               {}
@@ -2062,7 +2062,7 @@ type tableStreamHarness struct {
 	getTxn         func(context.Context, engine.Engine, client.TxnOperator) error
 	getRelation    func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error)
 	getSnapshotTS  func(client.TxnOperator) timestamp.Timestamp
-	enterRunSql    func(context.Context, client.TxnOperator, string) func()
+	tryEnterRunSql func(context.Context, client.TxnOperator, string) (func(), error)
 	collectFactory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)
 
 	collectCallsMu sync.Mutex
@@ -2177,7 +2177,9 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		}
 		return ts
 	}
-	h.enterRunSql = func(context.Context, client.TxnOperator, string) func() { return func() {} }
+	h.tryEnterRunSql = func(context.Context, client.TxnOperator, string) (func(), error) {
+		return func() {}, nil
+	}
 	h.collectFactory = func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
 		return newImmediateChangesHandle(nil), nil
 	}
@@ -2203,8 +2205,8 @@ func (h *tableStreamHarness) installStubs() {
 	h.addStub(gostub.Stub(&GetSnapshotTS, func(op client.TxnOperator) timestamp.Timestamp {
 		return h.getSnapshotTS(op)
 	}))
-	h.addStub(gostub.Stub(&EnterRunSql, func(ctx context.Context, op client.TxnOperator, sql string) func() {
-		return h.enterRunSql(ctx, op, sql)
+	h.addStub(gostub.Stub(&TryEnterRunSql, func(ctx context.Context, op client.TxnOperator, sql string) (func(), error) {
+		return h.tryEnterRunSql(ctx, op, sql)
 	}))
 	h.addStub(gostub.Stub(&CollectChanges, func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 		h.collectCallsMu.Lock()
@@ -2332,11 +2334,39 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 	}
 }
 
-func (h *tableStreamHarness) SetEnterRunSql(fn func(context.Context, client.TxnOperator, string) func()) {
+func (h *tableStreamHarness) SetTryEnterRunSql(fn func(context.Context, client.TxnOperator, string) (func(), error)) {
 	if fn == nil {
-		fn = func(context.Context, client.TxnOperator, string) func() { return func() {} }
+		fn = func(context.Context, client.TxnOperator, string) (func(), error) {
+			return func() {}, nil
+		}
 	}
-	h.enterRunSql = fn
+	h.tryEnterRunSql = fn
+}
+
+func TestProcessOneRoundRejectsSealedTransaction(t *testing.T) {
+	expectedErr := moerr.NewTxnClosedNoCtx([]byte("sealed"))
+	var finishErr error
+	getTxnOpStub := gostub.Stub(&GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return newNoopTxnOperator(), nil
+	})
+	defer getTxnOpStub.Reset()
+	finishTxnStub := gostub.Stub(&FinishTxnOp, func(_ context.Context, err error, _ client.TxnOperator, _ engine.Engine) {
+		finishErr = err
+	})
+	defer finishTxnStub.Reset()
+	enterRunSQLStub := gostub.Stub(&TryEnterRunSql, func(context.Context, client.TxnOperator, string) (func(), error) {
+		return func() {}, expectedErr
+	})
+	defer enterRunSQLStub.Reset()
+	getTxnStub := gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error {
+		t.Fatal("GetTxn must not run after SQL registration is rejected")
+		return nil
+	})
+	defer getTxnStub.Reset()
+
+	err := (&TableChangeStream{}).processOneRound(context.Background(), &ActiveRoutine{})
+	require.ErrorIs(t, err, expectedErr)
+	require.ErrorIs(t, finishErr, expectedErr)
 }
 
 func (h *tableStreamHarness) SetCollectFactory(factory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)) {

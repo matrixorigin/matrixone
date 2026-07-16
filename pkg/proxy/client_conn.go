@@ -706,6 +706,8 @@ skipConnCache:
 						c.log.Error("failed to close server connection", zap.Error(closeErr))
 					}
 				}
+				v2.ProxyConnectCommonFailCounter.Inc()
+				return nil, moerr.NewInternalErrorNoCtx("the response from cn server is not correct")
 			}
 
 			// set the response from the cn server.
