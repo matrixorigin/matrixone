@@ -3851,11 +3851,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
+		savedRowCount := ses.GetLastAffectedRows()
 		data := req.GetData().([]byte)
 		if len(data) < 4 {
-			// A malformed (too short) packet is a failed statement: reset
-			// ROW_COUNT() to -1 and return an error instead of panicking on the slice.
-			markRowCountFailed(ses, ses.GetProc())
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(),
 				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_CLOSE packet")), nil
 		}
@@ -3864,9 +3863,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtName := getPrepareStmtName(stmtID)
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
-			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
-			// This early return never reaches doComQuery, so set the state here.
-			markRowCountFailed(ses, ses.GetProc())
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -3876,16 +3873,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
-		// deallocate prepare is a protocol-only side effect of closing a prepared
-		// statement; on success it must not overwrite the preceding statement's
-		// ROW_COUNT(). On failure leave the error path's -1 marking in place.
-		savedRowCount := ses.GetLastAffectedRows()
+		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
-		} else {
-			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		}
+		restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		return resp, nil
 
 	case COM_STMT_RESET:
@@ -3931,6 +3924,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
+		markRowCountFailed(ses, ses.GetProc())
 		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil

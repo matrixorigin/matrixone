@@ -732,6 +732,7 @@ func NewSession(
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	ses.proc.Session = ses
+	setRowCount(ses, ses.proc, -1)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {

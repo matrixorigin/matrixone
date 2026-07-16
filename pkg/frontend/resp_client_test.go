@@ -79,19 +79,19 @@ func TestRestoreRowCount(t *testing.T) {
 	require.Equal(t, int64(3), ses2.GetLastAffectedRows())
 }
 
-func TestRecordLastAffectedRowsSkipsFieldList(t *testing.T) {
+func TestRecordLastAffectedRowsFieldList(t *testing.T) {
 	ses := &Session{}
 	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
 	// A prior DML set ROW_COUNT() to 5.
 	ses.SetLastAffectedRows(5)
 	proc.SetAffectedRows(5)
 
-	// COM_FIELD_LIST (InternalCmdFieldList) is a protocol-only helper and must not
-	// overwrite the preceding statement's affected-row count.
+	// COM_FIELD_LIST terminates its metadata result with EOF and sets ROW_COUNT()
+	// to the result-set sentinel.
 	execCtx := &ExecCtx{stmt: &InternalCmdFieldList{}, proc: proc}
 	recordLastAffectedRows(ses, execCtx)
-	require.Equal(t, int64(5), ses.GetLastAffectedRows())
-	require.Equal(t, int64(5), proc.GetAffectedRows())
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), proc.GetAffectedRows())
 }
 
 func TestRecordLastAffectedRows(t *testing.T) {

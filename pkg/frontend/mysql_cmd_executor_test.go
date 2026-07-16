@@ -598,8 +598,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		resp, err = ExecRequest(ses, ec, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
-		convey.So(ses.GetLastAffectedRows(), convey.ShouldEqual, int64(7))
-		convey.So(ses.GetProc().GetAffectedRows(), convey.ShouldEqual, int64(7))
+		convey.So(ses.GetLastAffectedRows(), convey.ShouldEqual, int64(-1))
+		convey.So(ses.GetProc().GetAffectedRows(), convey.ShouldEqual, int64(-1))
 	})
 }
 
@@ -1313,9 +1313,10 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		cmd  CommandType
+		want int64
 	}{
-		{name: "close", cmd: COM_STMT_CLOSE},
-		{name: "reset", cmd: COM_STMT_RESET},
+		{name: "close", cmd: COM_STMT_CLOSE, want: 7},
+		{name: "reset", cmd: COM_STMT_RESET, want: -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := newTestSession(t, ctrl)
@@ -1323,6 +1324,7 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 			stmtID := uint32(123)
 			data := make([]byte, 4)
 			binary.LittleEndian.PutUint32(data, stmtID)
+			setRowCount(ses, ses.GetProc(), 7)
 
 			resp, err := ExecRequest(ses, ec, &Request{cmd: tc.cmd, data: data})
 			require.NoError(t, err)
@@ -1330,6 +1332,8 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 			require.Equal(t, ErrorResponse, resp.category)
 			require.Equal(t, int(tc.cmd), resp.cmd)
 			require.Error(t, resp.GetData().(error))
+			require.Equal(t, tc.want, ses.GetLastAffectedRows())
+			require.Equal(t, tc.want, ses.GetProc().GetAffectedRows())
 		})
 	}
 }
@@ -2995,6 +2999,8 @@ func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
 	ec := newTestExecCtx(ctx, ctrl)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 
 	setRowCount(ses, ses.GetProc(), 7)
 	resp, err := ExecRequest(ses, ec, &Request{cmd: COM_PING})
@@ -3009,6 +3015,20 @@ func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	require.Equal(t, OkResponse, resp.category)
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err = ExecRequest(ses, ec, &Request{cmd: CommandType(0xff)})
+	require.NoError(t, err)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err = ExecRequest(ses, ec, &Request{cmd: COM_STMT_CLOSE, data: []byte{1, 2, 3}})
+	require.NoError(t, err)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 }
 
 func Test_ExecRequest_SidecarFallthrough(t *testing.T) {

@@ -47,11 +47,11 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 // fresh value, and the session so that the next COM_QUERY (which builds a new
 // proc seeded from the session) reads it too.
 func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
-	// Internal protocol-only helper commands are not user SQL statements and must
-	// not clobber the ROW_COUNT() state of the preceding statement. COM_FIELD_LIST
-	// is routed through doComQuery as InternalCmdFieldList (an OUTPUT_STATUS stmt
-	// with no runResult), which would otherwise record 0.
+	// COM_FIELD_LIST returns column metadata terminated by EOF, which has the same
+	// ROW_COUNT() semantics as a result set even though its internal statement is
+	// classified as OUTPUT_STATUS.
 	if _, ok := execCtx.stmt.(*InternalCmdFieldList); ok {
+		setRowCount(ses, execCtx.proc, -1)
 		return
 	}
 	var n int64
