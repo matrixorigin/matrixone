@@ -139,6 +139,7 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 	}
 
+	jsonValue := fulltext2.IsJSONValueParser(u.tblcfg.Parser)
 	var content bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
 		for i := 2; i < len(argVecs); i++ {
@@ -149,7 +150,15 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 			} else {
 				raw = []byte(argVecs[i].GetStringAt(nthRow))
 			}
-			ft, err := fulltext2.FlattenJSON(raw, binary)
+			// json: ngram over space-joined values; json_value: each value is one whole
+			// atomic token, so keep them '\n'-separated for jsonValueTokenize below.
+			var ft []byte
+			var err error
+			if jsonValue {
+				ft, err = fulltext2.FlattenJSONLines(raw, binary)
+			} else {
+				ft, err = fulltext2.FlattenJSON(raw, binary)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -181,6 +190,11 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 	}
 	if content.Len() == 0 {
 		return nil, nil
+	}
+
+	// json_value indexes each whole '\n'-separated value as one atomic token (no ngram).
+	if jsonValue {
+		return fulltext2.JSONValueTokenize(content.Bytes()), nil
 	}
 
 	// json is indexed as ngram over its flattened values (SimpleTokenizer).

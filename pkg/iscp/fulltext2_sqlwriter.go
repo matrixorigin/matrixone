@@ -159,13 +159,22 @@ func (w *Fulltext2SqlWriter) rowText(row []any) (string, error) {
 		}
 	}
 	isJSON := fulltext2.IsJSONParser(w.cfg.Parser)
+	jsonValue := fulltext2.IsJSONValueParser(w.cfg.Parser)
 	var b strings.Builder
 	for i, pos := range w.textPos {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
 		if isJSON {
-			ft, err := fulltext2.FlattenJSONColumn(row[pos])
+			// json_value keeps each value as a separable '\n'-joined whole token (matched
+			// exactly); json space-joins for ngram. CdcTokenizer then tokenizes to match.
+			var ft []byte
+			var err error
+			if jsonValue {
+				ft, err = fulltext2.FlattenJSONValueColumn(row[pos])
+			} else {
+				ft, err = fulltext2.FlattenJSONColumn(row[pos])
+			}
 			if err != nil {
 				return "", err
 			}

@@ -184,6 +184,82 @@ func IsJSONParser(parser string) bool {
 	return p == ParserJSON || p == ParserJSONValue
 }
 
+// IsJSONValueParser reports whether parser is the json_value variant. json_value
+// indexes each json leaf value as ONE whole atomic token and matches it EXACTLY
+// (classic fulltext: tokenize.go stores the whole value, sql.go:173 queries
+// `word = value`) — distinct from json, which ngrams over the flattened values.
+func IsJSONValueParser(parser string) bool {
+	return normalizeParser(parser) == ParserJSONValue
+}
+
+// flattenBJLines joins a parsed json document's leaf values with NEWLINES (not
+// spaces): the json_value parser keeps each whole value as a separable atomic token,
+// so a '\n' separator lets JSONValueTokenize recover the values (a space join would
+// fuse values and lose the boundaries — and values may themselves contain spaces).
+func flattenBJLines(bj bytejson.ByteJson) []byte {
+	var b strings.Builder
+	for tk := range bj.TokenizeValue(false) {
+		n := int(tk.TokenBytes[0])
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.Write(tk.TokenBytes[1 : 1+n])
+	}
+	return []byte(b.String())
+}
+
+// FlattenJSONLines is FlattenJSON for the json_value parser: leaf values joined by
+// '\n' so each stays a separable whole token. binary selects the encoding as in
+// FlattenJSON.
+func FlattenJSONLines(raw []byte, binary bool) ([]byte, error) {
+	var bj bytejson.ByteJson
+	var err error
+	if binary {
+		err = bj.Unmarshal(raw)
+	} else {
+		bj, err = bytejson.ParseFromString(string(raw))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return flattenBJLines(bj), nil
+}
+
+// FlattenJSONValueColumn is FlattenJSONColumn for the json_value parser: ONE indexed
+// column's leaf values joined by '\n' (the CDC-write-side analogue of the create-TVF's
+// per-column flatten). Mirrors FlattenJSONColumn's input-type handling.
+func FlattenJSONValueColumn(v any) ([]byte, error) {
+	switch t := v.(type) {
+	case bytejson.ByteJson:
+		return flattenBJLines(t), nil
+	case []byte:
+		return FlattenJSONLines(t, false)
+	case string:
+		return FlattenJSONLines([]byte(t), false)
+	default:
+		return nil, nil
+	}
+}
+
+// JSONValueTokenize splits '\n'-joined json values into whole (word, byte-position)
+// tokens — the json_value parser's atomic-value tokenization: no ngram, no
+// case-folding, punctuation kept, so `red..blue--brown` and `中文學習教材` each index
+// as ONE token that a query matches exactly (classic fulltext json_value parity).
+func JSONValueTokenize(text []byte) []WordPos {
+	var words []WordPos
+	for i := 0; i < len(text); {
+		j := i
+		for j < len(text) && text[j] != '\n' {
+			j++
+		}
+		if j > i {
+			words = append(words, WordPos{Word: string(text[i:j]), Pos: int32(i)})
+		}
+		i = j + 1
+	}
+	return words
+}
+
 // CdcTokenizer returns the parser-aware tokenize closure the CDC consumer feeds to
 // TailBuilder — ordered words per parser. For a json parser the CDC WRITER
 // (Fulltext2SqlWriter.rowText) already flattens each json column to its values,
@@ -193,6 +269,12 @@ func IsJSONParser(parser string) bool {
 // which produced zero tokens for a T_json column and mis-parsed multi-column json — so
 // CDC-inserted json rows were unsearchable.)
 func CdcTokenizer(parser string) (func(string) []WordPos, error) {
+	if IsJSONValueParser(parser) {
+		// json_value: the CDC writer (rowText) already flattened each json column to its
+		// '\n'-joined whole values, so here we just recover them as atomic tokens — NOT
+		// ngram — matching the create/base build.
+		return func(text string) []WordPos { return JSONValueTokenize([]byte(text)) }, nil
+	}
 	tok, err := DocTokenizer(parser)
 	if err != nil {
 		return nil, err
@@ -223,12 +305,30 @@ func tokenizeWords(tok tokenizer.Tokenizer, text []byte) []WordPos {
 // the right document tokenizer and flattening json docs first. It is the
 // parser-aware build entry (compile-side build-from-source uses it).
 func BuildSegmentFromDocsParser(id string, pkType int32, docs []Doc, parser string) (*Segment, error) {
+	p := normalizeParser(parser)
+	if p == ParserJSONValue {
+		// json_value: each leaf value is one whole atomic token (no ngram). Build the
+		// tokenized docs directly from the '\n'-joined values so build matches query.
+		tds := make([]TokenizedDoc, 0, len(docs))
+		for _, d := range docs {
+			lines, ferr := FlattenJSONLines(d.Text, false)
+			if ferr != nil {
+				return nil, ferr
+			}
+			td := TokenizedDoc{Pk: d.Pk}
+			for _, wp := range JSONValueTokenize(lines) {
+				td.Terms = append(td.Terms, wp.Word)
+				td.Positions = append(td.Positions, wp.Pos)
+			}
+			tds = append(tds, td)
+		}
+		return BuildSegmentFromTokenized(id, pkType, tds)
+	}
 	tok, err := DocTokenizer(parser)
 	if err != nil {
 		return nil, err
 	}
-	p := normalizeParser(parser)
-	if p == ParserJSON || p == ParserJSONValue {
+	if p == ParserJSON {
 		fdocs := make([]Doc, 0, len(docs))
 		for _, d := range docs {
 			ft, ferr := flattenJSONValues(d.Text)
@@ -285,6 +385,14 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 // as word* prefixes (STAR), each carrying a BYTE position. For gojieba it tokenizes into
 // words with byte positions. Offsets are relative to the first slot.
 func phraseSlots(pattern, parser string) ([]phraseSlot, error) {
+	if IsJSONValueParser(parser) {
+		// json_value: the whole pattern is ONE atomic value matched exactly (no ngram) —
+		// a single exact-term slot, mirroring classic `word = value`.
+		if pattern == "" {
+			return nil, nil
+		}
+		return []phraseSlot{{term: pattern, off: 0}}, nil
+	}
 	if normalizeParser(parser) == ParserGojieba {
 		tok, err := queryTokenizer(ParserGojieba)
 		if err != nil {
@@ -398,6 +506,20 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 			return clause{}, false, nil
 		}
 		return clause{kind: clauseGroup, children: children, weight: w}, true, nil
+	}
+
+	// json_value: the whole operand is ONE atomic value matched exactly (no ngram, no
+	// tokenization) — classic fulltext queries `word = operand` (sql.go:173). A quoted
+	// operand ("update_json") is the same whole-value match. A trailing * is a value
+	// prefix.
+	if IsJSONValueParser(parser) {
+		if rc.text == "" {
+			return clause{}, false, nil
+		}
+		if rc.star {
+			return clause{kind: clausePrefix, terms: []string{rc.text}, weight: w}, true, nil
+		}
+		return clause{kind: clauseTerm, terms: []string{rc.text}, weight: w}, true, nil
 	}
 
 	// A bare (non-quoted, non-prefix) CJK operand under ngram/json is an EXACT positional

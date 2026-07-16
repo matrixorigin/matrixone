@@ -240,9 +240,12 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 				break
 			}
 			idf2 := gs.idfFor(s, c.terms[0], pl)
-			tfs := pl.materializeTfs()
-			for i, ord := range docs {
-				raw[ord] = s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
+			for _, ord := range docs {
+				// Boolean mode ignores the within-doc occurrence count: classic fulltext
+				// collapses each operand's retrieval to one row per doc (GROUP BY doc_id,
+				// sql.go:493-496), so the scorer sees tf≡1. NL mode keeps the real tf; that
+				// path is SearchPhrase, not here.
+				raw[ord] = s.scoreTerm(algo, 1, idf2, ord, avgDocLen)
 			}
 		}
 	case clausePhrase:
@@ -260,7 +263,9 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 		}
 		idf2 := gs.phraseIdfFor(s, c.phrase, len(hits))
 		for _, h := range hits {
-			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
+			// Boolean mode ignores occurrence count (classic collapses the phrase to one
+			// row per doc, sql.go:534-538) ⇒ tf≡1. See clauseTerm.
+			raw[h.ord] = s.scoreTerm(algo, 1, idf2, h.ord, avgDocLen)
 		}
 	case clausePrefix:
 		terms, err := s.prefixTerms(c.terms[0])
@@ -280,9 +285,8 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 				continue
 			}
 			idf2 := gs.idfFor(s, t, pl)
-			tfs := pl.materializeTfs()
-			for i, ord := range docs {
-				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
+			for _, ord := range docs {
+				sc := s.scoreTerm(algo, 1, idf2, ord, avgDocLen) // boolean: tf≡1 (see clauseTerm)
 				if cur, seen := raw[ord]; !seen || sc > cur {
 					raw[ord] = sc
 				}

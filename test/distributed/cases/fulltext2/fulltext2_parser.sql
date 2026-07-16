@@ -1,7 +1,7 @@
--- fulltext2 parsers (synchronous build): ngram (default — CJK 3-gram bag-of-words,
--- Latin exact-phrase), gojieba (dictionary word segmentation), json (values
--- flattened + indexed as ngram). CJK NL under ngram is bag-of-words; gojieba keeps
--- exact-phrase over words.
+-- fulltext2 parsers (synchronous build): ngram (default — CJK sliding 3-gram,
+-- Latin whole-word), gojieba (dictionary word segmentation), json (values
+-- flattened + indexed as ngram). NL is an EXACT ordered phrase for every parser
+-- (no bag-of-words); gojieba segments into words first.
 
 drop database if exists fulltext2_parser;
 create database fulltext2_parser;
