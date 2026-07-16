@@ -15,8 +15,9 @@
 package memoryengine
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -142,8 +143,8 @@ func (s *NoShard) setShard(stores []metadata.TNService) {
 		if len(infos) == 0 {
 			panic("no shard")
 		}
-		sort.Slice(infos, func(i, j int) bool {
-			return infos[i].Shard.ShardID < infos[j].Shard.ShardID
+		slices.SortFunc(infos, func(a, b ShardInfo) int {
+			return cmp.Compare(a.Shard.ShardID, b.Shard.ShardID)
 		})
 		info := infos[0]
 		s.shard = Shard{

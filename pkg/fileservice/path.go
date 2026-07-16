@@ -83,6 +83,18 @@ func ParsePath(s string) (path Path, err error) {
 	return
 }
 
+func canonicalFilePaths(paths []string) ([]string, error) {
+	canonical := make([]string, 0, len(paths))
+	for _, value := range paths {
+		path, err := ParsePath(value)
+		if err != nil {
+			return nil, err
+		}
+		canonical = append(canonical, path.File)
+	}
+	return canonical, nil
+}
+
 func parseService(str string) (service string, arguments []string, err error) {
 	r := csv.NewReader(strings.NewReader(str))
 	records, err := r.ReadAll()

@@ -15,13 +15,14 @@
 package memorystorage
 
 import (
+	"cmp"
 	"context"
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -842,8 +843,8 @@ func (m *MemHandler) HandleGetTableColumns(ctx context.Context, meta txn.TxnMeta
 	); err != nil {
 		return err
 	}
-	sort.Slice(attrRows, func(i, j int) bool {
-		return attrRows[i].Order < attrRows[j].Order
+	slices.SortFunc(attrRows, func(a, b *AttributeRow) int {
+		return cmp.Compare(a.Order, b.Order)
 	})
 	for _, row := range attrRows {
 		resp.Attrs = append(resp.Attrs, row.Attribute)
@@ -908,8 +909,8 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 			return err
 		}
 
-		sort.Slice(attrRows, func(i, j int) bool {
-			return attrRows[i].Order < attrRows[j].Order
+		slices.SortFunc(attrRows, func(a, b *AttributeRow) int {
+			return cmp.Compare(a.Order, b.Order)
 		})
 		for _, row := range attrRows {
 			def := &engine.AttributeDef{

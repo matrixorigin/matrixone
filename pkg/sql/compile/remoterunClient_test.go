@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -159,6 +160,16 @@ func TestNewMessageSenderOnClientReturnsErrorWithoutServiceRuntime(t *testing.T)
 	require.Contains(t, err.Error(), "service runtime is not initialized")
 }
 
+func TestPipelineStreamReuseRuntimeGate(t *testing.T) {
+	sid := t.Name()
+	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+	require.True(t, pipelineStreamReuseEnabled(sid))
+	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.EnablePipelineStreamReuse, false)
+	require.False(t, pipelineStreamReuseEnabled(sid))
+	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.EnablePipelineStreamReuse, true)
+	require.True(t, pipelineStreamReuseEnabled(sid))
+}
+
 func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 	sid := t.Name()
 	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
@@ -180,6 +191,200 @@ func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, client)
 	require.Contains(t, err.Error(), "pipeline stream is not initialized")
+}
+
+func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
+	t.Run("negotiated retry terminal needs explicit cleanup authorization", func(t *testing.T) {
+		sender := &messageSenderOnClient{expectedEnd: pipeline.Method_PrepareDoneNotifyMessage}
+		message := &pipeline.Message{
+			Cmd:                  pipeline.Method_PrepareDoneNotifyMessage,
+			Sid:                  pipeline.Status_MessageEnd,
+			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+		}
+		sender.markTerminal(message, false)
+		require.True(t, sender.terminalNegotiated)
+		require.False(t, sender.reuseEligible)
+		sender.prepareForLocalCleanup()
+		require.True(t, sender.reuseEligible)
+	})
+
+	t.Run("accepted FIN ACK reuses backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		responses := make(chan morpc.Message, 1)
+		responses <- &pipeline.Message{
+			Id:                   7,
+			Cmd:                  pipeline.Method_PipelineStreamFinishAck,
+			Sid:                  pipeline.Status_MessageEnd,
+			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+		}
+		stream.EXPECT().ID().Return(uint64(7))
+		stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request morpc.Message) error {
+				message := request.(*pipeline.Message)
+				require.Equal(t, pipeline.Method_PipelineStreamFinish, message.GetCmd())
+				require.Equal(t, pipeline.Status_Last, message.GetSid())
+				return nil
+			})
+		stream.EXPECT().Close(false).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:           context.Background(),
+			streamSender:  stream,
+			receiveCh:     responses,
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+		sender.close()
+		sender.close()
+	})
+
+	t.Run("legacy End closes backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		stream.EXPECT().Close(true).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:          context.Background(),
+			streamSender: stream,
+			safeToClose:  true,
+		}
+		sender.close()
+	})
+
+	t.Run("malformed FIN ACK poisons backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		responses := make(chan morpc.Message, 1)
+		responses <- &pipeline.Message{Id: 9, Cmd: pipeline.Method_PipelineStreamFinishAck, Sid: pipeline.Status_MessageEnd}
+		stream.EXPECT().ID().Return(uint64(9))
+		stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+		stream.EXPECT().Close(true).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:           context.Background(),
+			streamSender:  stream,
+			receiveCh:     responses,
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+		sender.close()
+	})
+
+	t.Run("query cancellation after End poisons backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stream.EXPECT().Close(true).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:           ctx,
+			streamSender:  stream,
+			receiveCh:     make(chan morpc.Message),
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+		sender.close()
+	})
+
+	t.Run("successful local cleanup cancellation still reuses backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		ctx, cancel := context.WithCancel(context.Background())
+		responses := make(chan morpc.Message, 1)
+		responses <- &pipeline.Message{
+			Id:                   11,
+			Cmd:                  pipeline.Method_PipelineStreamFinishAck,
+			Sid:                  pipeline.Status_MessageEnd,
+			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+		}
+		stream.EXPECT().ID().Return(uint64(11))
+		stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+		stream.EXPECT().Close(false).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:           ctx,
+			streamSender:  stream,
+			receiveCh:     responses,
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+		sender.prepareForLocalCleanup()
+		cancel()
+		sender.close()
+	})
+
+	t.Run("cancellation before cleanup completion poisons backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		pipelineCtx, cancelPipeline := context.WithCancel(context.Background())
+		stream.EXPECT().Close(true).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:           pipelineCtx,
+			streamSender:  stream,
+			receiveCh:     make(chan morpc.Message),
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+		cancelPipeline()
+		sender.close()
+	})
+
+	t.Run("FIN ACK timeout poisons backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		stream.EXPECT().ID().Return(uint64(10))
+		stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+		stream.EXPECT().Close(true).Return(nil)
+		oldTimeout := pipelineStreamFinishClientTimeout
+		pipelineStreamFinishClientTimeout = 10 * time.Millisecond
+		t.Cleanup(func() { pipelineStreamFinishClientTimeout = oldTimeout })
+		sender := &messageSenderOnClient{
+			ctx:           context.Background(),
+			streamSender:  stream,
+			receiveCh:     make(chan morpc.Message),
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+		sender.close()
+	})
+
+	t.Run("clean StopSending End reuses backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		responses := make(chan morpc.Message, 2)
+		responses <- &pipeline.Message{
+			Id:                   12,
+			Cmd:                  pipeline.Method_PipelineMessage,
+			Sid:                  pipeline.Status_MessageEnd,
+			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+		}
+		responses <- &pipeline.Message{
+			Id:                   12,
+			Cmd:                  pipeline.Method_PipelineStreamFinishAck,
+			Sid:                  pipeline.Status_MessageEnd,
+			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+		}
+		stream.EXPECT().ID().Return(uint64(12)).Times(2)
+		gomock.InOrder(
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, request morpc.Message) error {
+					require.Equal(t, pipeline.Method_StopSending, request.(*pipeline.Message).GetCmd())
+					return nil
+				}),
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, request morpc.Message) error {
+					require.Equal(t, pipeline.Method_PipelineStreamFinish, request.(*pipeline.Message).GetCmd())
+					return nil
+				}),
+		)
+		stream.EXPECT().Close(false).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:                      context.Background(),
+			streamSender:             stream,
+			receiveCh:                responses,
+			safeToClose:              false,
+			expectedEnd:              pipeline.Method_PipelineMessage,
+			allowCleanupCancellation: true,
+		}
+		sender.close()
+	})
 }
 
 func TestRemoteRun(t *testing.T) {
@@ -236,11 +441,10 @@ func TestRemoteRun(t *testing.T) {
 }
 
 func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
-	_ = colexec.NewServer(nil)
-
 	oldRuntime := runtime.ServiceRuntime("")
 	testRuntime := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", testRuntime)
+	_ = colexec.NewServer("")
 	t.Cleanup(func() {
 		runtime.SetupServiceBasedRuntime("", oldRuntime)
 	})
@@ -288,6 +492,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	require.NoError(t, err)
 	defer registrations.cleanup()
 	registeredProc, notifyCh, err := (&messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(),
 		messageCtx:    context.Background(),
 	}).TryGetProcByUuid(uid)
@@ -325,7 +530,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 		t.Fatal("RemoteRun failure did not release the pending retained-root attach")
 	}
 	registrations.cleanup()
-	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.False(t, ok)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)

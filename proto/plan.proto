@@ -716,6 +716,8 @@ message IndexReaderParam {
   Expr limit = 2;
   string orig_func_name = 3;
   DistRange dist_range = 4;
+  int32 partition_cn_cnt = 5;
+  int32 partition_cn_idx = 6;
 }
 
 message Node {

@@ -96,6 +96,16 @@ select count(*) as cnt from t4 group by c1 having cnt>1;
 -- @separator:table
 explain select count(*) as cnt from t4 group by c2 having cnt>1;
 select count(*) as cnt from t4 group by c2 having cnt>1;
+-- dedup join spill: large ODKU with low join_spill_mem
+drop table if exists t_dedup_spill;
+create table t_dedup_spill (id int primary key, val int);
+insert into t_dedup_spill select *,* from generate_series(400000) g;
+set @@join_spill_mem = 1000;
+insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
+on duplicate key update val = val + 1;
+select count(*) from t_dedup_spill;
+drop table if exists t_dedup_spill;
+
 drop database if exists d1;
 drop database if exists test;
 create database test;

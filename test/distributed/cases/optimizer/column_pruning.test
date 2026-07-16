@@ -39,6 +39,23 @@ select a, json_arrayagg(payload) from (select a, payload, row_number() over(part
 create table empty_t(v int);
 select 1 from (select sum(v) as discarded from empty_t) s;
 
+-- Row-only consumers choose a low-cost carrier while preserving every row.
+create table carrier_l(payload varchar(1000), id tinyint);
+create table carrier_r(payload varchar(2000), id tinyint);
+insert into carrier_l values ('wide-a', 1), ('wide-b', 2);
+insert into carrier_r values ('wide-c', 3);
+select 1 from carrier_l order by id;
+select 1 from (
+    select payload, id from carrier_l
+    union all
+    select payload, id from carrier_r
+) u;
+
+-- A discarded expensive aggregate must not become the scalar row carrier.
+select 1 from (select group_concat(payload), count(*) from carrier_l) s;
+select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
+select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+
 -- _wstart is deliberately unprojected. Column pruning must continue and keep
 -- _wend instead of leaving the time-window remapping incomplete.
 create table tw(ts timestamp, v int);
