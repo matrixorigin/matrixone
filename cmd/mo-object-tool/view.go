@@ -22,6 +22,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var runObjectViewFromCommand = runObjectView
+
 func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view <object-file>",
@@ -37,7 +39,7 @@ func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
 			if !storage.IsRemote() {
 				return interactive.RunWithKind(path, kind)
 			}
-			return runObjectView(context.Background(), path, *storage, kind)
+			return runObjectViewFromCommand(context.Background(), path, *storage, kind)
 		},
 	}
 

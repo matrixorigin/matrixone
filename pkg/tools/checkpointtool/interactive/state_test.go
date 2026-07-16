@@ -112,3 +112,49 @@ func TestStateNavigationWithEmptyCheckpointEntry(t *testing.T) {
 
 	require.NoError(t, state.LoadLogicalView())
 }
+
+func TestStateSelectTableBackfillsObjectRanges(t *testing.T) {
+	dataStats := testObjectStats(t, 31, 10, 1, 100, 200)
+	tombStats := testObjectStats(t, 32, 5, 1, 50, 100)
+	dataRange := ckputil.TableRange{TableID: 42, ObjectType: ckputil.ObjectType_Data, ObjectStats: dataStats}
+	tombRange := ckputil.TableRange{TableID: 42, ObjectType: ckputil.ObjectType_Tombstone, ObjectStats: tombStats}
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Global)
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetObjectEntriesForTest(func(_ *checkpointtool.CheckpointReader, got *checkpoint.CheckpointEntry, tableID uint64) ([]*checkpointtool.ObjectEntryInfo, []*checkpointtool.ObjectEntryInfo, error) {
+		require.Same(t, entry, got)
+		require.Equal(t, uint64(42), tableID)
+		return []*checkpointtool.ObjectEntryInfo{{ObjectStats: dataStats}}, []*checkpointtool.ObjectEntryInfo{{ObjectStats: tombStats}}, nil
+	})
+	state := &State{
+		reader:        reader,
+		entries:       []*checkpoint.CheckpointEntry{entry},
+		selectedEntry: 0,
+		tables: []*checkpointtool.TableInfo{{
+			TableID:    42,
+			DataRanges: []ckputil.TableRange{dataRange},
+			TombRanges: []ckputil.TableRange{tombRange},
+		}},
+	}
+
+	require.NoError(t, state.SelectTable(42))
+	require.Equal(t, dataRange, state.DataEntries()[0].Range)
+	require.Equal(t, tombRange, state.TombEntries()[0].Range)
+	require.Nil(t, state.LogicalView())
+}
+
+func TestStateSwitchAndLogicalViewErrors(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Global)
+	hookErr := assert.AnError
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetTablesForTest(func(_ *checkpointtool.CheckpointReader, got *checkpoint.CheckpointEntry) ([]*checkpointtool.TableInfo, error) {
+		require.Same(t, entry, got)
+		return nil, hookErr
+	})
+	state := &State{reader: reader, entries: []*checkpoint.CheckpointEntry{entry}, selectedEntry: 0}
+
+	require.ErrorIs(t, state.SwitchToTables(), hookErr)
+
+	state = &State{reader: &checkpointtool.CheckpointReader{}, entries: []*checkpoint.CheckpointEntry{entry}, selectedEntry: 1}
+	require.NoError(t, state.LoadLogicalView())
+	require.Nil(t, state.LogicalView())
+}

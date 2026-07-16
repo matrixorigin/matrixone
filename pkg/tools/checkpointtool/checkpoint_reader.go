@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,8 +46,21 @@ type CheckpointReader struct {
 	mp      *mpool.MPool
 	closeFS bool
 
+	getTableRangesForTest   func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]ckputil.TableRange, error)
 	getTablesForTest        func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]*TableInfo, error)
 	getObjectEntriesForTest func(*CheckpointReader, *checkpoint.CheckpointEntry, uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error)
+}
+
+func (r *CheckpointReader) SetGetTableRangesForTest(fn func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]ckputil.TableRange, error)) {
+	r.getTableRangesForTest = fn
+}
+
+func (r *CheckpointReader) SetGetTablesForTest(fn func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]*TableInfo, error)) {
+	r.getTablesForTest = fn
+}
+
+func (r *CheckpointReader) SetGetObjectEntriesForTest(fn func(*CheckpointReader, *checkpoint.CheckpointEntry, uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error)) {
+	r.getObjectEntriesForTest = fn
 }
 
 // Option configures CheckpointReader
@@ -152,6 +164,7 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 		kind:                    r.kind,
 		entries:                 r.entries,
 		mp:                      mpool.MustNewZero(),
+		getTableRangesForTest:   r.getTableRangesForTest,
 		getTablesForTest:        r.getTablesForTest,
 		getObjectEntriesForTest: r.getObjectEntriesForTest,
 	}
@@ -332,6 +345,9 @@ func (r *CheckpointReader) EntryInfo(index int, e *checkpoint.CheckpointEntry) *
 
 // GetTableRanges reads table ranges from an entry
 func (r *CheckpointReader) GetTableRanges(entry *checkpoint.CheckpointEntry) ([]ckputil.TableRange, error) {
+	if r.getTableRangesForTest != nil {
+		return r.getTableRangesForTest(r, entry)
+	}
 	loc := entry.GetLocation()
 	if loc.IsEmpty() {
 		return nil, nil

@@ -56,6 +56,27 @@ func TestShowInfoWrapsOpenError(t *testing.T) {
 	require.ErrorContains(t, err, "failed to open object")
 }
 
+func TestShowInfoRemoteObjectFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	filename := objectio.BuildObjectName(&types.Uuid{2}, 1).String()
+	writeInfoTestObject(t, dir, filename)
+	cfgPath := filepath.Join(t.TempDir(), "tn.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+[[fileservice]]
+backend = "DISK"
+data-dir = "`+dir+`"
+name = "SHARED"
+`), 0644))
+
+	output := captureStdout(t, func() {
+		require.NoError(t, showInfo(filename, toolfs.StorageOptions{FSConfig: cfgPath}, objectio.OfflineKindLocal))
+	})
+
+	require.Contains(t, output, "Object: "+filename)
+	require.Contains(t, output, "Blocks: 1")
+	require.Contains(t, output, "Rows:   2")
+}
+
 func writeInfoTestObject(t *testing.T, dir string, filename string) {
 	t.Helper()
 	ctx := context.Background()

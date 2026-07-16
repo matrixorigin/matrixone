@@ -16,10 +16,12 @@ package object
 
 import (
 	"bytes"
+	"context"
 	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,4 +120,26 @@ func TestObjectInfoViewCommands(t *testing.T) {
 	c2 := PrepareCommand()
 	c2.SetArgs([]string{"view", "--local", missing})
 	require.Error(t, c2.Execute())
+}
+
+func TestViewCommandRemoteUsesObjectViewRunner(t *testing.T) {
+	old := runObjectViewFromCommand
+	defer func() { runObjectViewFromCommand = old }()
+
+	var gotPath, gotKind string
+	var gotStorage toolfs.StorageOptions
+	runObjectViewFromCommand = func(ctx context.Context, path string, storage toolfs.StorageOptions, kind string) error {
+		require.NotNil(t, ctx)
+		gotPath = path
+		gotStorage = storage
+		gotKind = kind
+		return nil
+	}
+
+	cmd := PrepareCommand()
+	cmd.SetArgs([]string{"--fs-config", "tn.toml", "--local2", "view", "obj"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "obj", gotPath)
+	require.Equal(t, "tn.toml", gotStorage.FSConfig)
+	require.Equal(t, objectio.OfflineKindLocal2, gotKind)
 }

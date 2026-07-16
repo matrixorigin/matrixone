@@ -24,12 +24,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 )
 
+type checkpointProgram interface {
+	Run() (tea.Model, error)
+}
+
+var (
+	newCheckpointProgram = func(m tea.Model) checkpointProgram {
+		return tea.NewProgram(m, tea.WithAltScreen())
+	}
+	runObjectViewerWithFS = objectinteractive.RunUnifiedWithFS
+)
+
 // Run starts the interactive checkpoint viewer
 func Run(reader *checkpointtool.CheckpointReader) error {
 	m := NewUnifiedModel(reader)
 
 	for {
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		p := newCheckpointProgram(m)
 		finalModel, err := p.Run()
 		if err != nil {
 			return err
@@ -77,7 +88,7 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 				Kind:           m.state.reader.Kind(), // read nested objects in the same on-disk format
 				CustomOverview: ckpDataOverview,
 			}
-			if err := objectinteractive.RunUnifiedWithFS(
+			if err := runObjectViewerWithFS(
 				context.Background(), m.state.reader.FS(), um.GetObjectToOpen(), opts,
 			); err != nil {
 				return err

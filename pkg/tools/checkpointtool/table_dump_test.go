@@ -138,6 +138,24 @@ func TestWriteCSVChunksPreservesStorageOrder(t *testing.T) {
 	assert.Equal(t, "a\nb\nc\n", buf.String())
 }
 
+func TestWriteCSVChunksRejectsUnboundedFutureObjects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chunks := make(chan csvPipelineChunk, 1)
+	done := make(chan error, 1)
+	counters := &csvPipelineCounters{}
+	var buf bytes.Buffer
+
+	go writeCSVChunks(ctx, &buf, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{objectIdx: csvPipelineReorderWindow + 1, blockIdx: 0, data: []byte("future\n")}
+
+	err := <-done
+	require.Error(t, err)
+	require.ErrorContains(t, err, "reorder window exceeded")
+	assert.Empty(t, buf.String())
+}
+
 func TestProcessCSVObjectChunksFailsMissingVisibleObject(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
