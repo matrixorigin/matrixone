@@ -62,20 +62,22 @@ func TestReplayedPreparedDMLFenceLifecycle(t *testing.T) {
 	table.ResolveReplayedPreparedDML("txn-1", nil)
 	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(21, 0)))
 
-	// A committed replay publishes its own DML prepare timestamp while removing
-	// the final blocker. It never promotes the current ALTER prepare timestamp.
+	// A committed replay publishes its visibility (commit) timestamp while
+	// removing the final blocker. A snapshot between prepare and commit must
+	// still retry because it cannot contain the recovered row yet.
 	replayedPrepare := types.BuildTS(12, 0)
-	table.ResolveReplayedPreparedDML("txn-2", &replayedPrepare)
+	replayedCommit := types.BuildTS(13, 0)
+	table.ResolveReplayedPreparedDML("txn-2", &replayedCommit)
 	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart, types.BuildTS(22, 0)))
+	require.True(t, table.ShouldRetryAutoIncrementAlter(
+		replayedPrepare, types.BuildTS(23, 0)))
 
-	// An ALTER whose snapshot is at/after the original DML prepare proceeds;
+	// An ALTER whose snapshot is at/after the recovered DML commit proceeds;
 	// ordered logtail delivery guarantees that such a CN snapshot contains the
 	// recovered row. Unknown duplicate resolutions cannot add a new fence.
-	require.True(t, table.ShouldRetryAutoIncrementAlter(
-		types.BuildTS(11, 0), types.BuildTS(23, 0)))
 	require.False(t, table.ShouldRetryAutoIncrementAlter(
-		types.BuildTS(12, 0), types.BuildTS(24, 0)))
-	table.ResolveReplayedPreparedDML("missing", &replayedPrepare)
+		replayedCommit, types.BuildTS(24, 0)))
+	table.ResolveReplayedPreparedDML("missing", &replayedCommit)
 	require.False(t, table.ShouldRetryAutoIncrementAlter(
 		types.BuildTS(22, 0), types.BuildTS(25, 0)))
 }

@@ -352,23 +352,93 @@ func (s *fakeTxnStore) DoneEvent(typ int) {
 // test loudly, which is actually the safety behavior we want.
 type fakeAsyncTxn struct {
 	txnif.AsyncTxn
-	store   *fakeTxnStore
-	replay  bool
-	twoPC   bool
-	prepare types.TS
-	state   txnif.TxnState
-	stateFn func() txnif.TxnState // overrides state when set
+	store       *fakeTxnStore
+	replay      bool
+	twoPC       bool
+	prepare     types.TS
+	state       txnif.TxnState
+	stateFn     func() txnif.TxnState // overrides state when set
+	stateWaitFn func(bool) txnif.TxnState
 }
 
 func (t *fakeAsyncTxn) IsReplay() bool           { return t.replay }
 func (t *fakeAsyncTxn) Is2PC() bool              { return t.twoPC }
 func (t *fakeAsyncTxn) GetPrepareTS() types.TS   { return t.prepare }
 func (t *fakeAsyncTxn) GetStore() txnif.TxnStore { return t.store }
-func (t *fakeAsyncTxn) GetTxnState(bool) txnif.TxnState {
+func (t *fakeAsyncTxn) GetTxnState(wait bool) txnif.TxnState {
+	if t.stateWaitFn != nil {
+		return t.stateWaitFn(wait)
+	}
 	if t.stateFn != nil {
 		return t.stateFn()
 	}
 	return t.state
+}
+
+func TestManagerStopCancelsUnresolvedReplayed2PC(t *testing.T) {
+	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
+	mgr.Start()
+
+	queried := make(chan struct{})
+	releaseLegacyWait := make(chan struct{})
+	var queryOnce sync.Once
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		replay:  true,
+		twoPC:   true,
+		prepare: types.BuildTS(20, 0),
+		stateWaitFn: func(wait bool) txnif.TxnState {
+			queryOnce.Do(func() { close(queried) })
+			if wait {
+				<-releaseLegacyWait
+				return txnif.TxnStateRollbacked
+			}
+			return txnif.TxnStatePrepared
+		},
+	}
+	mgr.OnEndPrepareWAL(txn)
+	select {
+	case <-queried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayed 2PC collector did not start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		mgr.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(200 * time.Millisecond):
+		// Let the old blocking implementation terminate before failing so this
+		// regression test never leaks its queue goroutine.
+		close(releaseLegacyWait)
+		<-stopped
+		t.Fatal("Manager.Stop blocked on an unresolved replayed 2PC")
+	}
+	require.Zero(t, txn.store.tailCollecting.Load())
+}
+
+func TestCollectReplayed2PCPanicsOnUnknownState(t *testing.T) {
+	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
+	defer mgr.Stop()
+	var calls atomic.Int32
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		replay:  true,
+		twoPC:   true,
+		prepare: types.BuildTS(20, 0),
+		stateWaitFn: func(bool) txnif.TxnState {
+			if calls.Add(1) == 1 {
+				return txnif.TxnStateUnknown
+			}
+			return txnif.TxnStateRollbacked
+		},
+	}
+	txn.store.AddEvent(txnif.TailCollecting)
+	require.Panics(t, func() { mgr.collectReplayed2PC(txn) })
+	require.Zero(t, txn.store.tailCollecting.Load())
 }
 
 func TestOnTxnLogTails_Replayed2PCCommitHoldsOrderUntilDecision(t *testing.T) {

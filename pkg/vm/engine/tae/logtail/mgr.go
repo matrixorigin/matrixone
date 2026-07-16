@@ -93,6 +93,8 @@ type Manager struct {
 	nextCompactTS   types.TS
 
 	collectPool *ants.Pool
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 }
 
 func NewManager(
@@ -105,6 +107,7 @@ func NewManager(
 	mgr := &Manager{
 		rt:      rt,
 		catalog: c,
+		stopCh:  make(chan struct{}),
 		table: NewTxnTable(
 			blockSize,
 			nowClock,
@@ -276,12 +279,32 @@ func (mgr *Manager) collectReplayed2PC(txn txnif.AsyncTxn) *txnWithLogtails {
 	// apply catalog changes before DoneWithErr makes that state observable.
 	txn.GetStore().DoneEvent(txnif.TailCollecting)
 
-	state := txn.GetTxnState(true)
-	if state == txnif.TxnStateRollbacked {
-		return nil
-	}
-	if state != txnif.TxnStateCommitted {
-		panic(fmt.Sprintf("wrong replayed 2PC state %v", state))
+	ticker := time.NewTicker(LogtailHeartbeatDuration)
+	defer ticker.Stop()
+	for {
+		state := txn.GetTxnState(false)
+		switch state {
+		case txnif.TxnStateRollbacked:
+			return nil
+		case txnif.TxnStateCommitted:
+			break
+		case txnif.TxnStatePrepared,
+			txnif.TxnStateCommittingFinished,
+			txnif.TxnStateRollbacking:
+			// A coordinator/recovery decision is still in progress.
+		case txnif.TxnStateUnknown:
+			panic("replayed 2PC reached unknown final state")
+		default:
+			panic(fmt.Sprintf("wrong replayed 2PC state %v", state))
+		}
+		if state == txnif.TxnStateCommitted {
+			break
+		}
+		select {
+		case <-mgr.stopCh:
+			return nil
+		case <-ticker.C:
+		}
 	}
 
 	tails, closeCB := mgr.collectReplayed2PCTables(txn)
@@ -407,8 +430,11 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 }
 
 func (mgr *Manager) Stop() {
-	mgr.logtailQueue.Stop()
-	mgr.collectPool.Release()
+	mgr.stopOnce.Do(func() {
+		close(mgr.stopCh)
+		mgr.logtailQueue.Stop()
+		mgr.collectPool.Release()
+	})
 }
 
 func (mgr *Manager) Start() {

@@ -104,24 +104,24 @@ func (entry *TableEntry) RegisterReplayedPreparedDML(txnID string) {
 }
 
 // ResolveReplayedPreparedDML removes one replay fence. A committed replay
-// publishes its original DML prepare timestamp while holding the same lock
+// publishes its commit visibility timestamp while holding the same lock
 // used by AUTO_INCREMENT ALTER validation. Rollback publishes no watermark.
-// Row visibility for snapshots at/after prepareTS is guaranteed by the
+// Row visibility for snapshots at/after visibilityTS is guaranteed by the
 // ordered replay logtail slot, not by promoting an ALTER timestamp.
-func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string, prepareTS *types.TS) {
+func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string, visibilityTS *types.TS) {
 	entry.replayedPreparedDML.Lock()
 	defer entry.replayedPreparedDML.Unlock()
 	if _, ok := entry.replayedPreparedDML.txns[txnID]; !ok {
 		return
 	}
-	if prepareTS != nil {
-		entry.RecordKnownDMLPrepare(*prepareTS)
+	if visibilityTS != nil {
+		entry.RecordKnownDMLPrepare(*visibilityTS)
 	}
 	delete(entry.replayedPreparedDML.txns, txnID)
 }
 
 // ShouldRetryAutoIncrementAlter serializes the unresolved replay set with the
-// durable DML prepare watermark at TN prepare validation.
+// durable DML visibility watermark at TN prepare validation.
 func (entry *TableEntry) ShouldRetryAutoIncrementAlter(startTS, prepareTS types.TS) bool {
 	entry.replayedPreparedDML.Lock()
 	if len(entry.replayedPreparedDML.txns) > 0 {

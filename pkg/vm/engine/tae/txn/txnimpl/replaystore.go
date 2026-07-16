@@ -90,8 +90,8 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
-	prepareTS := txn.GetPrepareTS()
-	store.resolvePreparedDMLTables(&prepareTS)
+	visibilityTS := txn.GetCommitTS()
+	store.resolvePreparedDMLTables(&visibilityTS)
 	return
 }
 
@@ -125,9 +125,9 @@ func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
 	}
 }
 
-func (store *replayTxnStore) resolvePreparedDMLTables(prepareTS *types.TS) {
+func (store *replayTxnStore) resolvePreparedDMLTables(visibilityTS *types.TS) {
 	for _, table := range store.preparedTables {
-		table.ResolveReplayedPreparedDML(store.preparedTxnID, prepareTS)
+		table.ResolveReplayedPreparedDML(store.preparedTxnID, visibilityTS)
 	}
 	store.preparedTables = nil
 }

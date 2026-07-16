@@ -6956,11 +6956,23 @@ func TestPreparedDMLReplayRestoresAutoIncrementFence(t *testing.T) {
 			}))
 
 			if resolution == "commit" {
-				commitTS := recovered.GetPrepareTS()
-				recovered.SetCommitTS(commitTS.Next())
+				prepareTS := recovered.GetPrepareTS()
+				commitTS := prepareTS.Next()
+				recovered.SetCommitTS(commitTS)
 				require.NoError(t, recovered.Commit(ctx))
+				require.True(t, tableEntry.ShouldRetryAutoIncrementAlter(
+					prepareTS, commitTS.Next()),
+					"snapshot between replay prepare and commit cannot see key 5000")
+				afterCommit := commitTS.Next()
+				require.False(t, tableEntry.ShouldRetryAutoIncrementAlter(
+					commitTS, afterCommit.Next()),
+					"snapshot at replay commit may proceed after ordered logtail catch-up")
 			} else {
+				prepareTS := recovered.GetPrepareTS()
 				require.NoError(t, recovered.Rollback(ctx))
+				require.False(t, tableEntry.ShouldRetryAutoIncrementAlter(
+					prepareTS.Prev(), prepareTS.Next()),
+					"rollback must not publish a replay visibility watermark")
 			}
 
 			// A later ordinary append proves the ordered callback stream advanced
@@ -6980,7 +6992,6 @@ func TestPreparedDMLReplayRestoresAutoIncrementFence(t *testing.T) {
 			}
 			require.Equal(t, resolution == "commit", seen5000.Load(),
 				"recovered commit must publish key 5000; rollback must not")
-			_ = tableEntry
 		})
 	}
 }
