@@ -95,9 +95,10 @@ func TestAlterTableInplaceAppendsAutoIncrementSchemaMutation(t *testing.T) {
 	proc.Base.TxnOperator = txnOp
 
 	result := newAlterCopyFixedResult(t, proc.Mp(), types.T_uint64.ToType(), []uint64{effectiveOffset})
+	exec := &fixedResultSQLExecutor{result: result}
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 		moruntime.InternalSQLExecutor,
-		&fixedResultSQLExecutor{result: result},
+		exec,
 	)
 
 	ctrl := gomock.NewController(t)
@@ -123,10 +124,17 @@ func TestAlterTableInplaceAppendsAutoIncrementSchemaMutation(t *testing.T) {
 
 	tableDef := &plan2.TableDef{
 		Name: "t",
-		Cols: []*plan2.ColDef{{
-			Name: "id",
-			Typ:  plan2.Type{Id: int32(types.T_uint64), AutoIncr: true},
-		}},
+		Cols: []*plan2.ColDef{
+			{
+				Name: "id",
+				Typ:  plan2.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			},
+			{
+				Name:   catalog.FakePrimaryKeyColName,
+				Hidden: true,
+				Typ:    plan2.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			},
+		},
 	}
 	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
@@ -140,6 +148,7 @@ func TestAlterTableInplaceAppendsAutoIncrementSchemaMutation(t *testing.T) {
 
 	c := &Compile{e: eng, proc: proc, db: "db", pn: s.Plan}
 	require.NoError(t, s.AlterTableInplace(c))
+	require.Equal(t, 1, exec.calls)
 	require.Len(t, rel.alterReqs, 1)
 	require.Equal(t, api.NewUpdateAutoIncrementReq(1, 1, effectiveOffset), rel.alterReqs[0])
 }

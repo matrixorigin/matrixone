@@ -788,7 +788,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
 	}
-	autoCols := incrservice.GetAutoColumnFromDef(copyDef)
+	autoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
 	if len(autoCols) == 0 {
 		return nil
 	}

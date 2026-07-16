@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,9 @@ import (
 type tableCloneRecordingExecutor struct {
 	result executor.Result
 	err    error
+	run    func(string) (executor.Result, error)
 	sql    string
+	sqls   []string
 	opts   executor.Options
 }
 
@@ -47,7 +50,11 @@ func (e *tableCloneRecordingExecutor) Exec(
 		return executor.Result{}, err
 	}
 	e.sql = sql
+	e.sqls = append(e.sqls, sql)
 	e.opts = opts
+	if e.run != nil {
+		return e.run(sql)
+	}
 	return e.result, e.err
 }
 
@@ -62,6 +69,15 @@ func (e *tableCloneRecordingExecutor) ExecTxn(
 func newTableCloneResult(t *testing.T, mp *mpool.MPool, value uint64) executor.Result {
 	t.Helper()
 	return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{value})
+}
+
+func newTableCloneOffsetResult(t *testing.T, mp *mpool.MPool, colIdx int32, offset uint64) executor.Result {
+	t.Helper()
+	memRes := executor.NewMemResult([]types.Type{types.T_int32.ToType(), types.T_uint64.ToType()}, mp)
+	memRes.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, []int32{colIdx}))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, []uint64{offset}))
+	return memRes.GetResult()
 }
 
 func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
@@ -108,6 +124,38 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 			table+" {MO_TS = 123}",
 		exec.sql,
 	)
+}
+
+func TestConstructTableCloneDoesNotReadHiddenAutoIncrementMaximum(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wantErr := errors.New("hidden auto-increment column must not be queried")
+	exec := &tableCloneRecordingExecutor{}
+	exec.run = func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, "__mo_fake_pk_col") {
+			return executor.Result{}, wantErr
+		}
+		return newTableCloneOffsetResult(t, proc.Mp(), 0, 40), nil
+	}
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, &plan.CloneTable{
+		SrcTableDef: &plan.TableDef{
+			TblId:  7,
+			DbName: "db",
+			Name:   "src",
+			Cols: []*plan.ColDef{{
+				Name:   "__mo_fake_pk_col",
+				Hidden: true,
+				Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			}},
+		},
+		SrcObjDef: &plan.ObjectRef{},
+	})
+	require.NoError(t, err)
+	t.Cleanup(tc.Release)
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "mo_catalog.mo_increment_columns")
+	require.Equal(t, map[int32]uint64{0: 40}, tc.Ctx.SrcInternalAutoOffsets)
 }
 
 func TestConstructTableCloneHonorsCanceledContextBeforeMaximumRead(t *testing.T) {

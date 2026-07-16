@@ -1118,7 +1118,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					return err
 				}
 			}
-			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
+			autoCols := incrservice.GetUserAutoColumnFromDef(qry.GetTableDef())
 			sid := c.proc.GetService()
 			svc := incrservice.GetAutoIncrementService(sid)
 			for _, col := range autoCols {

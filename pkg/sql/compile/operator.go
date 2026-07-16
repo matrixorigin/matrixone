@@ -2231,15 +2231,19 @@ func constructTableClone(
 		ret executor.Result
 		sql string
 
-		account     = uint32(math.MaxUint32)
-		colMaxValue map[int32]uint64
-		hasAutoIncr bool
+		account            = uint32(math.MaxUint32)
+		colMaxValue        map[int32]uint64
+		internalColOffsets map[int32]uint64
+		hasAutoIncr        bool
+		hasInternalAuto    bool
 	)
 
 	for _, colDef := range clonePlan.SrcTableDef.Cols {
 		if colDef.Typ.AutoIncr {
 			hasAutoIncr = true
-			break
+			if colDef.Hidden {
+				hasInternalAuto = true
+			}
 		}
 	}
 
@@ -2262,9 +2266,48 @@ func constructTableClone(
 		}
 	}
 
+	if hasInternalAuto {
+		sql = fmt.Sprintf(
+			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
+			clonePlan.SrcTableDef.TblId,
+		)
+		if clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+			sql = fmt.Sprintf(
+				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
+				clonePlan.ScanSnapshot.TS.PhysicalTime,
+				clonePlan.SrcTableDef.TblId,
+			)
+		}
+		if ret, err = c.runSqlWithResultAndOptions(
+			sql,
+			int32(account),
+			executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
+			ret.Close()
+			return nil, err
+		}
+		internalColOffsets = make(map[int32]uint64)
+		func() {
+			defer ret.Close()
+			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
+				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+				for i := 0; i < rows; i++ {
+					idx := colIdxes[i]
+					if idx >= 0 && int(idx) < len(clonePlan.SrcTableDef.Cols) &&
+						clonePlan.SrcTableDef.Cols[idx].Hidden &&
+						clonePlan.SrcTableDef.Cols[idx].Typ.AutoIncr {
+						internalColOffsets[idx] = offsets[i]
+					}
+				}
+				return true
+			})
+		}()
+	}
+
 	colMaxValue = make(map[int32]uint64)
 	for colIdx, colDef := range clonePlan.SrcTableDef.Cols {
-		if !colDef.Typ.AutoIncr {
+		if !colDef.Typ.AutoIncr || colDef.Hidden {
 			continue
 		}
 
@@ -2303,6 +2346,7 @@ func constructTableClone(
 	}
 
 	metaCopy.Ctx.SrcAutoIncrMaxValues = colMaxValue
+	metaCopy.Ctx.SrcInternalAutoOffsets = internalColOffsets
 
 	success = true
 	return metaCopy, nil

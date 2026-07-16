@@ -62,75 +62,73 @@ func newLazyPrivateTableCache(
 }
 
 func (c *lazyPrivateTableCache) load(ctx context.Context) (incrTableCache, error) {
-	for {
-		c.lifecycle.Lock()
-		retired := c.lifecycle.retired
-		c.lifecycle.Unlock()
-		if retired {
-			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
-		}
+	c.lifecycle.Lock()
+	retired := c.lifecycle.retired
+	c.lifecycle.Unlock()
+	if retired {
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 
-		c.mu.Lock()
-		if c.mu.cache != nil {
-			cache := c.mu.cache
+	c.mu.Lock()
+	if c.mu.cache != nil {
+		cache := c.mu.cache
+		cache.acquire()
+		c.mu.Unlock()
+		return cache, nil
+	}
+	if c.mu.build != nil {
+		build := c.mu.build
+		c.mu.Unlock()
+		select {
+		case <-build.ready:
+			if build.err != nil {
+				return nil, build.err
+			}
+			// Serialize the acquire with retire. A completed generation can
+			// be retired before this waiter is scheduled after ready closes.
+			c.mu.Lock()
+			if c.mu.cache != build.cache {
+				c.mu.Unlock()
+				return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+			cache := build.cache
 			cache.acquire()
 			c.mu.Unlock()
 			return cache, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		if c.mu.build != nil {
-			build := c.mu.build
-			c.mu.Unlock()
-			select {
-			case <-build.ready:
-				if build.err != nil {
-					return nil, build.err
-				}
-				// Serialize the acquire with retire. A completed generation can
-				// be retired before this waiter is scheduled after ready closes.
-				c.mu.Lock()
-				if c.mu.cache != build.cache {
-					c.mu.Unlock()
-					return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
-				}
-				cache := build.cache
-				cache.acquire()
-				c.mu.Unlock()
-				return cache, nil
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		build := &privateCacheBuild{ready: make(chan struct{})}
-		c.mu.build = build
-		c.mu.Unlock()
-
-		cache, err := c.build(ctx)
-
-		c.mu.Lock()
-		c.lifecycle.Lock()
-		retired = c.lifecycle.retired
-		c.lifecycle.Unlock()
-		if err == nil && !retired {
-			c.mu.cache = cache
-			build.cache = cache
-			cache.acquire()
-		} else if err != nil {
-			build.err = err
-		} else {
-			build.err = moerr.NewTxnNeedRetryWithDefChanged(ctx)
-		}
-		c.mu.build = nil
-		close(build.ready)
-		c.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		if retired {
-			cache.retire()
-			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
-		}
-		return cache, nil
 	}
+	build := &privateCacheBuild{ready: make(chan struct{})}
+	c.mu.build = build
+	c.mu.Unlock()
+
+	cache, err := c.build(ctx)
+
+	c.mu.Lock()
+	c.lifecycle.Lock()
+	retired = c.lifecycle.retired
+	c.lifecycle.Unlock()
+	if err == nil && !retired {
+		c.mu.cache = cache
+		build.cache = cache
+		cache.acquire()
+	} else if err != nil {
+		build.err = err
+	} else {
+		build.err = moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	c.mu.build = nil
+	close(build.ready)
+	c.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if retired {
+		cache.retire()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return cache, nil
 }
 
 func (c *lazyPrivateTableCache) table() uint64   { return c.tableID }

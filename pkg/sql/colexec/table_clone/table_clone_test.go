@@ -105,6 +105,57 @@ func TestUpdateDstAutoIncrColumnsReconcilesRequestedOffsetWithCopiedMaximum(t *t
 	}
 }
 
+func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	proc.Base.IncrService = incrSvc
+
+	def := &plan.TableDef{
+		TblId:          42,
+		Version:        7,
+		AutoIncrOffset: 999,
+		Cols: []*plan.ColDef{
+			{
+				Name: "id",
+				Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			},
+			{
+				Name:   "__mo_fake_pk_col",
+				Hidden: true,
+				Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+	}
+	tc := &TableClone{
+		Ctx: &TableCloneCtx{
+			RequestedAutoIncrOffset: 999,
+			SrcAutoIncrMaxValues:    map[int32]uint64{0: 40},
+			SrcInternalAutoOffsets:  map[int32]uint64{1: 40},
+		},
+		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
+	}
+
+	incrSvc.EXPECT().InsertValues(
+		gomock.Any(), def.TblId, def.Version, gomock.Any(), gomock.Any(), 1, int64(1),
+	).DoAndReturn(func(
+		_ context.Context,
+		_ uint64,
+		_ uint32,
+		_ client.TxnOperator,
+		vecs []*vector.Vector,
+		_ int,
+		_ int64,
+	) (uint64, error) {
+		require.Equal(t, uint64(999), vector.MustFixedColWithTypeCheck[uint64](vecs[0])[0])
+		require.Equal(t, uint64(40), vector.MustFixedColWithTypeCheck[uint64](vecs[1])[0])
+		return 0, nil
+	})
+
+	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
+}
+
 func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeEffectiveOffset(t *testing.T) {
 	tests := []struct {
 		name    string

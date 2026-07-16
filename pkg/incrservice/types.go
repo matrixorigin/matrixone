@@ -165,11 +165,27 @@ type AutoColumn struct {
 	Step     uint64
 }
 
-// GetAutoColumnFromDef get auto columns from table def
+// GetAutoColumnFromDef gets all allocator-owned columns from a table definition,
+// including internal hidden columns such as __mo_fake_pk_col.
 func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(*plan.ColDef) bool { return true })
+}
+
+// GetUserAutoColumnFromDef gets only SQL-visible AUTO_INCREMENT columns.
+func GetUserAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(col *plan.ColDef) bool { return !col.Hidden })
+}
+
+// GetInternalAutoColumnFromDef gets allocator-owned hidden columns. User ALTER
+// TABLE AUTO_INCREMENT requests must not change these columns.
+func GetInternalAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(col *plan.ColDef) bool { return col.Hidden })
+}
+
+func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) []AutoColumn {
 	var cols []AutoColumn
 	for i, col := range def.Cols {
-		if col.Typ.AutoIncr {
+		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
 				ColName:  col.Name,
 				TableID:  def.TblId,

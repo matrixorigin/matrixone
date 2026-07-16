@@ -283,11 +283,12 @@ func (mgr *Manager) collectReplayed2PC(txn txnif.AsyncTxn) *txnWithLogtails {
 	defer ticker.Stop()
 	for {
 		state := txn.GetTxnState(false)
+		if state == txnif.TxnStateCommitted {
+			break
+		}
 		switch state {
 		case txnif.TxnStateRollbacked:
 			return nil
-		case txnif.TxnStateCommitted:
-			break
 		case txnif.TxnStatePreparing,
 			txnif.TxnStatePrepared,
 			txnif.TxnStateCommittingFinished,
@@ -297,9 +298,6 @@ func (mgr *Manager) collectReplayed2PC(txn txnif.AsyncTxn) *txnWithLogtails {
 			panic("replayed 2PC reached unknown final state")
 		default:
 			panic(fmt.Sprintf("wrong replayed 2PC state %v", state))
-		}
-		if state == txnif.TxnStateCommitted {
-			break
 		}
 		select {
 		case <-mgr.stopCh:

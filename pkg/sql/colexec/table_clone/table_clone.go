@@ -105,6 +105,9 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 	if tc.Ctx.SrcAutoIncrMaxValues != nil {
 		clear(tc.Ctx.SrcAutoIncrMaxValues)
 	}
+	if tc.Ctx.SrcInternalAutoOffsets != nil {
+		clear(tc.Ctx.SrcInternalAutoOffsets)
+	}
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
@@ -471,14 +474,15 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	proc *process.Process,
 ) error {
 
-	if tc.Ctx.SrcAutoIncrMaxValues == nil {
+	if tc.Ctx.SrcAutoIncrMaxValues == nil && tc.Ctx.SrcInternalAutoOffsets == nil {
 		return nil
 	}
 
 	var (
-		err      error
-		typs     []types.Type
-		incrCols []incrservice.AutoColumn
+		err              error
+		typs             []types.Type
+		userIncrCols     []incrservice.AutoColumn
+		internalIncrCols []incrservice.AutoColumn
 
 		maxVal uint64
 
@@ -487,7 +491,8 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 
 	dstTblDef = tc.dstMasterRel.GetTableDef(dstCtx)
 	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(dstTblDef)
-	incrCols = incrservice.GetAutoColumnFromDef(dstTblDef)
+	userIncrCols = incrservice.GetUserAutoColumnFromDef(dstTblDef)
+	internalIncrCols = incrservice.GetInternalAutoColumnFromDef(dstTblDef)
 
 	vecs := make([]*vector.Vector, len(typs))
 	for i, typ := range typs {
@@ -501,12 +506,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	}()
 
 	rows := 0
-	for _, col := range incrCols {
-		maxVal = max(
-			tc.Ctx.RequestedAutoIncrOffset,
-			tc.Ctx.SrcAutoIncrMaxValues[int32(col.ColIndex)],
-		)
-
+	appendValue := func(col incrservice.AutoColumn, maxVal uint64) error {
 		var val any
 		typ := typs[col.ColIndex]
 		outOfRange := func() error {
@@ -564,6 +564,23 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		}
 		if rows == 0 {
 			rows = vecs[col.ColIndex].Length()
+		}
+		return nil
+	}
+
+	for _, col := range userIncrCols {
+		maxVal = max(
+			tc.Ctx.RequestedAutoIncrOffset,
+			tc.Ctx.SrcAutoIncrMaxValues[int32(col.ColIndex)],
+		)
+		if err = appendValue(col, maxVal); err != nil {
+			return err
+		}
+	}
+	for _, col := range internalIncrCols {
+		maxVal = tc.Ctx.SrcInternalAutoOffsets[int32(col.ColIndex)]
+		if err = appendValue(col, maxVal); err != nil {
+			return err
 		}
 	}
 

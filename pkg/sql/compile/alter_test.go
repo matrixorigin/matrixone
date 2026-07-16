@@ -282,6 +282,75 @@ func TestScopeAlterTableCopyReconcilesAutoIncrementAfterDataCopy(t *testing.T) {
 	}
 }
 
+func TestReconcileAlterCopyAutoIncrementSkipsHiddenOnlyDefinition(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+
+	copyDef := &plan.TableDef{
+		TblId:          2,
+		Name:           "dept_copy",
+		AutoIncrOffset: 999,
+		Cols: []*plan.ColDef{{
+			Name:   catalog.FakePrimaryKeyColName,
+			Hidden: true,
+			Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Empty(t, spyExec.executedSQLs)
+}
+
+func TestReconcileAlterCopyAutoIncrementAffectsOnlyVisibleColumn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	copyDef := &plan.TableDef{
+		TblId:          2,
+		Name:           "dept_copy",
+		AutoIncrOffset: 999,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{
+				Name:   catalog.FakePrimaryKeyColName,
+				Hidden: true,
+				Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			},
+		},
+	}
+	visibleMaxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	hiddenMaxSQL := "select cast(coalesce(max(case when `__mo_fake_pk_col` > 0 then `__mo_fake_pk_col` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	resultMP := mpool.MustNewZero()
+	spyExec := &alterCopyInsertSpyExecutor{
+		results: map[string]executor.Result{
+			visibleMaxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+		},
+		errs: map[string]error{
+			hiddenMaxSQL: errors.New("hidden column is not SQL-visible"),
+		},
+	}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, "id", copyDef.AutoIncrOffset, c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{visibleMaxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB(), "visible MAX query result must be closed")
+}
+
 func (e *alterCopyInsertSpyExecutor) ExecTxn(
 	ctx context.Context,
 	execFunc func(executor.TxnExecutor) error,
