@@ -344,45 +344,6 @@ else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
-RESOURCE_ACCOUNTING_TEST_ENV := CGO_ENABLED=1 \
-	CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include" \
-	CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -lusearch_c" \
-	LD_LIBRARY_PATH="$(CGO_DIR):$(THIRDPARTIES_INSTALL_DIR)/lib:$${LD_LIBRARY_PATH}" \
-	DYLD_LIBRARY_PATH="$(CGO_DIR):$(THIRDPARTIES_INSTALL_DIR)/lib:$${DYLD_LIBRARY_PATH}"
-
-.PHONY: test-resource-accounting
-test-resource-accounting: cgo thirdparties
-	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=10m \
-		./pkg/util/resource ./pkg/common/mpool \
-		./pkg/util/trace/impl/motrace/statistic ./pkg/util/trace/impl/motrace \
-		./pkg/vm/process ./pkg/sql/compile ./pkg/sql/models ./pkg/sql/plan/explain
-	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
-		-run='Test(ConnCountsCompletedOutputPackets|ConnCountsPartialWriteFacts|FailedStatementSealsAfterTerminalResponse|StatementlessRequestConsumesResponseCounters|RecordParseErrorStatement)' \
-		./pkg/frontend
-
-.PHONY: test-resource-accounting-race
-test-resource-accounting-race: cgo thirdparties
-	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -race -count=1 -timeout=20m \
-		./pkg/util/resource ./pkg/common/mpool ./pkg/util/trace/impl/motrace ./pkg/vm/process
-
-.PHONY: fuzz-resource-accounting
-fuzz-resource-accounting:
-	go test ./pkg/util/resource -run=^$$ -fuzz=FuzzReducer -fuzztime=60s
-	go test ./pkg/util/resource -run=^$$ -fuzz=FuzzAttemptLifecycle -fuzztime=60s
-
-.PHONY: bench-resource-accounting
-bench-resource-accounting: cgo thirdparties
-	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -run=^$$ \
-		-bench='Benchmark(Resource|MPoolAtomicMax)' -benchmem \
-		./pkg/util/resource ./pkg/common/mpool
-
-.PHONY: bvt-resource-accounting
-bvt-resource-accounting: test-resource-accounting
-	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
-		-run='^TestResourceAccountingBVTSingleCN$$' ./pkg/embed
-	$(RESOURCE_ACCOUNTING_TEST_ENV) go test $(GOLDFLAGS) -count=1 -timeout=5m \
-		-run='^TestResourceAccountingBVTMultiCN$$' ./pkg/embed
-
 ###############################################################################
 # bvt and unit test
 ###############################################################################

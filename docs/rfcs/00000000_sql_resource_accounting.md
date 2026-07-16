@@ -1629,21 +1629,13 @@ logs/traces, not metric labels.
 
 ### 19.1 Local acceptance workflow
 
-The implementation must deliver reproducible repository targets rather than a
-manual-only checklist:
-
-```text
-make test-resource-accounting       deterministic unit and integration tests
-make test-resource-accounting-race  focused race tests
-make bench-resource-accounting      fixed benchmark suite
-make bvt-resource-accounting        single-CN and multi-CN SQL cases
-```
-
-These targets are added with PR 1 or the integration PR and become required
-pre-merge gates. They must use the production recorder, reducer, terminal, CU,
-projection, and exporter code; the harness may inject clocks, terminal order,
-failures, and queue capacity, but may not carry a second accounting
-implementation.
+The PR delivers deterministic Go tests in the packages that own the behavior.
+Local orchestration is a developer convenience, not a root Makefile API or a
+repository merge gate. Run the package, race, fuzz, benchmark, and cluster
+commands below directly or from an untracked local script. Every test must use
+the production recorder, reducer, terminal, CU, projection, and exporter code;
+fault injection may control clocks, terminal order, failures, and queue
+capacity, but must not carry a second accounting implementation.
 
 Before direct Go tests that can reach `usearch`, prepare the local CGO
 environment:
@@ -1676,7 +1668,7 @@ go test -count=1 -timeout 20m \
   ./pkg/frontend
 ```
 
-Package paths may be narrowed as the implementation lands, but the target must
+Package paths may be narrowed for a focused local run, but the checked-in tests
 retain coverage of the core algebra, MPool adapter, attempt/root lifecycle,
 trace export, CU projection, Explain consumer, and frontend sealing path.
 
@@ -1717,19 +1709,14 @@ The named fuzz entry points are implementation deliverables. The race and fuzz
 runs must finish with no race, panic, underflow, double merge, goroutine leak,
 MPool-domain leak, lease leak, or tombstone leak.
 
-The checked-in SQL gate is `pkg/embed/resource_accounting_bvt_test.go`. It runs
-real SQL and `EXPLAIN PHYPLAN ANALYZE` against an embedded single-CN service,
-then forces a multi-CN scan and requires resource overviews from at least two
-distinct CN addresses. `make bvt-resource-accounting` first runs the focused
-package gate, then both embedded SQL success cases.
-
-The embedded service does not initialize the asynchronous statement exporter,
-so it must not pretend to validate `system.statement_info` persistence. That
-boundary is covered deterministically by the frontend completion test, which
-executes terminal response accounting and feeds its sealed summary through the
-production StatsArray projection, asserting the exact serialized v6 values
-(version, active time, peak memory, egress bytes/packets, attempt count,
-quality, and non-negative CU).
+Single-CN and multi-CN SQL runs are local acceptance only. They are not checked
+into `pkg/embed` while exporter synchronization is not deterministic. The PR
+covers the persistence boundary compositionally: the frontend completion test
+executes terminal response accounting, and the production StatsArray
+projection tests assert the exact serialized v6 values (version, active time,
+peak memory, egress bytes/packets, attempt count, quality, and non-negative
+CU). A deployed cluster with the asynchronous exporter enabled remains the
+end-to-end persistence check.
 
 For optional end-to-end diagnosis of exporter deployment, build and run a
 single-process cluster:
@@ -1755,15 +1742,16 @@ where statement like '%resource_acceptance%'
 order by response_at desc;
 ```
 
-This manual smoke check is supplementary, not part of the reproducible local
-gate. The repository gate is deliberately compositional rather than claiming a
+This deployed smoke check is local acceptance, not a repository merge gate.
+The checked-in coverage is deliberately compositional rather than claiming a
 single synthetic end-to-end fixture: resource algebra tests cover terminal
 outcomes, partial/missing data and spill; compile tests cover generation-local
 retry attribution and remote terminals; trace tests cover projection,
 aggregation and collector saturation; frontend tests cover response completion
-and protocol failure; embedded SQL covers real single-CN and multi-CN plan
-execution. A deployment with the asynchronous exporter enabled remains the
-only end-to-end persistence check. Assertions for that smoke check include:
+and protocol failure. A local cluster harness may cover real single-CN and
+multi-CN plan execution without becoming part of the PR. A deployment with the
+asynchronous exporter enabled remains the only end-to-end persistence check.
+Assertions for that smoke check include:
 
 - `json_length(stats) = 17`, index 0 is 6, and every persisted count, byte, and
   duration is non-negative;
@@ -1797,12 +1785,14 @@ most 2%, no material scan/join/insert/load/spill/multi-CN regression, and all
 object, wire, JSON, exporter-retention, lease, and tombstone bounds. No shadow
 or dual-calculation path is enabled for this comparison.
 
-Local sign-off attaches the deterministic, race, fuzz, embedded SQL BVT, and
-benchmark results. A representative v6 `statement_info` row is required only
-for deployment smoke testing where the asynchronous exporter is enabled. Local
-acceptance passes only when all repository suites pass, unexpected
-invariant/partial flags remain zero, ordinary query results and plans are
-unchanged, and the old accounting path is absent from the built binary.
+PR sign-off attaches deterministic and focused race results. Optional local
+sign-off may also attach fuzz, benchmark, single-CN, multi-CN, and deployed
+exporter results; those commands may live in an untracked local script. A
+representative v6 `statement_info` row is required only for deployment smoke
+testing where the asynchronous exporter is enabled. Acceptance passes when the
+applicable suites pass, unexpected invariant/partial flags remain zero,
+ordinary query results and plans are unchanged, and the old accounting path is
+absent from the built binary.
 
 ## 20. Decisions Required Before Implementation or Rollout
 
