@@ -273,7 +273,7 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 			if resp.Txn != nil && resp.Txn.Status == txn.TxnStatus_Prepared {
 				prepared++
 				if txnMeta.CommitTS.Less(resp.Txn.PreparedTS) {
-					txnMeta.PreparedTS = resp.Txn.PreparedTS
+					txnMeta.CommitTS = resp.Txn.PreparedTS
 				}
 			}
 		}

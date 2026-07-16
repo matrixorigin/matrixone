@@ -369,23 +369,41 @@ func TestRecoveryFromMultiCommittedAfterPrepared(t *testing.T) {
 func TestRecoveryFromMultiTNShardWithAllPrepared(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
+	mlog3 := mem.NewMemLog()
 
-	wTxn := NewTestTxn(1, 1, 1, 2)
-	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = NewTestTimestamp(2)
+	coordinatorTxn := NewTestTxn(1, 1, 1, 2, 3)
+	coordinatorTxn.Status = txn.TxnStatus_Prepared
+	coordinatorTxn.PreparedTS = NewTestTimestamp(10)
+	remoteTxn2 := coordinatorTxn
+	remoteTxn2.PreparedTS = NewTestTimestamp(20)
+	remoteTxn3 := coordinatorTxn
+	remoteTxn3.PreparedTS = NewTestTimestamp(15)
 
-	addLog(t, mlog1, wTxn, 1)
-	addLog(t, mlog2, wTxn, 2)
+	addLog(t, mlog1, coordinatorTxn, 1)
+	addLog(t, mlog2, remoteTxn2, 2)
+	addLog(t, mlog3, remoteTxn3, 3)
 
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
+	var mu sync.Mutex
+	var commitRequests []txn.TxnRequest
+	sender.setFilter(func(request *txn.TxnRequest) bool {
+		if request.Method == txn.TxnMethod_CommitTNShard {
+			mu.Lock()
+			commitRequests = append(commitRequests, *request)
+			mu.Unlock()
+		}
+		return true
+	})
 
 	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
 	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	s3 := NewTestTxnServiceWithLog(t, 3, sender, NewTestClock(0), mlog3).(*service)
 	sender.AddTxnService(s1)
 	sender.AddTxnService(s2)
+	sender.AddTxnService(s3)
 
 	assert.NoError(t, s1.Start())
 	defer func() {
@@ -396,21 +414,46 @@ func TestRecoveryFromMultiTNShardWithAllPrepared(t *testing.T) {
 	defer func() {
 		assert.NoError(t, s2.Close(false))
 	}()
+	assert.NoError(t, s3.Start())
+	defer func() {
+		assert.NoError(t, s3.Close(false))
+	}()
 
-	for e := range s1.storage.(*mem.KVTxnStorage).GetEventC() {
-		if e.Type == mem.CommitType {
-			break
+	commitEvent := func(s *service) mem.Event {
+		for e := range s.storage.(*mem.KVTxnStorage).GetEventC() {
+			if e.Type == mem.CommitType {
+				return e
+			}
 		}
+		t.Fatal("storage event channel closed before commit")
+		return mem.Event{}
+	}
+	coordinatorCommit := commitEvent(s1)
+	remoteCommit2 := commitEvent(s2)
+	remoteCommit3 := commitEvent(s3)
+
+	maxPreparedTS := NewTestTimestamp(20)
+	assert.Equal(t, maxPreparedTS, coordinatorCommit.Txn.CommitTS)
+	assert.Equal(t, NewTestTimestamp(10), coordinatorCommit.Txn.PreparedTS)
+	assert.Equal(t, maxPreparedTS, remoteCommit2.Txn.CommitTS)
+	assert.Equal(t, maxPreparedTS, remoteCommit3.Txn.CommitTS)
+
+	mu.Lock()
+	recorded := append([]txn.TxnRequest(nil), commitRequests...)
+	mu.Unlock()
+	require.Len(t, recorded, 2)
+	assert.Equal(t, []uint64{2, 3}, []uint64{
+		recorded[0].GetTargetTN().ShardID,
+		recorded[1].GetTargetTN().ShardID,
+	})
+	for _, request := range recorded {
+		assert.Equal(t, maxPreparedTS, request.Txn.CommitTS)
+		assert.Equal(t, NewTestTimestamp(10), request.Txn.PreparedTS)
 	}
 
-	for e := range s2.storage.(*mem.KVTxnStorage).GetEventC() {
-		if e.Type == mem.CommitType {
-			break
-		}
-	}
-
-	checkData(t, wTxn, s1, 2, 1, true)
-	checkData(t, wTxn, s2, 2, 2, true)
+	checkData(t, coordinatorTxn, s1, 20, 1, true)
+	checkData(t, coordinatorTxn, s2, 20, 2, true)
+	checkData(t, coordinatorTxn, s3, 20, 3, true)
 }
 
 func TestRecoveryFromMultiTNShardWithAnyNotPrepared(t *testing.T) {
