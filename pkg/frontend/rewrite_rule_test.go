@@ -643,6 +643,25 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	})
 }
 
+func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
+	ctx := context.Background()
+	outer := `/*+ {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1"]},"remapdb":{"src":"session_db"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"src.t":"select * from src.t where inline_keep = 1"},"remapdb":{"src":"inline_db"}} */ select * from src.t`
+
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select * from src.t where role_keep = 1",
+		"select * from src.t where session_keep = 1",
+		"select * from src.t where inline_keep = 1",
+	}, chains["src.t"])
+	require.Equal(t, "inline_db", remapDb["src"])
+}
+
 func TestValidateRewriteRuleSQL(t *testing.T) {
 	ctx := context.Background()
 

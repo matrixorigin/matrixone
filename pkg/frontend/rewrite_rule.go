@@ -291,6 +291,51 @@ func rewriteSingleSQL(
 	return hint + " " + sql, nil
 }
 
+// rewriteSQLFromMaterializedPolicy applies the policy already captured on the
+// outer statement to SQL nested in PREPARE ... FROM 'sql'/@var, then layers the
+// nested SQL's own inline hint on top. It intentionally does not read session
+// or role state again: earlier statements in the same COM_QUERY may already
+// have changed that state after the request was parsed.
+func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL string) (string, error) {
+	chains := make(map[string][]string)
+	remapDb := make(map[string]string)
+	if content, ok := leadingHintContent(outerSQL); ok {
+		content = strings.TrimSpace(content)
+		if content != "" && content[0] == '{' {
+			outerChains, outerRemapDb, err := parsers.DecodeRewriteHint(ctx, content)
+			if err != nil {
+				return innerSQL, err
+			}
+			for key, chain := range outerChains {
+				chains[key] = append(chains[key], chain...)
+			}
+			for src, dst := range outerRemapDb {
+				remapDb[src] = dst
+			}
+		}
+	}
+
+	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
+	if err != nil {
+		return innerSQL, err
+	}
+	for key, rule := range inlineRules {
+		chains[key] = append(chains[key], rule)
+	}
+	for src, dst := range inlineRemapDb {
+		remapDb[src] = dst
+	}
+	if len(chains) == 0 && len(remapDb) == 0 {
+		return innerSQL, nil
+	}
+
+	hint, err := formatRewriteHintChains(ctx, chains, remapDb)
+	if err != nil {
+		return innerSQL, err
+	}
+	return hint + " " + innerSQL, nil
+}
+
 // extractInlineRewrites returns the per-table rewrite rules and database-remap
 // entries from a leading /*+ {...} */ (or /*!+ {...} */) hint on sql, if present.
 // Each rewrite value must be a single SQL string: a user-written inline hint may

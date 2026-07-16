@@ -1111,6 +1111,7 @@ func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T) {
@@ -1155,6 +1156,7 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 		`{"remapdb":{"src":"session_db"}}`))
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
+	execCtx.rewriteEnabled = true
 
 	tests := []struct {
 		name      string
@@ -1183,6 +1185,10 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			outerSQL, err := rewriteSQL(ctx, ses,
+				`prepare test_stmt from 'select 1'`)
+			require.NoError(t, err)
+			execCtx.sqlOfStmt = outerSQL
 			rewritten, stmt, remap, err := prepareStringStatement(execCtx, ses, tt.sql)
 			require.NoError(t, err)
 			require.NotNil(t, stmt)
@@ -1198,6 +1204,31 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("inner inline works without outer policy", func(t *testing.T) {
+		execCtx.sqlOfStmt = `prepare inline_only from 'select 1'`
+		_, stmt, remap, err := prepareStringStatement(execCtx, ses,
+			`/*+ {"remapdb":{"src":"inline_only_db"}} */ select * from src.t`)
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "inline_only_db", remap["src"])
+		require.Contains(t, tree.String(stmt, dialect.MYSQL), "inline_only_db.t")
+	})
+
+	t.Run("uses materialized outer snapshot after session changes", func(t *testing.T) {
+		outerSQL, err := rewriteSQL(ctx, ses,
+			`prepare snap from 'select * from src.t'`)
+		require.NoError(t, err)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+			`{"remapdb":{"src":"new_db"}}`))
+		execCtx.sqlOfStmt = outerSQL
+
+		_, stmt, remap, err := prepareStringStatement(execCtx, ses, "select * from src.t")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "session_db", remap["src"])
+		require.Contains(t, tree.String(stmt, dialect.MYSQL), "session_db.t")
+	})
 }
 
 func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
@@ -1787,6 +1818,36 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	err := handleAnalyzeStmt(ses, outerExecCtx, &tree.AnalyzeStmt{})
 	require.Error(t, err)
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
+}
+
+func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	staleExecCtx := &ExecCtx{reqCtx: context.Background()}
+	currentExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: testutil.NewProc(t)}
+	ses.GetTxnCompileCtx().SetExecCtx(staleExecCtx)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	checked := false
+	buildPlanWithAuthorization = func(
+		ctx context.Context,
+		_ FeSession,
+		compilerCtx plan.CompilerContext,
+		_ tree.Statement,
+	) (*plan.Plan, error) {
+		checked = true
+		require.Same(t, currentExecCtx, compilerCtx.(*TxnCompilerContext).execCtx)
+		return nil, moerr.NewInternalError(ctx, "stop after context check")
+	}
+
+	_, err := createPrepareStmt(currentExecCtx, ses, "select 1",
+		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
+	require.Error(t, err)
+	require.True(t, checked)
 }
 
 func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {

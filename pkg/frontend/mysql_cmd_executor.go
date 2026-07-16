@@ -1594,9 +1594,13 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 }
 
 func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string, tree.Statement, map[string]string, error) {
-	rewritten, err := rewriteSQL(execCtx.reqCtx, ses, sql)
-	if err != nil {
-		return sql, nil, nil, err
+	rewritten := sql
+	var err error
+	if execCtx.rewriteEnabled {
+		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql)
+		if err != nil {
+			return sql, nil, nil, err
+		}
 	}
 
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
@@ -1617,7 +1621,7 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	}
 
 	var remapDb map[string]string
-	if ses.rewriteEnabled.Load() {
+	if execCtx.rewriteEnabled {
 		if err = parsers.AddRewriteHints(execCtx.reqCtx, stmts, rewritten); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
@@ -1643,6 +1647,12 @@ func createPrepareStmt(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// A preceding statement may have run nested/background SQL and left the
+	// compiler context pointing at a temporary ExecCtx that has already been
+	// closed. PREPARE plans synchronously against the current request context.
+	if execCtx.proc != nil {
+		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	}
 
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
@@ -2702,6 +2712,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	// Capture the request-level switch before any statement in a multi-statement
+	// request can mutate it. Statement-specific policies are captured below.
+	execCtx.rewriteEnabled = ses.rewriteEnabled.Load()
 	// Reset the per-statement database remap; it is (re)populated below only when
 	// the rewrite feature is enabled and a remapdb is configured.
 	execCtx.remapDb = nil
@@ -2795,43 +2808,40 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if err != nil {
 			return nil, err
 		}
-		v, err := ses.GetSessionSysVar("enable_remap_hint")
-		if err == nil {
-			if on, convErr := valueIsBoolTrue(v); convErr == nil && on {
-				err = parsers.AddRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql())
-				if err != nil {
-					return nil, err
-				}
-				// Apply remapdb (database-name substitution) on the parsed AST
-				// before privilege checks and planning resolve the original
-				// database. The effective remapdb (role rules carry none, the
-				// session variable and any inline hint are merged by rewriteSQL
-				// into the leading hint) is read back from the statement text and
-				// applied to qualified references in SELECT and INSERT/UPDATE/
-				// DELETE alike. Only the remapdb field is decoded here, so layered
-				// (array-form) rewrites in the merged hint do not interfere. Each map
-				// travels with its computation wrapper and is installed on execCtx
-				// before authorization/planning, so DefaultDatabase can remap the
-				// current database for UNQUALIFIED references (USE is not remapped).
-				statementRemaps = extractRemapDbByStatement(execCtx.input.getSql())
-				// COM_STMT_PREPARE rewrites the statement before wrapping it in
-				// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
-				// so use the policy captured on UserInput for its single nested stmt.
-				if len(execCtx.input.remapDb) > 0 && len(statementRemaps) == 1 {
-					statementRemaps[0] = execCtx.input.remapDb
-				}
-				// Text EXECUTE similarly contains no original hint. Restore the policy
-				// saved with the prepared statement before authorization/planning.
-				for i, stmt := range stmts {
-					if execute, ok := stmt.(*tree.Execute); ok {
-						if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, string(execute.Name)); getErr == nil {
-							statementRemaps[i] = prepared.remapDb
-						}
+		if execCtx.rewriteEnabled {
+			err = parsers.AddRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql())
+			if err != nil {
+				return nil, err
+			}
+			// Apply remapdb (database-name substitution) on the parsed AST
+			// before privilege checks and planning resolve the original
+			// database. The effective remapdb (role rules carry none, the
+			// session variable and any inline hint are merged by rewriteSQL
+			// into the leading hint) is read back from the statement text and
+			// applied to qualified references in SELECT and INSERT/UPDATE/
+			// DELETE alike. Only the remapdb field is decoded here, so layered
+			// (array-form) rewrites in the merged hint do not interfere. Each map
+			// travels with its computation wrapper and is installed on execCtx
+			// before authorization/planning, so DefaultDatabase can remap the
+			// current database for UNQUALIFIED references (USE is not remapped).
+			statementRemaps = extractRemapDbByStatement(execCtx.input.getSql())
+			// COM_STMT_PREPARE rewrites the statement before wrapping it in
+			// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
+			// so use the policy captured on UserInput for its single nested stmt.
+			if len(execCtx.input.remapDb) > 0 && len(statementRemaps) == 1 {
+				statementRemaps[0] = execCtx.input.remapDb
+			}
+			// Text EXECUTE similarly contains no original hint. Restore the policy
+			// saved with the prepared statement before authorization/planning.
+			for i, stmt := range stmts {
+				if execute, ok := stmt.(*tree.Execute); ok {
+					if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, string(execute.Name)); getErr == nil {
+						statementRemaps[i] = prepared.remapDb
 					}
 				}
-				if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, statementRemaps); err != nil {
-					return nil, err
-				}
+			}
+			if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, statementRemaps); err != nil {
+				return nil, err
 			}
 		}
 	}

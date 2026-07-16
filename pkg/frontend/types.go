@@ -906,6 +906,11 @@ type ExecCtx struct {
 	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
 	// no remapdb is configured.
 	remapDb map[string]string
+	// rewriteEnabled is captured once when the request is parsed. It keeps
+	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
+	// snapshot even if an earlier statement in the request changes the session
+	// switch before the nested SQL is planned.
+	rewriteEnabled bool
 }
 
 func (execCtx *ExecCtx) Close() {
@@ -927,6 +932,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.rewriteEnabled = false
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
