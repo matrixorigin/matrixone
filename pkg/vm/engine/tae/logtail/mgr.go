@@ -288,7 +288,8 @@ func (mgr *Manager) collectReplayed2PC(txn txnif.AsyncTxn) *txnWithLogtails {
 			return nil
 		case txnif.TxnStateCommitted:
 			break
-		case txnif.TxnStatePrepared,
+		case txnif.TxnStatePreparing,
+			txnif.TxnStatePrepared,
 			txnif.TxnStateCommittingFinished,
 			txnif.TxnStateRollbacking:
 			// A coordinator/recovery decision is still in progress.

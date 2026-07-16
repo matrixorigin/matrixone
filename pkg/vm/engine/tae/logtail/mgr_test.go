@@ -441,6 +441,31 @@ func TestCollectReplayed2PCPanicsOnUnknownState(t *testing.T) {
 	require.Zero(t, txn.store.tailCollecting.Load())
 }
 
+func TestCollectReplayed2PCWaitsFromPreparingToCommitted(t *testing.T) {
+	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
+	defer mgr.Stop()
+	states := []txnif.TxnState{
+		txnif.TxnStatePreparing,
+		txnif.TxnStatePrepared,
+		txnif.TxnStateCommitted,
+	}
+	var calls atomic.Int32
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		replay:  true,
+		twoPC:   true,
+		prepare: types.BuildTS(20, 0),
+		stateWaitFn: func(bool) txnif.TxnState {
+			idx := int(calls.Add(1)) - 1
+			return states[idx]
+		},
+	}
+	txn.store.AddEvent(txnif.TailCollecting)
+	require.NotNil(t, mgr.collectReplayed2PC(txn))
+	require.Equal(t, int32(3), calls.Load())
+	require.Zero(t, txn.store.tailCollecting.Load())
+}
+
 func TestOnTxnLogTails_Replayed2PCCommitHoldsOrderUntilDecision(t *testing.T) {
 	mgr := NewManager(nil, nil, 10, func() types.TS { return types.BuildTS(100, 0) })
 	defer mgr.Stop()
