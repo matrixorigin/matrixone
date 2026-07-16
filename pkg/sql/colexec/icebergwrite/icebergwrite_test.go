@@ -320,7 +320,7 @@ func TestIcebergWriteCachedExecutionCreatesIndependentCoordinators(t *testing.T)
 	var requests []AppendRequest
 	var coordinators []*testCoordinator
 	op := NewArgument(AppendRequest{
-		Operation:      OperationAppend,
+		Operation:      OperationOverwrite,
 		StatementID:    "prepare-statement-id",
 		IdempotencyKey: "prepare-statement-id",
 	}).WithCoordinatorFactory(CoordinatorFactoryFunc(func(ctx context.Context, req AppendRequest) (Coordinator, error) {

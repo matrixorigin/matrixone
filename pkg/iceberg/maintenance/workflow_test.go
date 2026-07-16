@@ -16,6 +16,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -58,6 +59,56 @@ func TestCommitRunnerReturnsNoOpWithoutCommit(t *testing.T) {
 	}).RunMaintenance(context.Background(), maintenanceRequest())
 	require.NoError(t, err)
 	require.Equal(t, Result{SnapshotAfter: "44", Verified: true}, result)
+	require.Empty(t, committer.requests)
+}
+
+func TestCommitRunnerDurablyRecordsPostCommitCleanupBeforeMutation(t *testing.T) {
+	plan := maintenanceCommitPlan()
+	plan.PostCommitOrphans = []string{"s3://warehouse/orders/metadata/expired-manifest.avro"}
+	recorder := &fakeMaintenanceOrphanRecorder{}
+	writer := &fakeMaintenanceObjectWriter{}
+	committer := &fakeMaintenanceCommitter{result: &api.CommitResult{SnapshotID: 101}}
+
+	_, err := (CommitRunner{
+		Planner:        fakeMaintenancePlanner{plan: plan},
+		ObjectWriter:   writer,
+		Committer:      committer,
+		OrphanRecorder: recorder,
+	}).RunMaintenance(context.Background(), maintenanceRequest())
+	require.NoError(t, err)
+	require.Len(t, recorder.candidates, 1)
+	require.Equal(t, plan.PostCommitOrphans[0], recorder.candidates[0].FilePath)
+	require.Len(t, writer.paths, 1)
+	require.Len(t, committer.requests, 1)
+}
+
+func TestCommitRunnerStopsBeforeMutationWhenPostCommitCleanupCannotBeRecorded(t *testing.T) {
+	plan := maintenanceCommitPlan()
+	plan.PostCommitOrphans = []string{"s3://warehouse/orders/metadata/expired-manifest.avro"}
+	sentinel := api.NewError(api.ErrCatalogUnavailable, "recorder unavailable", nil)
+	recorder := &fakeMaintenanceOrphanRecorder{err: sentinel}
+	writer := &fakeMaintenanceObjectWriter{}
+	committer := &fakeMaintenanceCommitter{}
+
+	_, err := (CommitRunner{
+		Planner:        fakeMaintenancePlanner{plan: plan},
+		ObjectWriter:   writer,
+		Committer:      committer,
+		OrphanRecorder: recorder,
+	}).RunMaintenance(context.Background(), maintenanceRequest())
+	require.ErrorIs(t, err, sentinel)
+	require.Contains(t, err.Error(), string(api.ErrOrphanCleanupFailed))
+	require.Empty(t, writer.paths)
+	require.Empty(t, committer.requests)
+
+	_, err = (CommitRunner{
+		Planner:      fakeMaintenancePlanner{plan: plan},
+		ObjectWriter: writer,
+		Committer:    committer,
+	}).RunMaintenance(context.Background(), maintenanceRequest())
+	require.Error(t, err)
+	require.Contains(t, errors.Unwrap(err).Error(), "requires an orphan recorder")
+	require.Empty(t, writer.paths)
 	require.Empty(t, committer.requests)
 }
 
@@ -273,9 +324,13 @@ func (c *fakeMaintenanceCommitter) CommitTable(ctx context.Context, req api.Comm
 
 type fakeMaintenanceOrphanRecorder struct {
 	candidates []write.OrphanCandidate
+	err        error
 }
 
 func (r *fakeMaintenanceOrphanRecorder) RecordOrphans(ctx context.Context, candidates []write.OrphanCandidate) error {
+	if r.err != nil {
+		return r.err
+	}
 	r.candidates = append(r.candidates, candidates...)
 	return nil
 }

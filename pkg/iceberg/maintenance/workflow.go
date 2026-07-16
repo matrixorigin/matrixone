@@ -114,6 +114,17 @@ func (r CommitRunner) RunMaintenance(ctx context.Context, req Request) (Result, 
 		primaryErr := api.NewError(api.ErrConfigInvalid, "Iceberg maintenance commit runner requires an object writer", map[string]string{"operation": string(req.Operation)})
 		return Result{}, stderrors.Join(primaryErr, r.recordOrphans(recoveryCtx, req, plan))
 	}
+	// Persist cleanup intent before the external catalog mutation. Once
+	// expire_snapshots commits, the removed manifests may no longer be
+	// discoverable from current metadata, so a post-commit recorder outage
+	// cannot be repaired. Candidates are TTL-delayed and the sweeper rechecks
+	// committed metadata, which makes this ordering safe when the commit fails.
+	if err := r.recordPostCommitOrphans(ctx, req, plan); err != nil {
+		return Result{}, api.WrapError(api.ErrOrphanCleanupFailed, "Iceberg maintenance could not durably schedule post-commit cleanup", map[string]string{
+			"operation": string(req.Operation),
+			"table":     req.Table,
+		}, err)
+	}
 	for _, object := range plan.Objects {
 		if err := r.ObjectWriter.WriteObject(ctx, object.Location, object.Payload); err != nil {
 			recoveryCtx, cancel := write.NewRecoveryContext(ctx)
@@ -136,7 +147,6 @@ func (r CommitRunner) RunMaintenance(ctx context.Context, req Request) (Result, 
 	recoveryCtx, cancel := write.NewRecoveryContext(ctx)
 	defer cancel()
 	committed := r.verifyCommitted(recoveryCtx, req, plan, *result)
-	r.recordPostCommitOrphansAfterSuccess(recoveryCtx, req, plan, committed)
 	return Result{
 		SnapshotAfter:      strconv.FormatInt(committed.SnapshotID, 10),
 		RewrittenFileCount: plan.RewrittenFileCount,
@@ -158,14 +168,10 @@ func (r CommitRunner) resolveUnknownCommit(ctx context.Context, req Request, pla
 		if err == nil && ok {
 			verified.Verified = true
 			verified.Unknown = false
-			r.recordPostCommitOrphansAfterSuccess(recoveryCtx, req, plan, verified)
 			return maintenanceResult(plan, verified), nil
 		}
 		if err != nil {
-			recoveryErr := stderrors.Join(
-				r.recordOrphans(recoveryCtx, req, plan),
-				r.recordPostCommitOrphans(recoveryCtx, req, plan),
-			)
+			recoveryErr := r.recordOrphans(recoveryCtx, req, plan)
 			unknownErr := api.WrapError(api.ErrCommitUnknown, "Iceberg maintenance commit outcome could not be verified", map[string]string{
 				"operation": string(req.Operation),
 				"table":     req.Table,
@@ -173,31 +179,12 @@ func (r CommitRunner) resolveUnknownCommit(ctx context.Context, req Request, pla
 			return maintenanceResult(plan, candidate), stderrors.Join(unknownErr, recoveryErr)
 		}
 	}
-	recoveryErr := stderrors.Join(
-		r.recordOrphans(recoveryCtx, req, plan),
-		r.recordPostCommitOrphans(recoveryCtx, req, plan),
-	)
+	recoveryErr := r.recordOrphans(recoveryCtx, req, plan)
 	unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg maintenance commit outcome is unknown and could not be verified", map[string]string{
 		"operation": string(req.Operation),
 		"table":     req.Table,
 	})
 	return maintenanceResult(plan, candidate), stderrors.Join(unknownErr, recoveryErr)
-}
-
-func (r CommitRunner) recordPostCommitOrphansAfterSuccess(ctx context.Context, req Request, plan *CommitPlan, result api.CommitResult) {
-	if err := r.recordPostCommitOrphans(ctx, req, plan); err != nil {
-		// The table commit is already known to have succeeded. Returning this
-		// hook error would invite a retry of a committed operation, so keep the
-		// successful result and surface the cleanup scheduling failure in logs.
-		logutil.Warn("Iceberg maintenance post-commit orphan record failed",
-			zap.Uint32("account-id", req.AccountID),
-			zap.Uint64("catalog-id", req.CatalogID),
-			zap.String("namespace", req.Namespace),
-			zap.String("table", req.Table),
-			zap.String("operation", string(req.Operation)),
-			zap.Int64("snapshot-id", result.SnapshotID),
-			zap.Error(err))
-	}
 }
 
 func maintenanceResult(plan *CommitPlan, result api.CommitResult) Result {
@@ -314,8 +301,14 @@ func (r CommitRunner) recordOrphans(ctx context.Context, req Request, plan *Comm
 }
 
 func (r CommitRunner) recordPostCommitOrphans(ctx context.Context, req Request, plan *CommitPlan) error {
-	if plan == nil {
+	if plan == nil || len(plan.PostCommitOrphans) == 0 {
 		return nil
+	}
+	if r.OrphanRecorder == nil {
+		return api.NewError(api.ErrConfigInvalid, "Iceberg maintenance post-commit cleanup requires an orphan recorder", map[string]string{
+			"operation": string(req.Operation),
+			"table":     req.Table,
+		})
 	}
 	return r.recordOrphanPaths(ctx, req, plan.PostCommitOrphans)
 }

@@ -591,12 +591,15 @@ func TestOrphanFileCleanupSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert orphan file: %v", err)
 	}
-	if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], "mo_iceberg_orphan_files") || !strings.Contains(exec.sqls[0], "values (0,'job-1',7") || !strings.Contains(exec.sqls[0], "'gold'") || !strings.Contains(exec.sqls[0], "'file-hash'") || strings.Contains(exec.sqls[0], "KSA") {
+	if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], "mo_iceberg_orphan_files") || !strings.Contains(exec.sqls[0], "values (0,'job-1',7") || !strings.Contains(exec.sqls[0], "'gold'") || !strings.Contains(exec.sqls[0], "'file-hash'") || !strings.Contains(exec.sqls[0], "on duplicate key update written_at = values(written_at), expire_at = values(expire_at), cleanup_status = values(cleanup_status), updated_at = utc_timestamp, version = version + 1") || strings.Contains(exec.sqls[0], "KSA") {
 		t.Fatalf("unexpected orphan file insert SQL: %#v", exec.sqls)
+	}
+	if _, err := mysql.ParseOne(context.Background(), exec.sqls[0], 1); err != nil {
+		t.Fatalf("parse idempotent orphan file insert SQL: %v", err)
 	}
 
 	listSQL := ListOrphanCleanupCandidatesSQL(0, 0)
-	for _, want := range []string{"namespace", "table_name", "file_path", "account_id = 0", "cleanup_status = 'pending'", "expire_at <= utc_timestamp", "order by expire_at asc", "limit 100"} {
+	for _, want := range []string{"namespace", "table_name", "file_path", "account_id = 0", "cleanup_status = 'pending'", "expire_at <= utc_timestamp", "order by updated_at asc, expire_at asc", "limit 100"} {
 		if !strings.Contains(listSQL, want) {
 			t.Fatalf("orphan cleanup list SQL missing %q: %s", want, listSQL)
 		}
@@ -882,6 +885,12 @@ func TestOrphanCleanupStoreMapsDAOState(t *testing.T) {
 	}
 	if storeDAO.status != OrphanCleanupStatusDeleted || storeDAO.expectedVersion != 3 {
 		t.Fatalf("unexpected delete status update: %+v", storeDAO)
+	}
+	if err := store.MarkOrphanRetry(context.Background(), candidates[0], "ICEBERG_ORPHAN_CLEANUP_FAILED"); err != nil {
+		t.Fatalf("mark orphan retry: %v", err)
+	}
+	if storeDAO.status != OrphanCleanupStatusPending || storeDAO.expectedVersion != 3 {
+		t.Fatalf("unexpected retry status update: %+v", storeDAO)
 	}
 	if err := store.MarkOrphanFailed(context.Background(), candidates[0], "ICEBERG_ORPHAN_CLEANUP_FAILED"); err != nil {
 		t.Fatalf("mark orphan failed: %v", err)

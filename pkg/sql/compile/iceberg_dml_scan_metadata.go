@@ -43,18 +43,13 @@ func (c *Compile) constructIcebergInsert(nodes []*plan.Node, node *plan.Node) (v
 		}
 		metadata.OverwriteScope = planned.OverwriteScope
 		metadata.OverwritePartition = planned.OverwritePartition
-		writer.Request.DMLScan = metadata
-		if err := writer.RetainObjectIORef(c.proc.Ctx); err != nil {
+		if err := attachIcebergDMLScanMetadata(c.proc.Ctx, writer, metadata); err != nil {
 			return nil, err
 		}
-		if writer.Factory != nil {
-			coordinator, err := writer.Factory.NewCoordinator(c.proc.Ctx, writer.Request)
-			if err != nil {
-				writer.ReleaseObjectIORef()
-				return nil, err
-			}
-			writer.Coordinator = coordinator
-		}
+		// Coordinator construction is execution-scoped and must remain in
+		// IcebergWrite.Prepare. In particular, a cached PREPARE/EXECUTE pipeline
+		// needs a fresh terminal state and statement/idempotency identity on every
+		// execution; constructing it here would capture the compile-time identity.
 		return writer, nil
 	}
 	if !icebergWriteNeedsDMLScanMetadata(writer.Request.Operation) {
@@ -64,9 +59,20 @@ func (c *Compile) constructIcebergInsert(nodes []*plan.Node, node *plan.Node) (v
 	if err != nil {
 		return nil, err
 	}
-	writer.Request.DMLScan = metadata
+	if err := attachIcebergDMLScanMetadata(c.proc.Ctx, writer, metadata); err != nil {
+		return nil, err
+	}
 	alignIcebergDMLWriteRequestToInput(nodes, node, &writer.Request)
 	return writer, nil
+}
+
+func attachIcebergDMLScanMetadata(ctx context.Context, writer *icebergwrite.IcebergWrite, metadata icebergwrite.DMLScanMetadata) error {
+	writer.Request.DMLScan = metadata
+	// The target scan and the DML sink are independent owners. A scan can run in
+	// a pre-scope and Free after sending its terminal batch, before the sink has
+	// materialized manifests during Commit. Retaining here keeps the provider
+	// alive for the sink; carrying the opaque ref string alone is not ownership.
+	return writer.RetainObjectIORef(ctx)
 }
 
 func icebergWriteNeedsDMLScanMetadata(operation string) bool {

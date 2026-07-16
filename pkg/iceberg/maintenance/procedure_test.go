@@ -221,7 +221,7 @@ func TestMarkAndSweepUsesTTLAndCleanerReferenceChecks(t *testing.T) {
 	require.Equal(t, []string{"s3://warehouse/t/job-1/a.parquet"}, store.deleted)
 }
 
-func TestMarkAndSweepMarksFailedCleanup(t *testing.T) {
+func TestMarkAndSweepKeepsCleanupFailureRetryable(t *testing.T) {
 	now := time.Unix(200, 0)
 	store := &fakeOrphanStore{candidates: []write.OrphanCandidate{{FilePath: "s3://warehouse/t/job-1/a.parquet", ExpireAt: now.Add(-time.Second)}}}
 	result, err := (MarkAndSweep{
@@ -233,7 +233,8 @@ func TestMarkAndSweepMarksFailedCleanup(t *testing.T) {
 	}).Sweep(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Failed)
-	require.Equal(t, []string{string(api.ErrOrphanCleanupFailed)}, store.failedCategories)
+	require.Equal(t, []string{string(api.ErrOrphanCleanupFailed)}, store.retryCategories)
+	require.Empty(t, store.failedCategories)
 }
 
 type fakeJobRecorder struct {
@@ -258,6 +259,7 @@ func (r *fakeJobRecorder) UpdateMaintenanceJobStatus(ctx context.Context, accoun
 type fakeOrphanStore struct {
 	candidates       []write.OrphanCandidate
 	deleted          []string
+	retryCategories  []string
 	failedCategories []string
 }
 
@@ -267,6 +269,11 @@ func (s *fakeOrphanStore) ListExpiredOrphans(ctx context.Context, now time.Time,
 
 func (s *fakeOrphanStore) MarkOrphanDeleted(ctx context.Context, candidate write.OrphanCandidate) error {
 	s.deleted = append(s.deleted, candidate.FilePath)
+	return nil
+}
+
+func (s *fakeOrphanStore) MarkOrphanRetry(ctx context.Context, candidate write.OrphanCandidate, category string) error {
+	s.retryCategories = append(s.retryCategories, category)
 	return nil
 }
 

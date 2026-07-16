@@ -739,8 +739,13 @@ func UpdatePublishJobStatusSQL(accountID uint32, jobID, status, errorCategory st
 }
 
 func InsertOrphanFileSQL(f model.OrphanFile) string {
+	// Recording is deliberately idempotent. A recorder can fail after inserting
+	// only part of a batch, and an unknown catalog commit may retry the same job.
+	// Re-arm a duplicate because a late retry can materialize the same path after
+	// an earlier generation was already swept. The reference checker still makes
+	// deletion safe if a successful retry commits that path into live metadata.
 	return fmt.Sprintf(
-		"insert into mo_catalog.%s(account_id,job_id,catalog_id,namespace,table_name,table_location_hash,file_path,file_path_hash,file_path_redacted,written_at,expire_at,cleanup_status,version) values (%d,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d)",
+		"insert into mo_catalog.%s(account_id,job_id,catalog_id,namespace,table_name,table_location_hash,file_path,file_path_hash,file_path_redacted,written_at,expire_at,cleanup_status,version) values (%d,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d) on duplicate key update written_at = values(written_at), expire_at = values(expire_at), cleanup_status = values(cleanup_status), updated_at = utc_timestamp, version = version + 1",
 		TableOrphanFiles,
 		f.AccountID,
 		quoteSQLString(f.JobID),
@@ -763,7 +768,7 @@ func ListOrphanCleanupCandidatesSQL(accountID uint32, limit int) string {
 		limit = 100
 	}
 	return fmt.Sprintf(
-		"select account_id,job_id,catalog_id,namespace,table_name,table_location_hash,file_path,file_path_hash,file_path_redacted,cleanup_status,version from mo_catalog.%s where account_id = %d and cleanup_status = 'pending' and expire_at <= utc_timestamp order by expire_at asc limit %d",
+		"select account_id,job_id,catalog_id,namespace,table_name,table_location_hash,file_path,file_path_hash,file_path_redacted,cleanup_status,version from mo_catalog.%s where account_id = %d and cleanup_status = 'pending' and expire_at <= utc_timestamp order by updated_at asc, expire_at asc limit %d",
 		TableOrphanFiles,
 		accountID,
 		limit,

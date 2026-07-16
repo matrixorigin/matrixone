@@ -289,6 +289,7 @@ func NewJob(req Request, now time.Time) model.MaintenanceJob {
 type OrphanStore interface {
 	ListExpiredOrphans(ctx context.Context, now time.Time, limit int) ([]write.OrphanCandidate, error)
 	MarkOrphanDeleted(ctx context.Context, candidate write.OrphanCandidate) error
+	MarkOrphanRetry(ctx context.Context, candidate write.OrphanCandidate, category string) error
 	MarkOrphanFailed(ctx context.Context, candidate write.OrphanCandidate, category string) error
 }
 
@@ -331,7 +332,12 @@ func (s MarkAndSweep) Sweep(ctx context.Context) (SweepResult, error) {
 		}
 		if err := s.Cleaner.CleanupOrphan(ctx, candidate); err != nil {
 			result.Failed++
-			if markErr := s.Store.MarkOrphanFailed(ctx, candidate, string(api.ErrOrphanCleanupFailed)); markErr != nil {
+			// Every cleanup refusal remains retryable. In particular, a file
+			// referenced by an old snapshot can become safe after that snapshot
+			// expires. Updating its version/time rotates it behind other pending
+			// candidates instead of losing it or letting it starve the queue.
+			markErr := s.Store.MarkOrphanRetry(ctx, candidate, string(api.ErrOrphanCleanupFailed))
+			if markErr != nil {
 				return result, stderrors.Join(err, markErr)
 			}
 			continue

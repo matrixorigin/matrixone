@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
@@ -386,6 +387,37 @@ func TestIcebergWriteNeedsDMLScanMetadata(t *testing.T) {
 	require.False(t, icebergWriteNeedsDMLScanMetadata(icebergwrite.OperationAppend))
 }
 
+func TestAttachIcebergDMLScanMetadataDefersCoordinatorAndOwnsObjectIO(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
+	require.True(t, icebergio.RetainObjectIORef(objectIORef), "simulate the target scan owner")
+	factoryCalls := 0
+	writer := icebergwrite.NewArgument(icebergwrite.AppendRequest{
+		Operation: icebergwrite.OperationOverwrite,
+	}).WithCoordinatorFactory(icebergwrite.CoordinatorFactoryFunc(func(context.Context, icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		factoryCalls++
+		return nil, nil
+	}))
+
+	require.NoError(t, attachIcebergDMLScanMetadata(ctx, writer, icebergwrite.DMLScanMetadata{ObjectIORef: objectIORef}))
+	require.Zero(t, factoryCalls, "compile-time metadata attachment must not create execution state")
+	require.Nil(t, writer.Coordinator)
+
+	icebergio.ReleaseObjectIORef(objectIORef)
+	_, _, err := icebergio.ResolveObjectIORef(ctx, objectIORef, "s3://warehouse/orders/data/a.parquet")
+	require.NoError(t, err, "the sink retain must outlive the target scan owner")
+
+	proc := &process.Process{Ctx: ctx, Base: &process.BaseProcess{}}
+	require.NoError(t, writer.Prepare(proc))
+	writer.Reset(proc, false, nil)
+	require.NoError(t, writer.Prepare(proc))
+	require.Equal(t, 2, factoryCalls, "cached executions need independent coordinators")
+
+	writer.Free(proc, false, nil)
+	_, _, err = icebergio.ResolveObjectIORef(ctx, objectIORef, "s3://warehouse/orders/data/a.parquet")
+	require.Error(t, err, "Free must release the sink's independent ownership")
+}
+
 func TestIcebergDMLScanMetadataFromPlanIgnoresDeleteTasks(t *testing.T) {
 	metadata := icebergDMLScanMetadataFromPlan(&icebergapi.IcebergScanPlan{
 		Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "main"},
@@ -437,12 +469,13 @@ func TestIcebergDeleteIntentCarriesCompiledScanMetadata(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
 	testCompile := &Compile{
 		proc: proc,
 		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
 			0: {
 				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "audit"},
-				ObjectIORef: "iceberg-object-io://test-ref",
+				ObjectIORef: objectIORef,
 				DataTasks: []icebergapi.DataFileTask{
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
@@ -459,7 +492,7 @@ func TestIcebergDeleteIntentCarriesCompiledScanMetadata(t *testing.T) {
 	require.Equal(t, int64(30), writer.Request.DMLScan.BaseSnapshotID)
 	require.Equal(t, 9, writer.Request.DMLScan.BaseSchemaID)
 	require.Equal(t, "audit", writer.Request.DMLScan.Ref)
-	require.Equal(t, "iceberg-object-io://test-ref", writer.Request.DMLScan.ObjectIORef)
+	require.Equal(t, objectIORef, writer.Request.DMLScan.ObjectIORef)
 	require.Len(t, writer.Request.DMLScan.DataFiles, 2)
 	require.Equal(t, "s3://warehouse/gold/orders/data/a.parquet", writer.Request.DMLScan.DataFiles[0].FilePath)
 	require.Equal(t, 4, writer.Request.DMLScan.DataFiles[1].SpecID)
@@ -504,12 +537,13 @@ func TestIcebergDeleteIntentAlignsMetadataIndexesWithInputProjection(t *testing.
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
 	testCompile := &Compile{
 		proc: proc,
 		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
 			0: {
 				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "main"},
-				ObjectIORef: "iceberg-object-io://test-ref",
+				ObjectIORef: objectIORef,
 				DataTasks: []icebergapi.DataFileTask{
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
 				},
@@ -555,12 +589,13 @@ func TestIcebergMergeIntentCarriesCompiledScanMetadata(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
 	testCompile := &Compile{
 		proc: proc,
 		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
 			0: {
 				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "audit"},
-				ObjectIORef: "iceberg-object-io://test-ref",
+				ObjectIORef: objectIORef,
 				DataTasks: []icebergapi.DataFileTask{
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/b.parquet", SpecID: 4}},
@@ -576,7 +611,7 @@ func TestIcebergMergeIntentCarriesCompiledScanMetadata(t *testing.T) {
 	require.Equal(t, int64(30), writer.Request.DMLScan.BaseSnapshotID)
 	require.Equal(t, 9, writer.Request.DMLScan.BaseSchemaID)
 	require.Equal(t, "audit", writer.Request.DMLScan.Ref)
-	require.Equal(t, "iceberg-object-io://test-ref", writer.Request.DMLScan.ObjectIORef)
+	require.Equal(t, objectIORef, writer.Request.DMLScan.ObjectIORef)
 	require.Len(t, writer.Request.DMLScan.DataFiles, 2)
 }
 
@@ -627,19 +662,21 @@ func TestIcebergMergeIntentSelectsTargetScanWhenSourceIsIceberg(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	targetObjectIORef := registerCompileTestObjectIO(t)
+	sourceObjectIORef := registerCompileTestObjectIO(t)
 	testCompile := &Compile{
 		proc: proc,
 		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
 			0: {
 				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "main"},
-				ObjectIORef: "iceberg-object-io://target",
+				ObjectIORef: targetObjectIORef,
 				DataTasks: []icebergapi.DataFileTask{
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/dml/accounts/data/a.parquet", SpecID: 3}},
 				},
 			},
 			1: {
 				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 40, SchemaID: 9, RefName: "main"},
-				ObjectIORef: "iceberg-object-io://source",
+				ObjectIORef: sourceObjectIORef,
 				DataTasks: []icebergapi.DataFileTask{
 					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/dml/accounts_updates/data/b.parquet", SpecID: 3}},
 				},
@@ -653,7 +690,7 @@ func TestIcebergMergeIntentSelectsTargetScanWhenSourceIsIceberg(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, icebergwrite.OperationMerge, writer.Request.Operation)
 	require.Equal(t, int64(30), writer.Request.DMLScan.BaseSnapshotID)
-	require.Equal(t, "iceberg-object-io://target", writer.Request.DMLScan.ObjectIORef)
+	require.Equal(t, targetObjectIORef, writer.Request.DMLScan.ObjectIORef)
 	require.Len(t, writer.Request.DMLScan.DataFiles, 1)
 	require.Equal(t, "s3://warehouse/dml/accounts/data/a.parquet", writer.Request.DMLScan.DataFiles[0].FilePath)
 }

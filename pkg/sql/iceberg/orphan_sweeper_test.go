@@ -110,8 +110,8 @@ func TestOrphanSweeperRefusesReferencedCandidate(t *testing.T) {
 	if result.Scanned != 1 || result.Deleted != 0 || result.Failed != 1 {
 		t.Fatalf("unexpected sweep result: %+v", result)
 	}
-	if store.statusByHash[api.PathHash(candidatePath)] != OrphanCleanupStatusFailed {
-		t.Fatalf("referenced candidate must be marked failed, got %s", store.statusByHash[api.PathHash(candidatePath)])
+	if store.statusByHash[api.PathHash(candidatePath)] != OrphanCleanupStatusPending {
+		t.Fatalf("referenced candidate must remain retryable for later snapshot expiry, got %s", store.statusByHash[api.PathHash(candidatePath)])
 	}
 	_ = readMaintenanceMemoryFile(t, ctx, fs, maintenanceMemoryPath(candidatePath))
 }

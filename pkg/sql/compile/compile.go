@@ -4607,6 +4607,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		return nil, err
 	} else if ok {
 		currentFirstFlag := c.anal.isFirst
+		// A single Iceberg writer is a correctness boundary, not only a layout
+		// optimization. The coordinator owns one commit generation and publishes
+		// only after its input reaches terminal state; splitting it across remote
+		// or parallel scopes would require explicit scope registration and a
+		// failure-aware barrier before any scope may commit.
 		if icebergInsertNeedsSingleWriterMerge(ss, toEngineNode(c.currentCNWorker())) {
 			ss = []*Scope{c.newMergeScope(ss)}
 		}

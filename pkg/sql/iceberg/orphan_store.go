@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	OrphanCleanupStatusPending = "pending"
 	OrphanCleanupStatusDeleted = "deleted"
 	OrphanCleanupStatusFailed  = "failed"
 )
@@ -132,6 +133,10 @@ func (s OrphanCleanupStore) ListExpiredOrphans(ctx context.Context, _ time.Time,
 
 func (s OrphanCleanupStore) MarkOrphanDeleted(ctx context.Context, candidate icebergwrite.OrphanCandidate) error {
 	return s.updateStatus(ctx, candidate, OrphanCleanupStatusDeleted)
+}
+
+func (s OrphanCleanupStore) MarkOrphanRetry(ctx context.Context, candidate icebergwrite.OrphanCandidate, _ string) error {
+	return s.updateStatus(ctx, candidate, OrphanCleanupStatusPending)
 }
 
 func (s OrphanCleanupStore) MarkOrphanFailed(ctx context.Context, candidate icebergwrite.OrphanCandidate, _ string) error {
