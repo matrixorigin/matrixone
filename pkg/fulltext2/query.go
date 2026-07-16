@@ -83,8 +83,9 @@ func normalizeParser(p string) string {
 
 // hasCJK reports whether s contains a CJK-class rune — a non-Latin, non-breaker
 // rune, matching SimpleTokenizer's own CJK classification (isLatin: rune<0x7FF).
-// Only such input goes through the ngram bag-of-words path; pure-Latin queries
-// stay exact-phrase.
+// A bare CJK boolean operand is routed to the positional (byte-offset) phrase path
+// so a short compound (e.g. 中文, a 2-char bigram absent as a whole token from an
+// ngram-3 index) matches via a word* prefix rather than an empty exact-term lookup.
 func hasCJK(s string) bool {
 	for _, r := range s {
 		if r > 0x7FF && !unicode.IsPunct(r) && !unicode.IsSpace(r) {
@@ -244,17 +245,16 @@ func BuildSegmentFromDocsParser(id string, pkType int32, docs []Doc, parser stri
 // SearchQuery runs a MATCH query over the index under parser and mode. It is the
 // single query entry the fulltext2 search TVF calls.
 //
-// NL mode (boolean=false):
-//   - gojieba, or Latin under ngram/json: EXACT PHRASE of the tokenized words
-//     (fulltext2's distinguishing NL semantics).
-//   - CJK under ngram/json: BAG-OF-WORDS over classic fulltext's redundant-ngram-
-//     removed terms (fulltext.ParsePatternInNLMode), because exact-phrase over
-//     overlapping/tail 3-grams is unreliable for CJK. This matches classic
-//     fulltext NL membership.
+// NL mode (boolean=false): an EXACT ORDERED PHRASE for EVERY parser — the terms
+// must occur contiguously and in order (classic fulltext NL semantics). There is
+// NO bag-of-words path: a CJK query is matched positionally by BYTE offset over
+// classic fulltext's redundant-ngram-removed slots (full trigrams as TEXT, short
+// tails as word* prefixes), so the phrase is robust despite overlapping/tail 3-grams.
 //
-// Boolean mode (boolean=true): standard +/-/>/</~ operators; a CJK operand under
-// ngram/json expands to an OR-group of its redundant-removed ngrams (rather than
-// a fragile sliding-3-gram phrase).
+// Boolean mode (boolean=true): standard +/-/>/</~ operators; each operand is an
+// exact positional phrase (a bare CJK operand included) — never an OR-group of its
+// ngrams. Distinct SHOULD operands still OR together (boolean semantics), and a
+// word* prefix / ( ) group behave as their operators dictate.
 func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
@@ -349,24 +349,10 @@ func tokenizePhraseSlots(tok tokenizer.Tokenizer, text []byte) []phraseSlot {
 	return slots
 }
 
-// patternsToClauses maps classic TEXT/STAR NL patterns to fulltext2 term/prefix
-// clauses (default weight). Non-leaf operators are not produced by
-// ParsePatternInNLMode, so only TEXT and STAR appear.
-func patternsToClauses(ps []*fulltext.Pattern) []clause {
-	out := make([]clause, 0, len(ps))
-	for _, p := range ps {
-		if p.Operator == fulltext.STAR {
-			out = append(out, clause{kind: clausePrefix, terms: []string{strings.TrimSuffix(p.Text, "*")}, weight: 1.0})
-		} else {
-			out = append(out, clause{kind: clauseTerm, terms: []string{p.Text}, weight: 1.0})
-		}
-	}
-	return out
-}
-
 // buildBooleanQuery parses a boolean-mode query parser-aware: gojieba/Latin
-// operands tokenize into word phrases/terms; a CJK operand under ngram/json is
-// expanded into an OR-group of its redundant-removed ngrams.
+// operands tokenize into word phrases/terms; a bare CJK operand under ngram/json
+// is an exact positional (byte-offset) phrase, matching it contiguously — NOT an
+// OR-group of its ngrams (which would over-match any doc sharing a single ngram).
 func buildBooleanQuery(query, parser string) (BoolQuery, error) {
 	var q BoolQuery
 	for _, rc := range scanBoolean(query) {
@@ -391,9 +377,10 @@ func buildBooleanQuery(query, parser string) (BoolQuery, error) {
 	return q, nil
 }
 
-// rawToClauseParser is the parser-aware form of rawToClause (boolean.go): it
-// adds CJK-operand ngram expansion for ngram/json parsers; quoted phrases,
-// prefixes, groups and gojieba/Latin operands behave as in rawToClause.
+// rawToClauseParser is the parser-aware form of rawToClause (boolean.go): a bare
+// CJK operand under ngram/json becomes an exact positional phrase (byte-offset
+// slots); quoted phrases, prefixes, groups and gojieba/Latin operands behave as
+// in rawToClause.
 func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 	w := weightOf(rc.prefix)
 	if rc.group {
@@ -413,23 +400,21 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 		return clause{kind: clauseGroup, children: children, weight: w}, true, nil
 	}
 
-	// A bare (non-quoted, non-prefix) CJK operand under ngram/json expands to an
-	// OR-group of redundant-removed ngrams rather than a fragile sliding phrase.
+	// A bare (non-quoted, non-prefix) CJK operand under ngram/json is an EXACT positional
+	// phrase (byte-offset slots), the same as NL and as classic fulltext — which matches
+	// the operand contiguously. (It previously expanded to an OR-group of its n-grams,
+	// which over-matched any doc sharing a single n-gram, e.g. `+中文學習` matched 中文學校.
+	// That was a workaround for the old token-index phrase matcher; byte positions make
+	// the phrase robust, so it is no longer needed.)
 	if parser != ParserGojieba && !rc.quoted && !rc.star && hasCJK(rc.text) {
-		ps, err := fulltext.ParsePatternInNLMode(rc.text, ParserNgram)
+		slots, err := phraseSlots(rc.text, parser)
 		if err != nil {
 			return clause{}, false, err
 		}
-		children := patternsToClauses(ps)
-		if len(children) == 0 {
+		if len(slots) == 0 {
 			return clause{}, false, nil
 		}
-		if len(children) == 1 {
-			c := children[0]
-			c.weight = w
-			return c, true, nil
-		}
-		return clause{kind: clauseGroup, children: children, weight: w}, true, nil
+		return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
 	}
 
 	tok, err := queryTokenizer(parser)

@@ -45,6 +45,8 @@ func TestExactPhraseSemantics(t *testing.T) {
 		{int64(4), []byte("中文學習教材")},     // superset of 中文學習
 		{int64(5), []byte("quick brown fox")}, // English, in order
 		{int64(6), []byte("brown quick")},     // English, reversed
+		{int64(7), []byte("中文學校")},         // shares trigram 中文學 with 中文學習, NOT a superset
+		{int64(8), []byte("語文學習")},         // shares trigram 文學習 with 中文學習, NOT a superset
 	}
 
 	run := func(t *testing.T, idx *Index) {
@@ -65,14 +67,19 @@ func TestExactPhraseSemantics(t *testing.T) {
 		require.ElementsMatch(t, []any{int64(6)}, nl("brown quick"), "English NL: reversed is a different phrase")
 		require.Empty(t, nl("索引 系统"), "not adjacent in doc 3 in this order")
 
-		// Contiguous substring of a longer doc matches.
-		require.ElementsMatch(t, []any{int64(4)}, nl("中文學習"), "CJK substring of a longer doc")
-		require.ElementsMatch(t, []any{int64(4)}, nl("中文學"))
-		require.ElementsMatch(t, []any{int64(4)}, nl("中文"))
+		// Contiguous substring of a longer doc matches — but NOT docs that merely share
+		// a trigram (中文學校 shares 中文學, 語文學習 shares 文學習): there is NO bag-of-words.
+		require.ElementsMatch(t, []any{int64(4)}, nl("中文學習"), "CJK substring, not trigram-overlap docs")
+		require.ElementsMatch(t, []any{int64(4), int64(7)}, nl("中文學"), "中文學 is a substring of docs 4 and 7")
+		require.ElementsMatch(t, []any{int64(4), int64(7)}, nl("中文"))
 
-		// Boolean explicit "phrase" is exact-ordered; a bare boolean operand is OR.
+		// Boolean: a SINGLE bare CJK compound operand is an EXACT phrase, NOT an OR of its
+		// ngrams — so +中文學習 matches only the superset doc, never the trigram-overlap docs.
+		require.ElementsMatch(t, []any{int64(4)}, bl("+中文學習"), "boolean bare CJK operand: exact phrase, not bag")
+		require.ElementsMatch(t, []any{int64(4)}, bl("中文學習"), "boolean bare CJK operand (SHOULD): exact phrase, not bag")
+		// Boolean explicit "phrase" is exact-ordered; distinct bare operands OR together.
 		require.ElementsMatch(t, []any{int64(1)}, bl(`"全文 索引"`), "boolean explicit phrase: exact")
-		require.ElementsMatch(t, []any{int64(1), int64(2), int64(3)}, bl("全文 索引"), "boolean bare: OR")
+		require.ElementsMatch(t, []any{int64(1), int64(2), int64(3)}, bl("全文 索引"), "boolean two bare operands: OR")
 	}
 
 	seg, err := BuildSegmentFromDocsParser("ex", int32(types.T_int64), docs, ParserNgram)
