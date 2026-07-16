@@ -48,6 +48,28 @@ func (e *failingExpressionExecutor) Free()              {}
 func (e *failingExpressionExecutor) IsColumnExpr() bool { return false }
 func (e *failingExpressionExecutor) TypeName() string   { return "failing" }
 
+type failAfterFirstExpressionExecutor struct {
+	calls    int
+	delegate ExpressionExecutor
+}
+
+func (e *failAfterFirstExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	e.calls++
+	if e.calls > 1 {
+		return nil, moerr.NewInvalidInputNoCtx("inactive branch evaluated after batch shrink")
+	}
+	return e.delegate.Eval(proc, batches, selectList)
+}
+
+func (e *failAfterFirstExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return e.Eval(proc, batches, selectList)
+}
+
+func (e *failAfterFirstExpressionExecutor) ResetForNextQuery() { e.delegate.ResetForNextQuery() }
+func (e *failAfterFirstExpressionExecutor) Free()              { e.delegate.Free() }
+func (e *failAfterFirstExpressionExecutor) IsColumnExpr() bool { return false }
+func (e *failAfterFirstExpressionExecutor) TypeName() string   { return "failAfterFirst" }
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -154,6 +176,46 @@ func TestEvalIffPropagatesSelectedBranchError(t *testing.T) {
 	err = expr.EvalIff(proc, []*batch.Batch{bat}, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Equal(t, 1, thenExecutor.calls)
+}
+
+func TestEvalIffShrinkingBatchDoesNotReuseStaleBranchSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	newConditionBatch := func(values []bool) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	largeBatch := newConditionBatch([]bool{true, true, true})
+	smallBatch := newConditionBatch([]bool{false})
+	defer largeBatch.Clean(proc.Mp())
+	defer smallBatch.Clean(proc.Mp())
+
+	conditionExecutor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+	})
+	require.NoError(t, err)
+	thenValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(11), 1, proc.Mp())
+	require.NoError(t, err)
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(22), 1, proc.Mp())
+	require.NoError(t, err)
+	thenExecutor := &failAfterFirstExpressionExecutor{
+		delegate: NewFixedVectorExpressionExecutor(proc.Mp(), false, thenValue),
+	}
+
+	expr := NewFunctionExpressionExecutor()
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	defer expr.Free()
+	expr.SetParameter(0, conditionExecutor)
+	expr.SetParameter(1, thenExecutor)
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{largeBatch}, nil))
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{smallBatch}, nil))
 	require.Equal(t, 1, thenExecutor.calls)
 }
 

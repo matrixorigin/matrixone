@@ -516,6 +516,8 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+	expr.selectList1 = expr.selectList1[:rowCount]
+	expr.selectList2 = expr.selectList2[:rowCount]
 
 	for i := 0; i < rowCount; i++ {
 		if selectList != nil {
