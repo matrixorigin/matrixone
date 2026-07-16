@@ -361,6 +361,7 @@ message ISCPDrainConsumerRequest {
   string JobName = 3;
   uint64 JobID = 4;
   bool RemoveFenceOnly = 5;
+  bool RenewFenceOnly = 6;
 }
 
 message ISCPDrainConsumerResponse {
