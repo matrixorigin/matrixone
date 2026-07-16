@@ -130,7 +130,11 @@ func TestSimpleCAllocatorReallocZeroTransitions(t *testing.T) {
 				old[i] = byte(i%251 + 1)
 			}
 
-			resized, err := allocator.ReallocZero(old, testCase.newSize)
+			resized, err := allocator.ReallocZero(
+				old,
+				testCase.oldSize,
+				testCase.newSize,
+			)
 			require.NoError(t, err)
 			require.Len(t, resized, int(testCase.newSize))
 			require.Equal(t, int(testCase.newSize), cap(resized))
@@ -150,46 +154,83 @@ func TestSimpleCAllocatorReallocZeroTransitions(t *testing.T) {
 	}
 }
 
-func TestSimpleCAllocatorReallocZeroUsesCapacityForOwnership(t *testing.T) {
-	allocator := newTestSimpleCAllocator()
-	old, err := allocator.Allocate(simpleCAllocatorMmapThreshold)
-	require.NoError(t, err)
-	for i := range old {
-		old[i] = 0x7f
+func TestSimpleCAllocatorReallocZeroReducedCapacityTransitions(t *testing.T) {
+	testCases := []struct {
+		name          string
+		oldSize       uint64
+		logicalLength uint64
+		newSize       uint64
+	}{
+		{
+			name:          "small-to-large",
+			oldSize:       simpleCAllocatorMmapThreshold - 1,
+			logicalLength: simpleCAllocatorMmapThreshold / 2,
+			newSize:       simpleCAllocatorMmapThreshold,
+		},
+		{
+			name:          "large-to-small",
+			oldSize:       simpleCAllocatorMmapThreshold,
+			logicalLength: simpleCAllocatorMmapThreshold / 4,
+			newSize:       simpleCAllocatorMmapThreshold / 2,
+		},
+		{
+			name:          "large-to-large",
+			oldSize:       simpleCAllocatorMmapThreshold * 2,
+			logicalLength: simpleCAllocatorMmapThreshold / 2,
+			newSize:       simpleCAllocatorMmapThreshold * 3,
+		},
 	}
 
-	logicalLength := simpleCAllocatorMmapThreshold / 2
-	resized, err := allocator.ReallocZero(
-		old[:logicalLength],
-		simpleCAllocatorMmapThreshold*2,
-	)
-	require.NoError(t, err)
-	require.Equal(t, int64(simpleCAllocatorMmapThreshold*2), allocator.currentInuse.Load())
-	require.Equal(t, makeRepeatedByteSlice(logicalLength, 0x7f), resized[:logicalLength])
-	require.Equal(
-		t,
-		make([]byte, simpleCAllocatorMmapThreshold*2-logicalLength),
-		resized[logicalLength:],
-	)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			allocator := newTestSimpleCAllocator()
+			old, err := allocator.Allocate(testCase.oldSize)
+			require.NoError(t, err)
+			for i := range old {
+				old[i] = 0x7f
+			}
 
-	allocator.Deallocate(resized, simpleCAllocatorMmapThreshold*2)
-	require.Zero(t, allocator.currentInuse.Load())
+			// The three-index slice deliberately removes the allocator capacity
+			// from the caller-visible view.
+			reducedView := old[:testCase.logicalLength:testCase.logicalLength]
+			resized, err := allocator.ReallocZero(
+				reducedView,
+				testCase.oldSize,
+				testCase.newSize,
+			)
+			require.NoError(t, err)
+			require.Equal(t, int64(testCase.newSize), allocator.currentInuse.Load())
+			require.Equal(
+				t,
+				makeRepeatedByteSlice(int(testCase.logicalLength), 0x7f),
+				resized[:testCase.logicalLength],
+			)
+			require.Equal(
+				t,
+				make([]byte, testCase.newSize-testCase.logicalLength),
+				resized[testCase.logicalLength:],
+			)
+
+			allocator.Deallocate(resized, testCase.newSize)
+			require.Zero(t, allocator.currentInuse.Load())
+		})
+	}
 }
 
 func TestSimpleCAllocatorReallocZeroFromAndToEmpty(t *testing.T) {
 	allocator := newTestSimpleCAllocator()
 
-	slice, err := allocator.ReallocZero(nil, simpleCAllocatorMmapThreshold)
+	slice, err := allocator.ReallocZero(nil, 0, simpleCAllocatorMmapThreshold)
 	require.NoError(t, err)
 	require.Len(t, slice, simpleCAllocatorMmapThreshold)
 	require.Equal(t, int64(simpleCAllocatorMmapThreshold), allocator.currentInuse.Load())
 
-	slice, err = allocator.ReallocZero(slice, 0)
+	slice, err = allocator.ReallocZero(slice, simpleCAllocatorMmapThreshold, 0)
 	require.NoError(t, err)
 	require.Nil(t, slice)
 	require.Zero(t, allocator.currentInuse.Load())
 
-	slice, err = allocator.ReallocZero(nil, 0)
+	slice, err = allocator.ReallocZero(nil, 0, 0)
 	require.NoError(t, err)
 	require.Nil(t, slice)
 	require.Zero(t, allocator.currentInuse.Load())
@@ -229,7 +270,11 @@ func TestSimpleCAllocatorConcurrentTransitions(t *testing.T) {
 				}
 				slice[0] = 1
 
-				slice, err = allocator.ReallocZero(slice, simpleCAllocatorMmapThreshold)
+				slice, err = allocator.ReallocZero(
+					slice,
+					simpleCAllocatorMmapThreshold-1,
+					simpleCAllocatorMmapThreshold,
+				)
 				if err != nil {
 					errs <- err
 					return

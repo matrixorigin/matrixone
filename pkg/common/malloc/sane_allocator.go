@@ -113,27 +113,46 @@ func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
 	return slice, nil
 }
 
-// ReallocZero resizes old and zeros bytes beyond old's logical length.
-func (sca *SimpleCAllocator) ReallocZero(old []byte, size uint64) ([]byte, error) {
-	oldCapacity := uint64(cap(old))
+// ReallocZero resizes an allocation whose stable backing size is oldSize and
+// zeros bytes beyond old's logical length. old may be a reduced-capacity view;
+// allocator provenance must never be inferred from that mutable view.
+func (sca *SimpleCAllocator) ReallocZero(old []byte, oldSize, size uint64) ([]byte, error) {
 	oldLength := uint64(len(old))
 
-	if oldCapacity == 0 {
+	if oldSize == 0 {
+		if oldLength != 0 || cap(old) != 0 {
+			return old, moerr.NewInternalErrorNoCtx(
+				"non-empty allocation has zero recorded size",
+			)
+		}
 		if size == 0 {
 			return nil, nil
 		}
 		return sca.Allocate(size)
 	}
+	if unsafe.SliceData(old) == nil {
+		return old, moerr.NewInternalErrorNoCtx(
+			"recorded allocation has nil base pointer",
+		)
+	}
+	if oldLength > oldSize || uint64(cap(old)) > oldSize {
+		return old, moerr.NewInternalErrorNoCtxf(
+			"allocation view exceeds recorded size, len %d, cap %d, recorded %d",
+			oldLength,
+			cap(old),
+			oldSize,
+		)
+	}
 
 	if size == 0 {
-		deallocateSimpleCAllocatorMemory(old, oldCapacity)
-		sca.recordReallocation(oldCapacity, 0)
+		deallocateSimpleCAllocatorMemory(old, oldSize)
+		sca.recordReallocation(oldSize, 0)
 		sca.inuseObjects.Add(-1)
 		sca.triggerUpdate()
 		return nil, nil
 	}
 
-	if !simpleCAllocatorUsesMmap(oldCapacity) && !simpleCAllocatorUsesMmap(size) {
+	if !simpleCAllocatorUsesMmap(oldSize) && !simpleCAllocatorUsesMmap(size) {
 		oldptr := unsafe.Pointer(unsafe.SliceData(old))
 		ptr := C.realloc(oldptr, C.ulong(size))
 		if ptr == nil {
@@ -144,7 +163,7 @@ func (sca *SimpleCAllocator) ReallocZero(old []byte, size uint64) ([]byte, error
 		if size > oldLength {
 			clear(slice[oldLength:])
 		}
-		sca.recordReallocation(oldCapacity, size)
+		sca.recordReallocation(oldSize, size)
 		sca.triggerUpdate()
 		return slice, nil
 	}
@@ -158,8 +177,8 @@ func (sca *SimpleCAllocator) ReallocZero(old []byte, size uint64) ([]byte, error
 		return old, err
 	}
 	copy(slice, old)
-	deallocateSimpleCAllocatorMemory(old, oldCapacity)
-	sca.recordReallocation(oldCapacity, size)
+	deallocateSimpleCAllocatorMemory(old, oldSize)
+	sca.recordReallocation(oldSize, size)
 	sca.triggerUpdate()
 	return slice, nil
 }
@@ -235,16 +254,18 @@ func allocateSimpleCAllocatorMemory(size uint64, clearMemory bool) ([]byte, erro
 }
 
 func deallocateSimpleCAllocatorMemory(slice []byte, size uint64) {
+	ptr := unsafe.Pointer(unsafe.SliceData(slice))
 	if simpleCAllocatorUsesMmap(size) {
 		if size > uint64(maxIntValue()) {
 			panic(moerr.NewInternalErrorNoCtxf("cannot unmap allocation larger than max int: %d", size))
 		}
-		if err := unix.Munmap(slice[:int(size)]); err != nil {
+		fullAllocation := unsafe.Slice((*byte)(ptr), int(size))
+		if err := unix.Munmap(fullAllocation); err != nil {
 			panic(moerr.NewInternalErrorNoCtxf("failed to unmap %d-byte allocation: %v", size, err))
 		}
 		return
 	}
-	C.free(unsafe.Pointer(unsafe.SliceData(slice)))
+	C.free(ptr)
 }
 
 func maxIntValue() int {
