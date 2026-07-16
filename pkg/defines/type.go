@@ -289,6 +289,9 @@ type FulltextMembershipFilter struct{}
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfReaderParam struct{}
 
+// RemoteRunContext marks a pipeline executing through remote-run RPC.
+type RemoteRunContext struct{}
+
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 

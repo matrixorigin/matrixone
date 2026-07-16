@@ -202,7 +202,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
 
 			spillFiles = make([]*os.File, spillNumBuckets)
-			spillBuffers = ctr.acquireSpillBuffers(proc)
+			spillBuffers = make([]*batch.Batch, spillNumBuckets)
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {

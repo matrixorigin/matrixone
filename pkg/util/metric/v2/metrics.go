@@ -242,6 +242,7 @@ func initRPCMetrics() {
 
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
+	registry.MustRegister(ProxyConnectionsCurrentGauge)
 	registry.MustRegister(proxyDisconnectCounter)
 	registry.MustRegister(proxyTransferCounter)
 	registry.MustRegister(ProxyTransferDurationHistogram)
