@@ -580,12 +580,13 @@ func runLCAProbeWithReaderFallback(
 	}()
 
 	scanStart := time.Now()
-	err = scanSnapshotRelationByID(
+	err = scanSnapshotRelationByIDWithFallback(
 		ctx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
 		snapshotTS,
+		tblStuff.lcaRel,
 		lcaLayout.attrs,
 		lcaLayout.types,
 		pkFilterExpr,
@@ -1253,31 +1254,15 @@ func hashDiffIfNoLCA(
 	copt compositeOption,
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
-	tarTombstoneHashmap databranchutils.BranchHashmap,
+	_ databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
-	baseTombstoneHashmap databranchutils.BranchHashmap,
+	_ databranchutils.BranchHashmap,
 ) (err error) {
-
-	if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		return cursor.ForEach(func(key []byte, _ []byte) error {
-			_, err2 := tarDataHashmap.PopByEncodedKey(key, true)
-			return err2
-		})
-
-	}, -1); err != nil {
-		return
-	}
-
-	if err = baseTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		return cursor.ForEach(func(key []byte, _ []byte) error {
-			_, err2 := baseDataHashmap.PopByEncodedKey(key, true)
-			return err2
-		})
-
-	}, -1); err != nil {
-		return
-	}
-
+	// buildHashmapForTable already reconciles data versions with tombstones by
+	// commit timestamp. Any data row left for a key is the latest live version.
+	// In particular, a bounded UPDATE produces a same-commit data+tombstone
+	// pair; removing the data merely because the marker remains would erase the
+	// update before the two independent tables are compared.
 	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
@@ -2790,6 +2775,7 @@ type historicalDataBranchChangesHandle struct {
 	ses              *Session
 	endpointRel      engine.Relation
 	endpointSnapshot types.TS
+	hydrate          bool
 }
 
 func (h *historicalDataBranchChangesHandle) Next(
@@ -2801,6 +2787,9 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, err
 	}
 	data = projectDataBranchBatchToTarget(data, &h.tblStuff, h.sourceMapping, mp)
+	if !h.hydrate {
+		return data, tombstone, hint, nil
+	}
 	if err = hydrateHistoricalDataBranchBatch(
 		ctx, h.ses, data, h.tblStuff, h.endpointRel, h.endpointSnapshot,
 	); err != nil {

@@ -1599,6 +1599,8 @@ func constructChangeHandle(
 					ses:              ses,
 					endpointRel:      tarHydrationRel,
 					endpointSnapshot: tarHydrationSnapshot,
+					hydrate: tarRange.rel[i].GetTableID(ctx) !=
+						tarHydrationRel.GetTableID(ctx),
 				}
 			}
 			tarHandle = append(tarHandle, handle)
@@ -1648,6 +1650,8 @@ func constructChangeHandle(
 					ses:              ses,
 					endpointRel:      tables.baseRel,
 					endpointSnapshot: baseSnapshot,
+					hydrate: baseRange.rel[i].GetTableID(ctx) !=
+						tables.baseRel.GetTableID(ctx),
 				}
 			}
 			baseHandle = append(baseHandle, handle)

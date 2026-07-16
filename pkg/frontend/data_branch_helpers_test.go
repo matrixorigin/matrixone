@@ -307,6 +307,46 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("uses historical fallback when current relation is gone", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		currentLookupErr := moerr.NewInternalErrorNoCtx("can not find table by id 7")
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, currentLookupErr).
+			Times(1)
+
+		historicalRel := mock_frontend.NewMockRelation(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("historical ranges reached")
+		historicalRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(nil, wantErr).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByIDWithFallback(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			historicalRel,
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("returns error when range relation is missing", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
