@@ -220,12 +220,17 @@ func (c *codecService) Decode(
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
 	if value.PrepareParams.Length > 0 {
-		prepareParams := vector.NewVecWithData(
+		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
 			int(value.PrepareParams.Length),
 			value.PrepareParams.Data,
 			value.PrepareParams.Area,
+			proc.Mp(),
 		)
+		if err != nil {
+			proc.Free()
+			return nil, err
+		}
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
 				prepareParams.GetNulls().Add(uint64(i))

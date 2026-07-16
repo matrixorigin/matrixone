@@ -216,6 +216,10 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	decodedParams := decodedProc.GetPrepareParams()
+	require.NotPanics(t, decodedProc.Free)
+	require.Nil(t, decodedParams.GetData())
+	require.Nil(t, decodedParams.GetArea())
 
 	rtSvc := "codec-test-svc"
 	runtime := rt.DefaultRuntime()

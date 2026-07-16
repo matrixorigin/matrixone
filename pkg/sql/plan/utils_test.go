@@ -136,12 +136,19 @@ func TestHasTrailingZeros(t *testing.T) {
 }
 
 func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
+	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_Sval{Sval: "AB\x00\x00"},
+		IsBin: true,
+		Src:   source,
+	}}}
 	queryPlan := &plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{
 			Steps: []int32{0},
 			Nodes: []*plan.Node{{
 				NodeType: plan.Node_VALUE_SCAN,
 				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+				Offset:   binaryLiteral,
 			}},
 		}},
 	}
@@ -165,6 +172,11 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 		require.Equal(t, test.value, literal.GetSval())
 		require.NotSame(t, queryPlan, filled)
 		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
+		copiedLiteral := filled.GetQuery().Nodes[0].Offset.GetLit()
+		require.True(t, copiedLiteral.GetIsBin())
+		require.Equal(t, "AB\x00\x00", copiedLiteral.GetSval())
+		require.NotSame(t, source, copiedLiteral.GetSrc())
+		require.NotNil(t, binaryLiteral.GetLit().GetSrc().GetP())
 	}
 }
 

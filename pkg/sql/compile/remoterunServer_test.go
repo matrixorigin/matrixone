@@ -211,13 +211,18 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:                 "test-proc-id",
-			accountId:          catalog.System_Account,
-			unixTime:           time.Now().Unix(),
-			txnClient:          txnClient,
-			txnOperator:        txnOperator,
-			prepareParams:      params,
-			prepareParamsIsBin: []bool{true, false},
+			id:          "test-proc-id",
+			accountId:   catalog.System_Account,
+			unixTime:    time.Now().Unix(),
+			txnClient:   txnClient,
+			txnOperator: txnOperator,
+			prepareParams: pipeline.PrepareParamInfo{
+				Length: 2,
+				Data:   append([]byte(nil), params.GetData()...),
+				Area:   append([]byte(nil), params.GetArea()...),
+				Nulls:  []bool{false, false},
+				IsBin:  []bool{true, false},
+			},
 		},
 		messageAcquirer: func() morpc.Message {
 			return &pipeline.Message{}
@@ -235,6 +240,10 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
 	require.NotNil(t, compile.fill, "fill callback should be set")
+	remoteParams := compile.proc.GetPrepareParams()
+	require.NotPanics(t, compile.Release)
+	require.Nil(t, remoteParams.GetData())
+	require.Nil(t, remoteParams.GetArea())
 }
 
 func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
@@ -331,9 +340,9 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "test-proc-id", helper.id)
 	require.Equal(t, catalog.System_Account, helper.accountId)
-	require.Equal(t, []bool{true, false}, helper.prepareParamsIsBin)
-	require.Equal(t, "AB\x00\x00", helper.prepareParams.GetStringAt(0))
-	require.Equal(t, "text", helper.prepareParams.GetStringAt(1))
+	require.Equal(t, []bool{true, false}, helper.prepareParams.IsBin)
+	require.Equal(t, procInfo.PrepareParams.Data, helper.prepareParams.Data)
+	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
