@@ -1486,6 +1486,7 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrDeadlockCheckBusy:        false,
 	moerr.ErrLockConflict:             false,
 	moerr.ErrRemoteLockWaitTimeout:    false,
+	moerr.ErrLockWaitTimeout:          false,
 	moerr.ErrTxnUnknown:               false,
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,

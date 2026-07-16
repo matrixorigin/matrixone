@@ -386,7 +386,7 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		return
 	}
 
-	if v.wait >= waitTooLong {
+	if v.logWaitTooLong {
 		lockDetail := ""
 		v.lt.mu.RLock()
 		lock, ok := v.lt.mu.store.Get(v.key)
@@ -461,16 +461,22 @@ func (mw *waiterEvents) addToOrphanCheck(
 	wait time.Duration,
 ) {
 	ck := *w.conflictKey.Load()
+	logWaitTooLong := wait >= waitTooLong && w.waitTooLongLogged.CompareAndSwap(false, true)
 	v := checkOrphan{
-		wait: wait,
-		key:  ck,
-		lt:   w.lt.Load(),
-		txn:  w.txn,
+		wait:           wait,
+		key:            ck,
+		lt:             w.lt.Load(),
+		txn:            w.txn,
+		logWaitTooLong: logWaitTooLong,
 	}
 
 	select {
 	case mw.checkOrphanC <- v:
 	default:
+		if logWaitTooLong {
+			// The warning was not queued. Let a later check retry it.
+			w.waitTooLongLogged.Store(false)
+		}
 	}
 }
 
@@ -479,4 +485,7 @@ type checkOrphan struct {
 	key  []byte
 	lt   *localLockTable
 	txn  pb.WaitTxn
+	// logWaitTooLong controls only the diagnostic; every event still performs
+	// the orphan check regardless of this flag.
+	logWaitTooLong bool
 }

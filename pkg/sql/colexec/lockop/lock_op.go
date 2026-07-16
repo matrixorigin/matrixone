@@ -788,6 +788,22 @@ type lockRetryState struct {
 }
 
 func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
 		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
 			switch n := v.(type) {
@@ -811,7 +827,7 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 			return time.Duration(seconds) * time.Second
 		}
 	}
-	return client.LockWaitTimeoutFromTxn(txnOp)
+	return txnTimeout
 }
 
 func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {

@@ -55,6 +55,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -67,6 +68,24 @@ type compileTestCase struct {
 	stmt      tree.Statement
 	proc      *process.Process
 	txnClient client.TxnClient // Store txnClient for truncating table with real transaction
+}
+
+func TestApplyExecutorLockWaitTimeout(t *testing.T) {
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZero(),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+
+	applyExecutorLockWaitTimeout(proc, executor.Options{}.WithLockWaitTimeout(1500*time.Millisecond))
+	require.Equal(t, int64(2), proc.Base.SessionInfo.LockWaitTimeout)
 }
 
 func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {

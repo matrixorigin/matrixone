@@ -120,7 +120,9 @@ func (l *remoteLockTable) lock(
 	// When session-level lock_wait_timeout is set, bound the RPC by that
 	// timeout plus slack so the lock-table owner has enough time to observe
 	// and return ErrLockTimeout before the client-side RPC deadline fires.
-	// Without a session timeout, use the caller context as-is.
+	// Service entry points also use this field for the safety ceiling. A zero
+	// value is possible only for direct lock-table callers and tests, where the
+	// caller context remains the fallback.
 	var rpcCtx context.Context
 	var rpcCancel context.CancelFunc
 	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
