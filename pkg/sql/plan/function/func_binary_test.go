@@ -9501,6 +9501,37 @@ func TestTimeFormat(t *testing.T) {
 	}
 }
 
+func TestMakeTimeFractionAndSign(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(floatWithMicrosecondScale,
+				[]float64{12, -12, 12, 838, 12, 12},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(floatWithMicrosecondScale,
+				[]float64{34, 34, 59, 59, 34, 34},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(floatWithMicrosecondScale,
+				[]float64{56.789012, 56.789012, 59.9999996, 59.9999996, math.NaN(), math.Inf(1)},
+				[]bool{false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+			[]types.Time{
+				types.TimeFromClock(false, 12, 34, 56, 789012),
+				types.TimeFromClock(true, 12, 34, 56, 789012),
+				types.TimeFromClock(false, 13, 0, 0, 0),
+				0,
+				0,
+				0,
+			},
+			[]bool{false, false, false, true, true, true}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME fractional/sign case failed: %s", info)
+}
+
 // TestTimestampDiffDateString tests TIMESTAMPDIFF with DATE and string arguments
 // This tests the new overload that handles mixed DATE and string types
 func TestTimestampDiffDateString(t *testing.T) {

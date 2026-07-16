@@ -354,6 +354,27 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
+func TestMakeTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	fractionalResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.New(types.T_decimal128, 20, 6),
+	})
+	require.NoError(t, err)
+	require.True(t, fractionalResult.needCast)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), fractionalResult.retType)
+}
+
 func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
