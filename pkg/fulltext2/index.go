@@ -163,29 +163,78 @@ func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 	return idx.SearchPhrase(terms, algo, k, filter), nil
 }
 
-// SearchBoolean runs a parsed boolean-mode query across the index: each segment
-// is searched, only the LIVE copy of a pk contributes, and the merged matches
-// are returned as the global top-k (score desc, ties by ascending pk key).
-//
-// Scoring uses each segment's local stats. For the common single-base index that
-// is exact (the one segment's stats ARE the global stats); across many segments
-// the per-clause global df is an approximation — a cross-segment global-stats
-// boolean pass is a follow-up (as for the delete-frame folding).
+// globalStats carries the corpus-global scoring inputs (N, average doc length, and
+// per-term document frequency) so a boolean query scores every segment on the SAME
+// scale. Without it each segment used its LOCAL N/df, so appending a CDC tail shifted
+// a doc's score and could drop a globally-top-k doc at the merge. df is summed across
+// segments (like bm25's gdf) and memoized per query; it is built fresh per query and
+// used sequentially across segments, so the cache needs no lock.
+type globalStats struct {
+	n         int64
+	avgDocLen float64
+	idx       *Index
+	dfCache   map[string]int
+}
+
+func (idx *Index) newGlobalStats() *globalStats {
+	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx, dfCache: make(map[string]int)}
+}
+
+// df returns term's corpus-global document frequency (summed over segments). Dead
+// copies are counted — df is an idf input where a small over-count is immaterial and
+// this matches bm25's gdf.
+func (gs *globalStats) df(term string) int {
+	if d, ok := gs.dfCache[term]; ok {
+		return d
+	}
+	d := 0
+	for _, seg := range gs.idx.segments {
+		if pl, ok := seg.lookup(term); ok {
+			d += pl.df()
+		}
+	}
+	gs.dfCache[term] = d
+	return d
+}
+
+// idfFor is the term's idf² under the global corpus stats, or the segment-local stats
+// when gs is nil (a direct Segment query / single-segment test, where local == global).
+func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float64 {
+	if gs == nil {
+		return idfSquared(seg.N, pl.df())
+	}
+	return idfSquared(gs.n, gs.df(term))
+}
+
+// avgdl is the global average doc length, or the segment's own when gs is nil.
+func (gs *globalStats) avgdl(seg *Segment) float64 {
+	if gs == nil {
+		return seg.avgDocLenOrMean()
+	}
+	return gs.avgDocLen
+}
+
+// SearchBoolean runs a parsed boolean-mode query across the index and returns the
+// global top-k (score desc, ties by ascending pk key). Each segment is scored on the
+// GLOBAL corpus stats (globalStats), and its walk admits only the LIVE copy of a pk
+// (liveness ANDed into the WHERE prefilter), so a segment's top-k is k live docs on
+// the global scale — the merge below is then the exact global top-k even across a
+// base + CDC tail. (A phrase clause's idf remains per-segment — its cross-segment df
+// would need a pre-pass; term/prefix clauses and the disjunctive WAND path are global.)
 func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
+	gs := idx.newGlobalStats()
 	matched := make(map[string]Result)
 	for si, seg := range idx.segments {
-		res, err := seg.SearchBoolean(q, algo, k, mkAllow(seg, filter))
+		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
+		res, err := seg.SearchBoolean(q, algo, k, allow, gs)
 		if err != nil {
 			return nil, err
 		}
 		for _, r := range res {
-			key := keyOf(r.Pk)
-			if loc, ok := idx.liveLoc[key]; ok && loc.si == si {
-				matched[key] = r
-			}
+			matched[keyOf(r.Pk)] = r // liveness inside the walk → one live copy per pk
 		}
 	}
 	if len(matched) == 0 {

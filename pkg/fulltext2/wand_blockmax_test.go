@@ -157,9 +157,9 @@ func TestBlockMaxWANDParity(t *testing.T) {
 				terms, ok := disjunctiveTerms(q)
 				require.True(t, ok, "query %d must be WAND-eligible", qi)
 				for _, k := range ks {
-					want, err := seg.searchBooleanFull(q, algo, k, nil)
+					want, err := seg.searchBooleanFull(q, algo, k, nil, nil)
 					require.NoError(t, err)
-					got := seg.searchWAND(terms, algo, k, nil)
+					got := seg.searchWAND(terms, algo, k, nil, nil)
 					requireSameTopK(t, got, want,
 						fmt.Sprintf("%s algo=%v q=%d k=%d", tag, algo, qi, k))
 				}

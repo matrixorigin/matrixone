@@ -199,8 +199,8 @@ func (h *minScoreHeap) Pop() any {
 // so the LIMIT bounds the FILTERED set. Block-skip stays valid — blockSum is a score
 // upper bound over every doc in the region regardless of the filter, so a skipped
 // region contains no admissible doc that could beat θ.
-func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Membership) []Result {
-	avgDocLen := s.avgDocLenOrMean()
+func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Membership, gs *globalStats) []Result {
+	avgDocLen := gs.avgdl(s)
 
 	iters := make([]*wandIter, 0, len(clauses))
 	for _, c := range clauses {
@@ -208,7 +208,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 		if !ok || pl.df() == 0 {
 			continue
 		}
-		idf2 := idfSquared(s.N, pl.df())
+		idf2 := gs.idfFor(s, c.terms[0], pl)
 		iters = append(iters, &wandIter{
 			tp:        pl,
 			curBlk:    -1,

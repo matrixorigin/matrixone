@@ -84,14 +84,14 @@ type BoolQuery struct {
 // no phrase/prefix/group) is routed to the WAND top-k (searchWAND), which
 // early-terminates via term max-impact bounds and returns the identical ranking
 // as the full scan. Everything else uses the full evaluator.
-func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Membership) ([]Result, error) {
+func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
 	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0) {
 		return nil, nil
 	}
 	if terms, ok := disjunctiveTerms(q); ok {
-		return s.searchWAND(terms, algo, k, allow), nil
+		return s.searchWAND(terms, algo, k, allow, gs), nil
 	}
-	return s.searchBooleanFull(q, algo, k, allow)
+	return s.searchBooleanFull(q, algo, k, allow, gs)
 }
 
 // disjunctiveTerms reports whether q is a pure OR of single-term SHOULD clauses
@@ -108,22 +108,22 @@ func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
 	return q.should, true
 }
 
-func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership) ([]Result, error) {
-	avgDocLen := s.avgDocLenOrMean()
+func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
+	avgDocLen := gs.avgdl(s)
 
-	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen)
+	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen, gs)
 	if err != nil {
 		return nil, err
 	}
-	shouldMaps, err := s.evalClauses(q.should, algo, avgDocLen)
+	shouldMaps, err := s.evalClauses(q.should, algo, avgDocLen, gs)
 	if err != nil {
 		return nil, err
 	}
-	adjustMaps, err := s.evalClauses(q.adjust, algo, avgDocLen)
+	adjustMaps, err := s.evalClauses(q.adjust, algo, avgDocLen, gs)
 	if err != nil {
 		return nil, err
 	}
-	notMaps, err := s.evalClauses(q.mustNot, algo, avgDocLen)
+	notMaps, err := s.evalClauses(q.mustNot, algo, avgDocLen, gs)
 	if err != nil {
 		return nil, err
 	}
@@ -200,10 +200,10 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 	return results, nil
 }
 
-func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64) ([]map[int64]float64, error) {
+func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats) ([]map[int64]float64, error) {
 	out := make([]map[int64]float64, len(cs))
 	for i, c := range cs {
-		m, err := s.evalClause(c, algo, avgDocLen)
+		m, err := s.evalClause(c, algo, avgDocLen, gs)
 		if err != nil {
 			return nil, err
 		}
@@ -215,12 +215,14 @@ func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64) ([
 // evalClause returns the weighted (doc ord → score) contribution of one clause.
 // A present doc is always a key (even at score 0, so MUST/presence is exact); an
 // absent term yields an empty map. The clause weight (> < ~) scales the result.
-func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[int64]float64, error) {
+// Term / prefix clauses score with the global corpus idf (gs); a phrase clause keeps
+// its per-segment df (its cross-segment phrase-hit count would need a pre-pass).
+func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats) (map[int64]float64, error) {
 	raw := make(map[int64]float64)
 	switch c.kind {
 	case clauseTerm:
 		if pl, ok := s.lookup(c.terms[0]); ok {
-			idf2 := idfSquared(s.N, pl.df())
+			idf2 := gs.idfFor(s, c.terms[0], pl)
 			docs, tfs := pl.materializeDocIDs(), pl.materializeTfs()
 			for i, ord := range docs {
 				raw[ord] = s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
@@ -242,7 +244,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[i
 			if !ok {
 				continue
 			}
-			idf2 := idfSquared(s.N, pl.df())
+			idf2 := gs.idfFor(s, t, pl)
 			docs, tfs := pl.materializeDocIDs(), pl.materializeTfs()
 			for i, ord := range docs {
 				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
@@ -253,7 +255,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[i
 		}
 	case clauseGroup:
 		for _, ch := range c.children { // OR of children, score = MAX (§6)
-			m, err := s.evalClause(ch, algo, avgDocLen)
+			m, err := s.evalClause(ch, algo, avgDocLen, gs)
 			if err != nil {
 				return nil, err
 			}
@@ -289,7 +291,7 @@ func (s *Segment) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 	if err != nil {
 		return nil, err
 	}
-	return s.SearchBoolean(q, algo, k, nil) // convenience entry: no WHERE prefilter
+	return s.SearchBoolean(q, algo, k, nil, nil) // convenience entry: no prefilter, local stats
 }
 
 // ---- parser ----

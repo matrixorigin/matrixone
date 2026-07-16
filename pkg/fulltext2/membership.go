@@ -95,3 +95,41 @@ func mkAllow(seg *Segment, f docfilter.MembershipFilter) Membership {
 // allowed reports whether ord passes the membership (nil = allow all) — the one-liner
 // the segment searches use at each admit point.
 func allowed(m Membership, ord int64) bool { return m == nil || m.Contains(ord) }
+
+// livenessMembership admits ord in segment si iff it is the LIVE copy of its pk
+// (highest-Recency, not delete-shadowed). Threaded into the per-segment boolean walk
+// so a segment's top-k is k LIVE docs — a dead copy (superseded by a later CDC
+// segment, or deleted) never enters the heap, so the cross-segment merge can't
+// under-fill by later dropping it. Mirrors bm25's per-segment liveness Membership.
+type livenessMembership struct {
+	idx *Index
+	si  int
+}
+
+func (l *livenessMembership) Contains(ord int64) bool {
+	seg := l.idx.segments[l.si]
+	if ord < 0 || ord >= int64(len(seg.pks)) {
+		return false
+	}
+	return l.idx.isLive(l.si, ord, keyOf(seg.pks[ord]))
+}
+
+// andMembership is the conjunction of two memberships (either may be nil = allow all).
+type andMembership struct{ a, b Membership }
+
+func (m andMembership) Contains(ord int64) bool {
+	return (m.a == nil || m.a.Contains(ord)) && (m.b == nil || m.b.Contains(ord))
+}
+
+// andAllow ANDs two memberships, collapsing nils (used to AND the WHERE prefilter with
+// per-segment liveness). nil AND x = x.
+func andAllow(a, b Membership) Membership {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	default:
+		return andMembership{a, b}
+	}
+}

@@ -90,8 +90,8 @@ func TestWANDParity(t *testing.T) {
 			require.True(t, ok, "%s must be WAND-eligible", c.name)
 
 			for k := 1; k <= int(c.seg.N)+1; k++ {
-				wand := c.seg.searchWAND(terms, algo, k, nil)
-				full, err := c.seg.searchBooleanFull(q, algo, k, nil)
+				wand := c.seg.searchWAND(terms, algo, k, nil, nil)
+				full, err := c.seg.searchBooleanFull(q, algo, k, nil, nil)
 				require.NoError(t, err)
 				requireSameRanking(t, fmt.Sprintf("%s algo=%d k=%d", c.name, algo, k), wand, full)
 			}
@@ -106,9 +106,9 @@ func TestWANDRouted(t *testing.T) {
 	q, err := ParseBoolean([]byte("alpha beta gamma"), tokenizer.NewSimpleTokenizer())
 	require.NoError(t, err)
 
-	routed, err := s.SearchBoolean(q, BM25, 5, nil)
+	routed, err := s.SearchBoolean(q, BM25, 5, nil, nil)
 	require.NoError(t, err)
-	full, err := s.searchBooleanFull(q, BM25, 5, nil)
+	full, err := s.searchBooleanFull(q, BM25, 5, nil, nil)
 	require.NoError(t, err)
 	requireSameRanking(t, "routed", routed, full)
 }
@@ -127,8 +127,8 @@ func TestWANDParityLoaded(t *testing.T) {
 	terms, _ := disjunctiveTerms(q)
 	for _, algo := range []ScoreAlgo{TfIdf, BM25} {
 		for k := 1; k <= int(loaded.N)+1; k++ {
-			wand := loaded.searchWAND(terms, algo, k, nil)
-			full, err := loaded.searchBooleanFull(q, algo, k, nil)
+			wand := loaded.searchWAND(terms, algo, k, nil, nil)
+			full, err := loaded.searchBooleanFull(q, algo, k, nil, nil)
 			require.NoError(t, err)
 			requireSameRanking(t, fmt.Sprintf("loaded algo=%d k=%d", algo, k), wand, full)
 		}
