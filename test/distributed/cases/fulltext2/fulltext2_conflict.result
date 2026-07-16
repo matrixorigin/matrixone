@@ -13,4 +13,7 @@ create fulltext index f1 on t2(body);
 invalid input: cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first
 create table t3 (id bigint primary key, body text, fulltext(body), fulltext2(body));
 invalid input: cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first
+create table t4 (id bigint primary key, body text);
+alter table t4 add fulltext ftx(body), add fulltext2 fty(body);
+invalid input: cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first
 drop database ft2_conflict;

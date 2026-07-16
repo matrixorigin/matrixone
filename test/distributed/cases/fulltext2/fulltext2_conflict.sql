@@ -25,4 +25,8 @@ create fulltext index f1 on t2(body);
 -- CREATE TABLE with BOTH engines inline on the same column -> rejected
 create table t3 (id bigint primary key, body text, fulltext(body), fulltext2(body));
 
+-- ALTER with BOTH engines on the same column in ONE statement (multi-action) -> rejected
+create table t4 (id bigint primary key, body text);
+alter table t4 add fulltext ftx(body), add fulltext2 fty(body);
+
 drop database ft2_conflict;

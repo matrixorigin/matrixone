@@ -3685,6 +3685,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
+				// Make this action's new index visible to LATER ADD actions in the SAME
+				// ALTER statement — their conflict (checkFulltextEngineConflict) and
+				// duplicate-name checks read tableDef.Indexes, which is otherwise the
+				// original, so `ALTER … ADD FULLTEXT ft1(a), ADD FULLTEXT2 ft2(a)` would
+				// otherwise slip a classic+v2 pair on the same column past ⑤.
+				tableDef.Indexes = append(tableDef.Indexes, indexInfo.TableDef.Indexes...)
+
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
 						AddIndex: &plan.AlterTableAddIndex{

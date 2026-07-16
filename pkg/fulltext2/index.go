@@ -17,9 +17,11 @@ package fulltext2
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
 
@@ -141,14 +143,26 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 		tf  int
 	}
 	matched := make(map[any]match)
+	// idf df is the CORPUS phrase df — all live docs containing the phrase, independent
+	// of the WHERE prefilter (else the same doc's score would change with an unrelated
+	// WHERE clause, and NL would disagree with BOOLEAN's gs.phraseDf). Only build the
+	// separate unfiltered set when a filter is present; without one, matched IS every
+	// live match.
+	var dfSet map[any]struct{}
+	if filter != nil {
+		dfSet = make(map[any]struct{})
+	}
 	for si, seg := range idx.segments {
 		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
 		for _, h := range seg.matchPhrase(terms) {
-			if !allowed(allow, h.ord) {
+			key := normalizeKey(seg.pks[h.ord])
+			if !idx.isLive(si, h.ord, key) {
 				continue
 			}
-			key := normalizeKey(seg.pks[h.ord])
-			if idx.isLive(si, h.ord, key) {
+			if dfSet != nil {
+				dfSet[key] = struct{}{}
+			}
+			if allowed(allow, h.ord) {
 				matched[key] = match{seg, h.ord, h.tf}
 			}
 		}
@@ -157,7 +171,11 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 		return nil
 	}
 
-	idf2 := idfSquared(idx.globalN, len(matched)) // df = live matched docs (exact)
+	df := len(matched)
+	if dfSet != nil {
+		df = len(dfSet)
+	}
+	idf2 := idfSquared(idx.globalN, df) // df = live phrase-matched docs, filter-independent
 	results := make([]Result, 0, len(matched))
 	for _, m := range matched {
 		results = append(results, Result{
@@ -205,11 +223,33 @@ type globalStats struct {
 	idx           *Index
 	dfCache       map[string]int
 	phraseDfCache map[string]int
+	// phraseHitsCache memoizes matchPhrase per (phrase, segment) so a boolean phrase
+	// clause's own scoring scan and phraseDf's cross-segment df scan share ONE
+	// matchPhrase per segment instead of running it twice.
+	phraseHitsCache map[string]map[*Segment][]docTf
 }
 
 func (idx *Index) newGlobalStats() *globalStats {
 	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx,
-		dfCache: make(map[string]int), phraseDfCache: make(map[string]int)}
+		dfCache: make(map[string]int), phraseDfCache: make(map[string]int),
+		phraseHitsCache: make(map[string]map[*Segment][]docTf)}
+}
+
+// phraseHits returns seg's matchPhrase hits, memoized per (phrase, segment) so the
+// scoring pass and the phraseDf pass share one scan.
+func (gs *globalStats) phraseHits(seg *Segment, terms []string) []docTf {
+	key := strings.Join(terms, "\x00")
+	m := gs.phraseHitsCache[key]
+	if m == nil {
+		m = make(map[*Segment][]docTf)
+		gs.phraseHitsCache[key] = m
+	}
+	if h, ok := m[seg]; ok {
+		return h
+	}
+	h := seg.matchPhrase(terms)
+	m[seg] = h
+	return h
 }
 
 // df returns term's corpus-global document frequency (summed over segments). Dead
@@ -248,7 +288,7 @@ func (gs *globalStats) phraseDf(terms []string) int {
 	}
 	d := 0
 	for _, seg := range gs.idx.segments {
-		d += len(seg.matchPhrase(terms))
+		d += len(gs.phraseHits(seg, terms)) // shares the memoized scan with scoring
 	}
 	gs.phraseDfCache[key] = d
 	return d
@@ -354,14 +394,20 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 		}
 	}
 
-	keys := make([]any, 0, len(idx.liveLoc))
-	for k := range idx.liveLoc {
-		keys = append(keys, k)
+	// Decorate-sort-undecorate: compute each pk's sortKey ONCE (O(n)) rather than per
+	// comparison (O(n log n) Sprintf/allocs), which matters at MERGE over a large index.
+	type keyed struct {
+		sk  string
+		loc docLoc
 	}
-	sort.Slice(keys, func(i, j int) bool { return sortKey(keys[i]) < sortKey(keys[j]) }) // deterministic output
+	keys := make([]keyed, 0, len(idx.liveLoc))
+	for k, l := range idx.liveLoc {
+		keys = append(keys, keyed{sortKey(k), l})
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk }) // deterministic output
 	out := make([]TokenizedDoc, 0, len(keys))
-	for _, k := range keys {
-		l := idx.liveLoc[k]
+	for _, kd := range keys {
+		l := kd.loc
 		b := buckets[l]
 		sort.SliceStable(b, func(i, j int) bool { return b[i].pos < b[j].pos })
 		terms := make([]string, len(b))
@@ -399,16 +445,24 @@ func normalizeKey(pk any) any {
 	return pk
 }
 
-// sortKey is a deterministic STRING projection of a pk, used ONLY to order equal-score
-// results (and MERGE output) reproducibly — never as a map key. It need not be
-// injective: the value-keyed maps already dedup distinct pks, so a lossy tie between
-// two pks only makes their relative order arbitrary, with both still present.
+// sortKey is a deterministic INJECTIVE string projection of a pk, used to order
+// equal-score results (and MERGE output) reproducibly — never as a map key. The
+// temporal types are keyed by their underlying int64 because %v/String() truncates
+// them to whole seconds, which would make two equal-score DATETIME(6) rows sharing a
+// second sort nondeterministically at a LIMIT boundary; every other scalar pk has an
+// injective %v (int/decimal exact, uuid canonical, date a distinct day).
 func sortKey(pk any) string {
 	switch v := pk.(type) {
 	case []byte:
 		return string(v)
 	case string:
 		return v
+	case types.Datetime:
+		return strconv.FormatInt(int64(v), 10)
+	case types.Time:
+		return strconv.FormatInt(int64(v), 10)
+	case types.Timestamp:
+		return strconv.FormatInt(int64(v), 10)
 	default:
 		return fmt.Sprintf("%v", v)
 	}

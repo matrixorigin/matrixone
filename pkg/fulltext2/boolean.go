@@ -230,7 +230,12 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 			}
 		}
 	case clausePhrase:
-		hits := s.matchPhrase(c.terms)
+		var hits []docTf
+		if gs != nil {
+			hits = gs.phraseHits(s, c.terms) // memoized; shared with gs.phraseDf
+		} else {
+			hits = s.matchPhrase(c.terms)
+		}
 		idf2 := gs.phraseIdfFor(s, c.terms, len(hits))
 		for _, h := range hits {
 			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)

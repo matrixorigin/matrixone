@@ -87,3 +87,49 @@ func TestPrefilterMembership(t *testing.T) {
 		require.Contains(t, even, pk)
 	}
 }
+
+// TestPhraseDfFilterIndependent pins re-review [0]: an NL phrase's idf df is the
+// CORPUS phrase df (all live matches), not the WHERE-filtered subset, so a matched
+// doc's score must NOT change when an unrelated WHERE prefilter is applied.
+func TestPhraseDfFilterIndependent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	b := NewBuilder("df", int32(types.T_int64))
+	for i := int64(0); i < 4; i++ {
+		feed(t, b, i, "alpha") // 4 docs contain the phrase
+	}
+	for i := int64(4); i < 8; i++ {
+		feed(t, b, i, "other")
+	}
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	idx := NewIndex([]*Segment{seg}, nil)
+
+	scoreOf := func(rs []Result, pk int64) float64 {
+		for _, r := range rs {
+			if r.Pk.(int64) == pk {
+				return r.Score
+			}
+		}
+		t.Fatalf("pk %d not in results", pk)
+		return 0
+	}
+	unfiltered := idx.SearchPhrase([]string{"alpha"}, BM25, 100, nil)
+	require.Len(t, unfiltered, 4)
+	s0 := scoreOf(unfiltered, 0)
+
+	// WHERE prefilter allowing only {0,1} — df must stay 4 (corpus), so doc 0's score
+	// is unchanged; before the fix df shrank to 2 and the score differed.
+	vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+	require.NoError(t, vector.AppendFixed(vec, int64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+	fb, err := docfilter.Build(vec)
+	require.NoError(t, err)
+	filter, err := docfilter.New(fb)
+	require.NoError(t, err)
+	defer filter.Free()
+
+	filtered := idx.SearchPhrase([]string{"alpha"}, BM25, 100, filter)
+	require.Len(t, filtered, 2, "only the allowed docs are returned")
+	require.InDelta(t, s0, scoreOf(filtered, 0), 1e-9,
+		"doc 0's score must be filter-independent (corpus df, not filtered count)")
+}
