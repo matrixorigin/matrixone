@@ -16,6 +16,8 @@ package fulltext2
 
 import (
 	"os"
+	"sort"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,7 +60,7 @@ func TestMmapLoad(t *testing.T) {
 		require.True(t, ok, term)
 		got, ok := s.LookupLoaded(term)
 		require.True(t, ok, term)
-		require.Equal(t, want.docIDs, got.docIDs, term)
+		require.Equal(t, want.docIDs, got.materializeDocIDs(), term)
 		gp := got.materializePositions()
 		require.Equal(t, len(want.positions), len(gp), term)
 		for i := range want.positions {
@@ -79,4 +81,71 @@ func TestMmapLoad(t *testing.T) {
 	require.Nil(t, s.mmapData)
 	_, statErr := os.Stat(path)
 	require.True(t, os.IsNotExist(statErr), "Free must delete the mmap-owned file")
+}
+
+// TestConcurrentBlockDecode proves the loaded-segment design invariant: docID/tf
+// blocks live in ONE shared, read-only mmap, and each WAND cursor decodes into its
+// OWN per-cursor buffer — so many queries can hit the same segment concurrently with
+// no lock and no race. Terms span many blocks (N/BlockSize each) so skipTo crosses
+// block boundaries, and results must match a single-threaded reference exactly. Run
+// under -race, this is the guard against a shared/mutable block cache.
+func TestConcurrentBlockDecode(t *testing.T) {
+	const N = 4000 // ~31 blocks for "alpha"
+	b := NewBuilder("cc", int32(types.T_int64))
+	for i := 0; i < N; i++ {
+		toks := []string{"alpha"}
+		if i%2 == 0 {
+			toks = append(toks, "beta")
+		}
+		if i%3 == 0 {
+			toks = append(toks, "gamma")
+		}
+		feed(t, b, int64(i), toks...)
+	}
+	built, err := b.Finish()
+	require.NoError(t, err)
+	blob, err := built.Serialize()
+	require.NoError(t, err)
+
+	f, err := os.CreateTemp("", "cctest")
+	require.NoError(t, err)
+	path := f.Name()
+	_, err = f.Write(blob)
+	require.NoError(t, err)
+	require.NoError(t, f.Sync())
+	data, err := mmapReadOnly(f)
+	f.Close()
+	require.NoError(t, err)
+	s := &Segment{Id: "cc", mmapData: data, mmapPath: path}
+	require.NoError(t, s.decodeSegment(data))
+	idx := NewIndex([]*Segment{s}, nil)
+	defer idx.Free()
+
+	// Reference (single-threaded): a disjunctive WAND top-k over all three terms.
+	pkset := func(rs []Result) []int64 {
+		out := make([]int64, len(rs))
+		for i, r := range rs {
+			out[i] = r.Pk.(int64)
+		}
+		sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
+		return out
+	}
+	ref, err := idx.SearchQuery([]byte("alpha beta gamma"), true, "default", BM25, 100)
+	require.NoError(t, err)
+	require.NotEmpty(t, ref)
+	want := pkset(ref)
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for it := 0; it < 40; it++ {
+				got, e := idx.SearchQuery([]byte("alpha beta gamma"), true, "default", BM25, 100)
+				require.NoError(t, e)
+				require.Equal(t, want, pkset(got)) // same top-k SET (ties aside)
+			}
+		}()
+	}
+	wg.Wait()
 }

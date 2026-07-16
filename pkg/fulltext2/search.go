@@ -129,16 +129,21 @@ func (s *Segment) matchPhrase(terms []string) []docTf {
 	// ONCE (decoding the loaded-side compressed posRaw transiently; build-side
 	// returns its [][]int32 directly), then index by doc position. WAND ranking
 	// never materializes; only phrase verification does.
+	// docIDs are block-compressed on a loaded segment; materialize each term's docs
+	// (and positions) ONCE here, alongside positions, so the per-candidate binary
+	// search runs over a flat slice instead of re-decoding blocks.
 	mats := make([][][]int32, len(pls))
+	docsPerTerm := make([][]int64, len(pls))
 	for j, pl := range pls {
 		mats[j] = pl.materializePositions()
+		docsPerTerm[j] = pl.materializeDocIDs()
 	}
 	var hits []docTf
 	posLists := make([][]int32, len(terms))
-	for _, ord := range pls[rare].docIDs {
+	for _, ord := range docsPerTerm[rare] {
 		ok := true
-		for j, pl := range pls {
-			pos, has := positionsInDoc(pl, mats[j], ord)
+		for j := range pls {
+			pos, has := positionsInDoc(docsPerTerm[j], mats[j], ord)
 			if !has {
 				ok = false
 				break
@@ -182,12 +187,13 @@ func (s *Segment) avgDocLenOrMean() float64 {
 	return meanDocLen(s.docLen)
 }
 
-// positionsInDoc returns the ascending token positions of the term (whose posting
-// list is pl) within the document ord, or ok=false if the term does not occur in
-// that doc. Binary search over the ascending docIDs.
-func positionsInDoc(pl *termPostings, mat [][]int32, ord int64) (pos []int32, ok bool) {
-	i := sort.Search(len(pl.docIDs), func(i int) bool { return pl.docIDs[i] >= ord })
-	if i < len(pl.docIDs) && pl.docIDs[i] == ord {
+// positionsInDoc returns the ascending token positions of a term within the
+// document ord, or ok=false if the term does not occur there. docs is the term's
+// materialized ascending doc ords and mat its parallel per-doc positions (both from
+// materialize* on the posting list). Binary search over docs.
+func positionsInDoc(docs []int64, mat [][]int32, ord int64) (pos []int32, ok bool) {
+	i := sort.Search(len(docs), func(i int) bool { return docs[i] >= ord })
+	if i < len(docs) && docs[i] == ord {
 		return mat[i], true
 	}
 	return nil, false

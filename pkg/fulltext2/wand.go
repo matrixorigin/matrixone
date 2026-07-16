@@ -42,18 +42,36 @@ import (
 // tie may include one arbitrary member over another. The top-k SET (above the
 // boundary) and the score multiset are identical either way.
 
-// wandIter is a term's posting cursor for WAND. It holds the whole termPostings so
-// the walk can read both the term-level max-impact and the per-block Block-Max
-// bounds (blockLastDoc/blockMaxTf/blockMinDocLn).
+// wandIter is a term's posting cursor for WAND. It holds the termPostings for the
+// resident Block-Max bounds (blockLastDoc/blockMaxTf/blockMinDocLn), plus a small
+// PER-CURSOR decoded-block cache: docIDs/tfs are NOT resident on a loaded segment
+// (they live block-compressed in the shared, read-only mmap), so the cursor decodes
+// one block at a time into bDocs/bTfs. The cache is per-cursor, so concurrent queries
+// over the same shared segment never race. WAND's block-skip means most blocks are
+// never decoded.
 type wandIter struct {
 	tp        *termPostings
 	idx       int
+	curBlk    int     // block index currently decoded into bDocs/bTfs (-1 = none)
+	blen      int     // valid entries in bDocs/bTfs
+	bDocs     []int64 // decoded docIDs of curBlk (cap BlockSize)
+	bTfs      []uint8 // decoded tfs of curBlk (cap BlockSize)
 	idf2      float64
 	weight    float64
 	maxImpact float64 // term-level upper bound of this term's weighted contribution
 }
 
-func (it *wandIter) atEnd() bool { return it.idx >= len(it.tp.docIDs) }
+func (it *wandIter) atEnd() bool { return it.idx >= it.tp.df() }
+
+// ensure decodes the block containing the cursor's current idx into bDocs/bTfs, if
+// not already cached. Cheap (a field compare) when the cursor stays within a block.
+func (it *wandIter) ensure() {
+	b := it.idx / BlockSize
+	if b != it.curBlk {
+		it.blen = it.tp.fillBlock(b, it.bDocs, it.bTfs)
+		it.curBlk = b
+	}
+}
 
 // doc returns the current doc ord, or math.MaxInt64 when exhausted (so an
 // exhausted cursor sorts last).
@@ -61,19 +79,37 @@ func (it *wandIter) doc() int64 {
 	if it.atEnd() {
 		return math.MaxInt64
 	}
-	return it.tp.docIDs[it.idx]
+	it.ensure()
+	return it.bDocs[it.idx%BlockSize]
 }
 
-// skipTo advances the cursor to the first doc >= d (binary search over the
-// remaining ascending docIDs).
+// tf returns the current posting's capped term frequency.
+func (it *wandIter) tf() uint8 {
+	it.ensure()
+	return it.bTfs[it.idx%BlockSize]
+}
+
+// skipTo advances the cursor to the first doc >= d: locate the block via the
+// RESIDENT blockLastDoc (no decode), then binary-search within that one block.
 func (it *wandIter) skipTo(d int64) {
-	rem := it.tp.docIDs[it.idx:]
-	it.idx += sort.Search(len(rem), func(i int) bool { return rem[i] >= d })
+	b := it.blockIndexAt(d)
+	if b >= it.tp.nblk() {
+		it.idx = it.tp.df() // past the last posting → exhausted
+		return
+	}
+	if b != it.curBlk {
+		it.blen = it.tp.fillBlock(b, it.bDocs, it.bTfs)
+		it.curBlk = b
+	}
+	// d <= blockLastDoc[b] = bDocs[blen-1], so the lower bound is within the block
+	// and never moves the cursor backward (d >= current doc).
+	w := sort.Search(it.blen, func(i int) bool { return it.bDocs[i] >= d })
+	it.idx = b*BlockSize + w
 }
 
 // blockIndexAt returns the index of the block (>= the current block) containing
-// doc d — the first block whose last ord >= d. len(blocks) if d is past the
-// cursor's last posting. Mirrors bm25's cursor.blockIndexAt.
+// doc d — the first block whose last ord >= d. nblk() if d is past the cursor's
+// last posting. Uses only the resident blockLastDoc (no block decode).
 func (it *wandIter) blockIndexAt(d int64) int {
 	bl := it.tp.blockLastDoc
 	b := it.idx / BlockSize
@@ -171,6 +207,9 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int) []Result {
 		idf2 := idfSquared(s.N, pl.df())
 		iters = append(iters, &wandIter{
 			tp:        pl,
+			curBlk:    -1,
+			bDocs:     make([]int64, BlockSize),
+			bTfs:      make([]uint8, BlockSize),
 			idf2:      idf2,
 			weight:    c.weight,
 			maxImpact: c.weight * s.termMaxImpact(algo, idf2, pl, avgDocLen),
@@ -251,7 +290,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int) []Result {
 			var score float64
 			for _, it := range iters {
 				if it.doc() == pivotDoc {
-					score += it.weight * s.scoreTerm(algo, float64(it.tp.tfs[it.idx]), it.idf2, pivotDoc, avgDocLen)
+					score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, pivotDoc, avgDocLen)
 				}
 			}
 			if h.Len() < k {

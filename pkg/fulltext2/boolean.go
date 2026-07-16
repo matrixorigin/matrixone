@@ -218,8 +218,9 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[i
 	case clauseTerm:
 		if pl, ok := s.lookup(c.terms[0]); ok {
 			idf2 := idfSquared(s.N, pl.df())
-			for i, ord := range pl.docIDs {
-				raw[ord] = s.scoreTerm(algo, float64(pl.tfs[i]), idf2, ord, avgDocLen)
+			docs, tfs := pl.materializeDocIDs(), pl.materializeTfs()
+			for i, ord := range docs {
+				raw[ord] = s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
 			}
 		}
 	case clausePhrase:
@@ -239,8 +240,9 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64) (map[i
 				continue
 			}
 			idf2 := idfSquared(s.N, pl.df())
-			for i, ord := range pl.docIDs {
-				sc := s.scoreTerm(algo, float64(pl.tfs[i]), idf2, ord, avgDocLen)
+			docs, tfs := pl.materializeDocIDs(), pl.materializeTfs()
+			for i, ord := range docs {
+				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
 				if cur, seen := raw[ord]; !seen || sc > cur {
 					raw[ord] = sc
 				}

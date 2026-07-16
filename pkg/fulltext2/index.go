@@ -231,7 +231,8 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 	for si, seg := range idx.segments {
 		err := seg.forEachPosting(func(term string, tp *termPostings) {
 			mat := tp.materializePositions() // decode this term's positions once
-			for i, ord := range tp.docIDs {
+			docs := tp.materializeDocIDs()   // and its docIDs (block-compressed on load)
+			for i, ord := range docs {
 				l := docLoc{si, ord}
 				if _, live := buckets[l]; !live {
 					continue

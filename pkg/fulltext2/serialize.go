@@ -31,7 +31,8 @@ import (
 const (
 	memberDocmap    = "docmap"    // pkType + N + ord->pk + ord->docLen
 	memberTermDict  = "termdict"  // the vellum FST: term -> ordinal
-	memberPostings  = "postings"  // ranking: per-term df, docID gaps, tfs, posByteLen
+	memberPostings  = "postings"  // ranking DIRECTORY: per-term df, per-block max/skip meta (resident)
+	memberBlocks    = "blocks"    // per-term docID/tf blocks (delta+varint; mmap, block-decoded on demand)
 	memberPositions = "positions" // per-term compressed positions (phrase-only, lazy)
 )
 
@@ -55,7 +56,7 @@ func (s *Segment) Serialize() ([]byte, error) {
 		return nil, err
 	}
 
-	fst, ranking, positions, err := s.encodeTermsAndPostings()
+	fst, ranking, blocks, positions, err := s.encodeTermsAndPostings()
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +64,9 @@ func (s *Segment) Serialize() ([]byte, error) {
 		return nil, err
 	}
 	if err = writeMember(tw, memberPostings, ranking); err != nil {
+		return nil, err
+	}
+	if err = writeMember(tw, memberBlocks, blocks); err != nil {
 		return nil, err
 	}
 	if err = writeMember(tw, memberPositions, positions); err != nil {
@@ -97,7 +101,7 @@ func Deserialize(id string, r io.Reader) (*Segment, error) {
 // sliceMembers returns the FST / docmap / ranking / positions members as SLICES
 // into data (zero-copy) by walking the tar and tracking the reader offset, so the
 // same code serves an in-memory blob or an mmap'd file.
-func sliceMembers(data []byte) (docmap, fst, ranking, positions []byte, err error) {
+func sliceMembers(data []byte) (docmap, fst, ranking, blocks, positions []byte, err error) {
 	br := bytes.NewReader(data)
 	tr := tar.NewReader(br)
 	for {
@@ -106,11 +110,11 @@ func sliceMembers(data []byte) (docmap, fst, ranking, positions []byte, err erro
 			break
 		}
 		if e != nil {
-			return nil, nil, nil, nil, e
+			return nil, nil, nil, nil, nil, e
 		}
 		off := int64(len(data)) - int64(br.Len()) // tar positions br at the content
 		if off < 0 || off+h.Size > int64(len(data)) {
-			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtx("fulltext2: member out of range")
+			return nil, nil, nil, nil, nil, moerr.NewInternalErrorNoCtx("fulltext2: member out of range")
 		}
 		seg := data[off : off+h.Size]
 		switch h.Name {
@@ -120,25 +124,28 @@ func sliceMembers(data []byte) (docmap, fst, ranking, positions []byte, err erro
 			fst = seg
 		case memberPostings:
 			ranking = seg
+		case memberBlocks:
+			blocks = seg
 		case memberPositions:
 			positions = seg
 		}
 	}
-	return docmap, fst, ranking, positions, nil
+	return docmap, fst, ranking, blocks, positions, nil
 }
 
 // decodeSegment builds the loaded segment over data (an in-memory blob or an mmap):
-// docIDs/tfs expand off-heap, the FST + compressed positions stay as views into
-// data. Callers keep data alive (mmapData for a base, GC for a tail).
+// the ranking DIRECTORY (per-block skip/max meta) expands RESIDENT, while the FST,
+// the docID/tf blocks, and the compressed positions stay as views into data (decoded
+// on demand). Callers keep data alive (mmapData for a base, GC for a tail).
 func (s *Segment) decodeSegment(data []byte) error {
-	docmap, fst, ranking, positions, err := sliceMembers(data)
+	docmap, fst, ranking, blocks, positions, err := sliceMembers(data)
 	if err != nil {
 		return err
 	}
 	if err := s.decodeDocmap(docmap); err != nil {
 		return err
 	}
-	if err := s.decodePostings(ranking, positions); err != nil {
+	if err := s.decodePostings(ranking, blocks, positions); err != nil {
 		return err
 	}
 	dict, err := loadTermDict(fst)
@@ -226,43 +233,66 @@ func (s *Segment) decodeDocmap(data []byte) error {
 
 // ---- termdict (FST) + postings ----
 
-// encodeTermsAndPostings builds the FST (term -> ordinal) and TWO posting sections
+// encodeTermsAndPostings builds the FST (term -> ordinal) and THREE posting sections
 // in one pass over the sorted terms (ordinal i in the FST is posting list i):
 //
-//   - RANKING (postingsFormatV3): version, nterms, totalP, then per term
-//     df(varint), docID GAPS(varint, ascending ords → tiny deltas), tfs(df raw
-//     bytes), posByteLen(varint). This is all WAND ranking needs.
-//   - POSITIONS: per term (same order) the compressed positions — per doc
-//     pc(varint) + position GAPS(varint). Phrase-only, never touched by ranking,
-//     so the loader keeps it compressed and decodes on demand.
+//   - RANKING directory (postingsFormatV4, kept RESIDENT at load): version, nterms,
+//     then per term df(varint), nblk(varint), and per BlockSize-doc block
+//     {lastDocGap(varint, from the previous block's last ord), maxTf(1 byte),
+//     minDocLn(varint), blkByteLen(varint)}, then posByteLen(varint). This is the
+//     Block-Max skip metadata + a directory into the blocks section; it is all WAND
+//     needs to prune, and it is O(df/BlockSize) — ~1/128 the postings.
+//   - BLOCKS (mmap, block-decoded on demand): per term, per block, the docID GAPS
+//     (varint, from the previous block's last ord → tiny deltas) then the block's raw
+//     tf bytes. The WAND cursor decodes only the blocks its walk lands on; docIDs
+//     never fully expand into RAM at load (the OOM-scaling fix).
+//   - POSITIONS (mmap, phrase-only): per term (same order) per doc pc(varint) +
+//     position GAPS(varint). Never touched by ranking.
 //
-// Delta+varint shrinks the two dominant sections (docIDs ~46%, positions ~48%) ~4×,
-// and separating positions lets a loaded index keep only the ranking data expanded
-// in RAM. fulltext2 is experimental, so the old layout is dropped (nothing to
-// migrate); a version byte guards a stale blob.
-const postingsFormatV3 byte = 3
+// Delta+varint shrinks docIDs/positions ~4×; blocking docIDs (vs one flat per-term
+// stream) is what lets the loader keep them on the mmap and random-access one block.
+// fulltext2 is experimental, so the old layout is dropped (nothing to migrate); a
+// version byte guards a stale blob.
+const postingsFormatV4 byte = 4
 
-func (s *Segment) encodeTermsAndPostings() (fst []byte, ranking []byte, positions []byte, err error) {
+func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []byte, err error) {
 	n := len(s.sortedTerms)
 	values := make([]uint64, n)
-	var totalP int64
-	for _, term := range s.sortedTerms {
-		totalP += int64(len(s.terms[term].docIDs))
-	}
-	var w, pw leBuf // w=ranking, pw=positions
-	w.b.WriteByte(postingsFormatV3)
+	var w, bw, pw leBuf // w=ranking directory, bw=blocks, pw=positions
+	w.b.WriteByte(postingsFormatV4)
 	w.i64(int64(n))
-	w.i64(totalP)
 	for i, term := range s.sortedTerms {
 		values[i] = uint64(i)
 		tp := s.terms[term]
-		w.uvarint(uint64(len(tp.docIDs)))
-		var prev int64
-		for _, d := range tp.docIDs { // ascending ords → non-negative gaps
-			w.uvarint(uint64(d - prev))
-			prev = d
+		if tp.blockLastDoc == nil { // ensure the block-max directory (build normally sets it)
+			deriveTermStats(tp, s.docLen)
 		}
-		w.b.Write(tp.tfs) // df raw bytes
+		df := len(tp.docIDs)
+		nblk := (df + BlockSize - 1) / BlockSize
+		w.uvarint(uint64(df))
+		w.uvarint(uint64(nblk))
+		var prevLast int64
+		for b := 0; b < nblk; b++ {
+			lo := b * BlockSize
+			hi := lo + BlockSize
+			if hi > df {
+				hi = df
+			}
+			// block bytes: docID gaps (from prevLast) then raw tfs.
+			blkStart := bw.b.Len()
+			prev := prevLast
+			for j := lo; j < hi; j++ {
+				bw.uvarint(uint64(tp.docIDs[j] - prev))
+				prev = tp.docIDs[j]
+			}
+			bw.b.Write(tp.tfs[lo:hi])
+			// directory entry.
+			w.uvarint(uint64(tp.blockLastDoc[b] - prevLast)) // lastDocGap
+			w.b.WriteByte(tp.blockMaxTf[b])
+			w.uvarint(uint64(tp.blockMinDocLn[b]))
+			w.uvarint(uint64(bw.b.Len() - blkStart)) // this block's byte length
+			prevLast = tp.blockLastDoc[b]
+		}
 		before := pw.b.Len()
 		for _, pos := range tp.positions {
 			pw.uvarint(uint64(len(pos)))
@@ -275,38 +305,32 @@ func (s *Segment) encodeTermsAndPostings() (fst []byte, ranking []byte, position
 		w.uvarint(uint64(pw.b.Len() - before)) // this term's positions byte length
 	}
 	if fst, err = buildTermDictFST(s.sortedTerms, values); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return fst, w.b.Bytes(), pw.b.Bytes(), nil
+	return fst, w.b.Bytes(), bw.b.Bytes(), pw.b.Bytes(), nil
 }
 
-// decodePostings loads the ranking section into s.loaded (indexed by ordinal),
-// expanding docIDs/tfs OFF the Go heap, and slices the still-COMPRESSED positions
-// section into each term's posRaw (decoded on demand for phrase/MERGE — never at
-// load). The block-max score-UB fields are derived here from the loaded postings.
-func (s *Segment) decodePostings(ranking, positions []byte) error {
-	if len(ranking) < 1+16 {
+// decodePostings loads the ranking DIRECTORY into s.loaded (indexed by ordinal):
+// the per-block Block-Max skip metadata (blockLastDoc/blockMaxTf/blockMinDocLn) and
+// a byte-offset directory (blockOff) into the blocks section expand RESIDENT, while
+// each term's docID/tf blocks (blockData) and compressed positions (posRaw) stay as
+// views into the mmap — decoded on demand (the WAND cursor decodes one block; cold
+// paths materialize). No off-heap allocation and no re-derivation: the score-UB
+// fields are read straight from the directory the builder wrote.
+func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
+	if len(ranking) < 1+8 {
 		if len(ranking) == 0 {
 			s.loaded = nil
 			return nil
 		}
 		return moerr.NewInternalErrorNoCtx("fulltext2: ranking blob too short")
 	}
-	if ranking[0] != postingsFormatV3 {
+	if ranking[0] != postingsFormatV4 {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("fulltext2: unsupported postings format %d", ranking[0]))
 	}
 	p := 1
 	nterms := int64(binary.LittleEndian.Uint64(ranking[p:]))
-	totalP := int64(binary.LittleEndian.Uint64(ranking[p+8:]))
-	p += 16
-
-	// docIDs/tfs off-heap (contiguous, per-term views). Positions are NOT copied:
-	// each term's posRaw slices directly into `positions` (the caller keeps it alive
-	// — the shared mmap for a base, the read blob for a tail).
-	bigDocIDs, bigTfs, err := s.allocPostings(totalP)
-	if err != nil {
-		return err
-	}
+	p += 8
 
 	uv := func() (uint64, bool) {
 		v, n := binary.Uvarint(ranking[p:])
@@ -316,48 +340,85 @@ func (s *Segment) decodePostings(ranking, positions []byte) error {
 		p += n
 		return v, true
 	}
+	rb := func() (uint8, bool) { // read one raw byte from the directory
+		if p >= len(ranking) {
+			return 0, false
+		}
+		v := ranking[p]
+		p++
+		return v, true
+	}
 	bad := func() error { return moerr.NewInternalErrorNoCtx("fulltext2: corrupt postings stream") }
 
 	s.loaded = make([]*termPostings, nterms)
-	var cp, cpos int64 // running offsets into docIDs/tfs, and positions bytes
+	var cb, cpos int64 // running offsets into the blocks and positions sections
 	for t := int64(0); t < nterms; t++ {
 		dfu, ok := uv()
 		if !ok {
 			return bad()
 		}
-		df := int64(dfu)
-		if cp+df > totalP {
+		nblku, ok := uv()
+		if !ok {
 			return bad()
 		}
-		tp := &termPostings{
-			docIDs: bigDocIDs[cp : cp+df],
-			tfs:    bigTfs[cp : cp+df],
+		df, nblk := int(dfu), int(nblku)
+		tp := &termPostings{ndoc: df}
+		if nblk > 0 {
+			tp.blockLastDoc = make([]int64, nblk)
+			tp.blockMaxTf = make([]uint8, nblk)
+			tp.blockMinDocLn = make([]int32, nblk)
+			tp.blockOff = make([]int32, nblk+1)
 		}
-		var prev int64 // docID gaps → absolute ascending ords
-		for j := int64(0); j < df; j++ {
-			g, ok := uv()
+		blkBase := cb
+		var prevLast int64
+		var termMaxTf uint8
+		termMinDL := int32(math.MaxInt32)
+		for b := 0; b < nblk; b++ {
+			gap, ok := uv()
 			if !ok {
 				return bad()
 			}
-			prev += int64(g)
-			tp.docIDs[j] = prev
+			prevLast += int64(gap)
+			tp.blockLastDoc[b] = prevLast
+			maxTf, ok := rb()
+			if !ok {
+				return bad()
+			}
+			tp.blockMaxTf[b] = maxTf
+			minDL, ok := uv()
+			if !ok {
+				return bad()
+			}
+			tp.blockMinDocLn[b] = int32(minDL)
+			blkLen, ok := uv()
+			if !ok {
+				return bad()
+			}
+			tp.blockOff[b] = int32(cb - blkBase)
+			cb += int64(blkLen)
+			if maxTf > termMaxTf {
+				termMaxTf = maxTf
+			}
+			if int32(minDL) < termMinDL {
+				termMinDL = int32(minDL)
+			}
 		}
-		if p+int(df) > len(ranking) {
-			return bad()
+		if nblk > 0 {
+			tp.blockOff[nblk] = int32(cb - blkBase)
+			if cb > int64(len(blocks)) {
+				return bad()
+			}
+			tp.blockData = blocks[blkBase:cb]
+			tp.maxTf = termMaxTf
+			tp.minDocLen = termMinDL
 		}
-		copy(tp.tfs, ranking[p:p+int(df)]) // df raw tf bytes
-		p += int(df)
 		posLen, ok := uv() // byte length of this term's compressed positions
 		if !ok || cpos+int64(posLen) > int64(len(positions)) {
 			return bad()
 		}
 		tp.posRaw = positions[cpos : cpos+int64(posLen)]
 		cpos += int64(posLen)
-		// Derive the raw score-UB fields (maxTf / minDocLen / block-max) from the
-		// loaded postings + docLen (docmap precedes postings in the archive).
-		deriveTermStats(tp, s.docLen)
 		s.loaded[t] = tp
-		cp += df
 	}
 	return nil
 }
@@ -373,6 +434,7 @@ func (s *Segment) decodePostings(ranking, positions []byte) error {
 // stored).
 func deriveTermStats(tp *termPostings, docLen []int32) {
 	df := len(tp.docIDs)
+	tp.ndoc = df
 	if df == 0 {
 		return
 	}

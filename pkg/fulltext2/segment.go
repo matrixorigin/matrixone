@@ -18,8 +18,6 @@ import (
 	"encoding/binary"
 	"os"
 	"sort"
-
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
 const (
@@ -43,9 +41,27 @@ const (
 // idf/avgdl-free so one segment serves both TF-IDF and BM25; the active scorer
 // derives its max-impact bound at query time.
 type termPostings struct {
-	docIDs    []int64   // doc ords, ascending, len == df
-	tfs       []uint8   // parallel, capped tf (<= MaxCappedTf)
+	docIDs    []int64   // BUILD-side doc ords, ascending, len == df; nil on a LOADED segment
+	tfs       []uint8   // BUILD-side parallel capped tf (<= MaxCappedTf); nil on a LOADED segment
 	positions [][]int32 // BUILD-side per-doc positions (len == df); nil on a LOADED segment
+
+	// ndoc is the document frequency (df). On a LOADED segment docIDs/tfs are NOT
+	// expanded — they live block-compressed in blockData (a view into the mmap) —
+	// so ndoc is the authoritative count. On a build-side segment it equals
+	// len(docIDs) (set by deriveTermStats).
+	ndoc int
+
+	// LOADED-side docID/tf blocks: this term's postings kept COMPRESSED as
+	// BlockSize-doc blocks (per block: docID gaps as delta+varint from the previous
+	// block's last ord, then the block's raw tf bytes), a view into the segment's
+	// mmap. docIDs are the largest resident section (~46% at load), needed in full
+	// ONLY by phrase verification / MERGE / boolean — WAND ranking touches only the
+	// blocks its block-max walk lands on. So they are NOT expanded at load; the WAND
+	// cursor decodes one block on demand (fillBlock), and the cold paths materialize
+	// transiently (materializeDocIDs/materializeTfs). blockOff[b] is block b's byte
+	// offset within blockData (len nblk+1, cumulative). nil on a build-side segment.
+	blockData []byte
+	blockOff  []int32
 
 	// LOADED-side positions (Deserialize): this term's positions kept COMPRESSED
 	// (delta+varint, per doc: pc + position gaps), a view into the segment's
@@ -59,15 +75,96 @@ type termPostings struct {
 	maxTf     uint8 // max tf over all postings
 	minDocLen int32 // min doc length over all postings
 
-	// Block-Max skip-block metadata, one entry per ceil(df/BlockSize), derived
-	// at load. Also raw / scorer-agnostic.
+	// Block-Max skip-block metadata, one entry per ceil(df/BlockSize). Computed at
+	// BUILD (deriveTermStats) and STORED in the ranking directory, read back RESIDENT
+	// at load (never re-derived from the compressed blocks). Raw / scorer-agnostic.
 	blockLastDoc  []int64 // last (max) ord in each block
 	blockMaxTf    []uint8 // max tf in each block
 	blockMinDocLn []int32 // min doc length in each block
 }
 
 // df is the document frequency (number of docs containing the term).
-func (p *termPostings) df() int { return len(p.docIDs) }
+func (p *termPostings) df() int {
+	if p.docIDs != nil {
+		return len(p.docIDs) // build-side (authoritative before ndoc is set)
+	}
+	return p.ndoc
+}
+
+// nblk is the number of Block-Max skip blocks (== ceil(df/BlockSize)).
+func (p *termPostings) nblk() int { return len(p.blockLastDoc) }
+
+// blockLen is the number of postings in block b (BlockSize, or the remainder for
+// the last block).
+func (p *termPostings) blockLen(b int) int {
+	n := p.df() - b*BlockSize
+	if n > BlockSize {
+		n = BlockSize
+	}
+	return n
+}
+
+// fillBlock decodes block b's docIDs and tfs into outDocs/outTfs (each cap >=
+// BlockSize) and returns the block length. Build-side copies the flat slices;
+// loaded-side varint-decodes the block from blockData (the mmap view): docID gaps
+// accumulate from the previous block's last ord (resident blockLastDoc[b-1]), then
+// the raw tf bytes follow. The WAND cursor calls this once per block it lands on;
+// materializeDocIDs/Tfs call it per block to rebuild the flat arrays.
+func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
+	blen := p.blockLen(b)
+	if p.docIDs != nil { // build-side: copy from the flat arrays
+		lo := b * BlockSize
+		copy(outDocs[:blen], p.docIDs[lo:lo+blen])
+		copy(outTfs[:blen], p.tfs[lo:lo+blen])
+		return blen
+	}
+	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
+	var prev int64
+	if b > 0 {
+		prev = p.blockLastDoc[b-1]
+	}
+	off := 0
+	for i := 0; i < blen; i++ {
+		g, n := binary.Uvarint(data[off:])
+		off += n
+		prev += int64(g)
+		outDocs[i] = prev
+	}
+	copy(outTfs[:blen], data[off:off+blen])
+	return blen
+}
+
+// materializeDocIDs returns this term's full ascending doc ords (df entries): the
+// build-side flat slice as-is, or a transient decode of every loaded block. Cold
+// paths (phrase / MERGE / boolean) that scan all postings call this ONCE; WAND
+// ranking never does (it decodes only the blocks its walk lands on).
+func (p *termPostings) materializeDocIDs() []int64 {
+	if p.docIDs != nil {
+		return p.docIDs
+	}
+	out := make([]int64, p.ndoc)
+	var scratch [BlockSize]uint8
+	for b := 0; b < p.nblk(); b++ {
+		lo := b * BlockSize
+		p.fillBlock(b, out[lo:], scratch[:])
+	}
+	return out
+}
+
+// materializeTfs returns this term's full capped tf bytes (df entries): the
+// build-side flat slice as-is, or a transient decode of every loaded block.
+func (p *termPostings) materializeTfs() []uint8 {
+	if p.tfs != nil {
+		return p.tfs
+	}
+	out := make([]uint8, p.ndoc)
+	var scratch [BlockSize]int64
+	for b := 0; b < p.nblk(); b++ {
+		lo := b * BlockSize
+		p.fillBlock(b, scratch[:], out[lo:])
+	}
+	return out
+}
 
 // materializePositions decodes this term's per-doc token positions (df entries):
 // the build-side stored [][]int32 as-is, or the loaded-side compressed posRaw
@@ -79,7 +176,7 @@ func (p *termPostings) materializePositions() [][]int32 {
 	if p.positions != nil {
 		return p.positions
 	}
-	df := len(p.docIDs)
+	df := p.df()
 	out := make([][]int32, df)
 	off := 0
 	for i := 0; i < df; i++ {
@@ -136,29 +233,24 @@ type Segment struct {
 	dict   *termDict
 	loaded []*termPostings
 
-	// deallocators frees the off-heap (C-allocated) docID/tf buffers of a LOADED
-	// segment (kept off the Go heap so a large cached index is not GC-scanned and
-	// releases RSS deterministically). A build-side segment leaves this nil.
-	deallocators []malloc.Deallocator
-
 	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
-	// FST + the compressed positions section are views into it (page-cache-backed,
-	// reclaimable, shared by all concurrent queries — no copy). mmapPath is that
-	// file. Both are released by Free() under the cache's eviction write-lock (no
-	// reader in flight). nil on a build-side or in-memory (tail) segment.
+	// FST, the compressed docID/tf blocks, and the compressed positions section are
+	// all views into it (page-cache-backed, reclaimable, shared by all concurrent
+	// queries — no copy, no off-heap). mmapPath is that file (empty for the anonymous
+	// SSD file, whose inode is freed by munmap). Both are released by Free() under the
+	// cache's eviction write-lock (no reader in flight). nil on a build-side or
+	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
 }
 
-// Free releases a loaded segment's off-heap posting buffers. Safe on a build-side
-// segment (nil deallocators → no-op) and idempotent. After Free the segment must
-// not be queried; the VectorIndexCache holds the write lock when calling Destroy,
-// and single-shot loaders (compact) Free after they finish reading.
+// Free releases a loaded segment's mmap (and its backing file, if linked). Safe on
+// a build-side / in-memory tail segment (nil mmapData → no-op) and idempotent. After
+// Free the segment must not be queried; the VectorIndexCache holds the write lock
+// when calling Destroy, and single-shot loaders (compact) Free after they finish
+// reading. The loaded posting blocks (blockData) are views into mmapData, so
+// munmap reclaims them — there is no off-heap buffer to deallocate.
 func (s *Segment) Free() {
-	for _, d := range s.deallocators {
-		d.Deallocate()
-	}
-	s.deallocators = nil
 	if s.mmapData != nil {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
