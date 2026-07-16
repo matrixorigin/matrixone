@@ -613,6 +613,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
+			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
 		}
@@ -1088,6 +1089,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
+		arg.VectorOpType = t.VectorOpType
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1106,7 +1108,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Intersect:
 		op = intersect.NewArgument()
 	case vm.IntersectAll:
-		op = intersect.NewArgument()
+		op = intersectall.NewArgument()
 	case vm.Minus:
 		op = minus.NewArgument()
 	case vm.Connector:
