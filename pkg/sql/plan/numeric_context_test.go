@@ -399,6 +399,92 @@ func TestNumericColumnTypeScopeLookup(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPreparedDirectCastKeepsOriginalParameterPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantTarget types.T
+	}{
+		{name: "timestamp", sql: "select cast(? as timestamp(6))", wantTarget: types.T_timestamp},
+		{name: "date", sql: "select cast(? as date)", wantTarget: types.T_date},
+		{name: "time", sql: "select cast(? as time(6))", wantTarget: types.T_time},
+		{name: "char", sql: "select cast(? as char(10))", wantTarget: types.T_char},
+		{name: "decimal", sql: "select cast(? as decimal(20, 2))", wantTarget: types.T_decimal128},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			castPaths := collectPlanParamCastPaths(queryPlan)
+			require.Len(t, castPaths, 1)
+			require.Equal(t, []types.T{test.wantTarget}, castPaths[0])
+		})
+	}
+}
+
+func TestPreparedCastPropagatesContextOnlyIntoArithmetic(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		{name: "binary arithmetic", sql: "select cast((? + ?) as char(20))", want: types.T_float64},
+		{name: "unary arithmetic", sql: "select cast(-? as decimal(20, 2))", want: types.T_decimal128},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			paramTypes := collectPlanParamTypes(queryPlan)
+			require.NotEmpty(t, paramTypes)
+			for _, typ := range paramTypes {
+				require.Equal(t, test.want, typ)
+			}
+		})
+	}
+}
+
+func TestPreparedNumericLiteralStrength(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		{name: "decimal literal is weak", sql: "select 0.0 + ?", want: types.T_float64},
+		{name: "approximate literal is strong", sql: "select 0e0 + ?", want: types.T_float64},
+		{name: "integer literal is strong", sql: "select 0 + ?", want: types.T_int64},
+		{
+			name: "explicit decimal cast is strong",
+			sql:  "select cast(0 as decimal(10, 1)) + ?",
+			want: types.T_decimal64,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			paramTypes := collectPlanParamTypes(queryPlan)
+			require.Len(t, paramTypes, 1)
+			require.Equal(t, test.want, paramTypes[0])
+		})
+	}
+}
+
 func numericTestBinding(table, col string, typ types.Type) *Binding {
 	planType := makePlan2Type(&typ)
 	return &Binding{
@@ -449,6 +535,39 @@ func collectPlanParamPlanTypes(queryPlan *Plan) []planpb.Type {
 		}
 	}
 	return result
+}
+
+func collectPlanParamCastPaths(queryPlan *Plan) [][]types.T {
+	var result [][]types.T
+	query := queryPlan.GetQuery()
+	if query == nil {
+		return result
+	}
+	for _, node := range query.Nodes {
+		for _, expr := range node.ProjectList {
+			collectExprParamCastPaths(expr, nil, &result)
+		}
+	}
+	return result
+}
+
+func collectExprParamCastPaths(expr *planpb.Expr, path []types.T, result *[][]types.T) {
+	if expr == nil {
+		return
+	}
+	if expr.GetP() != nil {
+		*result = append(*result, append([]types.T(nil), path...))
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		childPath := path
+		if fn.Func != nil && fn.Func.ObjName == "cast" {
+			childPath = append(append([]types.T(nil), path...), types.T(expr.Typ.Id))
+		}
+		for _, arg := range fn.Args {
+			collectExprParamCastPaths(arg, childPath, result)
+		}
+	}
 }
 
 func collectExprEffectiveParamPlanTypes(expr *planpb.Expr, inherited planpb.Type, result *[]planpb.Type) {

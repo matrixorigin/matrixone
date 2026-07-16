@@ -146,7 +146,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
-		expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
+		if isNumericArithmeticRoot(exprImpl.Expr) {
+			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
+		} else {
+			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+		}
 		b.numericParamType = parentParamType
 		if err != nil {
 			return
@@ -747,6 +751,21 @@ func isNumericContextNode(astExpr tree.Expr) bool {
 	}
 }
 
+func isNumericArithmeticRoot(astExpr tree.Expr) bool {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return isNumericArithmeticRoot(expr.Expr)
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(expr.Op)
+	case *tree.UnaryExpr:
+		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
+	case *tree.FuncExpr:
+		return numericAstFunctionName(expr) == "mod" && len(expr.Exprs) == 2
+	default:
+		return false
+	}
+}
+
 func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, outer *Type) (*Expr, error) {
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
@@ -833,6 +852,9 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) ([]Type, bo
 		bound, err := b.bindNumVal(expr, Type{})
 		if err != nil {
 			return nil, false, err
+		}
+		if types.T(bound.Typ.Id).IsDecimal() {
+			return nil, false, nil
 		}
 		return []Type{bound.Typ}, false, nil
 	case *tree.FuncExpr:
