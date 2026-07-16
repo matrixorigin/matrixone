@@ -308,6 +308,96 @@ func TestTriggerWaitFaultWithContextReturnsOnCancel(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestTriggerWaitFaultWithContextCancelDoesNotReleaseOtherWaiters(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	require.NoError(t, AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w", false))
+
+	waitCtx1, cancel1 := context.WithCancel(ctx)
+	waitCtx2, cancel2 := context.WithCancel(ctx)
+	defer cancel2()
+	done1 := make(chan struct{})
+	done2 := make(chan struct{})
+	go func() {
+		TriggerFaultWithContext(waitCtx1, "w")
+		close(done1)
+	}()
+	go func() {
+		TriggerFaultWithContext(waitCtx2, "w")
+		close(done2)
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := TriggerFault("gw")
+		return ok && cnt == 2
+	}, time.Second, 10*time.Millisecond)
+
+	cancel1()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done1:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case <-done2:
+		t.Fatal("canceling one context-aware wait released another live waiter")
+	default:
+	}
+	cnt, _, ok := TriggerFault("gw")
+	require.True(t, ok)
+	require.Equal(t, int64(1), cnt)
+
+	cancel2()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done2:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestTriggerWaitFaultWithContextReturnsOnNotifyAll(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	require.NoError(t, AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w", false))
+	require.NoError(t, AddFaultPoint(ctx, "nall", ":::", "notifyall", 0, "w", false))
+
+	done := make(chan struct{})
+	go func() {
+		TriggerFaultWithContext(ctx, "w")
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := TriggerFault("gw")
+		return ok && cnt == 1
+	}, time.Second, 10*time.Millisecond)
+
+	TriggerFault("nall")
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestTriggerSleepFaultWithContextReturnsOnCancel(t *testing.T) {
 	ctx := context.Background()
 

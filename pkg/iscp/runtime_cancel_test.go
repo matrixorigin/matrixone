@@ -277,6 +277,36 @@ func TestAddOrUpdateJobDropAtClearsGenerationFence(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, exec.IsJobFenced(key))
+	iters, _ := table.getCandidate()
+	require.Empty(t, iters)
+}
+
+func TestAddOrUpdateJobDropAtPreservesFenceOnParseFailure(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	table := NewTableEntry(exec, key.AccountID, 1, key.TableID, "db", "tbl")
+	spec := &JobSpec{TriggerSpec: TriggerSpec{JobType: TriggerType_Default}}
+	table.jobs[JobKey{JobName: key.JobName, JobID: key.JobID}] = NewJobEntry(table, key.JobName, spec, key.JobID, types.BuildTS(1, 0), ISCPJobState_Completed, 0)
+	exec.setTable(table)
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
+
+	err := exec.addOrUpdateJob(
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+		ISCPJobState_Completed,
+		types.BuildTS(1, 0).ToString(),
+		[]byte("bad-json"),
+		encodeJSONRows(t, []string{mustMarshalJobStatus(t, 1, JobStage_Running)})[0],
+		types.Timestamp(time.Now().UnixNano()),
+		false,
+	)
+
+	require.Error(t, err)
+	require.True(t, exec.IsJobFenced(key))
+	iters, _ := table.getCandidate()
+	require.Empty(t, iters)
 }
 
 func TestAddOrUpdateJobDropAtClearsGenerationFenceWhenTableIsAbsent(t *testing.T) {

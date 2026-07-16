@@ -972,9 +972,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	notPrint bool,
 ) error {
 	var newCreate bool
-	if dropAt != 0 {
-		exec.RemoveJobFence(NewJobRuntimeKey(accountID, tableID, jobName, jobID))
-	}
+	fenceKey := NewJobRuntimeKey(accountID, tableID, jobName, jobID)
 
 	var watermark types.TS
 	defer func() {
@@ -1005,6 +1003,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
 		if dropAt != 0 {
+			exec.RemoveJobFence(fenceKey)
 			return nil
 		}
 		table = NewTableEntry(
@@ -1018,6 +1017,9 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		exec.setTable(table)
 	}
 	newCreate = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	if dropAt != 0 {
+		exec.RemoveJobFence(fenceKey)
+	}
 	return nil
 }
 

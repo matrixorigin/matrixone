@@ -83,11 +83,12 @@ type faultEntry struct {
 	sarg             string // string arg
 	constant         bool
 
-	nWaiters int
-	removed  bool
-	mutex    sync.Mutex
-	cond     *sync.Cond
-	scope    Domain
+	nWaiters  int
+	notifySeq int64
+	removed   bool
+	mutex     sync.Mutex
+	cond      *sync.Cond
+	scope     Domain
 }
 
 type faultMap struct {
@@ -190,11 +191,17 @@ func (e *faultEntry) do() (int64, string) {
 		}
 	case NOTIFY:
 		if ee := lookup(e.scope, e.sarg); ee != nil {
+			ee.mutex.Lock()
+			ee.notifySeq++
 			ee.cond.Signal()
+			ee.mutex.Unlock()
 		}
 	case NOTIFYALL:
 		if ee := lookup(e.scope, e.sarg); ee != nil {
+			ee.mutex.Lock()
+			ee.notifySeq++
 			ee.cond.Broadcast()
+			ee.mutex.Unlock()
 		}
 	case PANIC:
 		switch e.iarg {
@@ -228,17 +235,22 @@ func (e *faultEntry) doWithContext(ctx context.Context) (int64, string) {
 		return 0, ""
 	}
 	e.nWaiters += 1
+	notifySeq := e.notifySeq
+	canceled := false
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
 			e.mutex.Lock()
+			canceled = true
 			e.cond.Broadcast()
 			e.mutex.Unlock()
 		case <-done:
 		}
 	}()
-	e.cond.Wait()
+	for !e.removed && !canceled && e.notifySeq == notifySeq {
+		e.cond.Wait()
+	}
 	e.nWaiters -= 1
 	close(done)
 	e.mutex.Unlock()
