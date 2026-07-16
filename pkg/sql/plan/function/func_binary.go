@@ -7341,6 +7341,9 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		hourParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 		getHourValue = func(i uint64) (int64, bool) {
 			val, null := hourParam.GetValue(i)
+			if null || val > 838 {
+				return 0, true
+			}
 			return int64(val), null
 		}
 	case types.T_float32, types.T_float64:

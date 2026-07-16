@@ -9532,6 +9532,32 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 	require.True(t, s, "MAKETIME fractional/sign case failed: %s", info)
 }
 
+func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{838, math.MaxUint64},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{34, 34},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{56, 56},
+				[]bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 838, 34, 56, 0),
+				0,
+			},
+			[]bool{false, true}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME unsigned hour overflow case failed: %s", info)
+}
+
 // TestTimestampDiffDateString tests TIMESTAMPDIFF with DATE and string arguments
 // This tests the new overload that handles mixed DATE and string types
 func TestTimestampDiffDateString(t *testing.T) {
