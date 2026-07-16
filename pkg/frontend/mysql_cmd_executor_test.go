@@ -1145,6 +1145,61 @@ func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T)
 	}
 }
 
+func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = make(map[string]string)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"remapdb":{"src":"session_db"}}`))
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	tests := []struct {
+		name      string
+		sql       string
+		want      string
+		qualified bool
+	}{
+		{
+			name:      "session policy",
+			sql:       "select * from src.t",
+			want:      "session_db",
+			qualified: true,
+		},
+		{
+			name:      "inline policy overrides session",
+			sql:       `/*+ {"remapdb":{"src":"inline_db"}} */ select * from src.t`,
+			want:      "inline_db",
+			qualified: true,
+		},
+		{
+			name: "unqualified table stays unqualified",
+			sql:  "select * from t",
+			want: "session_db",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rewritten, stmt, remap, err := prepareStringStatement(execCtx, ses, tt.sql)
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			defer stmt.Free()
+			require.NotEmpty(t, rewritten)
+			require.Equal(t, tt.want, remap["src"])
+			formatted := tree.String(stmt, dialect.MYSQL)
+			if tt.qualified {
+				require.Contains(t, formatted, tt.want+".t")
+				require.NotContains(t, formatted, "src.t")
+			} else {
+				require.Equal(t, "select * from t", formatted)
+			}
+		})
+	}
+}
+
 func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

@@ -1568,23 +1568,68 @@ func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*Pre
 }
 
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
-	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, ses, st.Sql)
 	if err != nil {
 		return nil, err
 	}
 
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
-	if err != nil {
-		return nil, err
-	}
+	// buildPrepare only understands PrepareStmt and otherwise reparses the
+	// original PrepareString text. Pass the already rewritten/remapped AST so
+	// authorization and planning see the same policy snapshot that is saved for
+	// later EXECUTE and schema-change rebuilds.
+	prepareNode := tree.NewPrepareStmt(st.Name, innerStmt)
+	defer prepareNode.Free()
 
-	prepareStmt, err := createPrepareStmt(execCtx, ses, st.Sql, st, stmts[0])
+	previousRemapDb := execCtx.remapDb
+	execCtx.remapDb = remapDb
+	prepareStmt, err := createPrepareStmt(execCtx, ses, rewritten, prepareNode, innerStmt)
+	execCtx.remapDb = previousRemapDb
 	if err != nil {
+		innerStmt.Free()
 		return nil, err
 	}
 
 	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
 	return prepareStmt, err
+}
+
+func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string, tree.Statement, map[string]string, error) {
+	rewritten, err := rewriteSQL(execCtx.reqCtx, ses, sql)
+	if err != nil {
+		return sql, nil, nil, err
+	}
+
+	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return rewritten, nil, nil, err
+	}
+
+	stmts, err := mysql.Parse(execCtx.reqCtx, rewritten, v.(int64))
+	if err != nil {
+		return rewritten, nil, nil, err
+	}
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return rewritten, nil, nil, moerr.NewInvalidInput(execCtx.reqCtx,
+			"prepared statement must contain exactly one statement")
+	}
+
+	var remapDb map[string]string
+	if ses.rewriteEnabled.Load() {
+		if err = parsers.AddRewriteHints(execCtx.reqCtx, stmts, rewritten); err != nil {
+			stmts[0].Free()
+			return rewritten, nil, nil, err
+		}
+		remaps := extractRemapDbByStatement(rewritten)
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+			stmts[0].Free()
+			return rewritten, nil, nil, err
+		}
+		remapDb = remaps[0]
+	}
+	return rewritten, stmts[0], remapDb, nil
 }
 
 // handlePrepareString
