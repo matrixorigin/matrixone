@@ -210,6 +210,7 @@ func (exec *ISCPTaskExecutor) finishCanceledJob(ctx context.Context, key JobRunt
 		return err
 	}
 	exec.clearCancelingJob(key)
+	exec.RemoveJobFence(key)
 	return nil
 }
 
@@ -272,6 +273,19 @@ func (exec *ISCPTaskExecutor) RemoveJobFence(key JobRuntimeKey) {
 	}
 	exec.runtimeMu.Lock()
 	delete(exec.fencedJobs, key)
+	exec.runtimeMu.Unlock()
+}
+
+func (exec *ISCPTaskExecutor) RemoveTableJobFences(accountID uint32, tableID uint64) {
+	if exec == nil {
+		return
+	}
+	exec.runtimeMu.Lock()
+	for key := range exec.fencedJobs {
+		if key.AccountID == accountID && key.TableID == tableID {
+			delete(exec.fencedJobs, key)
+		}
+	}
 	exec.runtimeMu.Unlock()
 }
 

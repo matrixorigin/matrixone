@@ -35,6 +35,7 @@ var (
 	iscpUnregisterJobFunc = iscp.UnregisterJob
 	iscpLookupJobLogFunc  = iscp.LookupJobLog
 	iscpGetExecutorFunc   = iscp.GetExecutorRuntime
+	iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 	isTableInCCPRFunc     = isTableInCCPRImpl
 )
 
@@ -197,7 +198,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 }
 
 func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
-	return drainIndexCdcTaskConsumer(c, tableDef, dbname, tablename, indexname, false)
+	return drainIndexCdcTaskConsumer(c, tableDef, dbname, tablename, indexname)
 }
 
 func drainIndexCdcTaskConsumer(
@@ -206,7 +207,6 @@ func drainIndexCdcTaskConsumer(
 	dbname string,
 	tablename string,
 	indexname string,
-	failIfNoLocalExecutor bool,
 ) error {
 	valid, err := checkValidIndexCdc(tableDef, indexname)
 	if err != nil {
@@ -236,22 +236,19 @@ func drainIndexCdcTaskConsumer(
 	if tableID == 0 {
 		tableID = tableDef.TblId
 	}
-	exec, ok := iscpGetExecutorFunc(c.proc.GetService())
+	runnerCN, err := iscpGetTaskRunnerFunc(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	if runnerCN == "" {
+		runnerCN = c.proc.GetService()
+	}
+	exec, ok := iscpGetExecutorFunc(runnerCN)
 	if !ok || exec == nil {
-		if !failIfNoLocalExecutor {
-			logutil.Infof(
-				"skip local drain for index cdc task consumer, iscp executor not found: cn=%s tableID=%d jobName=%s jobID=%d",
-				c.proc.GetService(),
-				tableID,
-				jobName,
-				jobID,
-			)
-			return nil
-		}
 		return moerr.NewInternalErrorf(
 			c.proc.Ctx,
 			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
-			c.proc.GetService(),
+			runnerCN,
 			tableID,
 			jobName,
 			jobID,
@@ -299,7 +296,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 			if e != nil {
 				return e
 			}
-			if e = drainIndexCdcTaskConsumer(c, tabledef, dbname, tablename, idx.IndexName, false); e != nil {
+			if e = drainIndexCdcTaskConsumer(c, tabledef, dbname, tablename, idx.IndexName); e != nil {
 				return e
 			}
 		}

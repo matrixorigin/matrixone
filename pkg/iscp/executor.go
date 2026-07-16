@@ -1065,6 +1065,7 @@ func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
 	tids := make([]uint64, 0, len(tablesToDelete))
 	for _, table := range tablesToDelete {
 		exec.deleteTableEntry(table)
+		exec.RemoveTableJobFences(table.accountID, table.tableID)
 		tids = append(tids, table.tableID)
 	}
 	logutil.Infof("ISCP-Task delete table %v", tids)

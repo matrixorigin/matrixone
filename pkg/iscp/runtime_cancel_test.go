@@ -195,6 +195,22 @@ func TestTableEntryGetCandidateDoesNotSkipRecreatedSameNameJob(t *testing.T) {
 	require.Equal(t, []uint64{2}, iters[0].jobIDs)
 }
 
+func TestRemoveTableJobFencesOnlyClearsMatchingTable(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	key1 := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	key2 := NewJobRuntimeKey(1, 2, "index_idx01", 2)
+	keyOtherTable := NewJobRuntimeKey(1, 3, "index_idx01", 1)
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key1.AccountID, key1.TableID, key1.JobName, key1.JobID))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key2.AccountID, key2.TableID, key2.JobName, key2.JobID))
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), keyOtherTable.AccountID, keyOtherTable.TableID, keyOtherTable.JobName, keyOtherTable.JobID))
+
+	exec.RemoveTableJobFences(1, 2)
+
+	require.False(t, exec.IsJobFenced(key1))
+	require.False(t, exec.IsJobFenced(key2))
+	require.True(t, exec.IsJobFenced(keyOtherTable))
+}
+
 func TestCancelAndDrainJobConsumerHonorsCallerContext(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)

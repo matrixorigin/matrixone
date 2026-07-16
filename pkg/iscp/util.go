@@ -441,14 +441,8 @@ func checkLease(
 	}
 	defer txn.Commit(ctxWithTimeout)
 
-	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
-	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
-	if err != nil {
-		return
-	}
-	defer result.Close()
 	var runner string
-	runner, err = readSingleTaskRunner(result)
+	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)
 	if err != nil {
 		return
 	}
@@ -465,6 +459,23 @@ func checkLease(
 		)
 	}
 	return
+}
+
+func GetTaskRunner(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+) (string, error) {
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	defer cancel()
+
+	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
+	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+	return readSingleTaskRunner(result)
 }
 
 func readSingleTaskRunner(result executor.Result) (string, error) {

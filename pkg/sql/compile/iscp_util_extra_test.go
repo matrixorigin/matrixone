@@ -325,11 +325,15 @@ func TestDrainIndexCdcTaskConsumerFencesRuntimeJob(t *testing.T) {
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
 		return exec, true
 	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
 	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
 		return 0, 42, 7, true, true, nil
 	}
 	defer func() {
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
@@ -353,15 +357,23 @@ func TestDrainIndexCdcTaskConsumerFencesRuntimeJob(t *testing.T) {
 	require.True(t, exec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)))
 }
 
-func TestDrainIndexCdcTaskConsumerNoLocalExecutorContinues(t *testing.T) {
+func TestDrainIndexCdcTaskConsumerRoutesToRunnerExecutor(t *testing.T) {
+	runnerExec := &iscp.ISCPTaskExecutor{}
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		if cnUUID == "runner-cn" {
+			return runnerExec, true
+		}
 		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
 	}
 	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
 		return 0, 42, 7, true, true, nil
 	}
 	defer func() {
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
@@ -380,6 +392,40 @@ func TestDrainIndexCdcTaskConsumerNoLocalExecutorContinues(t *testing.T) {
 	}
 
 	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	require.True(t, runnerExec.IsJobFenced(iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)))
+}
+
+func TestDrainIndexCdcTaskConsumerNoRunnerExecutorFailsClosed(t *testing.T) {
+	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{
+			{
+				TableExist:      true,
+				IndexName:       "idx1",
+				IndexAlgo:       "hnsw",
+				IndexAlgoParams: `{"async":"true"}`,
+			},
+		},
+	}
+
+	require.ErrorContains(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"), "cannot confirm ISCP consumer quiescence on CN runner-cn")
 }
 
 func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
@@ -387,11 +433,15 @@ func TestDrainIndexCdcTaskConsumerRegistersRollbackFenceCleanup(t *testing.T) {
 	iscpGetExecutorFunc = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
 		return exec, true
 	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
 	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
 		return 0, 42, 7, true, true, nil
 	}
 	defer func() {
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
@@ -443,12 +493,16 @@ func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {
 	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
 		return exec, true
 	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
 	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
 		return 0, 42, uint64(dropCount), true, true, nil
 	}
 	defer func() {
 		iscpUnregisterJobFunc = iscp.UnregisterJob
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
@@ -477,7 +531,7 @@ func TestCoverage_DropAllIndexCdcTasks_DuplicateNames(t *testing.T) {
 	assert.Equal(t, 1, dropCount, "duplicate index names should be deduplicated")
 }
 
-func TestDropAllIndexCdcTasksNoLocalExecutorContinuesAfterUnregister(t *testing.T) {
+func TestDropAllIndexCdcTasksNoRunnerExecutorFailsAfterUnregister(t *testing.T) {
 	dropCount := 0
 	iscpUnregisterJobFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (bool, error) {
 		dropCount++
@@ -486,12 +540,16 @@ func TestDropAllIndexCdcTasksNoLocalExecutorContinuesAfterUnregister(t *testing.
 	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
 		return nil, false
 	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
 	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
 		return 0, 42, 1, true, true, nil
 	}
 	defer func() {
 		iscpUnregisterJobFunc = iscp.UnregisterJob
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
@@ -509,7 +567,7 @@ func TestDropAllIndexCdcTasksNoLocalExecutorContinuesAfterUnregister(t *testing.
 		},
 	}
 
-	require.NoError(t, DropAllIndexCdcTasks(c, tbldef, "db", "tbl"))
+	require.ErrorContains(t, DropAllIndexCdcTasks(c, tbldef, "db", "tbl"), "cannot confirm ISCP consumer quiescence on CN runner-cn")
 	require.Equal(t, 1, dropCount)
 }
 
@@ -523,12 +581,16 @@ func TestCoverage_DropAllIndexCdcTasks_MixedIndexes(t *testing.T) {
 	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
 		return exec, true
 	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		return "runner-cn", nil
+	}
 	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
 		return 0, 42, uint64(dropCount), true, true, nil
 	}
 	defer func() {
 		iscpUnregisterJobFunc = iscp.UnregisterJob
 		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
 		iscpLookupJobLogFunc = iscp.LookupJobLog
 	}()
 
