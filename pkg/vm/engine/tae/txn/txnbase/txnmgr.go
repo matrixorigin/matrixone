@@ -165,6 +165,17 @@ type TxnManager struct {
 	prevPrepareTSInPrepareWAL types.TS
 }
 
+// RecoveringTxn is an immutable snapshot of a replayed distributed
+// transaction that still needs a coordinator decision after restart.
+type RecoveringTxn struct {
+	ID           []byte
+	SnapshotTS   types.TS
+	PreparedTS   types.TS
+	CommitTS     types.TS
+	State        txnif.TxnState
+	Participants []uint64
+}
+
 func NewTxnManager(
 	txnStoreFactory TxnStoreFactory,
 	txnFactory TxnFactory,
@@ -451,6 +462,41 @@ func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 		return nil
 	}
 	return res
+}
+
+// SnapshotRecoveringTxns returns replayed distributed transactions that still
+// need a coordinator decision after restart. Both the slice and its variable
+// length fields are detached from the live transaction map.
+func (mgr *TxnManager) SnapshotRecoveringTxns() []RecoveringTxn {
+	txns := make([]RecoveringTxn, 0)
+	mgr.txns.store.Range(func(_, value any) bool {
+		txn := value.(txnif.AsyncTxn)
+		if !txn.IsReplay() || !txn.Is2PC() {
+			return true
+		}
+		state := txn.GetTxnState(false)
+		switch state {
+		case txnif.TxnStatePrepared, txnif.TxnStateCommittingFinished:
+		default:
+			return true
+		}
+		snapshot := RecoveringTxn{
+			ID:           append([]byte(nil), txn.GetCtx()...),
+			SnapshotTS:   txn.GetSnapshotTS(),
+			PreparedTS:   txn.GetPrepareTS(),
+			CommitTS:     txn.GetCommitTS(),
+			State:        state,
+			Participants: append([]uint64(nil), txn.GetParticipants()...),
+		}
+		// State transitions are monotonic. If it changed while fields were
+		// copied, leave resolution to the final-state path instead of emitting
+		// a mixed recovery record.
+		if txn.GetTxnState(false) == state {
+			txns = append(txns, snapshot)
+		}
+		return true
+	})
+	return txns
 }
 
 func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {

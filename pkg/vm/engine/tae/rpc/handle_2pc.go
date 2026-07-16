@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -72,9 +73,37 @@ func (h *Handle) HandlePrepare(
 func (h *Handle) HandleStartRecovery(
 	ctx context.Context,
 	ch chan txn.TxnMeta) {
-	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
-	//TODO:: 1.  Get the 2PC transactions which be in prepared or
-	//           committing state from txn engine's recovery.
-	//       2.  Feed these transaction into ch.
-	close(ch)
+	defer close(ch)
+
+	for _, recovering := range h.db.TxnMgr.SnapshotRecoveringTxns() {
+		status := txn.TxnStatus_Prepared
+		if recovering.State == txnif.TxnStateCommittingFinished {
+			status = txn.TxnStatus_Committing
+		}
+
+		shards := make([]metadata.TNShard, 0, len(recovering.Participants))
+		for _, shardID := range recovering.Participants {
+			if h.db.Opts != nil && h.db.Opts.Shard.GetShardID() == shardID {
+				shards = append(shards, h.db.Opts.Shard)
+				continue
+			}
+			shards = append(shards, metadata.TNShard{
+				TNShardRecord: metadata.TNShardRecord{ShardID: shardID},
+			})
+		}
+
+		meta := txn.TxnMeta{
+			ID:         recovering.ID,
+			Status:     status,
+			SnapshotTS: recovering.SnapshotTS.ToTimestamp(),
+			PreparedTS: recovering.PreparedTS.ToTimestamp(),
+			CommitTS:   recovering.CommitTS.ToTimestamp(),
+			TNShards:   shards,
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- meta:
+		}
+	}
 }
