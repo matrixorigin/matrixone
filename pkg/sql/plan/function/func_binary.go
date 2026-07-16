@@ -6299,7 +6299,7 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 
 		date, null := dates.GetValue(i)
-		if null {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6342,7 +6342,7 @@ func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		dt, null := datetimes.GetValue(i)
-		if null {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6389,7 +6389,7 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 
 		ts, null := timestamps.GetValue(i)
-		if null {
+		if null || ts == types.ZeroTimestamp {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6457,6 +6457,12 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 				}
 				continue
 			}
+			if date == types.ZeroDate {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
 			// Use date for YEARWEEK calculation
 			year, week := date.YearWeek(mode)
 			result := int64(year)*100 + int64(week)
@@ -6466,6 +6472,12 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		// Use datetime for YEARWEEK calculation
 		year, week := dt.YearWeek(mode)
 		result := int64(year)*100 + int64(week)

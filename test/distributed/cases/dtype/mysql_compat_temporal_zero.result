@@ -18,6 +18,49 @@ null
 select unix_timestamp('0000-00-00 00:00:00.000000') as zero_unix_timestamp_fraction;
 ➤ zero_unix_timestamp_fraction[3,38,6]  𝄀
 null
+select dayofyear(cast('0000-00-00' as date)) as zero_dayofyear,
+week(cast('0000-00-00' as date)) as zero_week_date,
+week(cast('0000-00-00 00:00:00' as datetime)) as zero_week_datetime;
+➤ zero_dayofyear[5,16,0]  ¦  zero_week_date[-6,8,0]  ¦  zero_week_datetime[-6,8,0]  𝄀
+null  ¦  null  ¦  null
+select weekofyear(cast('0000-00-00' as date)) as zero_weekofyear_date,
+weekofyear(cast('0000-00-00 00:00:00' as datetime)) as zero_weekofyear_datetime,
+weekofyear(cast('0000-00-00 00:00:00' as timestamp)) as zero_weekofyear_timestamp;
+➤ zero_weekofyear_date[-5,64,0]  ¦  zero_weekofyear_datetime[-5,64,0]  ¦  zero_weekofyear_timestamp[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+select yearweek(cast('0000-00-00' as date)) as zero_yearweek_date,
+yearweek(cast('0000-00-00 00:00:00' as datetime)) as zero_yearweek_datetime,
+yearweek(cast('0000-00-00 00:00:00' as timestamp)) as zero_yearweek_timestamp,
+yearweek('0000-00-00') as zero_yearweek_string;
+➤ zero_yearweek_date[-5,64,0]  ¦  zero_yearweek_datetime[-5,64,0]  ¦  zero_yearweek_timestamp[-5,64,0]  ¦  zero_yearweek_string[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+select weekday(cast('0000-00-00' as date)) as zero_weekday_date,
+weekday(cast('0000-00-00 00:00:00' as datetime)) as zero_weekday_datetime,
+dayofweek(cast('0000-00-00' as date)) as zero_dayofweek_date,
+dayofweek(cast('0000-00-00 00:00:00' as datetime)) as zero_dayofweek_datetime,
+dayofweek(cast('0000-00-00 00:00:00' as timestamp)) as zero_dayofweek_timestamp;
+➤ zero_weekday_date[-5,64,0]  ¦  zero_weekday_datetime[-5,64,0]  ¦  zero_dayofweek_date[-5,64,0]  ¦  zero_dayofweek_datetime[-5,64,0]  ¦  zero_dayofweek_timestamp[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+select dayname(cast('0000-00-00' as date)) as zero_dayname_date,
+dayname(cast('0000-00-00 00:00:00' as datetime)) as zero_dayname_datetime,
+dayname(cast('0000-00-00 00:00:00' as timestamp)) as zero_dayname_timestamp;
+➤ zero_dayname_date[12,-1,0]  ¦  zero_dayname_datetime[12,-1,0]  ¦  zero_dayname_timestamp[12,-1,0]  𝄀
+null  ¦  null  ¦  null
+select monthname(cast('0000-00-00' as date)) as zero_monthname_date,
+monthname(cast('0000-00-00 00:00:00' as datetime)) as zero_monthname_datetime,
+monthname(cast('0000-00-00 00:00:00' as timestamp)) as zero_monthname_timestamp;
+➤ zero_monthname_date[12,-1,0]  ¦  zero_monthname_datetime[12,-1,0]  ¦  zero_monthname_timestamp[12,-1,0]  𝄀
+null  ¦  null  ¦  null
+select dayofmonth(cast('0000-00-00' as date)) as zero_dayofmonth_date,
+dayofmonth(cast('0000-00-00 00:00:00' as datetime)) as zero_dayofmonth_datetime,
+month(cast('0000-00-00' as date)) as zero_month_date,
+month(cast('0000-00-00 00:00:00' as datetime)) as zero_month_datetime,
+quarter(cast('0000-00-00' as date)) as zero_quarter_date,
+quarter(cast('0000-00-00 00:00:00' as datetime)) as zero_quarter_datetime,
+year(cast('0000-00-00' as date)) as zero_year_date,
+year(cast('0000-00-00 00:00:00' as datetime)) as zero_year_datetime;
+➤ zero_dayofmonth_date[-6,8,0]  ¦  zero_dayofmonth_datetime[-6,8,0]  ¦  zero_month_date[-6,8,0]  ¦  zero_month_datetime[-6,8,0]  ¦  zero_quarter_date[-6,8,0]  ¦  zero_quarter_datetime[-6,8,0]  ¦  zero_year_date[-5,64,0]  ¦  zero_year_datetime[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
 select cast('0001-01-01' as date) as minimum_date,
 cast('0001-01-01 00:00:00' as datetime) as minimum_datetime;
 ➤ minimum_date[91,64,0]  ¦  minimum_datetime[93,64,0]  𝄀

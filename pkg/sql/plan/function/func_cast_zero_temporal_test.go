@@ -289,3 +289,69 @@ func TestZeroTemporalIntervalOperatorsReturnNull(t *testing.T) {
 		})
 	}
 }
+
+func TestCompleteDateFunctionsReturnNullForZeroTemporal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{name: "dayofyear date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint16.ToType(), false, []uint16{0}, []bool{true}), fn: DayOfYear},
+		{name: "week date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{true}), fn: DateToWeek},
+		{name: "week datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{true}), fn: DatetimeToWeek},
+		{name: "weekofyear date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DateToWeekOfYear},
+		{name: "weekofyear datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DatetimeToWeekOfYear},
+		{name: "weekofyear timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: TimestampToWeekOfYear},
+		{name: "yearweek date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: YearWeekDate},
+		{name: "yearweek datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: YearWeekDatetime},
+		{name: "yearweek timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: YearWeekTimestamp},
+		{name: "yearweek string", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00"}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: YearWeekString},
+		{name: "weekday date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DateToWeekday},
+		{name: "weekday datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DatetimeToWeekday},
+		{name: "dayofweek date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DateToDayOfWeek},
+		{name: "dayofweek datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DatetimeToDayOfWeek},
+		{name: "dayofweek timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: TimestampToDayOfWeek},
+		{name: "dayname date const", input: NewFunctionTestConstInput(types.T_date.ToType(), []types.Date{types.ZeroDate, types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}), fn: DateToDayName},
+		{name: "dayname datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn: DatetimeToDayName},
+		{name: "dayname timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil), expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn: TimestampToDayName},
+		{name: "monthname date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn: DateToMonthName},
+		{name: "monthname datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn: DatetimeToMonthName},
+		{name: "monthname timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil), expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn: TimestampToMonthName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, tc.fn)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestPartialDateFunctionsKeepZeroForZeroTemporal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{name: "dayofmonth date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DateToDay},
+		{name: "dayofmonth datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DatetimeToDay},
+		{name: "month date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DateToMonth},
+		{name: "month datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DatetimeToMonth},
+		{name: "quarter date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DateToQuarter},
+		{name: "quarter datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, nil), fn: DatetimeToQuarter},
+		{name: "year date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil), fn: DateToYear},
+		{name: "year datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil), fn: DatetimeToYear},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, tc.fn)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
