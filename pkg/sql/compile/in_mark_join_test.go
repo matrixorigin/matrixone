@@ -58,9 +58,25 @@ func TestCanUseHashMarkJoin(t *testing.T) {
 			want:       false,
 		},
 		{
+			name: "hash key plus residual non-equality retains loop join",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, "<", 1, true),
+			},
+			want: false,
+		},
+		{
 			name:       "same-side equality is not a hash join key",
 			conditions: []*plan.Expr{makeMarkJoinTestSameSideCondition(t)},
 			want:       false,
+		},
+		{
+			name: "hash key plus mixed-side correlated equality retains loop join",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestMixedSideCondition(t),
+			},
+			want: false,
 		},
 	}
 
@@ -82,6 +98,41 @@ func makeMarkJoinTestSameSideCondition(t *testing.T) *plan.Expr {
 	condition := makeMarkJoinTestCondition(t, "=", 0, true)
 	condition.GetF().Args[1].GetCol().RelPos = 0
 	return condition
+}
+
+// makeMarkJoinTestMixedSideCondition models a pulled-up correlated predicate
+// such as t2.z + t1.c = t1.d. The left operand cannot be a hash key because it
+// references both the build and probe relations.
+func makeMarkJoinTestMixedSideCondition(t *testing.T) *plan.Expr {
+	t.Helper()
+
+	typ := types.T_int64.ToType()
+	plus, err := function.GetFunctionByName(context.Background(), "+", []types.Type{typ, typ})
+	require.NoError(t, err)
+	equal, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+	require.NoError(t, err)
+
+	mixedOperand := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: plus.GetEncodedOverloadID(), ObjName: "+"},
+			Args: []*plan.Expr{
+				makeMarkJoinTestColumn(1, 1, true),
+				makeMarkJoinTestColumn(0, 1, true),
+			},
+		}},
+	}
+
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: []*plan.Expr{
+				mixedOperand,
+				makeMarkJoinTestColumn(0, 2, true),
+			},
+		}},
+	}
 }
 
 func TestConstructBroadcastHashBuildForMark(t *testing.T) {

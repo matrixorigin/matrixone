@@ -69,6 +69,10 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.IsMark() && hashJoin.NonEqCond != nil {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join does not support residual conditions")
+	}
+
 	if hashJoin.OpAnalyzer == nil {
 		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)
 	} else {

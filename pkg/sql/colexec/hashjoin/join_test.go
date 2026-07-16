@@ -75,6 +75,18 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 	proc.Free()
 }
 
+func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument()
+	arg.JoinType = plan.Node_MARK
+	arg.NonEqCond = newExpr(0, types.T_int32.ToType())
+
+	require.ErrorContains(t, arg.Prepare(proc), "hash MARK join does not support residual conditions")
+
+	arg.Release()
+	proc.Free()
+}
+
 var (
 	tag int32
 )
