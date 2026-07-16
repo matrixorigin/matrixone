@@ -230,7 +230,8 @@ type FixedVectorExpressionExecutor struct {
 }
 
 type FunctionExpressionExecutor struct {
-	m *mpool.MPool
+	m   *mpool.MPool
+	typ types.Type
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -241,6 +242,7 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults  []*vector.Vector
 	parameterExecutor []ExpressionExecutor
+	iffNullResults    [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -496,6 +498,7 @@ func (expr *FunctionExpressionExecutor) Init(
 	m := proc.Mp()
 
 	expr.m = m
+	expr.typ = retType
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
@@ -514,9 +517,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList2 = make([]bool, rowCount)
 	}
 
-	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
 			expr.selectList1[i] = selectList[i]
 			expr.selectList2[i] = selectList[i]
@@ -524,18 +525,57 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 			expr.selectList1[i] = true
 			expr.selectList2[i] = true
 		}
-		if !null && b {
+		if !expr.selectList1[i] {
+			continue
+		}
+		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i))
+		if err != nil {
+			return err
+		}
+		if truth {
 			expr.selectList2[i] = false
 		} else {
 			expr.selectList1[i] = false
 		}
 	}
-	expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, expr.selectList1)
-	if err != nil {
+	if hasSelectedRows(expr.selectList1) {
+		expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, expr.selectList1)
+		if err != nil {
+			return err
+		}
+	} else {
+		expr.parameterResults[1] = expr.iffNullResult(0, rowCount)
+	}
+	if hasSelectedRows(expr.selectList2) {
+		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, expr.selectList2)
 		return err
 	}
-	expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, expr.selectList2)
-	return err
+	expr.parameterResults[2] = expr.iffNullResult(1, rowCount)
+	return nil
+}
+
+func hasSelectedRows(selectList []bool) bool {
+	for _, selected := range selectList {
+		if selected {
+			return true
+		}
+	}
+	return false
+}
+
+func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) *vector.Vector {
+	typ := expr.typ
+	result := expr.iffNullResults[index]
+	if result == nil || *result.GetType() != typ {
+		if result != nil {
+			result.Free(expr.m)
+		}
+		result = vector.NewConstNull(typ, length, expr.m)
+		expr.iffNullResults[index] = result
+	} else {
+		result.SetLength(length)
+	}
+	return result
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
@@ -664,6 +704,7 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
+	expr.freeIffNullResults()
 
 	for _, p := range expr.parameterExecutor {
 		if p != nil {

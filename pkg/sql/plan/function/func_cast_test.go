@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -3755,4 +3756,38 @@ func TestCastNumericTokenInvalidInputErrors(t *testing.T) {
 	_, err = prefixedDigitsToDecimalString("2", 2)
 	require.ErrorContains(t, err, "invalid input:")
 	require.ErrorContains(t, err, "invalid numeric string")
+}
+
+func TestParseFloatCastString(t *testing.T) {
+	valid := []struct {
+		input string
+		want  float64
+	}{
+		{"  -2.5 ", -2.5},
+		{"+0x10", 16},
+		{"-0x10", -16},
+		{"0b1010", 10},
+		{"0o17", 15},
+		{"NaN", math.NaN()},
+		{"Inf", math.Inf(1)},
+	}
+	for _, tt := range valid {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseFloatCastString(tt.input)
+			require.NoError(t, err)
+			if math.IsNaN(tt.want) {
+				require.True(t, math.IsNaN(got))
+				return
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, input := range []string{"1abc", "", "0x", "0xg", "1e10000"} {
+		t.Run("invalid_"+input, func(t *testing.T) {
+			_, err := parseFloatCastString(input)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
 }

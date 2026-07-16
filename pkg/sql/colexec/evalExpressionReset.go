@@ -88,6 +88,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	expr.folded.reset(expr.m)
 	// reset the function information.
 	expr.functionInformationForEval.reset()
+	expr.freeIffNullResults()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -97,6 +98,15 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 
 		expr.parameterResults[i] = nil
 		param.ResetForNextQuery()
+	}
+}
+
+func (expr *FunctionExpressionExecutor) freeIffNullResults() {
+	for i, result := range expr.iffNullResults {
+		if result != nil {
+			result.Free(expr.m)
+			expr.iffNullResults[i] = nil
+		}
 	}
 }
 
@@ -115,6 +125,11 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 
 	expr.folded.needFoldingCheck = false
 	expr.folded.canFold = false
+	if expr.fid == function.IFF {
+		// IFF must choose its branch before evaluating it. The generic recursive
+		// folding below visits every child and would violate that short-circuit.
+		return nil
+	}
 
 	// fold parameters.
 	allParametersFolded := true

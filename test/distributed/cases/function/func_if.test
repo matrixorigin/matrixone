@@ -199,6 +199,34 @@ INSERT INTO t1 VALUES(1,0,0),(1,2,0),(1,0,3),(1,2,3);
 SELECT if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c)) FROM t1;
 DROP TABLE t1;
 
+-- IF condition numeric-token semantics. The result file is generated after the implementation lands.
+-- @bvt:issue
+SELECT IF(NULL, 'T', 'F') AS if_null_false;
+SELECT IF('0', 'T', 'F') AS if_string_zero_false,
+       IF('  -2.5 ', 'T', 'F') AS if_string_decimal_true;
+SELECT IF('+0x10', 'T', 'F') AS if_hex_positive_true,
+       IF('-0x10', 'T', 'F') AS if_hex_negative_true,
+       IF('0b1010', 'T', 'F') AS if_binary_prefix_true,
+       IF('0o17', 'T', 'F') AS if_octal_prefix_true;
+SELECT IF('NaN', 'T', 'F') AS if_nan_true,
+       IF('Inf', 'T', 'F') AS if_inf_true;
+
+-- String-family conditions use their actual bytes as complete numeric tokens.
+SELECT IF(CAST('0x10' AS VARBINARY), 'T', 'F') AS if_varbinary_hex_true,
+       IF(CAST('0x10' AS BLOB), 'T', 'F') AS if_blob_hex_true,
+       IF(X'3136', 'T', 'F') AS if_binary_text_16_true;
+SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_error;
+SELECT IF(CAST('0x10' AS BINARY(8)), 'T', 'F') AS if_fixed_binary_padding_error;
+
+-- Complete conversion is required; invalid numeric tokens return moerr.
+SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_error;
+SELECT IF('abc', 'T', 'F') AS if_invalid_string_error;
+SELECT IF('  -2.5foo', 'T', 'F') AS if_signed_suffix_error;
+SELECT IF('', 'T', 'F') AS if_empty_string_error;
+SELECT IF('true', 'T', 'F') AS if_bool_text_error;
+SELECT IF('0x', 'T', 'F') AS if_missing_hex_digits_error;
+SELECT IF('1e10000', 'T', 'F') AS if_float_overflow_error;
+
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES(1),(2),(3);
 SELECT CASE WHEN id = 1 THEN 'string' WHEN id = 2 THEN 123 ELSE 'mixed' END AS mixed_case FROM t1 ORDER BY id;

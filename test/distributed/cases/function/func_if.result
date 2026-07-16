@@ -22,7 +22,7 @@ INSERT INTO t VALUES ( 6,    6.0,  10.0/3),
 ( 1,    null, 10.0/3),
 ( 2,    2.0,  null  );
 SELECT coalesce(e2,i1) nullif_c, IF(e2 IS NULL,i1,e2) if_c, SUM(d1) FROM t GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
-➤ nullif_c[3,18,2]  ¦  if_c[3,18,2]  ¦  SUM(d1)[8,54,0]  𝄀
+➤ nullif_c[3,12,2]  ¦  if_c[3,12,2]  ¦  SUM(d1)[8,54,0]  𝄀
 2.00  ¦  2.00  ¦  2.0  𝄀
 3.33  ¦  3.33  ¦  null  𝄀
 3.33  ¦  3.33  ¦  6.0  𝄀
@@ -65,7 +65,7 @@ INSERT INTO t VALUES ( 6,    6.0,  10.0/3),
 SELECT IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY SUM(d1);
-➤ if_c[3,18,2]  ¦  SUM(d1)[8,54,0]  𝄀
+➤ if_c[3,12,2]  ¦  SUM(d1)[8,54,0]  𝄀
 3.33  ¦  null  𝄀
 2.00  ¦  2.0  𝄀
 3.33  ¦  6.0  𝄀
@@ -98,7 +98,8 @@ SELECT a FROM t1 WHERE a IN(1, (SELECT IF(1=0,1,2/1)));
 2
 DROP TABLE t1;
 select IF(0,"ERROR","this"),IF(1,"is","ERROR"),IF(NULL,"ERROR","a"),IF(1,2,3)|0,IF(1,2.0,3.0)+0 ;
-invalid argument function if, bad value [ANY VARCHAR VARCHAR]
+➤ IF(0, ERROR, this)[12,-1,0]  ¦  IF(1, is, ERROR)[12,-1,0]  ¦  IF(null, ERROR, a)[12,-1,0]  ¦  IF(1, 2, 3) | 0[-5,64,0]  ¦  IF(1, 2.0, 3.0) + 0[3,38,1]  𝄀
+this  ¦  is  ¦  a  ¦  2  ¦  2.0
 CREATE TABLE t1 (st varchar(255) NOT NULL, u int(11) NOT NULL);
 [unknown result because it is related to issue#3334]
 INSERT INTO t1 VALUES ('a',1),('A',1),('aa',1),('AA',1),('a',1),('aaa',0),('BBB',0);
@@ -148,7 +149,7 @@ DROP TABLE t1;
 create table t1 (f1 int, f2 int);
 insert into t1 values(1,1),(0,0);
 select f1, any_value(f2), if(f1, 40.0, 5.00) from t1 group by f1;
-➤ f1[4,32,0]  ¦  any_value(f2)[4,32,0]  ¦  if(f1, 40.0, 5.00)[3,18,2]  𝄀
+➤ f1[4,32,0]  ¦  any_value(f2)[4,32,0]  ¦  if(f1, 40.0, 5.00)[3,19,2]  𝄀
 1  ¦  1  ¦  40.00  𝄀
 0  ¦  0  ¦  5.00
 drop table t1;
@@ -230,16 +231,56 @@ drop table test_grid_dtl_1;
 CREATE TABLE t1(a INT,b INT,c INT);
 INSERT INTO t1 VALUES(1,0,0),(1,2,0),(1,0,3),(1,2,3);
 SELECT if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c)) FROM t1;
-if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c))
-1
-0.5
-0.3333333333333333
+➤ if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c))[8,54,0]  𝄀
+1.0  𝄀
+0.5  𝄀
+0.3333333333333333  𝄀
 0.16666666666666666
 DROP TABLE t1;
+SELECT IF(NULL, 'T', 'F') AS if_null_false;
+➤ if_null_false[12,-1,0]  𝄀
+F
+SELECT IF('0', 'T', 'F') AS if_string_zero_false,
+IF('  -2.5 ', 'T', 'F') AS if_string_decimal_true;
+➤ if_string_zero_false[12,-1,0]  ¦  if_string_decimal_true[12,-1,0]  𝄀
+F  ¦  T
+SELECT IF('+0x10', 'T', 'F') AS if_hex_positive_true,
+IF('-0x10', 'T', 'F') AS if_hex_negative_true,
+IF('0b1010', 'T', 'F') AS if_binary_prefix_true,
+IF('0o17', 'T', 'F') AS if_octal_prefix_true;
+➤ if_hex_positive_true[12,-1,0]  ¦  if_hex_negative_true[12,-1,0]  ¦  if_binary_prefix_true[12,-1,0]  ¦  if_octal_prefix_true[12,-1,0]  𝄀
+T  ¦  T  ¦  T  ¦  T
+SELECT IF('NaN', 'T', 'F') AS if_nan_true,
+IF('Inf', 'T', 'F') AS if_inf_true;
+➤ if_nan_true[12,-1,0]  ¦  if_inf_true[12,-1,0]  𝄀
+T  ¦  T
+SELECT IF(CAST('0x10' AS VARBINARY), 'T', 'F') AS if_varbinary_hex_true,
+IF(CAST('0x10' AS BLOB), 'T', 'F') AS if_blob_hex_true,
+IF(X'3136', 'T', 'F') AS if_binary_text_16_true;
+➤ if_varbinary_hex_true[12,-1,0]  ¦  if_blob_hex_true[12,-1,0]  ¦  if_binary_text_16_true[12,-1,0]  𝄀
+T  ¦  T  ¦  T
+SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_error;
+invalid input: "\x10" is invalid numeric string
+SELECT IF(CAST('0x10' AS BINARY(8)), 'T', 'F') AS if_fixed_binary_padding_error;
+invalid input: "10\x00\x00\x00\x00" is invalid numeric string
+SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_error;
+invalid input: "1abc" is invalid numeric string
+SELECT IF('abc', 'T', 'F') AS if_invalid_string_error;
+invalid input: "abc" is invalid numeric string
+SELECT IF('  -2.5foo', 'T', 'F') AS if_signed_suffix_error;
+invalid input: "-2.5foo" is invalid numeric string
+SELECT IF('', 'T', 'F') AS if_empty_string_error;
+invalid input: "" is invalid numeric string
+SELECT IF('true', 'T', 'F') AS if_bool_text_error;
+invalid input: "true" is invalid numeric string
+SELECT IF('0x', 'T', 'F') AS if_missing_hex_digits_error;
+invalid input: "0x" is invalid numeric string
+SELECT IF('1e10000', 'T', 'F') AS if_float_overflow_error;
+invalid input: "1e10000" is invalid numeric string
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES(1),(2),(3);
 SELECT CASE WHEN id = 1 THEN 'string' WHEN id = 2 THEN 123 ELSE 'mixed' END AS mixed_case FROM t1 ORDER BY id;
-➤ mixed_case[12,6,0]  𝄀
+➤ mixed_case[12,-1,0]  𝄀
 string  𝄀
 123  𝄀
 mixed

@@ -442,20 +442,21 @@ var (
 func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
-		needCast := false
-		if inputs[0].Oid != types.T_bool {
-			if !inputs[0].IsIntOrUint() {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			needCast = true
+		conditionType := inputs[0]
+		needCast := conditionType.Oid == types.T_any
+		if needCast {
+			conditionType = types.T_bool.ToType()
+		} else if conditionType.Oid != types.T_bool &&
+			!conditionType.IsNumeric() && !conditionType.Oid.IsMySQLString() {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
-			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
 		if retType, resultAligned, ok := textStringCommonType(source); ok {
-			finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
+			finalTypes := []types.Type{conditionType, retType, retType}
 			shouldCast := needCast || !resultAligned
 			for i := range inputs {
 				if inputs[i].Oid != finalTypes[i].Oid {
@@ -499,7 +500,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
+		finalTypes := []types.Type{conditionType, retType, retType}
 		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
 		for i := range inputs {
 			if inputs[i].Oid != finalTypes[i].Oid {
@@ -512,6 +513,53 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+func IffConditionTruthyAt(vec *vector.Vector, row uint64) (bool, error) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
+		return false, nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		return vector.GetFixedAtNoTypeCheck[bool](vec, int(row)), nil
+	case types.T_bit:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, int(row)) != 0, nil
+	case types.T_int8:
+		return vector.GetFixedAtNoTypeCheck[int8](vec, int(row)) != 0, nil
+	case types.T_int16:
+		return vector.GetFixedAtNoTypeCheck[int16](vec, int(row)) != 0, nil
+	case types.T_int32:
+		return vector.GetFixedAtNoTypeCheck[int32](vec, int(row)) != 0, nil
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, int(row)) != 0, nil
+	case types.T_uint8:
+		return vector.GetFixedAtNoTypeCheck[uint8](vec, int(row)) != 0, nil
+	case types.T_uint16:
+		return vector.GetFixedAtNoTypeCheck[uint16](vec, int(row)) != 0, nil
+	case types.T_uint32:
+		return vector.GetFixedAtNoTypeCheck[uint32](vec, int(row)) != 0, nil
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, int(row)) != 0, nil
+	case types.T_float32:
+		return vector.GetFixedAtNoTypeCheck[float32](vec, int(row)) != 0, nil
+	case types.T_float64:
+		return vector.GetFixedAtNoTypeCheck[float64](vec, int(row)) != 0, nil
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, int(row)) != 0, nil
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, int(row)).Compare(types.Decimal128{}) != 0, nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, int(row)).Compare(types.Decimal256{}) != 0, nil
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		value, err := parseFloatCastString(string(vec.GetBytesAt(int(row))))
+		if err != nil {
+			return false, err
+		}
+		return value != 0, nil
+	default:
+		return false, moerr.NewInvalidArgNoCtx("IF condition", vec.GetType().String())
+	}
 }
 
 func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -567,14 +615,23 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
 	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
 
 	rs := vector.MustFunctionResult[T](result)
+	var zero T
 	for i := uint64(0); i < uint64(length); i++ {
-		b, null := p1.GetValue(i)
-		if !null && b {
+		if iffRowSkipped(selectList, i) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		truth, err := IffConditionTruthyAt(vecs[0], i)
+		if err != nil {
+			return err
+		}
+		if truth {
 			if err := rs.Append(p2.GetValue(i)); err != nil {
 				return err
 			}
@@ -588,14 +645,22 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 }
 
 func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		b, null := p1.GetValue(i)
-		if !null && b {
+		if iffRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		truth, err := IffConditionTruthyAt(vecs[0], i)
+		if err != nil {
+			return err
+		}
+		if truth {
 			if err := rs.AppendBytes(p2.GetStrValue(i)); err != nil {
 				return err
 			}
@@ -606,6 +671,11 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 		}
 	}
 	return nil
+}
+
+func iffRowSkipped(selectList *FunctionSelectList, row uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() ||
+		(!selectList.ShouldEvalAllRow() && selectList.Contains(row)))
 }
 
 func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 | types.Decimal256](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

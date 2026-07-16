@@ -5305,6 +5305,26 @@ func prefixedDigitsToDecimalString(digits string, base int) (string, error) {
 	return value.String(), nil
 }
 
+func parseFloatCastString(s string) (float64, error) {
+	trimmed := strings.TrimSpace(s)
+	token, err := parseCastNumericToken(trimmed)
+	if err != nil {
+		return 0, err
+	}
+	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseFloat(parseStr, 64)
+	if err != nil {
+		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
+	}
+	if token.negative {
+		value = -value
+	}
+	return value, nil
+}
+
 func parseSignedCastString(s string, bitSize int) (int64, error) {
 	token, err := parseCastNumericToken(s)
 	if err != nil {
