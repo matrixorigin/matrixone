@@ -116,6 +116,18 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		}
 		defer filter.Free()
 	}
+
+	// No-LIMIT streaming path: when the caller passes an Emit callback (the TVF does
+	// this only for a query with no pushed LIMIT), yield every matching doc in bounded
+	// batches — no top-K heap, no materialization of the whole result set. Results are
+	// handed off through Emit, so return empty keys/distances (mirrors bm25).
+	if rt.Emit != nil {
+		if serr := s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, filter, rt.Emit); serr != nil {
+			return nil, nil, serr
+		}
+		return []any{}, []float64{}, nil
+	}
+
 	results, err := s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, filter)
 	if err != nil {
 		return nil, nil, err

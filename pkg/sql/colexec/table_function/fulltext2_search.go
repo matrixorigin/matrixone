@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bytedance/sonic"
@@ -47,11 +48,30 @@ type fulltext2SearchState struct {
 	distances   []float64
 	filterBytes []byte // serialized docfilter membership (WHERE-clause prefilter), if any
 	batch       *batch.Batch
+
+	// Streaming no-LIMIT path (u.limit == 0): rather than materialize every matching
+	// doc, a producer goroutine runs the search with an Emit callback that hands bounded
+	// batches to streamCh; call() drains one batch per invocation and the upstream ORDER
+	// BY score node ranks them. cancel stops the producer (and releases the cache read
+	// lock it holds) if the consumer aborts early. Mirrors bm25_search.
+	streaming bool
+	streamCh  chan ft2StreamBatch
+	errCh     chan error
+	cancel    context.CancelFunc
+	done      bool
+}
+
+// ft2StreamBatch is one emitted batch (<= streamBatch rows); the producer hands
+// ownership to the consumer, so the slices are not reused.
+type ft2StreamBatch struct {
+	keys      []any
+	distances []float64
 }
 
 func (u *fulltext2SearchState) end(tf *TableFunction, proc *process.Process) error { return nil }
 
 func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
+	u.stopStream()
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -59,9 +79,29 @@ func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.keys = nil
 	u.distances = nil
 	u.filterBytes = nil
+	u.streaming = false
+	u.errCh = nil
+	u.done = false
+}
+
+// stopStream cancels the producer goroutine (if streaming) and drains streamCh until
+// the producer closes it, so no goroutine — nor the cache read-lock it holds — leaks
+// past this query. Idempotent; a no-op when not streaming.
+func (u *fulltext2SearchState) stopStream() {
+	if u.cancel == nil {
+		return
+	}
+	u.cancel()
+	if u.streamCh != nil {
+		for range u.streamCh { // drain to the producer's close()
+		}
+	}
+	u.cancel = nil
+	u.streamCh = nil
 }
 
 func (u *fulltext2SearchState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	u.stopStream()
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
@@ -70,6 +110,34 @@ func (u *fulltext2SearchState) free(tf *TableFunction, proc *process.Process, pi
 func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 	u.batch.CleanOnlyData()
 	withScore := u.batch.VectorCount() > 1
+
+	if u.streaming {
+		if u.done {
+			return vm.CancelResult, nil
+		}
+		select {
+		case b, ok := <-u.streamCh:
+			if !ok {
+				// producer finished; surface any search error (sent before close).
+				u.done = true
+				u.cancel = nil
+				if e := <-u.errCh; e != nil {
+					return vm.CancelResult, e
+				}
+				return vm.CancelResult, nil
+			}
+			for i := range b.keys {
+				vector.AppendAny(u.batch.Vecs[0], b.keys[i], false, proc.Mp())
+				if withScore {
+					vector.AppendFixed[float64](u.batch.Vecs[1], b.distances[i], false, proc.Mp())
+				}
+			}
+			u.batch.SetRowCount(len(b.keys))
+			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+		case <-proc.Ctx.Done():
+			return vm.CancelResult, proc.Ctx.Err()
+		}
+	}
 
 	nkeys := len(u.keys)
 	n := 0
@@ -130,9 +198,12 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		u.inited = true
 	}
 
+	u.stopStream()
 	u.offset = 0
 	u.keys = nil
 	u.distances = nil
+	u.streaming = false
+	u.done = false
 	u.batch.CleanOnlyData()
 
 	patVec := tf.ctr.argVecs[1]
@@ -176,7 +247,35 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		Algo:        fulltext2ScoreAlgo(proc),
 		FilterBytes: u.filterBytes,
 	}
-	// u.limit==0 means "no pushed LIMIT" → Fulltext2Search.Search returns all docs.
+
+	if u.limit == 0 {
+		// No pushed LIMIT: STREAM every matching doc in bounded batches (no top-K heap,
+		// no materialization of the whole result set). A producer goroutine runs the
+		// search with an Emit callback that hands batches to streamCh; call() drains one
+		// per invocation and the upstream ORDER BY score node ranks. cancel/ctx let
+		// reset()/free() stop the producer and release the cache read-lock it holds.
+		u.streaming = true
+		u.streamCh = make(chan ft2StreamBatch, 4)
+		u.errCh = make(chan error, 1)
+		ctx, cancel := context.WithCancel(proc.Ctx)
+		u.cancel = cancel
+		rt := vectorindex.RuntimeConfig{Emit: func(keys []any, dists []float64) error {
+			select {
+			case u.streamCh <- ft2StreamBatch{keys: keys, distances: dists}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+		go func() {
+			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
+			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
+			close(u.streamCh)
+		}()
+		return nil
+	}
+
+	// With a pushed LIMIT: WAND top-K, returned all at once (bounded by the LIMIT).
 	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
 	keys, dists, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
 	if serr != nil {

@@ -199,9 +199,10 @@ func (h *minScoreHeap) Pop() any {
 // so the LIMIT bounds the FILTERED set. Block-skip stays valid — blockSum is a score
 // upper bound over every doc in the region regardless of the filter, so a skipped
 // region contains no admissible doc that could beat θ.
-func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Membership, gs *globalStats) []Result {
-	avgDocLen := gs.avgdl(s)
-
+// buildWandIters makes a posting cursor for each present SHOULD term, with its
+// max-impact bound under the given (global or local) stats. Shared by the top-k
+// searchWAND and the no-LIMIT streamWAND.
+func (s *Segment) buildWandIters(clauses []clause, algo ScoreAlgo, gs *globalStats, avgDocLen float64) []*wandIter {
 	iters := make([]*wandIter, 0, len(clauses))
 	for _, c := range clauses {
 		pl, ok := s.lookup(c.terms[0])
@@ -219,6 +220,13 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 			maxImpact: c.weight * s.termMaxImpact(algo, idf2, pl, avgDocLen),
 		})
 	}
+	return iters
+}
+
+func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Membership, gs *globalStats) []Result {
+	avgDocLen := gs.avgdl(s)
+
+	iters := s.buildWandIters(clauses, algo, gs, avgDocLen)
 	if len(iters) == 0 {
 		return nil
 	}
