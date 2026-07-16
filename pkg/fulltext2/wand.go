@@ -15,9 +15,10 @@
 package fulltext2
 
 import (
-	"container/heap"
 	"math"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // WAND (Weak-AND, Broder et al. 2003) disjunctive top-k for a pure OR of single
@@ -162,35 +163,15 @@ func chooseSkip(iters []*wandIter, pivot int, target int64) int {
 	return best
 }
 
-// scoredDoc / minScoreHeap: a bounded top-k min-heap keyed by score (smallest at
-// the root, so it is the eviction candidate and the threshold).
-type scoredDoc struct {
-	ord   int64
-	score float64
-}
+// topKHeap is the bounded top-k-by-score heap shared by the WAND and full boolean
+// evaluators: a SoA FastMaxHeap keyed by ord (int64) with distance = -score, so keeping
+// the k SMALLEST distances keeps the k HIGHEST scores with zero per-candidate allocation
+// and no interface dispatch. Its root distance is the current threshold θ (the k-th best
+// score, negated). Equal scores are equally relevant — ties are unspecified.
+type topKHeap = vectorindex.FastMaxHeap[float64, int64]
 
-type minScoreHeap []scoredDoc
-
-func (h minScoreHeap) Len() int { return len(h) }
-
-// Less: smallest score at the root, so the root is the eviction candidate and its
-// score is the threshold θ. Among equal scores the LARGER ord is treated as
-// "smaller" (evicted first), a best-effort ascending-ord tiebreak; exact tie order
-// is still unspecified (see the float-ULP caveat on searchWAND).
-func (h minScoreHeap) Less(i, j int) bool {
-	if h[i].score != h[j].score {
-		return h[i].score < h[j].score
-	}
-	return h[i].ord > h[j].ord
-}
-func (h minScoreHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
-func (h *minScoreHeap) Push(x any)   { *h = append(*h, x.(scoredDoc)) }
-func (h *minScoreHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
+func newTopKHeap(k int) *topKHeap {
+	return vectorindex.NewFastMaxHeap[float64, int64](k, make([]int64, k), make([]float64, k))
 }
 
 // searchWAND runs WAND over the disjunctive single-term SHOULD clauses and
@@ -231,7 +212,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 		return nil
 	}
 
-	h := &minScoreHeap{}
+	h := newTopKHeap(k)
 	theta := math.Inf(-1) // until the heap holds k, accept everything
 
 	for {
@@ -307,16 +288,13 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 						score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, pivotDoc, avgDocLen)
 					}
 				}
-				if h.Len() < k {
-					heap.Push(h, scoredDoc{pivotDoc, score})
-					if h.Len() == k {
-						theta = (*h)[0].score
-					}
-				} else if score > theta {
-					// Replace-root + Fix (one sift) rather than Pop+Push (two).
-					(*h)[0] = scoredDoc{pivotDoc, score}
-					heap.Fix(h, 0)
-					theta = (*h)[0].score
+				// FastMaxHeap.Push fills until full, then admits iff -score < root
+				// distance (i.e. score > θ) with a single sift — the same replace-root
+				// behaviour, done internally. θ is the k-th best score = negated root.
+				h.Push(pivotDoc, -score)
+				if h.Full() {
+					_, negRoot, _ := h.Peek()
+					theta = -negRoot
 				}
 			}
 			for _, it := range iters {
@@ -342,19 +320,15 @@ func (s *Segment) termMaxImpact(algo ScoreAlgo, idf2 float64, pl *termPostings, 
 	return float64(pl.maxTf) * idf2 // TfIdf
 }
 
-// heapToResults drains a top-k min-heap into results ordered by score desc, ties
-// by ascending ord — matching the full evaluator's ordering.
-func heapToResults(s *Segment, h *minScoreHeap) []Result {
-	docs := *h
-	sort.Slice(docs, func(a, b int) bool {
-		if docs[a].score != docs[b].score {
-			return docs[a].score > docs[b].score
-		}
-		return docs[a].ord < docs[b].ord
-	})
-	results := make([]Result, len(docs))
-	for i, d := range docs {
-		results[i] = Result{Pk: s.pks[d.ord], Score: d.score}
+// heapToResults drains the bounded top-k heap into results ordered by score descending
+// (equal scores unspecified). FastMaxHeap.Pop yields the largest distance (= lowest
+// score) first, so filling back-to-front lands the output in score-desc order.
+func heapToResults(s *Segment, h *topKHeap) []Result {
+	n := h.Len()
+	results := make([]Result, n)
+	for i := n - 1; i >= 0; i-- {
+		ord, negScore, _ := h.Pop()
+		results[i] = Result{Pk: s.pks[ord], Score: -negScore}
 	}
 	return results
 }

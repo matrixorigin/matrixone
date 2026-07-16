@@ -15,7 +15,6 @@
 package fulltext2
 
 import (
-	"container/heap"
 	"fmt"
 	"sort"
 	"strconv"
@@ -24,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // Index is a queryable fulltext v2 index made of several loaded segments — a
@@ -129,7 +129,7 @@ func (idx *Index) isLive(si int, ord int64, key any) bool {
 }
 
 // SearchPhrase runs an NL exact-phrase query across all segments and returns the
-// global top-k (score desc, ties by ascending pk key). A single term is the
+// global top-k (score desc; equal scores are order-unspecified). A single term is the
 // degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the
 // phrase's document frequency is the number of LIVE documents that match (dead
 // and delete-shadowed copies are excluded), so idf is exact.
@@ -184,59 +184,40 @@ func (idx *Index) SearchPhrase(terms []string, algo ScoreAlgo, k int, filter doc
 			Score: m.seg.scoreTerm(algo, float64(m.tf), idf2, m.ord, idx.globalAvgDocLen),
 		})
 	}
-	return topKResults(results, k) // bounded top-k (score desc, ties by ascending pk)
+	return topKResults(results, k) // bounded top-k, score desc (ties unspecified)
 }
 
-// rk decorates a Result with its precomputed sortKey so the heap compares a string,
-// not a per-call Sprintf.
-type rk struct {
-	r  Result
-	sk string
-}
-
-// rkHeap is a min-heap by (score asc, sortKey desc): the root is the worst-kept entry
-// (lowest score, and among ties the largest sortKey), so it is the eviction candidate.
-type rkHeap []rk
-
-func (h rkHeap) Len() int { return len(h) }
-func (h rkHeap) Less(i, j int) bool {
-	if h[i].r.Score != h[j].r.Score {
-		return h[i].r.Score < h[j].r.Score
-	}
-	return h[i].sk > h[j].sk
-}
-func (h rkHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
-func (h *rkHeap) Push(x any)   { *h = append(*h, x.(rk)) }
-func (h *rkHeap) Pop() any     { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
-
-// topKResults returns the top-k results (score desc, ties by ascending sortKey) via a
-// bounded min-heap, so a query matching far more than k docs (a common single-term NL
-// phrase, or a boolean union) pays O(n log k) instead of an O(n log n) reflection-based
-// full sort — and sortKey is computed ONCE per result, not per comparison. The kept set
-// and order are identical to a full sort + truncate.
+// topKResults returns the top-k results ordered by score descending. Equal scores are
+// equally relevant, so their relative order is unspecified (SQL LIMIT over a tied ORDER
+// BY key is itself unspecified) — we do NOT impose an arbitrary pk tie-break, which would
+// force a sortKey string alloc for every matched doc (the alloc storm that dominated the
+// CPU/GC profile of a query matching far more than k docs, e.g. a common single-term NL
+// phrase or a boolean union).
+//
+// Selection is a bounded SoA FastMaxHeap keyed by result index with distance = -score:
+// keeping the k smallest distances yields the k highest scores in O(n) with ZERO
+// per-candidate allocation. Pop returns largest-distance (lowest-score) first, so
+// filling the output back-to-front lands it in score-descending order.
 func topKResults(results []Result, k int) []Result {
 	if k <= 0 || len(results) == 0 {
 		return nil
 	}
-	h := &rkHeap{}
-	for _, r := range results {
-		e := rk{r, sortKey(r.Pk)}
-		if h.Len() < k {
-			heap.Push(h, e)
-			continue
-		}
-		// Replace-root + Fix (ONE sift) instead of Pop+Push (two sifts): with a common
-		// term ~half the candidates beat the running worst-of-k, so the eviction sift is
-		// the hot loop. Only pay sortKey's string compare on a score tie.
-		root := (*h)[0]
-		if e.r.Score > root.r.Score || (e.r.Score == root.r.Score && e.sk < root.sk) {
-			(*h)[0] = e
-			heap.Fix(h, 0)
-		}
+	if k > len(results) {
+		k = len(results)
 	}
-	out := make([]Result, h.Len())
-	for i := len(out) - 1; i >= 0; i-- { // drain worst-first → fill from the end = score desc
-		out[i] = heap.Pop(h).(rk).r
+	keysBuf := make([]int64, k)
+	distsBuf := make([]float64, k)
+	h := vectorindex.NewFastMaxHeap[float64, int64](k, keysBuf, distsBuf)
+	for i := range results {
+		h.Push(int64(i), -results[i].Score)
+	}
+	out := make([]Result, k)
+	for i := k - 1; i >= 0; i-- {
+		idx, _, ok := h.Pop()
+		if !ok { // fewer than k live entries (e.g. duplicate pushes were bounded out)
+			return out[i+1:]
+		}
+		out[i] = results[idx]
 	}
 	return out
 }
@@ -353,7 +334,7 @@ func (gs *globalStats) avgdl(seg *Segment) float64 {
 }
 
 // SearchBoolean runs a parsed boolean-mode query across the index and returns the
-// global top-k (score desc, ties by ascending pk key). Each segment is scored on the
+// global top-k (score desc; equal scores are order-unspecified). Each segment is scored on the
 // GLOBAL corpus stats (globalStats), and its walk admits only the LIVE copy of a pk
 // (liveness ANDed into the WHERE prefilter), so a segment's top-k is k live docs on
 // the global scale — the merge below is then the exact global top-k even across a

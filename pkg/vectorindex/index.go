@@ -238,6 +238,26 @@ func (h *FastMaxHeap[T, K]) Push(key K, dist T) {
 	}
 }
 
+// Len reports how many elements the heap currently holds (0..limit).
+func (h *FastMaxHeap[T, K]) Len() int { return h.size }
+
+// Full reports whether the heap has reached its bounded capacity (limit). Once full,
+// Push only admits an element whose distance is smaller than the current root.
+func (h *FastMaxHeap[T, K]) Full() bool { return h.size >= h.limit }
+
+// Peek returns the root — the element with the LARGEST distance, i.e. the eviction
+// candidate and the bounded-top-k threshold — without removing it. ok is false when the
+// heap is empty. Callers use this for early-termination / pruning against the current
+// worst-kept distance.
+func (h *FastMaxHeap[T, K]) Peek() (K, T, bool) {
+	if h.size == 0 {
+		var zeroK K
+		var zeroT T
+		return zeroK, zeroT, false
+	}
+	return h.keys[0], h.distances[0], true
+}
+
 // Pop extracts the element with the largest distance from the max-heap.
 func (h *FastMaxHeap[T, K]) Pop() (K, T, bool) {
 	if h.size == 0 {

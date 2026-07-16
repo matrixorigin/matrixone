@@ -54,8 +54,14 @@ func syntheticCorpus(t *testing.T) *Segment {
 func requireSameRanking(t *testing.T, label string, wand, full []Result) {
 	t.Helper()
 	require.Equal(t, len(full), len(wand), "%s: count", label)
+	// WAND only avoids work; it must return the same top-k SCORES as the full scan. Both
+	// results are score-descending, so the score sequence must match rank-by-rank — this
+	// is the sufficient correctness invariant: a pruned or mis-scored doc changes a score
+	// here, while a pk difference can only occur among EQUAL scores, whose identity is
+	// unspecified (neither heap imposes a tiebreak, matching bm25). So we compare scores,
+	// not pk. (1e-9 also absorbs the float-ULP score noise between the two accumulation
+	// orders, which can flip a near-tie's doc identity.)
 	for i := range full {
-		require.Equal(t, full[i].Pk, wand[i].Pk, "%s: rank %d pk", label, i)
 		require.InDelta(t, full[i].Score, wand[i].Score, 1e-9, "%s: rank %d score", label, i)
 	}
 }

@@ -53,8 +53,8 @@ func TestIndexLiveness(t *testing.T) {
 
 	require.Equal(t, int64(3), idx.NumDocs()) // pk 1, 2(new), 4 live; pk 3 deleted
 
-	// "beta" is in base:pk1 and tail:pk4 — both live.
-	require.Equal(t, []any{int64(1), int64(4)}, iquery(t, idx, "beta"))
+	// "beta" is in base:pk1 and tail:pk4 — both live (equal score → order unspecified).
+	require.ElementsMatch(t, []any{int64(1), int64(4)}, iquery(t, idx, "beta"))
 	// pk2's OLD text ("gamma") is superseded by the tail → not visible.
 	require.Empty(t, iquery(t, idx, "gamma"))
 	// pk2's NEW text ("omega") is the live copy.
@@ -74,8 +74,8 @@ func TestIndexGlobalStats(t *testing.T) {
 
 	require.Equal(t, int64(4), idx.NumDocs())
 	require.EqualValues(t, 1.0, idx.globalAvgDocLen) // every doc has 1 token
-	// "cat" is in pk1 and pk3 across the two segments.
-	require.Equal(t, []any{int64(1), int64(3)}, iquery(t, idx, "cat"))
+	// "cat" is in pk1 and pk3 across the two segments (equal score → order unspecified).
+	require.ElementsMatch(t, []any{int64(1), int64(3)}, iquery(t, idx, "cat"))
 	// idf uses the GLOBAL df (=2) and N (=4), not a per-segment count.
 	rs, err := idx.SearchText([]byte("cat"), tokenizer.NewSimpleTokenizer(), TfIdf, 10, nil)
 	require.NoError(t, err)
@@ -90,6 +90,7 @@ func TestIndexPhraseAcrossSegments(t *testing.T) {
 	s2 := buildSeg(t, "s2", 0, []Doc{{int64(2), []byte("the quick brown fox runs")}, {int64(3), []byte("brown quick")}})
 	idx := NewIndex([]*Segment{s1, s2}, nil)
 
-	require.Equal(t, []any{int64(1), int64(2)}, iquery(t, idx, "quick brown fox"))
+	// both match with equal TfIdf score → order unspecified.
+	require.ElementsMatch(t, []any{int64(1), int64(2)}, iquery(t, idx, "quick brown fox"))
 	require.Empty(t, iquery(t, idx, "fox brown")) // not contiguous anywhere
 }

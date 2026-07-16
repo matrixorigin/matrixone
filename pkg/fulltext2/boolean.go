@@ -15,8 +15,6 @@
 package fulltext2
 
 import (
-	"container/heap"
-
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
 
@@ -175,12 +173,13 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		}
 	}
 
-	// Bounded top-k via a min-heap keyed by score (ascending-ord tiebreak), instead of
-	// sorting the ENTIRE candidate set: a common term/ngram matches nearly every doc, so
-	// an O(n log n) reflection-based sort of all candidates to keep k dominated the CPU
-	// profile. This is O(n log k), typed (no reflect), O(k) memory, and yields the exact
-	// same top-k (score desc, ties by ascending ord) as the full sort.
-	h := &minScoreHeap{}
+	// Bounded top-k via the SoA FastMaxHeap keyed by score, instead of sorting the ENTIRE
+	// candidate set: a common term/ngram matches nearly every doc, so an O(n log n)
+	// reflection-based sort of all candidates to keep k dominated the CPU profile. This is
+	// O(n log k), typed (no reflect / no boxing), O(k) memory. Push (dist = -score) fills
+	// then admits the strictly-better internally; equal scores are equally relevant, so
+	// ties are unspecified.
+	h := newTopKHeap(k)
 	for ord, score := range cand {
 		if _, bad := mustNot[ord]; bad {
 			continue
@@ -188,17 +187,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		if !allowed(allow, ord) { // WHERE prefilter (nil = allow all)
 			continue
 		}
-		if h.Len() < k {
-			heap.Push(h, scoredDoc{ord, score})
-			continue
-		}
-		// Strictly better, or ties the worst kept score with a smaller ord (the
-		// score-desc / ord-asc tiebreak the full sort produced). Replace-root + Fix
-		// (one sift) rather than Pop+Push (two).
-		if root := (*h)[0]; score > root.score || (score == root.score && ord < root.ord) {
-			(*h)[0] = scoredDoc{ord, score}
-			heap.Fix(h, 0)
-		}
+		h.Push(ord, -score)
 	}
 	return heapToResults(s, h), nil
 }

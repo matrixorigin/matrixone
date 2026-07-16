@@ -107,9 +107,9 @@ func TestBooleanWeights(t *testing.T) {
 	// membership is unchanged by a weight operator
 	require.ElementsMatch(t, []any{int64(1), int64(2), int64(4)}, bquery(t, s, ">quick"))
 
-	// sleeps(doc3) and high(doc4) score equally → tie broken by ord: [3,4].
-	require.Equal(t, []any{int64(3), int64(4)}, bqueryOrdered(t, s, "sleeps high"))
-	// boosting high flips the order: [4,3].
+	// sleeps(doc3) and high(doc4) score equally → tied, order unspecified.
+	require.ElementsMatch(t, []any{int64(3), int64(4)}, bqueryOrdered(t, s, "sleeps high"))
+	// boosting high gives it a strictly higher score, so it ranks first: [4,3].
 	require.Equal(t, []any{int64(4), int64(3)}, bqueryOrdered(t, s, "sleeps >high"))
 }
 
@@ -117,7 +117,12 @@ func TestBooleanWeights(t *testing.T) {
 // sink below the others (2,5), all still present.
 func TestBooleanTilde(t *testing.T) {
 	s := fulltextCorpus(t)
-	require.Equal(t, []any{int64(2), int64(5), int64(1), int64(4)}, bqueryOrdered(t, s, "fox ~jumps"))
+	// Two equal-score groups: {2,5} (fox, unpenalized) rank above {1,4} (fox + ~jumps
+	// penalty); order WITHIN each tied group is unspecified.
+	got := bqueryOrdered(t, s, "fox ~jumps")
+	require.Len(t, got, 4)
+	require.ElementsMatch(t, []any{int64(2), int64(5)}, got[:2])
+	require.ElementsMatch(t, []any{int64(1), int64(4)}, got[2:])
 }
 
 // TestBooleanGroupsLoaded exercises groups/weights on the loaded (FST) path.
@@ -129,7 +134,11 @@ func TestBooleanGroupsLoaded(t *testing.T) {
 	t.Cleanup(func() { _ = loaded.dict.Close() })
 
 	require.ElementsMatch(t, []any{int64(1), int64(4)}, bquery(t, loaded, "+(lazy high) +fox"))
-	require.Equal(t, []any{int64(2), int64(5), int64(1), int64(4)}, bqueryOrdered(t, loaded, "fox ~jumps"))
+	// {2,5} rank above {1,4}; order within each tied group is unspecified (see TestBooleanTilde).
+	got := bqueryOrdered(t, loaded, "fox ~jumps")
+	require.Len(t, got, 4)
+	require.ElementsMatch(t, []any{int64(2), int64(5)}, got[:2])
+	require.ElementsMatch(t, []any{int64(1), int64(4)}, got[2:])
 }
 
 // TestScanBoolean checks the top-level clause scanner directly.
