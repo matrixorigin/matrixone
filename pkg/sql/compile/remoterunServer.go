@@ -772,8 +772,10 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 // indefinitely when a remote CN fails.
 const waitRegistrationTimeout = 30 * time.Second
 
-func newRemoteDispatchNotRegisteredYetError(ctx context.Context, uid uuid.UUID) error {
-	return moerr.NewRemoteDispatchNotRegistered(ctx, uid.String())
+func newRemoteDispatchNotRegisteredYetError(_ context.Context, uid uuid.UUID) error {
+	// Registration lag is an expected, retryable protocol state. Keep the
+	// typed wire error without reporting every receiver attempt as an ERROR.
+	return moerr.NewRemoteDispatchNotRegistered(moerr.NoReportContext(), uid.String())
 }
 
 func isRemoteDispatchNotRegisteredYetError(err error) bool {
