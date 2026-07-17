@@ -339,9 +339,9 @@ func TestRequestMultipleCn_EmptyNodeAddress(t *testing.T) {
 	})
 }
 
-// TestRequestMultipleCnConcurrentSend verifies concurrent requests after the
-// client's backend for the target CN has been established.
-func TestRequestMultipleCnConcurrentSend(t *testing.T) {
+// TestRequestMultipleCn_ConcurrentSafety verifies that concurrent requests can
+// create and share the client's backend for the target CN without races.
+func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	cn := metadata.CNService{ServiceID: "test_concurrent"}
@@ -349,15 +349,8 @@ func TestRequestMultipleCnConcurrentSend(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		warmupReq := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
-		warmupReq.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
-		warmupResp, err := cli.SendMessage(ctx, addr, warmupReq)
-		assert.NoError(t, err)
-		if warmupResp != nil {
-			cli.Release(warmupResp)
-		}
-
-		// Multiple requests to the same CN exercise concurrent Send calls.
+		// Keep the backend cold so these requests exercise concurrent backend
+		// creation and waiter wakeup as well as concurrent Send calls.
 		nodes := []string{addr, addr, addr}
 
 		var successCount int
@@ -374,7 +367,7 @@ func TestRequestMultipleCnConcurrentSend(t *testing.T) {
 		}
 
 		// Execute concurrent sends.
-		err = RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
+		err := RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, 3, successCount, "All nodes should succeed")
