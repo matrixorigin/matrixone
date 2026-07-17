@@ -1,6 +1,37 @@
 # Issue #25782 多进程复现 Harness 交接说明
 
-更新时间：2026-07-17 12:10（Asia/Shanghai）
+更新时间：2026-07-17 15:24（Asia/Shanghai）
+
+## 0.1 硬预算拒绝转 spill 实机验收（2026-07-17 15:24）
+
+提交 `0c9a6ace4` 已在本机 fresh 双 CN runtime 上完成额外验收。每张表
+`132096` 行，物理计划为 16 路 Shuffle LEFT JOIN；session
+`join_spill_mem=1073741824`，因此本次数据规模不会由 soft threshold 触发
+spill；query hard limit 设置为 32 MiB。
+
+业务结果：
+
+```text
+query_rc=0
+count(*)=132096
+MemoryUsage=60675200B
+SpillSize=287488B
+```
+
+两个 CN 在该 SQL 前后的进程 metrics 均显示：
+
+```text
+CN1 query memory reject: 0 -> 4; initial spill: 17 -> 21
+CN2 query memory reject: 0 -> 4; initial spill: 19 -> 23
+```
+
+这直接证明执行路径是 hard query budget admission reject 后转入 spill，SQL
+仍精确成功，而不是依赖 `join_spill_mem` 的 soft spill。两个 CN 的 cgroup
+验收前后均为 `oom=0, oom_kill=0, swap=0`，runtime 已完整停止。证据目录：
+
+```text
+/tmp/mo-25782-hard-budget-20260717152059/manual
+```
 
 ## 0. 当前修复进度（2026-07-17 12:10）
 
