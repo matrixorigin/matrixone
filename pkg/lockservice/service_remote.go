@@ -264,8 +264,20 @@ func (s *service) handleRemoteLock(
 			}
 			lockErr = err
 			resp.Lock.Result = result
-			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+			_ = writeResponseWithDeadline(s.logger, cancel, resp, remoteLockWireError(err), cs, defaultRPCWriteTimeout, logFields)
 		})
+}
+
+// remoteLockWireError keeps Method_Lock v1 compatible during a rolling 4.1
+// upgrade. Old origins do not recognize ErrRemoteLockWaitTimeout as a
+// whole-transaction rollback error. Returning the established deadlock code
+// makes every supported origin roll back and issue remote unlock for any
+// partially granted rows.
+func remoteLockWireError(err error) error {
+	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
+		return ErrDeadLockDetected
+	}
+	return err
 }
 
 func (s *service) handleForwardLock(

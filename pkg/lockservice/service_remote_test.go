@@ -883,7 +883,7 @@ func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
 	)
 }
 
-func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
+func TestRemoteLockOwnerWaitTimeoutUsesV1CompatibleRollbackError(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2"},
@@ -906,7 +906,10 @@ func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
 			_, err := origin.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
 			elapsed := time.Since(start)
 
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout), "got %v", err)
+			// Method_Lock is protocol v1. The owner keeps the dedicated timeout
+			// internally but must return an error an old 4.1 origin classifies as
+			// whole-transaction rollback, so partial remote locks are released.
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected), "got %v", err)
 			require.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
 			require.Less(t, elapsed, 2*time.Second)
 			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
@@ -916,6 +919,55 @@ func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
 			cfg.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: 100 * time.Millisecond}
 		},
 	)
+}
+
+func TestRemoteLockOwnerWaitTimeoutFallbackReleasesPartialRemoteLock(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			owner := s[0]
+			origin := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			row1 := []byte{1}
+			row2 := []byte{2}
+			holderTxn := []byte("holder")
+			originTxn := []byte("origin")
+			verifyTxn := []byte("verify")
+			opt := newTestRowExclusiveOptions()
+			opt.LockWaitTimeout = 0
+
+			// Keep row2 busy. The remote request acquires row1 before waiting
+			// on row2, so it exercises the partial-grant cleanup path.
+			mustAddTestLock(t, ctx, owner, tableID, holderTxn, [][]byte{row2}, pb.Granularity_Row)
+			_, err := origin.Lock(ctx, tableID, [][]byte{row1, row2}, originTxn, opt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected), "got %v", err)
+
+			// The legacy-compatible error must make the origin perform a whole
+			// transaction rollback, including remote unlock for row1.
+			require.NoError(t, origin.Unlock(ctx, originTxn, timestamp.Timestamp{}))
+			_, err = owner.Lock(ctx, tableID, [][]byte{row1}, verifyTxn, opt)
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, verifyTxn, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: 100 * time.Millisecond}
+		},
+	)
+}
+
+func TestRemoteLockWireErrorUsesCompatibleFallback(t *testing.T) {
+	require.True(t, moerr.IsMoErrCode(
+		remoteLockWireError(ErrRemoteLockWaitTimeout),
+		moerr.ErrDeadLockDetected))
+
+	err := moerr.NewLockTableBindChangedNoCtx()
+	require.Same(t, err, remoteLockWireError(err))
 }
 
 // TestRemoteLockWaitTimeout_ReturnsLockTimeout ensures that in a multi-CN
