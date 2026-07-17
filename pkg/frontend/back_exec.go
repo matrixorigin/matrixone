@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -94,6 +95,17 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
+	return back.exec(ctx, sql, "", false)
+}
+
+// ExecWithSQLMode executes sql using sqlMode to parse it. The original SQL text
+// is retained so DDL which persists its source text, such as CREATE VIEW, is
+// not rewritten during execution.
+func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode string) (retErr error) {
+	return back.exec(ctx, sql, sqlMode, true)
+}
+
+func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
 	if ctx == nil {
@@ -115,7 +127,12 @@ func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 		v = int64(1)
 	}
 
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	var statements []tree.Statement
+	if useSQLMode {
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+	} else {
+		statements, err = mysql.Parse(ctx, sql, v.(int64))
+	}
 	if err != nil {
 		return err
 	}
@@ -169,8 +186,10 @@ func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	}
 
 	userInput := &UserInput{
-		sql:       sql,
-		isRestore: isRestore,
+		sql:              sql,
+		parserSQLMode:    sqlMode,
+		useParserSQLMode: useSQLMode,
+		isRestore:        isRestore,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
@@ -657,7 +676,17 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 		}
 		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
-		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
+		if input.useParserSQLMode {
+			stmts, err = parsers.ParseWithSQLMode(
+				execCtx.reqCtx,
+				dialect.MYSQL,
+				input.getSql(),
+				parserLowerCaseTableNames(ses),
+				input.parserSQLMode,
+			)
+		} else {
+			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
+		}
 		if err != nil {
 			return nil, err
 		}
