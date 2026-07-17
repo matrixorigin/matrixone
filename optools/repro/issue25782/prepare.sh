@@ -10,7 +10,11 @@ case "${mode}" in
 esac
 fixed_frontend_limits=""
 if [[ "${mode}" == fixed ]]; then
-    fixed_frontend_limits=$'processLimitationSize = 201326592\nprocessLimitationSpillSize = 1073741824'
+    process_limit_size="${MO_25782_PROCESS_LIMIT_SIZE:-201326592}"
+    process_spill_size="${MO_25782_PROCESS_SPILL_SIZE:-1073741824}"
+    [[ "${process_limit_size}" =~ ^[1-9][0-9]*$ && "${process_spill_size}" =~ ^[1-9][0-9]*$ ]] || \
+        die "fixed process memory and spill limits must be positive integers"
+    fixed_frontend_limits="processLimitationSize = ${process_limit_size}"$'\n'"processLimitationSpillSize = ${process_spill_size}"
 fi
 cn1_sql_port="${MO_25782_CN1_SQL_PORT:-16001}"
 cn2_sql_port="${MO_25782_CN2_SQL_PORT:-16002}"
@@ -223,6 +227,9 @@ env_tmp="${runtime}/harness.env.tmp.$$"
 {
     printf 'MO_25782_RUNTIME=%q\n' "${runtime}"
 	printf 'MO_25782_MODE=%q\n' "${mode}"
+	if [[ "${mode}" == fixed ]]; then
+		printf 'PROCESS_LIMIT_SIZE=%q\nPROCESS_SPILL_SIZE=%q\n' "${process_limit_size}" "${process_spill_size}"
+	fi
 	printf 'CN1_SQL_PORT=%q\nCN2_SQL_PORT=%q\n' "${cn1_sql_port}" "${cn2_sql_port}"
     printf 'BINARY=%q\n' "${MO_25782_BINARY:-${REPO_ROOT}/mo-service}"
     printf 'MO_25782_MYSQL_PASSWORD=%q\n' "${MO_25782_MYSQL_PASSWORD:-111}"
