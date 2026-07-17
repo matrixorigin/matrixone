@@ -1589,8 +1589,5 @@ func lockTargetWithRows(
 	bat.Vecs[target.primaryColumnIndexInBatch] = vec
 	bat.SetRowCount(vec.Length())
 
-	anal := lockOp.OpAnalyzer
-	anal.Start()
-	defer anal.Stop()
-	return performLock(bat, proc, lockOp, anal, idx)
+	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
 }
