@@ -2,9 +2,9 @@
 
 This historical reproduction harness was validated against the locked `main` commit `cd741923c`. It compares a broadcast `HashBuild` with a shuffle `HashBuild` positive control using the same physical tables, join key, and predicate. The physical scale is fixed at 132,096 rows per table (1,024 baseline rows followed by a 131,072-row high-cardinality tail); planner statistics are patched only to select the two plans.
 
-The current worktree now contains the first kernel safety slice. It rejects over-budget Broadcast and currently unsafe Shuffle spill paths with a controlled query error before unbounded HashBuild growth. The historical classifier below still describes reproduction of the old behavior; it is not yet the fixed acceptance classifier. The reviewed single-PR, multi-commit design and current implementation status are in [`FIX_PLAN.md`](FIX_PLAN.md).
+The current worktree contains the complete PR-scoped no-OOM fix: hierarchical HashBuild admission, transactional hashmap resize, bounded Shuffle spill/re-spill, deterministic Broadcast build errors, resource-ledger accounting, and fixed acceptance classification. The reviewed single-PR, multi-commit design is in [`FIX_PLAN.md`](FIX_PLAN.md), and the latest acceptance evidence is in [`HANDOFF.md`](HANDOFF.md).
 
-Do not use a historical `REPRODUCED` result as proof that the fix passed. A first fixed E2E was completed in `/tmp/mo-25782-fixed2-20260716235218`: the bounded Broadcast SQL returned `132096`, both CN follow-up queries succeeded, and both CNs recorded zero OOM/OOM-kill before clean shutdown. A dedicated fixed classifier and an over-budget cluster E2E remain future harness work.
+Do not use a historical phase-level `REPRODUCED` result by itself as proof that the fix passed. Fixed acceptance requires `classification.overall=FIXED_ACCEPTED`, correct SQL results, valid source/binary provenance, and final zero-OOM telemetry. A separate hard-budget run also sets `join_spill_mem` above the dataset, observes query-budget rejection followed by positive spill on both CNs, and returns the exact `132096` result.
 
 ## Usage
 
@@ -56,7 +56,7 @@ missing or mismatched attempt identity still produces `INCONCLUSIVE`.
 
 ## Plan and SQL gates
 
-`01_setup.sql` creates the bounded tables, refreshes small-sample statistics, appends the high-cardinality tail, flushes objects, and executes the required `set @@join_spill_mem=1000;` / `select @@join_spill_mem;` check.  `02_broadcast_plan.sql` patches the build estimate to 1,024 rows; `03_shuffle_plan.sql` patches both estimates above the main shuffle thresholds.  The run executes each plan gate immediately before its query so a later stats patch cannot affect the earlier target.
+`01_setup.sql` creates the bounded tables, refreshes small-sample statistics, appends the high-cardinality tail, flushes objects, and executes the required `set @@join_spill_mem=1000;` / `select @@join_spill_mem;` check.  `02_broadcast_plan.sql` patches the build estimate to 1,024 rows; `03_shuffle_plan.sql` patches both estimates above the main shuffle thresholds. `06_hard_budget_exec.sql` raises the soft threshold to 1 GiB so a metrics-observed rejection-to-spill transition can only come from hard admission. The run executes each plan gate immediately before its query so a later stats patch cannot affect the earlier target.
 
 Both `EXPLAIN` and `EXPLAIN PHYPLAN` must contain a hash join/hash build.  The broadcast gate rejects a shuffle annotation on the HashJoin line; the positive-control gate requires one.  A failed gate prevents that query from executing.  The execution phase uses `EXPLAIN PHYPLAN ANALYZE`, so runtime `SpillRows`/`SpillSize` can be collected per operator.
 
@@ -69,6 +69,6 @@ The only outcomes are `REPRODUCED`, `NOT_REPRODUCED`, and `INCONCLUSIVE`:
 - complete, contradictory evidence gives `NOT_REPRODUCED` for that phase;
 - missing/mixed operator evidence, a failed plan gate, timeout, non-zero query process exit, safety cancellation, or cgroup OOM gives `INCONCLUSIVE`.
 
-The overall result is `REPRODUCED` only when both the broadcast bypass and shuffle positive control are independently `REPRODUCED`; otherwise it is `INCONCLUSIVE` (or the relevant phase's `NOT_REPRODUCED` result is retained in its own artifact).
+In fixed mode, the overall result is `FIXED_ACCEPTED` only when the expected broadcast and shuffle phase evidence is complete, both SQL results are exact, the safety monitors remain clean, and final telemetry is valid. Historical mode retains the legacy `REPRODUCED` overall result for old-build comparison.
 
 Cleanup is performed by `99_cleanup.sql` unless `--keep` is used.  To avoid leaving data behind after an interrupted run, invoke `stop.sh --runtime ...` and remove the private runtime only after reviewing the saved artifacts.

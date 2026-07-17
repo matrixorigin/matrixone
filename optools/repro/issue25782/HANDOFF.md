@@ -156,7 +156,7 @@ git diff --check                                                            # PA
 
 - worktree：`/home/mo/worktrees/mo-25782-main`
 - 分支：`repro/25782-main-harness`
-- 最终验收代码：`39b38a10cf29cce0824698286523ead5b9c0fee4`
+- 最终验收代码：以当前分支 HEAD 为准；rebase 后必须重新构建并生成新 evidence，禁止复用旧 binary/source provenance。
 - 实现和 harness 已按单 PR、多 commit 的方式提交到当前本地分支；尚未推送或创建 PR。
 - 原工作区 `/home/mo/matrixone` 当前 HEAD 已变为 `8f3aee9cef5d667c6c7686d83cb155d0ba321e1f`，与最初记录的 `c883c48...` 不同。此次工作没有修改、stash 或清理原工作区，因此只能记录该外部漂移，不能再声称它自 harness 创建以来未变化。
 
@@ -174,4 +174,7 @@ REPRO_ALLOWED=1 ./optools/repro/issue25782/run.sh --runtime "$runtime"
 
 ## 8. 内核修复计划
 
-当前已完成第一阶段内核 hard-fail safety slice；完整方案仍按单 PR、多 commit 推进。尚未完成的核心项是 pre-dispatch query lease、Shuffle 有界 spill/re-spill、observability 和 fixed E2E acceptance。详见 [`FIX_PLAN.md`](FIX_PLAN.md)。
+本 PR 范围内的 no-OOM hard admission、事务化 HashMap resize、Shuffle 有界
+spill/re-spill、Broadcast 一致受控错误、资源账、observability、fixed E2E 和
+hard-budget reject→spill 验收均已完成。跨 CN pre-dispatch lease 仍是明确记录
+的后续增强项，不是本 PR 的正确性或验收前置条件。详见 [`FIX_PLAN.md`](FIX_PLAN.md)。

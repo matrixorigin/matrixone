@@ -2,7 +2,7 @@
 
 更新时间：2026-07-17（Asia/Shanghai）
 
-状态：单 PR、多 commit 的本期 no-OOM 与 Shuffle 有界 spill/re-spill 已完成实现和代码级验收；本机 132,096×132,096 多 CN 业务 SQL 已验证 Broadcast 与 Shuffle 均返回正确结果，Shuffle 产生正 spill。第 5 节所述跨 CN pre-dispatch lease 协议仍是后续增强项，不是本次业务验收的前置条件；当前由每 CN statement generation、pipeline 限额传递和有限 remote backstop 兜底。最终 fresh-runtime classifier/telemetry 运行完成后，只需把证据路径回填到 HANDOFF。
+状态：单 PR、多 commit 的本期 no-OOM 与 Shuffle 有界 spill/re-spill 已完成实现、代码级验收和 fresh-runtime 业务验收；本机 132,096×132,096 多 CN SQL 已验证 Broadcast 与 Shuffle 结果正确、Shuffle 正 spill、hard query budget reject 后转入 spill，且零 OOM/零 swap。第 5 节所述跨 CN pre-dispatch lease 协议仍是后续增强项，不是本次业务验收的前置条件；当前由每 CN statement generation、pipeline 限额传递和有限 remote backstop 兜底。证据路径记录在 HANDOFF。
 
 ### 2026-07-17 实施进度
 
@@ -14,11 +14,11 @@
 - Broadcast `JoinMap | BuildError` 唯一终态，多消费者收到一致的受控失败；
 - runtime-filter 序列化独立 reservation，并把 token 生命周期转移给 MessageBoard message；
 - `ReallocZero` temporary peak cap 检查和 rollback；
-- unsafe legacy spill scratch 暂时在进入前受控拒绝，避免绕过 CN budget。
+- spill/re-spill scratch、reader、磁盘字节和文件描述符均进入有限预算；无法继续时受控失败。
 
 当前业务语义：Shuffle 在有限预算内执行有界 spill/re-spill并返回正确结果；无法取得进展、达到深度/队列/磁盘/FD 上限时返回受控 query error。Broadcast 在预算内成功，超预算时所有消费者收到同一受控错误，不会伪装成 empty build。
 
-Fixed E2E（`/tmp/mo-25782-fixed2-20260716235218`）：Broadcast 计划在 132,096×132,096 的受控物理数据上返回 `132096`，PHYPLAN 总内存 `291164058B`、spill `0B`；两 CN 的后续查询均成功，CN cgroup `oom=0, oom_kill=0`，峰值分别为 `346140672` 和 `310169600` bytes，随后完整停止清理。该结果证明未超 hard budget 时业务成功；超预算受控错误由 Broadcast 多消费者、Shuffle 和 retained-batch 单测覆盖。
+Fixed E2E 与 hard-budget E2E 均已完成：Broadcast 和 Shuffle 在 132,096×132,096 的受控物理数据上返回 `132096`；hard-budget run 将 `join_spill_mem` 提高到 1 GiB，并在两个 CN 上同时观测到 query memory reject 与 initial spill 增长，最终仍返回精确结果。所有运行均为 `oom=0, oom_kill=0, swap=0` 并完整停止清理；完整路径和计数见 HANDOFF。
 
 Issue：[HashBuild can bypass spill and trigger system OOM during large hash table growth](https://github.com/matrixorigin/matrixone/issues/25782)
 
