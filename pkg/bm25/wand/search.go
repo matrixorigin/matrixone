@@ -161,16 +161,19 @@ type cursor struct {
 	pos       int     // global posting index into the term's df postings
 	curBlk    int     // block currently decoded into bDocs/bTfs (-1 = none)
 	blen      int     // valid entries in bDocs/bTfs
+	cur       int64   // cached curDoc for the current pos (ordEnd when exhausted)
 	bDocs     []int64 // decoded docIDs of curBlk (cap BlockSize)
 	bTfs      []uint8 // decoded tfs of curBlk (cap BlockSize)
 }
 
 func newCursor(tp *termPostings, idfSq, weight, maxScore, avgDocLen float64, docLen []int32) *cursor {
-	return &cursor{
+	c := &cursor{
 		tp: tp, idfSq: idfSq, weight: weight, maxScore: maxScore,
 		docLen: docLen, avgDocLen: avgDocLen, curBlk: -1,
 		bDocs: make([]int64, BlockSize), bTfs: make([]uint8, BlockSize),
 	}
+	c.refresh()
+	return c
 }
 
 // ensure decodes the block containing pos into bDocs/bTfs, if not already cached.
@@ -183,12 +186,21 @@ func (c *cursor) ensure() {
 	}
 }
 
-func (c *cursor) curDoc() int64 {
+// curDoc returns the cached current doc. It is read many times per pivot
+// iteration (insertion sort, pivot scan, blockMax, chooseSkip, alignment) while
+// the cursor moves at most once, so cur is recomputed only on move (refresh),
+// avoiding the df() check, the pos/BlockSize division in ensure, and the modulo
+// on every read.
+func (c *cursor) curDoc() int64 { return c.cur }
+
+// refresh recomputes cur after pos changes (advance/skipTo/construction).
+func (c *cursor) refresh() {
 	if c.pos >= c.tp.df() {
-		return ordEnd
+		c.cur = ordEnd
+		return
 	}
 	c.ensure()
-	return c.bDocs[c.pos%BlockSize]
+	c.cur = c.bDocs[c.pos%BlockSize]
 }
 
 // score is the BM25 contribution at the current posting:
@@ -199,7 +211,7 @@ func (c *cursor) score() float64 {
 	ord := c.bDocs[i]
 	return c.weight * c.idfSq * bm25Factor(float64(c.bTfs[i]), c.docLen[ord], c.avgDocLen)
 }
-func (c *cursor) advance() { c.pos++ }
+func (c *cursor) advance() { c.pos++; c.refresh() }
 
 // skipTo advances the cursor to the first doc >= d: locate the block via the
 // RESIDENT blockLastDoc (no decode), then binary-search within that one block.
@@ -207,6 +219,7 @@ func (c *cursor) skipTo(d int64) {
 	b := c.blockIndexAt(d)
 	if b >= c.tp.nblk() {
 		c.pos = c.tp.df() // past the last posting → exhausted
+		c.cur = ordEnd
 		return
 	}
 	if b != c.curBlk {
@@ -214,9 +227,20 @@ func (c *cursor) skipTo(d int64) {
 		c.curBlk = b
 	}
 	// d <= blockLastDoc[b] = bDocs[blen-1], so the lower bound is within the block
-	// and never moves the cursor backward (d >= current doc).
-	w := sort.Search(c.blen, func(i int) bool { return c.bDocs[i] >= d })
-	c.pos = b*BlockSize + w
+	// and never moves the cursor backward (d >= current doc). Inline lower-bound
+	// binary search rather than sort.Search: it avoids the per-call closure
+	// (skipTo.func1) and the generic sort.Search frame in this hot skip path.
+	lo, hi := 0, c.blen
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if c.bDocs[mid] < d {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	c.pos = b*BlockSize + lo
+	c.cur = c.bDocs[lo]
 }
 
 // blockIndexAt returns the index of the block (>= the current block) that
