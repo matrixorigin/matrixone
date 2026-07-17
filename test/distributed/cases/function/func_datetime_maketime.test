@@ -29,9 +29,10 @@ SELECT MAKETIME(12, NULL, 30) AS null_minute;
 SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
-# Float hour and minute values truncate; fractional seconds are preserved
+# Float hour and minute values round to nearest-even; fractional seconds are preserved
 SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
+SELECT CAST(MAKETIME(12, 34, '56.789012') AS VARCHAR) AS string_fractional_seconds;
 SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
 SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
 SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
@@ -42,6 +43,12 @@ CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
 INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);
 SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM maketime_double_seconds;
 DROP TABLE maketime_double_seconds;
+
+# VARCHAR second values retain fractional microseconds
+CREATE TABLE maketime_varchar_seconds(h INT, m INT, s VARCHAR(20));
+INSERT INTO maketime_varchar_seconds VALUES (12, 34, '56.789012');
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_column_microseconds FROM maketime_varchar_seconds;
+DROP TABLE maketime_varchar_seconds;
 
 # Table usage
 CREATE TABLE t1(h INT, m INT, s INT);

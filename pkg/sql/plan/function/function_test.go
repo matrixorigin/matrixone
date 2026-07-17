@@ -383,6 +383,24 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
 }
 
+func TestMakeTimeStringSecondUsesFloatOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, result.needCast)
+	require.Len(t, result.targetTypes, 3)
+	for _, target := range result.targetTypes {
+		require.Equal(t, types.T_float64, target.Oid)
+	}
+	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+}
+
 func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

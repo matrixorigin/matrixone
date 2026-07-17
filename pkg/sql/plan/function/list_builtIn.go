@@ -10747,6 +10747,25 @@ func makeTimeReturnType(parameters []types.Type) types.Type {
 	return types.T_time.ToTypeWithScale(scale)
 }
 
+func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+		for i, ov := range overloads {
+			if len(ov.args) != 3 || ov.args[0] != types.T_float64 || ov.args[1] != types.T_float64 || ov.args[2] != types.T_float64 {
+				continue
+			}
+			if status, _ := tryToMatch(inputs, ov.args); status != matchFailed {
+				targets := make([]types.Type, len(inputs))
+				for j := range targets {
+					targets[j] = ov.args[j].ToType()
+					SetTargetScaleFromSource(&inputs[j], &targets[j])
+				}
+				return newCheckResultWithCast(i, targets)
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 var supportedControlBuiltIns = []FuncNew{
 	// function `add_fault_point`
 	{
@@ -11197,7 +11216,7 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: MAKETIME,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    makeTimeCheck,
 		Overloads: []overload{
 			{
 				overloadId: 0,

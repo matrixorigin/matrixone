@@ -58,6 +58,9 @@ float_values
 SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
 fractional_seconds
 12:34:56.789012
+SELECT CAST(MAKETIME(12, 34, '56.789012') AS VARCHAR) AS string_fractional_seconds;
+string_fractional_seconds
+12:34:56.789012
 SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
 negative_fractional
 -12:34:56.789012
@@ -76,6 +79,12 @@ SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM mak
 double_column_microseconds
 12:34:56.789012
 DROP TABLE maketime_double_seconds;
+CREATE TABLE maketime_varchar_seconds(h INT, m INT, s VARCHAR(20));
+INSERT INTO maketime_varchar_seconds VALUES (12, 34, '56.789012');
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_column_microseconds FROM maketime_varchar_seconds;
+varchar_column_microseconds
+12:34:56.789012
+DROP TABLE maketime_varchar_seconds;
 CREATE TABLE t1(h INT, m INT, s INT);
 INSERT INTO t1 VALUES (12, 15, 30), (0, 0, 0), (23, 59, 59);
 SELECT MAKETIME(h, m, s) AS time_value FROM t1;
