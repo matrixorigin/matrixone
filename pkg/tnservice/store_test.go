@@ -31,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
@@ -44,9 +46,31 @@ var (
 	testTNLogtailAddress = "127.0.0.1:22001"
 )
 
+const storeTestTimeout = 30 * time.Second
+
 type storeQueryClient struct {
 	client.QueryClient
 	closeCalls int
+}
+
+type storeQueryService struct {
+	queryservice.QueryService
+	closeCalls int
+}
+
+type storeTxnServer struct {
+	rpc.TxnServer
+	beforeClose func()
+}
+
+func (s *storeTxnServer) Close() error {
+	s.beforeClose()
+	return s.TxnServer.Close()
+}
+
+func (s *storeQueryService) Close() error {
+	s.closeCalls++
+	return s.QueryService.Close()
 }
 
 func (c *storeQueryClient) Close() error {
@@ -255,14 +279,60 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 	})
 }
 
-func TestReplicaCreateRetryStopsPromptly(t *testing.T) {
+func TestStoreCloseClosesQueryService(t *testing.T) {
+	var tracked *storeQueryService
+	runTNStoreTest(t, func(s *store) {
+		tracked = &storeQueryService{QueryService: s.queryService}
+		s.queryService = tracked
+		t.Cleanup(func() {
+			require.Equal(t, 1, tracked.closeCalls)
+		})
+	})
+}
+
+func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
+	var canceledBeforeServerClose atomic.Bool
+	runTNStoreTest(t, func(s *store) {
+		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
+		s.replicas.Store(r.shard.ShardID, r)
+		s.server = &storeTxnServer{
+			TxnServer: s.server,
+			beforeClose: func() {
+				r.mu.RLock()
+				defer r.mu.RUnlock()
+				canceledBeforeServerClose.Store(r.mu.cancelled)
+			},
+		}
+	})
+	require.True(t, canceledBeforeServerClose.Load())
+}
+
+func TestHeartbeatOnlyReportsStartedReplicas(t *testing.T) {
+	runTNStoreTest(t, func(s *store) {
+		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
+		s.replicas.Store(r.shard.ShardID, r)
+		require.Empty(t, s.getTNShardInfo())
+
+		sender := service.NewTestSender()
+		t.Cleanup(func() { require.NoError(t, sender.Close()) })
+		txnService := service.NewTestTxnService(t, 1, sender, service.NewTestClock(1))
+		require.NoError(t, r.start(txnService))
+		require.Equal(t, []logservicepb.TNShardInfo{{
+			ShardID: 1, ReplicaID: 2,
+		}}, s.getTNShardInfo())
+	})
+}
+
+func TestReplicaCreateRetryStopsOnStoreStop(t *testing.T) {
 	oldInterval := retryCreateStorageInterval
-	retryCreateStorageInterval = time.Second
+	retryCreateStorageInterval = time.Hour
 	t.Cleanup(func() { retryCreateStorageInterval = oldInterval })
 
 	createAttempted := make(chan struct{}, 1)
+	var createAttempts atomic.Int32
 	runTNStoreTest(t, func(s *store) {
 		s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+			createAttempts.Add(1)
 			select {
 			case createAttempted <- struct{}{}:
 			default:
@@ -273,13 +343,21 @@ func TestReplicaCreateRetryStopsPromptly(t *testing.T) {
 		require.NoError(t, s.StartTNReplica(newTestTNShard(102, 202, 302)))
 		select {
 		case <-createAttempted:
-		case <-time.After(time.Second):
+		case <-time.After(storeTestTimeout):
 			t.Fatal("storage creation was not attempted")
 		}
 
-		start := time.Now()
-		s.stopper.Stop()
-		require.Less(t, time.Since(start), 500*time.Millisecond)
+		stopped := make(chan struct{})
+		go func() {
+			s.stopper.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(storeTestTimeout):
+			t.Fatal("store stop did not cancel replica creation retry")
+		}
+		require.Equal(t, int32(1), createAttempts.Load())
 	})
 }
 

@@ -110,6 +110,32 @@ func TestNewTAEStorageHandleCreationFailure(t *testing.T) {
 	require.Equal(t, 0, serverCalls)
 }
 
+func TestNewTAEStorageRejectsInvalidLogtailMessageSizeBeforeOpeningHandle(t *testing.T) {
+	handleCalls := 0
+	deps := taeStorageDependencies{
+		newTAEHandle: func(
+			context.Context,
+			string,
+			client.QueryClient,
+			*options.Options,
+		) (taeHandle, error) {
+			handleCalls++
+			return nil, nil
+		},
+	}
+	rt := runtime.DefaultRuntime()
+	cfg := options.NewDefaultLogtailServerCfg()
+	cfg.RpcMaxMessageSize = 1
+
+	storage, err := newTAEStorage(
+		context.Background(), t.TempDir(),
+		&options.Options{SID: rt.ServiceUUID()}, metadata.TNShard{}, rt,
+		"", cfg, nil, nil, deps)
+	require.Nil(t, storage)
+	require.Error(t, err)
+	require.Zero(t, handleCalls)
+}
+
 func TestNewTAEStorageLogtailServerFailureClosesHandle(t *testing.T) {
 	primaryErr := errors.New("logtail server creation failed")
 	cleanupErr := errors.New("handle close failed")
@@ -157,7 +183,7 @@ func newTAEStorageForTest(
 		metadata.TNShard{},
 		rt,
 		"",
-		&options.LogtailServerCfg{},
+		options.NewDefaultLogtailServerCfg(),
 		nil,
 		nil,
 		deps,
