@@ -231,6 +231,11 @@ type FixedVectorExpressionExecutor struct {
 
 type FunctionExpressionExecutor struct {
 	m *mpool.MPool
+	// resultType is the declared function return type. Some built-ins refine
+	// result metadata (for example temporal scale or decimal width/scale) at
+	// runtime, so reusable result vectors must start each evaluation from this
+	// stable type before the function applies the current runtime metadata.
+	resultType types.Type
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -508,11 +513,22 @@ func (expr *FunctionExpressionExecutor) Init(
 	m := proc.Mp()
 
 	expr.m = m
+	expr.resultType = retType
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
 	expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
 	return err
+}
+
+func (expr *FunctionExpressionExecutor) resetResultType(result vector.FunctionResultWrapper) {
+	if result == nil {
+		return
+	}
+	if vec := result.GetResultVector(); vec != nil {
+		vec.SetType(expr.resultType)
+		vec.SetIsBin(false)
+	}
 }
 
 func functionExpressionRowCount(batches []*batch.Batch) int {
@@ -646,6 +662,7 @@ func noRowsSelected(selectList []bool, rowCount int) bool {
 }
 
 func (expr *FunctionExpressionExecutor) makeNullResult(rowCount int) (*vector.Vector, error) {
+	expr.resetResultType(expr.resultVector)
 	if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}
@@ -701,13 +718,14 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedParameterResults[i] = parameter
 	}
 
+	expr.resetResultType(expr.resultVector)
 	if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}
 	if expr.selectedResult == nil {
-		expr.selectedResult = vector.NewFunctionResultWrapper(
-			*expr.resultVector.GetResultVector().GetType(), expr.m)
+		expr.selectedResult = vector.NewFunctionResultWrapper(expr.resultType, expr.m)
 	}
+	expr.resetResultType(expr.selectedResult)
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
 		return nil, err
 	}
@@ -716,12 +734,21 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 
+	selectedResult := expr.selectedResult.GetResultVector()
+	runtimeType := *selectedResult.GetType()
+	runtimeIsBin := selectedResult.GetIsBin()
+
 	result := expr.resultVector.GetResultVector()
+	result.SetType(runtimeType)
+	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if expr.selectedNullResult == nil {
-		expr.selectedNullResult = vector.NewConstNull(*result.GetType(), 1, expr.m)
+		expr.selectedNullResult = vector.NewConstNull(runtimeType, 1, expr.m)
+	} else {
+		expr.selectedNullResult.SetType(runtimeType)
+		expr.selectedNullResult.SetLength(1)
 	}
-	selectedResult := expr.selectedResult.GetResultVector()
+	expr.selectedNullResult.SetIsBin(runtimeIsBin)
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {
@@ -793,6 +820,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
+	expr.resetResultType(expr.resultVector)
 	if err = expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}

@@ -168,6 +168,7 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	}
 
 	// fold the function.
+	expr.resetResultType(expr.resultVector)
 	if err = expr.resultVector.PreExtendAndReset(execLen); err != nil {
 		return err
 	}

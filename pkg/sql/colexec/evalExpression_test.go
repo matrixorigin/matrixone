@@ -602,6 +602,84 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		}
 	}
 
+	t.Run("partial evaluation preserves runtime result type", func(t *testing.T) {
+		sourceType := types.New(types.T_float32, 10, 2)
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, sourceType, proc.Mp(), false, []float32{1.25, 2.5}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := castTo(column(0, sourceType), types.T_float64.ToType())
+		evalType := func(selectList []bool) types.Type {
+			t.Helper()
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, selectList)
+			require.NoError(t, err)
+			return *result.GetType()
+		}
+
+		fullType := evalType(nil)
+		partialType := evalType([]bool{false, true})
+		require.Equal(t, fullType, partialType)
+		require.Equal(t, int32(10), partialType.Width)
+		require.Equal(t, int32(2), partialType.Scale)
+	})
+
+	t.Run("partial runtime result type updates across reuse", func(t *testing.T) {
+		expr := bindFunction("sysdate", column(0, types.T_int64.ToType()))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		evalScale := func(scale int64) {
+			t.Helper()
+			input := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{6, scale}),
+			}, nil)
+			defer input.Clean(proc.Mp())
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+			require.NoError(t, err)
+			require.Equal(t, int32(scale), result.GetType().Scale)
+		}
+
+		evalScale(3)
+		evalScale(1)
+		evalScale(5)
+	})
+
+	t.Run("nested consumer observes partial runtime result type", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		sysdate := bindFunction("sysdate", makePlan2Int64ConstExprWithType(3))
+		asChar := castTo(sysdate, types.New(types.T_char, 64, 0))
+		directExecutor, err := NewExpressionExecutor(proc, asChar)
+		require.NoError(t, err)
+		defer directExecutor.Free()
+		direct, err := directExecutor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+
+		ifExpr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			asChar,
+			stringConst("fallback"))
+		ifExecutor, err := NewExpressionExecutor(proc, ifExpr)
+		require.NoError(t, err)
+		defer ifExecutor.Free()
+		partial, err := ifExecutor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+
+		require.Equal(t, 23, len(direct.GetStringAt(0)))
+		require.Equal(t, "fallback", partial.GetStringAt(0))
+		require.Equal(t, len(direct.GetStringAt(0)), len(partial.GetStringAt(1)))
+	})
+
 	t.Run("if skips invalid rows within a batch", func(t *testing.T) {
 		input := testutil.NewBatchWithVectors([]*vector.Vector{
 			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true}),
