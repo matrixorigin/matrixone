@@ -36,18 +36,15 @@ func (n noopTracerProvider) Tracer(string, ...TracerOption) Tracer {
 	return NoopTracer{}
 }
 
-// NoopTracer is an implementation of Tracer that preforms no operations.
+// NoopTracer is an implementation of Tracer that performs no operations.
 // It should have ZERO allocation overhead.
-// NoopTracer is only used when trace is disabled (disableSpan=true).
-// When trace is enabled, MOTracer is used instead.
+// MatrixOne permanently uses it after retiring Span recording.
 type NoopTracer struct{}
 
 // Start returns ctx and NoopSpan directly without any allocation.
 // All parameters are ignored since NoopTracer performs no operations.
-// This is safe because:
-// 1. NoopTracer is only used when trace is disabled
-// 2. When trace is disabled, empty SpanContext is expected behavior
-// 3. When trace is enabled, MOTracer.Start is called instead
+// SpanContext and RPC propagation remain available separately for logs,
+// errors, and compatibility with existing wire formats.
 func (t NoopTracer) Start(ctx context.Context, _ string, _ ...SpanStartOption) (context.Context, Span) {
 	return ctx, NoopSpan{}
 }

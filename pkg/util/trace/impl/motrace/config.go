@@ -15,13 +15,11 @@
 package motrace
 
 import (
-	"encoding/binary"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -29,7 +27,6 @@ import (
 
 const (
 	MOStatementType = "statement"
-	MOSpanType      = "span"
 	MOLogType       = "log"
 	MOErrorType     = "error"
 	MORawLogType    = "rawlog"
@@ -41,33 +38,16 @@ const (
 
 // tracerProviderConfig.
 type tracerProviderConfig struct {
-	// spanProcessors contains collection of SpanProcessors that are processing pipeline
-	// for spans in the trace signal.
-	// SpanProcessors registered with a TracerProvider and are called at the start
-	// and end of a Span's lifecycle, and are called in the order they are
-	// registered.
-	spanProcessors []trace.SpanProcessor
-
 	enable bool // SetEnable
 
 	// service used to get global config from mo.runtime
 	service string // WithService
 
-	// idGenerator is used to generate all Span and Trace IDs when needed.
-	idGenerator trace.IDGenerator
-
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *trace.Resource // withMOVersion, WithNode,
 
-	// disableSpan
-	disableSpan bool
-	// enableSpanProfile, do profile while span been record.
-	// work in MOSpan.doProfile()
-	enableSpanProfile bool
 	// disableError
 	disableError bool
-	// debugMode used in Tracer.Debug
-	debugMode bool // DebugMode
 
 	batchProcessor BatchProcessor // WithBatchProcessor
 
@@ -89,8 +69,6 @@ type tracerProviderConfig struct {
 	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
 	longQueryTime int64 //  WithLongQueryTime
-	// longSpanTime
-	longSpanTime time.Duration
 	// skipRunningStmt
 	skipRunningStmt bool // set by WithSkipRunningStmt
 
@@ -195,22 +173,21 @@ func WithLongQueryTime(secs float64) tracerProviderOption {
 	})
 }
 
-func WithLongSpanTime(d time.Duration) TracerProviderOption {
-	return tracerProviderOption(func(cfg *tracerProviderConfig) {
-		cfg.longSpanTime = d
-	})
+// WithLongSpanTime is retained as a compatibility no-op after Span recording
+// was retired.
+func WithLongSpanTime(_ time.Duration) TracerProviderOption {
+	return tracerProviderOption(func(_ *tracerProviderConfig) {})
 }
 
-func WithSpanDisable(disable bool) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.disableSpan = disable
-	}
+// WithSpanDisable is retained so existing configuration continues to parse.
+// Span recording cannot be re-enabled.
+func WithSpanDisable(_ bool) tracerProviderOption {
+	return func(_ *tracerProviderConfig) {}
 }
 
-func EnableSpanProfile(enable bool) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.enableSpanProfile = enable
-	}
+// EnableSpanProfile is retained as a compatibility no-op.
+func EnableSpanProfile(_ bool) tracerProviderOption {
+	return func(_ *tracerProviderConfig) {}
 }
 
 func WithErrorDisable(disable bool) tracerProviderOption {
@@ -294,10 +271,9 @@ func WithBufferSizeThreshold(size int64) tracerProviderOption {
 	})
 }
 
-func DebugMode(debug bool) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.debugMode = debug
-	}
+// DebugMode is retained as a compatibility no-op for the retired Span path.
+func DebugMode(_ bool) tracerProviderOption {
+	return func(_ *tracerProviderConfig) {}
 }
 
 func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
@@ -320,23 +296,4 @@ func WithInitAction(init bool) tracerProviderOption {
 		defer cfg.mux.Unlock()
 		cfg.needInit = init
 	}
-}
-
-var _ trace.IDGenerator = &moIDGenerator{}
-
-type moIDGenerator struct{}
-
-func (M moIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
-	tid := trace.TraceID{}
-	binary.BigEndian.PutUint64(tid[:], util.Fastrand64())
-	binary.BigEndian.PutUint64(tid[8:], util.Fastrand64())
-	sid := trace.SpanID{}
-	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
-	return tid, sid
-}
-
-func (M moIDGenerator) NewSpanID() trace.SpanID {
-	sid := trace.SpanID{}
-	binary.BigEndian.PutUint64(sid[:], util.Fastrand64())
-	return sid
 }

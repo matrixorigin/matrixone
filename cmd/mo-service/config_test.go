@@ -195,14 +195,15 @@ func TestDumpCommonConfig(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestObservabilityDisablesSpansByDefault(t *testing.T) {
+func TestObservabilityRetiresSpansByDefault(t *testing.T) {
 	cfg := NewConfig()
 	effective := cfg.getObservabilityConfig()
 	require.True(t, effective.DisableSpan)
 	require.False(t, effective.DisableTrace)
 	require.False(t, effective.DisableError)
 
-	// Span collection can still be explicitly enabled for a diagnostic run.
+	// Keep accepting the legacy key. Runtime Span recording remains retired even
+	// when old configuration explicitly sets it to false.
 	cfg = NewConfig()
 	err := parseFromString("[observability]\ndisable-span = false", cfg)
 	require.NoError(t, err)

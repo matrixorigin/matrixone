@@ -164,7 +164,7 @@ func TestReportZap_Discardable(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	collector := newDummyCollectorCounter()
-	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithBatchProcessor(collector))
+	p := newMOTracerProvider(EnableTracer(true), WithBatchProcessor(collector))
 	stubs := gostub.Stub(&GetTracerProvider, func() *MOTracerProvider {
 		return p
 	})

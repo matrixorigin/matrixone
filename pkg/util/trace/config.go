@@ -28,7 +28,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -170,66 +169,18 @@ func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
 	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
-type MoCtledState struct {
-	Enable    bool
-	Threshold time.Duration
-}
+// InitMOCtledSpan is retained for source compatibility. Span recording and its
+// runtime control state have been retired.
+func InitMOCtledSpan() {}
 
-var MOCtledSpanEnableConfig struct {
-	sync.Mutex
-	NameToKind  map[string]SpanKind
-	KindToState map[SpanKind]*MoCtledState
-}
-
-// InitMOCtledSpan registers all mo_ctl controlled span
-func InitMOCtledSpan() {
-	MOCtledSpanEnableConfig.NameToKind = make(map[string]SpanKind)
-	MOCtledSpanEnableConfig.KindToState = make(map[SpanKind]*MoCtledState)
-
-	// enable or disable the span with time threshold for remote file service operation
-	MOCtledSpanEnableConfig.NameToKind["s3"] = SpanKindRemoteFSVis
-	MOCtledSpanEnableConfig.KindToState[SpanKindRemoteFSVis] = &MoCtledState{false, 0}
-
-	// enable or disable the span with time threshold for Local file service operation
-	MOCtledSpanEnableConfig.NameToKind["local"] = SpanKindLocalFSVis
-	MOCtledSpanEnableConfig.KindToState[SpanKindLocalFSVis] = &MoCtledState{false, 0}
-
-	// enable or disable the span with time threshold for sql statement operation
-	MOCtledSpanEnableConfig.NameToKind["statement"] = SpanKindStatement
-	MOCtledSpanEnableConfig.KindToState[SpanKindStatement] = &MoCtledState{false, 0}
-
-	// enable or disable the span with time threshold for recording some debug log when tn
-	// handles RPC operation, like handleCommit
-	MOCtledSpanEnableConfig.NameToKind["tnrpc"] = SpanKindTNRPCHandle
-	MOCtledSpanEnableConfig.KindToState[SpanKindTNRPCHandle] = &MoCtledState{false, 0}
-}
-
-// IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
-// if it is, return it's current state, or return not exist
-func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Duration) {
-	MOCtledSpanEnableConfig.Lock()
-	defer MOCtledSpanEnableConfig.Unlock()
-
-	if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
-		return true, state.Enable, state.Threshold
-	}
+// IsMOCtledSpan is retained for source compatibility and never enables a Span.
+func IsMOCtledSpan(SpanKind) (exist bool, enable bool, threshold time.Duration) {
 	return false, false, 0
 }
 
-// SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
-// if it is, reset it's state to the specified and return succeed, or return not succeed
-func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed bool) {
-	MOCtledSpanEnableConfig.Lock()
-	defer MOCtledSpanEnableConfig.Unlock()
-
-	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
-		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
-		// convert threshold to ms in time.Duration format
-		MOCtledSpanEnableConfig.KindToState[kind].Threshold = time.Duration(threshold) * time.Millisecond
-		return true
-	}
-	return false
-}
+// SetMoCtledSpanState is retained for source compatibility. Span recording
+// cannot be enabled at runtime.
+func SetMoCtledSpanState(string, bool, int64) bool { return false }
 
 // SpanConfig is a group of options for a Span.
 type SpanConfig struct {
@@ -413,65 +364,58 @@ func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 	})
 }
 
-// WithHungThreshold please be careful to using this option.
-// It will create a new goroutine to check hung deadline while calling Tracer.Start().
+// WithHungThreshold is retained for source compatibility. No goroutine is
+// created because Span recording is retired.
 func WithHungThreshold(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.hungThreshold = d
 	})
 }
 
-// WithProfileGoroutine requests dump pprof/mutex. It will trigger profile.ProfileGoroutine() in Span.End().
-// More details in MOSpan.doProfile.
+// WithProfileGoroutine is retained for source compatibility and is a no-op at
+// runtime because Span recording is retired.
 func WithProfileGoroutine() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagGoroutine
 	})
 }
 
-// WithProfileHeap requests dump pprof/heap. It will trigger profile.ProfileHeap() in Span.End().
-// More details in MOSpan.doProfile.
+// WithProfileHeap is retained for source compatibility and has no runtime effect.
 func WithProfileHeap() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagHeap
 	})
 }
 
-// WithProfileThreadCreate requests dump pprof/ThreadCreate. It will trigger profile.ProfileRuntime(profile.THREADCREATE, ...) or profile.ProfileThreadcreate() in Span.End().
-// More details in MOSpan.doProfile.
+// WithProfileThreadCreate is retained for source compatibility and has no runtime effect.
 func WithProfileThreadCreate() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagThreadCreate
 	})
 }
 
-// WithProfileAllocs requests dump pprof/allocs. It will trigger profile.ProfileAllocs() in Span.End().
-// more details in MOSpan.doProfile.
+// WithProfileAllocs is retained for source compatibility and has no runtime effect.
 func WithProfileAllocs() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagAllocs
 	})
 }
 
-// WithProfileBlock  requests dump pprof/block. It will trigger profile.ProfileBlock() in Span.End().
-// More details in MOSpan.doProfile.
+// WithProfileBlock is retained for source compatibility and has no runtime effect.
 func WithProfileBlock() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagBlock
 	})
 }
 
-// WithProfileMutex  requests dump pprof/mutex. It will trigger profile.ProfileMutex() in Span.End().
-// More details in MOSpan.doProfile.
+// WithProfileMutex is retained for source compatibility and has no runtime effect.
 func WithProfileMutex() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagMutex
 	})
 }
 
-// WithProfileCpuSecs requests dump pprof/cpu, and specify the time to profile.
-// Please carefully to set this value, it is a sync profile.ProfileCPU() op.
-// More details in MOSpan.doProfile.
+// WithProfileCpuSecs is retained for source compatibility and has no runtime effect.
 func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagCpu
@@ -479,8 +423,7 @@ func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	})
 }
 
-// WithProfileSystemStatus requests dump system status. It will trigger SystemStatus() in Span.End().
-// More details in MOSpan.doProfile.
+// WithProfileSystemStatus is retained for source compatibility and has no runtime effect.
 func WithProfileSystemStatus(f func() ([]byte, error)) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagSystemStatus
@@ -488,9 +431,7 @@ func WithProfileSystemStatus(f func() ([]byte, error)) SpanStartOption {
 	})
 }
 
-// WithProfileTraceSecs requests dump pprof/trace, and specify the time to profile.
-// Please carefully to use, it is a sync profile.ProfileTrace() op
-// More details in MOSpan.doProfile.
+// WithProfileTraceSecs is retained for source compatibility and has no runtime effect.
 func WithProfileTraceSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagTrace

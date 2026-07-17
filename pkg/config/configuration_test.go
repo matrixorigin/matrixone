@@ -243,7 +243,7 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 	}
 }
 
-func TestNewObservabilityParametersDisablesOnlySpansByDefault(t *testing.T) {
+func TestNewObservabilityParametersRetiresOnlySpansByDefault(t *testing.T) {
 	cfg := NewObservabilityParameters()
 
 	// DisableTrace gates StatementInfo plus the log and error exporters, so it
