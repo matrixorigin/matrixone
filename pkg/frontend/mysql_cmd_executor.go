@@ -3275,6 +3275,11 @@ func executeStmtWithResponse(ses *Session,
 		return err
 	}
 
+	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
+	// following statement (same proc for multi-statement COM_QUERY, or the next
+	// COM_QUERY via the session) reads the correct value.
+	recordLastAffectedRows(ses, execCtx)
+
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
 		return err
@@ -3766,6 +3771,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SessionId:            ses.GetSessId(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
+	// Carry the previous statement's affected rows into this proc so the
+	// ROW_COUNT() builtin can read it.
+	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
@@ -3778,6 +3786,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
+
+	// MySQL semantics: when a statement fails (parse / compile / execution error),
+	// ROW_COUNT() for the following statement must return -1. recordLastAffectedRows
+	// only runs after a statement succeeds, so cover every error path of the main
+	// COM_QUERY / COM_STMT_EXECUTE flow here. proc is the session's reused proc and
+	// is reseeded from the session on the next query, so the session value drives
+	// the next statement; the proc is updated too for completeness.
+	defer func() {
+		if retErr != nil {
+			markRowCountFailed(ses, proc)
+		}
+	}()
+
 	if ses.GetTenantInfo() != nil {
 		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
@@ -3870,6 +3891,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.sentRows.Store(int64(0))
 		ses.writeCsvBytes.Store(int64(0))
 		resper.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
+		// ExecCtx is reused across statements in a multi-statement COM_QUERY;
+		// clear the previous statement's run result so a statement that does not
+		// set it (e.g. a status statement) does not inherit a stale AffectRows.
+		execCtx.runResult = nil
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		var err2 error
@@ -4016,6 +4041,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
@@ -4053,11 +4079,13 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			ses.addSqlCount(1)
 			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
+				setRowCount(ses, ses.GetProc(), -1)
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
 			if err != errSidecarNotConfigured {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
 			}
@@ -4071,6 +4099,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			query, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, query)
 			if rewriteErr != nil {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
@@ -4079,6 +4108,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 			resp.isIssue3482 = input.isIssue3482Sql()
 			if resp.isIssue3482 {
@@ -4107,6 +4137,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_PING:
+		setRowCount(ses, ses.GetProc(), 0)
 		resp = NewGeneralOkResponse(COM_PING, ses.GetTxnHandler().GetServerStatus())
 
 		return resp, nil
@@ -4120,6 +4151,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
@@ -4133,9 +4165,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
+		savedRowCount := ses.GetLastAffectedRows()
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql, remapDb: preparedRemapDb})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		}
 		return resp, nil
 
@@ -4147,11 +4182,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			if prepareStmt != nil {
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This parse failure never reaches doComQuery, so the error defer there
+			// does not run; set the state explicitly here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, remapDb: prepareStmt.remapDb})
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
 		prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -4161,6 +4201,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
 		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
 		}
@@ -4168,11 +4209,19 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		savedRowCount := ses.GetLastAffectedRows()
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
+			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_CLOSE packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -4182,19 +4231,32 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
+		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
+		restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		return resp, nil
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			// A malformed (too short) packet is a failed statement: reset
+			// ROW_COUNT() to -1 and return an error instead of panicking on the slice.
+			markRowCountFailed(ses, ses.GetProc())
+			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_RESET packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This early return never reaches doComQuery, so set the state here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -4206,17 +4268,21 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			setRowCount(ses, ses.GetProc(), 0)
 		}
 		return resp, nil
 
 	case COM_SET_OPTION:
 		err = handleSetOption(ses, execCtx, req.GetData().([]byte))
+		setRowCount(ses, ses.GetProc(), -1)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
+			return NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
+		markRowCountFailed(ses, ses.GetProc())
 		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil
