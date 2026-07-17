@@ -905,6 +905,49 @@ func (g *HashBuildBudgetGeneration) ReserveSpillDiskBytes(size uint64) (*HashBui
 	return g.ReserveSpillDisk(size)
 }
 
+// Grow increases one live per-file disk reservation without allocating a new
+// bookkeeping token. This keeps metadata proportional to open spill files,
+// rather than to the number of tiny batch records written to those files.
+func (r *HashBuildSpillDiskReservation) Grow(additional uint64) error {
+	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
+		return ErrHashBuildReservationInactive
+	}
+	if additional == 0 {
+		return nil
+	}
+	b := r.budget
+	g := r.generation
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if r.core.state.Load() != hashBuildReservationActive {
+		return ErrHashBuildReservationInactive
+	}
+	if b.closed || g.closed {
+		g.rejectCount++
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional}
+	}
+	if b.spillDiskUsed > b.spillDiskCap || additional > b.spillDiskCap-b.spillDiskUsed {
+		g.rejectCount++
+		observeHashBuildBudget("spill_disk", "reject", "cn", additional)
+		return newAdmissionError(additional, b.spillDiskUsed, b.spillDiskCap)
+	}
+	if g.spillDiskUsed > g.spillDiskCap || additional > g.spillDiskCap-g.spillDiskUsed {
+		g.rejectCount++
+		observeHashBuildBudget("spill_disk", "reject", "query", additional)
+		return newAdmissionError(additional, g.spillDiskUsed, g.spillDiskCap)
+	}
+	if r.core.size > math.MaxUint64-additional {
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "spill disk reservation size overflow"}
+	}
+	b.spillDiskUsed += additional
+	g.spillDiskUsed += additional
+	r.core.size += additional
+	observeHashBuildBudget("spill_disk", "reserve", "query", additional)
+	observeHashBuildBudget("spill_disk", "reserve", "cn", additional)
+	g.reserveCount++
+	return nil
+}
+
 func (g *HashBuildBudgetGeneration) ReserveSpillFD(size uint64) (*HashBuildSpillFDReservation, error) {
 	if g == nil || g.budget == nil {
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid}

@@ -122,36 +122,28 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
 
 	payload := ctr.spillWriteBuf.Bytes()
-	var diskToken *process.HashBuildSpillDiskReservation
 	var err error
 	if ctr.hashmapBuilder.budget != nil {
-		diskToken, err = ctr.hashmapBuilder.budget.ReserveSpillDisk(uint64(len(payload)))
+		if ctr.spillBundle == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		_, _, err = ctr.spillBundle.growDisk(file, ctr.hashmapBuilder.budget, uint64(len(payload)))
 		if err != nil {
 			return 0, err
 		}
 	}
 	written, err := file.Write(payload)
 	if err != nil {
-		if diskToken != nil {
-			diskToken.Release()
-		}
 		return 0, err
 	}
 	if written != len(payload) {
-		if diskToken != nil {
-			diskToken.Release()
-		}
 		return 0, io.ErrShortWrite
 	}
-	if diskToken != nil {
-		if _, err := diskToken.ReconcileDown(uint64(written)); err != nil {
-			diskToken.Release()
-			return 0, err
-		}
-		if ctr.spillBundle == nil {
-			ctr.spillBundle = &spillFileBundle{}
-		}
-		ctr.spillBundle.addDisk(file, diskToken, cnt, uint64(written))
+	if ctr.hashmapBuilder.budget != nil {
+		// The exact payload length was admitted. Record logical ownership only
+		// after the full write; partial writes retain the conservative charge
+		// until the enclosing bundle closes the file.
+		ctr.spillBundle.recordDiskWrite(file, cnt, uint64(written))
 	}
 	analyzer.Spill(int64(written))
 	analyzer.SpillRows(cnt)

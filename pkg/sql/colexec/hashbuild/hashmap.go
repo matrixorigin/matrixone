@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"math"
 	"runtime"
 	"strings"
 
@@ -66,6 +67,8 @@ type HashmapBuilder struct {
 	mapReservation            *hashMapReservationOwner
 	batchReservations         []*process.HashBuildReservation
 	auxReservation            *process.HashBuildReservation
+	keyExprs                  []*plan.Expr
+	expressionReservations    []*process.HashBuildReservation
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -165,6 +168,8 @@ func (hb *HashmapBuilder) Prepare(
 		}
 		hb.needDupVec = needDupVec
 		hb.executors = executors
+		hb.keyExprs = keyCols
+		hb.expressionReservations = make([]*process.HashBuildReservation, len(keyCols))
 		hb.keyWidth = keyWidth
 		hb.InputBatchRowCount = 0
 	}
@@ -202,11 +207,10 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 		}
 	}
 	hb.UniqueJoinKeys = nil
-	for i := range hb.executors {
-		if hb.executors[i] != nil {
-			hb.executors[i].ResetForNextQuery()
-		}
-	}
+	// Function executors retain result-vector capacity across ResetForNextQuery.
+	// Free them before releasing expression reservations; Prepare recreates the
+	// executor set for the next generation.
+	hb.FreeExecutors()
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
@@ -236,6 +240,8 @@ func (hb *HashmapBuilder) FreeExecutors() {
 		}
 	}
 	hb.executors = nil
+	hb.keyExprs = nil
+	hb.releaseExpressionReservations()
 }
 
 func (hb *HashmapBuilder) FreeTemporaryVectors(proc *process.Process) {
@@ -278,20 +284,145 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 		}
 	}
 	for idx2 := range hb.executors {
+		var candidate *process.HashBuildReservation
+		if _, isColumn := hb.keyExprs[idx2].Expr.(*plan.Expr_Col); !isColumn && hb.budget != nil {
+			peak, err := expressionVectorPeak(hb.keyExprs[idx2], bat.RowCount(), hb.needDupVec)
+			if err != nil {
+				return err
+			}
+			candidate, err = hb.budget.Reserve(peak)
+			if err != nil {
+				return err
+			}
+		}
 		vec, err := hb.executors[idx2].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
+			hb.abortExpressionEval(proc, candidate)
 			return err
 		}
 		if hb.needDupVec {
 			hb.curVecs[idx2], err = vec.DupOffHeap(proc.Mp())
 			if err != nil {
+				hb.abortExpressionEval(proc, candidate)
 				return err
 			}
 		} else {
 			hb.curVecs[idx2] = vec
 		}
+		if candidate != nil {
+			// Child function executors retain their result vectors but do not
+			// expose each capacity. Keep the recursive type bound charged until
+			// the complete executor tree is freed on Reset/Free.
+			if old := hb.expressionReservations[idx2]; old != nil {
+				old.Release()
+			}
+			hb.expressionReservations[idx2] = candidate
+		}
 	}
 	return nil
+}
+
+func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process, candidate *process.HashBuildReservation) {
+	// Eval may allocate cached child/result vectors before returning an error.
+	// Destroy the complete executor tree while both the previous tokens and the
+	// current candidate are still charged, then release admission ownership.
+	hb.FreeTemporaryVectors(proc)
+	hb.FreeExecutors()
+	if candidate != nil {
+		candidate.Release()
+	}
+}
+
+// expressionVectorPeak is an execution-before-allocation upper bound based on
+// the SQL result type. Varlena widths use the declared maximum (or the engine
+// maximum when absent), so input-dependent expanding functions are rejected
+// by admission before Eval instead of allocating first.
+func expressionVectorPeak(expr *plan.Expr, rows int, duplicate bool) (uint64, error) {
+	if expr == nil || rows < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	total, root, err := expressionTreePeak(expr, uint64(rows))
+	if err != nil {
+		return 0, err
+	}
+	if duplicate {
+		if total > math.MaxUint64-root {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		total += root
+	}
+	return total, nil
+}
+
+func expressionTreePeak(expr *plan.Expr, rows uint64) (total uint64, output uint64, err error) {
+	if expr == nil {
+		return 0, 0, process.ErrHashBuildBudgetInvalid
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return 0, 0, nil
+	case *plan.Expr_F:
+		if node.F == nil {
+			return 0, 0, process.ErrHashBuildBudgetInvalid
+		}
+		for _, arg := range node.F.Args {
+			child, _, childErr := expressionTreePeak(arg, rows)
+			if childErr != nil || total > math.MaxUint64-child {
+				return 0, 0, process.ErrHashBuildBudgetInvalid
+			}
+			total += child
+		}
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Fold:
+		// These executors may materialize a vector but have no child expression
+		// tree. Charge their declared output below.
+	default:
+		// Window, subquery, correlated, list, target-type and max nodes do not
+		// expose a bounded vector-evaluator tree here.
+		return 0, 0, process.ErrHashBuildBudgetInvalid
+	}
+	output, err = expressionTypePeak(expr.Typ, rows)
+	if err != nil || total > math.MaxUint64-output {
+		return 0, 0, process.ErrHashBuildBudgetInvalid
+	}
+	return total + output, output, nil
+}
+
+func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
+	width := int64(types.T(typ.Id).FixedLength())
+	if width < 0 {
+		width = int64(typ.Width)
+		hardMax := int64(types.MaxVarcharLen)
+		switch types.T(typ.Id) {
+		case types.T_blob, types.T_text, types.T_json, types.T_datalink,
+			types.T_geometry, types.T_geometry32, types.T_array_float32, types.T_array_float64:
+			hardMax = int64(types.MaxBlobLen)
+		}
+		if width <= 0 {
+			width = hardMax
+		} else if width > hardMax {
+			// Never clamp a declared bound downward.
+			hardMax = width
+		}
+		width = hardMax
+	}
+	if width < 1 {
+		width = 1
+	}
+	perRow := uint64(width) + 32
+	if rows > (math.MaxUint64-(64<<10))/perRow {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return rows*perRow + (64 << 10), nil
+}
+
+func (hb *HashmapBuilder) releaseExpressionReservations() {
+	for i, token := range hb.expressionReservations {
+		if token != nil {
+			token.Release()
+			hb.expressionReservations[i] = nil
+		}
+	}
+	hb.expressionReservations = nil
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {

@@ -338,13 +338,13 @@ func (r *BucketReader) Close() {
 
 // BucketWriter writes serialized batch records to an fd.
 type BucketWriter struct {
-	Name             string
-	Fd               *os.File
-	Budget           *process.HashBuildBudgetGeneration
-	Rows             int64
-	Bytes            uint64
-	diskReservations []*process.HashBuildSpillDiskReservation
-	fdReservation    *process.HashBuildSpillFDReservation
+	Name            string
+	Fd              *os.File
+	Budget          *process.HashBuildBudgetGeneration
+	Rows            int64
+	Bytes           uint64
+	diskReservation *process.HashBuildSpillDiskReservation
+	fdReservation   *process.HashBuildSpillFDReservation
 }
 
 func (w *BucketWriter) Created() bool { return w.Fd != nil }
@@ -354,12 +354,10 @@ func (w *BucketWriter) Close() {
 		w.Fd.Close()
 		w.Fd = nil
 	}
-	for _, token := range w.diskReservations {
-		if token != nil {
-			token.Release()
-		}
+	if w.diskReservation != nil {
+		w.diskReservation.Release()
+		w.diskReservation = nil
 	}
-	w.diskReservations = nil
 	if w.fdReservation != nil {
 		w.fdReservation.Release()
 		w.fdReservation = nil
@@ -372,7 +370,7 @@ func (w *BucketWriter) HandOffFd() *os.File {
 	}
 	// A raw descriptor cannot carry accounting ownership. Budgeted writers
 	// must use handOffSpillFile; retain ownership here so Close can unwind it.
-	if w.fdReservation != nil || len(w.diskReservations) != 0 {
+	if w.fdReservation != nil || w.diskReservation != nil {
 		return nil
 	}
 	if _, err := w.Fd.Seek(0, io.SeekStart); err != nil {
@@ -392,15 +390,13 @@ func (w *BucketWriter) handOffSpillFile() (*message.SpillFile, error) {
 	}
 	fd := w.Fd
 	w.Fd = nil
-	disk := append([]*process.HashBuildSpillDiskReservation(nil), w.diskReservations...)
+	disk := w.diskReservation
 	fdToken := w.fdReservation
-	w.diskReservations = nil
+	w.diskReservation = nil
 	w.fdReservation = nil
 	release := func() {
-		for _, token := range disk {
-			if token != nil {
-				token.Release()
-			}
+		if disk != nil {
+			disk.Release()
 		}
 		if fdToken != nil {
 			fdToken.Release()
@@ -442,14 +438,36 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 	copy(bucketBuf.Bytes()[batchSizePos:batchSizePos+8], types.EncodeInt64(&batchSize))
 	magic := uint64(SpillMagic)
 	bucketBuf.Write(types.EncodeUint64(&magic))
+	oldDiskSize := uint64(0)
+	newDiskToken := false
+	rollbackDisk := func() {
+		if w.diskReservation == nil {
+			return
+		}
+		if newDiskToken {
+			w.diskReservation.Release()
+			w.diskReservation = nil
+			return
+		}
+		_, _ = w.diskReservation.ReconcileDown(oldDiskSize)
+	}
 	if w.Budget != nil {
 		// The caller reserves the transient marshal scratch in scatterBatch.
-		// Disk and FD ownership starts only once the complete record is ready.
-		diskToken, err := w.Budget.ReserveSpillDisk(uint64(bucketBuf.Len()))
-		if err != nil {
-			return err
+		// Keep one growable disk token per file so bookkeeping remains bounded
+		// even when the input arrives as millions of tiny batches.
+		if w.diskReservation == nil {
+			diskToken, err := w.Budget.ReserveSpillDisk(uint64(bucketBuf.Len()))
+			if err != nil {
+				return err
+			}
+			w.diskReservation = diskToken
+			newDiskToken = true
+		} else {
+			oldDiskSize = w.diskReservation.Size()
+			if err := w.diskReservation.Grow(uint64(bucketBuf.Len())); err != nil {
+				return err
+			}
 		}
-		w.diskReservations = append(w.diskReservations, diskToken)
 	}
 	if !w.Created() {
 		var fdToken *process.HashBuildSpillFDReservation
@@ -457,11 +475,7 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 		if w.Budget != nil {
 			fdToken, err = w.Budget.ReserveSpillFD(1)
 			if err != nil {
-				// Roll back the disk token reserved above.
-				if n := len(w.diskReservations); n > 0 {
-					w.diskReservations[n-1].Release()
-					w.diskReservations = w.diskReservations[:n-1]
-				}
+				rollbackDisk()
 				return err
 			}
 		}
@@ -470,10 +484,7 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 			if fdToken != nil {
 				fdToken.Release()
 			}
-			if n := len(w.diskReservations); n > 0 {
-				w.diskReservations[n-1].Release()
-				w.diskReservations = w.diskReservations[:n-1]
-			}
+			rollbackDisk()
 			return err
 		}
 		f, err := fs.CreateAndRemoveFile(proc.Ctx, w.Name)
@@ -481,10 +492,7 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 			if fdToken != nil {
 				fdToken.Release()
 			}
-			if n := len(w.diskReservations); n > 0 {
-				w.diskReservations[n-1].Release()
-				w.diskReservations = w.diskReservations[:n-1]
-			}
+			rollbackDisk()
 			return err
 		}
 		w.Fd = f
@@ -1419,7 +1427,14 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		}
 		return nil, noProgressError(proc, bucket.Depth)
 	}
-	if childProbeRows != bucket.ProbeRows && bucket.ProbeRows != 0 {
+	// Inner/right joins deliberately do not create probe files for children
+	// with no build rows: those unmatched probe rows cannot affect the result.
+	// Full/left outer semantics retain them and therefore require exact probe
+	// conservation. Every mode still rejects row creation.
+	probeConservationFailed := bucket.ProbeRows != 0 &&
+		(childProbeRows > bucket.ProbeRows ||
+			(e.cfg.NeedsProbeForEmptyBuild && childProbeRows != bucket.ProbeRows))
+	if probeConservationFailed {
 		for i := range subBuckets {
 			if subBuckets[i].BuildFd != nil {
 				subBuckets[i].BuildFd.Close()

@@ -114,7 +114,12 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	probe := makeInt32Batch(tc.proc, values)
+	probeValues := make([]int32, rows+1024)
+	copy(probeValues, values)
+	for i := rows; i < len(probeValues); i++ {
+		probeValues[i] = int32(i)
+	}
+	probe := makeInt32Batch(tc.proc, probeValues)
 	build := makeInt32Batch(tc.proc, values)
 
 	tc.arg.NonEqCond = nil

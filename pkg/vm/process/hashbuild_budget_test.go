@@ -199,6 +199,12 @@ func TestHashBuildSpillLedgersTransferReconcile(t *testing.T) {
 	if b.SpillDiskUsed() != 100 || b.SpillFDUsed() != 2 {
 		t.Fatalf("used disk=%d fd=%d", b.SpillDiskUsed(), b.SpillFDUsed())
 	}
+	if err := disk.Grow(25); err != nil {
+		t.Fatalf("disk grow: %v", err)
+	}
+	if disk.Size() != 125 || b.SpillDiskUsed() != 125 {
+		t.Fatalf("grown disk token=%d used=%d", disk.Size(), b.SpillDiskUsed())
+	}
 	if ok, err := disk.ReconcileDown(40); !ok || err != nil {
 		t.Fatalf("disk reconcile: %v %v", ok, err)
 	}

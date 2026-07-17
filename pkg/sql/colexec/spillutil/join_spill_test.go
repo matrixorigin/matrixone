@@ -151,6 +151,31 @@ func TestBucketReaderAccountedLifecycle(t *testing.T) {
 	require.Zero(t, generation.SpillFDUsed())
 }
 
+func TestBucketWriterAggregatesDiskAccountingPerFile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(8<<20, 8<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	defer bat.Clean(proc.Mp())
+
+	w := BucketWriter{Name: "aggregate_disk_token", Budget: generation}
+	var buf bytes.Buffer
+	require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+	first := w.diskReservation
+	require.NotNil(t, first)
+	firstSize := first.Size()
+	require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+	require.Same(t, first, w.diskReservation)
+	require.Greater(t, w.diskReservation.Size(), firstSize)
+	require.Equal(t, w.diskReservation.Size(), generation.SpillDiskUsed())
+	w.Close()
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+}
+
 func TestBucketReaderEOF(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

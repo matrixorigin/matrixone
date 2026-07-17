@@ -85,11 +85,11 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	fdToken    *process.HashBuildSpillFDReservation
-	diskTokens []*process.HashBuildSpillDiskReservation
-	rows       int64
-	bytes      uint64
-	bucket     int
+	fdToken   *process.HashBuildSpillFDReservation
+	diskToken *process.HashBuildSpillDiskReservation
+	rows      int64
+	bytes     uint64
+	bucket    int
 }
 
 func (b *spillFileBundle) release() {
@@ -109,10 +109,8 @@ func (b *spillFileBundle) release() {
 		if entry.fdToken != nil {
 			entry.fdToken.Release()
 		}
-		for _, token := range entry.diskTokens {
-			if token != nil {
-				token.Release()
-			}
+		if entry.diskToken != nil {
+			entry.diskToken.Release()
 		}
 	}
 }
@@ -141,15 +139,14 @@ func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBu
 	b.mu.Unlock()
 }
 
-func (b *spillFileBundle) addDisk(file *os.File, token *process.HashBuildSpillDiskReservation, rows int64, bytes uint64) {
-	if b == nil || file == nil || token == nil {
-		return
+func (b *spillFileBundle) growDisk(file *os.File, budget *process.HashBuildBudgetGeneration, bytes uint64) (uint64, bool, error) {
+	if b == nil || file == nil || budget == nil {
+		return 0, false, process.ErrHashBuildBudgetInvalid
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.released {
-		b.mu.Unlock()
-		token.Release()
-		return
+		return 0, false, process.ErrHashBuildReservationInactive
 	}
 	if b.entries == nil {
 		b.entries = make(map[*os.File]*spillFileEntry)
@@ -159,14 +156,55 @@ func (b *spillFileBundle) addDisk(file *os.File, token *process.HashBuildSpillDi
 		entry = &spillFileEntry{bucket: -1}
 		b.entries[file] = entry
 	}
-	entry.diskTokens = append(entry.diskTokens, token)
+	if entry.diskToken == nil {
+		token, err := budget.ReserveSpillDisk(bytes)
+		if err != nil {
+			return 0, false, err
+		}
+		entry.diskToken = token
+		return 0, true, nil
+	}
+	old := entry.diskToken.Size()
+	if err := entry.diskToken.Grow(bytes); err != nil {
+		return 0, false, err
+	}
+	return old, false, nil
+}
+
+func (b *spillFileBundle) rollbackDisk(file *os.File, old uint64, created bool) {
+	if b == nil || file == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.entries[file]
+	if entry == nil || entry.diskToken == nil {
+		return
+	}
+	if created {
+		entry.diskToken.Release()
+		entry.diskToken = nil
+		return
+	}
+	_, _ = entry.diskToken.ReconcileDown(old)
+}
+
+func (b *spillFileBundle) recordDiskWrite(file *os.File, rows int64, bytes uint64) {
+	if b == nil || file == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.entries[file]
+	if entry == nil {
+		return
+	}
 	entry.rows += rows
 	if ^uint64(0)-entry.bytes >= bytes {
 		entry.bytes += bytes
 	} else {
 		entry.bytes = ^uint64(0)
 	}
-	b.mu.Unlock()
 }
 
 func (b *spillFileBundle) accountedFiles() []*message.SpillFile {
@@ -182,10 +220,8 @@ func (b *spillFileBundle) accountedFiles() []*message.SpillFile {
 			if e.fdToken != nil {
 				e.fdToken.Release()
 			}
-			for _, token := range e.diskTokens {
-				if token != nil {
-					token.Release()
-				}
+			if e.diskToken != nil {
+				e.diskToken.Release()
 			}
 		})
 		if e.bucket >= 0 && e.bucket < len(files) {

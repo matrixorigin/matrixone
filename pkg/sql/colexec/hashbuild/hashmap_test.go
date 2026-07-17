@@ -151,6 +151,30 @@ func TestSpillExpressionHashKeyFailsClosedBeforeEvaluatorAllocation(t *testing.T
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestExpressionHashKeyReservesDeclaredPeakBeforeEval(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(96<<10, 96<<10)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	require.NoError(t, hb.Prepare([]*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_F{F: &plan.Function{}},
+	}}, -1, -1, nil, proc))
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 1, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	err = hb.BuildHashmap(false, true, false, proc)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	hb.Free(proc)
+	require.Zero(t, generation.Used())
+}
+
 func TestGetJoinMapTransfersGroupSels(t *testing.T) {
 	var hb HashmapBuilder
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
