@@ -54,7 +54,7 @@ null_all
 null
 SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 float_values
-12:15:30.9
+13:16:30.9
 SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
 fractional_seconds
 12:34:56.789012

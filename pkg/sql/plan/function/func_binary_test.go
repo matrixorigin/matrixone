@@ -9530,8 +9530,8 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 				0,
 				types.TimeFromClock(false, 838, 59, 59, 0),
 				types.TimeFromClock(true, 838, 59, 59, 0),
-				types.TimeFromClock(false, 838, 0, 0, 0),
-				types.TimeFromClock(true, 838, 0, 0, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
 				0,
 				0,
 				0,
@@ -9596,32 +9596,80 @@ func TestMakeTimeSignedHourOverflow(t *testing.T) {
 	require.True(t, s, "MAKETIME signed hour overflow case failed: %s", info)
 }
 
+func TestMakeTimeUint32Overload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{12}, []bool{false}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{34}, []bool{false}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{56}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.TimeFromClock(false, 12, 34, 56, 0)},
+			[]bool{false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME uint32 overload failed: %s", info)
+}
+
+func TestMakeTimeFloatHourRounding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{12.7, 12.5, 13.5, -12.5, -13.5, 838.9},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 13, 0, 0, 0),
+				types.TimeFromClock(false, 12, 0, 0, 0),
+				types.TimeFromClock(false, 14, 0, 0, 0),
+				types.TimeFromClock(true, 12, 0, 0, 0),
+				types.TimeFromClock(true, 14, 0, 0, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+			},
+			[]bool{false, false, false, false, false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME float hour rounding failed: %s", info)
+}
+
 func TestMakeTimeFloatMinuteRange(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_int64.ToType(),
-				[]int64{12, 12, 12, 12, 12, 12, 12, 12},
-				[]bool{false, false, false, false, false, false, false, false}),
+				[]int64{12, 12, 12, 12, 12, 12, 12, 12, 12},
+				[]bool{false, false, false, false, false, false, false, false, false}),
 			NewFunctionTestInput(types.T_float64.ToType(),
-				[]float64{math.NaN(), math.Inf(1), math.Inf(-1), math.MaxFloat64, -math.MaxFloat64, 15.8, 59.9, -0.9},
-				[]bool{false, false, false, false, false, false, false, false}),
+				[]float64{15.8, 58.5, 59.5, 59.9, -0.5, -0.9, math.NaN(), math.Inf(1), math.Inf(-1)},
+				[]bool{false, false, false, false, false, false, false, false, false}),
 			NewFunctionTestInput(types.T_int64.ToType(),
-				[]int64{0, 0, 0, 0, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false}),
+				[]int64{0, 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false}),
 		},
 		NewFunctionTestResult(types.T_time.ToType(), false,
 			[]types.Time{
+				types.TimeFromClock(false, 12, 16, 0, 0),
+				types.TimeFromClock(false, 12, 58, 0, 0),
 				0,
 				0,
-				0,
-				0,
-				0,
-				types.TimeFromClock(false, 12, 15, 0, 0),
-				types.TimeFromClock(false, 12, 59, 0, 0),
 				types.TimeFromClock(false, 12, 0, 0, 0),
+				0,
+				0,
+				0,
+				0,
 			},
-			[]bool{true, true, true, true, true, false, false, false}),
+			[]bool{false, false, true, true, false, true, true, true, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()

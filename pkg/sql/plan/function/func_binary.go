@@ -7308,171 +7308,142 @@ func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vecto
 	return rs.Append(timeValue, false)
 }
 
+func makeTimeSignedIntegerGetter[T constraints.Signed](vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		return int64(value), null
+	}
+}
+
+func makeTimeUnsignedIntegerGetter[T constraints.Unsigned](vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		if uint64(value) > math.MaxInt64 {
+			return math.MaxInt64, null
+		}
+		return int64(value), null
+	}
+}
+
+func makeTimeIntegerGetter(vec *vector.Vector) (func(uint64) (int64, bool), bool) {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeTimeSignedIntegerGetter[int8](vec), true
+	case types.T_int16:
+		return makeTimeSignedIntegerGetter[int16](vec), true
+	case types.T_int32:
+		return makeTimeSignedIntegerGetter[int32](vec), true
+	case types.T_int64:
+		return makeTimeSignedIntegerGetter[int64](vec), true
+	case types.T_uint8:
+		return makeTimeUnsignedIntegerGetter[uint8](vec), true
+	case types.T_uint16:
+		return makeTimeUnsignedIntegerGetter[uint16](vec), true
+	case types.T_uint32:
+		return makeTimeUnsignedIntegerGetter[uint32](vec), true
+	case types.T_uint64:
+		return makeTimeUnsignedIntegerGetter[uint64](vec), true
+	default:
+		return nil, false
+	}
+}
+
+func makeTimeFloatGetter[T constraints.Float](vec *vector.Vector) func(uint64) (float64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (float64, bool) {
+		value, null := param.GetValue(i)
+		return float64(value), null
+	}
+}
+
 // MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
 func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Check the types of input vectors and create appropriate parameter wrappers
-	hourType := ivecs[0].GetType().Oid
-	minuteType := ivecs[1].GetType().Oid
-	secondType := ivecs[2].GetType().Oid
-
-	// Create parameter wrappers based on types (these can be reused for all rows)
 	var getHourValue func(uint64) (int64, bool)
 	var getMinuteValue func(uint64) (int64, bool)
 	var getSecondValue func(uint64) (int64, uint32, bool)
 
-	// Setup hour parameter extractor
-	switch hourType {
-	case types.T_int8:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
+	if getter, ok := makeTimeIntegerGetter(ivecs[0]); ok {
+		getHourValue = getter
+	} else {
+		var getFloat func(uint64) (float64, bool)
+		switch ivecs[0].GetType().Oid {
+		case types.T_float32:
+			getFloat = makeTimeFloatGetter[float32](ivecs[0])
+		case types.T_float64:
+			getFloat = makeTimeFloatGetter[float64](ivecs[0])
+		default:
+			return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", ivecs[0].GetType().Oid)
 		}
-	case types.T_int16:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
 		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_int32:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_int64:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return val, null
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			if val > math.MaxInt64 {
-				return math.MaxInt64, null
-			}
-			return int64(val), null
-		}
-	case types.T_float32, types.T_float64:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			if null || math.IsNaN(val) || math.IsInf(val, 0) {
+			value, null := getFloat(i)
+			if null || math.IsNaN(value) || math.IsInf(value, 0) {
 				return 0, true
 			}
-			val = math.Trunc(val)
-			if val >= float64(math.MaxInt64) {
+			rounded := math.RoundToEven(value)
+			if rounded >= float64(math.MaxInt64) {
 				return math.MaxInt64, false
 			}
-			if val <= float64(math.MinInt64) {
+			if rounded <= float64(math.MinInt64) {
 				return math.MinInt64, false
 			}
-			return int64(val), false
+			return int64(rounded), false
 		}
-	default:
-		return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", hourType)
 	}
 
-	// Setup minute parameter extractor
-	switch minuteType {
-	case types.T_int8:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
+	if getter, ok := makeTimeIntegerGetter(ivecs[1]); ok {
+		getMinuteValue = getter
+	} else {
+		var getFloat func(uint64) (float64, bool)
+		switch ivecs[1].GetType().Oid {
+		case types.T_float32:
+			getFloat = makeTimeFloatGetter[float32](ivecs[1])
+		case types.T_float64:
+			getFloat = makeTimeFloatGetter[float64](ivecs[1])
+		default:
+			return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", ivecs[1].GetType().Oid)
 		}
-	case types.T_int16:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[1])
 		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_int32:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_int64:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return val, null
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_float32, types.T_float64:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			if null || math.IsNaN(val) || math.IsInf(val, 0) {
+			value, null := getFloat(i)
+			if null || math.IsNaN(value) || math.IsInf(value, 0) {
 				return 0, true
 			}
-			val = math.Trunc(val)
-			if val < 0 || val >= 60 {
+			rounded := math.RoundToEven(value)
+			if rounded < 0 || rounded >= 60 {
 				return 0, true
 			}
-			return int64(val), false
+			return int64(rounded), false
 		}
-	default:
-		return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", minuteType)
 	}
 
-	// Setup second parameter extractor
-	switch secondType {
-	case types.T_int8:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[2])
+	if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
-			val, null := secondParam.GetValue(i)
-			return makeTimeIntegerSecond(int64(val), null)
+			value, null := getter(i)
+			return makeTimeIntegerSecond(value, null)
 		}
-	case types.T_int16:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[2])
-		getSecondValue = func(i uint64) (int64, uint32, bool) {
-			val, null := secondParam.GetValue(i)
-			return makeTimeIntegerSecond(int64(val), null)
+	} else {
+		var getFloat func(uint64) (float64, bool)
+		switch ivecs[2].GetType().Oid {
+		case types.T_float32:
+			getFloat = makeTimeFloatGetter[float32](ivecs[2])
+		case types.T_float64:
+			getFloat = makeTimeFloatGetter[float64](ivecs[2])
+		default:
+			return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", ivecs[2].GetType().Oid)
 		}
-	case types.T_int32:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
-			val, null := secondParam.GetValue(i)
-			return makeTimeIntegerSecond(int64(val), null)
-		}
-	case types.T_int64:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, uint32, bool) {
-			val, null := secondParam.GetValue(i)
-			return makeTimeIntegerSecond(val, null)
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, uint32, bool) {
-			val, null := secondParam.GetValue(i)
-			return makeTimeIntegerSecond(int64(val), null)
-		}
-	case types.T_float32, types.T_float64:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, uint32, bool) {
-			val, null := secondParam.GetValue(i)
-			if null || math.IsNaN(val) || math.IsInf(val, 0) || val < 0 || val >= 60 {
+			value, null := getFloat(i)
+			if null || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= 60 {
 				return 0, 0, true
 			}
-			total := int64(math.Round(val * float64(types.MicroSecsPerSec)))
+			total := int64(math.Round(value * float64(types.MicroSecsPerSec)))
 			return total / types.MicroSecsPerSec, uint32(total % types.MicroSecsPerSec), false
 		}
-	default:
-		return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", secondType)
 	}
 
-	// Process all rows
 	for i := uint64(0); i < uint64(length); i++ {
 		hourInt, null1 := getHourValue(i)
 		minuteInt, null2 := getMinuteValue(i)
