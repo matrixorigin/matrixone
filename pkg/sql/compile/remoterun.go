@@ -93,6 +93,17 @@ func encodeScope(s *Scope) ([]byte, error) {
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
 func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
+	if isRemote && proc != nil {
+		if proc.Ctx == nil {
+			proc.Ctx = context.Background()
+		}
+		proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+		topCtx := proc.GetTopContext()
+		if topCtx == nil {
+			topCtx = context.Background()
+		}
+		proc.ReplaceTopCtx(context.WithValue(topCtx, defines.RemoteRunContext{}, true))
+	}
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -602,6 +613,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
+			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
 		}
@@ -651,12 +663,14 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.Attrs,
-			Rets:     t.Rets,
-			Args:     t.Args,
-			Params:   t.Params,
-			Name:     t.FuncName,
-			IsSingle: t.IsSingle,
+			Attrs:                  t.Attrs,
+			Rets:                   t.Rets,
+			Args:                   t.Args,
+			Params:                 t.Params,
+			Name:                   t.FuncName,
+			IsSingle:               t.IsSingle,
+			IndexReaderParam:       t.IndexReaderParam,
+			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
 		}
 
 	case *external.External:
@@ -709,6 +723,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			HashOnPk:                  t.HashOnPK,
 			NeedBatches:               t.NeedBatches,
 			NeedAllocateSels:          t.NeedAllocateSels,
+			TrackNullKeys:             t.TrackNullKeys,
 			IsShuffle:                 t.IsShuffle,
 			Conditions:                t.Conditions,
 			JoinMapTag:                t.JoinMapTag,
@@ -785,12 +800,14 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.TableFunction.Attrs,
-			Rets:     t.TableFunction.Rets,
-			Args:     t.TableFunction.Args,
-			Params:   t.TableFunction.Params,
-			Name:     t.TableFunction.FuncName,
-			IsSingle: t.TableFunction.IsSingle,
+			Attrs:                  t.TableFunction.Attrs,
+			Rets:                   t.TableFunction.Rets,
+			Args:                   t.TableFunction.Args,
+			Params:                 t.TableFunction.Params,
+			Name:                   t.TableFunction.FuncName,
+			IsSingle:               t.TableFunction.IsSingle,
+			IndexReaderParam:       t.TableFunction.IndexReaderParam,
+			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1073,6 +1090,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
+		arg.VectorOpType = t.VectorOpType
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1091,7 +1109,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Intersect:
 		op = intersect.NewArgument()
 	case vm.IntersectAll:
-		op = intersect.NewArgument()
+		op = intersectall.NewArgument()
 	case vm.Minus:
 		op = minus.NewArgument()
 	case vm.Connector:
@@ -1135,6 +1153,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
+		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
+		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1194,6 +1214,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HashOnPK = t.HashOnPk
 		arg.NeedBatches = t.NeedBatches
 		arg.NeedAllocateSels = t.NeedAllocateSels
+		arg.TrackNullKeys = t.TrackNullKeys
 		arg.IsShuffle = t.IsShuffle
 		arg.Conditions = t.Conditions
 		arg.JoinMapTag = t.JoinMapTag
@@ -1268,6 +1289,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
+		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

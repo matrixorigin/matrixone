@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +74,11 @@ type TxnComputationWrapper struct {
 	prepareName   string
 
 	schedulingTrace schedule.TraceRecorder
+
+	// remapDb is the effective database remap for this statement only. A COM_QUERY
+	// can contain statements with different inline overrides, so this metadata
+	// must travel with the wrapper rather than live at request scope.
+	remapDb map[string]string
 }
 
 func InitTxnComputationWrapper(
@@ -92,6 +98,14 @@ func InitTxnComputationWrapper(
 
 func (cwft *TxnComputationWrapper) BinaryExecute() (bool, string) {
 	return cwft.binaryPrepare, cwft.prepareName
+}
+
+func (cwft *TxnComputationWrapper) SetRemapDb(remapDb map[string]string) {
+	cwft.remapDb = maps.Clone(remapDb)
+}
+
+func (cwft *TxnComputationWrapper) GetRemapDb() map[string]string {
+	return cwft.remapDb
 }
 
 func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
@@ -131,6 +145,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.paramVals = nil
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
+	cwft.remapDb = nil
 	cwft.schedulingTrace.Reset()
 }
 
@@ -142,8 +157,25 @@ func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
 }
 
+func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interface{}, error) {
+	columns := make([]interface{}, len(cols))
+	for i, col := range cols {
+		c, err := colDef2MysqlColumn(ctx, col)
+		if err != nil {
+			return nil, err
+		}
+		columns[i] = c
+	}
+	return columns, nil
+}
+
+func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Context) ([]interface{}, []*plan2.ColDef, error) {
+	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	columns, err := columnsToMysqlColumns(ctx, cols)
+	return columns, cols, err
+}
+
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
-	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowColumns:
@@ -171,15 +203,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 			}
 		}
 	}
-	columns := make([]interface{}, len(cols))
-	for i, col := range cols {
-		c, err := colDef2MysqlColumn(ctx, col)
-		if err != nil {
-			return nil, err
-		}
-		columns[i] = c
-	}
-	return columns, err
+	return columnsToMysqlColumns(ctx, cols)
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
@@ -578,21 +602,11 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params := vector.NewVec(types.T_text.ToType())
-		paramVals := make([]any, numParams)
-		for i, arg := range execPlan.Args {
-			exprImpl := arg.Expr.(*plan.Expr_V)
-			param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			err = util.AppendAnyToStringVector(cwft.proc, param, params)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			paramVals[i] = param
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		if err != nil {
+			return nil, nil, nil, originSQL, err
 		}
-		cwft.proc.SetPrepareParams(params)
+		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -600,6 +614,41 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func buildExecuteUserParams(
+	proc *process.Process,
+	args []*plan.Expr,
+) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
+	params = vector.NewVec(types.T_text.ToType())
+	defer func() {
+		if err != nil {
+			params.Free(proc.Mp())
+		}
+	}()
+	paramVals = make([]any, len(args))
+	paramIsBin = make([]bool, len(args))
+	for i, arg := range args {
+		exprImpl := arg.Expr.(*plan.Expr_V)
+		var param any
+		param, err = proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+		if err != nil {
+			return
+		}
+		err = util.AppendAnyToStringVector(proc, param, params)
+		if err != nil {
+			return
+		}
+		resolveIsBin := proc.GetResolveVariableIsBinFunc()
+		if resolveIsBin != nil {
+			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+	}
+	return
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

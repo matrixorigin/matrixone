@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -25,7 +26,7 @@ import (
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -565,8 +566,8 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
 	}
 
-	sort.Slice(parts, func(i, j int) bool {
-		return parts[i].PartNumber < parts[j].PartNumber
+	slices.SortFunc(parts, func(a, b cos.Object) int {
+		return cmp.Compare(a.PartNumber, b.PartNumber)
 	})
 
 	completeOpt := &cos.CompleteMultipartUploadOptions{

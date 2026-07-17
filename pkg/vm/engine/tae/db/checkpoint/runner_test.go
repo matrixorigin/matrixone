@@ -29,6 +29,30 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestContextForForceICKP(t *testing.T) {
+	t.Run("add the default timeout when the caller has none", func(t *testing.T) {
+		ctx, cancel := contextForForceICKP(context.Background())
+		defer cancel()
+
+		deadline, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline)
+		assert.WithinDuration(t, time.Now().Add(defaultForceICKPTimeout), deadline, time.Second)
+	})
+
+	t.Run("preserve a longer caller deadline", func(t *testing.T) {
+		callerDeadline := time.Now().Add(10 * time.Minute)
+		parent, cancelParent := context.WithDeadline(context.Background(), callerDeadline)
+		defer cancelParent()
+
+		ctx, cancel := contextForForceICKP(parent)
+		defer cancel()
+
+		deadline, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline)
+		assert.Equal(t, callerDeadline, deadline)
+	})
+}
+
 func TestCkpCheck(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {

@@ -15,12 +15,13 @@
 package external
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"iter"
 	"net/url"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -497,8 +498,8 @@ func DiscoverHivePartitionsWithPruneExpr(
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(result.Files, func(i, j int) bool {
-		return result.Files[i].FilePath < result.Files[j].FilePath
+	slices.SortFunc(result.Files, func(a, b PartitionFileEntry) int {
+		return cmp.Compare(a.FilePath, b.FilePath)
 	})
 	result.DiscoveredFiles = len(result.Files)
 	for _, file := range result.Files {
@@ -699,8 +700,8 @@ func discoverRecursive(
 		}
 	}
 
-	sort.Slice(childPrefixes, func(i, j int) bool {
-		return childPrefixes[i].prefix < childPrefixes[j].prefix
+	slices.SortFunc(childPrefixes, func(a, b childPartition) int {
+		return cmp.Compare(a.prefix, b.prefix)
 	})
 
 	// Count all matching partitions at this level before descending. Otherwise
