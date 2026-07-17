@@ -707,3 +707,35 @@ func TestBranchProtectSnapshot_HistoricalAlterLineageLiveBranchLifecycle(t *test
 	require.NotContains(t, dag.Info, alterTID)
 	require.True(t, dag.Info[branchTID].Deleted)
 }
+
+func TestBranchProtectSnapshot_AlterInheritsLiveBranchOwnership(t *testing.T) {
+	env := setupBranchProtectSnapshotEnv(t)
+	defer env.close(t)
+
+	const (
+		rootTID    = uint64(9201)
+		oldTID     = uint64(9202)
+		currentTID = uint64(9203)
+	)
+	env.simulateBranchCreate(t, oldTID, rootTID, 920_000,
+		"sys", "history_db", "history_tbl", rootTID)
+	env.simulateLineageCreate(t, currentTID, oldTID, 920_001,
+		"alter:table", "sys", "history_db", "history_tbl", oldTID)
+
+	// ALTER's internal DROP retires the old physical generation, but the
+	// replacement still owns the logical branch and both protection snapshots.
+	env.markBranchDeleted(t, oldTID)
+	require.ElementsMatch(t,
+		[]string{
+			databranchutils.BranchSnapshotName(oldTID),
+			databranchutils.BranchSnapshotName(currentTID),
+		},
+		env.runReclaim(t, []uint64{oldTID}),
+	)
+	require.Empty(t, env.compactHistoricalLineage(t, nil))
+
+	// Once the replacement is dropped, ordinary reclaim removes the complete
+	// snapshot chain; retaining alter:table above must not introduce a leak.
+	env.markBranchDeleted(t, currentTID)
+	require.Empty(t, env.runReclaim(t, []uint64{currentTID}))
+}
