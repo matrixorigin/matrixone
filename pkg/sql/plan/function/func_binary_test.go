@@ -9507,14 +9507,14 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(floatWithMicrosecondScale,
-				[]float64{12, -12, 12, 838, -838, 839, -839, 12, 12, 12},
-				[]bool{false, false, false, false, false, false, false, false, false, false}),
+				[]float64{12, -12, 12, 838, -838, 839, -839, 12, 12, 12, math.MaxFloat64, -math.MaxFloat64, 838.9, -838.9, math.NaN(), math.Inf(1), math.Inf(-1), 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true}),
 			NewFunctionTestInput(floatWithMicrosecondScale,
-				[]float64{34, 34, 59, 59, 59, 0, 0, 60, 34, 34},
-				[]bool{false, false, false, false, false, false, false, false, false, false}),
+				[]float64{34, 34, 59, 59, 59, 0, 0, 60, 34, 34, 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			NewFunctionTestInput(floatWithMicrosecondScale,
-				[]float64{56.789012, 56.789012, 59.9999996, 59.9999996, 59.9999996, 0, 0, 0, math.NaN(), math.Inf(1)},
-				[]bool{false, false, false, false, false, false, false, false, false, false}),
+				[]float64{56.789012, 56.789012, 59.9999996, 59.9999996, 59.9999996, 0, 0, 0, math.NaN(), math.Inf(1), 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
 			[]types.Time{
@@ -9528,8 +9528,16 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 				0,
 				0,
 				0,
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+				types.TimeFromClock(false, 838, 0, 0, 0),
+				types.TimeFromClock(true, 838, 0, 0, 0),
+				0,
+				0,
+				0,
+				0,
 			},
-			[]bool{false, false, false, false, false, false, false, true, true, true}),
+			[]bool{false, false, false, false, false, false, false, true, true, true, false, false, false, false, true, true, true, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
@@ -9560,6 +9568,32 @@ func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
 
 	s, info := fcTC.Run()
 	require.True(t, s, "MAKETIME unsigned hour overflow case failed: %s", info)
+}
+
+func TestMakeTimeSignedHourOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{math.MaxInt64, math.MinInt64},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0},
+				[]bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+			},
+			[]bool{false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME signed hour overflow case failed: %s", info)
 }
 
 func TestMakeTimeIntegerSecondRange(t *testing.T) {

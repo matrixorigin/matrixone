@@ -7361,7 +7361,17 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		hourParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 		getHourValue = func(i uint64) (int64, bool) {
 			val, null := hourParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
+			if null || math.IsNaN(val) || math.IsInf(val, 0) {
+				return 0, true
+			}
+			val = math.Trunc(val)
+			if val >= float64(math.MaxInt64) {
+				return math.MaxInt64, false
+			}
+			if val <= float64(math.MinInt64) {
+				return math.MinInt64, false
+			}
+			return int64(val), false
 		}
 	default:
 		return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", hourType)
