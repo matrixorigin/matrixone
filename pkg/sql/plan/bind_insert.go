@@ -2772,9 +2772,14 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 }
 
 func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
+	// only numeric targets may seed the numeric assignment context; a zero
+	// Type keeps the projection binder on the default binding path
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
-		targets[i] = tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
+		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
+		if makeTypeByPlan2Type(typ).IsNumeric() {
+			targets[i] = typ
+		}
 	}
 	return targets
 }

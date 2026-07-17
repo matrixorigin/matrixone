@@ -20,32 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
-
-func collectPlanParamTypes(queryPlan *Plan) []types.T {
-	var result []types.T
-	query := queryPlan.GetQuery()
-	if query == nil {
-		return result
-	}
-	for _, node := range query.Nodes {
-		for _, expr := range node.ProjectList {
-			collectExprParamTypes(expr, &result)
-		}
-		for _, expr := range node.FilterList {
-			collectExprParamTypes(expr, &result)
-		}
-		if rowset := node.RowsetData; rowset != nil {
-			for _, col := range rowset.Cols {
-				for _, data := range col.Data {
-					collectExprParamTypes(data.Expr, &result)
-				}
-			}
-		}
-	}
-	return result
-}
 
 func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 	tests := []struct {
@@ -176,6 +153,82 @@ func collectExprParamTypesByPos(expr *planpb.Expr, result map[int32]types.T) {
 	})
 }
 
+func TestPreparedNonNumericAssignmentKeepsTargetType(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		{
+			name: "update varchar assignment",
+			sql:  "update constraint_test.emp set ename = ? where empno = 1",
+			want: types.T_text,
+		},
+		{
+			name: "insert values varchar assignment",
+			sql:  "insert into constraint_test.emp (empno, ename) values (1, ?)",
+			want: types.T_text,
+		},
+		{
+			name: "insert select varchar assignment",
+			sql:  "insert into constraint_test.emp (empno, ename) select 1, ?",
+			want: types.T_text,
+		},
+		{
+			name: "on duplicate key update date assignment",
+			sql: "insert into constraint_test.emp (empno, hiredate) values (1, '2024-01-01') " +
+				"on duplicate key update hiredate = ?",
+			want: types.T_date,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+
+			paramTypes := collectUniquePlanParamTypes(queryPlan)
+			require.Len(t, paramTypes, 1)
+			for _, typ := range paramTypes {
+				require.Equal(t, test.want, typ)
+			}
+		})
+	}
+}
+
+func TestValuesExprIsFuncCall(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	sql := "insert into constraint_test.emp (sal) values " +
+		"(1), (-1), (mod(1, 2)), ((mod(1, 2))), (abs(1)), ((abs(1))), (cast(abs(1) as double))"
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+
+	insertStmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+	valuesClause, ok := insertStmt.Rows.Select.(*tree.ValuesClause)
+	require.True(t, ok)
+
+	wants := []bool{false, false, false, false, true, true, true}
+	require.Len(t, valuesClause.Rows, len(wants))
+	for i, want := range wants {
+		require.Equal(t, want, valuesExprIsFuncCall(valuesClause.Rows[i][0]), "row %d", i)
+	}
+}
+
+func TestBindProjectionListWithSampleFunc(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	sql := "select n_name, sample(n_nationkey, 10 rows) from nation group by n_name"
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	require.NoError(t, err)
+}
+
 func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 	tests := []struct {
 		name string
@@ -215,34 +268,5 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 				require.Equal(t, test.want, typ)
 			}
 		})
-	}
-}
-
-func collectExprParamTypes(expr *planpb.Expr, result *[]types.T) {
-	collectExprEffectiveParamTypes(expr, types.T_any, func(_ int32, typ types.T) {
-		*result = append(*result, typ)
-	})
-}
-
-func collectExprEffectiveParamTypes(expr *planpb.Expr, inherited types.T, collect func(int32, types.T)) {
-	if expr == nil {
-		return
-	}
-	if param := expr.GetP(); param != nil {
-		typ := inherited
-		if typ == types.T_any {
-			typ = types.T(expr.Typ.Id)
-		}
-		collect(param.Pos, typ)
-		return
-	}
-	if fn := expr.GetF(); fn != nil {
-		childType := inherited
-		if fn.Func != nil && fn.Func.ObjName == "cast" {
-			childType = types.T(expr.Typ.Id)
-		}
-		for _, arg := range fn.Args {
-			collectExprEffectiveParamTypes(arg, childType, collect)
-		}
 	}
 }

@@ -221,7 +221,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
-			updateNumericTargets[oldPos] = tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; makeTypeByPlan2Type(typ).IsNumeric() {
+				updateNumericTargets[oldPos] = typ
+			}
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
 			selectList = append(selectList, selectList[oldPos])

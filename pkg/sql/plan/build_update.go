@@ -419,7 +419,9 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName {
-					legacyNumericTargets[len(selectList)] = coldef.Typ
+					if makeTypeByPlan2Type(coldef.Typ).IsNumeric() {
+						legacyNumericTargets[len(selectList)] = coldef.Typ
+					}
 					if isEnumOrSetPlanType(&coldef.Typ) {
 						updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
 						if err != nil {

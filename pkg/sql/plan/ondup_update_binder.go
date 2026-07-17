@@ -77,6 +77,9 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
+	if !makeTypeByPlan2Type(target).IsNumeric() {
+		return b.BindExpr(astExpr, 0, true)
+	}
 	return b.bindNumericExprWithContext(astExpr, 0, &target)
 }
 
