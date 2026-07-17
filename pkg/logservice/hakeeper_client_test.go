@@ -1418,10 +1418,42 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 }
 
 func Test_NewLogHAKeeperClientWithRetry(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.NewInternalErrorNoCtx("ut tester"))
-	defer cancel()
-	cfg := HAKeeperClientConfig{
-		DiscoveryAddress: "wrongaddress",
+	original := newHAKeeperClientFunc
+	attempted := make(chan struct{}, 2)
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		attempted <- struct{}{}
+		return nil, moerr.NewInternalErrorNoCtx("injected creation failure")
 	}
-	NewLogHAKeeperClientWithRetry(ctx, "", cfg)
+	defer func() {
+		newHAKeeperClientFunc = original
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg := HAKeeperClientConfig{
+		DiscoveryAddress: "unused",
+	}
+	done := make(chan ClusterHAKeeperClient, 1)
+	go func() {
+		done <- NewLogHAKeeperClientWithRetry(ctx, "", cfg)
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-attempted:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "HAKeeper client retry was not attempted")
+		}
+	}
+	cancel()
+
+	select {
+	case client := <-done:
+		require.Nil(t, client)
+	case <-time.After(time.Second):
+		require.FailNow(t, "retry backoff did not observe context cancellation")
+	}
 }

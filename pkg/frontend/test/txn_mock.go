@@ -308,18 +308,18 @@ func (mr *MockTxnClientMockRecorder) New(ctx, commitTS interface{}, options ...i
 }
 
 // NewWithSnapshot mocks base method.
-func (m *MockTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
+func (m *MockTxnClient) NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewWithSnapshot", snapshot)
+	ret := m.ctrl.Call(m, "NewWithSnapshot", ctx, snapshot)
 	ret0, _ := ret[0].(client.TxnOperator)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NewWithSnapshot indicates an expected call of NewWithSnapshot.
-func (mr *MockTxnClientMockRecorder) NewWithSnapshot(snapshot interface{}) *gomock.Call {
+func (mr *MockTxnClientMockRecorder) NewWithSnapshot(ctx, snapshot interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewWithSnapshot", reflect.TypeOf((*MockTxnClient)(nil).NewWithSnapshot), snapshot)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewWithSnapshot", reflect.TypeOf((*MockTxnClient)(nil).NewWithSnapshot), ctx, snapshot)
 }
 
 // Pause mocks base method.

@@ -819,7 +819,7 @@ null  𝄀
 null
 drop table t1;
 create table testt(i int, j int, k int, d1 decimal(10, 2), d2 decimal(10, 2), ts1 timestamp, ts2 timestamp, t varchar(100));
-insert into testt select result, result % 7, result + 1, result + 3.14, result + 2.72, current_timestamp, current_timestamp, 'foo' || result from generate_series(1, 100) tmpt;
+insert into testt select result, result % 7, result + 1, result + 3.14, result + 2.72, current_timestamp, current_timestamp, concat('foo', result) from generate_series(1, 100) tmpt;
 select greatest(1, 2, 3);
 ➤ greatest(1, 2, 3)[-5,64,0]  𝄀
 3

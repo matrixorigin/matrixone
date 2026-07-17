@@ -527,6 +527,7 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
 	tc.arg.SpillThreshold = 1
+	tc.arg.TrackNullKeys = true
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
 	for cycle := 0; cycle < 2; cycle++ {
@@ -537,7 +538,14 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		}
 		require.NoError(t, tc.marg.Prepare(tc.proc))
 		require.NoError(t, tc.arg.Prepare(tc.proc))
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+		build := batch.NewWithSize(1)
+		var buildNulls []uint64
+		if cycle == 0 {
+			buildNulls = []uint64{1}
+		}
+		build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 2}, buildNulls, tc.proc.Mp())
+		build.SetRowCount(3)
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 		ok, err := vm.Exec(tc.arg, tc.proc)
@@ -547,6 +555,8 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, jm)
 		require.True(t, jm.IsSpilled(), "cycle %d must publish a spilled join map", cycle)
+		require.Equal(t, int64(3), jm.GetRowCount())
+		require.Equal(t, cycle == 0, jm.HasNullKey(), "cycle %d must not inherit NULL state from another execution", cycle)
 		jm.Free()
 	}
 	tc.arg.Free(tc.proc, false, nil)
