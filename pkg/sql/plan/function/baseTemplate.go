@@ -1714,7 +1714,7 @@ func specialTemplateForDivFunction[
 				nulls.AddRange(rsNull, 0, uint64(length))
 				return nil
 			}
-			if p1.WithAnyNullValue() {
+			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -615,5 +616,67 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Rows masked by selectList (e.g. short-circuited by CASE/IF) must not be
+// evaluated, so an overflow on a masked row must not raise an error. The
+// vector/const branch of specialTemplateForDivFunction used to check only
+// p1.WithAnyNullValue() and evaluated masked rows anyway.
+func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	maskRow1 := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+
+	runMasked := func(info string, fn fEvalFn, inputs []FunctionTestInput, rsTyp types.Type) *vector.Vector {
+		tcc := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(rsTyp, false, nil, nil), fn)
+		require.NoError(t, tcc.result.PreExtendAndReset(2), info)
+		require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskRow1), info)
+		rsVec := tcc.GetResultVectorDirectly()
+		require.True(t, rsVec.GetNulls().Contains(1), info)
+		require.False(t, rsVec.GetNulls().Contains(0), info)
+		return rsVec
+	}
+
+	// divFn vector / const: masked row 1 would overflow to +Inf
+	{
+		rsVec := runMasked("select case when .. then float64_col / 1e-308 end",
+			divFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{1, 1e308}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_float64.ToType(),
+					[]float64{1e-308, 1e-308}, []bool{false, false}),
+			},
+			types.T_float64.ToType())
+		require.Equal(t, 1e308, vector.MustFixedColNoTypeCheck[float64](rsVec)[0])
+	}
+
+	// integerDivFn vector / const: masked row 1 would exceed BIGINT range
+	{
+		rsVec := runMasked("select case when .. then float64_col DIV 1 end",
+			integerDivFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{7, 1e19}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_float64.ToType(),
+					[]float64{1, 1}, []bool{false, false}),
+			},
+			types.T_int64.ToType())
+		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+	}
+
+	// divFn vector / vector: masked-row overflow must be skipped too
+	{
+		rsVec := runMasked("select case when .. then float64_col1 / float64_col2 end",
+			divFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{1, 1e308}, []bool{false, false}),
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{2, 1e-308}, []bool{false, false}),
+			},
+			types.T_float64.ToType())
+		require.Equal(t, 0.5, vector.MustFixedColNoTypeCheck[float64](rsVec)[0])
 	}
 }
