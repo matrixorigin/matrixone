@@ -763,7 +763,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		table, null2 := tableNames.GetStrValue(i)
 		column, null3 := columnNames.GetStrValue(i)
 		if null1 || null2 || null3 {
-			rs.AppendMustNull()
+			if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
+				return appendErr
+			}
 		} else {
 			dbStr, tableStr, columnStr := string(db), string(table), string(column)
 
@@ -845,7 +847,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				}
 			}
 			if getValueFailed {
-				rs.AppendMustNull()
+				if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
+					return appendErr
+				}
 			}
 		}
 	}
