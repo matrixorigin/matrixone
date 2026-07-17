@@ -292,6 +292,27 @@ func TestMergeBuilderLifecycleAndEncodingContract(t *testing.T) {
 	require.ErrorContains(t, err, "encoded size mismatch")
 }
 
+func TestMergeBuilderResetRejectsOverDepthDocument(t *testing.T) {
+	document, err := ParseFromString(nestedJSONObject(101, `1`))
+	require.NoError(t, err)
+
+	builder := NewMergePatchBuilder()
+	require.NoError(t, builder.BeginRow())
+	require.ErrorContains(t, builder.Reset(document), "json document nesting depth exceeds 100")
+}
+
+func TestValidateJSONMergeDocumentDoesNotAllocate(t *testing.T) {
+	document, err := ParseFromString(nestedJSONObject(100, `1`))
+	require.NoError(t, err)
+
+	var validateErr error
+	allocs := testing.AllocsPerRun(100, func() {
+		validateErr = ValidateJSONMergeDocument(document)
+	})
+	require.NoError(t, validateErr)
+	require.Zero(t, allocs)
+}
+
 func TestMergeValueDepthAndArrayOverflow(t *testing.T) {
 	nested, err := ParseFromString(`{"x":1}`)
 	require.NoError(t, err)

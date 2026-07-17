@@ -1321,9 +1321,10 @@ func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
 		"wrapper allocations must not grow with rows: one=%f many=%f", oneRow, manyRows)
 }
 
-func TestJsonMergePatchFinalRawDepthValidation(t *testing.T) {
+func TestJsonMergeDepthValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	overDepthArray := `[` + nestedJSONMergeObject(100, `1`) + `]`
+	overDepthObject := nestedJSONMergeObject(101, `1`)
 
 	t.Run("final non-object replacement is rejected", func(t *testing.T) {
 		testCase := NewFunctionTestCase(
@@ -1346,15 +1347,56 @@ func TestJsonMergePatchFinalRawDepthValidation(t *testing.T) {
 		require.ErrorContains(t, err, "json document nesting depth exceeds 100")
 	})
 
-	t.Run("discarded over-depth value does not block scalar recovery", func(t *testing.T) {
-		vec := runJsonFunctionWithSelectList(t, proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthArray}, nil),
+	tests := []struct {
+		name   string
+		fn     fEvalFn
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "patch rejects over-depth target before scalar replacement",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, nil),
 			},
-			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
-		require.Equal(t, `1`, jsonVectorRowString(t, vec, 0))
-	})
+		},
+		{
+			name: "patch validates object while target is unknown",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+			},
+		},
+		{
+			name: "preserve validates argument before following SQL null",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePreserve,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				tt.inputs,
+				NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+				tt.fn,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			err := testCase.fn(
+				testCase.parameters,
+				testCase.result,
+				testCase.proc,
+				testCase.fnLength,
+				nil,
+			)
+			require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+		})
+	}
 }
 
 func TestJsonMergeIgnoreAllRowsMaterializesLength(t *testing.T) {

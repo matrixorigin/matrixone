@@ -129,16 +129,24 @@ func (b *MergeBuilder) ResetUnknown() error {
 	return nil
 }
 
-// Reset deliberately does not validate depth. SQL MERGE_PATCH may discard this
-// value after SQL NULL or a later non-object replacement.
 func (b *MergeBuilder) Reset(document ByteJson) error {
 	if err := b.requireBuilding(); err != nil {
 		return err
 	}
+	if err := ValidateJSONMergeDocument(document); err != nil {
+		return b.fail(err)
+	}
 	b.root = newRawMergeValue(document)
 	b.initialized = true
-	b.rootValid = false
+	b.rootValid = true
 	return nil
+}
+
+// ValidateJSONMergeDocument enforces the nesting-depth contract for one input
+// document independently of how the merge state machine will consume it.
+func ValidateJSONMergeDocument(document ByteJson) error {
+	value := newRawMergeValue(document)
+	return ensureMergeValueFits(&value, 1)
 }
 
 // Merge validates both participating roots before mutating the logical tree.
@@ -359,7 +367,9 @@ func byteJsonNestingDepth(value ByteJson) int {
 		next  int
 		depth int
 	}
-	stack := []frame{{value: value, depth: 1}}
+	var frames [maxJSONMergeNestingDepth]frame
+	frames[0] = frame{value: value, depth: 1}
+	stack := frames[:1]
 	for len(stack) > 0 {
 		current := &stack[len(stack)-1]
 		if current.next == current.value.GetElemCnt() {
@@ -383,7 +393,8 @@ func byteJsonNestingDepth(value ByteJson) int {
 		if maxDepth > maxJSONMergeNestingDepth {
 			return maxDepth
 		}
-		stack = append(stack, frame{value: child, depth: depth})
+		stack = frames[:len(stack)+1]
+		stack[len(stack)-1] = frame{value: child, depth: depth}
 	}
 	return maxDepth
 }

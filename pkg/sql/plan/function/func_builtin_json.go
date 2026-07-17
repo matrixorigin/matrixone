@@ -1590,6 +1590,8 @@ func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, r
 				if err := builder.Merge(document); err != nil {
 					return err
 				}
+			} else if err := bytejson.ValidateJSONMergeDocument(document); err != nil {
+				return err
 			}
 		}
 
