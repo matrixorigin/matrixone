@@ -3189,6 +3189,43 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 	}
 }
 
+func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testing.T) {
+	sql := `SELECT n.N_REGIONKEY,
+	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
+	               AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+	        FROM NATION n
+	        GROUP BY n.N_REGIONKEY`
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+	require.NoError(t, err)
+
+	foundGroupConcatAgg := false
+	query := logicPlan.GetQuery()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+
+		hasGroupConcat := false
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == NameGroupConcat {
+				hasGroupConcat = true
+				break
+			}
+		}
+		if !hasGroupConcat {
+			continue
+		}
+
+		foundGroupConcatAgg = true
+		require.Len(t, node.Children, 1)
+		sortNode := query.Nodes[node.Children[0]]
+		require.Equal(t, plan.Node_SORT, sortNode.NodeType, "GROUP_CONCAT input must be sorted after subquery joins")
+		require.Len(t, sortNode.Children, 1)
+		require.Equal(t, plan.Node_JOIN, query.Nodes[sortNode.Children[0]].NodeType)
+	}
+	require.True(t, foundGroupConcatAgg)
+}
+
 func TestMysqlCompatibilityMode(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
