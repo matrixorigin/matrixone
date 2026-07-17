@@ -466,6 +466,14 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			}},
 		}
 	}
+	uint8Const := func(value uint8) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_uint8), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_U8Val{U8Val: uint32(value)},
+			}},
+		}
+	}
 	bindFunction := func(name string, args ...*plan.Expr) *plan.Expr {
 		argTypes := make([]types.Type, len(args))
 		for i := range args {
@@ -612,6 +620,102 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.Equal(t, []int64{7, 9}, vector.MustFixedColWithTypeCheck[int64](result))
+	})
+
+	t.Run("if skips invalid regexp rows within a batch", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"x", "a"}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"[", "a"}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"c", "c"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			bindFunction("regexp_like",
+				column(1, types.T_varchar.ToType()),
+				column(2, types.T_varchar.ToType()),
+				column(3, types.T_varchar.ToType())),
+			makePlan2BoolConstExprWithType(false))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []bool{false, true}, vector.MustFixedColWithTypeCheck[bool](result))
+	})
+
+	t.Run("if still evaluates invalid selected regexp row", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"x", "a"}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"[", "a"}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"c", "c"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			bindFunction("regexp_like",
+				column(1, types.T_varchar.ToType()),
+				column(2, types.T_varchar.ToType()),
+				column(3, types.T_varchar.ToType())),
+			makePlan2BoolConstExprWithType(false))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("if does not execute sleep on unselected rows", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true}),
+			testutil.NewVector(2, types.T_float64.ToType(), proc.Mp(), false, []float64{-1, 0}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			bindFunction("sleep", column(1, types.T_float64.ToType())),
+			uint8Const(0))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []uint8{0, 0}, vector.MustFixedColWithTypeCheck[uint8](result))
+	})
+
+	t.Run("if preserves non-row-aligned in-list parameters", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(3, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true, false}),
+			testutil.NewVector(3, types.T_varchar.ToType(), proc.Mp(), false, []string{"x", "a", "b"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		list := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+				stringConst("a"),
+				stringConst("b"),
+			}}},
+		}
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			bindFunction("in", column(1, types.T_varchar.ToType()), list),
+			makePlan2BoolConstExprWithType(false))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []bool{false, true, false}, vector.MustFixedColWithTypeCheck[bool](result))
 	})
 
 	t.Run("case preserves first match across multiple when clauses and reuse", func(t *testing.T) {

@@ -237,6 +237,18 @@ type FunctionExpressionExecutor struct {
 	selectList2 []bool
 	selectList  function.FunctionSelectList
 
+	// A function implementation cannot be required to interpret selectList
+	// correctly: many built-ins predate it, and evaluating them on masked rows
+	// can still raise errors or perform side effects. For a partial selection we
+	// therefore compact row-aligned parameters, evaluate only selected rows, and
+	// scatter the result back to the original row positions. These buffers are
+	// allocated lazily and reused across batches.
+	selectedRows             []int64
+	selectedParameterResults []*vector.Vector
+	selectedParameterVectors []*vector.Vector
+	selectedResult           vector.FunctionResultWrapper
+	selectedNullResult       *vector.Vector
+
 	resultVector vector.FunctionResultWrapper
 	// parameters related
 	parameterResults  []*vector.Vector
@@ -643,6 +655,87 @@ func (expr *FunctionExpressionExecutor) makeNullResult(rowCount int) (*vector.Ve
 	return result, nil
 }
 
+func (expr *FunctionExpressionExecutor) evalSelectedRows(
+	proc *process.Process,
+	rowCount int,
+	selectList []bool,
+) (*vector.Vector, error) {
+	expr.selectedRows = expr.selectedRows[:0]
+	for row := 0; row < rowCount; row++ {
+		if selectList[row] {
+			expr.selectedRows = append(expr.selectedRows, int64(row))
+		}
+	}
+
+	selectedCount := len(expr.selectedRows)
+	if len(expr.selectedParameterResults) == 0 && len(expr.parameterResults) > 0 {
+		expr.selectedParameterResults = make([]*vector.Vector, len(expr.parameterResults))
+		expr.selectedParameterVectors = make([]*vector.Vector, len(expr.parameterResults))
+	}
+	for i, parameter := range expr.parameterResults {
+		// Constants, folded vectors, and list/vector literals are not row-aligned.
+		// They must be passed through unchanged; only column and non-folded
+		// function results map one-to-one to the input batch rows.
+		rowAligned := false
+		switch executor := expr.parameterExecutor[i].(type) {
+		case *ColumnExpressionExecutor:
+			rowAligned = true
+		case *FunctionExpressionExecutor:
+			rowAligned = !executor.folded.canFold
+		}
+		if rowAligned && !parameter.IsConst() {
+			selected := expr.selectedParameterVectors[i]
+			if selected == nil {
+				selected = vector.NewOffHeapVecWithType(*parameter.GetType())
+				expr.selectedParameterVectors[i] = selected
+			} else {
+				selected.Reset(*parameter.GetType())
+			}
+			selected.SetIsBin(parameter.GetIsBin())
+			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
+				return nil, err
+			}
+			expr.selectedParameterResults[i] = selected
+			continue
+		}
+		expr.selectedParameterResults[i] = parameter
+	}
+
+	if err := expr.resultVector.PreExtendAndReset(rowCount); err != nil {
+		return nil, err
+	}
+	if expr.selectedResult == nil {
+		expr.selectedResult = vector.NewFunctionResultWrapper(
+			*expr.resultVector.GetResultVector().GetType(), expr.m)
+	}
+	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
+		return nil, err
+	}
+	if err := expr.evalFn(
+		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
+		return nil, err
+	}
+
+	result := expr.resultVector.GetResultVector()
+	result.ResetWithSameType()
+	if expr.selectedNullResult == nil {
+		expr.selectedNullResult = vector.NewConstNull(*result.GetType(), 1, expr.m)
+	}
+	selectedResult := expr.selectedResult.GetResultVector()
+	selectedRow := int64(0)
+	for row := 0; row < rowCount; row++ {
+		if selectList[row] {
+			if err := result.UnionOne(selectedResult, selectedRow, proc.Mp()); err != nil {
+				return nil, err
+			}
+			selectedRow++
+		} else if err := result.UnionOne(expr.selectedNullResult, 0, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	if len(batches) == 0 {
 		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
@@ -688,10 +781,21 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
+	if selectList != nil {
+		selectedCount := 0
+		for row := 0; row < rowCount; row++ {
+			if selectList[row] {
+				selectedCount++
+			}
+		}
+		if selectedCount < rowCount {
+			return expr.evalSelectedRows(proc, rowCount, selectList)
+		}
+	}
+
 	if err = expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}
-
 	if selectList != nil && len(expr.selectList.SelectList) < rowCount {
 		expr.selectList.SelectList = make([]bool, rowCount)
 	}
@@ -741,6 +845,19 @@ func (expr *FunctionExpressionExecutor) Free() {
 	if expr.resultVector != nil {
 		expr.resultVector.Free()
 		expr.resultVector = nil
+	}
+	if expr.selectedResult != nil {
+		expr.selectedResult.Free()
+		expr.selectedResult = nil
+	}
+	if expr.selectedNullResult != nil {
+		expr.selectedNullResult.Free(expr.m)
+		expr.selectedNullResult = nil
+	}
+	for _, parameter := range expr.selectedParameterVectors {
+		if parameter != nil {
+			parameter.Free(expr.m)
+		}
 	}
 
 	for _, p := range expr.parameterExecutor {
