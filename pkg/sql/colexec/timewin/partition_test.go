@@ -324,6 +324,121 @@ func TestTimeWinIntervalPathForwardsPartitionKeys(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+// A Reset/Prepare cycle must be a full generation boundary: the second run
+// gets the same output a fresh operator would produce, from cursors and
+// buffers restarted at zero, and Free still returns every byte. Before the
+// fix, the second run resumed through nextWindow with flushed-out aggregate
+// state and crashed in GroupGrow.
+func TestTimeWinReuseAfterReset(t *testing.T) {
+	rows := []row{
+		{"2023-08-01 00:00:00", 10, 1},
+		{"2023-08-01 00:00:01", 20, 1},
+		{"2023-08-01 00:00:06", 30, 1},
+		{"2023-08-01 00:00:00", 100, 2},
+		{"2023-08-01 00:00:07", 400, 2},
+	}
+	sliding, err := calcDatetime(5, 2)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name          string
+		withPartition bool
+	}{
+		{"partitioned sliding", true},
+		{"sliding without partitions", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+			arg := newPartArg(t, proc, sliding, tc.withPartition)
+
+			// The first generation reads two child batches so its buffers hold
+			// two entries; the second reads one, which must land in entry 0
+			// rather than continue after the stale pair.
+			bats1 := []*batch.Batch{
+				makePartInput(t, proc.Mp(), rows[:3]),
+				makePartInput(t, proc.Mp(), rows[3:]),
+			}
+			starts1, sums1, parts1 := runPartArgBats(t, arg, proc, bats1)
+			require.NotEmpty(t, sums1)
+
+			arg.Reset(proc, false, nil)
+
+			in2 := makePartInput(t, proc.Mp(), rows)
+			starts2, sums2, parts2 := runPartArg(t, arg, proc, in2)
+
+			require.Equal(t, starts1, starts2)
+			require.Equal(t, sums1, sums2)
+			require.Equal(t, parts1, parts2)
+
+			arg.Free(proc, false, nil)
+			for _, b := range bats1 {
+				b.Clean(proc.Mp())
+			}
+			in2.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+// The interval pass-through path buffers one vector set per child batch,
+// indexed by the same cursor; reuse must restart it at zero as well.
+func TestTimeWinIntervalPathReuseAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	rows := []row{
+		{"2023-08-01 00:00:00", 10, 1},
+		{"2023-08-01 00:00:06", 30, 1},
+		{"2023-08-01 00:00:00", 100, 2},
+	}
+
+	arg := newPartArg(t, proc, 0, true)
+	// A non-nil EndExpr selects the pass-through path.
+	arg.EndExpr = newExpression(0)
+	arg.WEnd = true
+
+	// Layout: [val, _wstart, _wend, part]; the values pass through unreduced.
+	run := func(in *batch.Batch) (vals []int32, parts []int64) {
+		op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
+		arg.Children = nil
+		arg.AppendChild(op)
+		require.NoError(t, arg.Prepare(proc))
+		for {
+			res, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			if res.Batch == nil {
+				break
+			}
+			n := res.Batch.Vecs[0].Length()
+			vals = append(vals, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[:n]...)
+			parts = append(parts, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[3])[:n]...)
+			if res.Status == vm.ExecStop {
+				break
+			}
+		}
+		return
+	}
+
+	in1 := makePartInput(t, proc.Mp(), rows)
+	vals1, parts1 := run(in1)
+	require.Equal(t, []int32{10, 30, 100}, vals1)
+
+	arg.Reset(proc, false, nil)
+
+	in2 := makePartInput(t, proc.Mp(), rows)
+	vals2, parts2 := run(in2)
+	require.Equal(t, vals1, vals2)
+	require.Equal(t, parts1, parts2)
+
+	arg.Free(proc, false, nil)
+	in1.Clean(proc.Mp())
+	in2.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // runPartArgBats drives the operator over several child batches; the
 // partition state machine must behave identically no matter where the
 // batch boundaries fall.

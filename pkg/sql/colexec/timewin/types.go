@@ -171,6 +171,20 @@ func (timeWin *TimeWin) Release() {
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &timeWin.ctr
 	ctr.resetExes()
+	// The last flushed batch and the aggregate executors belong to the finished
+	// generation. In the sliding path the batch owns its aggregate prefix (the
+	// boundaries belong to their expression executors and the partition keys to
+	// partOut); in the interval path every vector is a buffer that outlives the
+	// batch, so only the reference is dropped. Aggregates cannot be rewound
+	// once Flush has run (see remakeAggs), so they are discarded here and
+	// rebuilt by Prepare. The tsVec/aggVec/partVec buffers stay allocated: with
+	// the cursors back at zero the next generation reuses them from index 0.
+	if timeWin.EndExpr == nil {
+		ctr.freeFlushedAggVecs(proc.Mp())
+	}
+	ctr.bat = nil
+	ctr.freeAgg()
+	ctr.aggs = nil
 	ctr.resetParam(timeWin)
 }
 
@@ -257,18 +271,42 @@ func (ctr *container) resetExes() {
 	}
 }
 
+// resetParam rewinds every piece of per-generation state, so a Reset/Prepare
+// cycle starts from the same blank slate as a fresh operator. Any cursor left
+// over from the previous run would either read stale buffered rows or, worse,
+// route receive into nextWindow with window bounds that no longer exist.
 func (ctr *container) resetParam(timeWin *TimeWin) {
 	if timeWin.EndExpr != nil {
 		ctr.status = interval
 	} else {
 		ctr.status = receive
 	}
+	ctr.i = 0
 	ctr.end = false
 	ctr.group = -1
 	ctr.wStart = nil
 	ctr.wEnd = nil
+
+	ctr.curVecIdx = 0
+	ctr.curRowIdx = 0
+	ctr.preVecIdx = 0
+	ctr.preRowIdx = 0
+	ctr.left = 0
+	ctr.right = 0
+	ctr.nextLeft = 0
+	ctr.nextRight = 0
+	ctr.withoutFill = false
+	ctr.last = false
+	ctr.lastVal = 0
+
 	ctr.partIdx = -1
 	ctr.partRow = 0
+	ctr.partEnd = false
+	ctr.breakVecIdx = 0
+	ctr.breakRowIdx = 0
+	ctr.partLastVal = 0
+	ctr.partLastVecIdx = 0
+	ctr.partLastRowIdx = 0
 	ctr.partitionBreak = false
 }
 
@@ -335,6 +373,18 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 	ctr.partVec = nil
 
 	ctr.freePartOut(mp)
+
+	// calRes only ever hands the *cast results* of these two to the output
+	// batch; the datetime staging vectors themselves are owned here and were
+	// never released before.
+	if ctr.startVec != nil {
+		ctr.startVec.Free(mp)
+		ctr.startVec = nil
+	}
+	if ctr.endVec != nil {
+		ctr.endVec.Free(mp)
+		ctr.endVec = nil
+	}
 }
 
 func (ctr *container) freePartOut(mp *mpool.MPool) {

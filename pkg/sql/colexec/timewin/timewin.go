@@ -61,6 +61,12 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				}
 			}
 		}
+	}
+
+	// Gated separately from the expression executors: Reset discards the
+	// aggregate state (it cannot survive a Flush) while keeping the executors,
+	// so a reused operator arrives here with executors but no aggregates.
+	if len(ctr.aggs) == 0 {
 		ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
 			ctr.aggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
