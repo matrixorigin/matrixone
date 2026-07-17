@@ -491,6 +491,28 @@ func chooseUnionRowCarrier(left, right []*plan.Expr, size int) int {
 	return best
 }
 
+func canPruneSampleExprs(node, child *plan.Node) bool {
+	if len(node.AggList) <= 1 {
+		return true
+	}
+	if child.NodeType != plan.Node_TABLE_SCAN || child.TableDef == nil || len(child.BindingTags) == 0 {
+		return false
+	}
+
+	tag := child.BindingTags[0]
+	for _, expr := range node.AggList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != tag || col.ColPos < 0 || int(col.ColPos) >= len(child.TableDef.Cols) {
+			return false
+		}
+		tableCol := child.TableDef.Cols[col.ColPos]
+		if tableCol == nil || !expr.Typ.NotNullable || !tableCol.Typ.NotNullable {
+			return false
+		}
+	}
+	return true
+}
+
 // retainInputOrder keeps windows on each order-transparent input path.
 // Order-sensitive aggregates expose the input sequence in their result, even
 // when a window's own output column is not referenced. Stacked windows must all
@@ -1334,20 +1356,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		// Multi-column sampling maintains capacity independently for each
-		// expression. Removing a nullable expression can therefore change the
-		// sampled row set even when its value is unused. With a single expression,
-		// or when every expression is non-null, all expressions admit the same
-		// rows and physical slots can be compacted safely.
-		canPruneSample := len(node.AggList) <= 1
-		if !canPruneSample {
-			canPruneSample = true
-			for _, expr := range node.AggList {
-				if !expr.Typ.NotNullable {
-					canPruneSample = false
-					break
-				}
-			}
-		}
+		// expression. Only direct NOT NULL table columns provide a strict enough
+		// runtime guarantee that removing an expression cannot change the sampled
+		// row set. Function nullability inference is intentionally insufficient:
+		// functions such as json_extract can return NULL for non-NULL arguments.
+		canPruneSample := canPruneSampleExprs(node, builder.qry.Nodes[node.Children[0]])
 
 		keepCarrier := false
 		carrier := -1

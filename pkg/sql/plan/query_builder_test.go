@@ -136,6 +136,57 @@ func TestChooseRowCarrier(t *testing.T) {
 	})
 }
 
+func TestCanPruneSampleExprs(t *testing.T) {
+	makeCol := func(tag, pos int32, notNullable bool) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}},
+		}
+	}
+	makeScan := func(tag int32, notNullable ...bool) *plan.Node {
+		cols := make([]*plan.ColDef, len(notNullable))
+		for i := range notNullable {
+			cols[i] = &plan.ColDef{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable[i]}}
+		}
+		return &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{tag},
+			TableDef:    &plan.TableDef{Cols: cols},
+		}
+	}
+
+	t.Run("single expression needs no cross-expression proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{}}}}}
+		require.True(t, canPruneSampleExprs(node, &plan.Node{NodeType: plan.Node_PROJECT}))
+	})
+
+	t.Run("direct not null table columns", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.True(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("function inference is not runtime proof", func(t *testing.T) {
+		functionExpr := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_json), NotNullable: true},
+			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "json_extract"}}},
+		}
+		node := &plan.Node{AggList: []*plan.Expr{functionExpr, makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("derived projection is not runtime proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		child := makeScan(7, true, true)
+		child.NodeType = plan.Node_PROJECT
+		require.False(t, canPruneSampleExprs(node, child))
+	})
+
+	t.Run("nullable table column", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, false)))
+	})
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
