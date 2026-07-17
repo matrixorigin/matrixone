@@ -1546,6 +1546,13 @@ func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, r
 		}
 		return nil
 	}
+	rs.UseOptFunctionParamFrame(len(parameters))
+	wrappers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	for i, parameter := range parameters {
+		wrappers[i] = vector.OptGetBytesParamFromWrapper(rs, i, parameter)
+	}
+	builder := bytejson.NewMergePatchBuilder()
+	defer builder.Clear()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -1555,26 +1562,32 @@ func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, r
 			continue
 		}
 
-		var merged bytejson.ByteJson
+		if err := builder.BeginRow(); err != nil {
+			return err
+		}
 		known := false
-		for j, parameter := range parameters {
-			document, isSQLNull, err := jsonMergeDocument(parameter, i)
+		for j, wrapper := range wrappers {
+			document, isSQLNull, err := jsonMergeDocument(wrapper, i)
 			if err != nil {
 				return err
 			}
 			if isSQLNull {
 				known = false
+				if err := builder.ResetUnknown(); err != nil {
+					return err
+				}
 				continue
 			}
 
 			if j == 0 || document.Type != bytejson.TpCodeObject {
-				merged = document
+				if err := builder.Reset(document); err != nil {
+					return err
+				}
 				known = true
 				continue
 			}
 			if known {
-				merged, err = merged.MergePatch(document)
-				if err != nil {
+				if err := builder.Merge(document); err != nil {
 					return err
 				}
 			}
@@ -1584,11 +1597,16 @@ func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, r
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			builder.Clear()
 			continue
 		}
-		if err := rs.AppendByteJson(merged, false); err != nil {
+		if err := builder.Finalize(); err != nil {
 			return err
 		}
+		if err := rs.AppendByteJsonEncoded(builder); err != nil {
+			return err
+		}
+		builder.Clear()
 	}
 	return nil
 }
@@ -1603,6 +1621,13 @@ func (op *opBuiltInJsonMerge) buildJsonMergePreserve(parameters []*vector.Vector
 		}
 		return nil
 	}
+	rs.UseOptFunctionParamFrame(len(parameters))
+	wrappers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	for i, parameter := range parameters {
+		wrappers[i] = vector.OptGetBytesParamFromWrapper(rs, i, parameter)
+	}
+	builder := bytejson.NewMergePreserveBuilder()
+	defer builder.Clear()
 
 rowLoop:
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1613,41 +1638,55 @@ rowLoop:
 			continue
 		}
 
-		var merged bytejson.ByteJson
-		for j, parameter := range parameters {
-			document, isSQLNull, err := jsonMergeDocument(parameter, i)
+		if err := builder.BeginRow(); err != nil {
+			return err
+		}
+		for j, wrapper := range wrappers {
+			document, isSQLNull, err := jsonMergeDocument(wrapper, i)
 			if err != nil {
 				return err
 			}
 			if isSQLNull {
+				if err := builder.ResetUnknown(); err != nil {
+					return err
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
+				builder.Clear()
 				continue rowLoop
 			}
 
 			if j == 0 {
-				merged = document
+				if err := builder.Reset(document); err != nil {
+					return err
+				}
 				continue
 			}
-			merged, err = merged.MergePreserve(document)
-			if err != nil {
+			if err := builder.Merge(document); err != nil {
 				return err
 			}
 		}
-		if err := rs.AppendByteJson(merged, false); err != nil {
+		if err := builder.Finalize(); err != nil {
 			return err
 		}
+		if err := rs.AppendByteJsonEncoded(builder); err != nil {
+			return err
+		}
+		builder.Clear()
 	}
 	return nil
 }
 
-func jsonMergeDocument(parameter *vector.Vector, row uint64) (bytejson.ByteJson, bool, error) {
-	documentBytes, isSQLNull := vector.GenerateFunctionStrParameter(parameter).GetStrValue(row)
+func jsonMergeDocument(
+	wrapper vector.FunctionParameterWrapper[types.Varlena],
+	row uint64,
+) (bytejson.ByteJson, bool, error) {
+	documentBytes, isSQLNull := wrapper.GetStrValue(row)
 	if isSQLNull {
 		return bytejson.Null, true, nil
 	}
-	if parameter.GetType().Oid == types.T_json {
+	if wrapper.GetType().Oid == types.T_json {
 		return types.DecodeJson(documentBytes), false, nil
 	}
 	document, err := types.ParseSliceToByteJson(documentBytes)

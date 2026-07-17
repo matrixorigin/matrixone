@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1276,6 +1277,86 @@ func TestJsonMerge(t *testing.T) {
 	})
 }
 
+func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	trueJSON := mustJsonBinaryString(t, `true`)
+	falseJSON := mustJsonBinaryString(t, `false`)
+
+	measure := func(rows int) float64 {
+		left := make([]string, rows)
+		right := make([]string, rows)
+		for i := range rows {
+			left[i] = trueJSON
+			right[i] = falseJSON
+		}
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), left, nil),
+				NewFunctionTestInput(types.T_json.ToType(), right, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		var runErr error
+		allocs := testing.AllocsPerRun(3, func() {
+			runErr = testCase.result.PreExtendAndReset(rows)
+			if runErr == nil {
+				runErr = testCase.fn(
+					testCase.parameters,
+					testCase.result,
+					testCase.proc,
+					testCase.fnLength,
+					nil,
+				)
+			}
+		})
+		require.NoError(t, runErr)
+		return allocs
+	}
+
+	oneRow := measure(1)
+	manyRows := measure(8192)
+	require.LessOrEqual(t, manyRows, oneRow+10,
+		"wrapper allocations must not grow with rows: one=%f many=%f", oneRow, manyRows)
+}
+
+func TestJsonMergePatchFinalRawDepthValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	overDepthArray := `[` + nestedJSONMergeObject(100, `1`) + `]`
+
+	t.Run("final non-object replacement is rejected", func(t *testing.T) {
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthArray}, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		err := testCase.fn(
+			testCase.parameters,
+			testCase.result,
+			testCase.proc,
+			testCase.fnLength,
+			nil,
+		)
+		require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+	})
+
+	t.Run("discarded over-depth value does not block scalar recovery", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthArray}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, nil),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+		require.Equal(t, `1`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
 func TestJsonMergeIgnoreAllRowsMaterializesLength(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := runJsonFunctionWithSelectList(t, proc,
@@ -2477,6 +2558,18 @@ func mustJsonBinaryString(t *testing.T, raw string) string {
 	data, err := bj.Marshal()
 	require.NoError(t, err)
 	return string(data)
+}
+
+func nestedJSONMergeObject(depth int, leaf string) string {
+	var builder strings.Builder
+	for range depth {
+		builder.WriteString(`{"a":`)
+	}
+	builder.WriteString(leaf)
+	for range depth {
+		builder.WriteByte('}')
+	}
+	return builder.String()
 }
 
 func jsonVectorRowString(t *testing.T, vec *vector.Vector, row uint64) string {
