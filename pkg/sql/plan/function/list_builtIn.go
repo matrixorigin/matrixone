@@ -10740,7 +10740,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 func makeTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[2].Scale
 	if scale < 0 {
-		scale = 0
+		scale = 6
 	} else if scale > 6 {
 		scale = 6
 	}
