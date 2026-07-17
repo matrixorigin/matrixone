@@ -86,29 +86,7 @@ create database statement_query_type;
 --
 select sleep(15);
 
--- A DDL statement may execute authentication and implicit privilege SQL under
--- the same resource root. Those child executions contribute resources, but
--- they must not be reported as top-level retry attempts.
-with expected(statement_type) as (
-    select 'Create Index'
-    union all select 'Create Table'
-    union all select 'Drop Database'
-    union all select 'Drop Table'
-)
-select e.statement_type,
-       count(s.statement_id) > 0 as observed,
-       min(cast(json_unquote(json_extract(s.stats, '$[16]')) as bigint)) = 1
-           and max(cast(json_unquote(json_extract(s.stats, '$[16]')) as bigint)) = 1
-           as one_top_level_attempt
-from expected e
-left join system.statement_info s
-    on s.account = 'bvt_query_type'
-    and s.status = 'Success'
-    and s.aggr_count = 0
-    and s.statement_type = e.statement_type
-    and cast(json_unquote(json_extract(s.stats, '$[0]')) as bigint) = 6
-group by e.statement_type
-order by e.statement_type;
+select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account = 'bvt_query_type' and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
 
 -- cleanup
 drop account if exists bvt_query_type;
