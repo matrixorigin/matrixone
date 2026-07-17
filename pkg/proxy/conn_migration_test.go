@@ -77,7 +77,8 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 					return nil
 				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
-					DB: "d1",
+					DB:               "d1",
+					LastAffectedRows: 7,
 					UserLevelLocks: []*pb.UserLevelLock{
 						{Name: "migration_lock", Count: 2},
 					},
@@ -89,6 +90,10 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 					return moerr.NewInternalError(ctx, "bad request")
 				}
 				assert.Equal(t, []*pb.UserLevelLock{{Name: "migration_lock", Count: 2}}, req.MigrateConnToRequest.UserLevelLocks)
+				if req.MigrateConnToRequest.LastAffectedRows != 7 {
+					return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
+						req.MigrateConnToRequest.LastAffectedRows)
+				}
 				resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
 					Success: true,
 				}
@@ -131,6 +136,7 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
 		assert.Equal(t, []*pb.UserLevelLock{{Name: "migration_lock", Count: 2}}, resp.UserLevelLocks)
+		assert.Equal(t, int64(7), resp.LastAffectedRows)
 	})
 }
 

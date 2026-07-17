@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -152,6 +153,7 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -903,9 +905,10 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
 			return err
 		}
-		cache.Add(message)
+		return cache.Add(message)
+	default:
+		return moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
 	}
-	return nil
 }
 
 func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
@@ -915,19 +918,27 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 	if err != nil {
 		return err
 	}
+	// CreateCache also returns a cache for an unfragmented message. Always
+	// remove the map entry on every terminal assembly path, not just close the
+	// queue object.
+	defer cs.DeleteCache(message.GetID())
+	finalMessage := message.(*pipeline.Message)
 	for {
-		msg, ok, err := cache.Pop()
+		cached, ok, err := cache.Pop()
 		if err != nil {
 			return err
 		}
 		if !ok {
-			cache.Close()
 			break
 		}
-		data = append(data, msg.(*pipeline.Message).GetData()...)
+		fragment, ok := cached.(*pipeline.Message)
+		if !ok || fragment.GetCmd() != finalMessage.GetCmd() ||
+			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() {
+			return moerr.NewInvalidInputNoCtx("inconsistent pipeline message fragments")
+		}
+		data = append(data, fragment.GetData()...)
 	}
-	msg := message.(*pipeline.Message)
-	msg.SetData(append(data, msg.GetData()...))
+	finalMessage.SetData(append(data, finalMessage.GetData()...))
 	return nil
 }
 

@@ -1107,7 +1107,8 @@ var (
 			comment,
 			character_set_client,
 			collation_connection,
-			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			database_collation,
+			sql_mode) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
@@ -1122,7 +1123,8 @@ var (
 			    comment = '%s',
 			    character_set_client = '%s',
 			    collation_connection = '%s',
-			    database_collation = '%s'
+			    database_collation = '%s',
+			    sql_mode = '%s'
 			where function_id = %d;`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
@@ -1130,6 +1132,7 @@ var (
 		args,
 		lang,
 		body,
+		sql_mode,
 		db,
 		definer,
 		modified_time,
@@ -1139,13 +1142,14 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
 
 	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
 			set 
 			    args = '%s',
 				lang = '%s',
 			    body = '%s',
+				sql_mode = '%s',
 				db = '%s',
 			    definer = '%s',
 			    modified_time = '%s',
@@ -1344,7 +1348,8 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
-	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
@@ -1586,7 +1591,7 @@ const (
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
-	fetchSqlOfSpFormat = `select lang, body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+	fetchSqlOfSpFormat = `select lang, body, args, sql_mode from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
 	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
@@ -2086,6 +2091,18 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 		return "", err
 	}
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
+}
+
+func getSqlForCheckDatabaseByAccount(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseByAccountFormat, dbName, accountID), nil
 }
 
 func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
@@ -4360,6 +4377,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		return rtnErr
 	}
+
+	// The whole account is being removed, so cross-database foreign key
+	// metadata does not need to be rewritten while each database is dropped.
+	// Rewriting it can create a delete+insert catalog pair for a table in a
+	// database that will be dropped later in this transaction.
+	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
 
 	// disable foreign key checks
 	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
@@ -9743,7 +9766,7 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	var err error
 	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
 	defer span.End()
-	sqlForCheckDatabase, err = getSqlForCheckDatabase(ctx, dbName)
+	sqlForCheckDatabase, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
 	if err != nil {
 		return false, err
 	}
@@ -10855,6 +10878,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		body = string(byt)
 	}
 	body = escapeSQLStringForDoubleQuotes(body)
+	parserSQLMode := plan2.EscapeFormat(sessionSQLModeForParser(ses))
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
@@ -10866,7 +10890,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode,
 			int32(id))
 	} else { // create
 		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
@@ -10874,7 +10898,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language, dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode)
 	}
 
 	err = bh.Exec(execCtx.reqCtx, initMoUdf)
@@ -10918,6 +10942,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	var initMoProcedure string
 	var dbName string
 	var checkExistence string
+	parserSQLMode := sessionSQLModeForParser(ses)
 	var argsJson []byte
 	// var fmtctx *tree.FmtCtx
 	var erArray []ExecResult
@@ -10993,14 +11018,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		}
 		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 			string(cp.Name.Name.ObjectName),
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	err = bh.Exec(ctx, initMoProcedure)
@@ -11294,6 +11319,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	// fetch related
 	var spLang string
 	var spBody string
+	var spSQLMode string
 	var dbName string
 	var sql string
 	var argstr string
@@ -11354,6 +11380,10 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		if err != nil {
 			return nil, err
 		}
+		spSQLMode, err = erArray[0].GetString(ctx, 0, 3)
+		if err != nil {
+			return nil, err
+		}
 
 		// perform argument length validation
 		// postpone argument type check until actual execution of its procedure body. This will be handled by the binder.
@@ -11394,15 +11424,11 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 
 	switch spLang {
 	case "sql":
-		stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+		stmt, err := parseStoredProcedureBody(ctx, ses, spBody, spSQLMode)
 		if err != nil {
 			return nil, err
 		}
-		defer func() {
-			for _, st := range stmt {
-				st.Free()
-			}
-		}()
+		defer freeStatements(stmt)
 
 		err = interpreter.ExecuteSp(stmt[0], dbName)
 		if err != nil {
@@ -11420,6 +11446,16 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	default:
 		return nil, moerr.NewInternalError(ctx, "unknown language")
 	}
+}
+
+func parseStoredProcedureBody(ctx context.Context, ses FeSession, sql string, sqlMode string) ([]tree.Statement, error) {
+	return parsers.ParseWithSQLMode(
+		ctx,
+		dialect.MYSQL,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sqlMode,
+	)
 }
 
 func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {

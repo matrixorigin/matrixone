@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,6 +46,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+type legacyZeroRunSQLTxnOperator struct {
+	client.TxnOperator
+	exited chan uint64
+}
+
+func (op *legacyZeroRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
+	return 0
+}
+
+func (op *legacyZeroRunSQLTxnOperator) ExitRunSqlWithToken(token uint64) {
+	op.exited <- token
+}
+
+func TestEnterFrontendRunSQLRejectsSealedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	expectedErr := moerr.NewTxnClosedNoCtx([]byte("sealed"))
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), "select 1").
+		Return(uint64(0), expectedErr)
+
+	ses := &Session{}
+	ses.txnHandler = InitTxnHandler("", nil, ctx, txnOperator)
+	defer ses.txnHandler.txnCtxCancel()
+	finish, err := enterFrontendRunSQL(ses, &ExecCtx{
+		reqCtx:    ctx,
+		sqlOfStmt: "select 1",
+	})
+
+	assert.ErrorIs(t, err, expectedErr)
+	assert.NotNil(t, finish)
+	assert.Empty(t, ses.runSQLTokens)
+}
+
+func TestEnterFrontendRunSQLPreservesLegacyZeroToken(t *testing.T) {
+	ctx := context.Background()
+	op := &legacyZeroRunSQLTxnOperator{exited: make(chan uint64, 1)}
+	ses := &Session{}
+	ses.txnHandler = InitTxnHandler("", nil, ctx, op)
+	defer ses.txnHandler.txnCtxCancel()
+
+	finish, err := enterFrontendRunSQL(ses, &ExecCtx{
+		reqCtx:    ctx,
+		sqlOfStmt: "select 1",
+	})
+	require.NoError(t, err)
+	require.Empty(t, ses.runSQLTokens)
+	finish()
+	select {
+	case token := <-op.exited:
+		require.Zero(t, token)
+	case <-time.After(time.Second):
+		t.Fatal("legacy zero token was not returned to ExitRunSqlWithToken")
+	}
+	require.Empty(t, ses.runSQLTokens)
+}
+
 func TestTxnHandler_NewTxn(t *testing.T) {
 	convey.Convey("new txn", t, func() {
 		ctrl := gomock.NewController(t)
@@ -56,7 +115,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -127,7 +186,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 			}).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -194,7 +253,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 			}).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
@@ -252,7 +311,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -325,7 +384,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -563,7 +622,7 @@ func TestSession_Migrate(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -576,7 +635,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
@@ -635,8 +694,8 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			DB:               "d1",
+			LastAffectedRows: 7,
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
@@ -645,6 +704,25 @@ func TestSession_Migrate(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
 		assert.Equal(t, 2, len(s.prepareStmts))
+		assert.Equal(t, int64(7), s.GetLastAffectedRows())
+		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+
+		execCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ec := &ExecCtx{reqCtx: execCtx, ses: s}
+		resp, err := ExecRequest(s, ec, &Request{cmd: COM_STMT_PREPARE, data: []byte("select row_count()")})
+		assert.NoError(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, int64(7), s.GetLastAffectedRows())
+		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+
+		stmtID := s.GetLastStmtId()
+		data := make([]byte, 4)
+		binary.LittleEndian.PutUint32(data, stmtID)
+		resp, err = ExecRequest(s, ec, &Request{cmd: COM_STMT_RESET, data: data})
+		assert.NoError(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, int64(0), s.GetLastAffectedRows())
+		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
 	t.Run("reject user-level locks", func(t *testing.T) {

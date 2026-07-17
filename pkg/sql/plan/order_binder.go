@@ -21,6 +21,83 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// distinctOrderBinder binds an ORDER BY expression against the output of a
+// DISTINCT projection. It deliberately exposes only select-list aliases and
+// directly selected columns; it never falls back to the input-table scope.
+type distinctOrderBinder struct {
+	baseBinder
+}
+
+var errDistinctOrderNotProjected = moerr.NewInternalErrorNoCtx("DISTINCT ORDER BY expression is not available from the projection")
+
+var _ Binder = (*distinctOrderBinder)(nil)
+
+func newDistinctOrderBinder(projectionBinder *ProjectionBinder) *distinctOrderBinder {
+	b := &distinctOrderBinder{}
+	b.sysCtx = projectionBinder.sysCtx
+	b.builder = projectionBinder.builder
+	b.ctx = projectionBinder.ctx
+	b.impl = b
+	return b
+}
+
+func (b *distinctOrderBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if _, ok := astExpr.(*tree.FullTextMatchExpr); ok {
+		return nil, errDistinctOrderNotProjected
+	}
+	return b.baseBindExpr(astExpr, depth, isRoot)
+}
+
+func (b *distinctOrderBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	if astExpr.NumParts == 1 {
+		name := astExpr.ColName()
+		if isRoot {
+			if b.ctx.aliasFrequency[name] > 1 {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
+			}
+			if selectItem, ok := b.ctx.aliasMap[name]; ok {
+				return makeProjectColRef(b.ctx, selectItem.idx), nil
+			}
+		} else if _, found := b.ctx.bindingByCol[name]; !found {
+			if b.ctx.aliasFrequency[name] > 1 {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
+			}
+			if selectItem, ok := b.ctx.aliasMap[name]; ok {
+				return makeProjectColRef(b.ctx, selectItem.idx), nil
+			}
+		}
+	}
+
+	qualified, err := b.ctx.qualifyColumnNames(astExpr, NoAlias)
+	if err != nil {
+		return nil, err
+	}
+	if pos, ok := b.ctx.projectColByAst[windowExprAstKey(qualified)]; ok {
+		return makeProjectColRef(b.ctx, pos), nil
+	}
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindSubquery(*tree.Subquery, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func (b *distinctOrderBinder) BindTimeWindowFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error) {
+	return nil, errDistinctOrderNotProjected
+}
+
+func makeProjectColRef(ctx *BindContext, pos int32) *plan.Expr {
+	return GetColExpr(ctx.projects[pos].Typ, ctx.projectTag, pos)
+}
+
 func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectExprs) *OrderBinder {
 	return &OrderBinder{
 		ProjectionBinder: projectionBinder,
@@ -29,7 +106,11 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 }
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
-	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
+	rootExpr := astExpr
+	if b.ctx.isDistinct {
+		rootExpr = unwrapParenExpr(rootExpr)
+	}
+	if colRef, ok := rootExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
 		if frequency, ok := b.ctx.aliasFrequency[colRef.ColName()]; ok && frequency > 1 {
 			return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
 		}
@@ -116,6 +197,19 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 
 		default:
 			return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
+		}
+	}
+
+	if b.ctx.isDistinct {
+		if b.distinctBinder == nil {
+			b.distinctBinder = newDistinctOrderBinder(b.ProjectionBinder)
+		}
+		distinctExpr, distinctErr := b.distinctBinder.BindExpr(astExpr, 0, true)
+		if distinctErr == nil {
+			return distinctExpr, nil
+		}
+		if distinctErr != errDistinctOrderNotProjected {
+			return nil, distinctErr
 		}
 	}
 

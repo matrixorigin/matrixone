@@ -116,10 +116,11 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID:         c.connID,
-		DB:             info.DB,
-		PrepareStmts:   info.PrepareStmts,
-		UserLevelLocks: info.UserLevelLocks,
+		ConnID:           c.connID,
+		DB:               info.DB,
+		PrepareStmts:     info.PrepareStmts,
+		LastAffectedRows: info.LastAffectedRows,
+		UserLevelLocks:   info.UserLevelLocks,
 	}
 	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnTo)
 	defer cancel()

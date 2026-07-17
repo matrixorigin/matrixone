@@ -512,6 +512,7 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 	}
 	resp.DB = ses.GetDatabaseName()
+	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,

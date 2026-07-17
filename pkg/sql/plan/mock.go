@@ -479,6 +479,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"character_set_client", types.T_varchar, false, 64, 0},
 			{"collation_connection", types.T_varchar, false, 64, 0},
 			{"database_collation", types.T_varchar, false, 64, 0},
+			{"sql_mode", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},

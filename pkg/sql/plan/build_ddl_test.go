@@ -980,3 +980,48 @@ func TestConstructAddedPartitionDefsErrors(t *testing.T) {
 		assert.Contains(t, err.Error(), "LIST PARTITIONING values must be unique across partitions")
 	})
 }
+
+func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		sqlMode:             "ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	const createSQL = `create table "partition_mode" ("category" varchar(20)) partition by list columns ("category") (partition "select" values in ('A\\B')) cluster by ("category")`
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, createSQL, 1, ctx.sqlMode)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTablePlan := p.GetDdl().GetCreateTable()
+	tableDef := createTablePlan.GetTableDef()
+	require.NotNil(t, tableDef)
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				tableDef.Createsql = property.Value
+			}
+		}
+	}
+	require.Contains(t, tableDef.Createsql, "`partition_mode`")
+	require.Contains(t, tableDef.Createsql, "`category`")
+	require.Contains(t, tableDef.Createsql, "partition `select`")
+	require.Contains(t, tableDef.Createsql, "cluster by (`category`)")
+	require.Contains(t, tableDef.Createsql, `'A\\\\B'`)
+	require.NotContains(t, tableDef.Createsql, `"`)
+	require.Equal(t, tableDef.Createsql, createTablePlan.RawSQL)
+
+	newValue := tree.NewNumVal("C\\D", "C\\D", false, tree.P_char)
+	clause := tree.NewAlterPartitionAddPartitionClause(
+		tree.AlterPartitionAddPartition,
+		[]*tree.Partition{{
+			Name:   tree.Identifier("p1"),
+			Values: tree.NewValuesIn(tree.Exprs{newValue}),
+		}},
+	)
+	defer clause.Free()
+
+	defs, err := constructAddedPartitionDefs(ctx, tableDef, clause)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+}

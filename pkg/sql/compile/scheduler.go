@@ -25,6 +25,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -253,8 +254,9 @@ func nilEngineValue(e engine.Engine) bool {
 }
 
 type resolvedQueryCandidates struct {
-	workers    schedule.Workers
-	resolution schedule.CandidateResolution
+	workers        schedule.Workers
+	resolution     schedule.CandidateResolution
+	hasMixedCommit bool
 }
 
 type queryCandidatePoolResolver interface {
@@ -276,7 +278,8 @@ func (legacyEngineNodesPoolResolver) resolve(
 	}
 	workers := toScheduleCandidateWorkers(discovered.legacyNodes)
 	return resolvedQueryCandidates{
-		workers: workers,
+		workers:        workers,
+		hasMixedCommit: hasMixedCommit(discovered.legacyNodes),
 		resolution: schedule.CandidateResolution{
 			DiscoverySource: discovered.source,
 			PoolResolution:  schedule.PoolResolutionLegacyEngineNodes,
@@ -304,7 +307,8 @@ func (r engineQueryCandidatePoolResolver) resolve(
 		return resolvedQueryCandidates{}, err
 	}
 	return resolvedQueryCandidates{
-		workers: toScheduleCandidateWorkers(nodes),
+		workers:        toScheduleCandidateWorkers(nodes),
+		hasMixedCommit: hasMixedCommit(nodes),
 		resolution: schedule.CandidateResolution{
 			DiscoverySource: discovered.source,
 			PoolResolution:  schedule.PoolResolutionTenantLabels,
@@ -406,6 +410,21 @@ func (c *Compile) evaluateQueryPlacement(
 	}
 	req.Candidates = resolved.workers
 	req.CandidateResolution = resolved.resolution
+	var qry *plan.Query
+	if c.pn != nil {
+		qry = c.pn.GetQuery()
+	}
+	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
+	// The local partition is the only one that can see the coordinator's
+	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
+	// distributed by ObjectID across all selected workers.
+	req.CurrentCNFirst = isIvfEntriesScan
+	if isIvfEntriesScan && resolved.hasMixedCommit {
+		if mode == queryCandidateModeExecution {
+			c.execType = plan2.ExecTypeAP_ONECN
+		}
+		req.ExecKind = schedule.QueryExecAPOneCN
+	}
 	return schedule.DecideQueryPlacement(req), "", nil
 }
 
@@ -510,6 +529,27 @@ func droppedWorkerReasonCounts(dropped schedule.DroppedWorkers) map[string]int {
 		counts[worker.Reason]++
 	}
 	return counts
+}
+
+func hasMixedCommit(nodes engine.Nodes) bool {
+	for i := range nodes {
+		if nodes[i].HasMixedCommit {
+			return true
+		}
+	}
+	return false
+}
+
+func queryHasIvfSearchEntriesInternalScan(qry *plan.Query) bool {
+	if qry == nil {
+		return false
+	}
+	for _, node := range qry.GetNodes() {
+		if plan2.IsIvfSearchEntriesInternalScan(node) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) currentCNWorker() schedule.Worker {

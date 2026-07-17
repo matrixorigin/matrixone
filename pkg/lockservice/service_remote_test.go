@@ -62,6 +62,97 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
+func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2", "s3"},
+		func(_ *lockTableAllocator, s []*service) {
+			owner := s[0]
+			holderService := s[1]
+			waiterService := s[2]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(10)
+			row := []byte("row")
+			seedTxn := []byte("seed")
+			holderTxn := []byte("remote-holder")
+			activeWaiterTxn := []byte("active-waiter")
+
+			// Bind the table to owner, then acquire it through holderService so
+			// fetchWhoWaitingMe has to query a remote lock table.
+			mustAddTestLock(t, ctx, owner, tableID, seedTxn, [][]byte{row}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+			mustAddTestLock(t, ctx, holderService, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			waitResult := make(chan error, 1)
+			go func() {
+				_, err := waiterService.Lock(
+					ctx,
+					tableID,
+					[][]byte{row},
+					activeWaiterTxn,
+					newTestRowExclusiveOptions(),
+				)
+				waitResult <- err
+			}()
+			defer func() {
+				require.NoError(t, holderService.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				require.NoError(t, <-waitResult)
+				require.NoError(t, waiterService.Unlock(ctx, activeWaiterTxn, timestamp.Timestamp{}))
+			}()
+
+			waitWaiters(t, owner, tableID, row, 1)
+			lt, err := owner.getLockTable(0, tableID)
+			require.NoError(t, err)
+			local := lt.(*localLockTable)
+			logger := getLogger("")
+
+			completedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed")}, "test", logger)
+			completedWaiter.setStatus(completed)
+			notifiedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("notified")}, "test", logger)
+			notifiedWaiter.setStatus(notified)
+			local.mu.Lock()
+			lock, ok := local.mu.store.Get(row)
+			if !ok {
+				local.mu.Unlock()
+				t.Fatal("owner lock disappeared before remote snapshot")
+			}
+			lock.addWaiter(logger, completedWaiter)
+			lock.addWaiter(logger, notifiedWaiter)
+			local.mu.Unlock()
+			defer func() {
+				local.mu.Lock()
+				lock, ok := local.mu.store.Get(row)
+				if ok {
+					removed, _ := lock.waiters.remove(completedWaiter)
+					require.True(t, removed)
+					removed, _ = lock.waiters.remove(notifiedWaiter)
+					require.True(t, removed)
+				}
+				local.mu.Unlock()
+				completedWaiter.close("test", logger)
+				notifiedWaiter.close("test", logger)
+			}()
+
+			txn := holderService.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, txn)
+			var waitingTxnIDs [][]byte
+			require.True(t, txn.fetchWhoWaitingMe(
+				holderService.serviceID,
+				holderTxn,
+				func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+					waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+					require.Equal(t, owner.serviceID, waiterAddress)
+					return true
+				},
+				holderService.getLockTable,
+			))
+			require.Equal(t, [][]byte{activeWaiterTxn}, waitingTxnIDs)
+		},
+	)
+}
+
 func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -413,6 +504,43 @@ func TestHandleCheckActiveTxn(t *testing.T) {
 	)
 }
 
+func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("txn1")
+			s.activeTxnHolder.getActiveTxn(txnID, true, "")
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       txnID,
+				},
+			}
+			cs := &testClientSession{ctx: context.Background()}
+
+			resp := acquireResponse()
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.False(t, resp.CheckActiveTxn.Active)
+			releaseResponse(resp)
+
+			s.unknownCommitResolver.mu.Lock()
+			s.unknownCommitResolver.mu.pending[string(txnID)] = unknownCommitTxn{id: txnID}
+			s.unknownCommitResolver.mu.Unlock()
+
+			resp = acquireResponse()
+			defer releaseResponse(resp)
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+		},
+	)
+}
+
 func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -431,6 +559,94 @@ func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
 			require.True(t, valid)
 		},
 	)
+}
+
+type scriptedActiveTxnClient struct {
+	Client
+	calls      atomic.Int32
+	resets     atomic.Int32
+	resetErr   error
+	afterReset pb.CheckActiveTxnResponse
+}
+
+func (c *scriptedActiveTxnClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_CheckActiveTxn {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected active-txn method")
+	}
+	resp := acquireResponse()
+	if c.calls.Add(1) == 1 {
+		// The stale endpoint belongs to a different CN incarnation.
+		resp.CheckActiveTxn.Valid = false
+		return resp, nil
+	}
+	resp.CheckActiveTxn = c.afterReset
+	return resp, nil
+}
+
+func (c *scriptedActiveTxnClient) ResetBackend(context.Context, string) error {
+	c.resets.Add(1)
+	return c.resetErr
+}
+
+func (c *scriptedActiveTxnClient) Close() error { return nil }
+
+func TestValidRemoteTxnRecoversStaleCheckActiveTxnEndpoint(t *testing.T) {
+	client := &scriptedActiveTxnClient{
+		afterReset: pb.CheckActiveTxnResponse{Valid: true, Active: true},
+	}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(2), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "recovered live txn reached unlock fencing")
+}
+
+func TestValidRemoteTxnStaysLiveWhenEndpointResetFails(t *testing.T) {
+	client := &scriptedActiveTxnClient{resetErr: moerr.NewBackendClosedNoCtx()}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(1), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "unknown routing must not reach unlock fencing")
 }
 
 func TestValidRemoteTxnFallsBackToGetActiveTxn(t *testing.T) {
@@ -1075,7 +1291,7 @@ func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
 			elapsed := time.Since(start)
 
 			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
 				"expected lock-timeout, got %v", err)
 			// Must fire well before the 10s coarse tick.
 			require.Less(t, elapsed, 3*time.Second,
@@ -1210,9 +1426,9 @@ func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
 
 			require.Error(t, err)
 			// Must receive lock-timeout, not connectivity/backend error.
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
-				"expected ErrLockTimeout (InvalidState), got %v", err)
-			require.Contains(t, err.Error(), "lock timeout",
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected ErrLockWaitTimeout, got %v", err)
+			require.Contains(t, err.Error(), "Lock wait timeout exceeded",
 				"expected lock timeout message, got %v", err)
 			require.GreaterOrEqual(t, elapsed, time.Second,
 				"should have waited at least LockWaitTimeout")

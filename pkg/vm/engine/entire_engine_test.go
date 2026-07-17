@@ -448,7 +448,7 @@ func (o *testOperator) NextSequence() uint64 {
 }
 
 func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
-	return 0
+	return 1
 }
 
 func (o *testOperator) ExitRunSqlWithToken(_ uint64) {}

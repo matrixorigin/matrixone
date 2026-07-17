@@ -529,7 +529,8 @@ message MigrateConnFromRequest {
 message MigrateConnFromResponse {
   string DB = 1;
   repeated PrepareStmt PrepareStmts = 2;
-  repeated UserLevelLock UserLevelLocks = 3;
+  int64 LastAffectedRows = 3;
+  repeated UserLevelLock UserLevelLocks = 4;
 }
 
 message MigrateConnToRequest {
@@ -537,7 +538,8 @@ message MigrateConnToRequest {
   string DB = 2;
   repeated string SetVarStmts = 3;
   repeated PrepareStmt PrepareStmts = 4;
-  repeated UserLevelLock UserLevelLocks = 5;
+  int64 LastAffectedRows = 5;
+  repeated UserLevelLock UserLevelLocks = 6;
 }
 
 message UserLevelLock {

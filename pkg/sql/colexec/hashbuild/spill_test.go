@@ -33,15 +33,13 @@ func TestComputeXXHashBuild(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	t.Run("empty", func(t *testing.T) {
-		err := computeXXHash(nil, nil)
-		require.NoError(t, err)
+		computeXXHash(nil, nil)
 	})
 
 	t.Run("single_column", func(t *testing.T) {
 		vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 		hashValues := make([]uint64, 3)
-		err := computeXXHash([]*vector.Vector{vec}, hashValues)
-		require.NoError(t, err)
+		computeXXHash([]*vector.Vector{vec}, hashValues)
 		require.NotEqual(t, uint64(0), hashValues[0])
 		require.NotEqual(t, hashValues[0], hashValues[1])
 	})
@@ -50,8 +48,7 @@ func TestComputeXXHashBuild(t *testing.T) {
 		vec1 := testutil.MakeInt32Vector([]int32{1, 2}, nil, mp)
 		vec2 := testutil.MakeVarcharVector([]string{"a", "b"}, nil, mp)
 		hashValues := make([]uint64, 2)
-		err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues)
-		require.NoError(t, err)
+		computeXXHash([]*vector.Vector{vec1, vec2}, hashValues)
 		require.NotEqual(t, hashValues[0], hashValues[1])
 	})
 
@@ -59,8 +56,7 @@ func TestComputeXXHashBuild(t *testing.T) {
 		vec := testutil.MakeInt32Vector([]int32{5}, nil, mp)
 		vec.SetClass(vector.CONSTANT)
 		hashValues := make([]uint64, 3)
-		err := computeXXHash([]*vector.Vector{vec}, hashValues)
-		require.NoError(t, err)
+		computeXXHash([]*vector.Vector{vec}, hashValues)
 		require.Equal(t, hashValues[0], hashValues[1])
 	})
 }
@@ -106,16 +102,24 @@ func TestShouldSpillBatches(t *testing.T) {
 
 	t.Run("not_shuffle", func(t *testing.T) {
 		hb := &HashBuild{
-			IsShuffle: false,
+			IsShuffle:   false,
+			NeedHashMap: true,
 		}
+		hb.ctr.setSpillThreshold(1)
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(1)
+		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
 		require.False(t, hb.shouldSpillBatches())
 	})
 
-	t.Run("no_threshold", func(t *testing.T) {
+	t.Run("no_hashmap", func(t *testing.T) {
 		hb := &HashBuild{
-			IsShuffle:      true,
-			SpillThreshold: 0,
+			IsShuffle: true,
 		}
+		hb.ctr.setSpillThreshold(1)
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(1)
+		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
 		require.False(t, hb.shouldSpillBatches())
 	})
 
@@ -123,7 +127,9 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb := &HashBuild{
 			IsShuffle:      true,
 			SpillThreshold: 1024 * 1024, // 1MB
+			NeedHashMap:    true,
 		}
+		hb.ctr.setSpillThreshold(1024 * 1024)
 		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{
 			{Vecs: []*vector.Vector{testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())}},
 		}
@@ -134,7 +140,6 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb := &HashBuild{
 			IsShuffle:      true,
 			SpillThreshold: 1, // 1 byte
-			CanSpill:       true,
 			NeedHashMap:    true,
 		}
 		hb.ctr.setSpillThreshold(1)
@@ -142,6 +147,7 @@ func TestShouldSpillBatches(t *testing.T) {
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
 		bat.SetRowCount(5)
 		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
+		hb.ctr.hashmapBuilder.InputBatchRowCount = bat.RowCount()
 		require.True(t, hb.shouldSpillBatches())
 	})
 }
@@ -152,8 +158,7 @@ func TestHashDistributionBuild(t *testing.T) {
 		11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}, nil, mp)
 
 	hashValues := make([]uint64, 30)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues)
-	require.NoError(t, err)
+	computeXXHash([]*vector.Vector{vec}, hashValues)
 
 	bucketCounts := make([]int, spillNumBuckets)
 	for _, hash := range hashValues {
@@ -222,8 +227,7 @@ func TestMultipleDataTypesBuild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hashValues := make([]uint64, 3)
-			err := computeXXHash([]*vector.Vector{tt.vec}, hashValues)
-			require.NoError(t, err)
+			computeXXHash([]*vector.Vector{tt.vec}, hashValues)
 			require.NotEqual(t, uint64(0), hashValues[0])
 			require.NotEqual(t, hashValues[0], hashValues[1])
 		})
@@ -234,8 +238,7 @@ func TestNullValuesBuild(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, []uint64{1}, mp)
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues)
-	require.NoError(t, err)
+	computeXXHash([]*vector.Vector{vec}, hashValues)
 	require.NotEqual(t, uint64(0), hashValues[0])
 	require.NotEqual(t, uint64(0), hashValues[2])
 }
@@ -502,7 +505,6 @@ func TestShouldSpillBatchesRowThreshold(t *testing.T) {
 	hb := &HashBuild{
 		IsShuffle:      true,
 		SpillThreshold: 10, // Small row threshold
-		CanSpill:       true,
 		NeedHashMap:    true,
 	}
 	hb.ctr.setSpillThreshold(10)
@@ -511,6 +513,7 @@ func TestShouldSpillBatchesRowThreshold(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 	bat.SetRowCount(3)
 	hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
+	hb.ctr.hashmapBuilder.InputBatchRowCount = bat.RowCount()
 
 	require.False(t, hb.shouldSpillBatches())
 
@@ -520,6 +523,7 @@ func TestShouldSpillBatchesRowThreshold(t *testing.T) {
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i)}, nil, proc.Mp())
 		bat.SetRowCount(1)
 		hb.ctr.hashmapBuilder.Batches.Buf = append(hb.ctr.hashmapBuilder.Batches.Buf, bat)
+		hb.ctr.hashmapBuilder.InputBatchRowCount += bat.RowCount()
 	}
 
 	require.True(t, hb.shouldSpillBatches())
@@ -532,6 +536,7 @@ func TestShouldSpillBatchesMemThreshold(t *testing.T) {
 	hb := &HashBuild{
 		IsShuffle:      true,
 		SpillThreshold: 1024 * 1024, // 1MB
+		NeedHashMap:    true,
 	}
 	hb.ctr.setSpillThreshold(1024 * 1024)
 
@@ -550,8 +555,7 @@ func TestHashWithConstVector(t *testing.T) {
 	vec.SetClass(vector.CONSTANT)
 
 	hashValues := make([]uint64, 10)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues)
-	require.NoError(t, err)
+	computeXXHash([]*vector.Vector{vec}, hashValues)
 
 	// All values should be the same for const vector
 	for i := 1; i < len(hashValues); i++ {
@@ -566,8 +570,7 @@ func TestHashMultiColumnCombinations(t *testing.T) {
 	vec2 := testutil.MakeVarcharVector([]string{"a", "b", "a"}, nil, mp)
 
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues)
-	require.NoError(t, err)
+	computeXXHash([]*vector.Vector{vec1, vec2}, hashValues)
 
 	// Different combinations should produce different hashes
 	require.NotEqual(t, hashValues[0], hashValues[1])

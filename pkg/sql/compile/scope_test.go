@@ -293,6 +293,24 @@ func TestScopeSerialization2(t *testing.T) {
 	checkScopeRoot(t, scope)
 }
 
+func TestDecodeRemoteScopePreservesRemoteRunContextDuringPipelineInit(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.counterSet = &perfcounter.CounterSet{}
+	sourceScope := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	scopeData, err := encodeScope(sourceScope)
+	require.NoError(t, err)
+
+	remoteScope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	testCompile.scopes = []*Scope{remoteScope}
+	testCompile.InitPipelineContextToExecuteQuery()
+
+	require.Equal(t, true, testCompile.proc.Ctx.Value(defines.RemoteRunContext{}))
+	require.Equal(t, true, remoteScope.Proc.Ctx.Value(defines.RemoteRunContext{}))
+}
+
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
@@ -482,7 +500,7 @@ func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
 	require.True(t, sender.safeToClose)
-	require.True(t, sender.alreadyClose)
+	require.True(t, sender.receiveClosed)
 }
 
 func TestNewParallelScope(t *testing.T) {
@@ -1599,7 +1617,7 @@ func TestNotifyMessageClean(t *testing.T) {
 		streamSender: ff,
 		safeToClose:  true,
 	}
-	// no matter error happens or not, clean method should close the sender.
+	// Repeated cleanup attempts must retire a sender exactly once.
 	n1 := notifyMessageResult{
 		sender: sender,
 		err:    moerr.NewInternalErrorNoCtx("there is an error."),
@@ -1613,7 +1631,7 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 
 	n2.clean(proc)
-	require.Equal(t, 2, ff.number)
+	require.Equal(t, 1, ff.number)
 }
 
 func TestSuppressRemoteRunCancelError(t *testing.T) {
@@ -2098,4 +2116,20 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
 	}
+}
+
+func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
+	ivfNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit:        &plan.Expr{},
+			OrigFuncName: "l2_distance",
+		},
+	}
+	ordinaryNode := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{}}
+
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
 }
