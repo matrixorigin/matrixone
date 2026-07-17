@@ -332,16 +332,7 @@ func (sp *ShufflePool) getAnyFullBatch() *batch.Batch {
 		case <-sp.anyBatchWaiter:
 		default:
 		}
-		sp.batchLocks[bucket].Lock()
-		bat := sp.batchSets[bucket].PopFront()
-		if bat != nil {
-			bat.ShuffleIDX = bucket
-		}
-		sp.batchLocks[bucket].Unlock()
-		if bat == nil {
-			panic("shuffle pool ready queue is inconsistent")
-		}
-		sp.releaseReady(1)
+		bat := sp.popReadyBatch(bucket)
 		if len(sp.readyBuckets) > 0 {
 			sp.notifyAnyBatch()
 		}
@@ -349,6 +340,20 @@ func (sp *ShufflePool) getAnyFullBatch() *batch.Batch {
 	default:
 		return nil
 	}
+}
+
+func (sp *ShufflePool) popReadyBatch(bucket int32) *batch.Batch {
+	sp.batchLocks[bucket].Lock()
+	bat := sp.batchSets[bucket].PopFront()
+	if bat != nil {
+		bat.ShuffleIDX = bucket
+	}
+	sp.batchLocks[bucket].Unlock()
+	if bat == nil {
+		panic("shuffle pool ready queue is inconsistent")
+	}
+	sp.releaseReady(1)
+	return bat
 }
 
 func (sp *ShufflePool) getLastBatch(shuffleIDX int32) *batch.Batch {
@@ -361,13 +366,27 @@ func (sp *ShufflePool) getLastBatch(shuffleIDX int32) *batch.Batch {
 	return bat
 }
 
+// getLastPartialBatch claims only a non-ready tail. Full batches remain owned
+// by their ready queue tokens, including tokens already claimed by a consumer.
+func (sp *ShufflePool) getLastPartialBatch(shuffleIDX int32) *batch.Batch {
+	sp.batchLocks[shuffleIDX].Lock()
+	defer sp.batchLocks[shuffleIDX].Unlock()
+	bs := sp.batchSets[shuffleIDX]
+	if bs.Length() == bs.ReadyCount() {
+		return nil
+	}
+	bat := bs.Pop()
+	bat.ShuffleIDX = shuffleIDX
+	return bat
+}
+
 func (sp *ShufflePool) getAnyLastBatch() *batch.Batch {
 	for {
 		idx := sp.finalCursor.Add(1) - 1
 		if idx >= uint32(sp.bucketNum) {
 			return nil
 		}
-		if bat := sp.getLastBatch(int32(idx)); bat != nil {
+		if bat := sp.getLastPartialBatch(int32(idx)); bat != nil {
 			return bat
 		}
 	}

@@ -180,6 +180,69 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolFinalDrainDoesNotStealClaimedReadyBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		rows     int
+		tailRows int
+	}{
+		{name: "full batch only", rows: objectio.BlockMaxRows},
+		{name: "full batch and partial tail", rows: objectio.BlockMaxRows + 1, tailRows: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			sp := NewShufflePool(1, 2, true)
+			require.True(t, sp.hold())
+			require.True(t, sp.hold())
+
+			input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, tc.rows, proc.Mp())
+			done, err := writeBatchToBucketForTest(sp, input, proc, 0)
+			require.NoError(t, err)
+			require.True(t, done)
+			input.Clean(proc.Mp())
+			sp.stopWriting()
+			sp.stopWriting()
+
+			claimed := make(chan int32)
+			resume := make(chan struct{}, 1)
+			readyBatch := make(chan *batch.Batch, 1)
+			defer func() {
+				select {
+				case resume <- struct{}{}:
+				default:
+				}
+			}()
+			go func() {
+				bucket := <-sp.readyBuckets
+				claimed <- bucket
+				<-resume
+				readyBatch <- sp.popReadyBatch(bucket)
+			}()
+
+			require.Equal(t, int32(0), <-claimed)
+			tail := sp.getAnyLastBatch()
+			resume <- struct{}{}
+			full := <-readyBatch
+
+			if tc.tailRows == 0 {
+				require.Nil(t, tail)
+			} else {
+				require.NotNil(t, tail)
+				require.Equal(t, tc.tailRows, tail.RowCount())
+				sp.discardBatch(tail, proc.Mp())
+			}
+			require.Equal(t, objectio.BlockMaxRows, full.RowCount())
+			sp.discardBatch(full, proc.Mp())
+			require.Zero(t, sp.readyCount)
+
+			sp.release(proc.Mp(), false)
+			sp.release(proc.Mp(), false)
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestShufflePoolRecycleCacheUsesWorkerBound(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
