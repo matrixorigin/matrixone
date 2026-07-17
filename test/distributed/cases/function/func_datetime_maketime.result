@@ -31,8 +31,8 @@ oversized_positive_hour
 SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
 oversized_negative_hour
 -838:59:59
-SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS invalid_hour;
-invalid_hour
+SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;
+negative_hour
 -01:15:30
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 invalid_minute

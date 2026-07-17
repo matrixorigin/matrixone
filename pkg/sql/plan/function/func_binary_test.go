@@ -9596,6 +9596,38 @@ func TestMakeTimeSignedHourOverflow(t *testing.T) {
 	require.True(t, s, "MAKETIME signed hour overflow case failed: %s", info)
 }
 
+func TestMakeTimeFloatMinuteRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{12, 12, 12, 12, 12, 12, 12, 12},
+				[]bool{false, false, false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{math.NaN(), math.Inf(1), math.Inf(-1), math.MaxFloat64, -math.MaxFloat64, 15.8, 59.9, -0.9},
+				[]bool{false, false, false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				0,
+				0,
+				0,
+				0,
+				0,
+				types.TimeFromClock(false, 12, 15, 0, 0),
+				types.TimeFromClock(false, 12, 59, 0, 0),
+				types.TimeFromClock(false, 12, 0, 0, 0),
+			},
+			[]bool{true, true, true, true, true, false, false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME float minute range failed: %s", info)
+}
+
 func TestMakeTimeIntegerSecondRange(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expected := NewFunctionTestResult(types.T_time.ToType(), false,

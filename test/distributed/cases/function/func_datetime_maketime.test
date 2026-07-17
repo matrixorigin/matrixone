@@ -19,7 +19,7 @@ SELECT MAKETIME(839, 0, 0) AS oversized_positive_hour;
 SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
 
 # Negative hours are valid; other invalid values return NULL
-SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS invalid_hour;
+SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 SELECT MAKETIME(12, 15, 60) AS invalid_second;
 

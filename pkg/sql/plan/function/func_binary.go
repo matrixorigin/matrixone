@@ -7413,7 +7413,14 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		minuteParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
 		getMinuteValue = func(i uint64) (int64, bool) {
 			val, null := minuteParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
+			if null || math.IsNaN(val) || math.IsInf(val, 0) {
+				return 0, true
+			}
+			val = math.Trunc(val)
+			if val < 0 || val >= 60 {
+				return 0, true
+			}
+			return int64(val), false
 		}
 	default:
 		return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", minuteType)
