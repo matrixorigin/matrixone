@@ -583,7 +583,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -593,14 +593,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTableDef.Cols = append(newTableDef.Cols, col)
 		}
 
 		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
 			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{tag, int32(carrier)})
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+				newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[carrier])
 			}
 		}
 
@@ -707,7 +707,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		colTag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{colTag, int32(i)}
@@ -716,7 +716,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			internalRemapping.addColRef(globalRef)
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTableDef.Cols = append(newTableDef.Cols, col)
 		}
 
 		if len(node.BindingTags) > 1 {
@@ -729,7 +729,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{colTag, int32(carrier)})
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+				newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[carrier])
 			}
 		}
 
