@@ -75,6 +75,30 @@ type RPCMessage struct {
 	createAt       time.Time
 }
 
+// StreamTerminalToken proves that the server IO loop validated a particular
+// stream request. Its fields are intentionally private so application handlers
+// can pass, but cannot manufacture, terminal authority.
+type StreamTerminalToken struct {
+	owner    *clientSession
+	streamID uint64
+	sequence uint32
+}
+
+type streamTerminalTokenContextKey struct{}
+
+// StreamTerminalTokenFromContext returns the token attached to a validated
+// streaming request. Non-streaming requests do not carry one.
+func StreamTerminalTokenFromContext(ctx context.Context) (StreamTerminalToken, bool) {
+	token, ok := ctx.Value(streamTerminalTokenContextKey{}).(StreamTerminalToken)
+	return token, ok && token.owner != nil
+}
+
+// StreamFinisher is implemented by server-side sessions that can synchronously
+// flush a final response and atomically retire the stream sequence state.
+type StreamFinisher interface {
+	FinishStream(context.Context, StreamTerminalToken, Message) error
+}
+
 // InternalMessage returns true means the rpc message is the internal message in morpc.
 func (m RPCMessage) InternalMessage() bool {
 	return m.internal

@@ -115,6 +115,9 @@ func (r *CsvReader) Close() error {
 // makeBatchRows reads rows from CSV/JSONLINE into the batch.
 // Migrated from external.go makeBatchRows, with state from CsvReader.
 func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (fileFinished bool, err error) {
+	if bat == nil || bat.VectorCount() == 0 {
+		return false, moerr.NewInternalError(proc.Ctx, "external CSV reader requires at least one materialized column")
+	}
 	param := r.param
 	ctx := proc.Ctx
 	csvReader := r.plh.csvReader

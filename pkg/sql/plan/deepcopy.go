@@ -292,8 +292,11 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 	}
 
 	ret := &plan.IndexReaderParam{
-		OrderBy: DeepCopyOrderBySpecList(oldParam.OrderBy),
-		Limit:   DeepCopyExpr(oldParam.Limit),
+		OrderBy:        DeepCopyOrderBySpecList(oldParam.OrderBy),
+		Limit:          DeepCopyExpr(oldParam.Limit),
+		OrigFuncName:   oldParam.OrigFuncName,
+		PartitionCnCnt: oldParam.PartitionCnCnt,
+		PartitionCnIdx: oldParam.PartitionCnIdx,
 	}
 
 	if oldParam.DistRange != nil {

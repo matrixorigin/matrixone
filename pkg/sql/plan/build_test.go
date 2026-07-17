@@ -1165,6 +1165,22 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NATIONKEY = N_NATIONKEY + 1")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.JoinType == plan.Node_DEDUP {
+			found = true
+			require.Equal(t, plan.Node_IGNORE, node.OnDuplicateAction)
+		}
+	}
+	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
 	testCases := []struct {
 		name             string
@@ -4473,7 +4489,36 @@ func TestCountDistinctRowSubqueryRejected(t *testing.T) {
 func TestSubqueryInJoinOn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
+		"SELECT a.n_nationkey FROM nation a JOIN nation b ON b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z WHERE z.n_regionkey = a.n_regionkey)",
 		"SELECT n_name FROM nation JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+		"SELECT n_name FROM nation JOIN region ON n_regionkey = r_regionkey AND r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		foundFilter := false
+		foundJoinCondition := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				foundFilter = true
+			}
+			for _, expr := range node.OnList {
+				foundJoinCondition = true
+				require.False(t, hasSubquery(expr), "JOIN OnList contains an executable Expr_Sub: %s", sql)
+			}
+			for _, expr := range node.FilterList {
+				require.False(t, hasSubquery(expr), "FILTER contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundFilter, "subquery predicate was not lowered to a FILTER: %s", sql)
+		if strings.Contains(sql, "n_regionkey = r_regionkey AND") {
+			require.True(t, foundJoinCondition, "ordinary ON predicate was removed from the JOIN: %s", sql)
+		}
+	}
+
+	runTestShouldError(mock, t, []string{
+		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	})
 }

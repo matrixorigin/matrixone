@@ -47,19 +47,21 @@ func WithWait(wait func()) Option {
 }
 
 type service struct {
-	cfg                  Config
-	serviceID            string
-	tableGroups          *lockTableHolders
-	activeTxnHolder      activeTxnHolder
-	fsp                  *fixedSlicePool
-	deadlockDetector     *detector
-	events               *waiterEvents
-	clock                clock.Clock
-	stopper              *stopper.Stopper
-	stopOnce             sync.Once
-	bindChangeMu         sync.RWMutex
-	fetchWhoWaitingListC chan who
-	logger               *log.MOLogger
+	cfg                   Config
+	serviceID             string
+	tableGroups           *lockTableHolders
+	activeTxnHolder       activeTxnHolder
+	fsp                   *fixedSlicePool
+	deadlockDetector      *detector
+	events                *waiterEvents
+	unknownCommitResolver *unknownCommitResolver
+	clock                 clock.Clock
+	stopper               *stopper.Stopper
+	stopOnce              sync.Once
+	bindChangeMu          sync.RWMutex
+	fetchWhoWaitingListC  chan who
+	logger                *log.MOLogger
+	commitSequence        atomic.Uint64
 
 	allocatorVersionMu         sync.Mutex
 	lastAllocatorVersion       uint64
@@ -90,6 +92,19 @@ type service struct {
 }
 
 const maxSupersededAllocatorIDs = 64
+
+var _ CommitSequenceProvider = (*service)(nil)
+
+// NextCommitSequence returns a non-zero sequence scoped to this lockservice
+// incarnation. serviceID also includes the process creation time, so a restart
+// gets a distinct source identity at TN.
+func (s *service) NextCommitSequence() uint64 {
+	sequence := s.commitSequence.Add(1)
+	if sequence != 0 {
+		return sequence
+	}
+	return s.commitSequence.Add(1)
+}
 
 // NewLockService create a lock service instance
 func NewLockService(
@@ -126,6 +141,7 @@ func NewLockService(
 	s.clock = runtime.ServiceRuntime(cfg.ServiceID).Clock()
 
 	s.initRemote()
+	s.unknownCommitResolver = newUnknownCommitResolver(s)
 	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.cfg.RemoteLockTimeout.Duration, s.Unlock, s.logger)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
@@ -237,12 +253,91 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
+	// completion even when the caller's request context has ended.
+	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+}
+
+// unlockUnknownCommit is used only after Commit returned an unknown outcome.
+// The allocator fence has already made a later Commit impossible, so shutdown
+// may cancel a remote cleanup and leave orphan recovery to release its lock.
+func (s *service) unlockUnknownCommit(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Keep the source transaction registered until every owner-side unlock has
+	// acknowledged. In particular, a local proxy must not publish a replacement
+	// holder before its ReplaceTo mutation reaches the remote owner. Retaining
+	// the active transaction on a bounded-attempt failure makes orphan cleanup
+	// fail closed; the resolver retries it later.
+	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	if txn == nil {
+		return nil
+	}
+
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
+	defer logUnlockTxn(s.logger, txn)()
+	if err := txn.closeWithoutFreeWithContext(
+		ctx,
+		txnID,
+		commitTS,
+		s.getLockTable,
+		s.logger,
+		mutations...,
+	); err != nil {
+		return err
+	}
+
+	if s.activeTxnHolder.deleteActiveTxn(txnID) != txn {
+		return nil
+	}
+	if !s.isStatus(pb.Status_ServiceLockEnable) {
+		s.reduceCanMoveGroupTables(txn)
+		if s.isStatus(pb.Status_ServiceLockWaiting) && s.activeTxnHolder.empty() {
+			s.setStatus(pb.Status_ServiceUnLockSucc)
+		}
+	}
+	s.deadlockDetector.txnClosed(txnID)
+	reuse.Free(txn, nil)
+	return nil
+}
+
+func (s *service) unlockWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
@@ -264,13 +359,13 @@ func (s *service) Unlock(
 	}
 
 	defer logUnlockTxn(s.logger, txn)()
-	txn.close(txnID, commitTS, s.getLockTable, s.logger, mutations...)
+	err := txn.closeWithContext(ctx, txnID, commitTS, s.getLockTable, s.logger, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
-	return nil
+	return err
 }
 
 func (s *service) IsOrphanTxn(
@@ -1057,10 +1152,13 @@ type mapBasedTxnHolder struct {
 	serviceID string
 	logger    *log.MOLogger
 	fsp       *fixedSlicePool
-	validTxn  func(txn pb.WaitTxn) (bool, error)
-	valid     func(sid string) (bool, error)
-	notify    func([]pb.OrphanTxn) (pb.CannotCommitResponse, error)
-	mu        struct {
+	// validTxn returns an authoritative liveness result only when err is nil.
+	// Any error means the remote transaction state is unknown; transport
+	// reachability is not evidence that the transaction is inactive.
+	validTxn func(txn pb.WaitTxn) (bool, error)
+	valid    func(sid string) (bool, error)
+	notify   func([]pb.OrphanTxn) (pb.CannotCommitResponse, error)
+	mu       struct {
 		sync.RWMutex
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
@@ -1341,21 +1439,24 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 		return true
 	}
 
-	valid, err := h.validTxn(txn)
-	if err == nil {
-		if valid {
-			return true
-		}
-		// A remote CN active-txn miss does not prove the txn is safe to unlock.
-		// The commit response may be lost after TN has already committed it, so
-		// require the allocator to confirm the txn cannot still be committing.
-		canUnlock, _ := h.canUnlockRemoteTxn(txn)
-		return !canUnlock
-	}
-	logValidTxnFailed(h.logger, txn, err)
-	if isRetryError(err) {
+	active, err := h.validTxn(txn)
+	if err != nil {
+		// A failed observation cannot establish transaction liveness. In
+		// particular, BackendClosed also represents transient MORPC pool and
+		// creation states; fencing on it can abort a healthy remote transaction.
+		// Keep the holder for this cycle. The waiter checker retries periodically,
+		// while a genuinely dead service is still reclaimed by the independent
+		// remote-bind heartbeat timeout path.
+		logValidTxnFailed(h.logger, txn, err)
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("indeterminate").Inc()
 		return true
 	}
+	if active {
+		return true
+	}
+	// A remote CN active-txn miss does not prove the txn is safe to unlock.
+	// The commit response may be lost after TN has already committed it, so
+	// require the allocator to confirm the txn cannot still be committing.
 	canUnlock, _ := h.canUnlockRemoteTxn(txn)
 	return !canUnlock
 }

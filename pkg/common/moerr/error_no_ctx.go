@@ -438,6 +438,10 @@ func NewRemoteLockWaitTimeoutNoCtx() *Error {
 	return newError(Context(), ErrRemoteLockWaitTimeout)
 }
 
+func NewLockWaitTimeoutNoCtx() *Error {
+	return newError(Context(), ErrLockWaitTimeout)
+}
+
 func NewLockNeedUpgradeNoCtx() *Error {
 	return newError(Context(), ErrLockNeedUpgrade)
 }
