@@ -375,6 +375,82 @@ func TestPipelineSpoolAbortWaitsForAllCurrentBroadcastReceivers(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPipelineSpoolSendBatchCopyFailureRestoresCapacity(t *testing.T) {
+	tests := []struct {
+		name      string
+		newVector func(*testing.T, *mpool.MPool) *vector.Vector
+	}{
+		{
+			name: "flat vector",
+			newVector: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+				vec := vector.NewVec(types.T_varchar.ToType())
+				require.NoError(t, vector.AppendBytes(vec, make([]byte, 2<<20), false, mp))
+				return vec
+			},
+		},
+		{
+			name: "const vector",
+			newVector: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+				vec, err := vector.NewConstBytes(types.T_varchar.ToType(), make([]byte, 2<<20), 1, mp)
+				require.NoError(t, err)
+				return vec
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dstMP, err := mpool.NewMPool("p-spool-copy-failure", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mpool.DeleteMPool(dstMP)
+			})
+
+			srcMP := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() {
+				mpool.DeleteMPool(srcMP)
+			})
+			src := batch.NewWithSize(1)
+			src.Vecs[0] = test.newVector(t, srcMP)
+			src.SetRowCount(1)
+			t.Cleanup(func() {
+				src.Clean(srcMP)
+			})
+
+			sp := InitMyPipelineSpool(dstMP, 1)
+			t.Cleanup(func() {
+				sp.Abort(nil)
+			})
+
+			for range 3 {
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				done, err := sp.SendBatch(ctx, 0, src, nil)
+				cancel()
+				require.Error(t, err)
+				require.False(t, done)
+			}
+
+			require.Equal(t, cap(sp.freeShardPool), len(sp.freeShardPool))
+			require.Equal(t, cap(sp.freeShardPool), len(sp.cache.buffer.readyToUse))
+
+			small := newSpoolTestBatch(t, srcMP, 1)
+			t.Cleanup(func() {
+				small.Clean(srcMP)
+			})
+			done, err := sp.SendBatch(context.Background(), 0, small, nil)
+			require.NoError(t, err)
+			require.False(t, done)
+			got, info := sp.ReceiveBatch(0)
+			require.NoError(t, info)
+			require.Equal(t, 1, got.RowCount())
+			sp.ReleaseCurrent(0)
+
+			sp.Abort(nil)
+			require.Equal(t, int64(0), dstMP.CurrNB())
+		})
+	}
+}
+
 func newSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	t.Helper()
 	src := batch.NewWithSize(1)

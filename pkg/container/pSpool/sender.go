@@ -108,6 +108,7 @@ func (ps *PipelineSpool) SendBatch(
 
 	dst, useCache, cacheID, err := ps.cache.GetCopiedBatch(data)
 	if err != nil {
+		ps.freeShardPool <- messageIdx
 		return false, err
 	}
 	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
