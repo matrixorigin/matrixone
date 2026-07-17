@@ -202,6 +202,134 @@ func TestBuildTable_AlterView(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
+	sqlMode := "PIPES_AS_CONCAT"
+	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
+		Stmt:            "create view v_pipe as select a||b as c from t",
+		DefaultDatabase: "db",
+		SQLMode:         &sqlMode,
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.True(t, exprContainsFunc(projectExpr, "concat"))
+	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func TestBindViewUsesStoredSQLModeForANSIQuotes(t *testing.T) {
+	sqlMode := "ANSI_QUOTES"
+	builder, nodeID := buildViewForSQLModeTest(t, "v_ansi", ViewData{
+		Stmt:            `create view v_ansi as select "a" as c from t`,
+		DefaultDatabase: "db",
+		SQLMode:         &sqlMode,
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.NotNil(t, projectExpr.GetCol())
+	require.Equal(t, "a", projectExpr.GetCol().Name)
+}
+
+func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
+	builder, nodeID := buildViewForSQLModeTest(t, "v_legacy_pipe", ViewData{
+		Stmt:            "create view v_legacy_pipe as select a||b as c from t",
+		DefaultDatabase: "db",
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.True(t, exprContainsFunc(projectExpr, "concat"))
+	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	type arg struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+	viewJSON, err := json.Marshal(viewData)
+	require.NoError(t, err)
+
+	store := map[string]arg{
+		"db.t": {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			table: &plan.TableDef{
+				DbName:    "db",
+				Name:      "t",
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*ColDef{
+					{Name: "a", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: "t"}},
+					{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: "t"}},
+				},
+			},
+		},
+		"db." + viewName: {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: viewName},
+			table: &plan.TableDef{
+				DbName:    "db",
+				Name:      viewName,
+				TableType: catalog.SystemViewRel,
+				ViewSql:   &plan.ViewDef{View: string(viewJSON)},
+			},
+		},
+	}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			x := store[schemaName+"."+tableName]
+			return x.obj, x.table, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	tableName := &tree.TableName{}
+	tableName.SchemaName = "db"
+	tableName.ObjectName = tree.Identifier(viewName)
+	nodeID, err := builder.buildTable(tableName, bindCtx, -1, nil)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
+	require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
+	return builder, nodeID
+}
+
+func exprContainsFunc(expr *plan.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func.GetObjName() == name {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if exprContainsFunc(arg, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
