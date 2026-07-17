@@ -828,6 +828,7 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
+	var userVarIsBin bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -864,7 +865,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				}
 			}
 		} else {
-			err = ses.SetUserDefinedVar(name, value, sql)
+			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
 			if err != nil {
 				return err
 			}
@@ -875,8 +876,9 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 	for _, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
+		userVarIsBin = false
 
-		value, err = getExprValue(assign.Value, ses, execCtx)
+		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
 		if err != nil {
 			return err
 		}
@@ -1379,7 +1381,7 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
+	stmts, err := mysql.ParseWithSQLMode(execCtx.reqCtx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 	if err != nil {
 		return nil, err
 	}
@@ -2579,15 +2581,165 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
-	v, err := execCtx.ses.GetSessionSysVar("lower_case_table_names")
-	var lctn int64 = 1 // default
-	if err == nil {
-		switch vv := v.(type) {
-		case int64:
-			lctn = vv
+	return p.ParseWithSQLMode(
+		execCtx.reqCtx,
+		execCtx.input.getSql(),
+		parserLowerCaseTableNames(execCtx.ses),
+		sessionSQLModeForParser(execCtx.ses),
+	)
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	v, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return ""
+	}
+	mode, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return mysql.SessionSQLModeForParser(mode)
+}
+
+func parserLowerCaseTableNames(ses FeSession) int64 {
+	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return 1
+	}
+	lctn, ok := v.(int64)
+	if !ok {
+		return 1
+	}
+	return lctn
+}
+
+func isSessionSQLModeSet(stmt tree.Statement) bool {
+	setVar, ok := stmt.(*tree.SetVar)
+	if !ok {
+		return false
+	}
+	for _, assignment := range setVar.Assignments {
+		if assignment != nil && assignment.System && !assignment.Global && strings.EqualFold(assignment.Name, "sql_mode") {
+			return true
 		}
 	}
-	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
+	return false
+}
+
+func hasStatement(fragment string, parserSQLMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0, mysql.EofChar():
+			return false
+		case int(';'):
+			continue
+		default:
+			return true
+		}
+	}
+}
+
+func mayNeedSQLModeStaging(sql string) bool {
+	return strings.Contains(sql, ";") && strings.Contains(strings.ToLower(sql), "sql_mode")
+}
+
+func prepareSQLModeStagedExecution(
+	ctx context.Context,
+	ses FeSession,
+	p *mysql.MySQLParser,
+	sql string,
+) (first string, remaining string, staged bool, err error) {
+	lctn := parserLowerCaseTableNames(ses)
+	parserSQLMode := sessionSQLModeForParser(ses)
+	stmts, parseErr := p.ParseWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	if parseErr == nil {
+		stageAt := -1
+		for i, stmt := range stmts {
+			if isSessionSQLModeSet(stmt) {
+				stageAt = i
+				break
+			}
+		}
+		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
+		freeStatements(stmts)
+		if !shouldStage {
+			return "", "", false, nil
+		}
+	} else {
+		probe := sql
+		foundSQLModeSet := false
+		for hasStatement(probe, parserSQLMode) {
+			stmt, end, firstErr := p.ParseFirstWithSQLMode(ctx, probe, lctn, parserSQLMode)
+			if firstErr != nil {
+				return "", "", false, parseErr
+			}
+			foundSQLModeSet = isSessionSQLModeSet(stmt)
+			stmt.Free()
+			probe = probe[end:]
+			if foundSQLModeSet {
+				break
+			}
+		}
+		if !foundSQLModeSet || !hasStatement(probe, parserSQLMode) {
+			return "", "", false, parseErr
+		}
+	}
+
+	stmt, end, err := p.ParseFirstWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	if err != nil {
+		return "", "", false, err
+	}
+	stmt.Free()
+	return sql[:end], sql[end:], true, nil
+}
+
+func nextSQLModeStatementInput(
+	ctx context.Context,
+	ses FeSession,
+	p *mysql.MySQLParser,
+	input *UserInput,
+	sql string,
+) (*UserInput, string, error) {
+	stmt, end, err := p.ParseFirstWithSQLMode(
+		ctx,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sessionSQLModeForParser(ses),
+	)
+	if err != nil {
+		return nil, sql, err
+	}
+	stmt.Free()
+	return newSQLStatementInput(input, ses, sql[:end]), sql[end:], nil
+}
+
+func newSQLStatementInput(input *UserInput, ses FeSession, sql string) *UserInput {
+	statementInput := *input
+	statementInput.sql = sql
+	statementInput.hashedSql = ""
+	statementInput.sqlSourceType = nil
+	statementInput.genHash()
+	statementInput.genSqlSourceType(ses)
+	return &statementInput
+}
+
+func sqlForRecord(sql string) string {
+	parts := parsers.HandleSqlForRecord(sql)
+	if len(parts) == 0 {
+		return strings.TrimSpace(sql)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func freeStatements(stmts []tree.Statement) {
+	for _, stmt := range stmts {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}
 }
 
 func incTransactionCounter(tenant string, tenantId uint32) {
@@ -2978,6 +3130,11 @@ func executeStmtWithResponse(ses *Session,
 	if err != nil {
 		return err
 	}
+
+	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
+	// following statement (same proc for multi-statement COM_QUERY, or the next
+	// COM_QUERY via the session) reads the correct value.
+	recordLastAffectedRows(ses, execCtx)
 
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
@@ -3453,7 +3610,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SessionId:            ses.GetSessId(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
+	// Carry the previous statement's affected rows into this proc so the
+	// ROW_COUNT() builtin can read it.
+	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
 	// IsFrontend from opts.IsFrontend() (default false → background);
@@ -3465,6 +3626,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
+
+	// MySQL semantics: when a statement fails (parse / compile / execution error),
+	// ROW_COUNT() for the following statement must return -1. recordLastAffectedRows
+	// only runs after a statement succeeds, so cover every error path of the main
+	// COM_QUERY / COM_STMT_EXECUTE flow here. proc is the session's reused proc and
+	// is reseeded from the session on the next query, so the session value drives
+	// the next statement; the proc is updated too for completeness.
+	defer func() {
+		if retErr != nil {
+			markRowCountFailed(ses, proc)
+		}
+	}()
+
 	if ses.GetTenantInfo() != nil {
 		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
@@ -3486,32 +3660,65 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
-	execCtx.input = input
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 
-	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
-		ses.GetUserName(),
-		pu.StorageEngine,
-		proc, ses)
-
-	ParseDuration := time.Since(beginInstant)
-
-	if err != nil {
-		statsInfo.ParseStage.ParseDuration = ParseDuration
-		var err2 error
-		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
-		if err2 != nil {
-			return err2
+	executionInput := input
+	stagedSQLMode := false
+	stagedRemaining := ""
+	var err error
+	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
+		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
+			execCtx.reqCtx,
+			ses,
+			ses.GetMySQLParser(),
+			input.getSql(),
+		)
+		if stageErr != nil {
+			err = stageErr
+		} else if staged {
+			stagedSQLMode = true
+			stagedRemaining = remaining
+			executionInput = newSQLStatementInput(input, ses, first)
 		}
-		retErr = err
-		if _, ok := err.(*moerr.Error); !ok {
-			retErr = moerr.NewParseError(execCtx.reqCtx, err.Error())
-		}
-		logStatementStringStatus(execCtx.reqCtx, ses, input.getSql(), fail, retErr)
-		return retErr
 	}
 
-	singleStatement := len(cws) == 1
+	var cws []ComputationWrapper
+	if err == nil {
+		execCtx.input = executionInput
+		cws, err = GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+			ses.GetUserName(),
+			pu.StorageEngine,
+			proc, ses)
+	}
+
+	ParseDuration := time.Since(beginInstant)
+	recordParseError := func(errorInput *UserInput, parseErr error) error {
+		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
+		var recordErr error
+		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
+			execCtx.reqCtx,
+			ses,
+			proc,
+			beginInstant,
+			parsers.HandleSqlForRecord(errorInput.getSql()),
+			errorInput.getSqlSourceTypes(),
+			parseErr,
+		)
+		if recordErr != nil {
+			return recordErr
+		}
+		if _, ok := parseErr.(*moerr.Error); !ok {
+			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
+		}
+		logStatementStringStatus(execCtx.reqCtx, ses, errorInput.getSql(), fail, parseErr)
+		return parseErr
+	}
+
+	if err != nil {
+		return recordParseError(input, err)
+	}
+
+	singleStatement := len(cws) == 1 && !stagedSQLMode
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
 		return moerr.NewNotSupported(execCtx.reqCtx, "prepare multi statements")
 	}
@@ -3522,7 +3729,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := true
+	canCache := !stagedSQLMode
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -3536,8 +3743,25 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 	}()
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	stagedInputs := make([]*UserInput, 0, 1)
+	stagedSQLRecords := make([]string, 0, 1)
+	if stagedSQLMode {
+		stagedInputs = append(stagedInputs, executionInput)
+		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql()))
+	}
 
-	for i, cw := range cws {
+	for i := 0; i < len(cws); i++ {
+		cw := cws[i]
+		currentInput := input
+		currentSQLRecord := sqlRecord[i]
+		sqlType := input.getSqlSourceType(i)
+		hasMoreStatements := i < len(cws)-1
+		if stagedSQLMode {
+			currentInput = stagedInputs[i]
+			currentSQLRecord = stagedSQLRecords[i]
+			sqlType = currentInput.getSqlSourceType(0)
+			hasMoreStatements = hasStatement(stagedRemaining, sessionSQLModeForParser(ses))
+		}
 		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
 			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
 			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
@@ -3551,10 +3775,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.sentRows.Store(int64(0))
 		ses.writeCsvBytes.Store(int64(0))
 		resper.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
+		// ExecCtx is reused across statements in a multi-statement COM_QUERY;
+		// clear the previous statement's run result so a statement that does not
+		// set it (e.g. a status statement) does not inherit a stale AffectRows.
+		execCtx.runResult = nil
 		stmt := cw.GetAst()
-		sqlType := input.getSqlSourceType(i)
 		var err2 error
-		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
 			return err2
 		}
@@ -3604,21 +3831,60 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
-		execCtx.isLastStmt = i >= len(cws)-1
+		execCtx.isLastStmt = !hasMoreStatements
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
-		execCtx.sqlOfStmt = sqlRecord[i]
+		execCtx.sqlOfStmt = currentSQLRecord
 		execCtx.cw = cw
 		execCtx.proc = proc
 		execCtx.resper = resper
 		execCtx.ses = ses
-		execCtx.cws = cws
-		execCtx.input = input
+		if stagedSQLMode {
+			execCtx.cws = []ComputationWrapper{cw}
+		} else {
+			execCtx.cws = cws
+		}
+		execCtx.input = currentInput
 
 		err = executeStmtWithResponse(ses, execCtx)
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
+		}
+
+		if stagedSQLMode && hasMoreStatements {
+			// SET expressions may execute an internal query, which temporarily
+			// replaces the compiler context's ExecCtx. Restore this outer query
+			// before planning the next staged statement.
+			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			nextInput, remaining, nextErr := nextSQLModeStatementInput(
+				execCtx.reqCtx,
+				ses,
+				ses.GetMySQLParser(),
+				input,
+				stagedRemaining,
+			)
+			if nextErr != nil {
+				return recordParseError(newSQLStatementInput(input, ses, stagedRemaining), nextErr)
+			}
+			execCtx.input = nextInput
+			nextCWs, nextErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+				ses.GetUserName(),
+				pu.StorageEngine,
+				proc, ses)
+			if nextErr != nil {
+				return recordParseError(nextInput, nextErr)
+			}
+			if len(nextCWs) != 1 {
+				for _, nextCW := range nextCWs {
+					nextCW.Free()
+				}
+				return moerr.NewInternalError(execCtx.reqCtx, "staged sql_mode execution parsed an unexpected statement count")
+			}
+			cws = append(cws, nextCWs[0])
+			stagedInputs = append(stagedInputs, nextInput)
+			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql()))
+			stagedRemaining = remaining
 		}
 
 	} // end of for
@@ -3663,6 +3929,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
@@ -3700,11 +3967,13 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			ses.addSqlCount(1)
 			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
+				setRowCount(ses, ses.GetProc(), -1)
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
 			if err != errSidecarNotConfigured {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
 			}
@@ -3718,6 +3987,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			query, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, query)
 			if rewriteErr != nil {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
@@ -3726,6 +3996,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 			resp.isIssue3482 = input.isIssue3482Sql()
 			if resp.isIssue3482 {
@@ -3754,6 +4025,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_PING:
+		setRowCount(ses, ses.GetProc(), 0)
 		resp = NewGeneralOkResponse(COM_PING, ses.GetTxnHandler().GetServerStatus())
 
 		return resp, nil
@@ -3766,6 +4038,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
@@ -3778,9 +4051,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
+		savedRowCount := ses.GetLastAffectedRows()
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		}
 		return resp, nil
 
@@ -3792,11 +4068,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			if prepareStmt != nil {
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This parse failure never reaches doComQuery, so the error defer there
+			// does not run; set the state explicitly here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
 		prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -3806,6 +4087,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
 		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
 		}
@@ -3813,11 +4095,19 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		savedRowCount := ses.GetLastAffectedRows()
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
+			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_CLOSE packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -3827,19 +4117,32 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
+		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
+		restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		return resp, nil
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			// A malformed (too short) packet is a failed statement: reset
+			// ROW_COUNT() to -1 and return an error instead of panicking on the slice.
+			markRowCountFailed(ses, ses.GetProc())
+			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_RESET packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This early return never reaches doComQuery, so set the state here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -3851,17 +4154,21 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			setRowCount(ses, ses.GetProc(), 0)
 		}
 		return resp, nil
 
 	case COM_SET_OPTION:
 		err = handleSetOption(ses, execCtx, req.GetData().([]byte))
+		setRowCount(ses, ses.GetProc(), -1)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
+			return NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
+		markRowCountFailed(ses, ses.GetProc())
 		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil
