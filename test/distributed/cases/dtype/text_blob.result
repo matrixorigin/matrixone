@@ -187,7 +187,7 @@ count(b1)
 select max(b2),min(b3) from blob_01;
 max(b2)    min(b3)
 ä¸­æ    0001-01-01
-select b1||b2 from blob_01;
+select concat(b1,b2) from blob_01;
 concat(b1, b2)
 noä¸­æ
  hhhh@126.com
