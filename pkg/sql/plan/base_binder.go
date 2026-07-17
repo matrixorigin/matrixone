@@ -804,21 +804,22 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 	b.numericParamType = &planType
 	defer func() { b.numericParamType = nil }()
 
-	if binary, ok := astExpr.(*tree.BinaryExpr); ok {
-		return b.bindBinaryExprWithCurrentContext(binary, depth)
-	}
-	if unary, ok := astExpr.(*tree.UnaryExpr); ok {
-		return b.bindUnaryExprWithCurrentContext(unary, depth)
-	}
-	return b.impl.BindExpr(astExpr, depth, false)
+	return b.bindNumericExprWithCurrentContext(astExpr, depth)
 }
 
 func (b *baseBinder) bindNumericExprWithoutNewContext(astExpr tree.Expr, depth int32) (*Expr, error) {
+	return b.bindNumericExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth int32) (*Expr, error) {
 	if binary, ok := astExpr.(*tree.BinaryExpr); ok {
 		return b.bindBinaryExprWithCurrentContext(binary, depth)
 	}
 	if unary, ok := astExpr.(*tree.UnaryExpr); ok {
 		return b.bindUnaryExprWithCurrentContext(unary, depth)
+	}
+	if function, ok := astExpr.(*tree.FuncExpr); ok && numericAstFunctionName(function) == "mod" {
+		return b.bindFuncExprImplByAstExpr("mod", function.Exprs, depth)
 	}
 	return b.impl.BindExpr(astExpr, depth, false)
 }

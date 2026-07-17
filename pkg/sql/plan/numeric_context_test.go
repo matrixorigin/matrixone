@@ -77,6 +77,8 @@ func TestPreparedNumericContextParameterTypes(t *testing.T) {
 func TestNumericContextLeavesOrdinaryArithmeticOnOriginalPath(t *testing.T) {
 	tests := []string{
 		"select 1 + 2",
+		"select mod(2024, 4)",
+		"select mod(mod(2024, 100), 4)",
 		"select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - 1) > 10",
 	}
 	for _, sql := range tests {
@@ -89,6 +91,16 @@ func TestNumericContextLeavesOrdinaryArithmeticOnOriginalPath(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestNumericContextModWithoutParametersInPrepareMode(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), "select mod(2024, 4)", 1)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	require.Empty(t, collectPlanParamTypes(queryPlan))
 }
 
 func TestNumericContextDoesNotCrossFunctionBoundary(t *testing.T) {
@@ -161,8 +173,20 @@ func TestPreparedNumericContextTreatsBitColumnAsUnsignedBigint(t *testing.T) {
 			want: types.T_uint64,
 		},
 		{
+			name: "bit mod function",
+			sql:  "select mod(?, n_regionkey) from nation",
+			want: types.T_uint64,
+		},
+		{
 			name:      "bit with weak decimal",
 			sql:       "select (? + 0.5) + n_regionkey from nation",
+			want:      types.T_decimal128,
+			wantWidth: 21,
+			wantScale: 1,
+		},
+		{
+			name:      "bit mod function with weak decimal",
+			sql:       "select mod(? + 0.5, n_regionkey) from nation",
 			want:      types.T_decimal128,
 			wantWidth: 21,
 			wantScale: 1,
@@ -215,6 +239,11 @@ func TestPreparedNumericContextCoversUnaryAndModFunction(t *testing.T) {
 			name: "cast context reaches mod",
 			sql:  "select cast(mod(?, ?) as decimal(30, 0))",
 			want: types.T_decimal128,
+		},
+		{
+			name: "nested mod uses integer sibling context",
+			sql:  "select mod(mod(?, 100), 4)",
+			want: types.T_int64,
 		},
 		{
 			name: "context-free unary defaults to double",
