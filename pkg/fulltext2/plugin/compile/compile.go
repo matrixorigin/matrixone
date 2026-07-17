@@ -275,9 +275,27 @@ func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.I
 	return true, "SELECT 1", nil
 }
 
-// ValidateReindexParams — no reindex-time params.
-func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return old, nil
+// ValidateReindexParams — fulltext2 honors position_free on a rebuild (its only
+// reindex-time param): POSITION_FREE=TRUE sets it, =FALSE clears it (→ a positional
+// rebuild that re-derives positions from source), absence keeps the current setting.
+// Other reindex options are ignored. The REBUILD (buildFromSource) then reads the
+// merged algo_params. NOTE: changing position_free needs REBUILD (no MERGE) — a MERGE
+// cannot re-derive positions when turning position_free OFF.
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	pf, ok := alter.Params[catalog.IndexAlgoParamPositionFree]
+	if !ok {
+		return old, nil
+	}
+	merged := make(map[string]string, len(old)+1)
+	for k, v := range old {
+		merged[k] = v
+	}
+	if pf == "true" {
+		merged[catalog.IndexAlgoParamPositionFree] = "true"
+	} else {
+		delete(merged, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (param absent)
+	}
+	return merged, nil
 }
 
 // HandleDropIndex — no algorithm-specific cleanup beyond the generic hidden-table

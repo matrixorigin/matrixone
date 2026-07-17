@@ -517,6 +517,11 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	// position_free is emitted as an explicit true/false when specified (tri-state:
+	// absence ⇒ "keep current"), so a fulltext2 REINDEX can turn it on OR off.
+	if opt.PositionFreeSet {
+		m[catalog.IndexAlgoParamPositionFree] = strconv.FormatBool(opt.PositionFree)
+	}
 	// quantization is normalized to lowercase here (matching the CREATE INDEX
 	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
 	// identically; the per-backend VALUE check (which names a given algorithm

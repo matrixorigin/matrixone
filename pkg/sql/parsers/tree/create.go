@@ -2145,6 +2145,7 @@ type IndexOption struct {
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
 	PositionFree             bool // fulltext2: build a position-free (bag-of-words only) index
+	PositionFreeSet          bool // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
 	IncludeColumns           []*UnresolvedName
 }
 

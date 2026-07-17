@@ -8385,8 +8385,9 @@ index_option_list:
               opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
             } else if opt2.MaxIndexCapacity > 0 {
               opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
-            } else if opt2.PositionFree {
+            } else if opt2.PositionFreeSet {
               opt1.PositionFree = opt2.PositionFree
+              opt1.PositionFreeSet = true
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -8575,12 +8576,14 @@ index_option:
     {
 	io := tree.NewIndexOption()
 	io.PositionFree = true
+	io.PositionFreeSet = true
 	$$ = io
     }
 |   POSITION_FREE '=' FALSE
     {
 	io := tree.NewIndexOption()
 	io.PositionFree = false
+	io.PositionFreeSet = true
 	$$ = io
     }
 |    ASYNC

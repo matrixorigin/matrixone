@@ -927,6 +927,8 @@ type AlterOptionAlterReIndex struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	PositionFree             bool
+	PositionFreeSet          bool
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -960,6 +962,8 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.KmeansTrainPercent = option.KmeansTrainPercent
 	a.KmeansMaxIteration = option.KmeansMaxIteration
 	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.PositionFree = option.PositionFree
+	a.PositionFreeSet = option.PositionFreeSet
 	a.IncludeColumns = option.IncludeColumns
 	return a
 }
