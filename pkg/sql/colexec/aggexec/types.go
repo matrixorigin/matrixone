@@ -214,6 +214,9 @@ func makeSpecialAggExec(
 			return makeHllAdd(mp, id, params[0]), true, nil
 		case AggIdOfHllMerge:
 			return makeHllMerge(mp, id, params[0]), true, nil
+		case AggIdOfApproxPercentile:
+			exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
+			return exec, true, err
 		case AggIdOfJsonArrayAgg:
 			exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
 			return exec, true, err
@@ -300,6 +303,23 @@ func makeJsonObjectAgg(
 func makeMedian(
 	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
 	return newMedianExec(mp, aggID, isDistinct, param)
+}
+
+func makeApproxPercentile(
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argType:   param,
+		emptyNull: true,
+	}
+	switch param.Oid {
+	case types.T_decimal64, types.T_decimal128:
+		info.retType = MedianReturnType([]types.Type{param})
+	default:
+		info.retType = types.T_float64.ToType()
+	}
+	return newApproxPercentileExec(mp, info)
 }
 
 func makeWindowExec(

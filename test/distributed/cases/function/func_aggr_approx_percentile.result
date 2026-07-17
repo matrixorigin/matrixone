@@ -1,0 +1,32 @@
+select approx_percentile(null, 0.5);
+➤ approx_percentile(null, 0.5)[8,54,0]  𝄀
+null
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values (1, 1), (2, 3), (3, 5), (4, 7), (5, 9);
+select approx_percentile(b, 0.5) from t1;
+➤ approx_percentile(b, 0.5)[8,54,0]  𝄀
+5.0
+select approx_percentile(b, 0.0) from t1;
+➤ approx_percentile(b, 0.0)[8,54,0]  𝄀
+1.0
+select approx_percentile(b, 1.0) from t1;
+➤ approx_percentile(b, 1.0)[8,54,0]  𝄀
+9.0
+insert into t1 values (1, 2), (1, 4), (2, 6), (2, 8);
+select a, approx_percentile(b, 0.5) from t1 group by a order by a;
+➤ a[4,32,0]  ¦  approx_percentile(b, 0.5)[8,54,0]  𝄀
+1  ¦  2.0  𝄀
+2  ¦  6.0  𝄀
+3  ¦  5.0  𝄀
+4  ¦  7.0  𝄀
+5  ¦  9.0
+drop table if exists t1;
+create table t1 (a int, b float);
+insert into t1 values (1, 1.1), (2, 2.2), (3, 3.3);
+select approx_percentile(b, 0.5) from t1;
+➤ approx_percentile(b, 0.5)[8,54,0]  𝄀
+2.2
+select approx_percentile(b, 0.95) from t1;
+➤ approx_percentile(b, 0.95)[8,54,0]  𝄀
+3.19
