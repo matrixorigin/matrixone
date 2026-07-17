@@ -537,7 +537,22 @@ func (m *WandModel) searchInto(h *topK, weights map[string]float64, gN int64, gA
 		if len(cursors) == 0 {
 			break
 		}
-		sort.Slice(cursors, func(i, j int) bool { return cursors[i].curDoc() < cursors[j].curDoc() })
+		// Keep cursors sorted by curDoc. Insertion sort, NOT sort.Slice: the
+		// cursors are nearly sorted between iterations (only the skipped cursor
+		// moved), so this is O(len) here; more importantly sort.Slice boxes the
+		// slice into an interface{} (runtime.convTslice) and heap-allocates the
+		// less closure every call — in this hot per-pivot loop that alloc churn
+		// (and the reflect-based Swapper) dominated the entire query CPU.
+		for i := 1; i < len(cursors); i++ {
+			ci := cursors[i]
+			di := ci.curDoc()
+			j := i - 1
+			for j >= 0 && cursors[j].curDoc() > di {
+				cursors[j+1] = cursors[j]
+				j--
+			}
+			cursors[j+1] = ci
+		}
 
 		theta := -1.0
 		if h.full() {
