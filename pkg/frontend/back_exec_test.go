@@ -15,11 +15,15 @@
 package frontend
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -60,4 +64,45 @@ func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 
 	require.Nil(t, proc.GetSession())
 	require.Equal(t, uuid.Nil, proc.Base.SessionInfo.SessionId)
+}
+
+func TestInstallBackExecStatsInfoPreservesRootAndClaimsOnce(t *testing.T) {
+	root := resource.NewRoot(resource.ConnInternal)
+	parent := resource.ContextWithRoot(context.Background(), root)
+	start := time.Unix(123, 456)
+	duration := 17 * time.Millisecond
+
+	firstCtx, firstStats := installBackExecStatsInfo(parent, start, duration)
+	secondCtx, secondStats := installBackExecStatsInfo(parent, start, duration)
+
+	if firstStats == secondStats {
+		t.Fatal("successive substatements must use distinct StatsInfo values")
+	}
+	if resource.RootFromContext(firstCtx) != root || resource.RootFromContext(secondCtx) != root {
+		t.Fatal("substatement context must preserve the parent resource root")
+	}
+	if statistic.StatsInfoFromContext(firstCtx) != firstStats {
+		t.Fatal("first substatement context does not contain its StatsInfo")
+	}
+	if statistic.StatsInfoFromContext(secondCtx) != secondStats {
+		t.Fatal("second substatement context does not contain its StatsInfo")
+	}
+	if firstStats.ParseStage.ParseStartTime != start || firstStats.ParseStage.ParseDuration != duration {
+		t.Fatal("first StatsInfo parse timing was not installed")
+	}
+	if secondStats.ParseStage.ParseStartTime != start || secondStats.ParseStage.ParseDuration != duration {
+		t.Fatal("second StatsInfo parse timing was not installed")
+	}
+	if _, ok := firstStats.ClaimRootPhaseResource(); !ok {
+		t.Fatal("first StatsInfo claim should succeed")
+	}
+	if _, ok := firstStats.ClaimRootPhaseResource(); ok {
+		t.Fatal("first StatsInfo claim should not succeed twice")
+	}
+	if _, ok := secondStats.ClaimRootPhaseResource(); !ok {
+		t.Fatal("second StatsInfo claim should succeed")
+	}
+	if _, ok := secondStats.ClaimRootPhaseResource(); ok {
+		t.Fatal("second StatsInfo claim should not succeed twice")
+	}
 }

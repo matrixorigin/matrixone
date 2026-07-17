@@ -107,6 +107,17 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 
 var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
 
+func installBackExecStatsInfo(
+	ctx context.Context,
+	parseStart time.Time,
+	parseDuration time.Duration,
+) (context.Context, *statistic.StatsInfo) {
+	statsInfo := statistic.NewStatsInfo()
+	statsInfo.ParseStage.ParseStartTime = parseStart
+	statsInfo.ParseStage.ParseDuration = parseDuration
+	return statistic.ContextWithStatsInfo(ctx, statsInfo), statsInfo
+}
+
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	return back.exec(ctx, sql, "", false)
 }
@@ -425,12 +436,13 @@ func doComQueryInBack(
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+	statsParentCtx := execCtx.reqCtx
 
-	// Instantiate StatsInfo to track SQL resource statistics
-	//statsInfo := new(statistic.StatsInfo)
-	statsInfo := statistic.NewStatsInfo()
-	statsInfo.ParseStage.ParseStartTime = beginInstant
-	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
+	// Instantiate StatsInfo to track SQL resource statistics. Keep this
+	// parsing instance for the parse-error path; successful substatements get
+	// their own instances below so their phase accounting is not reused.
+	var parseStatsInfo *statistic.StatsInfo
+	execCtx.reqCtx, parseStatsInfo = installBackExecStatsInfo(statsParentCtx, beginInstant, 0)
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
@@ -446,7 +458,7 @@ func doComQueryInBack(
 	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
-		statsInfo.ParseStage.ParseDuration = ParseDuration
+		parseStatsInfo.ParseStage.ParseDuration = ParseDuration
 
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -493,10 +505,15 @@ func doComQueryInBack(
 			}
 		}
 
-		statsInfo.Reset()
-		//average parse duration
-		statsInfo.ParseStage.ParseStartTime = beginInstant
-		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+		// Each successfully parsed substatement gets an independent StatsInfo.
+		// ContextWithStatsInfo preserves the parent context, including its
+		// resource.Root, while allowing compile and execution to claim this
+		// statement's phase resource exactly once.
+		execCtx.reqCtx, _ = installBackExecStatsInfo(
+			statsParentCtx,
+			beginInstant,
+			time.Duration(ParseDuration.Nanoseconds()/int64(len(cws))),
+		)
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
 
