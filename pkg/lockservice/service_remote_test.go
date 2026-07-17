@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -460,6 +462,154 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 		e := hold.mu.dequeue.PopFront()
 		assert.Equal(t, "s1", e.Value.id)
 		assert.True(t, e.Value.time.After(st))
+	})
+}
+
+func TestMapBasedTxnHolderConcurrentGetAndDelete(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+		defer hold.close()
+
+		const workers = 100
+		start := make(chan struct{})
+		results := make(chan *activeTxn, workers)
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- hold.getActiveTxn([]byte("same-txn"), true, "")
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		var first *activeTxn
+		for txn := range results {
+			if first == nil {
+				first = txn
+			}
+			require.Same(t, first, txn)
+		}
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+
+		created := make(chan []byte, workers)
+		start = make(chan struct{})
+		for i := range workers {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				txnID := []byte(fmt.Sprintf("txn-%d", i))
+				if hold.getActiveTxn(txnID, true, "") != nil {
+					created <- txnID
+				}
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		close(created)
+		txnIDs := make([][]byte, 0, workers)
+		for txnID := range created {
+			txnIDs = append(txnIDs, txnID)
+		}
+		require.Len(t, txnIDs, workers)
+		require.Equal(t, int64(workers+1), hold.activeTxnCount.Load())
+
+		deleted := make(chan *activeTxn, workers)
+		start = make(chan struct{})
+		for _, txnID := range txnIDs {
+			wg.Add(1)
+			go func(txnID []byte) {
+				defer wg.Done()
+				<-start
+				deleted <- hold.deleteActiveTxn(txnID)
+			}(txnID)
+		}
+		close(start)
+		wg.Wait()
+		close(deleted)
+		for txn := range deleted {
+			require.NotNil(t, txn)
+			reuse.Free(txn, nil)
+		}
+		for _, txnID := range txnIDs {
+			require.Nil(t, hold.deleteActiveTxn(txnID))
+		}
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+	})
+}
+
+func TestMapBasedTxnHolderVisitsAndClosesAllShards(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+
+		idsByShard := make(map[*activeTxnShard][]byte, activeTxnHolderShards)
+		for i := 0; len(idsByShard) < activeTxnHolderShards; i++ {
+			txnID := []byte(fmt.Sprintf("sharded-txn-%d", i))
+			shard := hold.getActiveTxnShard(string(txnID))
+			if _, ok := idsByShard[shard]; !ok {
+				idsByShard[shard] = txnID
+			}
+		}
+
+		expected := make(map[string]struct{}, activeTxnHolderShards)
+		for _, txnID := range idsByShard {
+			expected[string(txnID)] = struct{}{}
+			require.NotNil(t, hold.getActiveTxn(txnID, true, ""))
+		}
+		require.False(t, hold.empty())
+		require.Equal(t, int64(activeTxnHolderShards), hold.activeTxnCount.Load())
+
+		actual := make(map[string]struct{}, activeTxnHolderShards)
+		for _, txnID := range hold.getAllTxnID() {
+			actual[string(txnID)] = struct{}{}
+		}
+		require.Equal(t, expected, actual)
+
+		hold.close()
+		require.True(t, hold.empty())
+		require.Empty(t, hold.getAllTxnID())
+		for _, txnID := range idsByShard {
+			require.False(t, hold.hasActiveTxn(txnID))
+		}
+	})
+}
+
+func BenchmarkMapBasedTxnHolderConcurrent(b *testing.B) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	b.Cleanup(hold.close)
+
+	var next atomic.Uint64
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			txnID := []byte(fmt.Sprintf("txn-%d", next.Add(1)))
+			hold.getActiveTxn(txnID, true, "")
+			reuse.Free(hold.deleteActiveTxn(txnID), nil)
+		}
 	})
 }
 

@@ -370,8 +370,10 @@ type messageSenderOnClient struct {
 	// or
 	// 2. we have never sent a message in succeed.
 	safeToClose bool
-	// alreadyClose should be true once we get a stream closed signal.
-	alreadyClose       bool
+	// receiveClosed records a terminal signal from the receive channel. It
+	// poisons backend reuse, but does not release the locally owned morpc Stream;
+	// close must still call Stream.Close.
+	receiveClosed      bool
 	reuseEligible      bool
 	terminalNegotiated bool
 	expectedEnd        pipeline.Method
@@ -384,8 +386,7 @@ type messageSenderOnClient struct {
 	// still poisons reuse.
 	allowCleanupCancellation bool
 
-	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs
-	// (including when close() returns early because alreadyClose is true, so the gauge still decrements).
+	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs.
 	gaugeDecOnce sync.Once
 }
 
@@ -435,7 +436,7 @@ func newMessageSenderOnClient(
 		ctxCancel:          streamCtxCancel,
 		useInternalTimeout: useInternalTimeout,
 		safeToClose:        true,
-		alreadyClose:       false,
+		receiveClosed:      false,
 		mp:                 mp,
 		anal:               analyzeModule,
 		streamSender:       streamSender,
@@ -527,18 +528,18 @@ func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
 	sender.stateMu.Lock()
 	defer sender.stateMu.Unlock()
 	sender.safeToClose = false
-	sender.alreadyClose = false
+	sender.receiveClosed = false
 	sender.reuseEligible = false
 	sender.terminalNegotiated = false
 	sender.allowCleanupCancellation = false
 	sender.expectedEnd = method
 }
 
-func (sender *messageSenderOnClient) markStreamClosed() {
+func (sender *messageSenderOnClient) markReceiveClosed() {
 	sender.stateMu.Lock()
 	defer sender.stateMu.Unlock()
 	sender.safeToClose = true
-	sender.alreadyClose = true
+	sender.receiveClosed = true
 	sender.reuseEligible = false
 	sender.terminalNegotiated = false
 }
@@ -569,7 +570,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
-			sender.markStreamClosed()
+			sender.markReceiveClosed()
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -682,9 +683,9 @@ func forwardRemoteBatchWithContext(
 // no matter how we stop the remote-run, we should get the final remote cost here.
 func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	sender.stateMu.Lock()
-	alreadyClose, safeToClose := sender.alreadyClose, sender.safeToClose
+	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
 	sender.stateMu.Unlock()
-	if alreadyClose || safeToClose {
+	if receiveClosed || safeToClose {
 		return
 	}
 
@@ -704,7 +705,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		select {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
-				sender.markStreamClosed()
+				sender.markReceiveClosed()
 				return
 			}
 
@@ -759,7 +760,7 @@ func (sender *messageSenderOnClient) finishStreamForReuse() bool {
 	select {
 	case value, ok := <-sender.receiveCh:
 		if !ok || value == nil {
-			sender.markStreamClosed()
+			sender.markReceiveClosed()
 			return false
 		}
 		message, ok := value.(*pipeline.Message)
@@ -791,15 +792,14 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 
 func (sender *messageSenderOnClient) close() {
 	sender.closeOnce.Do(func() {
-		// Ensure Gauge is decremented exactly once when this sender is torn down, including when
-		// alreadyClose is true (stream already closed by remote); otherwise we'd leak the gauge.
+		// Ensure Gauge is decremented exactly once when this sender is torn down.
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
 		sender.waitingTheStopResponse()
 		sender.stateMu.Lock()
-		alreadyClose, reuseEligible := sender.alreadyClose, sender.reuseEligible
+		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()
-		if !alreadyClose && reuseEligible && sender.finishStreamForReuse() {
+		if !receiveClosed && reuseEligible && sender.finishStreamForReuse() {
 			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
 			if sender.ctxCancel != nil {
 				sender.ctxCancel()
@@ -814,14 +814,9 @@ func (sender *messageSenderOnClient) close() {
 		} else {
 			v2.PipelineStreamTeardownCounter.WithLabelValues("client_legacy_or_poisoned_close").Inc()
 		}
-		sender.stateMu.Lock()
-		alreadyClose = sender.alreadyClose
-		sender.stateMu.Unlock()
 		if sender.ctxCancel != nil {
 			sender.ctxCancel()
 		}
-		if !alreadyClose {
-			_ = sender.streamSender.Close(true)
-		}
+		_ = sender.streamSender.Close(true)
 	})
 }

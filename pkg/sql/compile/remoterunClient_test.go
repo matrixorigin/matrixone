@@ -250,6 +250,63 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 		sender.close()
 	})
 
+	for _, tt := range []struct {
+		name         string
+		closeChannel bool
+	}{
+		{name: "closed receive channel releases stream ownership", closeChannel: true},
+		{name: "nil receive message releases stream ownership"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			responses := make(chan morpc.Message, 1)
+			if tt.closeChannel {
+				close(responses)
+			} else {
+				responses <- nil
+			}
+			stream.EXPECT().Close(true).Return(nil).Times(1)
+			sender := &messageSenderOnClient{
+				ctx:           context.Background(),
+				streamSender:  stream,
+				receiveCh:     responses,
+				reuseEligible: true,
+			}
+
+			message, err := sender.receiveMessage()
+			require.Nil(t, message)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+			require.True(t, sender.receiveClosed)
+			require.False(t, sender.reuseEligible)
+
+			sender.close()
+			sender.close()
+		})
+	}
+
+	t.Run("peer close while waiting for FIN ACK poisons backend", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		stream := mock_morpc.NewMockStream(ctrl)
+		responses := make(chan morpc.Message)
+		close(responses)
+		stream.EXPECT().ID().Return(uint64(13))
+		stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+		stream.EXPECT().Close(true).Return(nil)
+		sender := &messageSenderOnClient{
+			ctx:           context.Background(),
+			streamSender:  stream,
+			receiveCh:     responses,
+			safeToClose:   true,
+			reuseEligible: true,
+		}
+
+		sender.close()
+		require.True(t, sender.receiveClosed)
+		require.False(t, sender.reuseEligible)
+	})
+
 	t.Run("malformed FIN ACK poisons backend", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		stream := mock_morpc.NewMockStream(ctrl)
