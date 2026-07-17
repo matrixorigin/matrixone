@@ -249,9 +249,6 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		ginputSize := NewStatisticValue(InputSize, "byte")
 		goutputSize := NewStatisticValue(OutputSize, "byte")
 
-		// memory
-		gMemorySize := NewStatisticValue(MemorySize, "byte")
-
 		//io
 		gDiskIO := NewStatisticValue(DiskIO, "byte")
 		gS3IOByte := NewStatisticValue(ScanBytes, "byte")
@@ -304,12 +301,6 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 				}
 			}
 
-			for _, memoryValue := range node.Statistics.Memory {
-				if memoryValue.Name == MemorySize {
-					gMemorySize.Value += memoryValue.Value
-				}
-			}
-
 			for _, ioValue := range node.Statistics.IO {
 				switch ioValue.Name {
 				case DiskIO:
@@ -357,7 +348,6 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 
 		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
-		mems := []StatisticValue{*gMemorySize}
 		io := []StatisticValue{
 			*gDiskIO,
 			*gS3IOByte,
@@ -372,7 +362,6 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 
 		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)
 		graphData.Global.Statistics.Throughput = append(graphData.Global.Statistics.Throughput, mbps...)
-		graphData.Global.Statistics.Memory = append(graphData.Global.Statistics.Memory, mems...)
 		graphData.Global.Statistics.IO = append(graphData.Global.Statistics.IO, io...)
 		graphData.Global.Statistics.Network = append(graphData.Global.Statistics.Network, nw...)
 

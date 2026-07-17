@@ -72,10 +72,11 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 		if summary := phy.Resource; summary != nil {
 			waitNS, waitQuality := summary.Usage.TotalWaitNS()
 			quality := summary.Quality | waitQuality
-			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, PeakMemory:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
+			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%dB, SumDomainPeakMemoryBound:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
 				summary.Usage.ExclusiveActiveNS,
 				waitNS,
 				summary.Memory.MaxDomainPeakLiveBytes,
+				summary.Memory.SumDomainPeakLiveBytesBound,
 				summary.Usage.SpillBytes,
 				summary.Usage.S3ReadBytes,
 				summary.Usage.S3WriteBytes,
@@ -83,8 +84,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				quality,
 			))
 		} else {
-			buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB, SpillSize:%dB, DiskI/O:%dB, NetworkI/O:%dB, RetryTime:%v",
-				gblStats.MemorySize,
+			buffer.WriteString(fmt.Sprintf("\tSpillSize:%dB, DiskI/O:%dB, NetworkI/O:%dB, RetryTime:%v",
 				gblStats.SpillSize,
 				gblStats.DiskIOSize,
 				gblStats.NetWorkSize,
@@ -191,8 +191,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 					gblStats.S3DeleteMultiRequest,
 				))
 
-				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
-					gblStats.MemorySize,
+				buffer.WriteString(fmt.Sprintf("\t\t- SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
 					gblStats.SpillSize,
 					gblStats.DiskIOSize,
 					gblStats.NetWorkSize,
@@ -370,7 +369,6 @@ func trimLastNewline(buf *bytes.Buffer) {
 type GblStats struct {
 	ScopePrepareTimeConsumed int64
 	OperatorTimeConsumed     int64
-	MemorySize               int64
 	SpillSize                int64
 	NetWorkSize              int64
 	DiskIOSize               int64
@@ -408,7 +406,6 @@ func handlePhyOperator(op *PhyOperator, stats *GblStats) {
 	// Accumulate stats from the current operator
 	if op.OpStats != nil && op.NodeIdx >= 0 {
 		stats.OperatorTimeConsumed += op.OpStats.TimeConsumed
-		stats.MemorySize += op.OpStats.MemorySize
 		stats.SpillSize += op.OpStats.SpillSize
 		stats.NetWorkSize += op.OpStats.NetworkIO
 		stats.DiskIOSize += op.OpStats.DiskIO

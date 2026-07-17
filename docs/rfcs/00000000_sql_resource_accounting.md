@@ -1088,10 +1088,12 @@ do not aggregate each other:
 
 - final statement `exclusive_active_ns` and peak memory come only from the sealed
   `ResourceRoot`;
-- operator and plan-node diagnostics remain in `AnalyzeInfo` and cannot be
-  summed to reconstruct statement memory or active time;
+- operator and plan-node row, I/O, spill, active, and wait diagnostics remain in
+  `AnalyzeInfo`; the old mixed operator `MemorySize` is neither aggregated nor
+  rendered until a producer can supply a separately named exact fact;
 - `EXPLAIN ANALYZE` overview reads the immutable pre-response snapshot after all
-  Executions seal; node rows show final-attempt operator diagnostics;
+  Executions seal and reports `MaxDomainPeakMemory` plus the explicitly named
+  `SumDomainPeakMemoryBound`; node rows show final-attempt operator diagnostics;
 - `mo_explain_phy` and physical-plan display stop contributing to statement
   accounting;
 - `system.sql_statement_hotspot.memorysize` retains its SQL shape but is

@@ -403,6 +403,9 @@ func TestMarshalNodeImpl_GetStatistics_ReadSize(t *testing.T) {
 
 			m := MarshalNodeImpl{node: node}
 			statistics := m.GetStatistics(ctx, options)
+			if len(statistics.Memory) != 0 {
+				t.Fatalf("legacy operator memory must not be rendered in logical JSON explain: %+v", statistics.Memory)
+			}
 
 			// Convert to JSON to verify structure
 			jsonData, err := json.Marshal(statistics)

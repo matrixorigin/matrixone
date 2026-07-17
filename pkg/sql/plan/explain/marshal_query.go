@@ -789,14 +789,6 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			},
 		}
 
-		mems := []models.StatisticValue{
-			{
-				Name:  MemorySize,
-				Value: analyzeInfo.MemorySize,
-				Unit:  Statistic_Unit_byte, //"byte",
-			},
-		}
-
 		io := []models.StatisticValue{
 			{
 				Name:  DiskIO,
@@ -907,7 +899,6 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 
 		statistics.Time = append(statistics.Time, times...)
 		statistics.Throughput = append(statistics.Throughput, mbps...)
-		statistics.Memory = append(statistics.Memory, mems...)
 		statistics.IO = append(statistics.IO, io...)
 		statistics.Network = append(statistics.Network, nw...)
 	}

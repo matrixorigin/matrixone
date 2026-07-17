@@ -493,21 +493,24 @@ func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 }
 
 type OperatorStats struct {
-	OperatorName     string                        `json:"-"`
-	CallNum          int                           `json:"CallCount,omitempty"`
-	TimeConsumed     int64                         `json:"TimeConsumed,omitempty"`
-	WaitTimeConsumed int64                         `json:"WaitTimeConsumed,omitempty"`
-	MemorySize       int64                         `json:"MemorySize,omitempty"`
-	SpillSize        int64                         `json:"SpillSize,omitempty"`
-	SpillRows        int64                         `json:"SpillRows,omitempty"`
-	InputRows        int64                         `json:"InputRows,omitempty"`
-	InputSize        int64                         `json:"InputSize,omitempty"`
-	OutputRows       int64                         `json:"OutputRows,omitempty"`
-	OutputSize       int64                         `json:"OutputSize,omitempty"`
-	NetworkIO        int64                         `json:"NetworkIO,omitempty"`
-	DiskIO           int64                         `json:"DiskIO,omitempty"`
-	ResourceQuality  resource.QualityFlags         `json:"-"`
-	ResourceWaitNS   [resource.WaitKindCount]int64 `json:"-"`
+	OperatorName     string `json:"-"`
+	CallNum          int    `json:"CallCount,omitempty"`
+	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
+	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
+	// MemorySize remains an internal producer-local observation. Exact memory
+	// accounting is owned by the statement resource summary and must not be
+	// serialized as operator explain data.
+	MemorySize      int64                         `json:"-"`
+	SpillSize       int64                         `json:"SpillSize,omitempty"`
+	SpillRows       int64                         `json:"SpillRows,omitempty"`
+	InputRows       int64                         `json:"InputRows,omitempty"`
+	InputSize       int64                         `json:"InputSize,omitempty"`
+	OutputRows      int64                         `json:"OutputRows,omitempty"`
+	OutputSize      int64                         `json:"OutputSize,omitempty"`
+	NetworkIO       int64                         `json:"NetworkIO,omitempty"`
+	DiskIO          int64                         `json:"DiskIO,omitempty"`
+	ResourceQuality resource.QualityFlags         `json:"-"`
+	ResourceWaitNS  [resource.WaitKindCount]int64 `json:"-"`
 
 	InputBlocks  int64 `json:"-"`
 	ScanBytes    int64 `json:"-"`
@@ -644,7 +647,6 @@ func (ps *OperatorStats) String() string {
 		"InSize:%dbytes "+
 		"InBlock:%d "+
 		"OutSize:%dbytes "+
-		"MemSize:%dbytes "+
 		"SpillSize:%dbytes "+
 		"SpillRows:%d "+
 		"ScanBytes:%dbytes "+
@@ -658,7 +660,6 @@ func (ps *OperatorStats) String() string {
 		ps.InputSize,
 		ps.InputBlocks,
 		ps.OutputSize,
-		ps.MemorySize,
 		ps.SpillSize,
 		ps.SpillRows,
 		ps.ScanBytes,
@@ -841,5 +842,5 @@ func (ps *OperatorStats) String() string {
 	}
 
 	sb.WriteString(metricsStr)
-	return sb.String()
+	return strings.TrimRight(sb.String(), " ")
 }

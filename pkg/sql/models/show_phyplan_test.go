@@ -15,8 +15,10 @@
 package models
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -230,5 +232,62 @@ func TestExplainPhyPlan(t *testing.T) {
 			got := ExplainPhyPlan(tt.args.plan, tt.args.stats, tt.args.option)
 			t.Logf("%s", got)
 		})
+	}
+}
+
+func TestExplainPhyPlanResourceOverviewUsesExactMemorySummary(t *testing.T) {
+	phy := NewPhyPlan()
+	phy.LocalScope = []PhyScope{{
+		RootOperator: &PhyOperator{OpName: "scan", NodeIdx: 0},
+	}}
+	phy.Resource = &resource.StatementResourceSummary{
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 11,
+			WaitNS:            [resource.WaitKindCount]uint64{resource.WaitOther: 13},
+			SpillBytes:        17,
+		},
+		Memory: resource.MemoryTotals{
+			MaxDomainPeakLiveBytes:      22,
+			SumDomainPeakLiveBytesBound: 33,
+		},
+		AttemptCount: 1,
+		Quality:      resource.QualityPartial,
+	}
+
+	got := ExplainPhyPlan(phy, nil, AnalyzeOption)
+	if strings.Count(got, "MaxDomainPeakMemory:") != 1 || strings.Count(got, "SumDomainPeakMemoryBound:") != 1 {
+		t.Fatalf("exact memory should appear once in overview: %s", got)
+	}
+	for _, token := range []string{
+		"ActiveTime:11ns",
+		"WaitTime:13ns",
+		"MaxDomainPeakMemory:22B",
+		"SumDomainPeakMemoryBound:33B",
+		"Quality:partial",
+	} {
+		if !strings.Contains(got, token) {
+			t.Fatalf("overview missing %q: %s", token, got)
+		}
+	}
+}
+
+func TestExplainPhyPlanWithoutResourceOmitsMemory(t *testing.T) {
+	phy := NewPhyPlan()
+	phy.LocalScope = []PhyScope{{
+		RootOperator: &PhyOperator{
+			OpName:  "scan",
+			NodeIdx: 0,
+			OpStats: &process.OperatorStats{MemorySize: 999, SpillSize: 7, DiskIO: 8, NetworkIO: 9},
+		},
+	}}
+
+	got := ExplainPhyPlan(phy, &statistic.StatsInfo{}, AnalyzeOption)
+	if strings.Contains(got, "MemoryUsage") || strings.Contains(got, "MaxDomainPeakMemory") {
+		t.Fatalf("resource-less overview must not fabricate memory: %s", got)
+	}
+	for _, token := range []string{"SpillSize:7B", "DiskI/O:8B", "NewWorkI/O:9B"} {
+		if !strings.Contains(got, token) {
+			t.Fatalf("resource-less overview missing %q: %s", token, got)
+		}
 	}
 }
