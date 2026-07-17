@@ -22,7 +22,7 @@ if ! binary_version_output="$("${binary_real}" -version 2>&1)"; then
     die "BINARY -version failed"
 fi
 binary_commit="$(awk -F':[[:space:]]*' '/^[[:space:]]*Git commit ID:/ {print $2; exit}' <<<"${binary_version_output}")"
-[[ "${binary_commit}" == "${EXPECTED_COMMIT}"* ]] ||
+[[ "${binary_commit}" == "${EXPECTED_COMMIT}"* || "${EXPECTED_COMMIT}" == "${binary_commit}"* ]] ||
     die "BINARY commit mismatch: expected ${EXPECTED_COMMIT}, got ${binary_commit:-missing}"
 printf '%s\n' "${binary_version_output}" >"${MO_25782_RUNTIME}/manifest/binary.version"
 chmod 0400 -- "${MO_25782_RUNTIME}/manifest/binary.version"

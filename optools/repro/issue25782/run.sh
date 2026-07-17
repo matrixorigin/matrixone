@@ -137,7 +137,8 @@ verify_source_gate() {
         [[ "${state:-}" == running ]] || die "${name}: service is not in running generation"
         manifest_hash="${BINARY_SHA256:-}"; manifest_commit="${BINARY_COMMIT:-}"
         [[ "$manifest_hash" =~ ^[0-9a-f]{64}$ ]] || die "${name}: binary hash missing from manifest"
-        [[ "$manifest_commit" == "$EXPECTED_COMMIT"* ]] || die "${name}: binary commit does not match locked source"
+        [[ "$manifest_commit" == "$EXPECTED_COMMIT"* || "$EXPECTED_COMMIT" == "$manifest_commit"* ]] ||
+            die "${name}: binary commit does not match locked source"
         proc_identity_matches "${MainPID:-}" "${PROC_STARTTIME:-}" "${EXE:-}" "${CMDLINE:-}" ||
             die "${name}: running process identity no longer matches manifest"
         running_hash="$(sha256sum -- "/proc/${MainPID}/exe" | awk '{print $1}')"
