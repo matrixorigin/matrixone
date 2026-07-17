@@ -996,6 +996,15 @@ func leastGreatestFnPackedDateResolved(
 		}
 	}
 
+	readers := make([]leastGreatestTemporalReader, len(parameters))
+	for i, pv := range parameters {
+		reader, err := newLeastGreatestTemporalReader(pv)
+		if err != nil {
+			return err
+		}
+		readers[i] = reader
+	}
+
 	loc := time.Local
 	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
@@ -1016,14 +1025,14 @@ func leastGreatestFnPackedDateResolved(
 		}
 
 		var winner types.Datetime
-		for j, pv := range parameters {
-			if pv.IsNull(i) {
+		for j := range readers {
+			if readers[j].source.IsNull(i) {
 				if err := leastGreatestAppendPackedDateResult(result, resolution, types.Datetime(0), loc, true); err != nil {
 					return err
 				}
 				goto nextRow
 			}
-			v, err := leastGreatestDatetimeValue(pv, i, resolution.temporalItemType, proc, loc)
+			v, err := readers[j].datetimeValue(i, resolution.temporalItemType, proc, loc)
 			if err != nil {
 				return err
 			}
@@ -1057,32 +1066,63 @@ func leastGreatestSetNullResult(result vector.FunctionResultWrapper, length int)
 	return nil
 }
 
-func leastGreatestDatetimeValue(v *vector.Vector, row uint64, temporalItemType types.Type, proc *process.Process, loc *time.Location) (types.Datetime, error) {
+type leastGreatestTemporalReader struct {
+	source    *vector.Vector
+	date      vector.FunctionParameterWrapper[types.Date]
+	datetime  vector.FunctionParameterWrapper[types.Datetime]
+	timestamp vector.FunctionParameterWrapper[types.Timestamp]
+	time      vector.FunctionParameterWrapper[types.Time]
+	year      vector.FunctionParameterWrapper[types.MoYear]
+}
+
+func newLeastGreatestTemporalReader(v *vector.Vector) (leastGreatestTemporalReader, error) {
+	reader := leastGreatestTemporalReader{source: v}
 	switch v.GetType().Oid {
 	case types.T_date:
-		p := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
-		val, _ := p.GetValue(row)
+		reader.date = vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+	case types.T_datetime:
+		reader.datetime = vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+	case types.T_timestamp:
+		reader.timestamp = vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
+	case types.T_time:
+		reader.time = vector.GenerateFunctionFixedTypeParameter[types.Time](v)
+	case types.T_year:
+		reader.year = vector.GenerateFunctionFixedTypeParameter[types.MoYear](v)
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+	default:
+		return leastGreatestTemporalReader{}, moerr.NewInternalErrorNoCtxf(
+			"unsupported temporal comparison type %s", v.GetType().Oid.String())
+	}
+	return reader, nil
+}
+
+func (r *leastGreatestTemporalReader) datetimeValue(
+	row uint64,
+	temporalItemType types.Type,
+	proc *process.Process,
+	loc *time.Location,
+) (types.Datetime, error) {
+	switch r.source.GetType().Oid {
+	case types.T_date:
+		val, _ := r.date.GetValue(row)
 		return val.ToDatetime(), nil
 	case types.T_datetime:
-		p := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
-		val, _ := p.GetValue(row)
+		val, _ := r.datetime.GetValue(row)
 		return val, nil
 	case types.T_timestamp:
-		p := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
-		val, _ := p.GetValue(row)
+		val, _ := r.timestamp.GetValue(row)
 		return val.ToDatetime(loc), nil
 	case types.T_time:
-		p := vector.GenerateFunctionFixedTypeParameter[types.Time](v)
-		val, _ := p.GetValue(row)
-		return leastGreatestTimeToDatetime(val, v.GetType().Scale, proc, loc), nil
+		val, _ := r.time.GetValue(row)
+		return leastGreatestTimeToDatetime(val, r.source.GetType().Scale, proc, loc), nil
 	case types.T_year:
-		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](v)
-		val, _ := p.GetValue(row)
+		val, _ := r.year.GetValue(row)
 		return types.DatetimeFromClock(int32(val.ToInt64()), 1, 1, 0, 0, 0, 0), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
-		return leastGreatestParsePackedDateBytes(v.GetBytesAt(int(row)), temporalItemType, proc, loc)
+		return leastGreatestParsePackedDateBytes(r.source.GetBytesAt(int(row)), temporalItemType, proc, loc)
 	default:
-		return types.Datetime(0), moerr.NewInternalErrorNoCtxf("unsupported temporal comparison type %s", v.GetType().Oid.String())
+		return types.Datetime(0), moerr.NewInternalErrorNoCtxf(
+			"unsupported temporal comparison type %s", r.source.GetType().Oid.String())
 	}
 }
 

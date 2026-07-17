@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1245,6 +1246,66 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		greatestJSONTemporalFn)
 	ok, info = tcJSONGreatest.Run()
 	require.True(t, ok, info)
+}
+
+func TestLeastGreatestTemporalAllocationsDoNotScaleWithRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	measure := func(rowCount int) float64 {
+		dates := make([]types.Date, rowCount)
+		datetimes := make([]types.Datetime, rowCount)
+		dateVec := newVectorByType(proc.Mp(), types.T_date.ToType(), dates, nil)
+		datetimeVec := newVectorByType(proc.Mp(), types.T_datetime.ToType(), datetimes, nil)
+		defer dateVec.Free(proc.Mp())
+		defer datetimeVec.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(rowCount))
+
+		return testing.AllocsPerRun(5, func() {
+			if err := result.PreExtendAndReset(rowCount); err != nil {
+				panic(err)
+			}
+			if err := greatestTemporalFn(
+				[]*vector.Vector{dateVec, datetimeVec}, result, proc, rowCount, nil); err != nil {
+				panic(err)
+			}
+		})
+	}
+
+	oneRowAllocs := measure(1)
+	batchAllocs := measure(8192)
+	require.LessOrEqual(t, batchAllocs, oneRowAllocs+4,
+		"fixed temporal accessor allocations must be batch-scoped: one row=%v, 8192 rows=%v",
+		oneRowAllocs, batchAllocs)
+}
+
+func BenchmarkLeastGreatestTemporalFixedReaders(b *testing.B) {
+	const rowCount = 8192
+	proc := testutil.NewProcess(b)
+	dateVec := newVectorByType(proc.Mp(), types.T_date.ToType(), make([]types.Date, rowCount), nil)
+	datetimeVec := newVectorByType(proc.Mp(), types.T_datetime.ToType(), make([]types.Datetime, rowCount), nil)
+	defer dateVec.Free(proc.Mp())
+	defer datetimeVec.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	if err := result.PreExtendAndReset(rowCount); err != nil {
+		b.Fatal(err)
+	}
+	parameters := []*vector.Vector{dateVec, datetimeVec}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := result.PreExtendAndReset(rowCount); err != nil {
+			b.Fatal(err)
+		}
+		if err := greatestTemporalFn(parameters, result, proc, rowCount, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestLeastGreatestMixedTemporalExecutorPreservesMaxScale(t *testing.T) {
