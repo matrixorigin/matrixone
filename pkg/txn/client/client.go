@@ -772,6 +772,15 @@ func (client *txnClient) NewWithSnapshot(
 			return nil, err
 		}
 	}
+	// The timestamp waiter may select a successful notification concurrently
+	// with client shutdown and return that success after Close has completed.
+	// Linearize final mirror admission against Close only after the wait; holding
+	// the gate during the wait would prevent shutdown from canceling it.
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
+	if client.isClosed() {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
 	op := newTxnOperatorWithSnapshot(
 		client.logger,
 		client.sender,

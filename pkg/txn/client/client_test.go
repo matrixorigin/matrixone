@@ -229,6 +229,38 @@ func (*snapshotTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
 func (*snapshotTimestampWaiter) Close()                                   {}
 func (*snapshotTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
 
+// selectedSuccessTimestampWaiter models the valid notify-vs-cancel ordering
+// where notification wins the waiter's select, but the successful return is
+// delayed until after the transaction client has closed.
+type selectedSuccessTimestampWaiter struct {
+	entered  chan struct{}
+	notify   chan struct{}
+	selected chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (w *selectedSuccessTimestampWaiter) GetTimestamp(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	close(w.entered)
+	select {
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, ctx.Err()
+	case <-w.notify:
+		close(w.selected)
+	}
+	<-w.release
+	return ts, nil
+}
+
+func (w *selectedSuccessTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {
+	w.once.Do(func() { close(w.notify) })
+}
+func (*selectedSuccessTimestampWaiter) Close()                        {}
+func (*selectedSuccessTimestampWaiter) LatestTS() timestamp.Timestamp { return timestamp.Timestamp{} }
+
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
@@ -342,6 +374,67 @@ func TestNewWithSnapshotPropagatesContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, op)
 	require.Equal(t, 1, waiter.called)
+}
+
+func TestNewWithSnapshotRejectsSuccessSelectedBeforeClientClose(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+
+	waiter := &selectedSuccessTimestampWaiter{
+		entered:  make(chan struct{}),
+		notify:   make(chan struct{}),
+		selected: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter))
+	released := false
+	defer func() {
+		if !released {
+			close(waiter.release)
+		}
+	}()
+	resultC := make(chan txnCreateResult, 1)
+	go func() {
+		op, err := c.NewWithSnapshot(context.Background(), txn.CNTxnSnapshot{
+			Txn: txn.TxnMeta{
+				ID:         []byte("remote-txn"),
+				SnapshotTS: timestamp.Timestamp{PhysicalTime: 100},
+			},
+		})
+		resultC <- txnCreateResult{op: op, err: err}
+	}()
+
+	select {
+	case <-waiter.entered:
+	case <-time.After(time.Second):
+		t.Fatal("NewWithSnapshot did not enter the timestamp wait")
+	}
+	waiter.NotifyLatestCommitTS(timestamp.Timestamp{PhysicalTime: 100})
+	select {
+	case <-waiter.selected:
+	case <-time.After(time.Second):
+		t.Fatal("timestamp wait did not select the successful notification")
+	}
+	closeErrC := make(chan error, 1)
+	go func() { closeErrC <- c.Close() }()
+	select {
+	case err := <-closeErrC:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client Close was blocked by the timestamp wait")
+	}
+	close(waiter.release)
+	released = true
+
+	select {
+	case result := <-resultC:
+		require.Nil(t, result.op)
+		require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrClientClosed))
+	case <-time.After(time.Second):
+		t.Fatal("NewWithSnapshot did not finish after releasing selected success")
+	}
 }
 
 func TestZeroValueClientShardedMaps(t *testing.T) {
