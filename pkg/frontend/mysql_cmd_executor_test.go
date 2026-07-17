@@ -593,6 +593,13 @@ func Test_mce_selfhandle(t *testing.T) {
 		resp, err := ExecRequest(ses, ec, req)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldBeNil)
+		setRowCount(ses, ses.GetProc(), 7)
+
+		resp, err = ExecRequest(ses, ec, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldBeNil)
+		convey.So(ses.GetLastAffectedRows(), convey.ShouldEqual, int64(-1))
+		convey.So(ses.GetProc().GetAffectedRows(), convey.ShouldEqual, int64(-1))
 	})
 }
 
@@ -1306,9 +1313,10 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		cmd  CommandType
+		want int64
 	}{
-		{name: "close", cmd: COM_STMT_CLOSE},
-		{name: "reset", cmd: COM_STMT_RESET},
+		{name: "close", cmd: COM_STMT_CLOSE, want: 7},
+		{name: "reset", cmd: COM_STMT_RESET, want: -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := newTestSession(t, ctrl)
@@ -1316,6 +1324,7 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 			stmtID := uint32(123)
 			data := make([]byte, 4)
 			binary.LittleEndian.PutUint32(data, stmtID)
+			setRowCount(ses, ses.GetProc(), 7)
 
 			resp, err := ExecRequest(ses, ec, &Request{cmd: tc.cmd, data: data})
 			require.NoError(t, err)
@@ -1323,6 +1332,8 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 			require.Equal(t, ErrorResponse, resp.category)
 			require.Equal(t, int(tc.cmd), resp.cmd)
 			require.Error(t, resp.GetData().(error))
+			require.Equal(t, tc.want, ses.GetLastAffectedRows())
+			require.Equal(t, tc.want, ses.GetProc().GetAffectedRows())
 		})
 	}
 }
@@ -2899,6 +2910,7 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
+	setRowCount(ses, ses.GetProc(), 7)
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -2910,6 +2922,8 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, ResultResponse, resp.category)
+	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 }
 
 func Test_ExecRequest_SidecarError(t *testing.T) {
@@ -2933,6 +2947,7 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
+	setRowCount(ses, ses.GetProc(), 7)
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -2945,6 +2960,137 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	require.NotNil(t, resp)
 	// Should be an error response (from sidecar), not a success.
 	assert.Equal(t, ErrorResponse, resp.category)
+	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+}
+
+func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
+	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_PREPARE} {
+		t.Run(cmd.String(), func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			ses.txnHandler = &TxnHandler{}
+			ses.rewriteEnabled.Store(true)
+			ses.ruleCache = map[string]string{}
+			setRowCount(ses, ses.GetProc(), 7)
+
+			ec := newTestExecCtx(ctx, ctrl)
+			req := &Request{
+				cmd:  cmd,
+				data: []byte(`/*+ {"rewrites":{"db.t":123}} */ select * from db.t`),
+			}
+			resp, err := ExecRequest(ses, ec, req)
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			assert.Equal(t, ErrorResponse, resp.category)
+			assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
+			assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+		})
+	}
+}
+
+func TestExecRequestProtocolCommandRowCount(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	ec := newTestExecCtx(ctx, ctrl)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err := ExecRequest(ses, ec, &Request{cmd: COM_PING})
+	require.NoError(t, err)
+	require.Equal(t, OkResponse, resp.category)
+	require.Equal(t, int64(0), ses.GetLastAffectedRows())
+	require.Equal(t, int64(0), ses.GetProc().GetAffectedRows())
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err = ExecRequest(ses, ec, &Request{cmd: COM_SET_OPTION, data: []byte{0, 0}})
+	require.NoError(t, err)
+	require.Equal(t, OkResponse, resp.category)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+
+	for _, data := range [][]byte{{0}, {2, 0}} {
+		setRowCount(ses, ses.GetProc(), 7)
+		resp, err = ExecRequest(ses, ec, &Request{cmd: COM_SET_OPTION, data: data})
+		require.NoError(t, err)
+		require.Equal(t, ErrorResponse, resp.category)
+		require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+		require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+	}
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err = ExecRequest(ses, ec, &Request{cmd: CommandType(0xff)})
+	require.NoError(t, err)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+
+	setRowCount(ses, ses.GetProc(), 7)
+	resp, err = ExecRequest(ses, ec, &Request{cmd: COM_STMT_CLOSE, data: []byte{1, 2, 3}})
+	require.NoError(t, err)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
+}
+
+func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	stmtID := uint32(1)
+	stmtName := getPrepareStmtName(stmtID)
+	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?")
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+	require.NoError(t, err)
+	prepareStmt := &PrepareStmt{
+		Name:                stmtName,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
+
+	setRowCount(ses, ses.GetProc(), 7)
+	payload := make([]byte, 6)
+	binary.LittleEndian.PutUint32(payload, stmtID)
+	binary.LittleEndian.PutUint16(payload[4:], 0)
+	payload = append(payload, "long data"...)
+	resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_SEND_LONG_DATA, data: payload})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "malformed packet", data: []byte{1, 2, 3}},
+		{name: "unknown statement", data: []byte{2, 0, 0, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setRowCount(ses, ses.GetProc(), 7)
+			resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_SEND_LONG_DATA, data: tc.data})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Equal(t, ErrorResponse, resp.category)
+			require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+			require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+		})
+	}
 }
 
 func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
