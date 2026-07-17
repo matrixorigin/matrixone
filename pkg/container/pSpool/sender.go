@@ -334,8 +334,16 @@ func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
 			if ps.cleanupDone {
 				ps.cleanSlotLocked(last)
 			} else {
-				ps.cache.CacheBatch(
-					ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
+				// The slot and batch pools have independent reuse orders, so a
+				// returned batch may be assigned to a different slot immediately.
+				// Detach the batch before either object is republished; otherwise
+				// this slot can retain an alias that later cleanup frees prematurely.
+				msg := &ps.shardPool[last]
+				data := msg.dataContent
+				useCache := msg.useCache
+				cacheID := msg.cacheID
+				ps.clearSlotLocked(last)
+				ps.cache.CacheBatch(useCache, cacheID, data)
 				ps.freeShardPool <- last
 			}
 		}
@@ -382,8 +390,10 @@ func (ps *PipelineSpool) cleanSlotLocked(idx uint32) {
 	if msg.useCache && msg.dataContent != nil {
 		msg.dataContent.Clean(ps.cache.mp)
 	}
-	msg.dataContent = nil
-	msg.errContent = nil
-	msg.useCache = false
-	msg.cacheID = 0
+	ps.clearSlotLocked(idx)
+}
+
+func (ps *PipelineSpool) clearSlotLocked(idx uint32) {
+	ps.shardPool[idx] = pipelineSpoolMessage{}
+	ps.doRefCheck[idx] = false
 }
