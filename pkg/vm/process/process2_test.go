@@ -72,6 +72,27 @@ func TestGetTaskService(t *testing.T) {
 	assert.Nil(t, proc.GetTaskService())
 }
 
+func TestAffectedRows(t *testing.T) {
+	// nil pointer is safe: Get returns 0, Set is a no-op.
+	procNil := &Process{Base: &BaseProcess{}}
+	assert.Equal(t, int64(0), procNil.GetAffectedRows())
+	procNil.SetAffectedRows(5)
+	assert.Equal(t, int64(0), procNil.GetAffectedRows())
+
+	// with backing storage: round-trips, including the -1 sentinel.
+	proc := &Process{Base: &BaseProcess{AffectedRows: new(int64)}}
+	assert.Equal(t, int64(0), proc.GetAffectedRows())
+
+	proc.SetAffectedRows(42)
+	assert.Equal(t, int64(42), proc.GetAffectedRows())
+
+	proc.SetAffectedRows(-1)
+	assert.Equal(t, int64(-1), proc.GetAffectedRows())
+
+	proc.SetAffectedRows(0)
+	assert.Equal(t, int64(0), proc.GetAffectedRows())
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	localFS, err := fileservice.NewLocalFS(
 		context.Background(),

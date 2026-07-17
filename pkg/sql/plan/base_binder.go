@@ -1724,6 +1724,10 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	switch udf.Language {
 	case string(tree.SQL):
 		sql := udf.Body
+		parserSQLMode := "PIPES_AS_CONCAT"
+		if udf.SQLMode != nil {
+			parserSQLMode = *udf.SQLMode
+		}
 		// replace sql with actual arg value
 		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		for i := 0; i < len(args); i++ {
@@ -1739,19 +1743,29 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 
 		if !strings.Contains(sql, "select") {
 			sql = "select " + sql
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				for _, stmt := range substmts {
+					stmt.Free()
+				}
+			}()
 			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				for _, stmt := range substmts {
+					stmt.Free()
+				}
+			}()
 			subquery := tree.NewSubquery(substmts[0], false)
 			expr, err = b.impl.BindSubquery(subquery, false)
 			if err != nil {

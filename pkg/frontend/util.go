@@ -1555,6 +1555,8 @@ type UserInput struct {
 	hashedSql           string
 	stmtName            string
 	stmt                tree.Statement
+	parserSQLMode       string
+	useParserSQLMode    bool
 	preparePlan         *plan.Plan // binary protocol execute
 	sqlSourceType       []string
 	isRestore           bool
