@@ -97,24 +97,43 @@ func alterDataBranchParticipationSQL(oldTableID uint64) string {
 	)
 }
 
-func alterDataBranchHistoricalSourceSQL(accountName, databaseName, tableName string, tableID uint64) string {
+func alterDataBranchHistoricalSourceScopeSQL(
+	accountName, databaseName, tableName string,
+	tableID uint64,
+) string {
 	accountName = sqlquote.EscapeString(accountName)
 	databaseName = sqlquote.EscapeString(databaseName)
 	tableName = sqlquote.EscapeString(tableName)
 	return fmt.Sprintf(
-		`select 1 from (`+
-			`select level, account_name, database_name, table_name, obj_id from %s.%s where kind = 'user' `+
-			`union all `+
-			`select level, account_name, database_name, table_name, obj_id from %s.%s where pitr_status = 1`+
-			`) as h where h.level = 'cluster' or (`+
-			`h.account_name = '%s' and (`+
-			`h.level = 'account' or `+
-			`(h.level = 'database' and h.database_name = '%s') or `+
-			`(h.level = 'table' and (h.obj_id = %d or (h.database_name = '%s' and h.table_name = '%s')))`+
-			`)) limit 1`,
-		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		catalog.MO_CATALOG, catalog.MO_PITR,
+		`(level = 'cluster' or (`+
+			`account_name = '%s' and (`+
+			`level = 'account' or `+
+			`(level = 'database' and database_name = '%s') or `+
+			`(level = 'table' and (obj_id = %d or (database_name = '%s' and table_name = '%s')))`+
+			`)))`,
 		accountName, databaseName, tableID, databaseName, tableName,
+	)
+}
+
+func alterDataBranchHistoricalSnapshotSourceSQL(
+	accountName, databaseName, tableName string,
+	tableID uint64,
+) string {
+	return fmt.Sprintf(
+		"select 1 from %s.%s where kind = 'user' and %s limit 1 for update",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+	)
+}
+
+func alterDataBranchHistoricalPitrSourceSQL(
+	accountName, databaseName, tableName string,
+	tableID uint64,
+) string {
+	return fmt.Sprintf(
+		"select 1 from %s.%s where pitr_status = 1 and %s limit 1 for update",
+		catalog.MO_CATALOG, catalog.MO_PITR,
+		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
 	)
 }
 
@@ -137,22 +156,29 @@ func (c *Compile) alterTableHasHistoricalBranchSource(
 	oldTableID uint64,
 	databaseName, tableName string,
 ) (bool, error) {
-	res, err := c.runSqlWithResult(
-		alterDataBranchHistoricalSourceSQL(
+	for _, sql := range []string{
+		alterDataBranchHistoricalSnapshotSourceSQL(
 			c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
 		),
-		int32(catalog.System_Account),
-	)
-	if err != nil {
-		return false, err
+		alterDataBranchHistoricalPitrSourceSQL(
+			c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
+		),
+	} {
+		res, err := c.runSqlWithResult(sql, int32(catalog.System_Account))
+		if err != nil {
+			return false, err
+		}
+		hasHistory := false
+		res.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			hasHistory = rows > 0
+			return false
+		})
+		res.Close()
+		if hasHistory {
+			return true, nil
+		}
 	}
-	defer res.Close()
-	hasHistory := false
-	res.ReadRows(func(rows int, _ []*vector.Vector) bool {
-		hasHistory = rows > 0
-		return false
-	})
-	return hasHistory, nil
+	return false, nil
 }
 
 func (c *Compile) prepareAlterDataBranchLineage(
@@ -165,6 +191,16 @@ func (c *Compile) prepareAlterDataBranchLineage(
 	}
 	hasLiveLineage := false
 	if participates {
+		op := c.proc.GetTxnOperator()
+		opts := op.TxnOptions()
+		if err = validateAlterDataBranchLineageTxn(
+			opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
+		); err != nil {
+			return alterDataBranchLineagePlan{}, err
+		}
+		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
+			return alterDataBranchLineagePlan{}, err
+		}
 		dag, dagErr := c.loadAlterDataBranchDAG(false)
 		if dagErr != nil {
 			return alterDataBranchLineagePlan{}, dagErr
@@ -264,6 +300,188 @@ func (c *Compile) loadAlterDataBranchDAG(forUpdate bool) (databranchutils.Branch
 		return true
 	})
 	return databranchutils.NewBranchReclaimDag(rows), nil
+}
+
+func alterDataBranchLineageEdgeSQL() string {
+	return fmt.Sprintf(
+		"select sname, ts, account_name, database_name, table_name, obj_id from %s.%s where kind = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, databranchutils.BranchSnapshotKind,
+	)
+}
+
+func alterDataBranchSnapshotSourceSQL() string {
+	return fmt.Sprintf(
+		"select ts, level, account_name, database_name, table_name, obj_id from %s.%s where kind = 'user'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+	)
+}
+
+func alterDataBranchPitrSourceSQL() string {
+	return fmt.Sprintf(
+		"select level, account_name, database_name, table_name, obj_id, pitr_length, pitr_unit from %s.%s where pitr_status = 1",
+		catalog.MO_CATALOG, catalog.MO_PITR,
+	)
+}
+
+func (c *Compile) loadAlterDataBranchLineageEdges() (
+	map[uint64]databranchutils.HistoricalLineageEdge,
+	error,
+) {
+	res, err := c.runSqlWithResult(
+		alterDataBranchLineageEdgeSQL(), int32(catalog.System_Account),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	edges := make(map[uint64]databranchutils.HistoricalLineageEdge, res.AffectedRows)
+	res.ReadRows(func(rowCount int, cols []*vector.Vector) bool {
+		if rowCount == 0 {
+			return true
+		}
+		names := executor.GetStringRows(cols[0])
+		cloneTSs := vector.MustFixedColNoTypeCheck[int64](cols[1])
+		accounts := executor.GetStringRows(cols[2])
+		databases := executor.GetStringRows(cols[3])
+		tables := executor.GetStringRows(cols[4])
+		parentIDs := vector.MustFixedColNoTypeCheck[uint64](cols[5])
+		for i, name := range names {
+			childID, ok := databranchutils.ParseBranchSnapshotName(name)
+			if !ok {
+				continue
+			}
+			edges[childID] = databranchutils.HistoricalLineageEdge{
+				ChildTableID:  childID,
+				ParentTableID: parentIDs[i],
+				CloneTS:       cloneTSs[i],
+				AccountName:   accounts[i],
+				DatabaseName:  databases[i],
+				TableName:     tables[i],
+			}
+		}
+		return true
+	})
+	return edges, nil
+}
+
+func appendAlterDataBranchHistoricalSources(
+	res executor.Result,
+	oldestTS func(int, []*vector.Vector) (int64, error),
+	columnOffset int,
+	sources *[]databranchutils.HistoricalSource,
+) error {
+	var loadErr error
+	res.ReadRows(func(rowCount int, cols []*vector.Vector) bool {
+		if rowCount == 0 {
+			return true
+		}
+		levels := executor.GetStringRows(cols[columnOffset])
+		accounts := executor.GetStringRows(cols[columnOffset+1])
+		databases := executor.GetStringRows(cols[columnOffset+2])
+		tables := executor.GetStringRows(cols[columnOffset+3])
+		objectIDs := vector.MustFixedColNoTypeCheck[uint64](cols[columnOffset+4])
+		for i := range levels {
+			lowerBound, err := oldestTS(i, cols)
+			if err != nil {
+				loadErr = err
+				return false
+			}
+			*sources = append(*sources, databranchutils.HistoricalSource{
+				Level:        levels[i],
+				AccountName:  accounts[i],
+				DatabaseName: databases[i],
+				TableName:    tables[i],
+				ObjectID:     objectIDs[i],
+				OldestTS:     lowerBound,
+			})
+		}
+		return true
+	})
+	return loadErr
+}
+
+func (c *Compile) loadAlterDataBranchHistoricalSources(
+	now time.Time,
+) ([]databranchutils.HistoricalSource, error) {
+	res, err := c.runSqlWithResult(
+		alterDataBranchSnapshotSourceSQL(), int32(catalog.System_Account),
+	)
+	if err != nil {
+		return nil, err
+	}
+	var sources []databranchutils.HistoricalSource
+	err = appendAlterDataBranchHistoricalSources(
+		res,
+		func(i int, cols []*vector.Vector) (int64, error) {
+			return vector.MustFixedColNoTypeCheck[int64](cols[0])[i], nil
+		},
+		1,
+		&sources,
+	)
+	res.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	res, err = c.runSqlWithResult(
+		alterDataBranchPitrSourceSQL(), int32(catalog.System_Account),
+	)
+	if err != nil {
+		return nil, err
+	}
+	err = appendAlterDataBranchHistoricalSources(
+		res,
+		func(i int, cols []*vector.Vector) (int64, error) {
+			lengths := vector.MustFixedColNoTypeCheck[int64](cols[5])
+			units := executor.GetStringRows(cols[6])
+			return databranchutils.PitrRetentionLowerBound(now, int(lengths[i]), units[i])
+		},
+		0,
+		&sources,
+	)
+	res.Close()
+	if err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+// compactExpiredAlterDataBranchLineage is ALTER's opportunistic expiry
+// hook. DROP paths compact synchronously, but an active PITR can also stop
+// covering an edge merely because its rolling retention window advances.
+// Locking metadata first keeps the edge/snapshot pair atomic with the ALTER
+// that will immediately decide whether to append a new edge.
+func (c *Compile) compactExpiredAlterDataBranchLineage(now time.Time) error {
+	dag, err := c.loadAlterDataBranchDAG(true)
+	if err != nil {
+		return err
+	}
+	if len(dag.Info) == 0 {
+		return nil
+	}
+	if now.IsZero() {
+		now = c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC()
+	}
+	edges, err := c.loadAlterDataBranchLineageEdges()
+	if err != nil {
+		return err
+	}
+	sources, err := c.loadAlterDataBranchHistoricalSources(now)
+	if err != nil {
+		return err
+	}
+	plan := databranchutils.ComputeAlterLineageCompactionPlan(dag, edges, sources)
+	if len(plan.TableIDs) == 0 {
+		return nil
+	}
+	if err = c.runSqlWithSystemTenant(
+		databranchutils.BuildAlterLineageSnapshotDeleteSQL(plan.SnapshotNames),
+	); err != nil {
+		return err
+	}
+	return c.runSqlWithSystemTenant(
+		databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs),
+	)
 }
 
 func alterDataBranchLineageMetadata(

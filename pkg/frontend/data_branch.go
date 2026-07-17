@@ -554,6 +554,9 @@ func dataBranchDeleteTable(
 	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
 		return
 	}
+	if err = compactHistoricalAlterLineageWithBH(execCtx.reqCtx, bh, time.Now().UTC()); err != nil {
+		return
+	}
 
 	return nil
 }
@@ -609,6 +612,9 @@ func dataBranchDeleteDatabase(
 	}
 
 	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
+		return
+	}
+	if err = compactHistoricalAlterLineageWithBH(execCtx.reqCtx, bh, time.Now().UTC()); err != nil {
 		return
 	}
 

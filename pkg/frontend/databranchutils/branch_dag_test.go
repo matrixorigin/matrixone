@@ -14,7 +14,12 @@
 
 package databranchutils
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestDAGFunctionality(t *testing.T) {
 
@@ -214,4 +219,184 @@ func TestPathFromRoot(t *testing.T) {
 	if ok {
 		t.Fatal("missing node unexpectedly had a root path")
 	}
+}
+
+func TestComputeAlterLineageCompactionPlan(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+	})
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {
+			ChildTableID:  2,
+			ParentTableID: 1,
+			CloneTS:       100,
+			AccountName:   "acc",
+			DatabaseName:  "db",
+			TableName:     "t",
+		},
+		3: {
+			ChildTableID:  3,
+			ParentTableID: 2,
+			CloneTS:       200,
+			AccountName:   "acc",
+			DatabaseName:  "db",
+			TableName:     "t",
+		},
+	}
+
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2, 3},
+			SnapshotNames: []string{"__mo_branch_2", "__mo_branch_3"},
+		},
+		ComputeAlterLineageCompactionPlan(dag, edges, nil),
+	)
+
+	sources := []HistoricalSource{{
+		Level:        "table",
+		AccountName:  "acc",
+		DatabaseName: "db",
+		TableName:    "t",
+		OldestTS:     150,
+	}}
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2},
+			SnapshotNames: []string{"__mo_branch_2"},
+		},
+		ComputeAlterLineageCompactionPlan(dag, edges, sources),
+	)
+}
+
+func TestComputeAlterLineageCompactionPlanScopeAndOwners(t *testing.T) {
+	baseRows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},
+	}
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {
+			ChildTableID:  2,
+			ParentTableID: 1,
+			CloneTS:       100,
+			AccountName:   "acc",
+			DatabaseName:  "db",
+			TableName:     "t",
+		},
+	}
+
+	for _, source := range []HistoricalSource{
+		{Level: "cluster", OldestTS: 100},
+		{Level: "account", AccountName: "acc", OldestTS: 100},
+		{Level: "database", AccountName: "acc", DatabaseName: "db", OldestTS: 100},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "t", OldestTS: 100},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "renamed", ObjectID: 1, OldestTS: 100},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "t", ObjectID: 999, OldestTS: 100},
+	} {
+		plan := ComputeAlterLineageCompactionPlan(
+			NewBranchReclaimDag(baseRows), edges, []HistoricalSource{source},
+		)
+		require.Empty(t, plan.TableIDs, "covering source %+v must retain the edge", source)
+	}
+
+	uncovered := []HistoricalSource{
+		{Level: "account", AccountName: "other", OldestTS: 0},
+		{Level: "database", AccountName: "acc", DatabaseName: "other", OldestTS: 0},
+		{Level: "table", AccountName: "acc", DatabaseName: "db", TableName: "t", OldestTS: 101},
+	}
+	plan := ComputeAlterLineageCompactionPlan(
+		NewBranchReclaimDag(baseRows), edges, uncovered,
+	)
+	require.Equal(t, []uint64{2}, plan.TableIDs)
+
+	withLiveLogicalSibling := NewBranchReclaimDag(append(baseRows,
+		DataBranchMetadata{TableID: 4, PTableID: 1, CloneTS: 90, Level: "table"},
+	))
+	plan = ComputeAlterLineageCompactionPlan(withLiveLogicalSibling, edges, nil)
+	require.Empty(t, plan.TableIDs)
+
+	withDeletedLogicalSibling := NewBranchReclaimDag(append(baseRows,
+		DataBranchMetadata{
+			TableID: 4, PTableID: 1, CloneTS: 90, Level: "table", TableDeleted: true,
+		},
+	))
+	plan = ComputeAlterLineageCompactionPlan(withDeletedLogicalSibling, edges, nil)
+	require.Equal(t, []uint64{2}, plan.TableIDs)
+
+	plan = ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(baseRows), nil, nil)
+	require.Empty(t, plan.TableIDs, "missing identity must be retained conservatively")
+}
+
+func TestComputeAlterLineageCompactionPlanTableOwnerSurvivesRename(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+	})
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {
+			ChildTableID: 2, ParentTableID: 1, CloneTS: 100,
+			AccountName: "acc", DatabaseName: "db", TableName: "before_rename",
+		},
+		3: {
+			ChildTableID: 3, ParentTableID: 2, CloneTS: 200,
+			AccountName: "acc", DatabaseName: "db", TableName: "after_rename",
+		},
+	}
+	source := HistoricalSource{
+		Level: "table", AccountName: "acc", DatabaseName: "db",
+		TableName: "before_rename", ObjectID: 1, OldestTS: 50,
+	}
+
+	plan := ComputeAlterLineageCompactionPlan(dag, edges, []HistoricalSource{source})
+	require.Empty(t, plan.TableIDs,
+		"the source object owns the component, including the newer edge across rename")
+}
+
+func TestComputeAlterLineageCompactionPlanCycleSafe(t *testing.T) {
+	dag := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 1, PTableID: 2, CloneTS: 100, Level: "alter"},
+		{TableID: 2, PTableID: 1, CloneTS: 200, Level: "alter"},
+	})
+	edges := map[uint64]HistoricalLineageEdge{
+		1: {ChildTableID: 1, ParentTableID: 2, CloneTS: 100},
+		2: {ChildTableID: 2, ParentTableID: 1, CloneTS: 200},
+	}
+
+	plan := ComputeAlterLineageCompactionPlan(dag, edges, nil)
+	require.Equal(t, []uint64{1, 2}, plan.TableIDs)
+	require.Equal(t, []string{"__mo_branch_1", "__mo_branch_2"}, plan.SnapshotNames)
+}
+
+func TestPitrRetentionLowerBound(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		length int
+		unit   string
+		want   time.Time
+	}{
+		{length: 2, unit: "h", want: now.Add(-2 * time.Hour)},
+		{length: 2, unit: "d", want: now.AddDate(0, 0, -2)},
+		{length: 2, unit: "mo", want: now.AddDate(0, -2, 0)},
+		{length: 2, unit: "y", want: now.AddDate(-2, 0, 0)},
+	} {
+		got, err := PitrRetentionLowerBound(now, tc.length, tc.unit)
+		require.NoError(t, err)
+		require.Equal(t, tc.want.UnixNano(), got)
+	}
+
+	_, err := PitrRetentionLowerBound(now, 1, "week")
+	require.Error(t, err)
+}
+
+func TestBuildAlterLineageDeleteSQL(t *testing.T) {
+	require.Equal(t,
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2','__mo_branch_3')",
+		BuildAlterLineageSnapshotDeleteSQL([]string{"__mo_branch_2", "__mo_branch_3"}),
+	)
+	require.Equal(t,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%')",
+		BuildAlterLineageMetadataDeleteSQL([]uint64{2, 3}),
+	)
+	require.Empty(t, BuildAlterLineageSnapshotDeleteSQL(nil))
+	require.Empty(t, BuildAlterLineageMetadataDeleteSQL(nil))
 }

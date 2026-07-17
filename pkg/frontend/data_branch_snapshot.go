@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -40,6 +41,268 @@ func branchSnapshotName(childTableID uint64) string {
 // the frontend package. It must stay in lockstep with
 // databranchutils.BranchSnapshotKind.
 const branchSnapshotKind = databranchutils.BranchSnapshotKind
+
+func historicalAlterLineageMetadataSQL() string {
+	return fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+}
+
+func historicalAlterLineageEdgeSQL() string {
+	return fmt.Sprintf(
+		"select sname, ts, account_name, database_name, table_name, obj_id from %s.%s where kind = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, databranchutils.BranchSnapshotKind,
+	)
+}
+
+func historicalSnapshotSourceSQL() string {
+	return fmt.Sprintf(
+		"select ts, level, account_name, database_name, table_name, obj_id from %s.%s where kind = 'user'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+	)
+}
+
+func historicalPitrSourceSQL() string {
+	return fmt.Sprintf(
+		"select level, account_name, database_name, table_name, obj_id, pitr_length, pitr_unit from %s.%s where pitr_status = 1",
+		catalog.MO_CATALOG, catalog.MO_PITR,
+	)
+}
+
+func historicalLineageQuery(
+	ctx context.Context,
+	bh BackgroundExec,
+	sql string,
+) ([]ExecResult, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+	return getResultSet(ctx, bh)
+}
+
+func loadHistoricalAlterLineageDAG(
+	ctx context.Context,
+	bh BackgroundExec,
+) (databranchutils.BranchReclaimDag, error) {
+	erArray, err := historicalLineageQuery(ctx, bh, historicalAlterLineageMetadataSQL())
+	if err != nil {
+		return databranchutils.BranchReclaimDag{}, err
+	}
+	var rows []databranchutils.DataBranchMetadata
+	for _, er := range erArray {
+		for row := uint64(0); row < er.GetRowCount(); row++ {
+			tableID, err := er.GetUint64(ctx, row, 0)
+			if err != nil {
+				return databranchutils.BranchReclaimDag{}, err
+			}
+			parentID, err := er.GetUint64(ctx, row, 1)
+			if err != nil {
+				return databranchutils.BranchReclaimDag{}, err
+			}
+			cloneTS, err := er.GetInt64(ctx, row, 2)
+			if err != nil {
+				return databranchutils.BranchReclaimDag{}, err
+			}
+			creator, err := er.GetUint64(ctx, row, 3)
+			if err != nil {
+				return databranchutils.BranchReclaimDag{}, err
+			}
+			level, err := er.GetString(ctx, row, 4)
+			if err != nil {
+				return databranchutils.BranchReclaimDag{}, err
+			}
+			deleted, err := er.GetInt64(ctx, row, 5)
+			if err != nil {
+				return databranchutils.BranchReclaimDag{}, err
+			}
+			rows = append(rows, databranchutils.DataBranchMetadata{
+				TableID:      tableID,
+				PTableID:     parentID,
+				CloneTS:      cloneTS,
+				Creator:      creator,
+				Level:        level,
+				TableDeleted: deleted != 0,
+			})
+		}
+	}
+	return databranchutils.NewBranchReclaimDag(rows), nil
+}
+
+func loadHistoricalAlterLineageEdges(
+	ctx context.Context,
+	bh BackgroundExec,
+) (map[uint64]databranchutils.HistoricalLineageEdge, error) {
+	erArray, err := historicalLineageQuery(ctx, bh, historicalAlterLineageEdgeSQL())
+	if err != nil {
+		return nil, err
+	}
+	edges := make(map[uint64]databranchutils.HistoricalLineageEdge)
+	for _, er := range erArray {
+		for row := uint64(0); row < er.GetRowCount(); row++ {
+			sname, err := er.GetString(ctx, row, 0)
+			if err != nil {
+				return nil, err
+			}
+			childID, ok := databranchutils.ParseBranchSnapshotName(sname)
+			if !ok {
+				continue
+			}
+			cloneTS, err := er.GetInt64(ctx, row, 1)
+			if err != nil {
+				return nil, err
+			}
+			accountName, err := er.GetString(ctx, row, 2)
+			if err != nil {
+				return nil, err
+			}
+			databaseName, err := er.GetString(ctx, row, 3)
+			if err != nil {
+				return nil, err
+			}
+			tableName, err := er.GetString(ctx, row, 4)
+			if err != nil {
+				return nil, err
+			}
+			parentID, err := er.GetUint64(ctx, row, 5)
+			if err != nil {
+				return nil, err
+			}
+			edges[childID] = databranchutils.HistoricalLineageEdge{
+				ChildTableID:  childID,
+				ParentTableID: parentID,
+				CloneTS:       cloneTS,
+				AccountName:   accountName,
+				DatabaseName:  databaseName,
+				TableName:     tableName,
+			}
+		}
+	}
+	return edges, nil
+}
+
+func loadHistoricalSources(
+	ctx context.Context,
+	bh BackgroundExec,
+	now time.Time,
+) ([]databranchutils.HistoricalSource, error) {
+	snapshotRows, err := historicalLineageQuery(ctx, bh, historicalSnapshotSourceSQL())
+	if err != nil {
+		return nil, err
+	}
+	var sources []databranchutils.HistoricalSource
+	for _, er := range snapshotRows {
+		for row := uint64(0); row < er.GetRowCount(); row++ {
+			oldestTS, err := er.GetInt64(ctx, row, 0)
+			if err != nil {
+				return nil, err
+			}
+			source, err := historicalSourceFromResult(ctx, er, row, 1, oldestTS)
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, source)
+		}
+	}
+
+	pitrRows, err := historicalLineageQuery(ctx, bh, historicalPitrSourceSQL())
+	if err != nil {
+		return nil, err
+	}
+	for _, er := range pitrRows {
+		for row := uint64(0); row < er.GetRowCount(); row++ {
+			length, err := er.GetInt64(ctx, row, 5)
+			if err != nil {
+				return nil, err
+			}
+			unit, err := er.GetString(ctx, row, 6)
+			if err != nil {
+				return nil, err
+			}
+			oldestTS, err := databranchutils.PitrRetentionLowerBound(now, int(length), unit)
+			if err != nil {
+				return nil, err
+			}
+			source, err := historicalSourceFromResult(ctx, er, row, 0, oldestTS)
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, source)
+		}
+	}
+	return sources, nil
+}
+
+func historicalSourceFromResult(
+	ctx context.Context,
+	er ExecResult,
+	row, start uint64,
+	oldestTS int64,
+) (databranchutils.HistoricalSource, error) {
+	level, err := er.GetString(ctx, row, start)
+	if err != nil {
+		return databranchutils.HistoricalSource{}, err
+	}
+	accountName, err := er.GetString(ctx, row, start+1)
+	if err != nil {
+		return databranchutils.HistoricalSource{}, err
+	}
+	databaseName, err := er.GetString(ctx, row, start+2)
+	if err != nil {
+		return databranchutils.HistoricalSource{}, err
+	}
+	tableName, err := er.GetString(ctx, row, start+3)
+	if err != nil {
+		return databranchutils.HistoricalSource{}, err
+	}
+	objectID, err := er.GetUint64(ctx, row, start+4)
+	if err != nil {
+		return databranchutils.HistoricalSource{}, err
+	}
+	return databranchutils.HistoricalSource{
+		Level:        level,
+		AccountName:  accountName,
+		DatabaseName: databaseName,
+		TableName:    tableName,
+		ObjectID:     objectID,
+		OldestTS:     oldestTS,
+	}, nil
+}
+
+func compactHistoricalAlterLineageWithBH(
+	ctx context.Context,
+	bh BackgroundExec,
+	now time.Time,
+) error {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	dag, err := loadHistoricalAlterLineageDAG(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	edges, err := loadHistoricalAlterLineageEdges(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	sources, err := loadHistoricalSources(sysCtx, bh, now)
+	if err != nil {
+		return err
+	}
+	plan := databranchutils.ComputeAlterLineageCompactionPlan(dag, edges, sources)
+	if len(plan.TableIDs) == 0 {
+		return nil
+	}
+	for _, sql := range []string{
+		databranchutils.BuildAlterLineageSnapshotDeleteSQL(plan.SnapshotNames),
+		databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs),
+	} {
+		bh.ClearExecResultSet()
+		if err = bh.Exec(sysCtx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // loadBranchDAGWithBH reads mo_branch_metadata under the sys account and
 // returns an in-memory DAG. It is used by the frontend reclaim entry point
