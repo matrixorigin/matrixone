@@ -73,6 +73,9 @@ func (hb *HashmapBuilder) setBudget(budget *process.HashBuildBudgetGeneration) {
 	hb.budget = budget
 }
 
+// SetBudget is the exported boundary used by spill and integration tests.
+func (hb *HashmapBuilder) SetBudget(budget *process.HashBuildBudgetGeneration) { hb.setBudget(budget) }
+
 func (hb *HashmapBuilder) reserveInitialMap(size int64) error {
 	if hb.budget == nil || size <= 0 {
 		return nil
@@ -143,7 +146,21 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 		return err
 	}
 	after := batchesAllocated(hb.Batches.Buf)
+	if after < before {
+		hb.Batches.Clean(proc.Mp())
+		reservation.Release()
+		hb.releaseBatchReservations()
+		return process.ErrHashBuildBudgetInvalid
+	}
 	actual := after - before
+	metadata, ok := retainedMetadataAllowance(src)
+	if !ok || actual > math.MaxUint64-metadata {
+		hb.Batches.Clean(proc.Mp())
+		reservation.Release()
+		hb.releaseBatchReservations()
+		return process.ErrHashBuildBudgetInvalid
+	}
+	actual += metadata
 	if actual > projected {
 		// This indicates an incomplete pre-allocation bound. Fail closed after
 		// cleaning; never legitimize the excess with post-allocation admission.
@@ -152,8 +169,35 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 		hb.releaseBatchReservations()
 		return process.ErrHashBuildBudgetInvalid
 	}
+	if _, err = reservation.ReconcileDown(actual); err != nil {
+		hb.Batches.Clean(proc.Mp())
+		reservation.Release()
+		hb.releaseBatchReservations()
+		return err
+	}
 	hb.batchReservations = append(hb.batchReservations, reservation)
 	return nil
+}
+
+// CopyBuildBatch is an exported compatibility wrapper.
+func (hb *HashmapBuilder) CopyBuildBatch(src *batch.Batch, proc *process.Process) error {
+	return hb.copyBuildBatch(src, proc)
+}
+
+func retainedMetadataAllowance(src *batch.Batch) (uint64, bool) {
+	if src == nil {
+		return 0, false
+	}
+	rows := uint64(src.RowCount())
+	columns := uint64(len(src.Vecs))
+	if columns > (math.MaxUint64-16)/8 {
+		return 0, false
+	}
+	perRow := uint64(16) + columns*8
+	if rows > 0 && perRow > math.MaxUint64/rows {
+		return 0, false
+	}
+	return rows * perRow, true
 }
 
 func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, error) {
@@ -183,15 +227,10 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 	// and are therefore not included in Batch.Allocated. Charge a deliberately
 	// conservative per-row allowance that also scales with the column count.
 	// This is part of admission, before CopyIntoBatches performs any allocation.
-	columns := uint64(len(src.Vecs))
-	if columns > (math.MaxUint64-16)/8 {
+	metadata, ok := retainedMetadataAllowance(src)
+	if !ok {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	perRow := 16 + columns*8
-	if rows > 0 && perRow > math.MaxUint64/rows {
-		return 0, process.ErrHashBuildBudgetInvalid
-	}
-	metadata := rows * perRow
 	if projected > math.MaxUint64-metadata {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -264,6 +303,18 @@ func (hb *HashmapBuilder) marshalRuntimeFilterVector(vec *vector.Vector) ([]byte
 	if uint64(len(data)) > payload {
 		token.Release()
 		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	// Keep the serialized slice's retained capacity and the source vector's
+	// still-live null/metadata footprint charged until the message handoff.
+	actual := uint64(cap(data))
+	if metadata > math.MaxUint64-4096 || actual > math.MaxUint64-(metadata+4096) {
+		token.Release()
+		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	actual += metadata + 4096
+	if _, err = token.ReconcileDown(actual); err != nil {
+		token.Release()
+		return nil, nil, err
 	}
 	return data, func() { token.Release() }, nil
 }

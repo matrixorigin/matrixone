@@ -106,7 +106,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 
 func TestProcessCodecHelpers(t *testing.T) {
 	t.Run("limitation conversion", func(t *testing.T) {
-		lim := Limitation{Size: 1, BatchRows: 2, BatchSize: 3, PartitionRows: 4, ReaderSize: 5}
+		lim := Limitation{Size: 1, BatchRows: 2, BatchSize: 3, PartitionRows: 4, ReaderSize: 5, SpillSize: 6}
 		pb := convertToPipelineLimitation(lim)
 		require.Equal(t, lim.Size, pb.Size)
 		require.Equal(t, lim.BatchRows, pb.BatchRows)

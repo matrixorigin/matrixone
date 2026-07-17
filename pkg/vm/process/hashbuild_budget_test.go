@@ -163,6 +163,60 @@ func TestHashBuildBudgetCapReductionFailsClosedUntilRelease(t *testing.T) {
 	newToken.Release()
 }
 
+func TestHashBuildReservationReconcileCopyAlias(t *testing.T) {
+	b := MustNewHashBuildBudget(20, 20)
+	g, _ := b.OpenGeneration(1)
+	tok, err := g.Reserve(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := *tok
+	if ok, err := alias.ReconcileDown(4); !ok || err != nil {
+		t.Fatalf("reconcile: ok=%v err=%v", ok, err)
+	}
+	if tok.Size() != 4 || g.Used() != 4 || b.AggregateUsed() != 4 {
+		t.Fatalf("alias reconcile diverged: size=%d gen=%d cn=%d", tok.Size(), g.Used(), b.AggregateUsed())
+	}
+	if _, err := tok.ReconcileDown(5); !errors.Is(err, ErrHashBuildReservationUpward) {
+		t.Fatalf("upward err=%v", err)
+	}
+	if !tok.Release() || alias.Release() {
+		t.Fatal("copy aliases must release exactly once")
+	}
+}
+
+func TestHashBuildSpillLedgersTransferReconcile(t *testing.T) {
+	b := MustNewHashBuildBudget(64, 64)
+	g, _ := b.OpenGeneration(1)
+	disk, err := g.ReserveSpillDisk(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := g.ReserveSpillFD(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.SpillDiskUsed() != 100 || b.SpillFDUsed() != 2 {
+		t.Fatalf("used disk=%d fd=%d", b.SpillDiskUsed(), b.SpillFDUsed())
+	}
+	if ok, err := disk.ReconcileDown(40); !ok || err != nil {
+		t.Fatalf("disk reconcile: %v %v", ok, err)
+	}
+	moved := fd.Transfer()
+	if moved == nil || fd.Release() {
+		t.Fatal("fd transfer")
+	}
+	g.Close()
+	if _, err := g.ReserveSpillDisk(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed spill reserve=%v", err)
+	}
+	disk.Release()
+	moved.Release()
+	if b.SpillDiskUsed() != 0 || b.SpillFDUsed() != 0 {
+		t.Fatalf("spill leak disk=%d fd=%d", b.SpillDiskUsed(), b.SpillFDUsed())
+	}
+}
+
 func TestHashBuildBudgetLiveCapProviderShrinksOpenGeneration(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 10)
 	g, _ := b.OpenGenerationWithCap(1, 10)
