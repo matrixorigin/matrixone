@@ -209,6 +209,23 @@ func TestExpressionHashKeyReservesDeclaredPeakBeforeEval(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestExpressionHashKeyAcceptsCastTargetType(t *testing.T) {
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			newExpr(0, types.T_int64.ToType()),
+			{
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			},
+		}}},
+	}
+
+	peak, err := expressionVectorPeak(expr, 1024, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(204800), peak, "charge the target-type and cast result vectors")
+}
+
 func TestGetJoinMapTransfersGroupSels(t *testing.T) {
 	var hb HashmapBuilder
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())

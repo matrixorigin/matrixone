@@ -372,11 +372,12 @@ func expressionTreePeak(expr *plan.Expr, rows uint64) (total uint64, output uint
 			}
 			total += child
 		}
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Fold:
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Fold, *plan.Expr_T:
 		// These executors may materialize a vector but have no child expression
-		// tree. Charge their declared output below.
+		// tree. Expr_T is the target-type argument used by CAST/bit_cast and is
+		// evaluated as a fixed vector. Charge their declared output below.
 	default:
-		// Window, subquery, correlated, list, target-type and max nodes do not
+		// Window, subquery, correlated, list and max nodes do not
 		// expose a bounded vector-evaluator tree here.
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
