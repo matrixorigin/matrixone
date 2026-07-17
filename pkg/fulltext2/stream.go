@@ -87,8 +87,8 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 			var score float64
 			for _, it := range iters {
 				if it.doc() == minDoc {
-					// Boolean mode: tf≡1 (classic GROUP BY doc_id), same as searchWAND / evalClause.
-					score += it.weight * s.scoreTerm(algo, 1, it.idf2, minDoc, avgDocLen)
+					// tf-aware, same as searchWAND / evalClause (fulltext2 keeps real tf).
+					score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, minDoc, avgDocLen)
 				}
 			}
 			sink.push(s.pks[minDoc], score)

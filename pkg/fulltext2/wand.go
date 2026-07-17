@@ -129,13 +129,10 @@ func (it *wandIter) blockMax(d int64, algo ScoreAlgo, avgDocLen float64) float64
 	if b >= len(it.tp.blockLastDoc) {
 		return 0
 	}
-	// Boolean mode scores with tf≡1 (classic GROUP BY doc_id), so within a block the
-	// largest contribution is at its MIN doc length (BM25's factor peaks there); tf does
-	// not enter, so blockMaxTf is irrelevant to the bound.
 	if algo == BM25 {
-		return it.weight * it.idf2 * bm25Factor(1, it.tp.blockMinDocLn[b], avgDocLen)
+		return it.weight * it.idf2 * bm25Factor(float64(it.tp.blockMaxTf[b]), it.tp.blockMinDocLn[b], avgDocLen)
 	}
-	return it.weight * it.idf2 // TfIdf: tf≡1
+	return it.weight * float64(it.tp.blockMaxTf[b]) * it.idf2 // TfIdf
 }
 
 // blockEndAt is the last ord of the block containing doc d (the upper edge of the
@@ -299,9 +296,9 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 				var score float64
 				for _, it := range iters {
 					if it.doc() == pivotDoc {
-						// Boolean mode: tf≡1 (classic GROUP BY doc_id). Matches the full-scan
-						// evalClause scorer so WAND returns the identical ranking.
-						score += it.weight * s.scoreTerm(algo, 1, it.idf2, pivotDoc, avgDocLen)
+						// tf-aware, matching the full-scan evalClause scorer so WAND returns the
+						// identical ranking (fulltext2 keeps real tf; see termMaxImpact).
+						score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, pivotDoc, avgDocLen)
 					}
 				}
 				// FastMaxHeap.Push fills until full, then admits iff -score < root
@@ -330,13 +327,10 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 // termMaxImpact is the largest weighted-free score a term can contribute to any
 // document, from its raw maxTf (and minDocLen for BM25's saturating factor).
 func (s *Segment) termMaxImpact(algo ScoreAlgo, idf2 float64, pl *termPostings, avgDocLen float64) float64 {
-	// Boolean mode scores with tf≡1 (classic GROUP BY doc_id), so the largest possible
-	// contribution is at the term's MIN doc length (BM25's factor peaks there); tf does
-	// not enter, so maxTf is irrelevant to the bound.
 	if algo == BM25 {
-		return idf2 * bm25Factor(1, pl.minDocLen, avgDocLen)
+		return idf2 * bm25Factor(float64(pl.maxTf), pl.minDocLen, avgDocLen)
 	}
-	return idf2 // TfIdf: tf≡1
+	return float64(pl.maxTf) * idf2 // TfIdf
 }
 
 // heapToResults drains the bounded top-k heap into results ordered by score descending
