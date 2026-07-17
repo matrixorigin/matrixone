@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -380,10 +381,11 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 }
 
 // phraseSlots turns an NL pattern into the positional phrase slots to match. For
-// ngram/default/json it uses classic fulltext's ParsePatternInNLMode — redundant-ngram
-// removal to the full trigrams that cover the string (TEXT), with sub-3-char fragments
-// as word* prefixes (STAR), each carrying a BYTE position. For gojieba it tokenizes into
-// words with byte positions. Offsets are relative to the first slot.
+// gojieba it tokenizes into words with byte positions. For ngram/default/json it uses
+// ngramPhraseSlots: EXACT full trigrams covering each CJK run (no word* prefix for runs
+// >= 3 chars), so matching is exact-term lookups + byte-position adjacency instead of the
+// old ParsePatternInNLMode prefix decomposition, whose word* expansion + full-position
+// materialization OOM-killed the CN at scale. Offsets are relative to the first slot.
 func phraseSlots(pattern, parser string) ([]phraseSlot, error) {
 	if IsJSONValueParser(parser) {
 		// json_value: the whole pattern is ONE atomic value matched exactly (no ngram) —
@@ -400,28 +402,84 @@ func phraseSlots(pattern, parser string) ([]phraseSlot, error) {
 		}
 		return tokenizePhraseSlots(tok, []byte(pattern)), nil
 	}
-	ps, err := fulltext.ParsePatternInNLMode(pattern, ParserNgram)
-	if err != nil {
-		return nil, err
-	}
-	return patternsToPhraseSlots(ps), nil
+	return ngramPhraseSlots(pattern), nil
 }
 
-// patternsToPhraseSlots maps classic NL patterns (TEXT trigrams / STAR word* prefixes,
-// with byte positions) to fulltext2 phrase slots, byte offsets relative to the first.
-func patternsToPhraseSlots(ps []*fulltext.Pattern) []phraseSlot {
-	if len(ps) == 0 {
+// isBreakerRune / isLatinRune mirror SimpleTokenizer's run classification (simple.go) so
+// the query decomposition segments runs exactly as the document tokenizer does.
+func isBreakerRune(r rune) bool {
+	if r < 128 {
+		return !((r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'))
+	}
+	return unicode.IsPunct(r) || unicode.IsSpace(r)
+}
+
+func isLatinRune(r rune) bool { return r < 0x7FF }
+
+// ngramPhraseSlots decomposes an ngram-parser query into positional phrase slots that
+// match the SimpleTokenizer document index WITHOUT word* prefixes for CJK runs >= 3
+// chars. A CJK run is covered by EXACT full trigrams at char step ngramSize PLUS a final
+// trigram that ends at the run's end (the last trigram is shifted back to cover the tail),
+// so byte-position adjacency alone pins the whole run — the overlapping/adjacent trigrams
+// uniquely determine the substring. Latin runs become whole (lowercased) word slots. Only
+// a CJK run SHORTER than ngramSize (1-2 chars, e.g. a bare 2-char term) has no trigram and
+// falls back to a single prefix (star) slot, handled presence-only at match time.
+func ngramPhraseSlots(pattern string) []phraseSlot {
+	runes := []rune(pattern)
+	n := len(runes)
+	if n == 0 {
 		return nil
 	}
-	base := ps[0].Position
-	slots := make([]phraseSlot, 0, len(ps))
-	for _, p := range ps {
-		term := p.Text
-		star := p.Operator == fulltext.STAR
-		if star {
-			term = strings.TrimSuffix(term, "*")
+	bpos := make([]int32, n+1) // byte offset of each rune index
+	b := int32(0)
+	for i, r := range runes {
+		bpos[i] = b
+		b += int32(utf8.RuneLen(r))
+	}
+	bpos[n] = b
+
+	var slots []phraseSlot
+	i := 0
+	for i < n {
+		if isBreakerRune(runes[i]) {
+			i++
+			continue
 		}
-		slots = append(slots, phraseSlot{term: term, star: star, off: p.Position - base})
+		if isLatinRune(runes[i]) {
+			j := i
+			for j < n && !isBreakerRune(runes[j]) && isLatinRune(runes[j]) {
+				j++
+			}
+			slots = append(slots, phraseSlot{term: strings.ToLower(string(runes[i:j])), off: bpos[i]})
+			i = j
+			continue
+		}
+		// CJK run [i, j)
+		j := i
+		for j < n && !isBreakerRune(runes[j]) && !isLatinRune(runes[j]) {
+			j++
+		}
+		if j-i < ngramSize {
+			// 1-2 char CJK run: no trigram exists → prefix (rare; presence-only in matchPhrase)
+			slots = append(slots, phraseSlot{term: string(runes[i:j]), star: true, off: bpos[i]})
+			i = j
+			continue
+		}
+		last := j - ngramSize // start index of the trigram ending at the run's end
+		for c := i; c <= last; c += ngramSize {
+			slots = append(slots, phraseSlot{term: string(runes[c : c+ngramSize]), off: bpos[c]})
+		}
+		if (last-i)%ngramSize != 0 { // tail not covered by the step-ngramSize loop → add the final trigram
+			slots = append(slots, phraseSlot{term: string(runes[last : last+ngramSize]), off: bpos[last]})
+		}
+		i = j
+	}
+	if len(slots) == 0 {
+		return nil
+	}
+	base := slots[0].off
+	for k := range slots {
+		slots[k].off -= base
 	}
 	return slots
 }
