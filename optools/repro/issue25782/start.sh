@@ -151,9 +151,9 @@ manifest_load log; wait_port log 32001 90
 start_one tn "${MEMORY_TN}" "${TN_CONFIG}" 6062
 manifest_load tn; wait_port tn 19000 120
 start_one cn1 "${MEMORY_CN1}" "${CN1_CONFIG}" 6063
-manifest_load cn1; wait_port cn1 16001 180
+manifest_load cn1; wait_port cn1 "${CN1_SQL_PORT:-16001}" 180
 start_one cn2 "${MEMORY_CN2}" "${CN2_CONFIG}" 6064
-manifest_load cn2; wait_port cn2 16002 180
+manifest_load cn2; wait_port cn2 "${CN2_SQL_PORT:-16002}" 180
 
 if [[ "${SMOKE_ONLY:-0}" = 1 ]]; then
     printf 'state=smoke-only\n' >"${MO_25782_RUNTIME}/start.state"
@@ -169,10 +169,10 @@ readiness_log="${MO_25782_RUNTIME}/logs/readiness.log"
 metadata_ok=0
 for ((metadata_try=0; metadata_try<180; metadata_try++)); do
     set +e
-    cn1_select="$(mysql_exec 127.0.0.1 16001 'SELECT 1;' 2>&1)"; rc1=$?
-    cn2_select="$(mysql_exec 127.0.0.1 16002 'SELECT 1;' 2>&1)"; rc2=$?
-    replicas="$(mysql_exec 127.0.0.1 16001 'SHOW LOGSERVICE REPLICAS;' 2>&1)"; rc3=$?
-    backends="$(mysql_exec 127.0.0.1 16001 'SHOW BACKEND SERVERS;' 2>&1)"; rc4=$?
+    cn1_select="$(mysql_exec 127.0.0.1 "${CN1_SQL_PORT:-16001}" 'SELECT 1;' 2>&1)"; rc1=$?
+    cn2_select="$(mysql_exec 127.0.0.1 "${CN2_SQL_PORT:-16002}" 'SELECT 1;' 2>&1)"; rc2=$?
+    replicas="$(mysql_exec 127.0.0.1 "${CN1_SQL_PORT:-16001}" 'SHOW LOGSERVICE REPLICAS;' 2>&1)"; rc3=$?
+    backends="$(mysql_exec 127.0.0.1 "${CN1_SQL_PORT:-16001}" 'SHOW BACKEND SERVERS;' 2>&1)"; rc4=$?
     set -e
     {
         printf 'attempt=%s\n' "${metadata_try}"
@@ -188,7 +188,7 @@ for ((metadata_try=0; metadata_try<180; metadata_try++)); do
     sleep 1
 done
 ((metadata_ok == 1)) || { log_msg "CN SQL/HAKeeper metadata readiness timed out; see ${readiness_log}"; exit 1; }
-mysql_exec 127.0.0.1 16001 'CREATE DATABASE IF NOT EXISTS issue25782_harness; CREATE TABLE IF NOT EXISTS issue25782_harness.lifecycle_probe (id INT PRIMARY KEY, v VARCHAR(32)); DELETE FROM issue25782_harness.lifecycle_probe; INSERT INTO issue25782_harness.lifecycle_probe VALUES (1, "ready"); SELECT COUNT(*) FROM issue25782_harness.lifecycle_probe;' >>"${readiness_log}" 2>&1 || { log_msg "DDL/DML readiness failed; see ${readiness_log}"; exit 1; }
+mysql_exec 127.0.0.1 "${CN1_SQL_PORT:-16001}" 'CREATE DATABASE IF NOT EXISTS issue25782_harness; CREATE TABLE IF NOT EXISTS issue25782_harness.lifecycle_probe (id INT PRIMARY KEY, v VARCHAR(32)); DELETE FROM issue25782_harness.lifecycle_probe; INSERT INTO issue25782_harness.lifecycle_probe VALUES (1, "ready"); SELECT COUNT(*) FROM issue25782_harness.lifecycle_probe;' >>"${readiness_log}" 2>&1 || { log_msg "DDL/DML readiness failed; see ${readiness_log}"; exit 1; }
 
 start_one proxy "${MEMORY_PROXY}" "${PROXY_CONFIG}" 6065
 manifest_load proxy; wait_port proxy 6001 120

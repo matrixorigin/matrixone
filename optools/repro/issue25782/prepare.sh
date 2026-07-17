@@ -12,6 +12,10 @@ fixed_frontend_limits=""
 if [[ "${mode}" == fixed ]]; then
     fixed_frontend_limits=$'processLimitationSize = 201326592\nprocessLimitationSpillSize = 1073741824'
 fi
+cn1_sql_port="${MO_25782_CN1_SQL_PORT:-16001}"
+cn2_sql_port="${MO_25782_CN2_SQL_PORT:-16002}"
+[[ "${cn1_sql_port}" =~ ^[1-9][0-9]*$ && "${cn2_sql_port}" =~ ^[1-9][0-9]*$ ]] || die "CN SQL ports must be positive integers"
+[[ "${cn1_sql_port}" != "${cn2_sql_port}" ]] || die "CN SQL ports must differ"
 
 runtime_arg="${MO_25782_RUNTIME:-}"
 while (($#)); do
@@ -189,8 +193,8 @@ enable-metric-to-prom = true
 disable-trace = true
 EOF
 }
-write_cn_config cn1 "${uuid_cn1}" 18100 16001 17003
-write_cn_config cn2 "${uuid_cn2}" 18200 16002 17004
+write_cn_config cn1 "${uuid_cn1}" 18100 "${cn1_sql_port}" 17003
+write_cn_config cn2 "${uuid_cn2}" 18200 "${cn2_sql_port}" 17004
 
 cat >"${runtime}/configs/proxy.toml" <<EOF
 service-type = "PROXY"
@@ -212,20 +216,21 @@ enable-metric-to-prom = true
 disable-trace = true
 EOF
 
-ports_all="32000 32001 32002 $(seq -s ' ' 19000 19020) $(seq -s ' ' 18100 18120) 16001 $(seq -s ' ' 18200 18220) 16002 6001 17001 17002 17003 17004 17005 6061 6062 6063 6064 6065"
+ports_all="32000 32001 32002 $(seq -s ' ' 19000 19020) $(seq -s ' ' 18100 18120) ${cn1_sql_port} $(seq -s ' ' 18200 18220) ${cn2_sql_port} 6001 17001 17002 17003 17004 17005 6061 6062 6063 6064 6065"
 precheck_ports "${ports_all}"
 
 env_tmp="${runtime}/harness.env.tmp.$$"
 {
     printf 'MO_25782_RUNTIME=%q\n' "${runtime}"
-    printf 'MO_25782_MODE=%q\n' "${mode}"
+	printf 'MO_25782_MODE=%q\n' "${mode}"
+	printf 'CN1_SQL_PORT=%q\nCN2_SQL_PORT=%q\n' "${cn1_sql_port}" "${cn2_sql_port}"
     printf 'BINARY=%q\n' "${MO_25782_BINARY:-${REPO_ROOT}/mo-service}"
     printf 'MO_25782_MYSQL_PASSWORD=%q\n' "${MO_25782_MYSQL_PASSWORD:-111}"
     printf 'LOG_UUID=%q\nTN_UUID=%q\nCN1_UUID=%q\nCN2_UUID=%q\nPROXY_UUID=%q\n' "${uuid_log}" "${uuid_tn}" "${uuid_cn1}" "${uuid_cn2}" "${uuid_proxy}"
     printf 'LOG_CONFIG=%q\nTN_CONFIG=%q\nCN1_CONFIG=%q\nCN2_CONFIG=%q\nPROXY_CONFIG=%q\n' \
         "${runtime}/configs/log.toml" "${runtime}/configs/tn.toml" "${runtime}/configs/cn1.toml" "${runtime}/configs/cn2.toml" "${runtime}/configs/proxy.toml"
     printf 'LOG_PORTS=%q\nTN_PORTS=%q\nCN1_PORTS=%q\nCN2_PORTS=%q\n' \
-        '32000 32001 32002' "$(seq -s ' ' 19000 19020)" "$(seq -s ' ' 18100 18120) 16001" "$(seq -s ' ' 18200 18220) 16002"
+        '32000 32001 32002' "$(seq -s ' ' 19000 19020)" "$(seq -s ' ' 18100 18120) ${cn1_sql_port}" "$(seq -s ' ' 18200 18220) ${cn2_sql_port}"
     printf 'CN1_SERVICE_ADDR=%q\nCN2_SERVICE_ADDR=%q\n' '127.0.0.1:18100' '127.0.0.1:18200'
     printf 'PROXY_PORT=6001\nSTATUS_PORTS=%q\nDEBUG_PORTS=%q\nPORTS_ALL=%q\n' \
         '17001 17002 17003 17004 17005' '6061 6062 6063 6064 6065' "${ports_all}"

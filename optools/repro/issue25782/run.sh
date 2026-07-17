@@ -207,7 +207,7 @@ cn_mysql_file() {
 
 sync_plan_stats() {
     local phase="$1" file="$2" port
-    for port in 16001 16002; do
+    for port in "${CN1_SQL_PORT:-16001}" "${CN2_SQL_PORT:-16002}"; do
         log_msg "stats_sync phase=${phase} cn_port=${port}"
         cn_mysql_file "$port" "$file" "${RESULT_DIR}/execution/${phase}_sync_cn${port}.out" ||
             die "${phase}: failed to synchronize planner statistics on CN port ${port}"
@@ -216,11 +216,11 @@ sync_plan_stats() {
 
 configure_route_labels() {
     local output="${RESULT_DIR}/execution/route_labels.out" backends="" try
-    mysql_exec 127.0.0.1 16001 \
+    mysql_exec 127.0.0.1 "${CN1_SQL_PORT:-16001}" \
         "SELECT mo_ctl('cn','label','${CN1_UUID}:issue25782_route:cn1'); SELECT mo_ctl('cn','label','${CN2_UUID}:issue25782_route:cn2');" \
         >"$output" 2>&1 || die "failed to assign private CN route labels"
     for ((try=0; try<30; try++)); do
-        backends="$(mysql_exec 127.0.0.1 16001 'SHOW BACKEND SERVERS;' 2>&1 || true)"
+        backends="$(mysql_exec 127.0.0.1 "${CN1_SQL_PORT:-16001}" 'SHOW BACKEND SERVERS;' 2>&1 || true)"
         printf 'attempt=%s\n%s\n' "$try" "$backends" >"${RESULT_DIR}/execution/route_labels.backends"
         if awk -v id="$CN1_UUID" '$0 ~ id && $0 ~ /issue25782_route/ && $0 ~ /cn1/ {found=1} END {exit !found}' <<<"$backends" &&
            awk -v id="$CN2_UUID" '$0 ~ id && $0 ~ /issue25782_route/ && $0 ~ /cn2/ {found=1} END {exit !found}' <<<"$backends"; then
