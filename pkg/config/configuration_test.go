@@ -243,6 +243,17 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 	}
 }
 
+func TestNewObservabilityParametersDisablesOnlySpansByDefault(t *testing.T) {
+	cfg := NewObservabilityParameters()
+
+	// DisableTrace gates StatementInfo plus the log and error exporters, so it
+	// must remain false when spans are disabled by default.
+	require.True(t, cfg.DisableSpan)
+	require.False(t, cfg.DisableTrace)
+	require.False(t, cfg.DisableError)
+	require.False(t, cfg.DisableMetric)
+}
+
 func TestOBCUConfig_SetDefaultValues(t *testing.T) {
 	type fields struct {
 		CUUnit        float64

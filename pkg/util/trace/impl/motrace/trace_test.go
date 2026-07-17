@@ -24,16 +24,56 @@ package motrace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var exportMux sync.Mutex
+
+type recordingBatchProcessor struct {
+	registered map[reflect.Type]struct{}
+}
+
+func newRecordingBatchProcessor() *recordingBatchProcessor {
+	return &recordingBatchProcessor{registered: make(map[reflect.Type]struct{})}
+}
+
+func (p *recordingBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
+func (p *recordingBatchProcessor) Start() bool                                      { return true }
+func (p *recordingBatchProcessor) Stop(bool) error                                  { return nil }
+func (p *recordingBatchProcessor) Register(name batchpipe.HasName, _ PipeImpl) {
+	p.registered[reflect.TypeOf(name)] = struct{}{}
+}
+
+func TestInitExporterKeepsStatementLogAndErrorWhenSpanDisabled(t *testing.T) {
+	processor := newRecordingBatchProcessor()
+	cfg := &tracerProviderConfig{
+		enable:              true,
+		disableSpan:         true,
+		batchProcessor:      processor,
+		exportInterval:      time.Second,
+		bufferSizeThreshold: 1024,
+	}
+
+	require.NoError(t, initExporter(context.Background(), cfg))
+	require.True(t, cfg.disableSpan)
+	require.True(t, cfg.IsEnable())
+	for _, item := range []batchpipe.HasName{
+		&StatementInfo{},
+		&MOZapLog{},
+		&MOErrorHolder{},
+	} {
+		_, ok := processor.registered[reflect.TypeOf(item)]
+		require.Truef(t, ok, "%T collector must remain registered", item)
+	}
+}
 
 func Test_initExport(t *testing.T) {
 	exportMux.Lock()
