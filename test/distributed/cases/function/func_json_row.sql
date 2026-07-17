@@ -45,21 +45,19 @@ select id, cast(json_row(null, js) as json) from jrt;
 
 -- aggregate
 select 'agg';
-select count(*), cast('[' || group_concat(json_row(id, bi, d, d128, t, js)) || ']' as json) from jrt;
+select count(*), cast(concat('[', group_concat(json_row(id, bi, d, d128, t, js)), ']') as json) from jrt;
 
 -- group_concat bug
-select b, count(*), '[' || group_concat(json_row(id)) || ']' as js from jrt group by b;
-select b, '[' || json_row(id, bi, d, d128, t, js) || ']' as js from jrt where b = false;
-select b, count(*), '[' || group_concat(json_row(id, bi, d, d128, t, js)) || ']' as js from jrt group by b;
+select b, count(*), concat('[', group_concat(json_row(id)), ']') as js from jrt group by b;
+select b, concat('[', json_row(id, bi, d, d128, t, js), ']') as js from jrt where b = false;
+select b, count(*), concat('[', group_concat(json_row(id, bi, d, d128, t, js)), ']') as js from jrt group by b;
 
 -- esp, this one.
-select b, '[' || group_concat(t, t, t, t, t) || ']' as js from jrt group by b; 
+select b, concat('[', group_concat(t, t, t, t, t), ']') as js from jrt group by b;
 
 --
 -- failure
 --
 select json_row(id, cast(vc as varbinary)) from jrt;
 drop table jrt;
-
-
 

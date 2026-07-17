@@ -476,7 +476,8 @@ type processHelper struct {
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
 	StmtId        uuid.UUID
-	prepareParams *vector.Vector
+	prepareParams pipeline.PrepareParamInfo
+	affectedRows  int64
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -615,7 +616,29 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.SetPrepareParams(pHelper.prepareParams)
+	if pHelper.prepareParams.Length > 0 {
+		prepareParams, err := vector.NewVecWithDataCopy(
+			types.T_text.ToType(),
+			int(pHelper.prepareParams.Length),
+			pHelper.prepareParams.Data,
+			pHelper.prepareParams.Area,
+			proc.Mp(),
+		)
+		if err != nil {
+			proc.Free()
+			mpool.DeleteMPool(mp)
+			return nil, err
+		}
+		for i := range pHelper.prepareParams.Nulls {
+			if pHelper.prepareParams.Nulls[i] {
+				prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), pHelper.prepareParams.IsBin...))
+	}
+	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
+	// the previous statement's affected rows instead of the default 0.
+	proc.SetAffectedRows(pHelper.affectedRows)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
@@ -728,24 +751,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	}
 
 	result := processHelper{
-		id:        procInfo.Id,
-		lim:       process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:  procInfo.UnixTime,
-		accountId: procInfo.AccountId,
-		txnClient: cli,
-	}
-	if procInfo.PrepareParams.Length > 0 {
-		result.prepareParams = vector.NewVecWithData(
-			types.T_text.ToType(),
-			int(procInfo.PrepareParams.Length),
-			procInfo.PrepareParams.Data,
-			procInfo.PrepareParams.Area,
-		)
-		for i := range procInfo.PrepareParams.Nulls {
-			if procInfo.PrepareParams.Nulls[i] {
-				result.prepareParams.GetNulls().Add(uint64(i))
-			}
-		}
+		id:           procInfo.Id,
+		lim:          process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:     procInfo.UnixTime,
+		accountId:    procInfo.AccountId,
+		txnClient:    cli,
+		affectedRows: procInfo.AffectedRows,
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {
@@ -755,6 +766,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if err != nil {
 		return processHelper{}, err
 	}
+	result.prepareParams = procInfo.PrepareParams
 	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
 		copy(result.StmtId[:], sessLogger.StmtId)
@@ -772,8 +784,10 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 // indefinitely when a remote CN fails.
 const waitRegistrationTimeout = 30 * time.Second
 
-func newRemoteDispatchNotRegisteredYetError(ctx context.Context, uid uuid.UUID) error {
-	return moerr.NewRemoteDispatchNotRegistered(ctx, uid.String())
+func newRemoteDispatchNotRegisteredYetError(_ context.Context, uid uuid.UUID) error {
+	// Registration lag is an expected, retryable protocol state. Keep the
+	// typed wire error without reporting every receiver attempt as an ERROR.
+	return moerr.NewRemoteDispatchNotRegistered(moerr.NoReportContext(), uid.String())
 }
 
 func isRemoteDispatchNotRegisteredYetError(err error) bool {
