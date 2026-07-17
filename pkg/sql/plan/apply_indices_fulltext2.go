@@ -45,6 +45,16 @@ func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, 
 			idxdef.IndexName)
 	}
 
+	// A POSITION_FREE index stores no positions, so NL / BOOLEAN (and the bare default,
+	// which is NL semantics) phrase matching cannot work — only IN BM25 MODE (bag-of-words)
+	// is valid. Reject the others up front with a clear message instead of silently
+	// returning wrong/empty results.
+	if mode != int64(tree.FULLTEXT_BM25) && fulltext2PositionFreeFromParams(idxdef.IndexAlgoParams) {
+		return nil, moerr.NewInvalidInputf(builder.GetContext(),
+			"fulltext2 index %q is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching",
+			idxdef.IndexName)
+	}
+
 	cfgMap := map[string]string{
 		"db":       scanNode.ObjRef.SchemaName,
 		"index":    storeTbl,
@@ -93,6 +103,22 @@ func fulltext2ParserFromParams(params string) string {
 		return ""
 	}
 	return p.Parser
+}
+
+// fulltext2PositionFreeFromParams reports whether the index was built POSITION_FREE
+// (position_free=="true" in IndexAlgoParams). Such an index has no positional payload,
+// so only IN BM25 MODE (bag-of-words) can query it.
+func fulltext2PositionFreeFromParams(params string) bool {
+	if len(params) == 0 {
+		return false
+	}
+	var p struct {
+		PositionFree string `json:"position_free"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return false
+	}
+	return p.PositionFree == "true"
 }
 
 // findFulltext2IndexTables resolves the storage + metadata hidden tables of a
