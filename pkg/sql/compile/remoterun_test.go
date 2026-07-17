@@ -572,6 +572,17 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		}
 	})
 
+	t.Run("HashBuild_TrackNullKeys", func(t *testing.T) {
+		op := &hashbuild.HashBuild{TrackNullKeys: true}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.HashBuild.TrackNullKeys)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*hashbuild.HashBuild).TrackNullKeys)
+	})
+
 	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
 		for name, op := range map[string]vm.Operator{
 			"hashjoin": &hashjoin.HashJoin{
