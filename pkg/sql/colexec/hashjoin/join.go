@@ -332,16 +332,39 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
+			files := ctr.mp.TakeSpillBuildFiles()
+			var budget *process.HashBuildBudgetGeneration
+			if files != nil {
+				var ok bool
+				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
+				if !ok || budget == nil {
+					for _, file := range files {
+						_ = file.Close()
+					}
+					return moerr.NewInternalError(proc.Ctx, "spilled join map is missing its producer budget generation")
+				}
+			} else {
+				budget, err = proc.GetHashBuildBudget()
+				if err != nil {
+					return err
+				}
+			}
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
+				ProbeKeyExprs:           hashJoin.EqConds[0],
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
 				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
 				HashOnPK:                hashJoin.HashOnPK,
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
+				Budget:                  budget,
 			})
-			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if files != nil {
+				engine.InitFromSpilledFiles(files)
+			} else {
+				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)

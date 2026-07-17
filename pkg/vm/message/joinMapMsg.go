@@ -164,21 +164,91 @@ type JoinMap struct {
 	memoryReleaseOnce sync.Once
 
 	// spill support
-	Spilled       bool
-	SpillBuildFds []*os.File // anonymous build-side file descriptors
+	Spilled         bool
+	SpillBuildFds   []*os.File // legacy anonymous build-side file descriptors
+	SpillBuildFiles []*SpillFile
+	// spillBudget is an in-process opaque handle to the exact producer budget
+	// generation.  The message package deliberately does not import process;
+	// the single spill consumer type-checks the handle before use.
+	spillBudget any
+}
+
+// SpillFile binds one anonymous spill descriptor to the accounting ownership
+// that made the file admissible.  Ownership is transferred by moving the
+// SpillFile pointer; Close is the only terminal operation and is idempotent.
+// Keeping the release callback SQL-agnostic avoids a message -> process import
+// cycle while still ensuring disk/FD tokens follow the physical file.
+type SpillFile struct {
+	mu          sync.Mutex
+	fd          *os.File
+	rows        int64
+	bytes       uint64
+	release     func()
+	releaseOnce sync.Once
+}
+
+func NewSpillFile(fd *os.File, rows int64, bytes uint64, release func()) *SpillFile {
+	return &SpillFile{fd: fd, rows: rows, bytes: bytes, release: release}
+}
+
+// File returns the descriptor to its current single owner.  Callers must not
+// retain it after transferring or closing the SpillFile.
+func (f *SpillFile) File() *os.File {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fd
+}
+
+func (f *SpillFile) Rows() int64 {
+	if f == nil {
+		return 0
+	}
+	return f.rows
+}
+
+func (f *SpillFile) Bytes() uint64 {
+	if f == nil {
+		return 0
+	}
+	return f.bytes
+}
+
+func (f *SpillFile) Close() error {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	fd := f.fd
+	f.fd = nil
+	f.mu.Unlock()
+	var err error
+	if fd != nil {
+		err = fd.Close()
+	}
+	f.releaseOnce.Do(func() {
+		if f.release != nil {
+			f.release()
+			f.release = nil
+		}
+	})
+	return err
 }
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
-		valid:         true,
-		mpool:         m,
-		shm:           shm,
-		ihm:           ihm,
-		sels:          sels,
-		delRows:       delRows,
-		batches:       batches,
-		Spilled:       false,
-		SpillBuildFds: nil,
+		valid:           true,
+		mpool:           m,
+		shm:             shm,
+		ihm:             ihm,
+		sels:            sels,
+		delRows:         delRows,
+		batches:         batches,
+		Spilled:         false,
+		SpillBuildFds:   nil,
+		SpillBuildFiles: nil,
 	}
 }
 
@@ -286,6 +356,33 @@ func (jm *JoinMap) TakeSpillBuildFds() []*os.File {
 	return fds
 }
 
+// SetSpillBuildFiles installs a complete, transactionally-published spill
+// file set. The JoinMap becomes its single owner until TakeSpillBuildFiles.
+func (jm *JoinMap) SetSpillBuildFiles(files []*SpillFile) {
+	jm.Spilled = len(files) > 0
+	jm.SpillBuildFiles = files
+}
+
+func (jm *JoinMap) SetSpillBudget(budget any) {
+	jm.spillBudget = budget
+}
+
+// TakeSpillBudget moves the producer generation handle to the single spill
+// consumer. It must be called together with TakeSpillBuildFiles.
+func (jm *JoinMap) TakeSpillBudget() any {
+	budget := jm.spillBudget
+	jm.spillBudget = nil
+	return budget
+}
+
+// TakeSpillBuildFiles transfers the complete accounted spill file set to the
+// caller. FreeMemory no longer closes or releases the transferred files.
+func (jm *JoinMap) TakeSpillBuildFiles() []*SpillFile {
+	files := jm.SpillBuildFiles
+	jm.SpillBuildFiles = nil
+	return files
+}
+
 func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }
@@ -304,6 +401,14 @@ func (jm *JoinMap) FreeMemory() {
 		}
 	}
 	jm.SpillBuildFds = nil
+	for i, file := range jm.SpillBuildFiles {
+		if file != nil {
+			_ = file.Close()
+			jm.SpillBuildFiles[i] = nil
+		}
+	}
+	jm.SpillBuildFiles = nil
+	jm.spillBudget = nil
 	jm.sels.Free(jm.mpool)
 	if jm.ihm != nil {
 		jm.ihm.Free()

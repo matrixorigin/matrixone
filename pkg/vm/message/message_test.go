@@ -239,6 +239,54 @@ func TestFreeMemoryClosesSpillFds(t *testing.T) {
 	})
 }
 
+func TestAccountedSpillFileOwnership(t *testing.T) {
+	var releases atomic.Int32
+	newFile := func() (*SpillFile, string) {
+		fd, err := os.CreateTemp("", "test_accounted_spill_*")
+		require.NoError(t, err)
+		return NewSpillFile(fd, 7, 11, func() { releases.Add(1) }), fd.Name()
+	}
+
+	t.Run("free_closes_and_releases_once", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		fd := file.File()
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.SetSpillBuildFiles([]*SpillFile{file})
+		require.True(t, jm.IsSpilled())
+		require.Equal(t, int64(7), file.Rows())
+		require.Equal(t, uint64(11), file.Bytes())
+
+		jm.FreeMemory()
+		jm.FreeMemory()
+		require.Equal(t, int32(1), releases.Load())
+		_, err := fd.Stat()
+		require.Error(t, err)
+	})
+
+	t.Run("take_moves_complete_ownership", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.SetSpillBuildFiles([]*SpillFile{file})
+		budgetIdentity := &struct{ generation uint64 }{generation: 9}
+		jm.SetSpillBudget(budgetIdentity)
+
+		files := jm.TakeSpillBuildFiles()
+		require.Len(t, files, 1)
+		require.Nil(t, jm.TakeSpillBuildFiles())
+		require.Same(t, budgetIdentity, jm.TakeSpillBudget())
+		require.Nil(t, jm.TakeSpillBudget())
+		jm.FreeMemory()
+		require.Zero(t, releases.Load())
+		require.NoError(t, files[0].Close())
+		require.NoError(t, files[0].Close())
+		require.Equal(t, int32(1), releases.Load())
+	})
+}
+
 func TestIsDeleted(t *testing.T) {
 	t.Run("nil_bitmap", func(t *testing.T) {
 		jm := &JoinMap{delRows: nil}

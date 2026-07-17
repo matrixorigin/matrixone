@@ -15,7 +15,10 @@
 package hashbuild
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"math"
 	"os"
 
 	"github.com/cespare/xxhash/v2"
@@ -35,6 +38,61 @@ const (
 	spillBufferSize = 8192 // Buffer 8192 rows before flushing
 )
 
+// spillBudgetBytes is intentionally conservative.  The input batch remains
+// owned by the upstream operator while HashBuild evaluates and partitions it,
+// so its footprint is included in the temporary peak alongside hash values,
+// row selections, the selected bucket, and marshal scratch.
+func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() <= 0 {
+		return 0, nil
+	}
+	rows := uint64(bat.RowCount())
+	if rows > math.MaxUint64/12 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	// hash values + one reusable selection array.  The selected batch and its
+	// varlen area may overlap the source capacity, hence a full additional
+	// source allocation is charged rather than just logical Size().
+	total := rows * 12
+	source := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > source {
+		source = size
+	}
+	if source > math.MaxUint64-total {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	total += source
+	// A selected bucket can contain every input row.  MarshalBinary emits
+	// vector metadata and varlen area; 2x payload plus fixed headers is a safe
+	// upper bound before bytes.Buffer grows.
+	if source > (math.MaxUint64-64*1024)/2 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	marshal := source*2 + 64*1024
+	if total > math.MaxUint64-marshal {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	total += marshal
+	if total > uint64(^uint(0)>>1) {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return total, nil
+}
+
+func (ctr *container) reserveSpillScratch(bat *batch.Batch) (*process.HashBuildReservation, error) {
+	if ctr.hashmapBuilder.budget == nil {
+		return nil, nil
+	}
+	bytes, err := spillBudgetBytes(bat)
+	if err != nil {
+		return nil, err
+	}
+	if bytes == 0 {
+		return nil, nil
+	}
+	return ctr.hashmapBuilder.budget.Reserve(bytes)
+}
+
 func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch, file *os.File, analyzer process.Analyzer) (int64, error) {
 	if bat == nil || bat.RowCount() == 0 {
 		return 0, nil
@@ -48,9 +106,12 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	var zero int64
 	ctr.spillWriteBuf.Write(types.EncodeInt64(&zero))
 
-	// Write batch data directly to spillWriteBuf
+	// Write batch data directly to spillWriteBuf.  The bounded partition path
+	// reserves this buffer's conservative upper bound before entering here.
 	batchStartPos := ctr.spillWriteBuf.Len()
-	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
+	if _, err := bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false); err != nil {
+		return 0, err
+	}
 	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
 
 	// Write batchSize at reserved position
@@ -60,9 +121,37 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	magic := uint64(spillMagic)
 	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
 
-	written, err := file.Write(ctr.spillWriteBuf.Bytes())
+	payload := ctr.spillWriteBuf.Bytes()
+	var diskToken *process.HashBuildSpillDiskReservation
+	var err error
+	if ctr.hashmapBuilder.budget != nil {
+		diskToken, err = ctr.hashmapBuilder.budget.ReserveSpillDisk(uint64(len(payload)))
+		if err != nil {
+			return 0, err
+		}
+	}
+	written, err := file.Write(payload)
 	if err != nil {
+		if diskToken != nil {
+			diskToken.Release()
+		}
 		return 0, err
+	}
+	if written != len(payload) {
+		if diskToken != nil {
+			diskToken.Release()
+		}
+		return 0, io.ErrShortWrite
+	}
+	if diskToken != nil {
+		if _, err := diskToken.ReconcileDown(uint64(written)); err != nil {
+			diskToken.Release()
+			return 0, err
+		}
+		if ctr.spillBundle == nil {
+			ctr.spillBundle = &spillFileBundle{}
+		}
+		ctr.spillBundle.addDisk(file, diskToken, cnt, uint64(written))
 	}
 	analyzer.Spill(int64(written))
 	analyzer.SpillRows(cnt)
@@ -84,6 +173,9 @@ func (ctr *container) getSpillFS(proc *process.Process) (fileservice.MutableFile
 
 // ensureSpillFile lazily creates an anonymous spill file for the given bucket.
 func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, bucket int) (*os.File, error) {
+	if bucket < 0 || bucket >= len(files) {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
 	if files[bucket] != nil {
 		return files[bucket], nil
 	}
@@ -95,20 +187,57 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 		return nil, err
 	}
 	name := fmt.Sprintf("join_%s_%d_build", ctr.spillUUID, bucket)
+	var fdToken *process.HashBuildSpillFDReservation
+	if ctr.hashmapBuilder.budget != nil {
+		fdToken, err = ctr.hashmapBuilder.budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
+	}
 	f, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
 	if err != nil {
+		if fdToken != nil {
+			fdToken.Release()
+		}
 		return nil, err
 	}
 	files[bucket] = f
+	if fdToken != nil {
+		if ctr.spillBundle == nil {
+			ctr.spillBundle = &spillFileBundle{}
+		}
+		ctr.spillBundle.addFD(f, bucket, fdToken)
+	}
 	return f, nil
 }
 
-func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
-	if bat.RowCount() == 0 {
+// spillBatchBounded partitions one input batch without retaining 32 bucket
+// vectors.  Hash values and row selections are admitted once; one bucket is
+// materialized, marshaled, and flushed before its memory is cleaned.
+func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch, files []*os.File, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
+	reservation, err := ctr.reserveSpillScratch(bat)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Go scratch capacities are temporary.  Drop the backing arrays before
+		// releasing the admission token; retaining them would make a later,
+		// smaller batch reuse uncharged capacity.
+		ctr.spillHashValues = nil
+		ctr.spillSelection = nil
+		ctr.spillKeyVecs = nil
+		ctr.spillWriteBuf = bytes.Buffer{}
+		if reservation != nil {
+			// All temporary scratch is gone at this point; retaining a zero-sized
+			// token until Release keeps exactly-once accounting on error paths.
+			_, _ = reservation.ReconcileDown(0)
+			reservation.Release()
+		}
+	}()
 
-	// Evaluate hash keys using pre-initialized executors (reuse cached slice)
 	if cap(ctr.spillKeyVecs) < len(executors) {
 		ctr.spillKeyVecs = make([]*vector.Vector, len(executors))
 	}
@@ -123,73 +252,80 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	ctr.hashmapBuilder.observeNullKeys(keyVecs)
 
 	// Reuse hashValues buffer
-	rowCount := bat.RowCount()
-	if cap(ctr.spillHashValues) < rowCount {
-		ctr.spillHashValues = make([]uint64, rowCount)
+	rows := bat.RowCount()
+	if cap(ctr.spillHashValues) < rows {
+		ctr.spillHashValues = make([]uint64, rows)
 	}
-	hashValues := ctr.spillHashValues[:rowCount]
-
-	computeXXHash(keyVecs, hashValues)
-
-	// Reuse bucketRowIds buffer
-	if cap(ctr.spillBucketRowIds) < spillNumBuckets {
-		ctr.spillBucketRowIds = make([][]int32, spillNumBuckets)
+	hashes := ctr.spillHashValues[:rows]
+	computeXXHash(keyVecs, hashes)
+	if cap(ctr.spillSelection) < rows {
+		ctr.spillSelection = make([]int32, rows)
 	}
-	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
-
-	// Single pass: reset and distribute row indices into buckets.
-	for i := 0; i < spillNumBuckets; i++ {
-		bucketRowIds[i] = bucketRowIds[i][:0]
-	}
-	for row := 0; row < rowCount; row++ {
-		b := hashValues[row] & (spillNumBuckets - 1)
-		bucketRowIds[b] = append(bucketRowIds[b], int32(row))
-	}
-
-	// Add rows to buffers and flush when needed
-	for bucketId, sels := range bucketRowIds {
-		if len(sels) == 0 {
+	sels := ctr.spillSelection[:rows]
+	for bucket := uint64(0); bucket < spillNumBuckets; bucket++ {
+		n := 0
+		for row, hash := range hashes {
+			if hash&(spillNumBuckets-1) == bucket {
+				sels[n] = int32(row)
+				n++
+			}
+		}
+		if n == 0 {
 			continue
 		}
 
-		buf := buffers[bucketId]
-		if buf == nil {
-			buf = batch.NewOffHeapWithSize(len(bat.Vecs))
-			for i, vec := range bat.Vecs {
-				typ := *vec.GetType()
-				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-				buf.Vecs[i].PreExtend(spillBufferSize, proc.Mp())
-			}
-			buffers[bucketId] = buf
-		}
-
-		// Append rows to buffer
+		selected := batch.NewOffHeapWithSize(len(bat.Vecs))
+		selected.Attrs = bat.Attrs
+		var spillErr error
 		for i, vec := range bat.Vecs {
-			if err := buf.Vecs[i].UnionInt32(vec, sels, proc.Mp()); err != nil {
-				return err
+			if vec == nil {
+				spillErr = process.ErrHashBuildBudgetInvalid
+				break
+			}
+			selected.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+			if spillErr = selected.Vecs[i].PreExtend(n, proc.Mp()); spillErr != nil {
+				break
+			}
+			if spillErr = selected.Vecs[i].UnionInt32(vec, sels[:n], proc.Mp()); spillErr != nil {
+				break
 			}
 		}
-		buf.SetRowCount(buf.RowCount() + len(sels))
-
-		// Flush if buffer is full
-		if buf.RowCount() >= spillBufferSize {
-			file, err := ctr.ensureSpillFile(proc, files, bucketId)
-			if err != nil {
-				return err
+		if spillErr == nil {
+			selected.SetRowCount(n)
+			var file *os.File
+			file, spillErr = ctr.ensureSpillFile(proc, files, int(bucket))
+			if spillErr == nil {
+				_, spillErr = ctr.flushBucketBuffer(proc, selected, file, analyzer)
 			}
-			if _, err := ctr.flushBucketBuffer(proc, buf, file, analyzer); err != nil {
-				return err
-			}
-			buf.CleanOnlyData()
+		}
+		selected.Clean(proc.Mp())
+		if spillErr != nil {
+			return spillErr
 		}
 	}
-
 	return nil
+}
+
+func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+	// buffers is retained in the signature for source compatibility with older
+	// unit tests and callers.  The implementation intentionally ignores it:
+	// every non-empty bucket is selected and flushed before the next bucket is
+	// materialized, so no persistent fanout-sized vector set can grow.
+	_ = buffers
+	return ctr.spillBatchBounded(proc, bat, files, executors, analyzer)
 }
 
 // initSpillExprExecs initializes or validates spill expression executors.
 // Returns the executors slice ready for use. Called once when entering spill mode.
 func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
+	for _, condition := range conditions {
+		if condition == nil {
+			return nil, &process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid, Message: "nil shuffle spill key"}
+		}
+		if _, ok := condition.Expr.(*plan.Expr_Col); !ok {
+			return nil, &process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid, Message: "shuffle spill requires simple column keys"}
+		}
+	}
 	if len(ctr.spillExprExecs) != len(conditions) {
 		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, conditions)
 		if err != nil {
@@ -251,7 +387,10 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) {
 
 	for _, vec := range keyVecs {
 		if vec.IsConst() {
-			colHash := xxhash.Sum64(vec.GetRawBytesAt(0))
+			colHash := uint64(0)
+			if !vec.IsConstNull() {
+				colHash = xxhash.Sum64(vec.GetRawBytesAt(0))
+			}
 			for i := 0; i < rowCount; i++ {
 				hashValues[i] = hashCombine(hashValues[i], colHash)
 			}
@@ -260,8 +399,19 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) {
 			if vec.Length() < n {
 				n = vec.Length()
 			}
-			for i := 0; i < n; i++ {
-				hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+			if vec.GetNulls().Any() {
+				nulls := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					if nulls.Contains(uint64(i)) {
+						hashValues[i] = hashCombine(hashValues[i], 0)
+					} else {
+						hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+					}
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+				}
 			}
 		}
 	}

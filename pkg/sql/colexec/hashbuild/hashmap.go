@@ -745,6 +745,18 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 	hb.IgnoreRows = nil
 }
 
+// FreeHashMapOnly discards a partial hash build while preserving the copied
+// build batches and their reservations for bounded spill recovery. It is the
+// only supported transition from a failed BuildHashmap attempt to re-spill.
+func (hb *HashmapBuilder) FreeHashMapOnly(proc *process.Process) {
+	hb.resetHashStateForRebuild(proc)
+	hb.DelRows = nil
+	if hb.auxReservation != nil {
+		hb.auxReservation.Release()
+		hb.auxReservation = nil
+	}
+}
+
 func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) error {
 	if hb.dedupDeleteMarkerColIdx < 0 {
 		return hb.Batches.Shrink(hb.IgnoreRows, proc)

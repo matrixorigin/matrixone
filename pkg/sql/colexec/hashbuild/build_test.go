@@ -168,6 +168,14 @@ func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
 	require.Zero(t, budget.Used())
 }
 
+func TestShuffleWithoutMapRejectsMissingRuntimeFilter(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil)
+	tc.arg.IsShuffle = true
+	tc.arg.NeedHashMap = false
+	require.Error(t, tc.arg.Prepare(tc.proc))
+	tc.arg.Free(tc.proc, true, nil)
+}
+
 func TestHashBuildFreeWithoutResetReleasesOwnedMemory(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -607,6 +615,8 @@ func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
 
 func TestHashBuildIsShuffle(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	budget, budgetErr := tc.proc.GetHashBuildBudget()
+	require.NoError(t, budgetErr)
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
 	tc.arg.SpillThreshold = 1
@@ -631,16 +641,25 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 		_, err := vm.Exec(tc.arg, tc.proc)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, process.ErrHashBuildBudgetAdmission))
+		require.NoError(t, err)
 		result, receiveErr := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
 		require.NoError(t, receiveErr)
-		require.True(t, result.IsBuildError(), "cycle %d must publish a controlled build error", cycle)
-		jm, err := message.ReceiveJoinMap(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-		require.Error(t, err)
-		require.Nil(t, jm)
-		tc.arg.Reset(tc.proc, true, err)
+		require.True(t, result.IsSuccess(), "cycle %d must publish a spilled JoinMap", cycle)
+		jm := result.JoinMap()
+		require.NotNil(t, jm)
+		require.True(t, jm.IsSpilled())
+		files := jm.TakeSpillBuildFiles()
+		require.Len(t, files, spillNumBuckets)
+		for _, file := range files {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		tc.arg.Reset(tc.proc, false, nil)
 	}
-	tc.arg.Free(tc.proc, true, errors.New("controlled spill admission"))
+	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 }

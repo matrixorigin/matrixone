@@ -34,6 +34,8 @@ import (
 
 var _ vm.Operator = new(HashBuild)
 
+var hashBuildSpillSequence atomic.Uint64
+
 const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
@@ -52,18 +54,145 @@ type container struct {
 	runtimeFilterDone bool
 	hashmapBuilder    HashmapBuilder
 	spilledFds        []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
-	spillFS           fileservice.MutableFileService
-	spillUUID         string // unique prefix for anonymous file paths
-	spillThreshold    int64
+	// spillBundle keeps the resource reservations associated with spilledFds.
+	// Build owns the bundle until the JoinMap publication wins; after that the
+	// JoinMap/SpillEngine handoff owns it and invokes release exactly once.
+	spillBundle    *spillFileBundle
+	spillFS        fileservice.MutableFileService
+	spillUUID      string // unique prefix for anonymous file paths
+	spillThreshold int64
 
 	// reusable buffers for spill operations
 	spillHashValues   []uint64
 	spillBucketRowIds [][]int32
+	spillSelection    []int32
 	spillWriteBuf     bytes.Buffer
 	spillKeyVecs      []*vector.Vector
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
+}
+
+// spillFileBundle is deliberately owned by hashbuild.  Build converts each
+// entry to message.SpillFile only after every file has been rewound; the
+// resulting file object carries its token release closure through JoinMap and
+// the SpillEngine. Keeping all tokens together prevents a file from becoming
+// an unaccounted orphan on partial failures.
+type spillFileBundle struct {
+	mu       sync.Mutex
+	entries  map[*os.File]*spillFileEntry
+	released bool
+}
+
+type spillFileEntry struct {
+	fdToken    *process.HashBuildSpillFDReservation
+	diskTokens []*process.HashBuildSpillDiskReservation
+	rows       int64
+	bytes      uint64
+	bucket     int
+}
+
+func (b *spillFileBundle) release() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		return
+	}
+	b.released = true
+	entries := b.entries
+	b.entries = nil
+	b.mu.Unlock()
+	for _, entry := range entries {
+		if entry.fdToken != nil {
+			entry.fdToken.Release()
+		}
+		for _, token := range entry.diskTokens {
+			if token != nil {
+				token.Release()
+			}
+		}
+	}
+}
+
+func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBuildSpillFDReservation) {
+	if b == nil || file == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		if token != nil {
+			token.Release()
+		}
+		return
+	}
+	if b.entries == nil {
+		b.entries = make(map[*os.File]*spillFileEntry)
+	}
+	entry := b.entries[file]
+	if entry == nil {
+		entry = &spillFileEntry{bucket: bucket}
+		b.entries[file] = entry
+	}
+	entry.fdToken = token
+	b.mu.Unlock()
+}
+
+func (b *spillFileBundle) addDisk(file *os.File, token *process.HashBuildSpillDiskReservation, rows int64, bytes uint64) {
+	if b == nil || file == nil || token == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		token.Release()
+		return
+	}
+	if b.entries == nil {
+		b.entries = make(map[*os.File]*spillFileEntry)
+	}
+	entry := b.entries[file]
+	if entry == nil {
+		entry = &spillFileEntry{bucket: -1}
+		b.entries[file] = entry
+	}
+	entry.diskTokens = append(entry.diskTokens, token)
+	entry.rows += rows
+	if ^uint64(0)-entry.bytes >= bytes {
+		entry.bytes += bytes
+	} else {
+		entry.bytes = ^uint64(0)
+	}
+	b.mu.Unlock()
+}
+
+func (b *spillFileBundle) accountedFiles() []*message.SpillFile {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	files := make([]*message.SpillFile, spillNumBuckets)
+	for file, entry := range b.entries {
+		f, e := file, entry
+		accounted := message.NewSpillFile(f, e.rows, e.bytes, func() {
+			if e.fdToken != nil {
+				e.fdToken.Release()
+			}
+			for _, token := range e.diskTokens {
+				if token != nil {
+					token.Release()
+				}
+			}
+		})
+		if e.bucket >= 0 && e.bucket < len(files) {
+			files[e.bucket] = accounted
+		}
+	}
+	return files
 }
 
 type HashBuild struct {
@@ -190,6 +319,7 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.ctr.spillKeyVecs = nil
 	hashBuild.ctr.spillHashValues = nil
 	hashBuild.ctr.spillBucketRowIds = nil
+	hashBuild.ctr.spillSelection = nil
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
@@ -228,6 +358,40 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 		}
 	}
 	hashBuild.ctr.spilledFds = nil
+	// Release FD and disk charges only after the physical descriptors have
+	// closed. This preserves the ledger invariant even during cancellation.
+	if hashBuild.ctr.spillBundle != nil {
+		hashBuild.ctr.spillBundle.release()
+		hashBuild.ctr.spillBundle = nil
+	}
+}
+
+// CleanCopiedBatchAt is the lifecycle hook used by bounded initial spill.
+// HashBuild keeps this wrapper on the operator side so batch reservation
+// ownership remains private to the hashbuild package.
+func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) error {
+	if idx < 0 || idx >= len(hb.Batches.Buf) {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if bat := hb.Batches.Buf[idx]; bat != nil {
+		bat.Clean(proc.Mp())
+	}
+	copy(hb.Batches.Buf[idx:], hb.Batches.Buf[idx+1:])
+	hb.Batches.Buf = hb.Batches.Buf[:len(hb.Batches.Buf)-1]
+	hb.Batches.MemSize = 0
+	for _, bat := range hb.Batches.Buf {
+		if bat != nil {
+			hb.Batches.MemSize += int64(bat.Size())
+		}
+	}
+	if idx < len(hb.batchReservations) {
+		if hb.batchReservations[idx] != nil {
+			hb.batchReservations[idx].Release()
+		}
+		copy(hb.batchReservations[idx:], hb.batchReservations[idx+1:])
+		hb.batchReservations = hb.batchReservations[:len(hb.batchReservations)-1]
+	}
+	return nil
 }
 
 func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

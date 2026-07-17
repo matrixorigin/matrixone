@@ -55,6 +55,36 @@ func TestComputeXXHash(t *testing.T) {
 	shortVec := testutil.MakeInt32Vector([]int32{9}, nil, mp)
 	defer shortVec.Free(mp)
 	ComputeXXHash([]*vector.Vector{shortVec}, hashValues, 2)
+
+	constNull := vector.NewConstNull(types.T_int32.ToType(), 3, mp)
+	defer constNull.Free(mp)
+	nullHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{constNull}, nullHashes, 7)
+	require.Equal(t, hashCombine(uint64(7), uint64(0)), nullHashes[0])
+	require.Equal(t, nullHashes[0], nullHashes[2])
+}
+
+func TestBucketWriterAccountedHandOffSeekFailureRetainsOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	fdToken, err := generation.ReserveSpillFD(1)
+	require.NoError(t, err)
+
+	fd, err := os.CreateTemp(t.TempDir(), "closed-spill")
+	require.NoError(t, err)
+	require.NoError(t, fd.Close())
+	w := BucketWriter{Fd: fd, fdReservation: fdToken}
+	file, err := w.handOffSpillFile()
+	require.Error(t, err)
+	require.Nil(t, file)
+	require.Same(t, fd, w.Fd, "failed rewind must retain file ownership")
+	require.Equal(t, uint64(1), generation.SpillFDUsed())
+	w.Close()
+	require.Zero(t, generation.SpillFDUsed())
 }
 
 func TestFlushBucketBatchAndReadRoundtrip(t *testing.T) {
@@ -84,6 +114,41 @@ func TestFlushBucketBatchAndReadRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, got.RowCount())
 	reader.Close()
+}
+
+func TestBucketReaderAccountedLifecycle(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(8<<20, 8<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3, 4})
+	defer bat.Clean(proc.Mp())
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_accounted_reader", Budget: generation}
+	require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+	file, err := w.handOffSpillFile()
+	require.NoError(t, err)
+	require.NotNil(t, file)
+	require.Positive(t, generation.SpillDiskUsed())
+	require.Equal(t, uint64(1), generation.SpillFDUsed())
+
+	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForSpillFile(file)
+	reuseBat := batch.NewOffHeapWithSize(0)
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 4, got.RowCount())
+	require.Positive(t, generation.Used())
+
+	reuseBat.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
 }
 
 func TestBucketReaderEOF(t *testing.T) {
@@ -180,6 +245,20 @@ func TestBucketWriterHandOffFd(t *testing.T) {
 	require.Nil(t, w.Fd)
 	require.False(t, w.Created())
 	fd.Close()
+
+	budget, err := process.NewHashBuildBudget(8<<20, 8<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	accounted := BucketWriter{Name: "test_accounted_raw_handoff", Budget: generation}
+	bat := makeInt32Batch(proc, []int32{1})
+	var buf bytes.Buffer
+	require.NoError(t, FlushBucketBatch(proc, bat, &accounted, &buf, nil))
+	bat.Clean(proc.Mp())
+	require.Nil(t, accounted.HandOffFd(), "raw handoff must not orphan accounting tokens")
+	accounted.Close()
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
 }
 
 func TestMakeBucketWriters(t *testing.T) {
@@ -917,6 +996,31 @@ func makeTestEvalKeysFn() func(*batch.Batch) ([]*vector.Vector, error) {
 	}
 }
 
+func TestScatterProbeRejectsExpressionBeforeEvaluation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	engine := NewSpillEngine(SpillEngineConfig{
+		ProbeKeyExprs: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+	})
+	childrenCalled := false
+	evalCalled := false
+	err := engine.ScatterProbeTable(
+		proc,
+		func() (*batch.Batch, error) {
+			childrenCalled = true
+			return nil, nil
+		},
+		nil,
+		func(*batch.Batch) ([]*vector.Vector, error) {
+			evalCalled = true
+			return nil, nil
+		},
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, childrenCalled)
+	require.False(t, evalCalled)
+}
+
 func makeInt32Batch(proc *process.Process, vals []int32) *batch.Batch {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
@@ -1084,7 +1188,7 @@ func TestRebuildHashmapEmptyBuildOuterJoin(t *testing.T) {
 		NeedsProbeForEmptyBuild: true,
 	})
 	engine.InitFromSpilledMap([]*os.File{nil})
-	engine.buckets[0].ProbeFd = probeFd
+	engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 0, 0, nil)
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, res, err := engine.RebuildHashmap(proc, analyzer)
@@ -1121,7 +1225,7 @@ func TestRebuildHashmapEmptyFile(t *testing.T) {
 				NeedsProbeForEmptyBuild: keepProbe,
 			})
 			engine.InitFromSpilledMap([]*os.File{buildFd})
-			engine.buckets[0].ProbeFd = probeFd
+			engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 0, 0, nil)
 
 			jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
 			require.NoError(t, err)
@@ -1269,7 +1373,7 @@ func TestNextProbeBatch(t *testing.T) {
 		BuildKeyExprs: makeTestKeyExpr(),
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
-	engine.buckets[0].ProbeFd = probeFd
+	engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 0, 0, nil)
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, res, err := engine.RebuildHashmap(proc, analyzer)
@@ -1331,7 +1435,7 @@ func TestAdvanceToNextBucket(t *testing.T) {
 		BuildKeyExprs: makeTestKeyExpr(),
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
-	engine.buckets[0].ProbeFd = probeFd
+	engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 0, 0, nil)
 
 	var capturedJM *message.JoinMap
 	var capturedRes BucketResult
@@ -1393,6 +1497,53 @@ func TestReSpillBucket(t *testing.T) {
 	engine.Cleanup(proc)
 }
 
+func TestReSpillConservesBuildAndProbeRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	vals := make([]int32, 5000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	build := makeInt32Batch(proc, vals)
+	probe := makeInt32Batch(proc, vals)
+	buildFd := writeBuildFile(proc, "test_conserve_build", build)
+	probeFd := writeBuildFile(proc, "test_conserve_probe", probe)
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		SpillThreshold:          500,
+		NeedsBuildForEmptyProbe: true,
+		NeedsProbeForEmptyBuild: true,
+	})
+	engine.InitFromSpilledMap([]*os.File{buildFd})
+	engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, int64(len(vals)), 0, nil)
+	engine.probeKeyEval = makeTestEvalKeysFn()
+
+	jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+	require.NoError(t, err)
+	require.Equal(t, BucketReSpilled, res)
+	require.Nil(t, jm)
+	var buildRows, probeRows, largest int64
+	for _, child := range engine.buckets {
+		buildRows += child.BuildRows
+		probeRows += child.ProbeRows
+		if child.BuildRows > largest {
+			largest = child.BuildRows
+		}
+	}
+	require.Equal(t, int64(len(vals)), buildRows)
+	require.Equal(t, int64(len(vals)), probeRows)
+	require.Less(t, largest, int64(len(vals)))
+
+	for engine.HasMoreBuckets() {
+		jm, _, err = engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+		require.NoError(t, err)
+		if jm != nil {
+			jm.Free()
+		}
+	}
+	engine.Cleanup(proc)
+}
+
 func TestReSpillDepthLimit(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1409,11 +1560,9 @@ func TestReSpillDepthLimit(t *testing.T) {
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, res, err := engine.RebuildHashmap(proc, analyzer)
-	require.NoError(t, err)
-	require.Equal(t, BucketReady, res, "must return BucketReady at max depth")
-	require.NotNil(t, jm)
-
-	jm.Free()
+	require.Error(t, err, "depth limit must not force an over-budget hashmap build")
+	require.Equal(t, BucketSkip, res)
+	require.Nil(t, jm)
 	engine.Cleanup(proc)
 }
 
@@ -1436,7 +1585,7 @@ func TestReSpillWithProbe(t *testing.T) {
 		SpillThreshold: 100,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
-	engine.buckets[0].ProbeFd = probeFd
+	engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 0, 0, nil)
 
 	// Set probeKeyEval so scatterProbe works during re-spill.
 	engine.probeKeyEval = makeTestEvalKeysFn()
@@ -1449,9 +1598,12 @@ func TestReSpillWithProbe(t *testing.T) {
 
 	for engine.HasMoreBuckets() {
 		jm2, _, err := engine.RebuildHashmap(proc, analyzer)
-		require.NoError(t, err)
 		if jm2 != nil {
 			jm2.Free()
+		}
+		if err != nil {
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+			break
 		}
 	}
 

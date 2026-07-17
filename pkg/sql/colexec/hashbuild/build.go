@@ -16,13 +16,15 @@ package hashbuild
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -55,18 +57,18 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
+	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
 	budget, err := proc.GetHashBuildBudget()
 	if err != nil {
 		return err
 	}
 	hashBuild.ctr.hashmapBuilder.setBudget(budget)
-	if !hashBuild.NeedHashMap {
-		return nil
-	}
-
 	if hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec == nil {
 		return moerr.NewInternalError(proc.Ctx, "shuffle hash build must have runtime filter")
+	}
+	if !hashBuild.NeedHashMap {
+		return nil
 	}
 
 	hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
@@ -111,7 +113,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.terminalMu.Lock()
 			if hashBuild.JoinMapTag <= 0 {
 				ctr.terminalMu.Unlock()
-				return result, moerr.NewInternalError(proc.Ctx, "wrong joinmap message tag!")
+				err := moerr.NewInternalError(proc.Ctx, "wrong joinmap message tag!")
+				hashBuild.finalizeBuildFailure(proc, err)
+				return result, err
 			}
 			if atomic.LoadUint32(&ctr.terminalPublished) != 0 {
 				ctr.terminalMu.Unlock()
@@ -126,8 +130,16 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					// In spill mode: send empty JoinMap with spill fds, no batches
 					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
-					jm.SpillBuildFds = ctr.spilledFds
+					if ctr.spillBundle != nil {
+						jm.SetSpillBuildFiles(ctr.spillBundle.accountedFiles())
+						jm.SetSpillBudget(ctr.hashmapBuilder.budget)
+					} else {
+						// Compatibility for tests and old callers that construct a
+						// container with raw descriptors only.
+						jm.SpillBuildFds = ctr.spilledFds
+					}
 					ctr.spilledFds = nil // ownership transferred
+					ctr.spillBundle = nil
 				} else {
 					// Normal mode: send hashmap and batches
 					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
@@ -142,6 +154,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				// Reset/Free may have won the terminal gate concurrently during
 				// cancellation.  Keep the producer side successful only if this
 				// publication won; consumers must never see two terminal values.
+				if jm != nil {
+					jm.FreeMemory()
+				}
 				ctr.terminalMu.Unlock()
 				return result, moerr.NewQueryInterrupted(proc.Ctx)
 			}
@@ -175,7 +190,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	ctr := &hashBuild.ctr
 	spillMode := false
 	var spillFiles []*os.File
-	var spillBuffers []*batch.Batch
+	bundleTransferred := false
 
 	defer func() {
 		for _, f := range spillFiles {
@@ -183,13 +198,46 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				f.Close()
 			}
 		}
-		for _, buf := range spillBuffers {
-			if buf != nil {
-				buf.Clean(proc.Mp())
-			}
+		if !bundleTransferred && ctr.spillBundle != nil {
+			ctr.spillBundle.release()
+			ctr.spillBundle = nil
 		}
 		ctr.freeSpillExprExecs()
 	}()
+
+	startSpill := func() error {
+		if spillMode {
+			return nil
+		}
+		execs, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions)
+		if err != nil {
+			return err
+		}
+		if spillFiles == nil {
+			spillFiles = make([]*os.File, spillNumBuckets)
+		}
+		spillMode = true
+		// Drain retained copies oldest-first.  Each successful partition is
+		// followed immediately by reservation and mpool release, so the source
+		// batch and one partition scratch are the only simultaneous peaks.
+		for len(ctr.hashmapBuilder.Batches.Buf) > 0 {
+			bat := ctr.hashmapBuilder.Batches.Buf[0]
+			if bat == nil {
+				if err := ctr.hashmapBuilder.CleanCopiedBatchAt(0, proc); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := ctr.spillBatchBounded(proc, bat, spillFiles, execs, analyzer); err != nil {
+				return err
+			}
+			if err := ctr.hashmapBuilder.CleanCopiedBatchAt(0, proc); err != nil {
+				return err
+			}
+		}
+		v2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1").Inc()
+		return nil
+	}
 
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
@@ -204,11 +252,14 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 
 		analyzer.Alloc(int64(result.Batch.Size()))
+		// Durable row accounting is advanced exactly once on ingress.  In
+		// particular, a rejected retained-copy admission below must not add the
+		// same upstream batch a second time when it is spilled directly.
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 
-		// If in spill mode, spill this batch directly to open files
+		// If in spill mode, spill this batch directly to open files.
 		if spillMode {
-			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
+			err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer)
 			if err != nil {
 				return err
 			}
@@ -218,36 +269,33 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// Store original batch
 		err = ctr.hashmapBuilder.copyBuildBatch(result.Batch, proc)
 		if err != nil {
+			if hashBuild.IsShuffle && errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+				// The source batch is still owned by the upstream operator.  Do
+				// not retry CopyIntoBatches (or increment row count again); enter
+				// spill recovery and write this batch directly.
+				if err := startSpill(); err != nil {
+					return err
+				}
+				if err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer); err != nil {
+					return err
+				}
+				continue
+			}
 			return err
 		}
 
 		// Check if we should enter spill mode based on batch memory size
 		if hashBuild.shouldSpillBatches() {
-			// The existing spill implementation grows expression scratch, 32
-			// bucket batches, Go row-index slices, and a full marshal buffer
-			// outside the HashBuild budget. Until bounded/re-spill accounting is
-			// installed, fail closed before entering that allocation path.
-			return &process.HashBuildBudgetError{
-				Kind:    process.HashBuildBudgetErrorAdmission,
-				Message: "hash build spill requires bounded scratch admission",
+			if err := startSpill(); err != nil {
+				return err
 			}
 		}
 	}
 
-	// Flush remaining buffered data
+	// spillBatchBounded flushes each selected bucket immediately; no persistent
+	// 32-bucket buffers remain here.  Rewind every file before publishing the
+	// complete set, and never publish a partially rewound set.
 	if spillMode {
-		for i, buf := range spillBuffers {
-			if buf != nil && buf.RowCount() > 0 {
-				file, err := ctr.ensureSpillFile(proc, spillFiles, i)
-				if err != nil {
-					return err
-				}
-				if _, err := ctr.flushBucketBuffer(proc, buf, file, analyzer); err != nil {
-					return err
-				}
-			}
-		}
-		// Seek all files to beginning for reading by hashjoin
 		for _, f := range spillFiles {
 			if f != nil {
 				if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -258,6 +306,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// Transfer ownership to container; nil local slice so defer won't close
 		ctr.spilledFds = spillFiles
 		spillFiles = nil
+		// Ownership is published only after all files were successfully rewound.
+		// SendJoinMap will transfer the bundle to message.SpillFile values.
+		bundleTransferred = true
 	}
 
 	// If we never entered spill mode, build the hashmap
