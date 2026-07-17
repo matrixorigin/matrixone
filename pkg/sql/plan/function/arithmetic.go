@@ -247,39 +247,39 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
-			return addUint64WithOverflowCheck(proc.Ctx, v1, v2)
+			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) (uint8, error) {
-			return addUint8WithOverflowCheck(proc.Ctx, v1, v2)
+			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint16, uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) (uint16, error) {
-			return addUint16WithOverflowCheck(proc.Ctx, v1, v2)
+			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint32, uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) (uint32, error) {
-			return addUint32WithOverflowCheck(proc.Ctx, v1, v2)
+			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
-			return addUint64WithOverflowCheck(proc.Ctx, v1, v2)
+			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int8, int8, int8](parameters, result, proc, length, func(v1, v2 int8) (int8, error) {
-			return addInt8WithOverflowCheck(proc.Ctx, v1, v2)
+			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int16, int16, int16](parameters, result, proc, length, func(v1, v2 int16) (int16, error) {
-			return addInt16WithOverflowCheck(proc.Ctx, v1, v2)
+			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int32, int32, int32](parameters, result, proc, length, func(v1, v2 int32) (int32, error) {
-			return addInt32WithOverflowCheck(proc.Ctx, v1, v2)
+			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int64, int64, int64](parameters, result, proc, length, func(v1, v2 int64) (int64, error) {
-			return addInt64WithOverflowCheck(proc.Ctx, v1, v2)
+			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
@@ -319,47 +319,47 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
-			return subUint64WithOverflowCheck(proc.Ctx, v1, v2)
+			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) (uint8, error) {
-			return subUint8WithOverflowCheck(proc.Ctx, v1, v2)
+			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint16, uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) (uint16, error) {
-			return subUint16WithOverflowCheck(proc.Ctx, v1, v2)
+			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint32, uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) (uint32, error) {
-			return subUint32WithOverflowCheck(proc.Ctx, v1, v2)
+			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
-			return subUint64WithOverflowCheck(proc.Ctx, v1, v2)
+			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int8, int8, int8](parameters, result, proc, length, func(v1, v2 int8) (int8, error) {
-			return subInt8WithOverflowCheck(proc.Ctx, v1, v2)
+			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int16, int16, int16](parameters, result, proc, length, func(v1, v2 int16) (int16, error) {
-			return subInt16WithOverflowCheck(proc.Ctx, v1, v2)
+			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int32, int32, int32](parameters, result, proc, length, func(v1, v2 int32) (int32, error) {
-			return subInt32WithOverflowCheck(proc.Ctx, v1, v2)
+			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int64, int64, int64](parameters, result, proc, length, func(v1, v2 int64) (int64, error) {
-			return subInt64WithOverflowCheck(proc.Ctx, v1, v2)
+			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 - v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return subFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 - v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return subFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Sub, selectList)
@@ -407,47 +407,47 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
-			return mulUint64WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) (uint8, error) {
-			return mulUint8WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint16, uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) (uint16, error) {
-			return mulUint16WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint32, uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) (uint32, error) {
-			return mulUint32WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
-			return mulUint64WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int8, int8, int8](parameters, result, proc, length, func(v1, v2 int8) (int8, error) {
-			return mulInt8WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int16, int16, int16](parameters, result, proc, length, func(v1, v2 int16) (int16, error) {
-			return mulInt16WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int32, int32, int32](parameters, result, proc, length, func(v1, v2 int32) (int32, error) {
-			return mulInt32WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int64, int64, int64](parameters, result, proc, length, func(v1, v2 int64) (int64, error) {
-			return mulInt64WithOverflowCheck(proc.Ctx, v1, v2)
+			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 * v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return mulFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 * v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return mulFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64Mul, selectList)
@@ -482,12 +482,12 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_float32:
-		return specialTemplateForDivFunction[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 / v2
+		return specialTemplateForDivFunction[float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return divFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return specialTemplateForDivFunction[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 / v2
+		return specialTemplateForDivFunction[float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return divFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
@@ -523,12 +523,12 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		// Unsigned integers -> uint64 result
 		return integerDivUnsigned(parameters, result, proc, length, selectList)
 	case types.T_float32:
-		return specialTemplateForDivFunction[float32, int64](parameters, result, proc, length, func(v1, v2 float32) int64 {
-			return int64(v1 / v2)
+		return specialTemplateForDivFunction[float32, int64](parameters, result, proc, length, func(v1, v2 float32) (int64, error) {
+			return floatDivToInt64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return specialTemplateForDivFunction[float64, int64](parameters, result, proc, length, func(v1, v2 float64) int64 {
-			return int64(v1 / v2)
+		return specialTemplateForDivFunction[float64, int64](parameters, result, proc, length, func(v1, v2 float64) (int64, error) {
+			return floatDivToInt64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalBatchArith[types.Decimal64, int64](parameters, result, proc, length, d64IntDivKernel(proc, selectList), selectList)
@@ -611,6 +611,12 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 				}
 				rsNull.Add(i)
 			} else {
+				// MySQL 8.4 computes DIV on unsigned magnitudes, so any quotient with
+				// magnitude 2^63 raises ERROR 1690 — including MinInt64 DIV 1, whose
+				// signed result would fit. Verified against MySQL 8.4.8.
+				if v1 == math.MinInt64 && (v2 == 1 || v2 == -1) {
+					return moerr.NewOutOfRangef(proc.Ctx, "BIGINT", "(%d DIV %d)", v1, v2)
+				}
 				rss[i] = v1 / v2
 			}
 		}

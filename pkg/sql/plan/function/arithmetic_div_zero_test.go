@@ -347,6 +347,7 @@ func TestIntegerDivBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	// INT64 min/max - overflow case
+	// MySQL 8.4: MIN_INT64 DIV -1 raises ERROR 1690 (BIGINT value is out of range)
 	{
 		tc := tcTemp{
 			info: "INT64 boundary: MIN_INT64 DIV -1 (overflow)",
@@ -356,8 +357,8 @@ func TestIntegerDivBoundary(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{-1}, []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{-9223372036854775808}, []bool{false}), // Overflow wraps around
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true,
+				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
 		succeed, info := tcc.Run()

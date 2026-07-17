@@ -379,7 +379,7 @@ type templateDecOut interface {
 // For integer division (DIV): TIn=Decimal, TOut=int64.
 // The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
 // Scale values and null bitmap are provided for kernels that need them.
-func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)
@@ -440,6 +440,9 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	}
 	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
+		}
 		return err
 	}
 	// Only reset rsNull if the kernel didn't add any nulls (e.g., div-by-zero).
@@ -1595,7 +1598,7 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 
 func specialTemplateForDivFunction[
 	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	divFn func(v1, v2 T) T2, selectList *FunctionSelectList) error {
+	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -1636,7 +1639,10 @@ func specialTemplateForDivFunction[
 				nulls.AddRange(rsNull, 0, uint64(length))
 				return nil
 			}
-			r := divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
 			rowCount := uint64(length)
 			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
@@ -1665,7 +1671,11 @@ func specialTemplateForDivFunction[
 						// Return NULL (MySQL 8.0 behavior)
 						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			} else {
@@ -1679,7 +1689,11 @@ func specialTemplateForDivFunction[
 						// Return NULL (MySQL 8.0 behavior)
 						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			}
@@ -1708,13 +1722,21 @@ func specialTemplateForDivFunction[
 						continue
 					}
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			}
 		}
@@ -1739,7 +1761,11 @@ func specialTemplateForDivFunction[
 				// Return NULL (MySQL 8.0 behavior)
 				rsNull.Add(i)
 			} else {
-				rss[i] = divFn(v1, v2)
+				r, err := divFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = r
 			}
 		}
 		return nil
@@ -1756,7 +1782,11 @@ func specialTemplateForDivFunction[
 			}
 			rsNull.Add(i)
 		} else {
-			rss[i] = divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
 		}
 	}
 	return nil
