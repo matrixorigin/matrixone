@@ -92,6 +92,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -489,6 +490,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.CompPkeyExpr = t.CompPkeyExpr
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -555,6 +557,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.CountDeleteAffectRows = t.CountDeleteAffectRows
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -708,6 +711,7 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
+	var err error
 
 	//var attrs []string
 	attrs := make([]string, 0)
@@ -755,6 +759,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	return op, nil
 }
@@ -804,9 +812,14 @@ func constructMultiUpdate(
 	action multi_update.UpdateAction,
 	isRemote bool,
 ) (vm.Operator, error) {
+	var err error
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+	arg.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, updateCtx := range node.UpdateCtxList {
 		if updateCtx.CountDeleteAffectRows {

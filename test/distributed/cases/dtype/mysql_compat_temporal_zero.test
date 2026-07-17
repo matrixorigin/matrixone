@@ -2,6 +2,8 @@
 -- @bvt:parallel
 
 set time_zone = '+00:00';
+set @old_sql_mode = @@sql_mode;
+set sql_mode = '';
 
 select cast('0000-00-00' as date) as zero_date,
        cast('0000-00-00 00:00:00' as datetime) as zero_datetime,
@@ -88,13 +90,17 @@ create table mysql_compat_temporal_zero_dml(
     ts timestamp
 );
 
-set @old_sql_mode = @@sql_mode;
-
 -- NO_ZERO_DATE only rejects zero temporals when a strict mode is also enabled.
 set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 insert into mysql_compat_temporal_zero values
     ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
 select count(*) as strict_no_zero_date_rows from mysql_compat_temporal_zero;
+
+-- IGNORE allows direct zero-temporal assignment in strict NO_ZERO_DATE mode.
+insert ignore into mysql_compat_temporal_zero values
+    ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+select d, dt, ts from mysql_compat_temporal_zero;
+truncate table mysql_compat_temporal_zero;
 
 set sql_mode = 'STRICT_TRANS_TABLES';
 insert into mysql_compat_temporal_zero values
@@ -107,8 +113,8 @@ insert into mysql_compat_temporal_zero values
     ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
 select d, dt, ts from mysql_compat_temporal_zero;
 
--- CAST expressions bypass literal conversion and must be rejected by the
--- MultiUpdate write boundary in strict NO_ZERO_DATE mode.
+-- Explicit CAST follows expression semantics: zero temporal strings become
+-- NULL in strict NO_ZERO_DATE mode before reaching the write boundary.
 set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 insert into mysql_compat_temporal_zero_dml values
     (1, cast('0000-00-00' as date), '2024-01-02 03:04:05', '2024-01-02 03:04:05');
@@ -122,6 +128,8 @@ insert into mysql_compat_temporal_zero_dml
            cast('0000-00-00 00:00:00' as datetime),
            cast('0000-00-00 00:00:00' as timestamp);
 select count(*) as strict_cast_insert_rows from mysql_compat_temporal_zero_dml;
+select id, d is null as d_is_null, dt is null as dt_is_null, ts is null as ts_is_null
+    from mysql_compat_temporal_zero_dml order by id;
 
 insert into mysql_compat_temporal_zero_dml values
     (10, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
@@ -135,6 +143,37 @@ update mysql_compat_temporal_zero_dml
     set ts = cast('0000-00-00 00:00:00' as timestamp)
     where id = 10;
 select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 10;
+
+-- UPDATE IGNORE preserves direct zero sentinels, but an explicit CAST still
+-- evaluates to NULL before assignment.
+insert into mysql_compat_temporal_zero_dml values
+    (11, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
+update ignore mysql_compat_temporal_zero_dml
+    set d = '0000-00-00',
+        dt = '0000-00-00 00:00:00',
+        ts = '0000-00-00 00:00:00'
+    where id = 11;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 11;
+
+insert into mysql_compat_temporal_zero_dml values
+    (12, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
+update ignore mysql_compat_temporal_zero_dml
+    set d = cast('0000-00-00' as date),
+        dt = cast('0000-00-00 00:00:00' as datetime),
+        ts = cast('0000-00-00 00:00:00' as timestamp)
+    where id = 12;
+select id, d is null as d_is_null, dt is null as dt_is_null, ts is null as ts_is_null
+    from mysql_compat_temporal_zero_dml where id = 12;
+
+-- Non-IGNORE direct assignment still fails atomically.
+insert into mysql_compat_temporal_zero_dml values
+    (13, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
+update mysql_compat_temporal_zero_dml
+    set d = '0000-00-00',
+        dt = '0000-00-00 00:00:00',
+        ts = '0000-00-00 00:00:00'
+    where id = 13;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 13;
 
 -- Either strict mode or NO_ZERO_DATE alone must continue to allow zero values
 -- produced by expressions that reach MultiUpdate.
@@ -155,6 +194,24 @@ insert into mysql_compat_temporal_zero_dml
            cast('0000-00-00 00:00:00' as datetime),
            cast('0000-00-00 00:00:00' as timestamp);
 select id, d, dt, ts from mysql_compat_temporal_zero_dml;
+
+-- Reused prepared DML refreshes the zero-temporal write policy on every
+-- execution instead of retaining the sql_mode active during its first run.
+truncate table mysql_compat_temporal_zero_dml;
+set sql_mode = 'STRICT_TRANS_TABLES';
+prepare temporal_zero_insert from 'insert into mysql_compat_temporal_zero_dml values (40, ''0000-00-00'', ''0000-00-00 00:00:00'', ''0000-00-00 00:00:00'')';
+execute temporal_zero_insert;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
+
+truncate table mysql_compat_temporal_zero_dml;
+set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
+execute temporal_zero_insert;
+select count(*) as strict_prepared_rows from mysql_compat_temporal_zero_dml;
+
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute temporal_zero_insert;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
+deallocate prepare temporal_zero_insert;
 
 set sql_mode = @old_sql_mode;
 drop table mysql_compat_temporal_zero;

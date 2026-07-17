@@ -15,12 +15,14 @@
 package util
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -312,6 +314,77 @@ func TestSetInsertValueRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
 			canInsert, err := tc.call()
 			require.False(t, canInsert)
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestRejectZeroTemporalWritePolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name    string
+		resolve func(string, bool, bool) (any, error)
+		ignore  bool
+		want    bool
+		wantErr string
+	}{
+		{
+			name: "strict no zero date rejects",
+			resolve: func(name string, isSystemVar, isGlobalVar bool) (any, error) {
+				require.Equal(t, "sql_mode", name)
+				require.True(t, isSystemVar)
+				require.False(t, isGlobalVar)
+				return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+			},
+			want: true,
+		},
+		{
+			name: "ignore disables rejection",
+			resolve: func(string, bool, bool) (any, error) {
+				return "STRICT_ALL_TABLES,NO_ZERO_DATE", nil
+			},
+			ignore: true,
+			want:   false,
+		},
+		{
+			name: "non strict does not reject",
+			resolve: func(string, bool, bool) (any, error) {
+				return "NO_ZERO_DATE", nil
+			},
+			want: false,
+		},
+		{
+			name:    "nil resolver is conservative false",
+			resolve: nil,
+			want:    false,
+		},
+		{
+			name: "non string mode is conservative false",
+			resolve: func(string, bool, bool) (any, error) {
+				return 1, nil
+			},
+			want: false,
+		},
+		{
+			name: "resolver error is returned",
+			resolve: func(string, bool, bool) (any, error) {
+				return nil, errors.New("boom")
+			},
+			wantErr: "boom",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc.SetResolveVariableFunc(tc.resolve)
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", tc.ignore)
+
+			got, err := RejectZeroTemporalWritePolicy(proc)
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }

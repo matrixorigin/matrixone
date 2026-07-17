@@ -15,11 +15,14 @@
 package function
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,6 +118,240 @@ func TestCastZeroTemporalStringsProducesNonNullSentinels(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestExplicitCastZeroTemporalStringsHonorStrictNoZeroDate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		input     string
+		target    types.Type
+		wantNull  bool
+		configure func(*process.Process)
+	}{
+		{
+			name:     "strict and no zero date returns null for date",
+			input:    "0000-00-00",
+			target:   types.T_date.ToType(),
+			wantNull: true,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", varName)
+					return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+				})
+			},
+		},
+		{
+			name:     "strict and no zero date returns null for datetime",
+			input:    "0000-00-00 00:00:00",
+			target:   types.T_datetime.ToType(),
+			wantNull: true,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", varName)
+					return "STRICT_ALL_TABLES,NO_ZERO_DATE", nil
+				})
+			},
+		},
+		{
+			name:     "strict and no zero date returns null for timestamp",
+			input:    "0000-00-00 00:00:00",
+			target:   types.T_timestamp.ToType(),
+			wantNull: true,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", varName)
+					return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+				})
+			},
+		},
+		{
+			name:     "remote strict no zero date policy returns null without resolver",
+			input:    "0000-00-00",
+			target:   types.T_date.ToType(),
+			wantNull: true,
+			configure: func(proc *process.Process) {
+				proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull = true
+			},
+		},
+		{
+			name:     "strict without no zero date keeps sentinel",
+			input:    "0000-00-00",
+			target:   types.T_date.ToType(),
+			wantNull: false,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+					return "STRICT_TRANS_TABLES", nil
+				})
+			},
+		},
+		{
+			name:     "no zero date without strict keeps sentinel",
+			input:    "0000-00-00 00:00:00",
+			target:   types.T_datetime.ToType(),
+			wantNull: false,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+					return "NO_ZERO_DATE", nil
+				})
+			},
+		},
+		{
+			name:     "resolver nil keeps sentinel",
+			input:    "0000-00-00 00:00:00",
+			target:   types.T_timestamp.ToType(),
+			wantNull: false,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+					return nil, nil
+				})
+			},
+		},
+		{
+			name:     "resolver non string keeps sentinel",
+			input:    "0000-00-00",
+			target:   types.T_date.ToType(),
+			wantNull: false,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+					return int64(1), nil
+				})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			tc.configure(proc)
+
+			result := runStringTemporalCast(t, proc, NewCast, tc.input, tc.target, nil)
+			require.Equal(t, tc.wantNull, result.nulls[0])
+		})
+	}
+}
+
+func TestAssignmentCastZeroTemporalStringsPreserveSentinels(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", varName)
+		return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+	})
+
+	for _, tc := range []struct {
+		name   string
+		input  string
+		target types.Type
+	}{
+		{name: "date", input: "0000-00-00", target: types.T_date.ToType()},
+		{name: "datetime", input: "0000-00-00 00:00:00", target: types.T_datetime.ToType()},
+		{name: "timestamp", input: "0000-00-00 00:00:00", target: types.T_timestamp.ToType()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			explicit := runStringTemporalCast(t, proc, NewCast, tc.input, tc.target, nil)
+			require.True(t, explicit.nulls[0], "explicit cast should return SQL NULL before assignment")
+
+			assignment := runStringTemporalCast(t, proc, NewStrictCast, tc.input, tc.target, nil)
+			require.False(t, assignment.nulls[0], "assignment cast should preserve zero temporal sentinel")
+		})
+	}
+}
+
+func TestExplicitCastZeroTemporalResolverErrorPropagates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, fmt.Errorf("sql_mode lookup failed")
+	})
+
+	inputVec := testutil.MakeVarcharVector([]string{"0000-00-00"}, nil, proc.Mp())
+	defer inputVec.Free(proc.Mp())
+	targetType := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())
+	defer targetType.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	err := NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sql_mode lookup failed")
+}
+
+func TestExplicitCastZeroTemporalSkippedRowsAreNotParsed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+	})
+
+	selectList := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{false, true, true},
+	}
+	result := runStringTemporalCast(
+		t,
+		proc,
+		NewCast,
+		"not-a-timestamp",
+		types.T_timestamp.ToType(),
+		selectList,
+		"0000-00-00 00:00:00",
+		"2024-01-02 03:04:05",
+	)
+
+	require.True(t, result.nulls[0], "skipped rows should append NULL without parsing")
+	require.True(t, result.nulls[1], "strict+NO_ZERO_DATE explicit cast should return NULL")
+	require.False(t, result.nulls[2], "non-zero timestamp should still be parsed")
+
+	expected, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05", 0)
+	require.NoError(t, err)
+	require.Equal(t, expected, result.timestamps[2])
+}
+
+type temporalCastResult struct {
+	nulls      []bool
+	dates      []types.Date
+	datetimes  []types.Datetime
+	timestamps []types.Timestamp
+}
+
+func runStringTemporalCast(
+	t *testing.T,
+	proc *process.Process,
+	fn fEvalFn,
+	input string,
+	target types.Type,
+	selectList *FunctionSelectList,
+	extraInputs ...string,
+) temporalCastResult {
+	t.Helper()
+
+	values := append([]string{input}, extraInputs...)
+	inputVec := testutil.MakeVarcharVector(values, nil, proc.Mp())
+	defer inputVec.Free(proc.Mp())
+	targetType := vector.NewConstNull(target, len(values), proc.Mp())
+	defer targetType.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(len(values)))
+	require.NoError(t, fn([]*vector.Vector{inputVec, targetType}, result, proc, len(values), selectList))
+
+	rsVec := result.GetResultVector()
+	out := temporalCastResult{nulls: make([]bool, len(values))}
+	for i := range values {
+		out.nulls[i] = rsVec.GetNulls().Contains(uint64(i))
+	}
+
+	switch target.Oid {
+	case types.T_date:
+		out.dates = append([]types.Date(nil), vector.MustFixedColNoTypeCheck[types.Date](rsVec)...)
+	case types.T_datetime:
+		out.datetimes = append([]types.Datetime(nil), vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)...)
+	case types.T_timestamp:
+		out.timestamps = append([]types.Timestamp(nil), vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)...)
+	default:
+		t.Fatalf("unsupported target type %s", target)
+	}
+	return out
 }
 
 func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {

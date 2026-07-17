@@ -202,7 +202,7 @@ func (c *Compile) GetPlan() *plan.Plan {
 	return c.pn
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -216,8 +216,14 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
 	for _, s := range c.scopes {
-		s.Reset(c)
+		if err = s.reset(c, rejectZeroTemporal); err != nil {
+			return err
+		}
 	}
 
 	for _, e := range c.filterExprExes {
@@ -249,6 +255,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.queryPlacement.Reason != "" {
 		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
+	return nil
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {

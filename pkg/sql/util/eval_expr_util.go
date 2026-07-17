@@ -48,23 +48,30 @@ func getVal(val any) string {
 }
 
 func rejectZeroTemporalInStrictMode(proc *process.Process, value, typ string) error {
-	if proc == nil || proc.GetResolveVariableFunc() == nil {
-		return nil
-	}
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	reject, err := RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
-		return nil
+		return err
 	}
-	modeStr, ok := mode.(string)
-	if !ok {
-		return nil
-	}
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	if hasStrictMode && strings.Contains(modeStr, "NO_ZERO_DATE") {
+	if reject {
 		return moerr.NewTruncatedValueForField(proc.Ctx, typ, value, "value", 1)
 	}
 	return nil
+}
+
+func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return false, nil
+	}
+
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return false, err
+	}
+	statementIgnore := false
+	if sp := proc.GetStmtProfile(); sp != nil {
+		statementIgnore = sp.GetStatementIgnore()
+	}
+	return process.IsStrictNoZeroDateMode(mode) && !statementIgnore, nil
 }
 
 func HexToInt(hex string) (uint64, error) {

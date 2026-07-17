@@ -296,11 +296,6 @@ func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
 func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
-	mode := "STRICT_TRANS_TABLES,NO_ZERO_DATE"
-	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		require.Equal(t, "sql_mode", varName)
-		return mode, nil
-	})
 
 	tests := []struct {
 		name string
@@ -325,14 +320,14 @@ func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
 			bat.Vecs[0] = vec
 			bat.SetRowCount(1)
 			pre := &PreInsert{
-				TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
-				Attrs:    []string{"v"},
+				RejectZeroTemporal: true,
+				TableDef:           &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
+				Attrs:              []string{"v"},
 			}
 
 			require.Error(t, checkZeroTemporalInStrictMode(pre, bat, proc))
-			mode = "NO_ZERO_DATE"
+			pre.RejectZeroTemporal = false
 			require.NoError(t, checkZeroTemporalInStrictMode(pre, bat, proc))
-			mode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
 			bat.Clean(proc.Mp())
 		})
 	}
@@ -341,10 +336,6 @@ func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
 func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
-	mode := "STRICT_TRANS_TABLES,NO_ZERO_DATE"
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return mode, nil
-	})
 
 	for _, tc := range []struct {
 		name string
@@ -361,8 +352,9 @@ func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *te
 			input.SetRowCount(1)
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 			pre := &PreInsert{
-				TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
-				Attrs:    []string{"v"},
+				RejectZeroTemporal: true,
+				TableDef:           &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.typ)}}}},
+				Attrs:              []string{"v"},
 			}
 			pre.AppendChild(child)
 			require.NoError(t, pre.Prepare(proc))
@@ -376,15 +368,15 @@ func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *te
 		})
 	}
 
-	mode = "NO_ZERO_DATE"
 	vec := newZeroTemporalConstVector(t, types.T_date, proc)
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = vec
 	input.SetRowCount(1)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	pre := &PreInsert{
-		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_date)}}}},
-		Attrs:    []string{"v"},
+		RejectZeroTemporal: false,
+		TableDef:           &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_date)}}}},
+		Attrs:              []string{"v"},
 	}
 	pre.AppendChild(child)
 	require.NoError(t, pre.Prepare(proc))

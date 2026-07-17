@@ -138,7 +138,7 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
 		return err
 	}
-	if err = checkZeroTemporalInStrictMode(proc, insertBatch); err != nil {
+	if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, insertBatch); err != nil {
 		return err
 	}
 	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
@@ -224,7 +224,7 @@ func (update *MultiUpdate) insert_table(
 		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 	}
 	if info.tableType == UpdateMainTable {
-		if err = checkZeroTemporalInStrictMode(proc, writeBatch); err != nil {
+		if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, writeBatch); err != nil {
 			return err
 		}
 	}
@@ -244,21 +244,8 @@ func (update *MultiUpdate) insert_table(
 	return
 }
 
-func checkZeroTemporalInStrictMode(proc *process.Process, bat *batch.Batch) error {
-	if proc == nil || bat == nil || proc.GetResolveVariableFunc() == nil {
-		return nil
-	}
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
-	if err != nil {
-		return nil
-	}
-	modeStr, ok := mode.(string)
-	if !ok {
-		return nil
-	}
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	if !hasStrictMode || !strings.Contains(modeStr, "NO_ZERO_DATE") {
+func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batch.Batch) error {
+	if proc == nil || bat == nil || !reject {
 		return nil
 	}
 

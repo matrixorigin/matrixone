@@ -607,7 +607,7 @@ func TestGetOneRowDataLoadDataNonStrictAdjustedValues(t *testing.T) {
 
 	date0, err := types.ParseDateCast("20240102")
 	require.NoError(t, err)
-	require.Equal(t, []types.Date{date0, types.Date(0), types.Date(0)}, vector.MustFixedColWithTypeCheck[types.Date](bat.Vecs[3]))
+	require.Equal(t, []types.Date{date0, types.ZeroDate, types.ZeroDate}, vector.MustFixedColWithTypeCheck[types.Date](bat.Vecs[3]))
 
 	require.Equal(t, "abcd", string(bat.Vecs[4].GetBytesAt(0)))
 	require.Equal(t, "abcd", string(bat.Vecs[4].GetBytesAt(1)))
@@ -779,6 +779,267 @@ func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *tes
 			)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.wantErrText)
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
+	utc8 := time.FixedZone("UTC+8", 8*3600)
+
+	testCases := []struct {
+		name              string
+		colType           plan.Type
+		vecType           types.Type
+		fieldVal          string
+		sessionTZ         *time.Location
+		wantDirect        any
+		wantParallelText  string
+		wantDirectErrText string
+		strict            bool
+		local             bool
+		format            string
+	}{
+		{
+			name:             "date malformed becomes zero date",
+			colType:          plan.Type{Id: int32(types.T_date)},
+			vecType:          types.T_date.ToType(),
+			fieldVal:         "2024-02-31",
+			wantDirect:       types.ZeroDate,
+			wantParallelText: "0000-00-00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "date explicit zero remains zero date",
+			colType:          plan.Type{Id: int32(types.T_date)},
+			vecType:          types.T_date.ToType(),
+			fieldVal:         "0000-00-00",
+			wantDirect:       types.ZeroDate,
+			wantParallelText: "0000-00-00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "date legal value unchanged",
+			colType:          plan.Type{Id: int32(types.T_date)},
+			vecType:          types.T_date.ToType(),
+			fieldVal:         "2024-01-02",
+			wantParallelText: "2024-01-02",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "datetime malformed becomes zero datetime",
+			colType:          plan.Type{Id: int32(types.T_datetime)},
+			vecType:          types.T_datetime.ToType(),
+			fieldVal:         "2024-02-31 25:61:61",
+			wantDirect:       types.ZeroDatetime,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "datetime explicit zero remains zero datetime",
+			colType:          plan.Type{Id: int32(types.T_datetime)},
+			vecType:          types.T_datetime.ToType(),
+			fieldVal:         "0000-00-00 00:00:00",
+			wantDirect:       types.ZeroDatetime,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "datetime legal value unchanged",
+			colType:          plan.Type{Id: int32(types.T_datetime)},
+			vecType:          types.T_datetime.ToType(),
+			fieldVal:         "2024-01-02 03:04:05",
+			wantParallelText: "2024-01-02 03:04:05",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp malformed becomes zero timestamp",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "not-a-timestamp",
+			sessionTZ:        utc8,
+			wantDirect:       types.ZeroTimestamp,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp explicit zero remains zero timestamp",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "0000-00-00 00:00:00",
+			sessionTZ:        utc8,
+			wantDirect:       types.ZeroTimestamp,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp lower bound in session timezone becomes zero timestamp",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "1970-01-01 00:00:01",
+			sessionTZ:        utc8,
+			wantDirect:       types.ZeroTimestamp,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp exact UTC lower bound remains valid",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "1970-01-01 00:00:01",
+			sessionTZ:        time.UTC,
+			wantParallelText: "1970-01-01 00:00:01",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:              "strict local date keeps existing error",
+			colType:           plan.Type{Id: int32(types.T_date)},
+			vecType:           types.T_date.ToType(),
+			fieldVal:          "2024-02-31",
+			wantParallelText:  "2024-02-31",
+			wantDirectErrText: "not Date type",
+			local:             true,
+			format:            tree.CSV,
+			strict:            true,
+		},
+		{
+			name:              "non-local datetime keeps existing error",
+			colType:           plan.Type{Id: int32(types.T_datetime)},
+			vecType:           types.T_datetime.ToType(),
+			fieldVal:          "2024-02-31 25:61:61",
+			wantParallelText:  "2024-02-31 25:61:61",
+			wantDirectErrText: "not Datetime type",
+			local:             false,
+			format:            tree.CSV,
+		},
+		{
+			name:              "non-csv timestamp keeps existing error",
+			colType:           plan.Type{Id: int32(types.T_timestamp)},
+			vecType:           types.T_timestamp.ToType(),
+			fieldVal:          "not-a-timestamp",
+			sessionTZ:         utc8,
+			wantParallelText:  "not-a-timestamp",
+			wantDirectErrText: "not Timestamp type",
+			local:             true,
+			format:            tree.JSONLINE,
+		},
+		{
+			name:             "timestamp legal value unchanged",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "2024-01-02 03:04:05",
+			sessionTZ:        utc8,
+			wantParallelText: "2024-01-02 03:04:05",
+			local:            true,
+			format:           tree.CSV,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			if tc.sessionTZ != nil {
+				proc.GetSessionInfo().TimeZone = tc.sessionTZ
+			}
+
+			directBat := batch.NewWithSize(1)
+			directBat.Vecs[0] = vector.NewVec(tc.vecType)
+			defer directBat.Clean(proc.Mp())
+
+			directParam := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: tc.strict,
+					Cols:          []*plan.ColDef{{Name: "temporal", Typ: tc.colType}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			attr := plan.ExternAttr{ColName: "temporal", ColIndex: 0, ColFieldIndex: 0}
+			err := getColData(directBat, []csvparser.Field{{Val: tc.fieldVal}}, 0, directParam, proc.Mp(), attr, proc)
+			if tc.wantDirectErrText != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantDirectErrText)
+			} else {
+				require.NoError(t, err)
+			}
+
+			parallelBat := batch.NewWithSize(1)
+			parallelBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			defer parallelBat.Clean(proc.Mp())
+
+			parallelParam := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					ParallelLoad:  true,
+					StrictSqlMode: tc.strict,
+					Cols:          []*plan.ColDef{{Name: "temporal", Typ: tc.colType}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err = getColData(parallelBat, []csvparser.Field{{Val: tc.fieldVal}}, 0, parallelParam, proc.Mp(), attr, proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantParallelText, string(parallelBat.Vecs[0].GetBytesAt(0)))
+
+			if tc.wantDirectErrText != "" {
+				return
+			}
+
+			switch want := tc.wantDirect.(type) {
+			case nil:
+				switch types.T(tc.colType.Id) {
+				case types.T_date:
+					got := vector.MustFixedColWithTypeCheck[types.Date](directBat.Vecs[0])[0]
+					expected, parseErr := types.ParseDateCast(tc.fieldVal)
+					require.NoError(t, parseErr)
+					require.Equal(t, expected, got)
+				case types.T_datetime:
+					got := vector.MustFixedColWithTypeCheck[types.Datetime](directBat.Vecs[0])[0]
+					expected, parseErr := types.ParseDatetime(tc.fieldVal, tc.colType.Scale)
+					require.NoError(t, parseErr)
+					require.Equal(t, expected, got)
+				case types.T_timestamp:
+					got := vector.MustFixedColWithTypeCheck[types.Timestamp](directBat.Vecs[0])[0]
+					expected, parseErr := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, tc.fieldVal, tc.colType.Scale)
+					require.NoError(t, parseErr)
+					require.Equal(t, expected, got)
+				default:
+					t.Fatalf("unexpected temporal type %v", types.T(tc.colType.Id))
+				}
+			case types.Date:
+				require.Equal(t, []types.Date{want}, vector.MustFixedColWithTypeCheck[types.Date](directBat.Vecs[0]))
+			case types.Datetime:
+				require.Equal(t, []types.Datetime{want}, vector.MustFixedColWithTypeCheck[types.Datetime](directBat.Vecs[0]))
+			case types.Timestamp:
+				require.Equal(t, []types.Timestamp{want}, vector.MustFixedColWithTypeCheck[types.Timestamp](directBat.Vecs[0]))
+			default:
+				t.Fatalf("unexpected direct expectation type %T", tc.wantDirect)
+			}
 		})
 	}
 }

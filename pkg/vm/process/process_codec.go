@@ -100,6 +100,11 @@ func (proc *Process) BuildProcessInfo(
 			QueryId:         proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout: resolveLockWaitTimeoutSeconds(proc),
 		}
+		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.ExplicitZeroTemporalCastReturnsNull = nullifyZeroTemporal
 	}
 	{ // log info
 		stmtId := proc.GetStmtProfile().GetStmtId()
@@ -296,15 +301,16 @@ func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
 	sessionInfo := SessionInfo{
-		User:            sei.User,
-		Host:            sei.Host,
-		Role:            sei.Role,
-		ConnectionID:    sei.ConnectionId,
-		Database:        sei.Database,
-		Version:         sei.Version,
-		Account:         sei.Account,
-		QueryId:         sei.QueryId,
-		LockWaitTimeout: sei.LockWaitTimeout,
+		User:                                sei.User,
+		Host:                                sei.Host,
+		Role:                                sei.Role,
+		ConnectionID:                        sei.ConnectionId,
+		Database:                            sei.Database,
+		Version:                             sei.Version,
+		Account:                             sei.Account,
+		QueryId:                             sei.QueryId,
+		LockWaitTimeout:                     sei.LockWaitTimeout,
+		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

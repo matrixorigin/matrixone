@@ -2743,12 +2743,10 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// cast_strict is an internal operator used only for assignment to a
-			// real CHAR/VARCHAR column, where an over-width value must be
-			// rejected instead of truncated. Restrict the target type to
-			// CHAR/VARCHAR so it can't be misused as a generic strict cast.
-			if len(inputs) == 2 &&
-				(inputs[1].Oid == types.T_char || inputs[1].Oid == types.T_varchar) {
+			// cast_strict is internal assignment conversion. Character targets
+			// reject over-width values; temporal targets preserve zero sentinels
+			// so the write boundary can apply the statement's SQL-mode policy.
+			if len(inputs) == 2 && isStrictAssignmentCastTarget(inputs[1].Oid) {
 				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(0)
 				}
@@ -3229,4 +3227,13 @@ var supportedOperators = []FuncNew{
 			},
 		},
 	},
+}
+
+func isStrictAssignmentCastTarget(target types.T) bool {
+	switch target {
+	case types.T_char, types.T_varchar, types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	default:
+		return false
+	}
 }

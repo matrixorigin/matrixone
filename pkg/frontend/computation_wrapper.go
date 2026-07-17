@@ -305,7 +305,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			}
 			stats.PermissionAuth.Add(&authStats)
 		}
-		refreshProcessDivByZeroProfileForPreparedStmt(cwft.proc, stmt)
+		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true
 
@@ -339,7 +339,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
+			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql()); err != nil {
+				return nil, err
+			}
 			cwft.compile = retComp
 		}
 

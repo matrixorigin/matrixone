@@ -160,6 +160,7 @@ message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
   repeated plan.UpdateCtx update_ctx_list = 3;
+  bool reject_zero_temporal = 4;
 }
 
 message Array {
@@ -200,6 +201,7 @@ message PreInsert {
   plan.Expr cluster_by_expr = 9;
   bool is_old_update = 10;
   bool is_new_update = 11;
+  bool reject_zero_temporal = 12;
 }
 
 message PostDml {
@@ -574,6 +576,7 @@ message SessionInfo {
   string account = 8;
   repeated string query_id = 9;
   int64 lock_wait_timeout = 10;
+  bool explicit_zero_temporal_cast_returns_null = 11;
 }
 
 message SessionLoggerInfo {

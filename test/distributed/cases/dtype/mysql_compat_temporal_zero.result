@@ -1,4 +1,6 @@
 set time_zone = '+00:00';
+set @old_sql_mode = @@sql_mode;
+set sql_mode = '';
 select cast('0000-00-00' as date) as zero_date,
 cast('0000-00-00 00:00:00' as datetime) as zero_datetime,
 cast('0000-00-00 00:00:00' as timestamp) as zero_timestamp;
@@ -106,7 +108,6 @@ d date,
 dt datetime,
 ts timestamp
 );
-set @old_sql_mode = @@sql_mode;
 set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 insert into mysql_compat_temporal_zero values
 ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
@@ -114,6 +115,12 @@ truncated type date value 0000-00-00 for column value, 1
 select count(*) as strict_no_zero_date_rows from mysql_compat_temporal_zero;
 ➤ strict_no_zero_date_rows[-5,64,0]  𝄀
 0
+insert ignore into mysql_compat_temporal_zero values
+('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+select d, dt, ts from mysql_compat_temporal_zero;
+➤ d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+truncate table mysql_compat_temporal_zero;
 set sql_mode = 'STRICT_TRANS_TABLES';
 insert into mysql_compat_temporal_zero values
 ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
@@ -130,39 +137,71 @@ select d, dt, ts from mysql_compat_temporal_zero;
 set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 insert into mysql_compat_temporal_zero_dml values
 (1, cast('0000-00-00' as date), '2024-01-02 03:04:05', '2024-01-02 03:04:05');
-truncated type date value 0000-00-00 for column value, 1
 insert into mysql_compat_temporal_zero_dml values
 (2, '2024-01-02', cast('0000-00-00 00:00:00' as datetime), '2024-01-02 03:04:05');
-truncated type datetime value 0000-00-00 00:00:00 for column value, 1
 insert into mysql_compat_temporal_zero_dml values
 (3, '2024-01-02', '2024-01-02 03:04:05', cast('0000-00-00 00:00:00' as timestamp));
-truncated type datetime value 0000-00-00 00:00:00 for column value, 1
 insert into mysql_compat_temporal_zero_dml
 select 4,
 cast('0000-00-00' as date),
 cast('0000-00-00 00:00:00' as datetime),
 cast('0000-00-00 00:00:00' as timestamp);
-truncated type date value 0000-00-00 for column value, 1
 select count(*) as strict_cast_insert_rows from mysql_compat_temporal_zero_dml;
 ➤ strict_cast_insert_rows[-5,64,0]  𝄀
-0
+4
+select id, d is null as d_is_null, dt is null as dt_is_null, ts is null as ts_is_null
+from mysql_compat_temporal_zero_dml order by id;
+➤ id[4,32,0]  ¦  d_is_null[-7,1,0]  ¦  dt_is_null[-7,1,0]  ¦  ts_is_null[-7,1,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  0  ¦  0  ¦  1  𝄀
+4  ¦  1  ¦  1  ¦  1
 insert into mysql_compat_temporal_zero_dml values
 (10, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
 update mysql_compat_temporal_zero_dml
 set d = cast('0000-00-00' as date)
 where id = 10;
-truncated type date value 0000-00-00 for column value, 1
 update mysql_compat_temporal_zero_dml
 set dt = cast('0000-00-00 00:00:00' as datetime)
 where id = 10;
-truncated type datetime value 0000-00-00 00:00:00 for column value, 1
 update mysql_compat_temporal_zero_dml
 set ts = cast('0000-00-00 00:00:00' as timestamp)
 where id = 10;
-truncated type datetime value 0000-00-00 00:00:00 for column value, 1
 select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 10;
 ➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
-10  ¦  2024-01-02  ¦  2024-01-02 03:04:05  ¦  2024-01-02 03:04:05
+10  ¦  null  ¦  null  ¦  null
+insert into mysql_compat_temporal_zero_dml values
+(11, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
+update ignore mysql_compat_temporal_zero_dml
+set d = '0000-00-00',
+dt = '0000-00-00 00:00:00',
+ts = '0000-00-00 00:00:00'
+where id = 11;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 11;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+11  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+insert into mysql_compat_temporal_zero_dml values
+(12, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
+update ignore mysql_compat_temporal_zero_dml
+set d = cast('0000-00-00' as date),
+dt = cast('0000-00-00 00:00:00' as datetime),
+ts = cast('0000-00-00 00:00:00' as timestamp)
+where id = 12;
+select id, d is null as d_is_null, dt is null as dt_is_null, ts is null as ts_is_null
+from mysql_compat_temporal_zero_dml where id = 12;
+➤ id[4,32,0]  ¦  d_is_null[-7,1,0]  ¦  dt_is_null[-7,1,0]  ¦  ts_is_null[-7,1,0]  𝄀
+12  ¦  1  ¦  1  ¦  1
+insert into mysql_compat_temporal_zero_dml values
+(13, '2024-01-02', '2024-01-02 03:04:05', '2024-01-02 03:04:05');
+update mysql_compat_temporal_zero_dml
+set d = '0000-00-00',
+dt = '0000-00-00 00:00:00',
+ts = '0000-00-00 00:00:00'
+where id = 13;
+truncated type date value 0000-00-00 for column value, 1
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 13;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+13  ¦  2024-01-02  ¦  2024-01-02 03:04:05  ¦  2024-01-02 03:04:05
 truncate table mysql_compat_temporal_zero_dml;
 set sql_mode = 'STRICT_TRANS_TABLES';
 insert into mysql_compat_temporal_zero_dml
@@ -183,6 +222,26 @@ cast('0000-00-00 00:00:00' as timestamp);
 select id, d, dt, ts from mysql_compat_temporal_zero_dml;
 ➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
 30  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+truncate table mysql_compat_temporal_zero_dml;
+set sql_mode = 'STRICT_TRANS_TABLES';
+prepare temporal_zero_insert from 'insert into mysql_compat_temporal_zero_dml values (40, ''0000-00-00'', ''0000-00-00 00:00:00'', ''0000-00-00 00:00:00'')';
+execute temporal_zero_insert;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+40  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+truncate table mysql_compat_temporal_zero_dml;
+set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
+execute temporal_zero_insert;
+truncated type date value 0000-00-00 for column value, 1
+select count(*) as strict_prepared_rows from mysql_compat_temporal_zero_dml;
+➤ strict_prepared_rows[-5,64,0]  𝄀
+0
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute temporal_zero_insert;
+select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+40  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+deallocate prepare temporal_zero_insert;
 set sql_mode = @old_sql_mode;
 drop table mysql_compat_temporal_zero;
 drop table mysql_compat_temporal_zero_dml;

@@ -999,6 +999,15 @@ var ForceCastExpr = forceCastExpr
 
 var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
+func useAssignmentStrictCast(targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
+		return true
+	default:
+		return false
+	}
+}
+
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
@@ -1012,11 +1021,11 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
-	// width check: an over-length value errors instead of being silently
-	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
+	// Assignment conversion keeps cast_strict semantics for real column writes:
+	// strict string widths and temporal zero sentinels stay distinct from
+	// explicit CAST(...), which continues to use the generic cast path.
 	funcName := "cast"
-	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
+	if useAssignmentStrictCast(targetType.Typ) {
 		funcName = "cast_strict"
 	}
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
@@ -1040,7 +1049,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 
 func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
 	return forceCastExprWithName(ctx, expr, targetType, funcName)

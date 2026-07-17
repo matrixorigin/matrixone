@@ -76,18 +76,19 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetQueryId("query-1")
 	proc.Base.UnixTime = 12345
 	proc.Base.SessionInfo = SessionInfo{
-		Account:         "acc",
-		User:            "user",
-		Host:            "host",
-		Role:            "role",
-		ConnectionID:    99,
-		Database:        "db1",
-		Version:         "v1",
-		TimeZone:        time.FixedZone("UTC+8", 8*3600),
-		LockWaitTimeout: 7,
-		QueryId:         []string{"stmt-qid"},
-		LogLevel:        zap.WarnLevel,
-		SessionId:       uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		Account:                             "acc",
+		User:                                "user",
+		Host:                                "host",
+		Role:                                "role",
+		ConnectionID:                        99,
+		Database:                            "db1",
+		Version:                             "v1",
+		TimeZone:                            time.FixedZone("UTC+8", 8*3600),
+		LockWaitTimeout:                     7,
+		ExplicitZeroTemporalCastReturnsNull: true,
+		QueryId:                             []string{"stmt-qid"},
+		LogLevel:                            zap.WarnLevel,
+		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -180,6 +181,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
+	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
 	mockInfo, err := MockProcessInfoWithPro("select 2", proc)
@@ -210,6 +212,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))

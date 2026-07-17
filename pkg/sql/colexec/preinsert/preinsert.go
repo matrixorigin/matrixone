@@ -309,20 +309,7 @@ func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
 // checkZeroTemporalInStrictMode covers expression-produced values that bypass
 // the literal conversion helpers used by INSERT ... VALUES.
 func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc *proc) error {
-	if preInsert == nil || bat == nil || proc == nil || proc.GetResolveVariableFunc() == nil {
-		return nil
-	}
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
-	if err != nil {
-		return nil
-	}
-	modeStr, ok := mode.(string)
-	if !ok {
-		return nil
-	}
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	if !hasStrictMode || !strings.Contains(modeStr, "NO_ZERO_DATE") {
+	if preInsert == nil || bat == nil || proc == nil || !preInsert.RejectZeroTemporal {
 		return nil
 	}
 

@@ -104,10 +104,7 @@ func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc, c := tc.build(t, false, false)
-			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-				return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
-			})
-
+			c.op.RejectZeroTemporal = true
 			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_date)}
 			for _, bat := range c.inputBatchs {
 				zeroDates := vector.NewVec(types.T_date.ToType())
@@ -121,6 +118,32 @@ func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
 			runTestCases(t, proc, []*testCase{c})
 		})
 	}
+}
+
+func TestMultiUpdatePreparePreservesCompiledZeroTemporalPolicy(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, false)
+	defer ctrl.Finish()
+	defer proc.Free()
+	op := &MultiUpdate{
+		MultiUpdateCtx:     prepareTestInsertMultiUpdateCtx(false, false),
+		Action:             UpdateWriteTable,
+		Engine:             prepareTestEng(ctrl, false),
+		RejectZeroTemporal: true,
+	}
+	require.NoError(t, op.Prepare(proc))
+	require.True(t, op.RejectZeroTemporal)
+}
+
+func TestMultiUpdateSetRejectZeroTemporalUpdatesCachedS3Writer(t *testing.T) {
+	op := &MultiUpdate{
+		RejectZeroTemporal: true,
+		ctr: container{
+			s3Writer: &s3WriterDelegate{rejectZeroTemporal: true},
+		},
+	}
+	op.SetRejectZeroTemporal(false)
+	require.False(t, op.RejectZeroTemporal)
+	require.False(t, op.ctr.s3Writer.rejectZeroTemporal)
 }
 
 // ----- util function ----

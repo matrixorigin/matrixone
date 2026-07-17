@@ -340,11 +340,9 @@ func TestInsertMainTableSkipNullPkRejectsZeroTemporalAfterFilter(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, false)
 	defer ctrl.Finish()
 	defer proc.Free()
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
-	})
 
 	op, updateCtx, written := newMainTablePkSecondHarness(t, ctrl)
+	op.RejectZeroTemporal = true
 	updateCtx.TableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_date)}
 
 	dates := vector.NewVec(types.T_date.ToType())

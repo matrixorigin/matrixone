@@ -456,7 +456,7 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return newCast(parameters, result, proc, length, selectList, true)
 }
 
-func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
+func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
@@ -476,61 +476,61 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = bitToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		err = int8ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = int8ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		err = int16ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = int16ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		err = int32ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = int32ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		err = int64ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = int64ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		err = uint8ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = uint8ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		err = uint16ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = uint16ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		err = uint32ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = uint32ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = uint64ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = uint64ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = float32ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = float64ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
-		err = decimal64ToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = decimal64ToOthers(proc, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
-		err = decimal128ToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = decimal128ToOthers(proc, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_decimal256:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
-		err = decimal256ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = decimal256ToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		err = dateToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = dateToOthers(proc, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		err = datetimeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = datetimeToOthers(proc, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		err = timeToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = timeToOthers(proc.Ctx, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
-		err = timestampToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = timestampToOthers(proc, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_year:
 		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
 		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = strTypeToOthers(proc, s, *toType, result, length, selectList, assignmentCast)
 	case types.T_array_float32, types.T_array_float64:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
@@ -1888,7 +1888,7 @@ func geometryToTextCast(
 
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
@@ -1971,10 +1971,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUuid(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return strToDate(source, rs, length, selectList)
+		return strToDate(proc, source, rs, length, selectList, assignmentCast)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return strToDatetime(source, rs, length, selectList)
+		return strToDatetime(proc, source, rs, length, selectList, assignmentCast)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return strToTime(source, rs, length, selectList)
@@ -1984,11 +1984,11 @@ func strTypeToOthers(proc *process.Process,
 		if proc != nil {
 			zone = proc.GetSessionInfo().TimeZone
 		}
-		return strToTimestamp(source, rs, zone, length, selectList)
+		return strToTimestamp(proc, source, rs, zone, length, selectList, assignmentCast)
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, proc, source, rs, length, toType, strictStringWidth)
+		return strToStr(ctx, proc, source, rs, length, toType, assignmentCast)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -5718,13 +5718,21 @@ func strToJson(
 	return nil
 }
 
-func strToDate(
+func strToDate(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
+	modeChecked := false
+	nullifyZero := false
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -5739,6 +5747,21 @@ func strToDate(
 					return err
 				}
 			} else {
+				if val == types.ZeroDate && !assignmentCast {
+					if !modeChecked {
+						nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)
+						if err != nil {
+							return err
+						}
+						modeChecked = true
+					}
+					if nullifyZero {
+						if err = to.Append(dft, true); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if err = to.Append(val, false); err != nil {
 					return err
 				}
@@ -5775,14 +5798,22 @@ func strToTime(
 	return nil
 }
 
-func strToDatetime(
+func strToDatetime(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
 	totype := to.GetType()
+	modeChecked := false
+	nullifyZero := false
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -5794,6 +5825,21 @@ func strToDatetime(
 			if err != nil {
 				return err
 			}
+			if val == types.ZeroDatetime && !assignmentCast {
+				if !modeChecked {
+					nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)
+					if err != nil {
+						return err
+					}
+					modeChecked = true
+				}
+				if nullifyZero {
+					if err = to.Append(dft, true); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if err = to.Append(val, false); err != nil {
 				return err
 			}
@@ -5802,15 +5848,23 @@ func strToDatetime(
 	return nil
 }
 
-func strToTimestamp(
+func strToTimestamp(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Timestamp],
-	zone *time.Location, length int, selectList *FunctionSelectList) error {
+	zone *time.Location, length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
 	totype := to.GetType()
+	modeChecked := false
+	nullifyZero := false
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -5822,12 +5876,36 @@ func strToTimestamp(
 			if err != nil {
 				return err
 			}
+			if val == types.ZeroTimestamp && !assignmentCast {
+				if !modeChecked {
+					nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)
+					if err != nil {
+						return err
+					}
+					modeChecked = true
+				}
+				if nullifyZero {
+					if err = to.Append(dft, true); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if err = to.Append(val, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func functionRowSkipped(selectList *FunctionSelectList, i uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() ||
+		(!selectList.ShouldEvalAllRow() && selectList.Contains(i)))
+}
+
+func explicitZeroTemporalCastReturnsNull(proc *process.Process) (bool, error) {
+	return process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
 }
 
 func strToStr(
