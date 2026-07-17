@@ -1641,7 +1641,7 @@ func TestLockTableIfLockCountIsZeroWithLockRows(t *testing.T) {
 		arg.OpAnalyzer.Start()
 		require.NoError(t, lockTalbeIfLockCountIsZero(proc, arg))
 		arg.OpAnalyzer.Stop()
-		require.Equal(t, int64(1), arg.OpAnalyzer.GetOpStats().CallNum)
+		require.Equal(t, 1, arg.OpAnalyzer.GetOpStats().CallNum)
 		require.Zero(t, arg.OpAnalyzer.GetOpStats().ResourceDelta().Quality)
 
 		arg.Free(proc, false, nil)

@@ -193,7 +193,7 @@ func TestGroupByWithSum(t *testing.T) {
 	}
 	// mock batch has 2 rows with distinct values (1, 1000) → 2 groups
 	require.Equal(t, 2, rowCount)
-	require.Equal(t, int64(execCalls), g.OpAnalyzer.GetOpStats().CallNum)
+	require.Equal(t, execCalls, g.OpAnalyzer.GetOpStats().CallNum)
 
 	g.Free(proc, false, nil)
 	proc.Free()
@@ -267,7 +267,7 @@ func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
 	require.NoError(t, merge.Prepare(proc))
 	finalBatches := collectBatches(t, merge, proc)
 	require.Len(t, finalBatches, 1)
-	require.Equal(t, int64(len(finalBatches)+1), merge.OpAnalyzer.GetOpStats().CallNum)
+	require.Equal(t, len(finalBatches)+1, merge.OpAnalyzer.GetOpStats().CallNum)
 	assertMergedTicketCounts(t, finalBatches, 2, 2)
 	merge.Free(proc, false, nil)
 }

@@ -803,12 +803,17 @@ func createCompile(
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
-	compileIOStart := atomic.LoadInt64(&stats.IOAccessTimeConsumption)
+	var compileIOStart int64
+	if stats != nil {
+		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
+	}
 	crs := new(perfcounter.CounterSet)
 	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
-		compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
-		stats.AddCompileIOConsumption(time.Duration(compileIO))
+		if stats != nil {
+			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
+			stats.AddCompileIOConsumption(time.Duration(compileIO))
+		}
 		stats.AddCompileS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
