@@ -364,7 +364,7 @@ func (s *service) handleForwardLock(
 			}
 			lockErr = err
 			resp.Lock.Result = result
-			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+			_ = writeResponseWithDeadline(s.logger, cancel, resp, remoteLockWireError(err), cs, defaultRPCWriteTimeout, logFields)
 		})
 }
 

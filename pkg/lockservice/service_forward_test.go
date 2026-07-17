@@ -20,8 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,6 +57,47 @@ func TestForwardLock(t *testing.T) {
 			require.NotNil(t, txn)
 			require.Equal(t, l1.serviceID, txn.remoteService)
 			require.True(t, l2.activeTxnHolder.hasRemoteLockBind(l1.serviceID, l2.tableGroups.get(0, tableID).getBind(), time.Second))
+		},
+	)
+}
+
+func TestForwardLockOwnerWaitTimeoutFallbackReleasesPartialRemoteLock(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			origin := s[0]
+			owner := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			_, err := owner.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			row1 := []byte{1}
+			row2 := []byte{2}
+			holderTxn := []byte("holder")
+			originTxn := []byte("origin")
+			verifyTxn := []byte("verify")
+			mustAddTestLock(t, ctx, owner, tableID, holderTxn, [][]byte{row2}, pb.Granularity_Row)
+
+			opt := newTestRowExclusiveOptions()
+			opt.ForwardTo = owner.serviceID
+			_, err = origin.Lock(ctx, tableID, [][]byte{row1, row2}, originTxn, opt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected), "got %v", err)
+
+			// An old origin treats the v1-compatible error as whole-transaction
+			// rollback, and its Unlock must release the partial grant on owner.
+			require.NoError(t, origin.Unlock(ctx, originTxn, timestamp.Timestamp{}))
+			_, err = owner.Lock(ctx, tableID, [][]byte{row1}, verifyTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, verifyTxn, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: 100 * time.Millisecond}
 		},
 	)
 }
