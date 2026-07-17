@@ -33,10 +33,11 @@
 package wand
 
 import (
+	"encoding/binary"
 	"math"
+	"os"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
@@ -64,10 +65,32 @@ func bm25Factor(tf float64, dl int32, avgDocLen float64) float64 {
 	return tf * (bm25K1 + 1) / (tf + bm25K1*norm)
 }
 
-// termPostings is the in-memory posting list for one word-id, ordered by doc ord.
+// termPostings is the posting list for one word-id, ordered by doc ord. It has
+// two representations (mirrors fulltext2's termPostings):
+//
+//   - BUILD-side: docIDs/tfs are resident Go slices; df == len(docIDs). Produced by
+//     the Builder, Merge, FilterLive, Split. blockLastDoc/blockMaxTf/blockMinDl are
+//     derived by finalizeScoring.
+//   - LOADED-side (Deserialize / mmap): docIDs/tfs are nil — the postings live
+//     block-compressed in blockData (a view into the mmap/blob, one BlockSize-doc
+//     block at a time: docID gaps as delta+varint from the previous block's last
+//     ord, then raw tf bytes). ndoc is the authoritative df. The block-max directory
+//     (blockLastDoc/blockMaxTf/blockMinDl + blockOff) is decoded RESIDENT per term on
+//     demand (decodeTermEntry) — never re-derived from the compressed blocks. The
+//     WAND cursor decodes only the blocks its block-max walk lands on (fillBlock).
 type termPostings struct {
-	docIDs []int64 // doc ords, ascending, len == df
-	tfs    []uint8 // parallel, capped tf
+	docIDs []int64 // BUILD-side doc ords, ascending, len == df; nil when LOADED
+	tfs    []uint8 // BUILD-side parallel capped tf; nil when LOADED
+
+	// ndoc is the document frequency on a LOADED posting list (docIDs not expanded);
+	// on a build-side list it equals len(docIDs).
+	ndoc int
+
+	// LOADED-side compressed docID/tf blocks (a view into the segment's mmap/blob)
+	// plus the per-block byte offsets within blockData (len nblk+1, cumulative). nil
+	// on a build-side list.
+	blockData []byte
+	blockOff  []int32
 
 	// Term-level score upper-bound inputs, idf-AND-avgdl-FREE so the bound stays
 	// valid under a global idf/avgdl (segments, incremental). The term UB is
@@ -75,12 +98,94 @@ type termPostings struct {
 	maxTf uint8 // max tf over all postings
 	minDl int32 // min doc length over all postings
 
-	// Block-Max skip-block metadata (one entry per ceil(df/BlockSize)), derived
-	// at load. Also idf/avgdl-free. block UB = weight·idf²·bm25Factor(blockMaxTf,
-	// blockMinDl, avgdl).
+	// Block-Max skip-block metadata (one entry per ceil(df/BlockSize)). Also
+	// idf/avgdl-free. block UB = weight·idf²·bm25Factor(blockMaxTf, blockMinDl,
+	// avgdl). Derived by finalizeScoring (build) or decodeTermEntry (loaded).
 	blockLastDoc []int64 // max (last) ord in each block (ascending → last)
 	blockMaxTf   []uint8 // max tf in each block
 	blockMinDl   []int32 // min doc length in each block
+}
+
+// df is the document frequency (build-side authoritative len; loaded-side ndoc).
+func (p *termPostings) df() int {
+	if p.docIDs != nil {
+		return len(p.docIDs)
+	}
+	return p.ndoc
+}
+
+// nblk is the number of Block-Max skip blocks (== ceil(df/BlockSize)).
+func (p *termPostings) nblk() int { return len(p.blockLastDoc) }
+
+// blockLen is the number of postings in block b (BlockSize, or the last remainder).
+func (p *termPostings) blockLen(b int) int {
+	n := p.df() - b*BlockSize
+	if n > BlockSize {
+		n = BlockSize
+	}
+	return n
+}
+
+// fillBlock decodes block b's docIDs and tfs into outDocs/outTfs (each cap >=
+// BlockSize) and returns the block length. Build-side copies the flat slices;
+// loaded-side varint-decodes the block from blockData (the mmap view): docID gaps
+// accumulate from the previous block's last ord (resident blockLastDoc[b-1]), then
+// the raw tf bytes follow. The WAND cursor calls this once per block it lands on;
+// materializeDocIDs/Tfs call it per block to rebuild the flat arrays.
+func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
+	blen := p.blockLen(b)
+	if p.docIDs != nil { // build-side: copy from the flat arrays
+		lo := b * BlockSize
+		copy(outDocs[:blen], p.docIDs[lo:lo+blen])
+		copy(outTfs[:blen], p.tfs[lo:lo+blen])
+		return blen
+	}
+	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
+	var prev int64
+	if b > 0 {
+		prev = p.blockLastDoc[b-1]
+	}
+	off := 0
+	for i := 0; i < blen; i++ {
+		g, n := binary.Uvarint(data[off:])
+		off += n
+		prev += int64(g)
+		outDocs[i] = prev
+	}
+	copy(outTfs[:blen], data[off:off+blen])
+	return blen
+}
+
+// materializeDocIDs returns this term's full ascending doc ords (df entries): the
+// build-side flat slice as-is, or a transient decode of every loaded block. Cold
+// paths (Merge / FilterLive / Split / re-Serialize) that scan all postings call
+// this ONCE; WAND ranking never does (it decodes only the blocks its walk lands on).
+func (p *termPostings) materializeDocIDs() []int64 {
+	if p.docIDs != nil {
+		return p.docIDs
+	}
+	out := make([]int64, p.ndoc)
+	var scratch [BlockSize]uint8
+	for b := 0; b < p.nblk(); b++ {
+		lo := b * BlockSize
+		p.fillBlock(b, out[lo:], scratch[:])
+	}
+	return out
+}
+
+// materializeTfs returns this term's full capped tf bytes (df entries): the
+// build-side flat slice as-is, or a transient decode of every loaded block.
+func (p *termPostings) materializeTfs() []uint8 {
+	if p.tfs != nil {
+		return p.tfs
+	}
+	out := make([]uint8, p.ndoc)
+	var scratch [BlockSize]int64
+	for b := 0; b < p.nblk(); b++ {
+		lo := b * BlockSize
+		p.fillBlock(b, scratch[:], out[lo:])
+	}
+	return out
 }
 
 // WandModel is the loadable in-memory index (one segment).
@@ -101,30 +206,81 @@ type WandModel struct {
 
 	pks      []any                   // ord -> original pk value (for output via AppendAny)
 	docLen   []int32                 // ord -> document length (token count), for BM25
-	terms    map[int32]*termPostings // word-id -> postings (slices into bigOrds/bigTfs when C-loaded)
+	terms    map[int32]*termPostings // BUILD-side word-id -> postings; nil on a LOADED model
 	overflow map[string]int32        // out-of-dict term -> overflow word-id (query resolution)
 
-	// When loaded from storage the postings live OFF the Go heap (C allocator):
-	// all term doc-ords/tfs are concatenated into these two buffers and each
-	// termPostings slices into them. Freed via deallocators on cache eviction.
-	// Build-side models leave these nil (per-term Go-heap slices) — Free is then
-	// a no-op.
-	bigOrds      []int64
-	bigTfs       []uint8
-	deallocators []malloc.Deallocator
+	// LOADED-side term dict (set by decodeLoaded / bindWand; nil on a build-side
+	// model). termOffsets maps word-id -> the BYTE OFFSET of that term's
+	// self-contained directory entry in `ranking`; a loaded model does NOT expand any
+	// term at load — lookupTerm decodes just the touched term's directory entry from
+	// `ranking` on demand and points its blockData at `blocks` — so the resident
+	// directory heap is O(the current query), not O(vocabulary). `ranking`/`blocks`
+	// are views into the mmap/blob (kept alive by mmapData or GC). The build-side
+	// `terms` map is left nil.
+	termOffsets     map[int32]int64
+	ranking, blocks []byte
+
+	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
+	// ranking directory and the compressed docID/tf blocks are views into it
+	// (page-cache-backed, reclaimable, shared by all concurrent queries — no copy, no
+	// off-heap). mmapPath is that file (empty for the anonymous SSD file, whose inode
+	// is freed by munmap). Both are released by Free() under the cache's eviction
+	// write-lock. nil on a build-side or in-memory (tail) model, whose bytes are
+	// GC-managed Go slices.
+	mmapData []byte
+	mmapPath string
 }
 
-// Free releases the off-heap (C-allocated) postings buffers. Safe to call on a
-// build-side model (no deallocators → no-op). After Free the model must not be
-// searched; the VectorIndexCache holds the write lock when calling Destroy.
+// Free releases a loaded model's mmap (and its backing file, if linked). Safe on a
+// build-side / in-memory tail model (nil mmapData → no-op) and idempotent. After
+// Free the model must not be searched; the VectorIndexCache holds the write lock
+// when calling Destroy. The loaded posting blocks (blockData) are views into
+// mmapData, so munmap reclaims them — there is no off-heap buffer to deallocate.
 func (m *WandModel) Free() {
-	for _, d := range m.deallocators {
-		d.Deallocate()
+	if m.mmapData != nil {
+		_ = munmap(m.mmapData)
+		m.mmapData = nil
 	}
-	m.deallocators = nil
-	m.bigOrds = nil
-	m.bigTfs = nil
+	if m.mmapPath != "" {
+		_ = os.Remove(m.mmapPath)
+		m.mmapPath = ""
+	}
+	m.ranking, m.blocks = nil, nil
+	m.termOffsets = nil
 	m.terms = nil
+}
+
+// lookupTerm resolves a word-id to its posting list, transparently across the two
+// representations: the build-side terms map, or a lazy per-term decode of the loaded
+// directory entry (decodeTermEntry). Returns (nil,false) if the word-id is absent.
+func (m *WandModel) lookupTerm(id int32) (*termPostings, bool) {
+	if m.termOffsets != nil { // loaded
+		off, ok := m.termOffsets[id]
+		if !ok {
+			return nil, false
+		}
+		return m.decodeTermEntry(off)
+	}
+	tp, ok := m.terms[id]
+	return tp, ok
+}
+
+// forEachTerm calls fn for every (word-id, posting-list), whether build-side (terms
+// map) or loaded-side (lazy directory decode). Used by the cold full-scan paths
+// (Merge / FilterLive / Split / re-Serialize). On a loaded model each tp is a
+// transient decode whose blockData views the mmap.
+func (m *WandModel) forEachTerm(fn func(int32, *termPostings)) {
+	if m.termOffsets != nil { // loaded
+		for id, off := range m.termOffsets {
+			if tp, ok := m.decodeTermEntry(off); ok {
+				fn(id, tp)
+			}
+		}
+		return
+	}
+	for id, tp := range m.terms {
+		fn(id, tp)
+	}
 }
 
 // NewWandModel returns an empty model.
@@ -137,10 +293,10 @@ func NewWandModel(id string, pkType int32) *WandModel {
 	}
 }
 
-// finalizeScoring derives AvgDocLen, each term's max BM25 factor, and the
-// per-term Block-Max skip-block stats. Called by the builder's Finish and after
-// Deserialize (both have docLen + sorted postings).
-func (m *WandModel) finalizeScoring() {
+// computeAvgDocLen sets AvgDocLen from docLen. Called by both finalizeScoring
+// (build) and decodeLoaded (load) — each model carries its own AvgDocLen, which
+// corpusStats aggregates across segments.
+func (m *WandModel) computeAvgDocLen() {
 	var sum int64
 	for _, dl := range m.docLen {
 		sum += int64(dl)
@@ -148,43 +304,59 @@ func (m *WandModel) finalizeScoring() {
 	if len(m.docLen) > 0 {
 		m.AvgDocLen = float64(sum) / float64(len(m.docLen))
 	}
+}
+
+// finalizeScoring derives AvgDocLen and every BUILD-side term's max BM25 factor +
+// per-term Block-Max skip-block stats. Called by the builder's Finish and by
+// Merge/FilterLive/Split (all build-side). A LOADED model reads the block-max
+// directory back from disk (decodeTermEntry) instead — it never calls this.
+func (m *WandModel) finalizeScoring() {
+	m.computeAvgDocLen()
 	for _, tp := range m.terms {
-		df := len(tp.docIDs)
-		nblk := (df + BlockSize - 1) / BlockSize
-		tp.blockLastDoc = make([]int64, nblk)
-		tp.blockMaxTf = make([]uint8, nblk)
-		tp.blockMinDl = make([]int32, nblk)
-		var termMaxTf uint8
-		termMinDl := int32(math.MaxInt32)
-		for b := 0; b < nblk; b++ {
-			lo := b * BlockSize
-			hi := lo + BlockSize
-			if hi > df {
-				hi = df
+		deriveTermStats(tp, m.docLen)
+	}
+}
+
+// deriveTermStats fills one BUILD-side posting list's term-level maxTf/minDl and its
+// per-block Block-Max skip metadata (blockLastDoc/blockMaxTf/blockMinDl), one entry
+// per ceil(df/BlockSize), from its resident docIDs/tfs + docLen. Raw / idf-avgdl-free.
+func deriveTermStats(tp *termPostings, docLen []int32) {
+	df := len(tp.docIDs)
+	tp.ndoc = df
+	nblk := (df + BlockSize - 1) / BlockSize
+	tp.blockLastDoc = make([]int64, nblk)
+	tp.blockMaxTf = make([]uint8, nblk)
+	tp.blockMinDl = make([]int32, nblk)
+	var termMaxTf uint8
+	termMinDl := int32(math.MaxInt32)
+	for b := 0; b < nblk; b++ {
+		lo := b * BlockSize
+		hi := lo + BlockSize
+		if hi > df {
+			hi = df
+		}
+		var maxTf uint8
+		minDl := int32(math.MaxInt32)
+		for i := lo; i < hi; i++ {
+			if tp.tfs[i] > maxTf {
+				maxTf = tp.tfs[i]
 			}
-			var maxTf uint8
-			minDl := int32(math.MaxInt32)
-			for i := lo; i < hi; i++ {
-				if tp.tfs[i] > maxTf {
-					maxTf = tp.tfs[i]
-				}
-				if dl := m.docLen[tp.docIDs[i]]; dl < minDl {
-					minDl = dl
-				}
-			}
-			tp.blockLastDoc[b] = tp.docIDs[hi-1] // ascending → last is max
-			tp.blockMaxTf[b] = maxTf
-			tp.blockMinDl[b] = minDl
-			if maxTf > termMaxTf {
-				termMaxTf = maxTf
-			}
-			if minDl < termMinDl {
-				termMinDl = minDl
+			if dl := docLen[tp.docIDs[i]]; dl < minDl {
+				minDl = dl
 			}
 		}
-		tp.maxTf = termMaxTf
-		tp.minDl = termMinDl
+		tp.blockLastDoc[b] = tp.docIDs[hi-1] // ascending → last is max
+		tp.blockMaxTf[b] = maxTf
+		tp.blockMinDl[b] = minDl
+		if maxTf > termMaxTf {
+			termMaxTf = maxTf
+		}
+		if minDl < termMinDl {
+			termMinDl = minDl
+		}
 	}
+	tp.maxTf = termMaxTf
+	tp.minDl = termMinDl
 }
 
 // Merge combines several index segments (disjoint document sets) into one
@@ -221,7 +393,11 @@ func Merge(id string, segs ...*WandModel) *WandModel {
 		m.pks = append(m.pks, s.pks...)
 		m.docLen = append(m.docLen, s.docLen...)
 
-		for wid, tp := range s.terms {
+		// forEachTerm handles both a build-side input (terms map) and a LOADED input
+		// (lazy directory decode) — CompactSegments feeds FilterLive'd loaded tail
+		// segments here. materializeDocIDs/Tfs expand a loaded term's compressed blocks
+		// transiently; a build-side term returns its resident slices.
+		s.forEachTerm(func(wid int32, tp *termPostings) {
 			mwid := wid
 			if wid >= tokenizer.DictWordIDLimit {
 				mwid = remap[wid]
@@ -231,11 +407,13 @@ func Merge(id string, segs ...*WandModel) *WandModel {
 				mtp = &termPostings{}
 				m.terms[mwid] = mtp
 			}
-			for i, ord := range tp.docIDs {
+			docs := tp.materializeDocIDs()
+			tfs := tp.materializeTfs()
+			for i, ord := range docs {
 				mtp.docIDs = append(mtp.docIDs, ord+base)
-				mtp.tfs = append(mtp.tfs, tp.tfs[i])
+				mtp.tfs = append(mtp.tfs, tfs[i])
 			}
-		}
+		})
 		base += s.N
 	}
 
@@ -244,8 +422,14 @@ func Merge(id string, segs ...*WandModel) *WandModel {
 	return m
 }
 
-// NumTerms returns the number of distinct word-ids in the index.
-func (m *WandModel) NumTerms() int { return len(m.terms) }
+// NumTerms returns the number of distinct word-ids in the index (build- or
+// loaded-side).
+func (m *WandModel) NumTerms() int {
+	if m.termOffsets != nil {
+		return len(m.termOffsets)
+	}
+	return len(m.terms)
+}
 
 // PkAt returns the original pk value for a doc ord (for output).
 func (m *WandModel) PkAt(ord int64) any {
