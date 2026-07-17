@@ -32,13 +32,25 @@ type Membership interface {
 
 const ordEnd = int64(0x7fffffffffffffff)
 
+// docBitset is a dense per-doc-ord bitset (doc ords are dense in [0, n) per segment),
+// 1 bit/doc — ~8× smaller than a []bool. Mirrors fulltext2's docBitset.
+type docBitset []uint64
+
+func newDocBitset(n int) docBitset { return make(docBitset, (n+63)/64) }
+func (b docBitset) set(i int)      { b[i>>6] |= uint64(1) << (uint(i) & 63) }
+func (b docBitset) clear(i int)    { b[i>>6] &^= uint64(1) << (uint(i) & 63) }
+func (b docBitset) get(i int) bool { return b[i>>6]&(uint64(1)<<(uint(i)&63)) != 0 }
+
 // ordAllowSet is a dense per-segment allow-set over ords [0, n) used to carry
 // precomputed liveness (owner-by-chunk_id ∩ not-deleted) into the WAND walk via the
-// existing Membership interface. allow[ord]==true ⇒ the ord is live.
-type ordAllowSet struct{ allow []bool }
+// existing Membership interface. A set bit ⇒ the ord is live.
+type ordAllowSet struct {
+	bits docBitset
+	n    int
+}
 
 func (s *ordAllowSet) Contains(ord int64) bool {
-	return ord >= 0 && ord < int64(len(s.allow)) && s.allow[ord]
+	return ord >= 0 && ord < int64(s.n) && s.bits.get(int(ord))
 }
 
 // andMembership is the conjunction of two Membership filters (either may be
@@ -106,7 +118,7 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 		// segment (the common multi-base case with no pending deletes) keeps out[i]=nil and
 		// costs no O(doc-count) allocation. On the first dead ord, backfill the earlier ords
 		// (all live so far) so the bitmap stays ord-aligned.
-		var allow []bool
+		var bits docBitset
 		for ord, pk := range s.pks {
 			k := normalizeKey(pk)
 			live := owner[k] == s.Recency // this segment owns the live copy
@@ -115,23 +127,30 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 					live = false // deleted after the latest insert
 				}
 			}
-			if !live && allow == nil {
-				allow = make([]bool, len(s.pks))
+			if !live && bits == nil {
+				bits = newDocBitset(len(s.pks))
 				for j := 0; j < ord; j++ {
-					allow[j] = true
+					bits.set(j) // earlier ords were all live
 				}
 			}
-			if allow != nil {
-				allow[ord] = live
+			if bits != nil && live {
+				bits.set(ord)
 			}
 		}
-		if allow != nil {
-			out[i] = &ordAllowSet{allow: allow}
+		if bits != nil {
+			out[i] = &ordAllowSet{bits: bits, n: len(s.pks)}
 		}
 	}
 	return out
 }
 
+// cursor is a term's posting cursor for the Block-Max WAND walk. On a loaded model
+// the postings are NOT resident (they live block-compressed in the shared, read-only
+// mmap), so the cursor decodes one block at a time into bDocs/bTfs via
+// termPostings.fillBlock. The cache is per-cursor, so concurrent queries over the
+// same shared model never race; WAND's block-skip means most blocks are never
+// decoded. On a build-side model fillBlock copies from the resident flat slices, so
+// the same cursor serves both.
 type cursor struct {
 	tp        *termPostings
 	idfSq     float64
@@ -139,41 +158,70 @@ type cursor struct {
 	maxScore  float64
 	docLen    []int32
 	avgDocLen float64
-	pos       int
+	pos       int     // global posting index into the term's df postings
+	curBlk    int     // block currently decoded into bDocs/bTfs (-1 = none)
+	blen      int     // valid entries in bDocs/bTfs
+	bDocs     []int64 // decoded docIDs of curBlk (cap BlockSize)
+	bTfs      []uint8 // decoded tfs of curBlk (cap BlockSize)
+}
+
+func newCursor(tp *termPostings, idfSq, weight, maxScore, avgDocLen float64, docLen []int32) *cursor {
+	return &cursor{
+		tp: tp, idfSq: idfSq, weight: weight, maxScore: maxScore,
+		docLen: docLen, avgDocLen: avgDocLen, curBlk: -1,
+		bDocs: make([]int64, BlockSize), bTfs: make([]uint8, BlockSize),
+	}
+}
+
+// ensure decodes the block containing pos into bDocs/bTfs, if not already cached.
+// Cheap (a field compare) when the cursor stays within a block.
+func (c *cursor) ensure() {
+	b := c.pos / BlockSize
+	if b != c.curBlk {
+		c.blen = c.tp.fillBlock(b, c.bDocs, c.bTfs)
+		c.curBlk = b
+	}
 }
 
 func (c *cursor) curDoc() int64 {
-	if c.pos < len(c.tp.docIDs) {
-		return c.tp.docIDs[c.pos]
+	if c.pos >= c.tp.df() {
+		return ordEnd
 	}
-	return ordEnd
+	c.ensure()
+	return c.bDocs[c.pos%BlockSize]
 }
 
 // score is the BM25 contribution at the current posting:
 // weight · idf² · bm25Factor(tf, dl, avgdl).
 func (c *cursor) score() float64 {
-	ord := c.tp.docIDs[c.pos]
-	return c.weight * c.idfSq * bm25Factor(float64(c.tp.tfs[c.pos]), c.docLen[ord], c.avgDocLen)
+	c.ensure()
+	i := c.pos % BlockSize
+	ord := c.bDocs[i]
+	return c.weight * c.idfSq * bm25Factor(float64(c.bTfs[i]), c.docLen[ord], c.avgDocLen)
 }
 func (c *cursor) advance() { c.pos++ }
 
+// skipTo advances the cursor to the first doc >= d: locate the block via the
+// RESIDENT blockLastDoc (no decode), then binary-search within that one block.
 func (c *cursor) skipTo(d int64) {
-	docs := c.tp.docIDs
-	lo, hi := c.pos, len(docs)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if docs[mid] < d {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
+	b := c.blockIndexAt(d)
+	if b >= c.tp.nblk() {
+		c.pos = c.tp.df() // past the last posting → exhausted
+		return
 	}
-	c.pos = lo
+	if b != c.curBlk {
+		c.blen = c.tp.fillBlock(b, c.bDocs, c.bTfs)
+		c.curBlk = b
+	}
+	// d <= blockLastDoc[b] = bDocs[blen-1], so the lower bound is within the block
+	// and never moves the cursor backward (d >= current doc).
+	w := sort.Search(c.blen, func(i int) bool { return c.bDocs[i] >= d })
+	c.pos = b*BlockSize + w
 }
 
 // blockIndexAt returns the index of the block (>= the current block) that
-// contains doc d (the first block whose last ord >= d). len(blocks) if d is past
-// the cursor's last posting.
+// contains doc d (the first block whose last ord >= d). nblk() if d is past
+// the cursor's last posting. Uses only the resident blockLastDoc (no block decode).
 func (c *cursor) blockIndexAt(d int64) int {
 	bl := c.tp.blockLastDoc
 	b := c.pos / BlockSize
@@ -298,8 +346,8 @@ func queryWeights(segs []*WandModel, terms []string) (map[string]float64, map[st
 		df := 0
 		for _, s := range segs {
 			if id, ok, err := s.resolveWordID(w); err == nil && ok {
-				if tp, ok2 := s.terms[id]; ok2 {
-					df += len(tp.docIDs)
+				if tp, ok2 := s.lookupTerm(id); ok2 {
+					df += tp.df()
 				}
 			}
 		}
@@ -359,24 +407,18 @@ func (m *WandModel) streamInto(sink *streamSink, weights map[string]float64, gN 
 		if err != nil || !ok {
 			continue
 		}
-		tp, ok := m.terms[id]
+		tp, ok := m.lookupTerm(id)
 		if !ok {
 			continue
 		}
 		df := gdf[word]
 		if df <= 0 {
-			df = len(tp.docIDs)
+			df = tp.df()
 		}
 		idf := log10(float64(gN) / float64(df))
 		idfSq := idf * idf
-		cursors = append(cursors, &cursor{
-			tp:        tp,
-			idfSq:     idfSq,
-			weight:    w,
-			maxScore:  w * idfSq * bm25Factor(float64(tp.maxTf), tp.minDl, gAvgDocLen),
-			docLen:    m.docLen,
-			avgDocLen: gAvgDocLen,
-		})
+		cursors = append(cursors, newCursor(tp, idfSq, w,
+			w*idfSq*bm25Factor(float64(tp.maxTf), tp.minDl, gAvgDocLen), gAvgDocLen, m.docLen))
 	}
 	if len(cursors) == 0 {
 		return
@@ -467,24 +509,18 @@ func (m *WandModel) searchInto(h *topK, weights map[string]float64, gN int64, gA
 		if err != nil || !ok {
 			continue // word not resolvable in this segment
 		}
-		tp, ok := m.terms[id]
+		tp, ok := m.lookupTerm(id)
 		if !ok {
 			continue // word absent from this segment
 		}
 		df := gdf[word]
 		if df <= 0 {
-			df = len(tp.docIDs)
+			df = tp.df()
 		}
 		idf := log10(float64(gN) / float64(df))
 		idfSq := idf * idf
-		cursors = append(cursors, &cursor{
-			tp:        tp,
-			idfSq:     idfSq,
-			weight:    w,
-			maxScore:  w * idfSq * bm25Factor(float64(tp.maxTf), tp.minDl, gAvgDocLen),
-			docLen:    m.docLen,
-			avgDocLen: gAvgDocLen,
-		})
+		cursors = append(cursors, newCursor(tp, idfSq, w,
+			w*idfSq*bm25Factor(float64(tp.maxTf), tp.minDl, gAvgDocLen), gAvgDocLen, m.docLen))
 	}
 	if len(cursors) == 0 {
 		return

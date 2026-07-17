@@ -18,12 +18,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"math"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,8 +33,21 @@ import (
 const (
 	memberDocmap   = "docmap"   // pkType + ord -> pk value
 	memberTermDict = "termdict" // out-of-dict term -> overflow word-id
-	memberWand     = "wand"     // postings keyed by int32 word-id
+	memberWandIdx  = "wandidx"  // version + word-id -> ranking byte offset (resident index)
+	memberWandRank = "wandrank" // per-term self-contained block-max directory (mmap view, lazy)
+	memberWandBlk  = "wandblk"  // per-term docID/tf blocks (delta+varint; mmap view, block-decoded)
 )
+
+// wandFormatV1 is the block-compressed WAND on-disk format: a RANKING directory of
+// per-term self-contained Block-Max skip entries reachable by byte offset (the
+// wandidx maps word-id -> that offset), plus a BLOCKS section of per-BlockSize-doc
+// docID gaps (delta+varint) + raw tfs. Delta+varint shrinks docIDs ~4× and blocking
+// them lets the loader keep them on the mmap and random-access one block, instead of
+// the old flat, fully-resident postings. This is a fork of fulltext2's
+// postingsFormatV6 with the positions section dropped (bm25 is position-free) and
+// the FST replaced by the word-id->offset index. The format is free to break (no
+// migration); a stale blob is rejected by this version byte.
+const wandFormatV1 byte = 1
 
 func log10(x float64) float64 { return math.Log10(x) }
 
@@ -56,7 +69,14 @@ func (m *WandModel) Serialize() ([]byte, error) {
 	if err := writeMember(tw, memberTermDict, m.encodeTermDict()); err != nil {
 		return nil, err
 	}
-	if err := writeMember(tw, memberWand, m.encodeWand()); err != nil {
+	idx, ranking, blocks := m.encodeWand()
+	if err := writeMember(tw, memberWandIdx, idx); err != nil {
+		return nil, err
+	}
+	if err := writeMember(tw, memberWandRank, ranking); err != nil {
+		return nil, err
+	}
+	if err := writeMember(tw, memberWandBlk, blocks); err != nil {
 		return nil, err
 	}
 	if err := tw.Close(); err != nil {
@@ -65,48 +85,79 @@ func (m *WandModel) Serialize() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Deserialize parses a tar archive produced by Serialize, streaming from r so a
-// multi-GB index is never fully materialized on the Go heap: the small docmap /
-// termdict members are buffered, but the large `wand` postings are read directly
-// into off-heap (C-allocated) buffers. r is typically the temp file the storage
-// chunks were streamed into.
+// Deserialize parses a tar archive produced by Serialize into a LOADED, queryable
+// model: the small docmap / termdict members expand resident, while the ranking
+// directory + docID/tf blocks stay as VIEWS into the read blob (decoded per term on
+// demand, NOT expanded at load). This is the in-memory path (CDC tail frames, tests
+// via bytes.Reader); the base-index path (LoadFromStorage) mmaps the file and binds
+// the same views to it. The returned model retains the read bytes (ranking/blocks
+// slice into them), so the blob is kept alive by GC. For a multi-GB base do NOT use
+// this (it would ReadAll onto the Go heap) — use the mmap loader.
 func Deserialize(id string, r io.Reader) (*WandModel, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	return decodeLoaded(id, data)
+}
+
+// decodeLoaded builds a LOADED model over data (an in-memory blob or an mmap): the
+// docmap/termdict expand resident, the ranking directory + blocks are bound as views
+// into data, and per-term entries decode lazily (lookupTerm). Callers keep data alive
+// (mmapData for a base, the retained slice/GC for a tail).
+func decodeLoaded(id string, data []byte) (*WandModel, error) {
 	m := NewWandModel(id, 0)
-	tr := tar.NewReader(r)
-	for {
-		h, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch h.Name {
-		case memberDocmap:
-			b := make([]byte, h.Size)
-			if _, err := io.ReadFull(tr, b); err != nil {
-				return nil, err
-			}
-			if err := m.decodeDocmap(b); err != nil {
-				return nil, err
-			}
-		case memberTermDict:
-			b := make([]byte, h.Size)
-			if _, err := io.ReadFull(tr, b); err != nil {
-				return nil, err
-			}
-			if err := m.decodeTermDict(b); err != nil {
-				return nil, err
-			}
-		case memberWand:
-			if err := m.decodeWand(tr); err != nil { // streams postings into C buffers
-				return nil, err
-			}
-		}
+	docmap, termdict, idx, ranking, blocks, err := sliceMembers(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.decodeDocmap(docmap); err != nil {
+		return nil, err
+	}
+	if err := m.decodeTermDict(termdict); err != nil {
+		return nil, err
+	}
+	if err := m.bindWand(idx, ranking, blocks); err != nil {
+		return nil, err
 	}
 	m.N = int64(len(m.pks))
-	m.finalizeScoring() // derive AvgDocLen + per-term max BM25 factor
+	m.computeAvgDocLen() // per-term Block-Max stats come from disk (decodeTermEntry), lazily
 	return m, nil
+}
+
+// sliceMembers returns the docmap / termdict / wandidx / wandrank / wandblk members
+// as SLICES into data (zero-copy) by walking the tar and tracking the reader offset,
+// so the same code serves an in-memory blob or an mmap'd file.
+func sliceMembers(data []byte) (docmap, termdict, idx, ranking, blocks []byte, err error) {
+	br := bytes.NewReader(data)
+	tr := tar.NewReader(br)
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return nil, nil, nil, nil, nil, e
+		}
+		off := int64(len(data)) - int64(br.Len()) // tar positions br at the content
+		if off < 0 || off+h.Size > int64(len(data)) {
+			return nil, nil, nil, nil, nil, moerr.NewInternalErrorNoCtx("wand: member out of range")
+		}
+		seg := data[off : off+h.Size]
+		switch h.Name {
+		case memberDocmap:
+			docmap = seg
+		case memberTermDict:
+			termdict = seg
+		case memberWandIdx:
+			idx = seg
+		case memberWandRank:
+			ranking = seg
+		case memberWandBlk:
+			blocks = seg
+		}
+	}
+	return docmap, termdict, idx, ranking, blocks, nil
 }
 
 func writeMember(tw *tar.Writer, name string, data []byte) error {
@@ -126,13 +177,17 @@ func writeMember(tw *tar.Writer, name string, data []byte) error {
 // alloc, no per-element boxing).
 type leBuf struct {
 	b   bytes.Buffer
-	tmp [8]byte
+	tmp [binary.MaxVarintLen64]byte
 }
 
 func (w *leBuf) u32(v uint32) { binary.LittleEndian.PutUint32(w.tmp[:4], v); w.b.Write(w.tmp[:4]) }
 func (w *leBuf) u64(v uint64) { binary.LittleEndian.PutUint64(w.tmp[:8], v); w.b.Write(w.tmp[:8]) }
 func (w *leBuf) i32(v int32)  { w.u32(uint32(v)) }
 func (w *leBuf) i64(v int64)  { w.u64(uint64(v)) }
+
+// uvarint appends v as a LEB128 varint (1–10 bytes) — used for the delta-encoded
+// docID gaps and the block directory, where values are small.
+func (w *leBuf) uvarint(v uint64) { n := binary.PutUvarint(w.tmp[:], v); w.b.Write(w.tmp[:n]) }
 
 // encodePkLen writes a length-prefixed pk directly into the buffer — byte-identical
 // to `binary.Write(len); Write(encodePk(...))` but without encodePk's per-pk small
@@ -264,84 +319,205 @@ func (m *WandModel) decodeTermDict(data []byte) error {
 	return nil
 }
 
-// ---- wand: postings keyed by int32 word-id ----
+// ---- wand: block-compressed postings keyed by int32 word-id ----
 
-func (m *WandModel) encodeWand() []byte {
-	var w leBuf
-	w.i64(int64(len(m.terms)))
-	ids := make([]int32, 0, len(m.terms))
-	var totalP int64
-	for id := range m.terms {
-		ids = append(ids, id)
-		totalP += int64(len(m.terms[id].docIDs))
+// encodeWand builds the three WAND members in one pass over the word-id-sorted
+// terms (see wandFormatV1):
+//
+//   - IDX (resident): version byte, nterms, then per term {word-id(i32),
+//     rankingOffset(i64)} — the word-id -> ranking byte-offset directory rebuilt into
+//     m.termOffsets at load (O(vocabulary) small ints).
+//   - RANKING (mmap view, lazy): per term a SELF-CONTAINED Block-Max entry at the
+//     offset the IDX records: df(varint), nblk(varint), blockDataBase(varint, the
+//     term's absolute offset into BLOCKS), maxTf(byte), minDl(varint), then per block
+//     {lastDocGap(varint from the previous block's last ord), blockMaxTf(byte),
+//     blockMinDl(varint), blkByteLen(varint)}. decodeTermEntry decodes ONE entry on
+//     demand — the resident directory heap is O(query), not O(vocabulary).
+//   - BLOCKS (mmap view, block-decoded): per term, per BlockSize-doc block the docID
+//     GAPS (varint, from the previous block's last ord) then the block's raw tf bytes.
+//
+// Works on a build-side model (terms map) and a loaded one (materializeDocIDs/Tfs +
+// the resident block-max stats), and is deterministic given identical postings, so a
+// build → load → re-Serialize round-trip is byte-identical.
+func (m *WandModel) encodeWand() (idx, ranking, blocks []byte) {
+	type entry struct {
+		id int32
+		tp *termPostings
 	}
-	w.i64(totalP)                                                   // total postings, for one off-heap alloc on load
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] }) // deterministic output
-	for _, id := range ids {
-		tp := m.terms[id]
-		w.i32(id)
-		w.u32(uint32(len(tp.docIDs)))
-		w.b.Write(util.UnsafeSliceToBytes(tp.docIDs)) // zero-copy LE bytes (see encodeDocmap)
-		w.b.Write(tp.tfs)
+	list := make([]entry, 0, m.NumTerms())
+	m.forEachTerm(func(id int32, tp *termPostings) { list = append(list, entry{id, tp}) })
+	sort.Slice(list, func(i, j int) bool { return list[i].id < list[j].id }) // deterministic output
+
+	var iw, rw, bw leBuf // index, ranking directory, blocks
+	iw.b.WriteByte(wandFormatV1)
+	iw.i64(int64(len(list)))
+	for _, e := range list {
+		tp := e.tp
+		if tp.blockLastDoc == nil { // defensive: a build-side term never finalized
+			deriveTermStats(tp, m.docLen)
+		}
+		docs := tp.materializeDocIDs()
+		tfs := tp.materializeTfs()
+		df := len(docs)
+		nblk := (df + BlockSize - 1) / BlockSize
+
+		iw.i32(e.id)
+		iw.i64(int64(rw.b.Len())) // ranking offset of this term's self-contained entry
+
+		rw.uvarint(uint64(df))
+		rw.uvarint(uint64(nblk))
+		rw.uvarint(uint64(bw.b.Len())) // blockDataBase: absolute offset into BLOCKS
+		rw.b.WriteByte(tp.maxTf)
+		rw.uvarint(uint64(uint32(tp.minDl)))
+		var prevLast int64
+		for b := 0; b < nblk; b++ {
+			lo := b * BlockSize
+			hi := lo + BlockSize
+			if hi > df {
+				hi = df
+			}
+			blkStart := bw.b.Len()
+			prev := prevLast
+			for j := lo; j < hi; j++ {
+				bw.uvarint(uint64(docs[j] - prev))
+				prev = docs[j]
+			}
+			bw.b.Write(tfs[lo:hi])
+
+			rw.uvarint(uint64(tp.blockLastDoc[b] - prevLast)) // lastDocGap
+			rw.b.WriteByte(tp.blockMaxTf[b])
+			rw.uvarint(uint64(uint32(tp.blockMinDl[b])))
+			rw.uvarint(uint64(bw.b.Len() - blkStart)) // this block's docID/tf byte length
+			prevLast = tp.blockLastDoc[b]
+		}
 	}
-	return w.b.Bytes()
+	return iw.b.Bytes(), rw.b.Bytes(), bw.b.Bytes()
 }
 
-func (m *WandModel) decodeWand(r io.Reader) error {
-	var nterms, totalP int64
-	if err := binary.Read(r, binary.LittleEndian, &nterms); err != nil {
-		return err
+// bindWand binds a LOADED model to its (mmap'd or in-memory) ranking + blocks
+// sections and rebuilds the resident word-id -> ranking-offset map from the IDX
+// member, WITHOUT expanding any term. Terms decode lazily via decodeTermEntry. It
+// sets m.terms = nil (the build-side map is unused on a loaded model).
+func (m *WandModel) bindWand(idx, ranking, blocks []byte) error {
+	m.terms = nil
+	m.termOffsets = map[int32]int64{}
+	m.ranking = ranking
+	m.blocks = blocks
+	if len(idx) == 0 {
+		return nil // no terms (empty index)
 	}
-	if err := binary.Read(r, binary.LittleEndian, &totalP); err != nil {
-		return err
+	if len(idx) < 1+8 {
+		return moerr.NewInternalErrorNoCtx("wand: wandidx blob too short")
 	}
-
-	// Allocate all postings OFF the Go heap (C allocator) in two contiguous
-	// buffers; each term's docIDs/tfs is a slice into them. This keeps a
-	// multi-GB index off the Go heap (no GC scan) and out of the query mpool;
-	// freed by Free() on cache eviction. OOM surfaces as an error here.
-	if totalP > 0 {
-		alloc := malloc.NewCAllocator()
-		ob, odec, err := alloc.Allocate(uint64(totalP)*uint64(util.UnsafeSizeOf[int64]()), malloc.NoClear)
-		if err != nil {
-			return err
-		}
-		m.deallocators = append(m.deallocators, odec)
-		m.bigOrds = util.UnsafeSliceCastToLength[int64](ob, int(totalP))
-
-		tb, tdec, err := alloc.Allocate(uint64(totalP), malloc.NoClear)
-		if err != nil {
-			return err
-		}
-		m.deallocators = append(m.deallocators, tdec)
-		m.bigTfs = util.UnsafeSliceCastToLength[uint8](tb, int(totalP))
+	if idx[0] != wandFormatV1 {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("wand: unsupported wand format %d", idx[0]))
 	}
-
-	var cur int64
+	nterms := int64(binary.LittleEndian.Uint64(idx[1:9]))
+	if nterms < 0 {
+		return moerr.NewInternalErrorNoCtx("wand: negative nterms")
+	}
+	m.termOffsets = make(map[int32]int64, nterms)
+	off := 9
 	for t := int64(0); t < nterms; t++ {
-		var id int32
-		if err := binary.Read(r, binary.LittleEndian, &id); err != nil {
-			return err
+		if off+12 > len(idx) {
+			return moerr.NewInternalErrorNoCtx("wand: wandidx truncated")
 		}
-		var df uint32
-		if err := binary.Read(r, binary.LittleEndian, &df); err != nil {
-			return err
+		wid := int32(binary.LittleEndian.Uint32(idx[off:]))
+		ro := int64(binary.LittleEndian.Uint64(idx[off+4:]))
+		off += 12
+		if ro < 0 || ro >= int64(len(ranking)) {
+			return moerr.NewInternalErrorNoCtx("wand: ranking offset out of range")
 		}
-		if cur+int64(df) > totalP {
-			return moerr.NewInternalErrorNoCtx("wand: postings overflow totalP")
-		}
-		ords := m.bigOrds[cur : cur+int64(df)]
-		tfs := m.bigTfs[cur : cur+int64(df)]
-		if err := binary.Read(r, binary.LittleEndian, ords); err != nil {
-			return err
-		}
-		if _, err := io.ReadFull(r, tfs); err != nil {
-			return err
-		}
-		m.terms[id] = &termPostings{docIDs: ords, tfs: tfs}
-		cur += int64(df)
+		m.termOffsets[wid] = ro
 	}
 	return nil
+}
+
+// decodeTermEntry lazily decodes ONE term's self-contained directory entry at byte
+// offset `off` in m.ranking into a transient termPostings whose blockData is a view
+// into m.blocks. Callers hold the result for the query's lifetime (WAND cursor,
+// forEachTerm), so the entry decodes at most a few times per query and never persists —
+// the resident directory heap is O(query), not O(vocabulary). Returns (nil,false) on a
+// corrupt/out-of-bounds entry (defense-in-depth on already-checksummed data).
+func (m *WandModel) decodeTermEntry(off int64) (*termPostings, bool) {
+	r := m.ranking
+	if off < 0 || off >= int64(len(r)) {
+		return nil, false
+	}
+	p := int(off)
+	uv := func() (uint64, bool) {
+		v, n := binary.Uvarint(r[p:])
+		if n <= 0 {
+			return 0, false
+		}
+		p += n
+		return v, true
+	}
+	dfu, ok := uv()
+	if !ok {
+		return nil, false
+	}
+	nblku, ok := uv()
+	if !ok {
+		return nil, false
+	}
+	baseB, ok := uv() // blockDataBase: absolute offset into m.blocks
+	if !ok {
+		return nil, false
+	}
+	if p >= len(r) {
+		return nil, false
+	}
+	termMaxTf := r[p]
+	p++
+	minDlu, ok := uv()
+	if !ok {
+		return nil, false
+	}
+	// A df/nblk larger than the blocks section is impossible (each posting is >= 1 byte).
+	if dfu > uint64(len(m.blocks)) || nblku > uint64(len(m.blocks)) {
+		return nil, false
+	}
+	df, nblk := int(dfu), int(nblku)
+	tp := &termPostings{ndoc: df, maxTf: termMaxTf, minDl: int32(minDlu)}
+	if nblk == 0 {
+		return tp, true
+	}
+	tp.blockLastDoc = make([]int64, nblk)
+	tp.blockMaxTf = make([]uint8, nblk)
+	tp.blockMinDl = make([]int32, nblk)
+	tp.blockOff = make([]int32, nblk+1) // byte offsets RELATIVE to this term's blockData
+	var prevLast, cb int64
+	for b := 0; b < nblk; b++ {
+		gap, ok := uv()
+		if !ok {
+			return nil, false
+		}
+		prevLast += int64(gap)
+		tp.blockLastDoc[b] = prevLast
+		if p >= len(r) {
+			return nil, false
+		}
+		tp.blockMaxTf[b] = r[p]
+		p++
+		mdl, ok := uv()
+		if !ok {
+			return nil, false
+		}
+		tp.blockMinDl[b] = int32(mdl)
+		blkLen, ok := uv()
+		if !ok || blkLen > uint64(len(m.blocks)) {
+			return nil, false
+		}
+		tp.blockOff[b] = int32(cb)
+		cb += int64(blkLen)
+	}
+	tp.blockOff[nblk] = int32(cb)
+	if int64(baseB)+cb > int64(len(m.blocks)) {
+		return nil, false
+	}
+	tp.blockData = m.blocks[baseB : int64(baseB)+cb]
+	return tp, true
 }
 
 // ---- pk codec (by types.T) ----

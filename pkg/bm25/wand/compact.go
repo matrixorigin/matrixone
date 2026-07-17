@@ -61,9 +61,14 @@ func (m *WandModel) FilterLive(allow Membership) *WandModel {
 		}
 	}
 	out.N = newOrd
-	for wid, tp := range m.terms {
+	// forEachTerm + materialize handles both a build-side receiver and a LOADED one
+	// (CompactSegments FilterLive's the loaded tail segments): a loaded term's
+	// compressed blocks expand transiently, a build-side term returns its resident slices.
+	m.forEachTerm(func(wid int32, tp *termPostings) {
+		docs := tp.materializeDocIDs()
+		tfs := tp.materializeTfs()
 		var stp *termPostings
-		for i, ord := range tp.docIDs {
+		for i, ord := range docs {
 			no := remap[ord]
 			if no < 0 {
 				continue
@@ -72,12 +77,12 @@ func (m *WandModel) FilterLive(allow Membership) *WandModel {
 				stp = &termPostings{}
 			}
 			stp.docIDs = append(stp.docIDs, no)
-			stp.tfs = append(stp.tfs, tp.tfs[i])
+			stp.tfs = append(stp.tfs, tfs[i])
 		}
 		if stp != nil {
 			out.terms[wid] = stp
 		}
-	}
+	})
 	out.finalizeScoring()
 	return out
 }
@@ -113,12 +118,14 @@ func (m *WandModel) Split(capacity int64) []*WandModel {
 		seg.N = hi - lo
 		segs[s] = seg
 	}
-	for wid, tp := range m.terms {
-		i, df := 0, len(tp.docIDs)
+	m.forEachTerm(func(wid int32, tp *termPostings) {
+		docs := tp.materializeDocIDs()
+		tfs := tp.materializeTfs()
+		i, df := 0, len(docs)
 		for s := 0; s < nseg && i < df; s++ {
 			hi := int64(s+1) * capacity
 			start := i
-			for i < df && tp.docIDs[i] < hi {
+			for i < df && docs[i] < hi {
 				i++
 			}
 			if i == start {
@@ -127,14 +134,14 @@ func (m *WandModel) Split(capacity int64) []*WandModel {
 			lo := int64(s) * capacity
 			stp := &termPostings{
 				docIDs: make([]int64, i-start),
-				tfs:    append([]uint8(nil), tp.tfs[start:i]...),
+				tfs:    append([]uint8(nil), tfs[start:i]...),
 			}
 			for j := start; j < i; j++ {
-				stp.docIDs[j-start] = tp.docIDs[j] - lo // global -> local ord
+				stp.docIDs[j-start] = docs[j] - lo // global -> local ord
 			}
 			segs[s].terms[wid] = stp
 		}
-	}
+	})
 	for _, seg := range segs {
 		seg.finalizeScoring()
 	}

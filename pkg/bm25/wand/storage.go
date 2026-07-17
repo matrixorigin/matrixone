@@ -17,14 +17,17 @@ package wand
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -265,13 +268,14 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, e
 }
 
 // LoadFromStorage reads an index's metadata + chunks back from the WAND store,
-// verifies the checksum, and deserializes it into a model. Chunks are
-// downloaded with STREAMING SQL and written by chunk_id offset into a temp file
-// (so the mpool only ever holds a chunk or two, never the whole index — mirrors
-// HNSW's loadChunk). The model is then deserialized straight from that file,
-// with the large postings going off the Go heap (C allocator). The temp file is
-// removed before returning. Errors if the tag=0 metadata is absent (callers that
-// tolerate a missing base use LoadBaseOptional).
+// verifies the checksum, and binds it into a LOADED model. Chunks are downloaded
+// with STREAMING SQL and written by chunk_id offset into a temp file on the fast
+// LOCAL (SSD) fileservice (so the mpool only ever holds a chunk or two, never the
+// whole index — mirrors HNSW's loadChunk). The file is then MMAP'd read-only and the
+// model's ranking directory + docID/tf blocks are kept as VIEWS into the mapping
+// (page-cache-backed, reclaimable, shared by all concurrent queries) — the large
+// postings are NEVER read onto the Go heap or into off-heap C buffers, and decode one
+// block at a time on demand. Errors if the tag=0 metadata is absent.
 func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
 	checksum, filesize, chunkId, found, err := readMetadata(sqlproc, cfg, id)
 	if err != nil {
@@ -284,44 +288,95 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("wand index %s has empty filesize", id))
 	}
 
-	// temp file sized to filesize; chunks are written by offset (possibly out of
-	// order), so a sparse file via Truncate + WriteAt.
-	fp, err := os.CreateTemp("", "wandidx")
+	// Materialize the segment on the fast LOCAL (SSD) fileservice so mmap page faults
+	// come off the 2 GB/s mount, not /tmp. path=="" means an anonymous SSD file
+	// (unlinked; munmap frees the inode) — the same CreateAndRemoveFile the JOIN spill uses.
+	fp, path, err := createLocalTempFile(sqlproc)
 	if err != nil {
 		return nil, err
 	}
-	path := fp.Name()
-	defer func() {
+	cleanup := func() {
 		fp.Close()
-		os.Remove(path)
-	}()
+		if path != "" {
+			os.Remove(path)
+		}
+	}
 	if err = fp.Truncate(filesize); err != nil {
+		cleanup()
 		return nil, err
 	}
-
 	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
+		cleanup()
 		return nil, err
 	}
 
-	// verify md5 over the assembled file
-	if got, cerr := vectorindex.CheckSum(path); cerr != nil {
-		return nil, cerr
-	} else if got != checksum {
+	// mmap the file read-only (shared across queries; ranking + blocks are views into
+	// it, page-cache-backed). The fd is not needed once mapped.
+	data, err := mmapReadOnly(fp)
+	fp.Close()
+	if err != nil {
+		if path != "" {
+			os.Remove(path)
+		}
+		return nil, err
+	}
+	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
+	if vectorindex.CheckSumFromBuffer(data) != checksum {
+		_ = munmap(data)
+		if path != "" {
+			os.Remove(path)
+		}
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("wand index %s checksum mismatch", id))
 	}
-
-	if _, err = fp.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	m, err := Deserialize(id, fp)
+	// The model OWNS the mapping (+ path for the /tmp fallback): Free() munmaps and,
+	// if linked, deletes it.
+	m, err := decodeLoaded(id, data)
 	if err != nil {
+		_ = munmap(data)
+		if path != "" {
+			os.Remove(path)
+		}
 		return nil, err
 	}
+	m.mmapData = data
+	m.mmapPath = path
 	// The base's recency key comes from SQL (metadata.chunk_id): 0 = oldest
 	// full-build base; K = the folded tail chunk_id for a compacted base. Query
 	// ComputeLiveness dedups bases + tail uniformly by this.
 	m.Recency = chunkId
 	return m, nil
+}
+
+// wandLocalDir is bm25's own subdir under the LOCAL fileservice (on the SSD data-dir)
+// for mmap segment files — sibling to the JOIN spill's "__spill".
+const wandLocalDir = "__bm25wand"
+
+// createLocalTempFile returns a temp file for the segment's mmap. It prefers the
+// LOCAL fileservice's __bm25wand subdir (on the SSD data-dir) via the same
+// CreateAndRemoveFile the JOIN spill uses — an ANONYMOUS file (unlinked; the fd +
+// mapping keep the inode alive, Free just munmaps, no os.Remove). Falls back to
+// os.CreateTemp (/tmp, linked → Free deletes by path) when no process/fileservice is
+// attached (tests / one-shot tools). Returns (file, path, err); path=="" for the
+// anonymous SSD file.
+func createLocalTempFile(sqlproc *sqlexec.SqlProcess) (*os.File, string, error) {
+	if sqlproc != nil && sqlproc.Proc != nil {
+		ctx := sqlproc.GetContext()
+		if local, e := fileservice.Get[fileservice.MutableFileService](
+			sqlproc.Proc.Base.FileService, defines.LocalFileServiceName); e == nil {
+			if e2 := local.EnsureDir(ctx, wandLocalDir); e2 == nil {
+				if sub, ok := fileservice.SubPath(local, wandLocalDir).(fileservice.MutableFileService); ok {
+					if f, e3 := sub.CreateAndRemoveFile(ctx, "wandidx_"+uuid.NewString()); e3 == nil {
+						return f, "", nil
+					}
+				}
+			}
+		}
+	}
+	f, err := os.CreateTemp("", "wandidx")
+	if err != nil {
+		return nil, "", err
+	}
+	return f, f.Name(), nil
 }
 
 // loadTailSegments streams the tag=1 CdcTail (index_id = CdcTailId) into a temp
@@ -342,6 +397,11 @@ func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandMode
 	}
 	if empty {
 		return nil, nil, 0, nil
+	}
+	// Fail fast if the tail can't fit in the memory budget, rather than letting it
+	// OOM-kill the CN as it decodes into the Go heap.
+	if err := checkTailLoadBudget(sqlproc, cfg); err != nil {
+		return nil, nil, 0, err
 	}
 	span := maxC - minC + 1
 	filesize := span * int64(vectorindex.MaxChunkSize)
@@ -402,6 +462,43 @@ func tailChunkBounds(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (minC, maxC i
 		return minC, maxC, false, nil
 	}
 	return 0, 0, true, nil
+}
+
+// checkTailLoadBudget fails fast when the CDC tail's stored bytes exceed the CN memory
+// budget, returning a clear, actionable error instead of letting the tail load OOM-kill
+// the CN (which would take down EVERY query on the node, not just this one). The tail
+// decodes into the Go HEAP (frames read from the streamed temp file), so its stored size
+// — SUM(LENGTH(data)), the ACTUAL bytes, not the padded span*MaxChunkSize file — is a
+// good proxy for the load footprint. The mmap'd base is reclaimable OS page cache and is
+// deliberately NOT counted (it cannot cause an OOM-kill). Budget = MemoryTotal*0.8 - live
+// Go heap; MemoryTotal is cgroup-aware, and MemoryGolang already includes any tails
+// currently resident, so this correctly gates an INCREMENTAL load. The 0.8 headroom
+// absorbs the (small, post-mmap) C-allocator/query-mpool usage the formula omits.
+func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
+	sql := fmt.Sprintf("SELECT COALESCE(SUM(LENGTH(%s)), 0) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.Bm25Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.Bm25Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.Bm25Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	var need int64
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		need = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+	}
+	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
+	if need > avail {
+		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
+			"bm25 CDC tail for %s.%s needs ~%d MB to load but only ~%d MB is free "+
+				"(MemoryTotal*0.8 - Go heap); compact it (ALTER ... REINDEX) or increase CN memory",
+			cfg.DbName, cfg.IndexTable, need>>20, avail>>20))
+	}
+	return nil
 }
 
 // streamChunksToFile streams a tag=0 index's chunk rows and writes each at
