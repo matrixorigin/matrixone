@@ -253,13 +253,16 @@ func (s *Segment) decodeDocmap(data []byte) error {
 // stream) is what lets the loader keep them on the mmap and random-access one block.
 // fulltext2 is experimental, so the old layout is dropped (nothing to migrate); a
 // version byte guards a stale blob.
-const postingsFormatV4 byte = 4
+// postingsFormatV5 adds a per-block positions byte length to each directory entry
+// (V4 stored one positions length per term), making positions block-seekable for the
+// phrase cursor. fulltext2 is experimental, so the old layout is dropped.
+const postingsFormatV5 byte = 5
 
 func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []byte, err error) {
 	n := len(s.sortedTerms)
 	values := make([]uint64, n)
 	var w, bw, pw leBuf // w=ranking directory, bw=blocks, pw=positions
-	w.b.WriteByte(postingsFormatV4)
+	w.b.WriteByte(postingsFormatV5)
 	w.i64(int64(n))
 	for i, term := range s.sortedTerms {
 		values[i] = uint64(i)
@@ -286,23 +289,29 @@ func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []by
 				prev = tp.docIDs[j]
 			}
 			bw.b.Write(tp.tfs[lo:hi])
+			// this block's positions (parallel to its docs) — grouped per block so the
+			// directory can record each block's byte length, making positions block-
+			// SEEKABLE for the phrase cursor (posRaw bytes are unchanged vs V4: still
+			// per-doc pc + ascending gaps in doc order, so materializePositions is
+			// unaffected). V4 wrote them once per term after all blocks.
+			posStart := pw.b.Len()
+			for j := lo; j < hi; j++ {
+				pos := tp.positions[j]
+				pw.uvarint(uint64(len(pos)))
+				var pp int32
+				for _, p := range pos { // ascending positions → non-negative gaps
+					pw.uvarint(uint64(p - pp))
+					pp = p
+				}
+			}
 			// directory entry.
 			w.uvarint(uint64(tp.blockLastDoc[b] - prevLast)) // lastDocGap
 			w.b.WriteByte(tp.blockMaxTf[b])
 			w.uvarint(uint64(tp.blockMinDocLn[b]))
-			w.uvarint(uint64(bw.b.Len() - blkStart)) // this block's byte length
+			w.uvarint(uint64(bw.b.Len() - blkStart)) // this block's docID/tf byte length
+			w.uvarint(uint64(pw.b.Len() - posStart)) // this block's positions byte length (V5)
 			prevLast = tp.blockLastDoc[b]
 		}
-		before := pw.b.Len()
-		for _, pos := range tp.positions {
-			pw.uvarint(uint64(len(pos)))
-			var pp int32
-			for _, p := range pos { // ascending positions → non-negative gaps
-				pw.uvarint(uint64(p - pp))
-				pp = p
-			}
-		}
-		w.uvarint(uint64(pw.b.Len() - before)) // this term's positions byte length
 	}
 	if fst, err = buildTermDictFST(s.sortedTerms, values); err != nil {
 		return nil, nil, nil, nil, err
@@ -325,7 +334,7 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 		}
 		return moerr.NewInternalErrorNoCtx("fulltext2: ranking blob too short")
 	}
-	if ranking[0] != postingsFormatV4 {
+	if ranking[0] != postingsFormatV5 {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("fulltext2: unsupported postings format %d", ranking[0]))
 	}
 	p := 1
@@ -375,8 +384,10 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 			tp.blockMaxTf = make([]uint8, nblk)
 			tp.blockMinDocLn = make([]int32, nblk)
 			tp.blockOff = make([]int32, nblk+1)
+			tp.blockPosOff = make([]int32, nblk+1)
 		}
 		blkBase := cb
+		posBase := cpos
 		var prevLast int64
 		var termMaxTf uint8
 		termMinDL := int32(math.MaxInt32)
@@ -403,6 +414,13 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 			}
 			tp.blockOff[b] = int32(cb - blkBase)
 			cb += int64(blkLen)
+			// per-block positions byte length (V5): builds the block-seekable position offset
+			posLen, ok := uv()
+			if !ok || posLen > uint64(len(positions)) || cpos+int64(posLen) > int64(len(positions)) {
+				return bad()
+			}
+			tp.blockPosOff[b] = int32(cpos - posBase)
+			cpos += int64(posLen)
 			if maxTf > termMaxTf {
 				termMaxTf = maxTf
 			}
@@ -416,17 +434,11 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 				return bad()
 			}
 			tp.blockData = blocks[blkBase:cb]
+			tp.blockPosOff[nblk] = int32(cpos - posBase)
+			tp.posRaw = positions[posBase:cpos] // this term's whole positions (blockPosOff indexes within)
 			tp.maxTf = termMaxTf
 			tp.minDocLen = termMinDL
 		}
-		posLen, ok := uv() // byte length of this term's compressed positions
-		// uint guard first: a high-bit posLen casts to negative int64 and would slip
-		// past the cumulative bound check, then panic in the slice expression.
-		if !ok || posLen > uint64(len(positions)) || cpos+int64(posLen) > int64(len(positions)) {
-			return bad()
-		}
-		tp.posRaw = positions[cpos : cpos+int64(posLen)]
-		cpos += int64(posLen)
 		s.loaded[t] = tp
 	}
 	return nil

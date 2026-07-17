@@ -122,18 +122,31 @@ type phraseSlot struct {
 	off  int32
 }
 
-// matchPhrase verifies a positional phrase against the segment: for a doc to hit, some
-// phrase-start byte position B must have every slot present at B+off (a star slot: ANY
-// term with that prefix at B+off). Returns per-doc phrase occurrence counts.
-//
-// It anchors on the RAREST slot and probes the others by binary search over their
-// doc-sorted postings — no per-slot map[int64][]int32, no per-doc slice growth, and no
-// re-sort (a term's positions are already ascending). The old materialize-all-then-
-// intersect built a fresh map with a growing slice per doc per slot every query, which
-// dominated CPU as GC churn and OOM-killed the CN once a word* prefix fanned the term
-// count out at scale. Star slots are now rare (only 1-2 char CJK runs); a lone star slot
-// is matched presence-only (doc IDs, no positions) so even a hot prefix cannot blow up.
+// matchPhrase verifies a positional phrase against the segment, returning per-doc phrase
+// occurrence counts. The common shape — a multi-slot phrase of EXACT trigrams (every CJK
+// query >= 3 chars decomposes to these) — runs the BLOCK-CURSOR conjunctive intersection
+// (matchPhraseCursor): it advances a Block-Max cursor per slot in doc order, decoding one
+// docID block + one position block at a time, so peak memory is O(nslots × BlockSize)
+// regardless of corpus size. A single-slot phrase or one containing a star (prefix) slot
+// — only 1-2 char CJK runs — takes the materialize fallback (which handles the presence-
+// only prefix union).
 func (s *Segment) matchPhrase(slots []phraseSlot) []docTf {
+	if len(slots) < 2 {
+		return s.matchPhraseFallback(slots)
+	}
+	for _, sl := range slots {
+		if sl.star {
+			return s.matchPhraseFallback(slots)
+		}
+	}
+	return s.matchPhraseCursor(slots)
+}
+
+// matchPhraseFallback is the materialize-then-probe evaluator: it resolves each slot to
+// doc-sorted postings, anchors on the rarest, and probes the others by binary search. It
+// backs the single-slot and star-slot cases (a lone star slot is presence-only via a
+// doc-ord bitset). No per-slot map, no re-sort (positions are stored ascending).
+func (s *Segment) matchPhraseFallback(slots []phraseSlot) []docTf {
 	if len(slots) == 0 {
 		return nil
 	}
@@ -318,6 +331,134 @@ func sortedIndexInt64(a []int64, v int64) int {
 		return i
 	}
 	return -1
+}
+
+// phraseCursor walks one exact term's Block-Max postings in doc order for the phrase
+// intersection, decoding ONE docID block + ONE position block at a time (never the whole
+// list). It is the phrase analogue of wandIter, but also carries the block's positions.
+type phraseCursor struct {
+	tp     *termPostings
+	off    int32     // this slot's byte offset within the phrase
+	idx    int       // current global posting index (0..df-1)
+	curBlk int       // block currently decoded into bDocs/bPos (-1 = none)
+	blen   int       // valid entries in bDocs/bPos
+	bDocs  []int64   // decoded docIDs of curBlk (cap BlockSize)
+	bPos   [][]int32 // decoded positions of curBlk (cap BlockSize)
+	tfbuf  []uint8   // scratch for fillBlock's tfs (phrase ignores tf)
+}
+
+func newPhraseCursor(tp *termPostings, off int32) *phraseCursor {
+	return &phraseCursor{
+		tp: tp, off: off, curBlk: -1,
+		bDocs: make([]int64, BlockSize),
+		bPos:  make([][]int32, BlockSize),
+		tfbuf: make([]uint8, BlockSize),
+	}
+}
+
+func (c *phraseCursor) atEnd() bool { return c.idx >= c.tp.df() }
+
+// decode ensures block b is the one loaded in bDocs/bPos (a field compare when the cursor
+// stays within a block; skipped blocks are never decoded).
+func (c *phraseCursor) decode(b int) {
+	if b == c.curBlk {
+		return
+	}
+	c.blen = c.tp.fillBlock(b, c.bDocs, c.tfbuf)
+	c.tp.fillBlockPositions(b, c.bPos)
+	c.curBlk = b
+}
+
+// doc returns the current doc ord, or MaxInt64 when exhausted (sorts last).
+func (c *phraseCursor) doc() int64 {
+	if c.atEnd() {
+		return math.MaxInt64
+	}
+	c.decode(c.idx / BlockSize)
+	return c.bDocs[c.idx%BlockSize]
+}
+
+// positions returns the current doc's ascending byte positions.
+func (c *phraseCursor) positions() []int32 {
+	c.decode(c.idx / BlockSize)
+	return c.bPos[c.idx%BlockSize]
+}
+
+// skipTo advances (forward only) to the first doc >= target, using the resident
+// blockLastDoc to pick the block so non-overlapping blocks are skipped without decoding.
+func (c *phraseCursor) skipTo(target int64) {
+	bl := c.tp.blockLastDoc
+	b := c.idx / BlockSize
+	for b < len(bl) && bl[b] < target {
+		b++
+	}
+	if b >= c.tp.nblk() {
+		c.idx = c.tp.df() // past the last posting → exhausted
+		return
+	}
+	c.decode(b)
+	w := sort.Search(c.blen, func(i int) bool { return c.bDocs[i] >= target })
+	c.idx = b*BlockSize + w
+}
+
+// matchPhraseCursor runs the block-cursor conjunctive phrase intersection over EXACT
+// slots: it drives the rarest slot in doc order and, for each of its docs, skips the
+// other cursors to that doc (block-skipping non-overlapping regions) and verifies byte-
+// position adjacency. Peak memory is O(nslots × BlockSize) — one decoded block per
+// cursor — independent of corpus size, vs the fallback's whole-posting-list materialize.
+func (s *Segment) matchPhraseCursor(slots []phraseSlot) []docTf {
+	cursors := make([]*phraseCursor, len(slots))
+	rare := 0
+	for i, sl := range slots {
+		pl, ok := s.lookup(sl.term)
+		if !ok {
+			return nil // a slot no doc satisfies ⇒ the phrase can't occur
+		}
+		cursors[i] = newPhraseCursor(pl, sl.off)
+		if pl.df() < cursors[rare].tp.df() {
+			rare = i
+		}
+	}
+	rc := cursors[rare]
+	var hits []docTf
+	for !rc.atEnd() {
+		d := rc.doc()
+		present := true
+		for j, c := range cursors {
+			if j == rare {
+				continue
+			}
+			c.skipTo(d)
+			if c.doc() != d {
+				present = false
+				break
+			}
+		}
+		if present {
+			cnt := 0
+			for _, pr := range rc.positions() {
+				start := pr - slots[rare].off // candidate phrase-start byte position
+				matched := true
+				for j := range slots {
+					if j == rare {
+						continue
+					}
+					if !sortedContainsInt32(cursors[j].positions(), start+slots[j].off) {
+						matched = false
+						break
+					}
+				}
+				if matched {
+					cnt++
+				}
+			}
+			if cnt > 0 {
+				hits = append(hits, docTf{d, cnt})
+			}
+		}
+		rc.idx++
+	}
+	return hits
 }
 
 // idfSquared is MatrixOne's squared inverse document frequency: (log10(N/df))².

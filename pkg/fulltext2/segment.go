@@ -68,8 +68,13 @@ type termPostings struct {
 	// resident positions buffer. Positions are the largest section (~48%) and are
 	// needed ONLY for phrase verification / MERGE — never for WAND ranking — so they
 	// are NOT expanded into RAM at load; callers decode on demand via
-	// materializePositions(). nil on a build-side segment.
+	// materializePositions() (whole list) or fillBlockPositions() (one block, for the
+	// phrase cursor). nil on a build-side segment.
 	posRaw []byte
+	// blockPosOff[b] is block b's byte offset within posRaw (len nblk+1, cumulative),
+	// so a block's positions are seekable without decoding the prior blocks — the
+	// position analogue of blockOff. nil on a build-side segment (positions is flat there).
+	blockPosOff []int32
 
 	// Term-level score-UB inputs (raw, scorer-agnostic).
 	maxTf     uint8 // max tf over all postings
@@ -131,6 +136,50 @@ func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
 		outDocs[i] = prev
 	}
 	copy(outTfs[:blen], data[off:off+blen])
+	return blen
+}
+
+// fillBlockPositions decodes block b's per-doc token positions into out[:blen],
+// returning the block length. Build-side views the flat positions slice; loaded-side
+// varint-decodes only block b's slice of posRaw (via blockPosOff) — the per-block
+// analogue of fillBlock, so the phrase cursor holds ONE block's positions (O(BlockSize))
+// instead of the whole list. out[i] is (re)allocated to that doc's position count.
+func (p *termPostings) fillBlockPositions(b int, out [][]int32) int {
+	blen := p.blockLen(b)
+	if p.positions != nil { // build-side: view into the flat slice
+		lo := b * BlockSize
+		copy(out[:blen], p.positions[lo:lo+blen])
+		return blen
+	}
+	data := p.posRaw[p.blockPosOff[b]:p.blockPosOff[b+1]]
+	off := 0
+	for i := 0; i < blen; i++ {
+		if off >= len(data) {
+			out[i] = nil
+			continue
+		}
+		pc, n := binary.Uvarint(data[off:])
+		if n <= 0 {
+			out[i] = nil
+			continue
+		}
+		off += n
+		if pc > uint64(len(data)-off) { // corrupt guard (each gap is >= 1 byte)
+			pc = uint64(len(data) - off)
+		}
+		doc := make([]int32, pc)
+		var pp int32
+		for m := uint64(0); m < pc; m++ {
+			g, k := binary.Uvarint(data[off:])
+			if k <= 0 {
+				break
+			}
+			off += k
+			pp += int32(g)
+			doc[m] = pp
+		}
+		out[i] = doc
+	}
 	return blen
 }
 
