@@ -60,7 +60,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || v1 == types.ZeroDate || v2 == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}

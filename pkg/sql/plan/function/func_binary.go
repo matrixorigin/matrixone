@@ -6954,6 +6954,19 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
+func appendTimestampDiffResult(
+	rs *vector.FunctionResult[int64],
+	unit []byte,
+	first, second types.Datetime,
+) error {
+	if first == types.ZeroDatetime || second == types.ZeroDatetime {
+		return rs.Append(0, true)
+	}
+	unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+	res, _ := second.DateTimeDiffWithUnit(unitStr, first)
+	return rs.Append(res, false)
+}
+
 // TimestampDiff: TIMESTAMPDIFF(unit, datetime1, datetime2) - Returns datetime2 - datetime1
 // Supports DATETIME, DATE, TIMESTAMP, and string inputs
 func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -6971,11 +6984,7 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := v3.DateTimeDiffWithUnit(unitStr, v2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, v2, v3); err != nil {
 				return err
 			}
 		}
@@ -7005,11 +7014,7 @@ func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			// Convert DATE to DATETIME for calculation (time part is 00:00:00)
 			dt2 := v2.ToDatetime()
 			dt3 := v3.ToDatetime()
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 				return err
 			}
 		}
@@ -7041,11 +7046,7 @@ func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResult
 			// Convert TIMESTAMP to DATETIME for calculation (considering timezone)
 			dt2 := v2.ToDatetime(loc)
 			dt3 := v3.ToDatetime(loc)
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 				return err
 			}
 		}
@@ -7105,11 +7106,7 @@ func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWra
 			dt3 = date3.ToDatetime()
 		}
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7156,11 +7153,7 @@ func TimestampDiffDateString(ivecs []*vector.Vector, result vector.FunctionResul
 			dt3 = date3.ToDatetime()
 		}
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7207,11 +7200,7 @@ func TimestampDiffStringDate(ivecs []*vector.Vector, result vector.FunctionResul
 		// Convert DATE to DATETIME (time part is 00:00:00)
 		dt3 := v3.ToDatetime()
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7248,11 +7237,7 @@ func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionRe
 		// Convert DATE to DATETIME (time part is 00:00:00)
 		dt3 := v3.ToDatetime()
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7289,11 +7274,7 @@ func TimestampDiffDateTimestamp(ivecs []*vector.Vector, result vector.FunctionRe
 		// Convert TIMESTAMP to DATETIME (considering timezone)
 		dt3 := v3.ToDatetime(loc)
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}

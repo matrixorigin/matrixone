@@ -13,6 +13,33 @@ select cast(cast('0000-00-00' as date) as signed) as zero_date_signed,
 select unix_timestamp('0000-00-00 00:00:00') as zero_unix_timestamp;
 select unix_timestamp('0000-00-00 00:00:00.000000') as zero_unix_timestamp_fraction;
 
+-- DATEDIFF and TIMESTAMPDIFF require complete non-zero dates.
+select datediff(cast('0000-00-00' as date), cast('2024-01-01' as date)) as zero_datediff;
+select timestampdiff(day,
+                     cast('0000-00-00 00:00:00' as datetime),
+                     cast('2024-01-01 00:00:00' as datetime)) as zero_timestampdiff_datetime,
+       timestampdiff(day,
+                     cast('0000-00-00' as date),
+                     cast('2024-01-01' as date)) as zero_timestampdiff_date,
+       timestampdiff(day,
+                     cast('0000-00-00 00:00:00' as timestamp),
+                     cast('2024-01-01 00:00:00' as timestamp)) as zero_timestampdiff_timestamp,
+       timestampdiff(day,
+                     '0000-00-00 00:00:00',
+                     '2024-01-01 00:00:00') as zero_timestampdiff_string;
+select timestampdiff(day,
+                     cast('0000-00-00' as date),
+                     '2024-01-01 00:00:00') as zero_timestampdiff_date_string,
+       timestampdiff(day,
+                     '0000-00-00 00:00:00',
+                     cast('2024-01-01' as date)) as zero_timestampdiff_string_date,
+       timestampdiff(day,
+                     cast('0000-00-00 00:00:00' as timestamp),
+                     cast('2024-01-01' as date)) as zero_timestampdiff_timestamp_date,
+       timestampdiff(day,
+                     cast('0000-00-00' as date),
+                     cast('2024-01-01 00:00:00' as timestamp)) as zero_timestampdiff_date_timestamp;
+
 -- Functions that require a complete calendar date return NULL for zero temporals.
 select dayofyear(cast('0000-00-00' as date)) as zero_dayofyear,
        week(cast('0000-00-00' as date)) as zero_week_date,

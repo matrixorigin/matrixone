@@ -355,3 +355,114 @@ func TestPartialDateFunctionsKeepZeroForZeroTemporal(t *testing.T) {
 		})
 	}
 }
+
+func TestDateDiffZeroTemporalReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	valid := types.DateFromCalendar(2024, 1, 1)
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate, valid}, nil),
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{valid, types.ZeroDate}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
+		builtInDateDiff,
+	)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTimestampDiffZeroTemporalReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	validDate := types.DateFromCalendar(2024, 1, 1)
+	validDatetime := validDate.ToDatetime()
+	validTimestamp := validDatetime.ToTimestamp(time.UTC)
+	units := NewFunctionTestInput(types.T_varchar.ToType(), []string{"day", "day"}, nil)
+	expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true})
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		fn     fEvalFn
+	}{
+		{
+			name: "datetime",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime, validDatetime}, nil),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{validDatetime, types.ZeroDatetime}, nil),
+			},
+			fn: TimestampDiff,
+		},
+		{
+			name: "date",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate, validDate}, nil),
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{validDate, types.ZeroDate}, nil),
+			},
+			fn: TimestampDiffDate,
+		},
+		{
+			name: "timestamp",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp, validTimestamp}, nil),
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{validTimestamp, types.ZeroTimestamp}, nil),
+			},
+			fn: TimestampDiffTimestamp,
+		},
+		{
+			name: "string",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00", "2024-01-01 00:00:00"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-01 00:00:00", "0000-00-00 00:00:00"}, nil),
+			},
+			fn: TimestampDiffString,
+		},
+		{
+			name: "date string",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate, validDate}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-01 00:00:00", "0000-00-00 00:00:00"}, nil),
+			},
+			fn: TimestampDiffDateString,
+		},
+		{
+			name: "string date",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00", "2024-01-01 00:00:00"}, nil),
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{validDate, types.ZeroDate}, nil),
+			},
+			fn: TimestampDiffStringDate,
+		},
+		{
+			name: "timestamp date",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp, validTimestamp}, nil),
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{validDate, types.ZeroDate}, nil),
+			},
+			fn: TimestampDiffTimestampDate,
+		},
+		{
+			name: "date timestamp",
+			inputs: []FunctionTestInput{
+				units,
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate, validDate}, nil),
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{validTimestamp, types.ZeroTimestamp}, nil),
+			},
+			fn: TimestampDiffDateTimestamp,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, expect, tc.fn)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}

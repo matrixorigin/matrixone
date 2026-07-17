@@ -18,6 +18,37 @@ null
 select unix_timestamp('0000-00-00 00:00:00.000000') as zero_unix_timestamp_fraction;
 ➤ zero_unix_timestamp_fraction[3,38,6]  𝄀
 null
+select datediff(cast('0000-00-00' as date), cast('2024-01-01' as date)) as zero_datediff;
+➤ zero_datediff[-5,64,0]  𝄀
+null
+select timestampdiff(day,
+cast('0000-00-00 00:00:00' as datetime),
+cast('2024-01-01 00:00:00' as datetime)) as zero_timestampdiff_datetime,
+timestampdiff(day,
+cast('0000-00-00' as date),
+cast('2024-01-01' as date)) as zero_timestampdiff_date,
+timestampdiff(day,
+cast('0000-00-00 00:00:00' as timestamp),
+cast('2024-01-01 00:00:00' as timestamp)) as zero_timestampdiff_timestamp,
+timestampdiff(day,
+'0000-00-00 00:00:00',
+'2024-01-01 00:00:00') as zero_timestampdiff_string;
+➤ zero_timestampdiff_datetime[-5,64,0]  ¦  zero_timestampdiff_date[-5,64,0]  ¦  zero_timestampdiff_timestamp[-5,64,0]  ¦  zero_timestampdiff_string[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+select timestampdiff(day,
+cast('0000-00-00' as date),
+'2024-01-01 00:00:00') as zero_timestampdiff_date_string,
+timestampdiff(day,
+'0000-00-00 00:00:00',
+cast('2024-01-01' as date)) as zero_timestampdiff_string_date,
+timestampdiff(day,
+cast('0000-00-00 00:00:00' as timestamp),
+cast('2024-01-01' as date)) as zero_timestampdiff_timestamp_date,
+timestampdiff(day,
+cast('0000-00-00' as date),
+cast('2024-01-01 00:00:00' as timestamp)) as zero_timestampdiff_date_timestamp;
+➤ zero_timestampdiff_date_string[-5,64,0]  ¦  zero_timestampdiff_string_date[-5,64,0]  ¦  zero_timestampdiff_timestamp_date[-5,64,0]  ¦  zero_timestampdiff_date_timestamp[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
 select dayofyear(cast('0000-00-00' as date)) as zero_dayofyear,
 week(cast('0000-00-00' as date)) as zero_week_date,
 week(cast('0000-00-00 00:00:00' as datetime)) as zero_week_datetime;
