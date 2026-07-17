@@ -453,12 +453,46 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return newCast(parameters, result, proc, length, selectList, true)
 }
 
+// maskCastInput makes every cast implementation observe unselected rows as NULL.
+// Window shares the immutable value buffers but owns its null bitmap, so adding
+// the selection mask does not modify a column vector owned by the input batch.
+// Constants can be evaluated once whenever at least one row is selected; the
+// expression executor handles the all-unselected case before calling evalFn.
+func maskCastInput(
+	from *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+) (*vector.Vector, error) {
+	if selectList == nil || selectList.ShouldEvalAllRow() || from.IsConst() {
+		return from, nil
+	}
+
+	masked, err := from.Window(0, length)
+	if err != nil {
+		return nil, err
+	}
+	masked.SetIsBin(from.GetIsBin())
+	for row := uint64(0); row < uint64(length); row++ {
+		if selectList.Contains(row) {
+			masked.SetNull(row)
+		}
+	}
+	return masked, nil
+}
+
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
 	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
-	from := parameters[0]
+	originalFrom := parameters[0]
+	from, err := maskCastInput(originalFrom, length, selectList)
+	if err != nil {
+		return err
+	}
+	if from != originalFrom {
+		defer from.Free(proc.Mp())
+	}
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList)
 	}
@@ -5035,12 +5069,6 @@ func strToSigned[T constraints.Signed](
 
 	var result T
 	for i = 0; i < l; i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {

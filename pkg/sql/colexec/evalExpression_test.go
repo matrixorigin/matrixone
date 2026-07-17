@@ -577,12 +577,21 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: pos}},
 		}
 	}
-	castToInt64 := func(source *plan.Expr) *plan.Expr {
+	castTo := func(source *plan.Expr, typ types.Type) *plan.Expr {
 		target := &plan.Expr{
-			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Typ:  plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale, NotNullable: true},
 			Expr: &plan.Expr_T{T: &plan.TargetType{}},
 		}
 		return bindFunction("cast", source, target)
+	}
+	castToInt64 := func(source *plan.Expr) *plan.Expr {
+		return castTo(source, types.T_int64.ToType())
+	}
+	typedNull := func(typ types.Type) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
 	}
 
 	t.Run("if skips invalid rows within a batch", func(t *testing.T) {
@@ -603,6 +612,76 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 		require.NoError(t, err)
 		require.Equal(t, []int64{7, 9}, vector.MustFixedColWithTypeCheck[int64](result))
+	})
+
+	for _, test := range []struct {
+		name       string
+		targetType types.Type
+		validValue string
+		fallback   *plan.Expr
+	}{
+		{
+			name:       "bool",
+			targetType: types.T_bool.ToType(),
+			validValue: "true",
+			fallback:   makePlan2BoolConstExprWithType(false),
+		},
+		{
+			name:       "uuid",
+			targetType: types.T_uuid.ToType(),
+			validValue: "00000000-0000-0000-0000-000000000001",
+			fallback:   typedNull(types.T_uuid.ToType()),
+		},
+		{
+			name:       "json",
+			targetType: types.T_json.ToType(),
+			validValue: `{"ok":true}`,
+			fallback:   typedNull(types.T_json.ToType()),
+		},
+	} {
+		t.Run("if skips unselected "+test.name+" cast rows", func(t *testing.T) {
+			input := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true}),
+				testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"bad", test.validValue}),
+			}, nil)
+			defer input.Clean(proc.Mp())
+
+			expr := bindFunction("if",
+				column(0, types.T_bool.ToType()),
+				castTo(column(1, types.T_varchar.ToType()), test.targetType),
+				test.fallback)
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.False(t, result.IsNull(1))
+			if test.targetType.Oid == types.T_bool {
+				require.Equal(t, []bool{false, true}, vector.MustFixedColWithTypeCheck[bool](result))
+			} else {
+				require.True(t, result.IsNull(0))
+			}
+		})
+	}
+
+	t.Run("if still evaluates invalid selected bool cast row", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
+			testutil.NewVector(2, types.T_varchar.ToType(), proc.Mp(), false, []string{"bad", "true"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			castTo(column(1, types.T_varchar.ToType()), types.T_bool.ToType()),
+			makePlan2BoolConstExprWithType(false))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.ErrorContains(t, err, "not a valid bool expression")
 	})
 
 	t.Run("coalesce skips invalid rows within a batch", func(t *testing.T) {
