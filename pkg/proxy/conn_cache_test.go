@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockGoodAuthenticator struct{}
@@ -117,6 +119,36 @@ func simulateScramble(password string, salt []byte) []byte {
 		scrambled[i] = stage1[i] ^ hash1[i]
 	}
 	return scrambled
+}
+
+type blockingCacheServerConn struct {
+	*mockServerConn
+	enteredOnce sync.Once
+	closeOnce   sync.Once
+	entered     chan struct{}
+	closed      chan struct{}
+}
+
+func newBlockingCacheServerConn(conn net.Conn) *blockingCacheServerConn {
+	return &blockingCacheServerConn{
+		mockServerConn: newMockServerConn(conn),
+		entered:        make(chan struct{}),
+		closed:         make(chan struct{}),
+	}
+}
+
+func (s *blockingCacheServerConn) ExecStmt(internalStmt, chan<- []byte) (bool, error) {
+	s.enteredOnce.Do(func() { close(s.entered) })
+	<-s.closed
+	return false, net.ErrClosed
+}
+
+func (s *blockingCacheServerConn) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closed)
+		_ = s.mockServerConn.Close()
+	})
+	return nil
 }
 
 func runTestWithNewConnCache(
@@ -299,6 +331,109 @@ func TestConnCache(t *testing.T) {
 			assert.False(t, cc.Push("k100", mockConn2))
 		})
 	})
+}
+
+func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
+	ctx := context.Background()
+	logger := runtime.DefaultRuntime().Logger()
+	cache := newConnCache(ctx, "", logger,
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+	)
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	blocked := newBlockingCacheServerConn(serverSide)
+	require.True(t, cache.Push("tenant-a", blocked))
+
+	popDone := make(chan ServerConn, 1)
+	go func() {
+		popDone <- cache.Pop("tenant-a", 1, nil, nil)
+	}()
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "Pop did not enter backend I/O")
+	}
+
+	otherClient, otherServer := net.Pipe()
+	defer otherClient.Close()
+	other := newMockServerConn(otherServer)
+	pushDone := make(chan bool, 1)
+	go func() {
+		pushDone <- cache.Push("tenant-b", other)
+	}()
+	select {
+	case pushed := <-pushDone:
+		require.True(t, pushed)
+	case <-time.After(time.Second):
+		require.FailNow(t, "blocked Pop held the global cache mutex")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- cache.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "cache Close waited for blocked backend I/O")
+	}
+	select {
+	case sc := <-popDone:
+		require.Nil(t, sc)
+	case <-time.After(time.Second):
+		require.FailNow(t, "cache Close did not terminate in-flight Pop")
+	}
+}
+
+func TestConnCacheCloseDoesNotWaitForPushReset(t *testing.T) {
+	ctx := context.Background()
+	logger := runtime.DefaultRuntime().Logger()
+	resetEntered := make(chan struct{})
+	releaseReset := make(chan struct{})
+	cache := newConnCache(ctx, "", logger,
+		withResetSessionFunc(func(ServerConn) ([]byte, error) {
+			close(resetEntered)
+			<-releaseReset
+			return nil, nil
+		}),
+		withAuthConstructor(nil),
+	)
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	conn := newMockServerConn(serverSide)
+	pushDone := make(chan bool, 1)
+	go func() {
+		pushDone <- cache.Push("tenant-a", conn)
+	}()
+	select {
+	case <-resetEntered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "Push did not enter reset-session I/O")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- cache.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "cache Close waited for reset-session I/O")
+	}
+
+	close(releaseReset)
+	select {
+	case pushed := <-pushDone:
+		require.False(t, pushed)
+	case <-time.After(time.Second):
+		require.FailNow(t, "Push did not recheck the closed cache after reset")
+	}
+	require.NoError(t, conn.Close())
 }
 
 func TestResetSession(t *testing.T) {
