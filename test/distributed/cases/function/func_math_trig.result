@@ -67,8 +67,7 @@ SELECT SIN(-0.001);
 ➤ SIN(-0.001)[8,54,0]  𝄀
 -9.999998333333417E-4
 SELECT SIN("ABC");
-➤ SIN(ABC)[8,54,0]  𝄀
-0.0
+invalid input: "ABC" is invalid numeric string
 SELECT COS(13413);
 ➤ COS(13413)[8,54,0]  𝄀
 -0.02983007588338295
@@ -91,8 +90,7 @@ SELECT COS(-0.001);
 ➤ COS(-0.001)[8,54,0]  𝄀
 0.9999995000000417
 SELECT COS("ABC");
-➤ COS(ABC)[8,54,0]  𝄀
-1.0
+invalid input: "ABC" is invalid numeric string
 SELECT TAN(13413);
 ➤ TAN(13413)[8,54,0]  𝄀
 33.50829505679211
@@ -115,8 +113,7 @@ SELECT TAN(-0.001);
 ➤ TAN(-0.001)[8,54,0]  𝄀
 -0.0010000003333334668
 SELECT TAN("ABC");
-➤ TAN(ABC)[8,54,0]  𝄀
-0.0
+invalid input: "ABC" is invalid numeric string
 SELECT COT(13413);
 ➤ COT(13413)[8,54,0]  𝄀
 0.02984335664587436
@@ -159,8 +156,7 @@ SELECT ATAN(-0.001);
 ➤ ATAN(-0.001)[8,54,0]  𝄀
 -9.999996666668668E-4
 SELECT ATAN("ABC");
-➤ ATAN(ABC)[8,54,0]  𝄀
-0.0
+invalid input: "ABC" is invalid numeric string
 SELECT SIN(NULL);
 ➤ SIN(null)[8,54,0]  𝄀
 null

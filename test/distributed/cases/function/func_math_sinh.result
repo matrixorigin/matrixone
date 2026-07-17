@@ -51,8 +51,7 @@ SELECT SINH(-0.001);
 ➤ SINH(-0.001)[8,54,0]  𝄀
 -0.001000000166666675
 SELECT SINH("ABC");
-➤ SINH(ABC)[8,54,0]  𝄀
-0.0
+invalid input: "ABC" is invalid numeric string
 SELECT SINH(NULL);
 ➤ SINH(null)[8,54,0]  𝄀
 null

@@ -19,9 +19,11 @@ select field('', '', '\r', '\n');
 ➤ field(, , , 
 )[-5,64,0]  𝄀
 1
-select field(1, '1', 1, 'true');
-➤ field(1, 1, 1, true)[-5,64,0]  𝄀
+select field(1, '1', 1);
+➤ field(1, 1, 1)[-5,64,0]  𝄀
 1
+select field(1, 'true');
+invalid input: "true" is invalid numeric string
 select field(1, 1, 2, 3-2);
 ➤ field(1, 1, 2, 3 - 2)[-5,64,0]  𝄀
 1
