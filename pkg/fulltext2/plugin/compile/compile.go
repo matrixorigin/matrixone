@@ -180,9 +180,26 @@ func resolveFulltext2Capacity(algoParams string) (int64, error) {
 	return DefaultMaxIndexCapacity, nil
 }
 
+// resolveFulltext2PositionFree reads position_free from the index's algo_params
+// (absence ⇒ false, i.e. a positional/phrase-capable index).
+func resolveFulltext2PositionFree(algoParams string) (bool, error) {
+	if algoParams == "" {
+		return false, nil
+	}
+	flat, err := catalog.IndexParamsStringToMap(algoParams)
+	if err != nil {
+		return false, err
+	}
+	return flat[catalog.IndexAlgoParamPositionFree] == "true", nil
+}
+
 // genFulltext2BuildFromSourceSQL emits the CROSS APPLY fulltext2_create build SQL.
 func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity int64) (string, error) {
 	const srcAlias = "src"
+	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
 	cfg := fulltext2.TableConfig{
 		DbName:        db,
 		SrcTable:      origTable.Name,
@@ -191,6 +208,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		PKey:          origTable.Pkey.PkeyColName,
 		Parser:        parserFromParams(storeDef.IndexAlgoParams),
 		Capacity:      capacity,
+		PositionFree:  positionFree,
 		FromSource:    true,
 	}
 	cfgbytes, err := json.Marshal(cfg)

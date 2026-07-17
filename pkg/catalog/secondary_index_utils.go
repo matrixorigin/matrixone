@@ -134,6 +134,11 @@ const (
 	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
 	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
 
+	// IndexAlgoParamPositionFree (fulltext2): "true" ⇒ build a position-free index
+	// (bag-of-words retrieval only, ~half the footprint; the FST term dict is kept).
+	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
+	IndexAlgoParamPositionFree = "position_free"
+
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
 
 	// IndexAlgoParamVersion selects the index engine version. Currently fulltext

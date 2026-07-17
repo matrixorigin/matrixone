@@ -98,7 +98,11 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 			return err
 		}
 		pkVec := tf.ctr.argVecs[1]
-		u.builder = fulltext2.NewBuilder(u.tblcfg.IndexTable, int32(pkVec.GetType().Oid))
+		var bopts []fulltext2.BuildOpt
+		if u.tblcfg.PositionFree {
+			bopts = append(bopts, fulltext2.WithPositionFree())
+		}
+		u.builder = fulltext2.NewBuilder(u.tblcfg.IndexTable, int32(pkVec.GetType().Oid), bopts...)
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}

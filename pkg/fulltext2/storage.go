@@ -48,8 +48,12 @@ type TableConfig struct {
 	Parser        string `json:"parser,omitempty"`
 	// Capacity is max_index_capacity: the create build splits the tag=0 base into
 	// sub-indexes of at most Capacity docs each (0 => a single unbounded base).
-	Capacity   int64 `json:"capacity,omitempty"`
-	FromSource bool  `json:"from_source,omitempty"`
+	Capacity int64 `json:"capacity,omitempty"`
+	// PositionFree builds segments without the positional payload (bag-of-words
+	// retrieval only; ~half the footprint, FST kept). Sourced from the persisted
+	// position_free algo_param so every build path (create, CDC tail, compact) agrees.
+	PositionFree bool `json:"position_free,omitempty"`
+	FromSource   bool `json:"from_source,omitempty"`
 }
 
 // SubIndexId is the index_id for the i-th tag=0 base sub-index of a build

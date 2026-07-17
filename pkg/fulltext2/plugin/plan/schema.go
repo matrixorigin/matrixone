@@ -195,6 +195,11 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 		if idx.IndexOption.MaxIndexCapacity > 0 {
 			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 		}
+		// position_free ⇒ build without the positional payload (bag-of-words retrieval
+		// only). Recorded only when TRUE; absence ⇒ positional (phrase-capable).
+		if idx.IndexOption.PositionFree {
+			res[catalog.IndexAlgoParamPositionFree] = "true"
+		}
 		// auto_update + day/hour/second drive the idxcron scheduled compaction
 		// cadence (read from algo_params by the idxcron executor). Mirrors bm25's
 		// ParamsFromTree.

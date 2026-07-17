@@ -2144,6 +2144,7 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	PositionFree             bool // fulltext2: build a position-free (bag-of-words only) index
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -2159,7 +2160,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 ||
+		node.MaxIndexCapacity != 0 || node.PositionFree ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2277,6 +2278,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString("MAX_INDEX_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
 		ctx.WriteByte(' ')
+	}
+	if node.PositionFree {
+		ctx.WriteString("POSITION_FREE=TRUE ")
 	}
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString("INCLUDE (")
