@@ -32,30 +32,30 @@ explain analyze select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4
 -- @regex("Table Scan on vector_ivf_multicn_search.__mo_index_secondary_", true)
 ap query plan on multicn(8 core)
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes
   ->  Sort
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes
         Sort Key: mo_ivf_alias_0.score INTERNAL
         Limit: 4
         ->  Join
-              Analyze: timeConsumed=0ms waitTime=14ms inputRows=8 outputRows=4 (min=4, max=4) InputSize=96 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.21 KiB (min=16.06 KiB, max=16.15 KiB)
+              Analyze: timeConsumed=0ms waitTime=14ms inputRows=8 outputRows=4 (min=4, max=4) InputSize=96 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes
               Join Type: INNER
               Join Cond: (t_int.a = mo_ivf_alias_0.pkid)
               Runtime Filter Build: #[-1,0]
               ->  Table Scan on vector_ivf_multicn_search.t_int
-                    Analyze: timeConsumed=0ms waitTime=5ms inputBlocks=1 inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)
+                    Analyze: timeConsumed=0ms waitTime=5ms inputBlocks=1 inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes
                     Runtime Filter Probe: t_int.a
               ->  Table Function on ivf_search
-                    Analyze: timeConsumed=10ms waitTime=0ms inputRows=0 outputRows=4 (min=0, max=4) InputSize=0 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=0 bytes, max=64 bytes)
+                    Analyze: timeConsumed=10ms waitTime=0ms inputRows=0 outputRows=4 (min=0, max=4) InputSize=0 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes
                     Index Reader Param:  Limit: 4
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes
   ->  Sort
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes
         Sort Key: __dist_func__ INTERNAL
         Limit: 4
         ->  Table Scan on vector_ivf_multicn_search.__mo_index_secondary_019f5b02-d9f4-763d-80ca-c8406cdc1ff9
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=4 outputRows=4 (min=4, max=4) InputSize=256 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=324 bytes (min=324 bytes, max=324 bytes)
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=4 outputRows=4 (min=4, max=4) InputSize=256 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes
               Index Reader Param:  Sort Key: l2_distance_sq(__mo_index_centroid_fk_entry, ) INTERNAL  Limit: 4
               Filter Cond: prefix_in(__mo_cpkey_col)
 select group_concat(a order by a) as nearest_ids, count(*) as row_count, count(distinct a) as distinct_count

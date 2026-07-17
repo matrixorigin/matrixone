@@ -28,12 +28,12 @@ select id, grp from t1 order by grp, id;
 -- @regex("SpillSize=", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.53 MiB (min=1.53 MiB, max=1.53 MiB)  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=0 bytes|0 bytes|0 bytes  𝄀
   ->  Sort  𝄀
-        Analyze: timeConsumed=23ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.05 MiB (min=1.53 MiB, max=1.53 MiB) SpillRows=200006 SpillSize=1.53 MiB (min=0 bytes, max=1.53 MiB)  𝄀
+        Analyze: timeConsumed=23ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=0 bytes|0 bytes|0 bytes SpillRows=200006 SpillSize=1.53 MiB (min=0 bytes, max=1.53 MiB)  𝄀
         Sort Key: t1.grp INTERNAL, t1.id INTERNAL  𝄀
         ->  Table Scan on qesortspill.t1  𝄀
-              Analyze: timeConsumed=3ms waitTime=0ms inputBlocks=26 inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=794.26 KiB|0 bytes|794.26 KiB MemorySize=128.00 KiB (min=128.00 KiB, max=128.00 KiB)
+              Analyze: timeConsumed=3ms waitTime=0ms inputBlocks=26 inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=794.26 KiB|0 bytes|794.26 KiB
 set @@max_dop = 0;
 set @@sort_spill_mem = 0;
 show variables like 'sort_spill_mem';

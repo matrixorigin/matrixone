@@ -73,13 +73,13 @@ Project  𝄀
         Block Filter Cond: (t4.c1 = 3)
 explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
 invalid input: check expr = 5 not found
-explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 -- @regex("ReadSize=", true)
 tp query plan  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
   ->  Table Scan on d1.t4  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=96.05 KiB|0 bytes|64.04 KiB MemorySize=33 bytes (min=16 bytes, max=16 bytes)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=96.05 KiB|0 bytes|64.04 KiB  𝄀
         Filter Cond: (t4.c1 = 3)  𝄀
         Block Filter Cond: (t4.c1 = 3)
 explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;
@@ -108,20 +108,20 @@ explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Joi
 -- @regex("invalid input: column 'c\\.full_name' does not exist", false)
 tp query plan  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=36 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=36 bytes (min=0 bytes, max=36 bytes)  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=36 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
   Limit: 20  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=192 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=352.04 KiB (min=36 bytes, max=352.00 KiB)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=192 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
         Group Key: c.id, c.full_name  𝄀
         Aggregate Functions: count(cp.id)  𝄀
         Filter Cond: (count(cp.id) > 5)  𝄀
         ->  Join  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=6 (min=6, max=6) InputSize=84 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.21 KiB (min=16.06 KiB, max=16.15 KiB)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=6 (min=6, max=6) InputSize=84 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
               Join Type: LEFT  𝄀
               Join Cond: (c.id = cp.company_id)  𝄀
               ->  Table Scan on d1.issue_23121_company  𝄀
-                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=1 (min=1, max=1) InputSize=104 bytes OutputSize=28 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=134 bytes (min=134 bytes, max=134 bytes)  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=1 (min=1, max=1) InputSize=104 bytes OutputSize=28 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
                     Filter Cond: (c.province = 'Shanghai')  𝄀
               ->  Table Scan on d1.issue_23121_company_patent  𝄀
-                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=7 outputRows=7 (min=7, max=7) InputSize=56 bytes OutputSize=56 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=112 bytes (min=112 bytes, max=112 bytes)
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=7 outputRows=7 (min=7, max=7) InputSize=56 bytes OutputSize=56 bytes ReadSize=0 bytes|0 bytes|0 bytes
 drop database if exists d1;
