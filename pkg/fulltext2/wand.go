@@ -227,8 +227,23 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 	theta := math.Inf(-1) // until the heap holds k, accept everything
 
 	for {
-		// Order cursors by current doc ascending (exhausted ones sort last).
-		sort.Slice(iters, func(a, b int) bool { return iters[a].doc() < iters[b].doc() })
+		// Order cursors by current doc ascending (exhausted ones, doc()==sentinel,
+		// sort last). Insertion sort, NOT sort.Slice: the iters are nearly sorted
+		// between iterations (only the skipped cursor moved), so this is O(len)
+		// here; more importantly sort.Slice boxes the slice into an interface{}
+		// (runtime.convTslice) and heap-allocates the less closure on every call —
+		// in this hot per-pivot loop that alloc churn (plus the reflect Swapper)
+		// dominated the entire query CPU.
+		for i := 1; i < len(iters); i++ {
+			it := iters[i]
+			di := it.doc()
+			j := i - 1
+			for j >= 0 && iters[j].doc() > di {
+				iters[j+1] = iters[j]
+				j--
+			}
+			iters[j+1] = it
+		}
 		if iters[0].atEnd() {
 			break // all exhausted
 		}
