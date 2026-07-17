@@ -213,11 +213,14 @@ func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		refCnt      int
+		parentType  plan.Node_NodeType
 		wantProject bool
 	}{
-		{name: "unused", refCnt: 0, wantProject: true},
-		{name: "single consumer", refCnt: 1, wantProject: false},
-		{name: "multiple consumers", refCnt: 2, wantProject: true},
+		{name: "unused", refCnt: 0, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single project consumer", refCnt: 1, parentType: plan.Node_PROJECT, wantProject: false},
+		{name: "single sort consumer", refCnt: 1, parentType: plan.Node_SORT, wantProject: false},
+		{name: "single join consumer", refCnt: 1, parentType: plan.Node_JOIN, wantProject: true},
+		{name: "multiple consumers", refCnt: 2, parentType: plan.Node_PROJECT, wantProject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			builder, bindCtx := genBuilderAndCtx()
@@ -238,7 +241,7 @@ func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
 			}, bindCtx)
 			refCnts := map[[2]int32]int{{projectTag, 0}: test.refCnt}
 
-			newNodeID, _ := builder.removeSimpleProjections(projectID, plan.Node_PROJECT, false, refCnts)
+			newNodeID, _ := builder.removeSimpleProjections(projectID, test.parentType, false, refCnts)
 			require.Equal(t, test.wantProject, newNodeID == projectID)
 		})
 	}

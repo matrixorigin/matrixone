@@ -1020,6 +1020,45 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Equal(t, 1, functionProjects)
 	})
 
+	for _, test := range []struct {
+		name     string
+		function string
+		expr     string
+	}{
+		{name: "sleep", function: "sleep", expr: "sleep(0)"},
+		{name: "nextval", function: "nextval", expr: "nextval('sample_seq')"},
+		{name: "setval", function: "setval", expr: "setval('sample_seq', '10')"},
+	} {
+		t.Run("join retains volatile input project "+test.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(
+				plan2.NewMockOptimizer(false),
+				t,
+				"select count(*) from (select "+test.expr+" as s from nation) l join region r on l.s <= r.r_regionkey",
+			)
+			require.NoError(t, err)
+
+			retained := false
+			query := logicPlan.GetQuery()
+			for _, node := range reachablePlanNodes(query) {
+				if node.NodeType != plan.Node_JOIN {
+					continue
+				}
+				for _, childID := range node.Children {
+					child := query.Nodes[childID]
+					if child.NodeType != plan.Node_PROJECT {
+						continue
+					}
+					for _, expr := range child.ProjectList {
+						if f := expr.GetF(); f != nil && f.Func.ObjName == test.function {
+							retained = true
+						}
+					}
+				}
+			}
+			require.True(t, retained)
+		})
+	}
+
 	t.Run("sample retains nullable outputs for row cardinality", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
