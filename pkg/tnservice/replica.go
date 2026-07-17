@@ -39,19 +39,45 @@ type replica struct {
 	createCtx    context.Context
 	cancelCreate context.CancelFunc
 	startedOnce  sync.Once
+	closeOnce    sync.Once
+	closeErr     error
 
 	mu struct {
 		sync.RWMutex
+		cond            *sync.Cond
 		starting        bool
 		cancelled       bool
 		destroyOnCancel bool
 		startErr        error
+		activeCalls     int
 	}
+}
+
+type txnServiceLease struct {
+	replica               *replica
+	service               service.TxnService
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	stopCancelPropagation func() bool
+	releaseOnce           sync.Once
+}
+
+func (l *txnServiceLease) release() {
+	l.releaseOnce.Do(func() {
+		l.stopCancelPropagation()
+		l.cancel()
+		l.replica.mu.Lock()
+		l.replica.mu.activeCalls--
+		if l.replica.mu.activeCalls == 0 {
+			l.replica.mu.cond.Broadcast()
+		}
+		l.replica.mu.Unlock()
+	})
 }
 
 func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &replica{
+	r := &replica{
 		rt:           rt,
 		shard:        shard,
 		logger:       rt.Logger().With(util.TxnTNShardField(shard)),
@@ -59,6 +85,8 @@ func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 		createCtx:    ctx,
 		cancelCreate: cancel,
 	}
+	r.mu.cond = sync.NewCond(&r.mu.RWMutex)
+	return r
 }
 
 func (r *replica) start(txnService service.TxnService) error {
@@ -124,49 +152,131 @@ func (r *replica) waitStartCompleted() {
 }
 
 func (r *replica) close(destroy bool) error {
+	r.cancelStart(destroy)
+	r.closeOnce.Do(func() {
+		r.closeErr = r.closeOnceFn()
+	})
+	return r.closeErr
+}
+
+func (r *replica) closeOnceFn() error {
 	r.mu.RLock()
 	starting := r.mu.starting
 	r.mu.RUnlock()
 	if !starting {
 		return nil
 	}
-	startErr := r.waitStarted(context.Background())
-	r.mu.RLock()
+
+	r.waitStartCompleted()
+	r.mu.Lock()
+	for r.mu.activeCalls > 0 {
+		r.mu.cond.Wait()
+	}
+	startErr := r.mu.startErr
 	txnService := r.service
-	r.mu.RUnlock()
+	destroy := r.mu.destroyOnCancel
+	r.mu.Unlock()
 	if txnService == nil {
 		return startErr
 	}
 	return errors.Join(startErr, txnService.Close(destroy))
 }
 
+func (r *replica) started() bool {
+	select {
+	case <-r.startedC:
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+		return !r.mu.cancelled && r.mu.startErr == nil && r.service != nil
+	default:
+		return false
+	}
+}
+
 func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	if err := r.waitStarted(ctx); err != nil {
+	lease, err := r.acquireService(ctx)
+	if err != nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
 
 	switch request.Method {
 	case txn.TxnMethod_GetStatus:
-		return r.service.GetStatus(ctx, request, response)
+		return lease.service.GetStatus(lease.ctx, request, response)
 	case txn.TxnMethod_Prepare:
-		return r.service.Prepare(ctx, request, response)
+		return lease.service.Prepare(lease.ctx, request, response)
 	case txn.TxnMethod_CommitTNShard:
-		return r.service.CommitTNShard(ctx, request, response)
+		return lease.service.CommitTNShard(lease.ctx, request, response)
 	case txn.TxnMethod_RollbackTNShard:
-		return r.service.RollbackTNShard(ctx, request, response)
+		return lease.service.RollbackTNShard(lease.ctx, request, response)
 	default:
-		return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", request.Method.String())
+		return moerr.NewNotSupportedf(lease.ctx, "unknown txn request method: %s", request.Method.String())
 	}
 }
 
 func (r *replica) waitStarted(ctx context.Context) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := context.Cause(r.createCtx); err != nil {
+		return err
+	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return context.Cause(ctx)
+	case <-r.createCtx.Done():
+		return context.Cause(r.createCtx)
 	case <-r.startedC:
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		r.mu.RLock()
 		defer r.mu.RUnlock()
+		if r.mu.cancelled {
+			return context.Canceled
+		}
 		return r.mu.startErr
 	}
+}
+
+// acquireService pins the transaction service until release is called. Closing
+// a replica cancels the call context and waits for all acquired services to be
+// released before closing the underlying storage.
+func (r *replica) acquireService(ctx context.Context) (*txnServiceLease, error) {
+	if err := r.waitStarted(ctx); err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	if err := context.Cause(ctx); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
+	if r.mu.cancelled {
+		r.mu.Unlock()
+		return nil, context.Canceled
+	}
+	if r.mu.startErr != nil {
+		err := r.mu.startErr
+		r.mu.Unlock()
+		return nil, err
+	}
+	if r.service == nil {
+		r.mu.Unlock()
+		return nil, context.Canceled
+	}
+	txnService := r.service
+	r.mu.activeCalls++
+	r.mu.Unlock()
+
+	callCtx, cancel := context.WithCancel(ctx)
+	stopCancelPropagation := context.AfterFunc(r.createCtx, cancel)
+	return &txnServiceLease{
+		replica:               r,
+		service:               txnService,
+		ctx:                   callCtx,
+		cancel:                cancel,
+		stopCancelPropagation: stopCancelPropagation,
+	}, nil
 }

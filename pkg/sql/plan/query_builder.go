@@ -3700,8 +3700,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// append DISTINCT node
+	resultSourceTag := ctx.projectTag
 	if ctx.isDistinct {
 		nodeID = builder.appendDistinctNode(ctx, nodeID)
+		if len(boundOrderBys) > 0 {
+			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
+				return
+			}
+		}
 	}
 
 	// append SORT node (include limit, offset)
@@ -3722,7 +3728,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	// append result PROJECT node
 	if builder.qry.Nodes[nodeID].NodeType != plan.Node_PROJECT {
-		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen)
+		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen, resultSourceTag)
 	} else {
 		ctx.results = ctx.projects
 	}
@@ -3826,6 +3832,7 @@ func (builder *QueryBuilder) bindSelectClause(
 
 	// Preprocess aliases
 	for i := range selectList {
+		_, columnLike := unwrapParenExpr(selectList[i].Expr).(*tree.UnresolvedName)
 		if selectList[i].Expr, err = ctx.qualifyColumnNames(selectList[i].Expr, NoAlias); err != nil {
 			return
 		}
@@ -3840,9 +3847,12 @@ func (builder *QueryBuilder) bindSelectClause(
 			ctx.aliasFrequency[selectList[i].As.Compare()]++
 		}
 
-		field := SelectField{
-			ast: selectList[i].Expr,
-			pos: int32(i),
+		field := SelectField{ast: selectList[i].Expr, pos: int32(i)}
+		if columnLike {
+			key := windowExprAstKey(selectList[i].Expr)
+			if _, exists := ctx.projectColByAst[key]; !exists {
+				ctx.projectColByAst[key] = int32(i)
+			}
 		}
 
 		if selectList[i].As != nil && !selectList[i].As.Empty() {
@@ -4731,17 +4741,75 @@ func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boun
 	}, ctx)
 }
 
-func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID int32, resultLen int) int32 {
+// appendDistinctOrderProjectionNode materializes derived DISTINCT ordering
+// expressions after duplicate elimination. This keeps the DISTINCT tuple
+// unchanged and preserves the column-only sort-key shape used by optimizer and
+// spill paths.
+func (builder *QueryBuilder) appendDistinctOrderProjectionNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundOrderBys []*plan.OrderBySpec,
+) (newNodeID int32, outputTag int32, err error) {
+	needsProjection := false
+	for _, orderBy := range boundOrderBys {
+		col := orderBy.Expr.GetCol()
+		if col == nil || col.RelPos != ctx.projectTag {
+			needsProjection = true
+			break
+		}
+	}
+	if !needsProjection {
+		return nodeID, ctx.projectTag, nil
+	}
+
+	outputTag = builder.genNewBindTag()
+	projects := make([]*plan.Expr, 0, len(ctx.projects)+len(boundOrderBys))
+	for i, project := range ctx.projects {
+		projects = append(projects, GetColExpr(project.Typ, ctx.projectTag, int32(i)))
+	}
+
+	derivedByExpr := make(map[string]int32, len(boundOrderBys))
+	projectTags := map[int32]bool{ctx.projectTag: true}
+	notCacheable := false
+	for _, orderBy := range boundOrderBys {
+		orderExpr := orderBy.Expr
+		if col := orderExpr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
+			orderBy.Expr = GetColExpr(orderExpr.Typ, outputTag, col.ColPos)
+			continue
+		}
+
+		if !containsOnlyTags(orderExpr, projectTags) {
+			return 0, 0, moerr.NewInternalError(builder.GetContext(), "DISTINCT ORDER BY expression escaped projection scope")
+		}
+		key, keyErr := projectExprKey(orderExpr)
+		if keyErr != nil {
+			return 0, 0, keyErr
+		}
+		pos, exists := derivedByExpr[key]
+		if !exists {
+			pos = int32(len(projects))
+			derivedByExpr[key] = pos
+			projects = append(projects, orderExpr)
+			if detectedExprWhetherTimeRelated(orderExpr) {
+				notCacheable = true
+			}
+		}
+		orderBy.Expr = GetColExpr(orderExpr.Typ, outputTag, pos)
+	}
+
+	newNodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  projects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{outputTag},
+		NotCacheable: notCacheable,
+	}, ctx)
+	return newNodeID, outputTag, nil
+}
+
+func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID int32, resultLen int, sourceTag int32) int32 {
 	for i := 0; i < resultLen; i++ {
-		ctx.results = append(ctx.results, &plan.Expr{
-			Typ: ctx.projects[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ctx.projectTag,
-					ColPos: int32(i),
-				},
-			},
-		})
+		ctx.results = append(ctx.results, GetColExpr(ctx.projects[i].Typ, sourceTag, int32(i)))
 	}
 
 	ctx.resultTag = builder.genNewBindTag()
