@@ -15,8 +15,30 @@
 package fulltext2
 
 import (
+	"math/bits"
+
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
+
+// docBitset is a dense per-doc-ord bitset (doc ords are dense in [0, N) per segment),
+// used by the boolean evaluator instead of map[int64]struct{} — no rehash, ~1/64 the
+// memory, and forEach yields ords ascending.
+type docBitset []uint64
+
+func newDocBitset(n int) docBitset { return make(docBitset, (n+63)/64) }
+func (b docBitset) set(i int)      { b[i>>6] |= uint64(1) << (uint(i) & 63) }
+func (b docBitset) get(i int) bool { return b[i>>6]&(uint64(1)<<(uint(i)&63)) != 0 }
+
+// forEach calls f with each set bit index, ascending.
+func (b docBitset) forEach(f func(int)) {
+	for w, word := range b {
+		base := w << 6
+		for word != 0 {
+			f(base + bits.TrailingZeros64(word))
+			word &= word - 1
+		}
+	}
+}
 
 // Boolean-mode search (MATCH … AGAINST('…' IN BOOLEAN MODE)).
 //
@@ -111,110 +133,142 @@ func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
 	return q.should, true
 }
 
+// searchBooleanFull evaluates a boolean query against a DENSE per-doc-ord accumulator
+// (score []float64 + doc bitsets) rather than a map[int64]float64 per clause plus a
+// candidate map. Doc ords are dense in [0, N) per segment, so the arrays are O(N) with no
+// rehash — a low-selectivity 2-char CJK term matches most of the corpus, and the old maps
+// then rehashed themselves to death and held ~30 bytes/doc × (#clauses+1). This is O(N)
+// memory total, flat, and the dominant remaining boolean-layer allocator is gone.
 func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
+	n := int(s.N)
+	if n == 0 || k <= 0 {
+		return nil, nil
+	}
 	avgDocLen := gs.avgdl(s)
+	score := make([]float64, n)
 
-	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen, gs, true)
-	if err != nil {
-		return nil, err
-	}
-	shouldMaps, err := s.evalClauses(q.should, algo, avgDocLen, gs, true)
-	if err != nil {
-		return nil, err
-	}
-	adjustMaps, err := s.evalClauses(q.adjust, algo, avgDocLen, gs, true)
-	if err != nil {
-		return nil, err
-	}
-	// MUST-NOT: only the matched ord SET is used (to exclude), never the score → skip scoring.
-	notMaps, err := s.evalClauses(q.mustNot, algo, avgDocLen, gs, false)
-	if err != nil {
-		return nil, err
-	}
-	mustNot := make(map[int64]struct{})
-	for _, m := range notMaps {
-		for ord := range m {
-			mustNot[ord] = struct{}{}
+	// MUST-NOT: presence only, into an exclusion bitset.
+	mustNot := newDocBitset(n)
+	for _, c := range q.mustNot {
+		if err := s.evalClauseInto(c, algo, avgDocLen, gs, false, func(ord int64, _ float64) {
+			mustNot.set(int(ord))
+		}); err != nil {
+			return nil, err
 		}
 	}
 
-	// Candidate docs + accumulated MUST score.
-	cand := make(map[int64]float64)
-	if len(mustMaps) > 0 {
-		for ord, sc0 := range mustMaps[0] { // intersection of all MUST clauses
-			total, ok := sc0, true
-			for _, m := range mustMaps[1:] {
-				v, present := m[ord]
-				if !present {
-					ok = false
-					break
-				}
-				total += v
-			}
-			if ok {
-				cand[ord] = total
-			}
-		}
-	} else {
-		// Union of SHOULD *and* ADJUST clauses. A ~ (ADJUST) term lowers a row's score but
-		// does NOT exclude it (MySQL: "rated lower ... but not excluded, as it would be
-		// with -"), so with no MUST a row matching only a ~term is still a candidate
-		// (ranked low by its negative contribution) — matching classic fulltext. Excluding
-		// it here made `AGAINST('fox ~lazy')` drop lazy-only rows that classic returns.
-		for _, maps := range [][]map[int64]float64{shouldMaps, adjustMaps} {
-			for _, m := range maps {
-				for ord := range m {
-					if _, seen := cand[ord]; !seen {
-						cand[ord] = 0
-					}
-				}
-			}
-		}
-	}
-	// SHOULD scores (optional when MUST present), then ~ ADJUST penalties — both
-	// only on docs already in the candidate set.
-	for ord := range cand {
-		for _, m := range shouldMaps {
-			if v, present := m[ord]; present {
-				cand[ord] += v
-			}
-		}
-		for _, m := range adjustMaps {
-			if v, present := m[ord]; present {
-				cand[ord] += v
-			}
-		}
-	}
-
-	// Bounded top-k via the SoA FastMaxHeap keyed by score, instead of sorting the ENTIRE
-	// candidate set: a common term/ngram matches nearly every doc, so an O(n log n)
-	// reflection-based sort of all candidates to keep k dominated the CPU profile. This is
-	// O(n log k), typed (no reflect / no boxing), O(k) memory. Push (dist = -score) fills
-	// then admits the strictly-better internally; equal scores are equally relevant, so
-	// ties are unspecified.
 	h := newTopKHeap(k, s.N)
-	for ord, score := range cand {
-		if _, bad := mustNot[ord]; bad {
-			continue
+	admit := func(ord int) {
+		if mustNot.get(ord) || !allowed(allow, int64(ord)) { // WHERE prefilter (nil = allow all)
+			return
 		}
-		if !allowed(allow, ord) { // WHERE prefilter (nil = allow all)
-			continue
-		}
-		h.Push(ord, -score)
+		h.Push(int64(ord), -score[ord])
 	}
+
+	if len(q.must) > 0 {
+		// A candidate must satisfy EVERY MUST clause: count hits per doc (intersection).
+		mustHit := make([]int32, n)
+		touched := newDocBitset(n)
+		for _, c := range q.must {
+			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float64) {
+				score[ord] += sc
+				mustHit[ord]++
+				touched.set(int(ord))
+			}); err != nil {
+				return nil, err
+			}
+		}
+		// SHOULD/ADJUST add to the score of whatever docs they touch; only MUST-satisfying
+		// docs are collected, so contributions to non-candidates are simply never read.
+		for _, cs := range [][]clause{q.should, q.adjust} {
+			for _, c := range cs {
+				if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float64) {
+					score[ord] += sc
+				}); err != nil {
+					return nil, err
+				}
+			}
+		}
+		need := int32(len(q.must))
+		touched.forEach(func(ord int) {
+			if mustHit[ord] == need {
+				admit(ord)
+			}
+		})
+		return heapToResults(s, h), nil
+	}
+
+	// No MUST: the candidate set is the union of SHOULD *and* ADJUST. A ~ (ADJUST) term
+	// lowers a row's score but does NOT exclude it (MySQL: "rated lower ... but not
+	// excluded, as with -"), so a row matching only a ~term is still a candidate, ranked
+	// low by its negative contribution — matching classic fulltext.
+	cand := newDocBitset(n)
+	for _, cs := range [][]clause{q.should, q.adjust} {
+		for _, c := range cs {
+			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float64) {
+				score[ord] += sc
+				cand.set(int(ord))
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	cand.forEach(admit)
 	return heapToResults(s, h), nil
 }
 
-func (s *Segment) evalClauses(cs []clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool) ([]map[int64]float64, error) {
-	out := make([]map[int64]float64, len(cs))
-	for i, c := range cs {
+// evalClauseInto streams one clause's weighted (doc, score) contributions to emit, WITHOUT
+// building a per-clause map. Term and phrase clauses touch each doc once, so they emit
+// directly (weight folded in); prefix and group clauses need a per-doc MAX over their
+// expansion/children, so they fall back to evalClause's map (rare, and bounded by the
+// prefix's terms). scored=false emits presence only (score 0), for MUST-NOT.
+func (s *Segment) evalClauseInto(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool, emit func(int64, float64)) error {
+	w := c.weight
+	switch c.kind {
+	case clauseTerm:
+		pl, ok := s.lookup(c.terms[0])
+		if !ok {
+			return nil
+		}
+		docs := pl.materializeDocIDs()
+		if !scored {
+			for _, ord := range docs {
+				emit(ord, 0)
+			}
+			return nil
+		}
+		idf2 := gs.idfFor(s, c.terms[0], pl)
+		tfs := pl.materializeTfs()
+		for i, ord := range docs {
+			emit(ord, w*s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen))
+		}
+	case clausePhrase:
+		var hits []docTf
+		if gs != nil {
+			hits = gs.phraseHits(s, c.phrase) // memoized; shared with gs.phraseDf
+		} else {
+			hits = s.matchPhrase(c.phrase)
+		}
+		if !scored {
+			for _, hh := range hits {
+				emit(hh.ord, 0)
+			}
+			return nil
+		}
+		idf2 := gs.phraseIdfFor(s, c.phrase, len(hits))
+		for _, hh := range hits {
+			emit(hh.ord, w*s.scoreTerm(algo, float64(hh.tf), idf2, hh.ord, avgDocLen))
+		}
+	default: // clausePrefix, clauseGroup: per-doc MAX needs a temp (evalClause applies weight)
 		m, err := s.evalClause(c, algo, avgDocLen, gs, scored)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out[i] = m
+		for ord, sc := range m {
+			emit(ord, sc)
+		}
 	}
-	return out, nil
+	return nil
 }
 
 // evalClause returns the weighted (doc ord → score) contribution of one clause.
