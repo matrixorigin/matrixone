@@ -1032,6 +1032,7 @@ func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
 			w.Free(mp)
 			return nil, err
 		}
+		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
 		return w, nil
 	}
 
