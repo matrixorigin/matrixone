@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -232,4 +233,72 @@ func TestManifestHTTP(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestManifestHTTPActiveGenerationLifecycle(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	activeManifestDB.Store(nil)
+	ctx := context.Background()
+
+	req := httptest.NewRequest("GET", "/debug/tae/manifest?table=gen_db.gen_tbl", nil)
+	w := httptest.NewRecorder()
+	activeManifestHTTPHandler(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	tae1 := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	createManifestHTTPTable(t, ctx, tae1, "gen_db", "gen_tbl")
+	RegisterManifestHTTP(tae1)
+
+	w = httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	tae2 := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	createManifestHTTPTable(t, ctx, tae2, "gen_db2", "gen_tbl2")
+	RegisterManifestHTTP(tae2)
+	require.NoError(t, tae1.Close())
+	UnregisterManifestHTTP(tae1)
+
+	req = httptest.NewRequest("GET", "/debug/tae/manifest?table=gen_db2.gen_tbl2", nil)
+	w = httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	UnregisterManifestHTTP(tae2)
+	req = httptest.NewRequest("GET", "/debug/tae/manifest?table=gen_db2.gen_tbl2", nil)
+	w = httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.NoError(t, tae2.Close())
+}
+
+func TestManifestHTTPClosedDBDoesNotPanic(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	createManifestHTTPTable(t, ctx, tae, "closed_db", "closed_tbl")
+	handler := manifestHTTPHandler(tae)
+	require.NoError(t, tae.Close())
+
+	req := httptest.NewRequest("GET", "/debug/tae/manifest?table=closed_db.closed_tbl", nil)
+	w := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		handler(w, req)
+	})
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func createManifestHTTPTable(t *testing.T, ctx context.Context, tae *db.DB, dbName, tableName string) {
+	schema := catalog.MockSchemaAll(5, 0)
+	schema.Name = tableName
+	txn, err := tae.StartTxn(nil)
+	require.NoError(t, err)
+	dbHdl, err := txn.CreateDatabase(dbName, "", "")
+	require.NoError(t, err)
+	_, err = dbHdl.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
 }
