@@ -1137,6 +1137,36 @@ func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 
 }
 
+func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(false)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{
+		sql: `/*+ {"rewrites":{"src.t":["select * from src.t where keep = 1"]},` +
+			`"remapdb":{"src":"dst"}} */ select * from src.t`,
+		rewritePolicy:             &rewritePolicySnapshot{enabled: true},
+		rewritePolicyMaterialized: true,
+	}
+	cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	defer cws[0].Free()
+
+	carrier, ok := cws[0].(interface{ GetRemapDb() map[string]string })
+	require.True(t, ok)
+	require.Equal(t, map[string]string{"src": "dst"}, carrier.GetRemapDb())
+	require.Contains(t, tree.String(cws[0].GetAst(), dialect.MYSQL), "dst.t")
+	selectStmt, ok := cws[0].GetAst().(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, selectStmt.RewriteOption)
+	require.Len(t, selectStmt.RewriteOption.Rewrites["src.t"], 1)
+}
+
 func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -1556,6 +1586,209 @@ func TestHandlePrepareStmtStoresRemapPolicy(t *testing.T) {
 		require.Equal(t, "prepared_db", prepared.remapDb["src"])
 		return nil
 	})
+}
+
+func Test_HandlePrepareStringUsesSessionSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStringUsesSessionSQLMode", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		ec.resper = ses.respr
+		preStmt, err := handlePrepareString(ses, ec, tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"))
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareVarUsesSessionSQLMode", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		require.NoError(t, ses.SetUserDefinedVar("stmt_var_sql", "select 'a'||'b'", "set @stmt_var_sql = 'select ''a''||''b'''"))
+		ec.resper = ses.respr
+		preStmt, err := handlePrepareVar(ses, ec, tree.NewPrepareVar("stmt_sql_mode_var", tree.NewVarExpr("stmt_var_sql", false, false, nil)))
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func requirePreparedSelectConcat(t *testing.T, preStmt *PrepareStmt) {
+	t.Helper()
+	selectStmt, ok := preStmt.PrepareStmt.(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, selectClause.Exprs, 1)
+	fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "concat", name.ColName())
+}
+
+func TestPrepareSQLModeStagedExecution(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+	tests := []struct {
+		name      string
+		sql       string
+		staged    bool
+		wantError bool
+		first     string
+	}{
+		{
+			name:   "expression value",
+			sql:    `set sql_mode=concat('ANSI_','QUOTES'); select "c"`,
+			staged: true,
+			first:  `set sql_mode=concat('ANSI_','QUOTES');`,
+		},
+		{
+			name:   "user variable value",
+			sql:    `set @mode='ANSI_QUOTES'; set sql_mode=@mode; select "c"`,
+			staged: true,
+			first:  `set @mode='ANSI_QUOTES';`,
+		},
+		{
+			name:   "failing expression precedes mode-sensitive syntax error",
+			sql:    `set sql_mode=unknown_function(); select 'a\'; select 1`,
+			staged: true,
+			first:  `set sql_mode=unknown_function();`,
+		},
+		{
+			name:   "compound statement",
+			sql:    `set sql_mode='ANSI_QUOTES'; begin select 1; end; select "c"`,
+			staged: true,
+			first:  `set sql_mode='ANSI_QUOTES';`,
+		},
+		{
+			name:   "mode set is final statement",
+			sql:    `select 1; set sql_mode='ANSI_QUOTES'`,
+			staged: false,
+		},
+		{
+			name:   "global mode does not affect session parser",
+			sql:    `set global sql_mode='ANSI_QUOTES'; select "c"`,
+			staged: false,
+		},
+		{
+			name:      "unrelated parse error",
+			sql:       `select from`,
+			wantError: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.staged, staged)
+			require.Equal(t, test.first, first)
+		})
+	}
+}
+
+func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+	input := &UserInput{sql: `set sql_mode=concat('ANSI_','QUOTES'); select "c"`}
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	require.NoError(t, err)
+	require.True(t, staged)
+	require.NotEmpty(t, first)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	nextInput, rest, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: nextInput}
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.Len(t, stmts, 1)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "c", name.ColName())
+}
+
+func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	input := &UserInput{
+		sql:           `set sql_mode='NO_BACKSLASH_ESCAPES'; select 'a\'; select * from src.t`,
+		rewritePolicy: policy,
+	}
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	require.NoError(t, err)
+	require.True(t, staged)
+	_, err = rewriteSQLStatementInput(ctx, ses, newSQLStatementInput(input, ses, first))
+	require.NoError(t, err)
+
+	// Simulate earlier staged statements changing both the SQL mode and rewrite
+	// state. Parsing follows the new mode; materialization follows the request
+	// snapshot.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
+	ses.rewriteEnabled.Store(false)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", ""))
+
+	second, remaining, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
+	require.NoError(t, err)
+	second, err = rewriteSQLStatementInput(ctx, ses, second)
+	require.NoError(t, err)
+	assertMaterializedRemap(t, ctx, second.sql, map[string]string{"src": "dst"})
+
+	third, remaining, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
+	require.NoError(t, err)
+	require.Empty(t, remaining)
+	third, err = rewriteSQLStatementInput(ctx, ses, third)
+	require.NoError(t, err)
+	assertMaterializedRemap(t, ctx, third.sql, map[string]string{"src": "dst"})
+}
+
+func assertMaterializedRemap(t *testing.T, ctx context.Context, sql string, want map[string]string) {
+	t.Helper()
+	content, ok := leadingHintContent(sql)
+	require.True(t, ok, "missing materialized hint in %q", sql)
+	_, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, want, remapDb)
 }
 
 func Test_HandleDeallocate(t *testing.T) {
@@ -1996,10 +2229,18 @@ func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
-			execCtx.input = &UserInput{sql: tt.commandSQL}
+			ses.rewriteEnabled.Store(false)
+			execCtx.rewriteEnabled = true
+			execCtx.input = &UserInput{
+				sql:           tt.commandSQL,
+				rewritePolicy: &rewritePolicySnapshot{enabled: true},
+			}
 			execCtx.sqlOfStmt = tt.statementSQL
 			var gotDerived string
 			stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
+				require.NotNil(t, innerExecCtx.input.rewritePolicy)
+				require.True(t, innerExecCtx.input.rewritePolicy.enabled)
+				require.True(t, innerExecCtx.input.rewritePolicyMaterialized)
 				gotDerived = innerExecCtx.input.getSql()
 				stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, gotDerived, 1)
 				require.NoError(t, err)

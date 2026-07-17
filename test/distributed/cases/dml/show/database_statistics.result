@@ -93,7 +93,7 @@ show column_number from mo_role_privs;
 10
 show column_number from mo_user_defined_function;
 ➤ Number of columns in mo_user_defined_function[-5,64,0]  𝄀
-17
+18
 show column_number from mo_tables;
 ➤ Number of columns in mo_tables[-5,64,0]  𝄀
 19
@@ -430,7 +430,7 @@ show column_number from mo_role_privs;
 10
 show column_number from mo_user_defined_function;
 ➤ Number of columns in mo_user_defined_function[-5,64,0]  𝄀
-17
+18
 show column_number from mo_tables;
 ➤ Number of columns in mo_tables[-5,64,0]  𝄀
 19

@@ -52,6 +52,62 @@ type rewriteHintPayload struct {
 	RemapDb map[string]string `json:"remapdb"`
 }
 
+// rewritePolicySnapshot freezes the effective request policy before any
+// statement in a multi-statement COM_QUERY can mutate session variables. SQL
+// text is still rewritten one staged statement at a time, using the SQL mode
+// that is current when that statement is parsed.
+type rewritePolicySnapshot struct {
+	enabled        bool
+	roleRules      map[string]string
+	sessionRules   map[string]string
+	sessionRemapDb map[string]string
+}
+
+func cloneRewriteMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	policy := &rewritePolicySnapshot{enabled: ses.rewriteEnabled.Load()}
+	if !policy.enabled {
+		return policy, nil
+	}
+
+	ses.ruleCacheMu.RLock()
+	cacheLoaded := ses.ruleCache != nil
+	if cacheLoaded {
+		policy.roleRules = cloneRewriteMap(ses.ruleCache)
+	}
+	ses.ruleCacheMu.RUnlock()
+
+	if !cacheLoaded {
+		rules, err := loadRuleCache(ctx, ses)
+		if err != nil {
+			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
+			return nil, err
+		}
+
+		ses.ruleCacheMu.Lock()
+		if ses.ruleCache == nil {
+			ses.ruleCache = rules
+		}
+		policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		ses.ruleCacheMu.Unlock()
+	}
+
+	policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
+	policy.sessionRules = cloneRewriteMap(policy.sessionRules)
+	policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
+	return policy, nil
+}
+
 // validateRemapDb checks a remapdb map: every source/target is a valid database
 // identifier, and the set of source databases is disjoint from the set of
 // target databases. The disjointness rule forbids chaining/ambiguity such as
@@ -169,38 +225,19 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // Rule cache load failures are returned to the caller so access-control rewrites
 // do not silently fall back to the unmodified SQL.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
-	// Check if enable_remap_hint is enabled using cached value
-	if !ses.rewriteEnabled.Load() {
+	policy, err := captureRewritePolicy(ctx, ses)
+	if err != nil {
+		return sql, err
+	}
+	return policy.rewrite(ctx, sql, sessionSQLModeForParser(ses))
+}
+
+func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sqlMode string) (string, error) {
+	if policy == nil || !policy.enabled {
 		return sql, nil
 	}
 
-	// Check cache with read lock first
-	ses.ruleCacheMu.RLock()
-	cache := ses.ruleCache
-	ses.ruleCacheMu.RUnlock()
-
-	if cache == nil {
-		// Load rules if cache is empty
-		rules, err := loadRuleCache(ctx, ses)
-		if err != nil {
-			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
-			return sql, err
-		}
-
-		// Update cache with write lock and double-check
-		ses.ruleCacheMu.Lock()
-		if ses.ruleCache == nil {
-			ses.ruleCache = rules
-			cache = rules
-		} else {
-			cache = ses.ruleCache
-		}
-		ses.ruleCacheMu.Unlock()
-	}
-
-	// Session-variable rewrites and database remaps.
-	sessionRules, sessionRemapDb := getSessionRewriteRules(ctx, ses)
-	fragments, err := parsers.SplitSqlByStatement(ctx, sql)
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		if _, ok := err.(*moerr.Error); !ok {
 			err = moerr.NewParseError(ctx, err.Error())
@@ -211,14 +248,14 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		if !parsers.FragmentHasStatement(sql) {
 			return sql, nil
 		}
-		return rewriteSingleSQL(ctx, sql, cache, sessionRules, sessionRemapDb)
+		return rewriteSingleSQL(ctx, sql, policy.roleRules, policy.sessionRules, policy.sessionRemapDb)
 	}
 
 	for i, fragment := range fragments {
 		if !parsers.FragmentHasStatement(fragment) {
 			continue
 		}
-		rewritten, err := rewriteSingleSQL(ctx, fragment, cache, sessionRules, sessionRemapDb)
+		rewritten, err := rewriteSingleSQL(ctx, fragment, policy.roleRules, policy.sessionRules, policy.sessionRemapDb)
 		if err != nil {
 			return sql, err
 		}
@@ -402,7 +439,11 @@ func extractInlineRemapDb(sql string) map[string]string {
 // merge into each fragment independently, so this preserves those boundaries
 // through parsing and execution.
 func extractRemapDbByStatement(ctx context.Context, sql string) ([]map[string]string, error) {
-	fragments, err := parsers.SplitSqlByStatement(ctx, sql)
+	return extractRemapDbByStatementWithSQLMode(ctx, sql, "")
+}
+
+func extractRemapDbByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]map[string]string, error) {
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, err
 	}

@@ -1551,14 +1551,21 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql                 string
-	hashedSql           string
-	stmtName            string
-	stmt                tree.Statement
-	preparePlan         *plan.Plan // binary protocol execute
-	sqlSourceType       []string
-	isRestore           bool
-	isBinaryProtExecute bool
+	sql              string
+	hashedSql        string
+	stmtName         string
+	stmt             tree.Statement
+	parserSQLMode    string
+	useParserSQLMode bool
+	rewritePolicy    *rewritePolicySnapshot
+	// rewritePolicyMaterialized means sql already carries the frozen policy as
+	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
+	// without injecting the same rules a second time.
+	rewritePolicyMaterialized bool
+	preparePlan               *plan.Plan // binary protocol execute
+	sqlSourceType             []string
+	isRestore                 bool
+	isBinaryProtExecute       bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()

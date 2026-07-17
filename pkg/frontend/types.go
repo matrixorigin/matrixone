@@ -612,6 +612,7 @@ type BackgroundExecOption struct {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecWithSQLMode(context.Context, string, string) error
 	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}

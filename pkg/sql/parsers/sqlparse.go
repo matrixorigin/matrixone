@@ -28,11 +28,15 @@ import (
 )
 
 func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) ([]tree.Statement, error) {
+	return ParseWithSQLMode(ctx, dialectType, sql, lower, "")
+}
+
+func ParseWithSQLMode(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
 	_, task := gotrace.NewTask(context.TODO(), "parser.Parse")
 	defer task.End()
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.Parse(ctx, sql, lower)
+		return mysql.ParseWithSQLMode(ctx, sql, lower, sqlMode)
 	case dialect.POSTGRESQL:
 		return postgresql.Parse(ctx, sql)
 	default:
@@ -41,9 +45,13 @@ func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, low
 }
 
 func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) (tree.Statement, error) {
+	return ParseOneWithSQLMode(ctx, dialectType, sql, lower, "")
+}
+
+func ParseOneWithSQLMode(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64, sqlMode string) (tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.ParseOne(ctx, sql, lower)
+		return mysql.ParseOneWithSQLMode(ctx, sql, lower, sqlMode)
 	case dialect.POSTGRESQL:
 		return postgresql.ParseOne(ctx, sql)
 	default:
@@ -204,7 +212,11 @@ func SplitSqlBySemicolon(sql string) []string {
 }
 
 func SplitSqlByStatement(ctx context.Context, sql string) ([]string, error) {
-	return mysql.SplitSqlByStatement(ctx, sql, 1)
+	return SplitSqlByStatementWithSQLMode(ctx, sql, "")
+}
+
+func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	return mysql.SplitSqlByStatementWithSQLMode(ctx, sql, 1, sqlMode)
 }
 
 // FragmentHasStatement reports whether a semicolon-separated fragment carries an
@@ -230,11 +242,15 @@ func FragmentHasStatement(fragment string) bool {
 // has none. Blank/comment-only fragments carry no statement and are skipped so
 // the returned slice lines up positionally with the parser's statement list.
 func extractLeadingHints(ctx context.Context, sql string) ([]string, error) {
+	return extractLeadingHintsWithSQLMode(ctx, sql, "")
+}
+
+func extractLeadingHintsWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
 	if len(sql) == 0 {
 		return []string{""}, nil
 	}
 
-	fragments, err := SplitSqlByStatement(ctx, sql)
+	fragments, err := SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +482,11 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 }
 
 func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) error {
-	hints, err := extractLeadingHints(ctx, sql)
+	return AddRewriteHintsWithSQLMode(ctx, stmts, sql, "")
+}
+
+func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
+	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
 	}
@@ -518,7 +538,7 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 				if v == "" {
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
+				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, 1, sqlMode)
 				if err != nil {
 					return moerr.NewParseError(ctx, err.Error())
 				}
@@ -557,7 +577,11 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func HandleSqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
-	fragments, err := SplitSqlByStatement(ctx, sql)
+	return HandleSqlForRecordByStatementWithSQLMode(ctx, sql, "")
+}
+
+func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	fragments, err := SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, err
 	}

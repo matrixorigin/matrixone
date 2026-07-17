@@ -187,4 +187,19 @@ PARTITION BY RANGE  COLUMNS(create_time)
 show create table test02;
 drop table test02;
 
+drop table if exists sql_mode_partition;
+set sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES';
+create table "sql_mode_partition" ("category" varchar(20))
+partition by list columns ("category") (
+    partition p0 values in ('A\B')
+);
+set sql_mode = '';
+alter table sql_mode_partition add partition (
+    partition p1 values in ('C')
+);
+insert into sql_mode_partition values ('A\\B'), ('C');
+select hex(category) from sql_mode_partition order by category;
+drop table sql_mode_partition;
+set sql_mode = default;
+
 drop database test;

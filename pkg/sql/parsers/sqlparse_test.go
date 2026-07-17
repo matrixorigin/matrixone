@@ -185,6 +185,15 @@ func TestSplitSqlByStatementPreservesFragmentContract(t *testing.T) {
 	}, got)
 }
 
+func TestSplitSqlByStatementUsesSQLMode(t *testing.T) {
+	ctx := context.Background()
+	sql := `select 'a\'; select 1`
+
+	got, err := SplitSqlByStatementWithSQLMode(ctx, sql, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Equal(t, []string{`select 'a\'`, "select 1"}, got)
+}
+
 func TestHandleSqlForRecord(t *testing.T) {
 	// Test remove /* cloud_user */ prefix
 	var ret []string

@@ -710,6 +710,37 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	})
 }
 
+func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+
+	// Earlier statements in the same COM_QUERY may mutate both values. The
+	// request must retain the original policy while parsing the next fragment
+	// with the SQL mode that is current at that point in staged execution.
+	ses.rewriteEnabled.Store(false)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", ""))
+	rewritten, err := policy.rewrite(ctx, `select 'a\'; select * from src.t`, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, rewritten, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Len(t, fragments, 2)
+	for _, fragment := range fragments {
+		content, ok := leadingHintContent(fragment)
+		require.True(t, ok)
+		_, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"src": "dst"}, remapDb)
+	}
+}
+
 func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
 	ctx := context.Background()
 	outer := `/*+ {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1"]},"remapdb":{"src":"session_db"}} */ prepare s from 'select 1'`
