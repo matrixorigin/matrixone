@@ -308,11 +308,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
 				}
-				resourceRecorder.finishAttempt(
-					uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
-					attemptScopes, attemptAnal, c.addr, resource.OutcomeSuccess, false,
-				)
-				attemptOpen = false
 				break
 			}
 		}
@@ -438,8 +433,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
 	}
-	resourceRecorder.publish()
-
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
 		strings.Contains(strings.ToLower(c.sql), "insert") &&
@@ -455,9 +448,27 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	//if !isInExecutor {
+	// Keep the attempt open through plan analysis. Adjust can fail and analysis
+	// can panic, so neither path may inherit a prematurely sealed success
+	// outcome. The panic defer above remains the single terminal owner until
+	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
-	//}
+
+	resourceRecorder.finishAttempt(
+		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+		attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
+	)
+	attemptOpen = false
+	resourceRecorder.publish()
+	// AnalyzeExecPlan builds the physical plan before execution resources are
+	// published. Refresh its live snapshot after publication; the frontend
+	// replaces this with the terminal sealed summary before persistence.
+	if c.anal != nil {
+		c.attachResourceSummary(c.anal.phyPlan)
+	}
+	if isExplainPhyPlan {
+		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
+	}
 
 	return queryResult, err
 }
@@ -839,7 +850,7 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
 	switch c.pn.Plan.(type) {
 	case *plan.Plan_Query:
-		c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
+		c.handleQueryPlanAnalyze(runC, stats)
 	case *plan.Plan_Ddl:
 		handleDdlPlanAnalyze(runC, stats)
 	}
@@ -855,29 +866,25 @@ func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 	}
 }
 
-func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+func (c *Compile) handleQueryPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 	if c.anal.phyPlan == nil || !c.UpdatePreparePhyPlan(runC) {
 		c.GenPhyPlan(runC)
 	}
 
 	c.fillPlanNodeAnalyzeInfo(stats)
 
-	if isExplainPhy {
-		topContext := c.proc.GetTopContext()
+}
 
-		statsInfo := statistic.StatsInfoFromContext(topContext)
-		// Use the final (retry) scopes for explain analyze output.
-		scopes := c.scopes
-		if runC != nil && runC != c && len(runC.scopes) > 0 {
-			scopes = runC.scopes
-		}
-		scopeInfo := makeExplainPhyPlanBuffer(scopes, queryResult, statsInfo, c.anal, option)
-
-		// Ensure explain analyze always exposes the final (retry) plan buffer.
-		c.anal.explainPhyBuffer = scopeInfo
-		if runC.anal != nil && runC != c {
-			runC.anal.explainPhyBuffer = scopeInfo
-		}
+func (c *Compile) refreshExplainPhyPlanBuffer(runC *Compile, queryResult *util2.RunResult, option *ExplainOption) {
+	statsInfo := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	scopes := c.scopes
+	if runC != nil && runC != c && len(runC.scopes) > 0 {
+		scopes = runC.scopes
+	}
+	scopeInfo := makeExplainPhyPlanBuffer(scopes, queryResult, statsInfo, c.anal, option)
+	c.anal.explainPhyBuffer = scopeInfo
+	if runC != nil && runC.anal != nil && runC != c {
+		runC.anal.explainPhyBuffer = scopeInfo
 	}
 }
 

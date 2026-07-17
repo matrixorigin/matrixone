@@ -553,11 +553,23 @@ func (ses *Session) CountOutputPackets(delta int64) {
 	}
 	ses.packetCounter.Add(delta)
 }
+
+// CountFlushPackage is retained as a source-compatible forwarding alias for
+// callers that used the legacy packet counter name.
+func (ses *Session) CountFlushPackage(delta int64) {
+	ses.CountOutputPackets(delta)
+}
+
 func (ses *Session) GetOutputPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}
 	return ses.packetCounter.Load()
+}
+
+// GetFlushPacketCnt is the legacy forwarding alias for GetOutputPacketCnt.
+func (ses *Session) GetFlushPacketCnt() int64 {
+	return ses.GetOutputPacketCnt()
 }
 func (ses *Session) ResetPacketCounter() {
 	if ses == nil {

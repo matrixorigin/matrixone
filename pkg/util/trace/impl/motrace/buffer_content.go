@@ -222,11 +222,27 @@ type contentWriteRequest struct {
 }
 
 func (c *contentWriteRequest) Handle() (int, error) {
-	if setter, ok := c.writer.(table.BufferSettable); ok && setter.NeedBuffer() {
+	writer := c.writer
+	if writer == nil {
+		return 0, nil
+	}
+	if setter, ok := writer.(table.BufferSettable); ok && setter.NeedBuffer() {
 		// FIXME: too complicated.
 		setter.SetBuffer(c.buffer, c.callback)
 	}
-	return c.writer.FlushAndClose()
+	c.buffer = nil
+	c.writer = nil
+	c.callback = nil
+	return writer.FlushAndClose()
+}
+
+func (c *contentWriteRequest) Abort() {
+	if c.buffer != nil && c.callback != nil {
+		c.callback(c.buffer)
+	}
+	c.buffer = nil
+	c.writer = nil
+	c.callback = nil
 }
 
 var bufferCount atomic.Int32

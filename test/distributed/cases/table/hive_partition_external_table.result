@@ -453,9 +453,9 @@ explain (analyze true, check '["External Scan", "inputRows=", "outputRows="]') s
 -- @regex("inputRows=", true)
 ➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=80 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=80 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=80 bytes (min=80 bytes, max=80 bytes)  𝄀
   ->  External Scan on hive_part_db.hive_single  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=80 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=80 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=165 bytes (min=80 bytes, max=80 bytes)  𝄀
         Filter Cond: (hive_single.year = 2024)
 explain (check '["External Scan", "Filter Cond"]') select * from hive_multi where year = 2024 and month = '01';
 ➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀

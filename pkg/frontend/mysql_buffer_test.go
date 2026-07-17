@@ -163,6 +163,14 @@ func TestConnCountsCompletedOutputPackets(t *testing.T) {
 	assert.Equal(t, int64(3), ses.GetOutputPacketCnt())
 }
 
+func TestLegacyPacketCounterAliases(t *testing.T) {
+	ses := &Session{}
+	ses.CountOutputPackets(2)
+	ses.CountFlushPackage(3)
+	assert.Equal(t, int64(5), ses.GetOutputPacketCnt())
+	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
+}
+
 type partialWriteConn struct {
 	testConn
 	limit int

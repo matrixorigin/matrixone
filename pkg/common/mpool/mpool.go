@@ -57,6 +57,33 @@ type MPoolStats struct {
 	xpoolFree map[string]detailInfo
 }
 
+// ResourcePeakEpoch is an opaque, statement-scoped observation token.  Its
+// peak remains readable after the epoch is ended, but allocations are only
+// published while the token is the pool's current epoch.
+type ResourcePeakEpoch struct {
+	owner *MPool
+	peak  atomic.Int64
+	ended atomic.Bool
+}
+
+func (e *ResourcePeakEpoch) recordPeak(curr int64) {
+	if e == nil || curr < 0 || e.ended.Load() {
+		return
+	}
+	for {
+		peak := e.peak.Load()
+		if curr <= peak {
+			return
+		}
+		if e.ended.Load() {
+			return
+		}
+		if e.peak.CompareAndSwap(peak, curr) {
+			return
+		}
+	}
+}
+
 func (s *MPoolStats) Init() {
 	s.xpoolFree = make(map[string]detailInfo)
 }
@@ -100,17 +127,20 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAlloc.Add(1)
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
-	s.recordHighWater(curr)
+	s.recordHighWater(tag, curr)
 	return curr
 }
 
-func (s *MPoolStats) recordHighWater(curr int64) {
+func (s *MPoolStats) recordHighWater(tag string, curr int64) {
 	for {
 		hwm := s.HighWaterMark.Load()
 		if curr <= hwm {
 			return
 		}
 		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
+			if curr/GB != hwm/GB {
+				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+			}
 			return
 		}
 	}
@@ -139,7 +169,7 @@ func (s *MPoolStats) cancelReserve(sz int64) {
 func (s *MPoolStats) commitReservedAlloc(tag string, sz, curr int64) {
 	s.NumAlloc.Add(1)
 	s.NumAllocBytes.Add(sz)
-	s.recordHighWater(curr)
+	s.recordHighWater(tag, curr)
 }
 
 // Update free stats, return curr bytes.
@@ -292,6 +322,7 @@ type MPool struct {
 	tag     string     // user supplied, for debug/inspect
 	cap     int64      // pool capacity
 	stats   MPoolStats // stats
+	epoch   atomic.Pointer[ResourcePeakEpoch]
 	details *mpoolDetails
 
 	noLock bool
@@ -482,13 +513,17 @@ func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
 }
 
-// ResourcePeakLiveBytes returns a live-safe peak preview for an open allocator
-// epoch. It deliberately exposes no terminal allocation/free/live facts.
-func (mp *MPool) ResourcePeakLiveBytes() (uint64, bool) {
-	if mp == nil {
+// ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
+// remain readable so the owner can seal the statement after workers quiesce;
+// a token belonging to another open epoch is rejected.
+func (mp *MPool) ResourcePeakLiveBytes(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
 		return 0, false
 	}
-	peak := mp.stats.HighWaterMark.Load()
+	if !token.ended.Load() && mp.epoch.Load() != token {
+		return 0, false
+	}
+	peak := token.peak.Load()
 	if peak < 0 {
 		return 0, false
 	}
@@ -517,20 +552,59 @@ func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.Qual
 }
 
 // StartResourcePeakEpoch starts a peak-occupancy observation at the current
-// live-byte baseline. The caller must own a quiescent MPool boundary; session
-// requests satisfy that contract because they execute serially on their
-// process MPool. Retained session state is deliberately part of the observed
-// occupancy instead of making the statement's memory value unavailable.
-func (mp *MPool) StartResourcePeakEpoch() bool {
+// live-byte baseline. Only one observation may be open on a pool at a time.
+// The lifetime high-water mark is deliberately left untouched.
+func (mp *MPool) StartResourcePeakEpoch() *ResourcePeakEpoch {
 	if mp == nil {
-		return false
+		return nil
 	}
-	live := mp.stats.NumCurrBytes.Load()
-	if live < 0 {
-		return false
+	if mp.stats.NumCurrBytes.Load() < 0 {
+		return nil
 	}
-	mp.stats.HighWaterMark.Store(live)
-	return true
+	token := &ResourcePeakEpoch{owner: mp}
+	if !mp.epoch.CompareAndSwap(nil, token) {
+		return nil
+	}
+	// Publish the baseline after claiming ownership. Allocations racing the
+	// claim update the token and recordPeak keeps the larger value.
+	token.recordPeak(mp.stats.NumCurrBytes.Load())
+	return token
+}
+
+// EndResourcePeakEpoch closes exactly token and returns its final peak.  A
+// wrong, stale, or already-ended token cannot clear a newer epoch.
+func (mp *MPool) EndResourcePeakEpoch(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	// Validate ownership before changing the token so passing a token to the
+	// wrong pool does not poison the epoch owned by its original pool.
+	if mp.epoch.Load() != token {
+		return 0, false
+	}
+	if !token.ended.CompareAndSwap(false, true) {
+		return 0, false
+	}
+	if !mp.epoch.CompareAndSwap(token, nil) {
+		// This should only be reachable for a malformed caller racing pool
+		// teardown. Preserve the token's ended state and report failure.
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+func (mp *MPool) recordResourcePeak(curr int64) {
+	if mp == nil || curr < 0 {
+		return
+	}
+	token := mp.epoch.Load()
+	if token != nil {
+		token.recordPeak(curr)
+	}
 }
 
 func DeleteMPool(mp *MPool) {
@@ -647,6 +721,7 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 		}
 		globalStats.commitReservedAlloc("global", sz, gcurr)
 		mp.stats.commitReservedAlloc(mp.tag, sz, mycurr)
+		mp.recordResourcePeak(mycurr)
 		reserved = false
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
@@ -881,7 +956,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	globalStats.RecordAlloc("global", int64(sz))
-	mp.stats.RecordAlloc(mp.tag, int64(sz))
+	mp.recordResourcePeak(mp.stats.RecordAlloc(mp.tag, int64(sz)))
 	return newbs, nil
 }
 

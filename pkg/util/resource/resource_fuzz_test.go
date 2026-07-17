@@ -54,29 +54,19 @@ func FuzzReducer(f *testing.F) {
 }
 
 func FuzzAttemptLifecycle(f *testing.F) {
-	f.Add(uint64(1), []byte{0, 1, 2, 3, 4, 5})
-	f.Add(uint64(9), []byte{5, 5, 4, 3, 2, 1, 0})
-	f.Fuzz(func(t *testing.T, generation uint64, operations []byte) {
-		attempt := NewAttempt(generation, 4, 2)
+	f.Add([]byte{0, 1, 2, 3})
+	f.Fuzz(func(t *testing.T, operations []byte) {
+		attempt := NewAttempt()
 		for _, operation := range operations {
-			slot := int(operation>>4) % 4
-			switch operation & 7 {
+			switch operation & 3 {
 			case 0:
-				attempt.MarkFragmentDispatched(slot)
+				attempt.AddLocal(Delta{Usage: Usage{ExclusiveActiveNS: uint64(operation)}})
 			case 1:
-				attempt.PublishFragment(generation, slot, Delta{Usage: Usage{ExclusiveActiveNS: uint64(operation)}})
-			case 2:
-				attempt.PublishFragment(generation+1, slot, Delta{})
-			case 3:
-				attempt.MarkFragmentSendFailed(slot)
-			case 4:
-				attempt.MarkMemoryDomainDispatched(slot % 2)
-			case 5:
-				attempt.PublishMemoryDomain(generation, slot%2, MemoryDomainSummary{})
-			case 6:
 				attempt.BeginClosing()
-			case 7:
+			case 2:
 				attempt.Seal(uint64(operation), OutcomeError)
+			case 3:
+				_ = attempt.State()
 			}
 		}
 		first := attempt.Seal(100, OutcomeSuccess)
@@ -106,10 +96,9 @@ func BenchmarkResourceMerge(b *testing.B) {
 func BenchmarkResourceAttemptTerminal(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		attempt := NewAttempt(1, 1, 0)
-		attempt.MarkFragmentDispatched(0)
+		attempt := NewAttempt()
+		attempt.AddLocal(Delta{Usage: Usage{ExclusiveActiveNS: 1}})
 		attempt.BeginClosing()
-		attempt.PublishFragment(1, 0, Delta{Usage: Usage{ExclusiveActiveNS: 1}})
 		attempt.Seal(1, OutcomeSuccess)
 	}
 }

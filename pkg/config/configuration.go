@@ -815,7 +815,9 @@ type ObservabilityParameters struct {
 	TaskLabel      map[string]string `toml:"task-label"`
 	ResetTaskLabel bool              `toml:"reset-task-label"`
 
-	// estimate tcp network packet cost
+	// TCPPacket is retained for source and configuration compatibility. SQL
+	// resource accounting records application-protocol bytes and ignores this
+	// legacy transport-header estimate.
 	TCPPacket bool `toml:"tcp-packet"`
 
 	// MaxLogMessageSize truncate the reset. default: 16 KiB

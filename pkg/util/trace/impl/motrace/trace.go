@@ -296,6 +296,7 @@ type Buffer interface {
 }
 
 type BatchProcessor interface {
+	// Collect transfers ownership of the item only when it returns nil.
 	Collect(context.Context, batchpipe.HasName) error
 	Start() bool
 	Stop(graceful bool) error
@@ -306,24 +307,15 @@ type DiscardableCollector interface {
 	DiscardableCollect(context.Context, batchpipe.HasName) error
 }
 
-// TryCollector accepts ownership without waiting. A false result means the
-// caller retains ownership and must release or otherwise handle the item.
-type TryCollector interface {
-	TryCollect(context.Context, batchpipe.HasName) (bool, error)
-}
-
 var _ BatchProcessor = &NoopBatchProcessor{}
 
 type NoopBatchProcessor struct {
 }
 
 func (n NoopBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
-func (n NoopBatchProcessor) TryCollect(context.Context, batchpipe.HasName) (bool, error) {
-	return true, nil
-}
-func (n NoopBatchProcessor) Start() bool                          { return true }
-func (n NoopBatchProcessor) Stop(bool) error                      { return nil }
-func (n NoopBatchProcessor) Register(batchpipe.HasName, PipeImpl) {}
+func (n NoopBatchProcessor) Start() bool                                      { return true }
+func (n NoopBatchProcessor) Stop(bool) error                                  { return nil }
+func (n NoopBatchProcessor) Register(batchpipe.HasName, PipeImpl)             {}
 
 func GetGlobalBatchProcessor() BatchProcessor {
 	return GetTracerProvider().batchProcessor

@@ -1008,6 +1008,12 @@ func (c *Conn) CountOutputPackets(n int64) {
 	}
 }
 
+// CountFlushPackage is retained as a source-compatible forwarding alias for
+// integrations that used the pre-egress-accounting name.
+func (c *Conn) CountFlushPackage(n int64) {
+	c.CountOutputPackets(n)
+}
+
 func (c *Conn) CountOutputBytes(n int) {
 	hld := c.ses.Load()
 	if hld != nil {

@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -3823,10 +3822,12 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+		decoded, err := statistic.DecodeStatsArray(statsJsonArrayStr)
+		if err != nil {
 			rs.Append(float64(0), true)
 			continue
 		}
+		stats = decoded
 
 		targetName := util.UnsafeBytesToString(target)
 		if stats.GetVersion() >= statistic.StatsArrayVersion6 {

@@ -239,12 +239,19 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 			node.AnalyzeInfo.OutrowsMax = max(node.AnalyzeInfo.OutrowsMax, op.OpStats.OutputRows)
 		}
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
+		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
+		node.AnalyzeInfo.MemoryMax = max(node.AnalyzeInfo.MemoryMax, op.OpStats.MemorySize)
 
 		node.AnalyzeInfo.SpillSize += op.OpStats.SpillSize
 		node.AnalyzeInfo.SpillRows += op.OpStats.SpillRows
 		node.AnalyzeInfo.SpillMax = max(node.AnalyzeInfo.SpillMax, op.OpStats.SpillSize)
 
 		if op.IsLast {
+			if node.AnalyzeInfo.MemoryMin == 0 {
+				node.AnalyzeInfo.MemoryMin = op.OpStats.MemorySize
+			}
+			node.AnalyzeInfo.MemoryMin = min(node.AnalyzeInfo.MemoryMin, op.OpStats.MemorySize)
+
 			if node.AnalyzeInfo.SpillMin == 0 {
 				node.AnalyzeInfo.SpillMin = op.OpStats.SpillSize
 			}
@@ -605,7 +612,9 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 
 	// record the number of remote cn s3 requests
 	for _, remotePhy := range runC.anal.remotePhyPlans {
-		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
+		if len(remotePhy.LocalScope) > 0 {
+			c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
+		}
 	}
 	c.attachResourceSummary(c.anal.phyPlan)
 }
@@ -694,11 +703,12 @@ func explainResourceOverview(
 			waitNS, waitQuality := summary.Usage.TotalWaitNS()
 			quality := summary.Quality | waitQuality
 			fmt.Fprintf(buffer,
-				"\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s, AffectedRows:%d",
+				"\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, OperatorMemorySum:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s, AffectedRows:%d",
 				summary.Usage.ExclusiveActiveNS,
 				waitNS,
 				common.ConvertUint64BytesToHumanReadable(summary.Memory.MaxDomainPeakLiveBytes),
 				common.ConvertUint64BytesToHumanReadable(summary.Memory.SumDomainPeakLiveBytesBound),
+				gblStats.MemorySize,
 				summary.Usage.SpillBytes,
 				summary.Usage.S3ReadBytes,
 				summary.Usage.S3WriteBytes,
@@ -708,7 +718,8 @@ func explainResourceOverview(
 			)
 		} else {
 			fmt.Fprintf(buffer,
-				"\tSpillSize:%dB, DiskI/O:%dB, NetworkI/O:%dB, AffectedRows:%d",
+				"\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
+				gblStats.MemorySize,
 				gblStats.SpillSize,
 				gblStats.DiskIOSize,
 				gblStats.NetWorkSize,
@@ -733,10 +744,6 @@ func explainResourceOverview(
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock - statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-			if anal.phyPlan.Resource != nil {
-				cpuTimeVal = int64(anal.phyPlan.Resource.Usage.ExclusiveActiveNS)
-			}
-
 			buffer.WriteString("\tCPU Usage: \n")
 			fmt.Fprintf(buffer, "\t\t- Total CPU Time: %dns \n", cpuTimeVal)
 			fmt.Fprintf(buffer, "\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
@@ -817,7 +824,8 @@ func explainResourceOverview(
 					gblStats.S3DeleteMultiRequest,
 				)
 
-				fmt.Fprintf(buffer, "\t\t- SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+				fmt.Fprintf(buffer, "\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+					gblStats.MemorySize,
 					gblStats.SpillSize,
 					gblStats.DiskIOSize,
 					gblStats.NetWorkSize,

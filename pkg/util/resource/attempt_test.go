@@ -21,54 +21,23 @@ import (
 )
 
 func TestAttemptTerminalLifecycle(t *testing.T) {
-	attempt := NewAttempt(7, 2, 1)
-	if got := attempt.MarkFragmentDispatched(0); got != PublishAccepted {
-		t.Fatalf("dispatch fragment: %v", got)
-	}
-	if got := attempt.MarkFragmentDispatched(1); got != PublishAccepted {
-		t.Fatalf("dispatch fragment: %v", got)
-	}
-	if got := attempt.MarkMemoryDomainDispatched(0); got != PublishAccepted {
-		t.Fatalf("dispatch memory: %v", got)
+	attempt := NewAttempt()
+	delta := Delta{Usage: Usage{ExclusiveActiveNS: 10}, Outcome: OutcomeSuccess}
+	if !attempt.AddLocal(delta) {
+		t.Fatal("local delta rejected")
 	}
 	if !attempt.BeginClosing() {
 		t.Fatal("begin closing rejected")
 	}
-
-	delta := Delta{Usage: Usage{ExclusiveActiveNS: 10}, Outcome: OutcomeSuccess}
-	if got := attempt.PublishFragment(7, 0, delta); got != PublishAccepted {
-		t.Fatalf("publish fragment: %v", got)
-	}
-	if got := attempt.PublishFragment(7, 0, delta); got != PublishDuplicate {
-		t.Fatalf("duplicate fragment: %v", got)
-	}
-	if got := attempt.PublishFragment(6, 1, delta); got != PublishStaleGeneration {
-		t.Fatalf("stale fragment: %v", got)
-	}
-	if got := attempt.PublishMemoryDomain(7, 0, MemoryDomainSummary{
-		AllocatedBytes: 100,
-		FreedBytes:     100,
-		PeakLiveBytes:  80,
-	}); got != PublishAccepted {
-		t.Fatalf("publish memory: %v", got)
-	}
-
 	summary := attempt.Seal(500, OutcomeError)
-	if summary.Usage.ExclusiveActiveNS != 10 || summary.Memory.MaxDomainPeakLiveBytes != 80 {
+	if summary.Usage.ExclusiveActiveNS != 10 || summary.Outcome != OutcomeError {
 		t.Fatalf("unexpected totals: %+v", summary)
-	}
-	if summary.MissingFragmentCount != 1 || summary.MissingMemoryDomainCount != 0 {
-		t.Fatalf("unexpected missing counts: %+v", summary)
-	}
-	wantFlags := QualityPartial | QualityMissingFragment
-	if summary.Quality&wantFlags != wantFlags {
-		t.Fatalf("quality %b does not contain %b", summary.Quality, wantFlags)
 	}
 	if again := attempt.Seal(999, OutcomeSuccess); again != summary {
 		t.Fatalf("seal is not idempotent: first=%+v second=%+v", summary, again)
 	}
-	if got := attempt.PublishFragment(7, 1, delta); got != PublishAfterSeal {
-		t.Fatalf("publish after seal: %v", got)
+	if attempt.AddLocal(delta) {
+		t.Fatal("add after seal accepted")
 	}
 }
 
@@ -174,52 +143,6 @@ func TestRootMemoryPeakObservationDoesNotInventDomainFacts(t *testing.T) {
 		summary.Memory.LiveBytesAtSeal != 0 || summary.Memory.CrossPoolFreeCount != 0 ||
 		summary.Quality != 0 || summary.MissingMemoryDomainCount != 0 {
 		t.Fatalf("peak observation invented isolated-domain facts: %+v", summary)
-	}
-}
-
-func TestUndispatchedSlotsAreNotMissing(t *testing.T) {
-	attempt := NewAttempt(1, 2, 1)
-	if got := attempt.MarkFragmentSendFailed(0); got != PublishAccepted {
-		t.Fatalf("send failure: %v", got)
-	}
-	if got := attempt.MarkMemoryDomainUnused(0); got != PublishAccepted {
-		t.Fatalf("unused memory: %v", got)
-	}
-	attempt.BeginClosing()
-	summary := attempt.Seal(1, OutcomeError)
-	if summary.MissingFragmentCount != 0 || summary.MissingMemoryDomainCount != 0 ||
-		summary.Quality&(QualityMissingFragment|QualityMissingMemoryDomain) != 0 {
-		t.Fatalf("undispatched work marked missing: %+v", summary)
-	}
-}
-
-func TestConcurrentTerminalPublication(t *testing.T) {
-	const slots = 64
-	attempt := NewAttempt(42, slots, 0)
-	for slot := 0; slot < slots; slot++ {
-		if got := attempt.MarkFragmentDispatched(slot); got != PublishAccepted {
-			t.Fatalf("dispatch %d: %v", slot, got)
-		}
-	}
-	attempt.BeginClosing()
-
-	var wg sync.WaitGroup
-	wg.Add(slots)
-	for slot := 0; slot < slots; slot++ {
-		go func(slot int) {
-			defer wg.Done()
-			delta := Delta{Usage: Usage{ExclusiveActiveNS: uint64(slot + 1)}}
-			if got := attempt.PublishFragment(42, slot, delta); got != PublishAccepted {
-				t.Errorf("publish %d: %v", slot, got)
-			}
-		}(slot)
-	}
-	wg.Wait()
-
-	summary := attempt.Seal(100, OutcomeSuccess)
-	want := uint64(slots * (slots + 1) / 2)
-	if summary.Usage.ExclusiveActiveNS != want || summary.MissingFragmentCount != 0 || summary.Quality != 0 {
-		t.Fatalf("unexpected summary: %+v, want active %d", summary, want)
 	}
 }
 

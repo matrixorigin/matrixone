@@ -73,11 +73,12 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 		if summary := phy.Resource; summary != nil {
 			waitNS, waitQuality := summary.Usage.TotalWaitNS()
 			quality := summary.Quality | waitQuality
-			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
+			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, OperatorMemorySum:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
 				summary.Usage.ExclusiveActiveNS,
 				waitNS,
 				common.ConvertUint64BytesToHumanReadable(summary.Memory.MaxDomainPeakLiveBytes),
 				common.ConvertUint64BytesToHumanReadable(summary.Memory.SumDomainPeakLiveBytesBound),
+				gblStats.MemorySize,
 				summary.Usage.SpillBytes,
 				summary.Usage.S3ReadBytes,
 				summary.Usage.S3WriteBytes,
@@ -85,7 +86,8 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				quality,
 			))
 		} else {
-			buffer.WriteString(fmt.Sprintf("\tSpillSize:%dB, DiskI/O:%dB, NetworkI/O:%dB, RetryTime:%v",
+			buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB,  RetryTime: %v",
+				gblStats.MemorySize,
 				gblStats.SpillSize,
 				gblStats.DiskIOSize,
 				gblStats.NetWorkSize,
@@ -108,10 +110,6 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock - statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-			if phy.Resource != nil {
-				cpuTimeVal = int64(phy.Resource.Usage.ExclusiveActiveNS)
-			}
-
 			buffer.WriteString("\tCPU Usage: \n")
 			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
 			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
@@ -192,7 +190,8 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 					gblStats.S3DeleteMultiRequest,
 				))
 
-				buffer.WriteString(fmt.Sprintf("\t\t- SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+					gblStats.MemorySize,
 					gblStats.SpillSize,
 					gblStats.DiskIOSize,
 					gblStats.NetWorkSize,
@@ -370,6 +369,7 @@ func trimLastNewline(buf *bytes.Buffer) {
 type GblStats struct {
 	ScopePrepareTimeConsumed int64
 	OperatorTimeConsumed     int64
+	MemorySize               int64
 	SpillSize                int64
 	NetWorkSize              int64
 	DiskIOSize               int64
@@ -407,6 +407,7 @@ func handlePhyOperator(op *PhyOperator, stats *GblStats) {
 	// Accumulate stats from the current operator
 	if op.OpStats != nil && op.NodeIdx >= 0 {
 		stats.OperatorTimeConsumed += op.OpStats.TimeConsumed
+		stats.MemorySize += op.OpStats.MemorySize
 		stats.SpillSize += op.OpStats.SpillSize
 		stats.NetWorkSize += op.OpStats.NetworkIO
 		stats.DiskIOSize += op.OpStats.DiskIO

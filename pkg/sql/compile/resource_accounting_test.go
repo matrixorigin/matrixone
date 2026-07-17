@@ -23,6 +23,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -71,6 +74,29 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestExplainPhyBufferUsesPublishedCurrentAttempt(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage:        resource.Usage{ExclusiveActiveNS: 42},
+		AttemptCount: 1,
+		LastOutcome:  resource.OutcomeSuccess,
+	}))
+	proc := testutil.NewProcess(t)
+	ctx := resource.ContextWithRoot(proc.GetTopContext(), root)
+	ctx = statistic.ContextWithStatsInfo(ctx, statistic.NewStatsInfo())
+	proc.ReplaceTopCtx(ctx)
+	c := &Compile{
+		proc: proc,
+		anal: &AnalyzeModule{phyPlan: models.NewPhyPlan()},
+	}
+	c.attachResourceSummary(c.anal.phyPlan)
+	c.refreshExplainPhyPlanBuffer(c, &util2.RunResult{}, &ExplainOption{Analyze: true})
+
+	output := c.anal.explainPhyBuffer.String()
+	require.Contains(t, output, "ActiveTime:42ns")
+	require.Contains(t, output, "Attempts:1")
 }
 
 func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
@@ -220,6 +246,11 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	anal := &AnalyzeModule{}
 	sender := &messageSenderOnClient{anal: anal}
 	envelope := remoteTerminalEnvelope{
+		PhyPlan: models.PhyPlan{
+			Version:    "1.0",
+			LocalScope: []models.PhyScope{{Magic: "Merge"}},
+		},
+		TerminalResourceVersion: remoteTerminalResourceVersion,
 		Delta: resource.Delta{
 			Usage:   resource.Usage{ExclusiveActiveNS: 11, S3ReadBytes: 12},
 			Quality: resource.QualityPartial,
@@ -242,6 +273,37 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	require.Equal(t, uint64(12), summary.Usage.S3ReadBytes)
 	require.Equal(t, uint64(15), summary.Memory.MaxDomainPeakLiveBytes)
 	require.NotZero(t, summary.Quality&resource.QualityPartial)
+	require.Len(t, anal.remotePhyPlans, 1)
+	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
+
+	// A pre-resource client decodes the same payload as a non-empty PhyPlan.
+	var legacyClientPlan models.PhyPlan
+	require.NoError(t, json.Unmarshal(data, &legacyClientPlan))
+	require.Len(t, legacyClientPlan.LocalScope, 1)
+}
+
+func TestRemoteTerminalEnvelopeDecodesLegacyPlan(t *testing.T) {
+	legacy := models.PhyPlan{
+		Version:    "1.0",
+		LocalScope: []models.PhyScope{{Magic: "Merge"}},
+	}
+	data, err := json.Marshal(legacy)
+	require.NoError(t, err)
+
+	anal := &AnalyzeModule{}
+	sender := &messageSenderOnClient{anal: anal}
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Len(t, anal.remotePhyPlans, 1)
+	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
+	require.Zero(t, anal.remoteResourceSummary().DirectReportCount)
+
+	// Empty legacy plans are ignored rather than becoming an out-of-range
+	// access later in GenPhyPlan.
+	empty, err := json.Marshal(models.PhyPlan{Version: "1.0"})
+	require.NoError(t, err)
+	emptySender := &messageSenderOnClient{anal: &AnalyzeModule{}}
+	require.NoError(t, emptySender.dealRemoteTerminal(empty))
+	require.Empty(t, emptySender.anal.remotePhyPlans)
 }
 
 func TestCountExpectedRemoteScopes(t *testing.T) {

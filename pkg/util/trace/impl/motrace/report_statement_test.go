@@ -38,22 +38,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
-type rejectingStatementCollector struct{}
+type failingStatementCollector struct{}
 
-func (rejectingStatementCollector) Collect(context.Context, batchpipe.HasName) error { return nil }
-func (rejectingStatementCollector) TryCollect(context.Context, batchpipe.HasName) (bool, error) {
-	return false, nil
+func (failingStatementCollector) Collect(context.Context, batchpipe.HasName) error {
+	return moerr.NewInternalErrorNoCtx("collector stopped")
 }
-func (rejectingStatementCollector) Start() bool                          { return true }
-func (rejectingStatementCollector) Stop(bool) error                      { return nil }
-func (rejectingStatementCollector) Register(batchpipe.HasName, PipeImpl) {}
+func (failingStatementCollector) Start() bool                          { return true }
+func (failingStatementCollector) Stop(bool) error                      { return nil }
+func (failingStatementCollector) Register(batchpipe.HasName, PipeImpl) {}
 
-func TestReportStatementDoesNotBlockOnFullCollector(t *testing.T) {
+type capturingFailingStatementCollector struct {
+	item *StatementInfo
+}
+
+func (c *capturingFailingStatementCollector) Collect(_ context.Context, item batchpipe.HasName) error {
+	c.item = item.(*StatementInfo)
+	return moerr.NewInternalErrorNoCtx("collector stopped")
+}
+func (*capturingFailingStatementCollector) Start() bool                          { return true }
+func (*capturingFailingStatementCollector) Stop(bool) error                      { return nil }
+func (*capturingFailingStatementCollector) Register(batchpipe.HasName, PipeImpl) {}
+
+func TestReportStatementReleasesItemWhenCollectorRejectsOwnership(t *testing.T) {
 	provider := GetTracerProvider()
 	old := provider.batchProcessor
 	oldEnable := provider.IsEnable()
 	provider.SetEnable(true)
-	provider.batchProcessor = rejectingStatementCollector{}
+	provider.batchProcessor = failingStatementCollector{}
 	defer func() {
 		provider.batchProcessor = old
 		provider.SetEnable(oldEnable)
@@ -63,8 +74,31 @@ func TestReportStatementDoesNotBlockOnFullCollector(t *testing.T) {
 	stmt.Statement = append(stmt.Statement, "select 1"...)
 	stmt.Status = StatementStatusSuccess
 	stmt.end = true
-	require.NoError(t, ReportStatement(context.Background(), stmt))
+	require.Error(t, ReportStatement(context.Background(), stmt))
 	require.Empty(t, stmt.Statement)
+}
+
+func TestReportStatementReleasesDetachedRunningCloneOnReject(t *testing.T) {
+	provider := GetTracerProvider()
+	old := provider.batchProcessor
+	oldEnable := provider.IsEnable()
+	provider.SetEnable(true)
+	collector := new(capturingFailingStatementCollector)
+	provider.batchProcessor = collector
+	defer func() {
+		provider.batchProcessor = old
+		provider.SetEnable(oldEnable)
+	}()
+
+	stmt := NewStatementInfo()
+	stmt.Statement = append(stmt.Statement, "select sleep(1)"...)
+	stmt.Status = StatementStatusRunning
+	require.Error(t, ReportStatement(context.Background(), stmt))
+	require.NotNil(t, collector.item)
+	require.Empty(t, collector.item.Statement)
+	require.Equal(t, "select sleep(1)", string(stmt.Statement), "live statement must remain owned by its session")
+	stmt.end = true
+	stmt.freeNoLocked()
 }
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {

@@ -663,6 +663,14 @@ func executeStmtInBack(backSes *backSession,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			// Preserve the historical BackgroundExec projection for engine-backed
+			// execution. This is return-only data; the authoritative statement
+			// resource root is sealed independently and must not ingest it again.
+			if statsArr != nil {
+				statsByte := execCtx.cw.StatsCompositeSubStmtResource(execCtx.reqCtx)
+				statsArr.Reset()
+				statsArr.Add(&statsByte)
+			}
 			c.Release()
 		}
 	}()

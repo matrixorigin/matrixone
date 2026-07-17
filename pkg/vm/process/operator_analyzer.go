@@ -47,7 +47,6 @@ type Analyzer interface {
 	Input(batch *batch.Batch)
 	Output(*batch.Batch)
 	WaitStop(time.Time)
-	WaitStopKind(time.Time, resource.WaitKind)
 	Network(*batch.Batch)
 	AddWrittenRows(int64)
 	AddDeletedRows(int64)
@@ -55,6 +54,10 @@ type Analyzer interface {
 	AddInsertTime(t time.Time)
 	AddIncrementTime(t time.Time)
 	AddWaitLockTime(t time.Time)
+	AddS3RequestCount(counter *perfcounter.CounterSet)
+	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
+	AddDiskIO(counter *perfcounter.CounterSet)
+	AddReadSizeInfo(counter *perfcounter.CounterSet)
 	AddParquetProfile(stats ParquetProfileStats)
 
 	GetOpCounterSet() *perfcounter.CounterSet
@@ -103,8 +106,26 @@ type ParquetProfileStats struct {
 // error and panic exits. Callers must keep CPU work outside fn.
 func MeasureWait[T any](analyzer Analyzer, kind resource.WaitKind, fn func() (T, error)) (T, error) {
 	start := time.Now()
-	defer analyzer.WaitStopKind(start, kind)
+	defer stopAnalyzerWait(analyzer, start, kind)
 	return fn()
+}
+
+type classifiedWaitAnalyzer interface {
+	WaitStopKind(time.Time, resource.WaitKind)
+}
+
+// StopAnalyzerWait records a classified wait when the analyzer supports the
+// new resource extension, while preserving the original Analyzer contract.
+func StopAnalyzerWait(analyzer Analyzer, start time.Time, kind resource.WaitKind) {
+	stopAnalyzerWait(analyzer, start, kind)
+}
+
+func stopAnalyzerWait(analyzer Analyzer, start time.Time, kind resource.WaitKind) {
+	if classified, ok := analyzer.(classifiedWaitAnalyzer); ok {
+		classified.WaitStopKind(start, kind)
+		return
+	}
+	analyzer.WaitStop(start)
 }
 
 // MeasureFilesystemWait records the complete duration of a storage boundary,
@@ -124,7 +145,7 @@ func MeasureFilesystemWaitErr(analyzer Analyzer, fn func() error) error {
 // MeasureOutputWaitErr records a protocol/output callback boundary.
 func MeasureOutputWaitErr(analyzer Analyzer, fn func() error) error {
 	start := time.Now()
-	defer analyzer.WaitStopKind(start, resource.WaitOutput)
+	defer stopAnalyzerWait(analyzer, start, resource.WaitOutput)
 	return fn()
 }
 
@@ -175,8 +196,17 @@ type operatorAnalyzer struct {
 	childrenCallDuration time.Duration
 	crs                  *perfcounter.CounterSet
 	crsActive            bool
+	crsConsumed          counterCategory
 	opStats              *OperatorStats
 }
+
+type counterCategory uint8
+
+const (
+	counterCategoryS3 counterCategory = 1 << iota
+	counterCategoryCache
+	counterCategoryReadSize
+)
 
 var _ Analyzer = &operatorAnalyzer{}
 
@@ -209,6 +239,7 @@ func (opAlyzr *operatorAnalyzer) GetOpCounterSet() *perfcounter.CounterSet {
 	opAlyzr.harvestCounterSet()
 	opAlyzr.crs.Reset()
 	opAlyzr.crsActive = true
+	opAlyzr.crsConsumed = 0
 	return opAlyzr.crs
 }
 
@@ -217,6 +248,7 @@ func (opAlyzr *operatorAnalyzer) Reset() {
 	opAlyzr.childrenCallDuration = 0
 	opAlyzr.crs.Reset()
 	opAlyzr.crsActive = false
+	opAlyzr.crsConsumed = 0
 	opAlyzr.opStats.Reset()
 }
 
@@ -348,6 +380,70 @@ func (opAlyzr *operatorAnalyzer) WaitStopKind(start time.Time, kind resource.Wai
 	)
 }
 
+func (opAlyzr *operatorAnalyzer) AddS3RequestCount(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddS3RequestCount: operatorAnalyzer.opStats is nil")
+	}
+	if !opAlyzr.claimCounterCategory(counter, counterCategoryS3) {
+		return
+	}
+	opAlyzr.opStats.S3List += counter.FileService.S3.List.Load()
+	opAlyzr.opStats.S3Head += counter.FileService.S3.Head.Load()
+	opAlyzr.opStats.S3Put += counter.FileService.S3.Put.Load()
+	opAlyzr.opStats.S3Get += counter.FileService.S3.Get.Load()
+	opAlyzr.opStats.S3Delete += counter.FileService.S3.Delete.Load()
+	opAlyzr.opStats.S3DeleteMul += counter.FileService.S3.DeleteMulti.Load()
+}
+
+func (opAlyzr *operatorAnalyzer) AddFileServiceCacheInfo(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddFileServiceCacheInfo: operatorAnalyzer.opStats is nil")
+	}
+	if !opAlyzr.claimCounterCategory(counter, counterCategoryCache) {
+		return
+	}
+	opAlyzr.opStats.CacheRead += counter.FileService.Cache.Read.Load()
+	opAlyzr.opStats.CacheHit += counter.FileService.Cache.Hit.Load()
+	opAlyzr.opStats.CacheMemoryRead += counter.FileService.Cache.Memory.Read.Load()
+	opAlyzr.opStats.CacheMemoryHit += counter.FileService.Cache.Memory.Hit.Load()
+	opAlyzr.opStats.CacheDiskRead += counter.FileService.Cache.Disk.Read.Load()
+	opAlyzr.opStats.CacheDiskHit += counter.FileService.Cache.Disk.Hit.Load()
+	opAlyzr.opStats.CacheRemoteRead += counter.FileService.Cache.Remote.Read.Load()
+	opAlyzr.opStats.CacheRemoteHit += counter.FileService.Cache.Remote.Hit.Load()
+}
+
+func (opAlyzr *operatorAnalyzer) AddDiskIO(*perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddDiskIO: operatorAnalyzer.opStats is nil")
+	}
+}
+
+func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddReadSizeInfo: operatorAnalyzer.opStats is nil")
+	}
+	if !opAlyzr.claimCounterCategory(counter, counterCategoryReadSize) {
+		return
+	}
+	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
+	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
+}
+
+// claimCounterCategory makes legacy manual harvesting and the new terminal
+// harvest mutually exclusive for the analyzer-owned active interval. External
+// counter sets retain the legacy additive behavior.
+func (opAlyzr *operatorAnalyzer) claimCounterCategory(counter *perfcounter.CounterSet, category counterCategory) bool {
+	if counter != opAlyzr.crs || !opAlyzr.crsActive {
+		return true
+	}
+	if opAlyzr.crsConsumed&category != 0 {
+		return false
+	}
+	opAlyzr.crsConsumed |= category
+	return true
+}
+
 func (opAlyzr *operatorAnalyzer) ChildrenCallStop(start time.Time) {
 	opAlyzr.childrenCallDuration += time.Since(start)
 }
@@ -426,26 +522,35 @@ func (opAlyzr *operatorAnalyzer) harvestCounterSet() {
 		panic("operatorAnalyzer.harvestCounterSet: operatorAnalyzer.opStats is nil")
 	}
 	counter := opAlyzr.crs
-	opAlyzr.opStats.S3List += counter.FileService.S3.List.Load()
-	opAlyzr.opStats.S3Head += counter.FileService.S3.Head.Load()
-	opAlyzr.opStats.S3Put += counter.FileService.S3.Put.Load()
-	opAlyzr.opStats.S3Get += counter.FileService.S3.Get.Load()
-	opAlyzr.opStats.S3Delete += counter.FileService.S3.Delete.Load()
-	opAlyzr.opStats.S3DeleteMul += counter.FileService.S3.DeleteMulti.Load()
-	opAlyzr.opStats.CacheRead += counter.FileService.Cache.Read.Load()
-	opAlyzr.opStats.CacheHit += counter.FileService.Cache.Hit.Load()
-	opAlyzr.opStats.CacheMemoryRead += counter.FileService.Cache.Memory.Read.Load()
-	opAlyzr.opStats.CacheMemoryHit += counter.FileService.Cache.Memory.Hit.Load()
-	opAlyzr.opStats.CacheDiskRead += counter.FileService.Cache.Disk.Read.Load()
-	opAlyzr.opStats.CacheDiskHit += counter.FileService.Cache.Disk.Hit.Load()
-	opAlyzr.opStats.CacheRemoteRead += counter.FileService.Cache.Remote.Read.Load()
-	opAlyzr.opStats.CacheRemoteHit += counter.FileService.Cache.Remote.Hit.Load()
-	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
-	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+	if opAlyzr.crsConsumed&counterCategoryS3 == 0 {
+		opAlyzr.opStats.S3List += counter.FileService.S3.List.Load()
+		opAlyzr.opStats.S3Head += counter.FileService.S3.Head.Load()
+		opAlyzr.opStats.S3Put += counter.FileService.S3.Put.Load()
+		opAlyzr.opStats.S3Get += counter.FileService.S3.Get.Load()
+		opAlyzr.opStats.S3Delete += counter.FileService.S3.Delete.Load()
+		opAlyzr.opStats.S3DeleteMul += counter.FileService.S3.DeleteMulti.Load()
+	}
+	if opAlyzr.crsConsumed&counterCategoryCache == 0 {
+		opAlyzr.opStats.CacheRead += counter.FileService.Cache.Read.Load()
+		opAlyzr.opStats.CacheHit += counter.FileService.Cache.Hit.Load()
+		opAlyzr.opStats.CacheMemoryRead += counter.FileService.Cache.Memory.Read.Load()
+		opAlyzr.opStats.CacheMemoryHit += counter.FileService.Cache.Memory.Hit.Load()
+		opAlyzr.opStats.CacheDiskRead += counter.FileService.Cache.Disk.Read.Load()
+		opAlyzr.opStats.CacheDiskHit += counter.FileService.Cache.Disk.Hit.Load()
+		opAlyzr.opStats.CacheRemoteRead += counter.FileService.Cache.Remote.Read.Load()
+		opAlyzr.opStats.CacheRemoteHit += counter.FileService.Cache.Remote.Hit.Load()
+	}
+	if opAlyzr.crsConsumed&counterCategoryReadSize == 0 {
+		opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
+		opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+		opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
+	}
+	// S3WriteSize has no legacy manual-harvest method and is always terminally
+	// harvested exactly once.
 	opAlyzr.opStats.S3WriteSize += counter.FileService.S3WriteSize.Load()
-	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
 	counter.Reset()
 	opAlyzr.crsActive = false
+	opAlyzr.crsConsumed = 0
 }
 
 func (opAlyzr *operatorAnalyzer) AddParquetProfile(stats ParquetProfileStats) {
@@ -497,10 +602,9 @@ type OperatorStats struct {
 	CallNum          int    `json:"CallCount,omitempty"`
 	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
 	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
-	// MemorySize remains an internal producer-local observation. Exact memory
-	// accounting is owned by the statement resource summary and must not be
-	// serialized as operator explain data.
-	MemorySize      int64                         `json:"-"`
+	// MemorySize remains a producer-local diagnostic. Statement billing uses
+	// the exact domain peak in the terminal resource summary instead.
+	MemorySize      int64                         `json:"MemorySize,omitempty"`
 	SpillSize       int64                         `json:"SpillSize,omitempty"`
 	SpillRows       int64                         `json:"SpillRows,omitempty"`
 	InputRows       int64                         `json:"InputRows,omitempty"`
@@ -647,6 +751,7 @@ func (ps *OperatorStats) String() string {
 		"InSize:%dbytes "+
 		"InBlock:%d "+
 		"OutSize:%dbytes "+
+		"MemSize:%dbytes "+
 		"SpillSize:%dbytes "+
 		"SpillRows:%d "+
 		"ScanBytes:%dbytes "+
@@ -660,6 +765,7 @@ func (ps *OperatorStats) String() string {
 		ps.InputSize,
 		ps.InputBlocks,
 		ps.OutputSize,
+		ps.MemorySize,
 		ps.SpillSize,
 		ps.SpillRows,
 		ps.ScanBytes,

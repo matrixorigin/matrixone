@@ -222,8 +222,8 @@ func TestPhyPlanJSON(t *testing.T) {
 		fmt.Printf("Error serializing to JSON: %s", err)
 		return
 	}
-	if strings.Contains(jsonStr, `"MemorySize"`) {
-		t.Fatalf("physical plan JSON must not serialize legacy operator memory: %s", jsonStr)
+	if !strings.Contains(jsonStr, `"MemorySize"`) {
+		t.Fatalf("physical plan JSON lost operator memory diagnostic: %s", jsonStr)
 	}
 	fmt.Printf("JSON: %s\n", jsonStr)
 

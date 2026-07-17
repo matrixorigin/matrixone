@@ -1538,7 +1538,7 @@ func hasNewVersionInRange(
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStopKind(start, resource.WaitLock)
+		process.StopAnalyzerWait(analyzer, start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }

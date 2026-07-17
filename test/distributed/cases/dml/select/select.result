@@ -412,34 +412,34 @@ explain analyze select count(*) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on select.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
               Aggregate Functions: starcount(1)
 explain analyze select count(a) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.a)  𝄀
         ->  Table Scan on select.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
               Aggregate Functions: starcount(t1.a)
 explain analyze select count(b) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.b)  𝄀
         ->  Table Scan on select.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
               Aggregate Functions: count(t1.b)
 drop table if exists t1;
 create table t1 (a int(11) unsigned);
@@ -480,34 +480,34 @@ explain analyze select count(*) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on db1.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
               Aggregate Functions: starcount(1)
 explain analyze select count(a) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.a)  𝄀
         ->  Table Scan on db1.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
               Aggregate Functions: starcount(t1.a)
 explain analyze select count(b) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.b\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.b)  𝄀
         ->  Table Scan on db1.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
               Aggregate Functions: starcount(t1.b)
 select mo_ctl('dn', 'flush', 'db1.t1');
 ➤ mo_ctl(dn, flush, db1.t1)[12,-1,0]  𝄀
@@ -541,34 +541,34 @@ explain analyze select count(*) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on db1.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
               Aggregate Functions: starcount(1)
 explain analyze select count(a) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.a)  𝄀
         ->  Table Scan on db1.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
               Aggregate Functions: starcount(t1.a)
 explain analyze select count(b) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.b)  𝄀
         ->  Table Scan on db1.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
               Aggregate Functions: count(t1.b)
 select mo_ctl('dn', 'flush', 'db1.t1');
 ➤ mo_ctl(dn, flush, db1.t1)[12,-1,0]  𝄀
@@ -607,34 +607,34 @@ explain analyze select count(*) from t11;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on db1.t11  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Aggregate Functions: starcount(1)
 explain analyze select count(a) from t11;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t11\.a\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t11.a)  𝄀
         ->  Table Scan on db1.t11  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Aggregate Functions: starcount(t11.a)
 explain analyze select count(b) from t11;
 -- @regex("(?s)Table Scan.*Aggregate Functions: count\(t11\.b\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t11.b)  𝄀
         ->  Table Scan on db1.t11  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Aggregate Functions: count(t11.b)
 drop table if exists t1;
 create table t1(a int primary key, b int);

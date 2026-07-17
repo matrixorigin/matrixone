@@ -501,6 +501,21 @@ func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, stats
 	return nil
 }
 
+// StatsCompositeSubStmtResource returns the legacy plan-statistics projection
+// for a composite child statement. The caller owns the returned value; it is
+// deliberately not merged into the authoritative resource root.
+func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
+	waitActiveCost := time.Duration(0)
+	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
+		if txn := handler.GetTxn(); txn != nil {
+			waitActiveCost = txn.GetWaitActiveCost()
+		}
+	}
+	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
+	statsByte, _ = h.legacyStats(ctx, cwft.ses)
+	return statsByte
+}
+
 func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
 	cwft.explainBuffer = buf
 }

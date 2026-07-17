@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -178,19 +179,6 @@ func transferSessionConnType2ResourceConnType(c ConnType) resource.ConnType {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) (context.Context, error) {
-	root := resource.NewRoot(transferSessionConnType2ResourceConnType(ses.connType))
-	ctx = resource.ContextWithRoot(ctx, root)
-	var resourceMPObserved bool
-	if proc != nil {
-		pool := proc.Mp()
-		resourceMPObserved = pool != nil && pool.StartResourcePeakEpoch()
-		root.SetMemoryPeakPreview(func() (uint64, bool) {
-			if pool == nil || !resourceMPObserved {
-				return 0, false
-			}
-			return pool.ResourcePeakLiveBytes()
-		})
-	}
 	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
@@ -257,6 +245,24 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		return ctx, nil
 	}
 
+	// Only a StatementInfo owns and closes the statement memory epoch. Create
+	// the root and epoch after every path that deliberately skips recording.
+	root := resource.NewRoot(transferSessionConnType2ResourceConnType(ses.connType))
+	ctx = resource.ContextWithRoot(ctx, root)
+	var resourceMPeakEpoch *mpool.ResourcePeakEpoch
+	if proc != nil {
+		pool := proc.Mp()
+		if pool != nil {
+			resourceMPeakEpoch = pool.StartResourcePeakEpoch()
+		}
+		root.SetMemoryPeakPreview(func() (uint64, bool) {
+			if pool == nil || resourceMPeakEpoch == nil {
+				return 0, false
+			}
+			return pool.ResourcePeakLiveBytes(resourceMPeakEpoch)
+		})
+	}
+
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal") // pls task care of mce.GetDoQueryFunc() call case.
@@ -298,7 +304,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	stm.SetResourceRoot(root)
 	if proc != nil {
-		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPObserved)
+		stm.SetResourceMemoryPoolEpoch(proc.Mp(), resourceMPeakEpoch)
 	}
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
@@ -5052,18 +5058,25 @@ type jsonPlanHandler struct {
 	stats                  motrace.Statistic
 	buffer                 *bytes.Buffer
 	persistSchedulingTrace bool
+	marshalHandler         *marshalPlanHandler
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
+	// The terminal resource refresh only needs the materialized ExplainData.
+	// Do not retain the statement or logical plan while the record waits for
+	// asynchronous export.
+	h.stmt = nil
+	h.query = nil
 	return &jsonPlanHandler{
 		jsonBytes:              jsonBytes,
 		statsBytes:             statsBytes,
 		stats:                  stats,
 		buffer:                 h.handoverBuffer(),
 		persistSchedulingTrace: h.persistSchedulingTrace,
+		marshalHandler:         h,
 	}
 }
 
@@ -5076,9 +5089,25 @@ func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *j
 	}
 	jsonBytes := h.Marshal(ctx)
 	return &jsonPlanHandler{
-		jsonBytes:  jsonBytes,
-		statsBytes: statistic.DefaultStatsArray,
-		buffer:     h.handoverBuffer(),
+		jsonBytes:      jsonBytes,
+		statsBytes:     statistic.DefaultStatsArray,
+		buffer:         h.handoverBuffer(),
+		marshalHandler: h,
+	}
+}
+
+// SetResourceSummary forwards the sealed summary into the retained marshal
+// handler and refreshes the serialized explain payload before persistence.
+func (h *jsonPlanHandler) SetResourceSummary(summary resource.StatementResourceSummary) {
+	if h == nil || h.marshalHandler == nil {
+		return
+	}
+	oldBuffer := h.buffer
+	h.marshalHandler.SetResourceSummary(summary)
+	h.jsonBytes = h.marshalHandler.Marshal(context.Background())
+	h.buffer = h.marshalHandler.handoverBuffer()
+	if oldBuffer != nil && oldBuffer != h.buffer {
+		releaseMarshalPlanBufferPool(oldBuffer)
 	}
 }
 
@@ -5096,6 +5125,7 @@ func (h *jsonPlanHandler) Free() {
 		h.buffer = nil
 		h.jsonBytes = nil
 	}
+	h.marshalHandler = nil
 }
 
 type marshalPlanConfig struct {
@@ -5134,10 +5164,37 @@ type marshalPlanHandler struct {
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
 	buffer      *bytes.Buffer
+	// internal sub statements, such as sub statements of compound statements,
+	// are not user SQL requests and should not emit top-level diagnostics.
+	isInternalSubStmt bool
 
 	persistSchedulingTrace bool
 
 	marshalPlanConfig
+}
+
+// NewMarshalPlanHandlerCompositeSubStmt builds the legacy diagnostic handler
+// used by BackgroundExec projections for child statements.  The handler only
+// projects plan statistics; it never publishes them to the statement
+// resource root.
+func NewMarshalPlanHandlerCompositeSubStmt(ctx context.Context, p *plan.Plan, opts ...marshalPlanOptions) *marshalPlanHandler {
+	h := &marshalPlanHandler{isInternalSubStmt: true}
+	if p != nil {
+		h.query = p.GetQuery()
+	}
+	for _, opt := range opts {
+		opt(&h.marshalPlanConfig)
+	}
+	return h
+}
+
+// SetResourceSummary injects an already sealed summary into a materialized
+// explain plan. It intentionally does not touch the live resource root.
+func (h *marshalPlanHandler) SetResourceSummary(summary resource.StatementResourceSummary) {
+	if h == nil || h.marshalPlan == nil {
+		return
+	}
+	h.marshalPlan.PhyPlan.Resource = &summary
 }
 
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
@@ -5345,6 +5402,69 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte 
 			}
 		}
 	}
+	return
+}
+
+// legacyStats is the return-only projection historically exposed through
+// BackgroundExec.GetExecStatsArray for engine-backed execution.  It is kept
+// separate from Stats so authoritative statement resource accounting cannot
+// ingest this projection a second time.
+func (h *marshalPlanHandler) legacyStats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+	if h.query != nil {
+		options := &explain.MarshalPlanOptions
+		statsByte.Reset()
+		for _, node := range h.query.Nodes {
+			s := explain.GetStatistic4Trace(ctx, node, options)
+			statsByte.Add(&s)
+			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
+				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
+				stats.RowsRead += rows
+				stats.BytesScan += bytes
+			}
+		}
+	} else {
+		statsByte = statistic.DefaultStatsArray
+	}
+	statsInfo := statistic.StatsInfoFromContext(ctx)
+	if statsInfo == nil {
+		return
+	}
+	operatorTimeConsumed := int64(statsByte.GetTimeConsumed())
+	totalTime := operatorTimeConsumed +
+		int64(statsInfo.ParseStage.ParseDuration) +
+		int64(statsInfo.PlanStage.PlanDuration) +
+		int64(statsInfo.CompileStage.CompileDuration) +
+		statsInfo.PrepareRunStage.ScopePrepareDuration +
+		statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+		statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+		statsInfo.PlanStage.BuildPlanStatsIOConsumption -
+		(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+	if totalTime < 0 {
+		if !h.isInternalSubStmt && ses != nil && h.stmt != nil {
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s", uuid.UUID(h.stmt.StatementID).String(), h.stmt.StatementType)
+		}
+		v2.GetTraceNegativeCUCounter("cpu").Inc()
+	} else {
+		statsByte.WithTimeConsumed(float64(totalTime))
+	}
+
+	planS3Input := statsInfo.PlanStage.BuildPlanS3Request.CountPUT()
+	planS3Output := statsInfo.PlanStage.BuildPlanS3Request.CountGET()
+	planS3List := statsInfo.PlanStage.BuildPlanS3Request.CountLIST()
+	planS3Delete := statsInfo.PlanStage.BuildPlanS3Request.CountDELETE()
+	compileS3Input := statsInfo.CompileStage.CompileS3Request.CountPUT()
+	compileS3Output := statsInfo.CompileStage.CompileS3Request.CountGET()
+	compileS3List := statsInfo.CompileStage.CompileS3Request.CountLIST()
+	compileS3Delete := statsInfo.CompileStage.CompileS3Request.CountDELETE()
+	preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountPUT()
+	preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountGET()
+	preRunS3List := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountLIST()
+	preRunS3Delete := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountDELETE()
+	statsByte.WithS3IOInputCount(statsByte.GetS3IOInputCount() + float64(planS3Input+compileS3Input+preRunS3Input))
+	statsByte.WithS3IOOutputCount(statsByte.GetS3IOOutputCount() + float64(planS3Output+compileS3Output+preRunS3Output))
+	statsByte.WithS3IOListCount(statsByte.GetS3IOListCount() + float64(planS3List+compileS3List+preRunS3List))
+	statsByte.WithS3IODeleteCount(statsByte.GetS3IODeleteCount() + float64(planS3Delete+compileS3Delete+preRunS3Delete))
+	statsByte.Add(&statsInfo.PermissionAuth)
 	return
 }
 

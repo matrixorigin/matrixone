@@ -83,7 +83,7 @@ type tracerProviderConfig struct {
 	cuConfig   config.OBCUConfig // WithCUConfig
 	cuConfigV1 config.OBCUConfig // WithCUConfig
 
-	tcpPacket bool // WithTCPPacket
+	tcpPacket bool // retained for WithTCPPacket compatibility; not used in accounting
 
 	MaxLogMessageSize int // WithMaxLogMessageSize
 	MaxStatementSize  int // WithMaxStatementSize
@@ -233,6 +233,8 @@ func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOp
 	}
 }
 
+// WithTCPPacket is retained for source compatibility. Resource accounting
+// deliberately excludes estimated TCP/TLS framing from protocol bytes.
 func WithTCPPacket(count bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.tcpPacket = count

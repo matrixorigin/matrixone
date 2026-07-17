@@ -287,10 +287,10 @@ There are two useful statement snapshots:
 2. The final root summary is sealed after protocol completion. It includes
    accepted client egress and is projected into statement trace and CU.
 
-Statement completion uses the existing non-blocking collector capability when
-available. Queue saturation may drop export work according to the collector
-policy, but it must not block the next SQL request or retain statement-owned
-objects indefinitely.
+Statement completion publishes through the reliable collector path after
+releasing statement-local locks. Queue saturation applies backpressure until
+the collector accepts ownership or stops; completed statement rows are not
+silently discarded.
 
 ## 8. Persistence contract
 

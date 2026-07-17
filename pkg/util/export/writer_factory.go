@@ -82,6 +82,20 @@ func (rw *reactWriter) FlushAndClose() (int, error) {
 	return n, err
 }
 
+func (rw *reactWriter) Abort() {
+	for idx := range rw.afters {
+		rw.afters[idx] = nil
+	}
+	rw.afters = nil
+	if abortable, ok := rw.w.(table.AbortableRowWriter); ok {
+		abortable.Abort()
+	} else if rw.w != nil {
+		_, _ = rw.w.FlushAndClose()
+	}
+	rw.w = nil
+	rw.setter = nil
+}
+
 func (rw *reactWriter) SetBuffer(buf *bytes.Buffer, callback func(*bytes.Buffer)) {
 	v2.TraceMOLoggerBufferSetCallBack.Inc()
 	if callback == nil {

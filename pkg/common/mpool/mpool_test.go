@@ -163,22 +163,21 @@ func TestMPoolResourcePeakEpochKeepsRetainedBaseline(t *testing.T) {
 	require.NoError(t, err)
 	second, err := mp.Alloc(200, true)
 	require.NoError(t, err)
-	peak, exact := mp.ResourcePeakLiveBytes()
-	require.True(t, exact)
-	require.Equal(t, uint64(300), peak)
+	require.Equal(t, int64(300), mp.Stats().HighWaterMark.Load())
 
 	summary, flags := mp.ResourceSnapshot()
 	require.Equal(t, resource.QualityNonZeroLiveAtSeal, flags)
 	require.Equal(t, uint64(300), summary.AllocatedBytes)
 	require.Equal(t, uint64(300), summary.PeakLiveBytes)
 	require.Equal(t, uint64(300), summary.LiveBytesAtSeal)
-	require.True(t, mp.StartResourcePeakEpoch())
-	peak, exact = mp.ResourcePeakLiveBytes()
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	peak, exact := mp.ResourcePeakLiveBytes(epoch)
 	require.True(t, exact)
 	require.Equal(t, uint64(300), peak)
 	third, err := mp.Alloc(50, true)
 	require.NoError(t, err)
-	peak, exact = mp.ResourcePeakLiveBytes()
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
 	require.True(t, exact)
 	require.Equal(t, uint64(350), peak)
 	mp.Free(third)
@@ -191,10 +190,94 @@ func TestMPoolResourcePeakEpochKeepsRetainedBaseline(t *testing.T) {
 	require.Equal(t, uint64(350), summary.FreedBytes)
 	require.Equal(t, uint64(350), summary.PeakLiveBytes)
 	require.Zero(t, summary.LiveBytesAtSeal)
-	require.True(t, mp.StartResourcePeakEpoch())
-	peak, exact = mp.ResourcePeakLiveBytes()
+	endedPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Equal(t, uint64(350), endedPeak)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, endedPeak, peak)
+	epoch = mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
 	require.True(t, exact)
 	require.Zero(t, peak)
+	_, ended = mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+}
+
+func TestMPoolResourcePeakEpochRejectsOverlapAndStaleEnd(t *testing.T) {
+	mp := MustNew("resource-epoch-overlap")
+	defer DeleteMPool(mp)
+	other := MustNew("resource-epoch-other")
+	defer DeleteMPool(other)
+
+	first := mp.StartResourcePeakEpoch()
+	require.NotNil(t, first)
+	require.Nil(t, mp.StartResourcePeakEpoch())
+	wrong := &ResourcePeakEpoch{}
+	_, ok := mp.EndResourcePeakEpoch(wrong)
+	require.False(t, ok)
+	otherEpoch := other.StartResourcePeakEpoch()
+	require.NotNil(t, otherEpoch)
+	_, ok = mp.EndResourcePeakEpoch(otherEpoch)
+	require.False(t, ok)
+	_, ok = other.EndResourcePeakEpoch(otherEpoch)
+	require.True(t, ok)
+	peak, ok := mp.EndResourcePeakEpoch(first)
+	require.True(t, ok)
+	require.Zero(t, peak)
+	_, ok = mp.EndResourcePeakEpoch(first)
+	require.False(t, ok)
+
+	second := mp.StartResourcePeakEpoch()
+	require.NotNil(t, second)
+	_, ok = mp.EndResourcePeakEpoch(first)
+	require.False(t, ok)
+	_, ok = mp.EndResourcePeakEpoch(second)
+	require.True(t, ok)
+}
+
+func TestMPoolResourcePeakEpochLifetimeHighWaterNeverDecreases(t *testing.T) {
+	mp := MustNew("resource-epoch-lifetime")
+	defer DeleteMPool(mp)
+
+	buf, err := mp.Alloc(128, true)
+	require.NoError(t, err)
+	initial := mp.Stats().HighWaterMark.Load()
+	require.Equal(t, int64(128), initial)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	mp.Free(buf)
+	peak, ok := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	require.Equal(t, uint64(128), peak)
+	require.Equal(t, initial, mp.Stats().HighWaterMark.Load())
+}
+
+func TestMPoolResourcePeakEpochConcurrentAllocations(t *testing.T) {
+	mp := MustNew("resource-epoch-concurrent")
+	defer DeleteMPool(mp)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			buf, err := mp.Alloc(1024, true)
+			if err != nil {
+				return
+			}
+			mp.Free(buf)
+		}()
+	}
+	wg.Wait()
+	peak, ok := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, peak, uint64(1024))
+	require.GreaterOrEqual(t, uint64(mp.Stats().HighWaterMark.Load()), peak)
 }
 
 func TestMpoolReAllocate(t *testing.T) {

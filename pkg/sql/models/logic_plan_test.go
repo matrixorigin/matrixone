@@ -19,7 +19,7 @@ import (
 	"testing"
 )
 
-func TestStatisticsGlobalResourceOmitsLegacyMemory(t *testing.T) {
+func TestStatisticsGlobalResourceKeepsDiagnosticMemory(t *testing.T) {
 	graph := NewGraphData(1)
 	graph.Nodes = append(graph.Nodes, Node{
 		Statistics: Statistics{
@@ -30,7 +30,7 @@ func TestStatisticsGlobalResourceOmitsLegacyMemory(t *testing.T) {
 	if err := graph.StatisticsGlobalResource(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(graph.Global.Statistics.Memory) != 0 {
-		t.Fatalf("legacy operator memory must not be synthesized in global logical explain: %+v", graph.Global.Statistics.Memory)
+	if len(graph.Global.Statistics.Memory) != 1 || graph.Global.Statistics.Memory[0].Value != 12345 {
+		t.Fatalf("operator memory diagnostic missing from global logical explain: %+v", graph.Global.Statistics.Memory)
 	}
 }

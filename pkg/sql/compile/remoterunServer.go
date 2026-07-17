@@ -805,11 +805,14 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
-		Plan:                     receiver.phyPlan,
+		TerminalResourceVersion:  remoteTerminalResourceVersion,
 		Delta:                    receiver.resourceDelta,
 		Memory:                   receiver.resourceMemory,
 		MissingFragmentCount:     receiver.resourceMissingFragments,
 		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
+	}
+	if receiver.phyPlan != nil {
+		envelope.PhyPlan = *receiver.phyPlan
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {

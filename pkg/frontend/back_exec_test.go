@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -104,5 +105,21 @@ func TestInstallBackExecStatsInfoPreservesRootAndClaimsOnce(t *testing.T) {
 	}
 	if _, ok := secondStats.ClaimRootPhaseResource(); ok {
 		t.Fatal("second StatsInfo claim should not succeed twice")
+	}
+}
+
+func TestLegacyCompositeStatsProjection(t *testing.T) {
+	ctx, _ := installBackExecStatsInfo(context.Background(), time.Unix(0, 0), 7)
+	h := &marshalPlanHandler{query: &plan.Query{Nodes: []*plan.Node{{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    &plan.TableDef{Name: "t"},
+		AnalyzeInfo: &plan.AnalyzeInfo{TimeConsumed: 123, InputRows: 9, InputSize: 77},
+	}}}}
+	stats, details := h.legacyStats(ctx, nil)
+	if stats.GetTimeConsumed() != 130 {
+		t.Fatalf("legacy engine projection time = %v, want 130", stats.GetTimeConsumed())
+	}
+	if details.RowsRead != 9 || details.BytesScan != 77 {
+		t.Fatalf("legacy engine projection scan stats = (%d,%d), want (9,77)", details.RowsRead, details.BytesScan)
 	}
 }

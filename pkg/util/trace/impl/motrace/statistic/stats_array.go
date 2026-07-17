@@ -15,12 +15,15 @@
 package statistic
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 )
 
@@ -342,6 +345,20 @@ func (s *StatsArray) Add(delta *StatsArray) *StatsArray {
 	if s.GetVersion() >= StatsArrayVersion6 && delta.GetVersion() >= StatsArrayVersion6 {
 		return s.addV6(delta)
 	}
+	if s.GetVersion() < StatsArrayVersion6 && delta.GetVersion() >= StatsArrayVersion6 {
+		// A legacy memory value is a statement-level sum, not a physical
+		// memory-domain peak.  Promote it with that value deliberately omitted,
+		// then merge the genuine v6 operand.
+		legacy := *s
+		s.promoteLegacy(legacy)
+		return s.addV6(delta)
+	}
+	if s.GetVersion() >= StatsArrayVersion6 && delta.GetVersion() < StatsArrayVersion6 {
+		// The legacy operand contributes all compatible counters, but its legacy
+		// memory value must never become a v6 peak.
+		s.WithQualityFlags(s.GetQualityFlags() | resource.QualityPartial | resource.QualityMissingMemoryDomain | resource.QualityAggregated)
+		return s.addV6WithoutMemory(delta)
+	}
 	dstLen := len(*delta)
 	if len(*s) < len(*delta) {
 		dstLen = len(*s)
@@ -355,7 +372,29 @@ func (s *StatsArray) Add(delta *StatsArray) *StatsArray {
 	return s
 }
 
+// promoteLegacy changes a v0-v5 receiver to v6 while retaining only fields whose
+// meaning is unchanged between the schemas.  The caller supplies a copy so
+// that promotion is safe even when the source aliases the receiver.
+func (s *StatsArray) promoteLegacy(legacy StatsArray) {
+	*s = StatsArray{}
+	(*s)[StatsArrayIndexVersion] = StatsArrayVersion6
+	for idx := StatsArrayIndexTimeConsumed; idx < StatsArrayLengthV5; idx++ {
+		if idx != StatsArrayIndexMemorySize {
+			(*s)[idx] = legacy[idx]
+		}
+	}
+	s.WithQualityFlags(resource.QualityPartial | resource.QualityMissingMemoryDomain | resource.QualityAggregated)
+}
+
 func (s *StatsArray) addV6(delta *StatsArray) *StatsArray {
+	return s.addV6Memory(delta, true)
+}
+
+func (s *StatsArray) addV6WithoutMemory(delta *StatsArray) *StatsArray {
+	return s.addV6Memory(delta, false)
+}
+
+func (s *StatsArray) addV6Memory(delta *StatsArray, deltaHasMemory bool) *StatsArray {
 	flags := s.GetQualityFlags() | delta.GetQualityFlags()
 	for _, idx := range [...]int{
 		StatsArrayIndexTimeConsumed,
@@ -377,7 +416,7 @@ func (s *StatsArray) addV6(delta *StatsArray) *StatsArray {
 			flags |= resource.QualityProjectionOverflow
 		}
 	}
-	if (*delta)[StatsArrayIndexMemorySize] > (*s)[StatsArrayIndexMemorySize] {
+	if deltaHasMemory && (*delta)[StatsArrayIndexMemorySize] > (*s)[StatsArrayIndexMemorySize] {
 		(*s)[StatsArrayIndexMemorySize] = (*delta)[StatsArrayIndexMemorySize]
 	}
 	if s.GetConnType() == float64(ConnTypeUnknown) {
@@ -387,6 +426,65 @@ func (s *StatsArray) addV6(delta *StatsArray) *StatsArray {
 	}
 	s.WithQualityFlags(flags)
 	return s
+}
+
+// DecodeStatsArray validates and decodes every statement-stat schema emitted
+// by MatrixOne. In particular, it rejects malformed JSON, non-arrays,
+// non-finite numbers, unsupported versions, and version/length mismatches
+// before exposing a StatsArray to aggregation.
+func DecodeStatsArray(data []byte) (StatsArray, error) {
+	var rawValues []json.RawMessage
+	if err := json.Unmarshal(data, &rawValues); err != nil {
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: %v", err)
+	}
+	if rawValues == nil {
+		return StatsArray{}, moerr.NewInvalidInputNoCtx("decode stats array: expected JSON array")
+	}
+	if len(rawValues) == 0 {
+		return StatsArray{}, moerr.NewInvalidInputNoCtx("decode stats array: empty array")
+	}
+	values := make([]float64, len(rawValues))
+	for idx, raw := range rawValues {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: null value at index %d", idx)
+		}
+		if err := json.Unmarshal(raw, &values[idx]); err != nil {
+			return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: value at index %d: %v", idx, err)
+		}
+		value := values[idx]
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: non-finite value at index %d", idx)
+		}
+	}
+	version := values[StatsArrayIndexVersion]
+	if version != math.Trunc(version) {
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: version %v is not integral", version)
+	}
+	var wantLen int
+	switch int(version) {
+	case StatsArrayVersion0:
+		wantLen = StatsArrayLengthV5
+	case StatsArrayVersion1:
+		wantLen = StatsArrayLengthV1
+	case StatsArrayVersion2:
+		wantLen = StatsArrayLengthV2
+	case StatsArrayVersion3:
+		wantLen = StatsArrayLengthV3
+	case StatsArrayVersion4:
+		wantLen = StatsArrayLengthV4
+	case StatsArrayVersion5:
+		wantLen = StatsArrayLengthV5
+	case StatsArrayVersion6:
+		wantLen = StatsArrayLengthV6
+	default:
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: unsupported version %v", version)
+	}
+	if len(values) != wantLen {
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: version %d requires %d values, got %d", int(version), wantLen, len(values))
+	}
+	var result StatsArray
+	copy(result[:], values)
+	return result, nil
 }
 
 const maxExactFloatInteger = uint64(1 << 53)

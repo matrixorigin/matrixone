@@ -272,7 +272,7 @@ func TestExplainPhyPlanResourceOverviewUsesExactMemorySummary(t *testing.T) {
 	}
 }
 
-func TestExplainPhyPlanWithoutResourceOmitsMemory(t *testing.T) {
+func TestExplainPhyPlanWithoutResourceKeepsOperatorMemory(t *testing.T) {
 	phy := NewPhyPlan()
 	phy.LocalScope = []PhyScope{{
 		RootOperator: &PhyOperator{
@@ -283,8 +283,8 @@ func TestExplainPhyPlanWithoutResourceOmitsMemory(t *testing.T) {
 	}}
 
 	got := ExplainPhyPlan(phy, &statistic.StatsInfo{}, AnalyzeOption)
-	if strings.Contains(got, "MemoryUsage") || strings.Contains(got, "MaxDomainPeakMemory") {
-		t.Fatalf("resource-less overview must not fabricate memory: %s", got)
+	if !strings.Contains(got, "MemoryUsage:999B") || strings.Contains(got, "MaxDomainPeakMemory") {
+		t.Fatalf("resource-less overview must retain diagnostic operator memory only: %s", got)
 	}
 	for _, token := range []string{"SpillSize:7B", "DiskI/O:8B", "NewWorkI/O:9B"} {
 		if !strings.Contains(got, token) {

@@ -96,11 +96,38 @@ func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	cw := InitTxnComputationWrapper(ses, &tree.Insert{}, proc)
 	statementCtx, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.NotNil(t, resource.RootFromContext(statementCtx))
+	require.Nil(t, resource.RootFromContext(statementCtx))
+	// A statement skipped because tracing is disabled must not leave an epoch
+	// active in the session MPool.
+	epoch := proc.Mp().StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	_, ended := proc.Mp().EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
 
 	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 	require.Equal(t, "Insert", ses.GetStmtType())
 	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
+func TestRecordStatementSkippedInternalEmptyDoesNotOpenMemoryEpoch(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	statementCtx, err := RecordStatement(
+		ctx, ses, proc, nil, time.Now(), "", constant.InternalSql, true,
+	)
+	require.NoError(t, err)
+	require.Nil(t, resource.RootFromContext(statementCtx))
+	epoch := proc.Mp().StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	_, ended := proc.Mp().EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
 }
 
 func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
@@ -3175,7 +3202,7 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	stmt := &motrace.StatementInfo{
 		StatementID: uid,
 		Statement:   []byte("select 1"),
-		RequestAt:   time.Now().Add(-2 * time.Second),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
 	}
 	logicPlan := &plan0.Plan{
 		Plan: &plan0.Plan_Query{
@@ -3198,6 +3225,40 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	jsonBytes := h.Marshal(context.Background())
 
 	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
+}
+
+func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
+	}
+	logicPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	h := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, nil)
+	defer h.Free()
+	summary := resource.StatementResourceSummary{
+		StatementWallNS: 99,
+		AttemptCount:    2,
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 42,
+			ClientEgressBytes: 17,
+		},
+	}
+	h.SetResourceSummary(summary)
+	var payload struct {
+		PhyPlan struct {
+			Resource *resource.StatementResourceSummary `json:"resource"`
+		}
+	}
+	require.NoError(t, json.Unmarshal(h.Marshal(context.Background()), &payload))
+	require.Equal(t, &summary, payload.PhyPlan.Resource)
+	require.Nil(t, h.marshalHandler.stmt)
+	require.Nil(t, h.marshalHandler.query)
 }
 
 func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *testing.T) {

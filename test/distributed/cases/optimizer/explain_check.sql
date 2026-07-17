@@ -34,7 +34,7 @@ explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
 -- Note: ReadSize values may vary (cache state, data distribution), so we only verify format, not specific values
 
 -- @regex("ReadSize=",true)
-explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
 
 -- the following should fail
 explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;

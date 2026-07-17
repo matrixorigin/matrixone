@@ -798,10 +798,10 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
-	if envelope.Plan != nil {
-		sender.dealRemoteAnalysis(*envelope.Plan)
+	if len(envelope.LocalScope) > 0 {
+		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
-	if sender.anal != nil {
+	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,

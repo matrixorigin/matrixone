@@ -944,9 +944,9 @@ func TestApplyOpStatsToNode_ReadSize(t *testing.T) {
 	require.Equal(t, int64(2048*1024), qry.Nodes[0].AnalyzeInfo.ScanBytes, "ScanBytes should be aggregated")
 	require.Equal(t, int64(100*1024), qry.Nodes[0].AnalyzeInfo.NetworkIO, "NetworkIO should be aggregated")
 	require.Equal(t, int64(10), qry.Nodes[0].AnalyzeInfo.InputBlocks, "InputBlocks should be aggregated")
-	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemorySize)
+	require.Equal(t, int64(111), qry.Nodes[0].AnalyzeInfo.MemorySize)
 	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemoryMin)
-	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemoryMax)
+	require.Equal(t, int64(111), qry.Nodes[0].AnalyzeInfo.MemoryMax)
 
 	// Apply stats from second operator (accumulation)
 	applyOpStatsToNode(phyOp2, qry, qry.Nodes, parallelInfo)
@@ -958,9 +958,9 @@ func TestApplyOpStatsToNode_ReadSize(t *testing.T) {
 	require.Equal(t, int64(6144*1024), qry.Nodes[0].AnalyzeInfo.ScanBytes, "ScanBytes should accumulate")
 	require.Equal(t, int64(300*1024), qry.Nodes[0].AnalyzeInfo.NetworkIO, "NetworkIO should accumulate")
 	require.Equal(t, int64(30), qry.Nodes[0].AnalyzeInfo.InputBlocks, "InputBlocks should accumulate")
-	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemorySize)
+	require.Equal(t, int64(333), qry.Nodes[0].AnalyzeInfo.MemorySize)
 	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemoryMin)
-	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemoryMax)
+	require.Equal(t, int64(222), qry.Nodes[0].AnalyzeInfo.MemoryMax)
 
 	// Test with a different node
 	phyOp3 := &models.PhyOperator{

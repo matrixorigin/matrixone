@@ -22,9 +22,11 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 var errUnsupportedNodeType = "Unsupported node type when plan is serialized to json"
@@ -721,10 +723,29 @@ const FSCacheDiskHit = "FileService Cache Disk Hit"
 const FSCacheRemoteRead = "FileService Cache Remote Read"
 const FSCacheRemoteHit = "FileService Cache Remote Hit"
 
+// GetStatistic4Trace returns the legacy per-operator diagnostic projection.
+// Authoritative statement billing is derived from the terminal resource root.
+func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
+	s.Reset()
+	if options.Analyze && node.AnalyzeInfo != nil {
+		analyzeInfo := node.AnalyzeInfo
+		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
+			WithMemorySize(float64(analyzeInfo.MemorySize)).
+			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows) + objectio.EstimateS3Input(analyzeInfo.DeletedRows)).
+			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
+			WithS3IOListCount(float64(analyzeInfo.S3List)).
+			WithS3IODeleteCount(float64(analyzeInfo.S3Delete + analyzeInfo.S3DeleteMul))
+	}
+	return
+}
+
 // GetInputRowsAndInputSize return plan.Node AnalyzeInfo InputRows and InputSize.
 // The method only records the original table's input data, and does not record index table's input data
 // migrate ExplainData.StatisticsRead to here
 func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *ExplainOptions) (rows int64, size int64) {
+	if node == nil || node.TableDef == nil {
+		return 0, 0
+	}
 	if util.IsIndexTableName(node.TableDef.Name) {
 		return 0, 0
 	}
@@ -786,6 +807,14 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Name:  OutputSize,
 				Value: analyzeInfo.OutputSize,
 				Unit:  Statistic_Unit_byte, //"byte",
+			},
+		}
+
+		mems := []models.StatisticValue{
+			{
+				Name:  MemorySize,
+				Value: analyzeInfo.MemorySize,
+				Unit:  Statistic_Unit_byte,
 			},
 		}
 
@@ -899,6 +928,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 
 		statistics.Time = append(statistics.Time, times...)
 		statistics.Throughput = append(statistics.Throughput, mbps...)
+		statistics.Memory = append(statistics.Memory, mems...)
 		statistics.IO = append(statistics.IO, io...)
 		statistics.Network = append(statistics.Network, nw...)
 	}

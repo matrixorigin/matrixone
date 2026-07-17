@@ -246,6 +246,7 @@ type StatementInfo struct {
 	resourceSummary  resource.StatementResourceSummary
 	resourceStated   bool
 	resourceMPool    *mpool.MPool
+	resourceMPeak    *mpool.ResourcePeakEpoch
 	resourceMPeakSet bool
 
 	// disableAgg true, do NOT aggregate statement
@@ -286,6 +287,7 @@ func NewStatementInfo() *StatementInfo {
 	s.resourceSummary = resource.StatementResourceSummary{}
 	s.resourceStated = false
 	s.resourceMPool = nil
+	s.resourceMPeak = nil
 	s.resourceMPeakSet = false
 	if s.Statement == nil {
 		s.Statement = make([]byte, 0, GetTracerProvider().MaxStatementSize)
@@ -363,6 +365,16 @@ func (s *StatementInfo) Free() {
 	if s.end && s.exported { // cooperate with s.mux
 		s.free()
 	}
+}
+
+// FreeOnCollectorDrop releases a statement record that the collector had
+// accepted but cannot export because it is stopping immediately. The item may
+// be either the terminal record or the independent clone used for a running
+// record, so collector ownership itself is the release precondition.
+func (s *StatementInfo) FreeOnCollectorDrop() {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.free()
 }
 
 // freeNoLocked will free StatementInfo if StatementInfo.end is true.
@@ -461,6 +473,7 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.resourceSummary = s.resourceSummary
 	stmt.resourceStated = s.resourceStated
 	stmt.resourceMPool = nil
+	stmt.resourceMPeak = nil
 	stmt.resourceMPeakSet = false
 	// part: disableAgg ctl
 	stmt.disableAgg = s.disableAgg
@@ -653,21 +666,26 @@ func (s *StatementInfo) SetResourceRoot(root *resource.Root) {
 // SetResourceMemoryPool establishes one statement-scoped peak observation.
 // Nested work and retained state in the serialized session MPool are included.
 func (s *StatementInfo) SetResourceMemoryPool(pool *mpool.MPool) {
-	s.SetResourceMemoryPoolEpoch(pool, pool != nil && pool.StartResourcePeakEpoch())
+	var token *mpool.ResourcePeakEpoch
+	if pool != nil {
+		token = pool.StartResourcePeakEpoch()
+	}
+	s.SetResourceMemoryPoolEpoch(pool, token)
 }
 
-// SetResourceMemoryPoolEpoch adopts a peak observation established at the
-// request root boundary. Allocation/free conservation remains exclusive to
-// isolated execution MPools.
-func (s *StatementInfo) SetResourceMemoryPoolEpoch(pool *mpool.MPool, observed bool) {
+// SetResourceMemoryPoolEpoch adopts a peak observation token established at
+// the request root boundary. Allocation/free conservation remains exclusive
+// to isolated execution MPools.
+func (s *StatementInfo) SetResourceMemoryPoolEpoch(pool *mpool.MPool, token *mpool.ResourcePeakEpoch) {
 	s.resourceMPool = pool
-	s.resourceMPeakSet = observed
+	s.resourceMPeak = token
+	s.resourceMPeakSet = token != nil
 	if s.resourceRoot != nil {
 		s.resourceRoot.SetMemoryPeakPreview(func() (uint64, bool) {
-			if pool == nil || !observed {
+			if pool == nil || token == nil {
 				return 0, false
 			}
-			return pool.ResourcePeakLiveBytes()
+			return pool.ResourcePeakLiveBytes(token)
 		})
 	}
 }
@@ -715,6 +733,14 @@ type SerializableExecPlan interface {
 	Stats(ctx context.Context) (statistic.StatsArray, Statistic)
 }
 
+// ResourceSummarySetter is implemented by serializers that retain a plan
+// snapshot.  It is intentionally optional so existing SerializableExecPlan
+// implementations remain source-compatible while terminal resource facts are
+// made available before Marshal.
+type ResourceSummarySetter interface {
+	SetResourceSummary(resource.StatementResourceSummary)
+}
+
 func (s *StatementInfo) SetSerializableExecPlan(execPlan SerializableExecPlan) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -744,6 +770,14 @@ func (s *StatementInfo) MarkResponseAt() {
 }
 
 func (s *StatementInfo) DisableAgg() { s.disableAgg = true }
+
+// TcpIpv4HeaderSize is retained for source compatibility. Statement resource
+// accounting no longer adds estimated transport headers to protocol bytes.
+const TcpIpv4HeaderSize = 66
+
+// ResponseErrPacketSize is retained for source compatibility. Error response
+// bytes are now measured by the protocol writer instead of estimated here.
+const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
 func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
@@ -784,7 +818,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		if s.resourceMPool != nil {
 			s.resourceRoot.ClearMemoryPeakPreview()
 			if s.resourceMPeakSet {
-				if peak, ok := s.resourceMPool.ResourcePeakLiveBytes(); ok {
+				if peak, ok := s.resourceMPool.EndResourcePeakEpoch(s.resourceMPeak); ok {
 					s.resourceRoot.AddMemoryPeakObservation(peak)
 				} else {
 					s.resourceRoot.MarkMemoryDomainMissing()
@@ -793,9 +827,13 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 				s.resourceRoot.MarkMemoryDomainMissing()
 			}
 			s.resourceMPool = nil
+			s.resourceMPeak = nil
 			s.resourceMPeakSet = false
 		}
 		s.SetResourceSummary(s.resourceRoot.Seal(uint64(s.Duration)))
+		if setter, ok := s.ExecPlan.(ResourceSummarySetter); ok {
+			setter.SetResourceSummary(s.resourceSummary)
+		}
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
 			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
@@ -878,12 +916,18 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 	collector := GetGlobalBatchProcessor()
+	runningSnapshot := false
 	// Filter out the Running record.
 	if s.Status == StatementStatusRunning {
 		if GetTracerProvider().skipRunningStmt {
 			return nil
 		} else {
 			s = s.CloneWithoutExecPlan()
+			// This clone is a detached export snapshot. Mark it releasable so
+			// normal export, collector rejection, and shutdown all return it to
+			// the pool independently of the live statement.
+			s.end = true
+			runningSnapshot = true
 		}
 	}
 	// Filter out the MO_LOGGER SQL statements
@@ -920,14 +964,20 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	s.reported = true
-	if nonBlocking, ok := collector.(TryCollector); ok {
-		accepted, err := nonBlocking.TryCollect(ctx, s)
-		if !accepted {
-			s.freeNoLocked()
+	if runningSnapshot {
+		if discardable, ok := collector.(DiscardableCollector); ok {
+			if err := discardable.DiscardableCollect(ctx, s); err != nil {
+				s.freeNoLocked()
+				return err
+			}
+			return nil
 		}
+	}
+	if err := collector.Collect(ctx, s); err != nil {
+		s.freeNoLocked()
 		return err
 	}
-	return collector.Collect(ctx, s)
+	return nil
 DiscardAndFreeL:
 	s.freeNoLocked()
 	return nil

@@ -34,9 +34,16 @@ type executionResourceRecorder struct {
 	ownsAttempts bool
 }
 
+const remoteTerminalResourceVersion = 1
+
+// remoteTerminalEnvelope keeps PhyPlan fields at the top level so clients from
+// before resource accounting can still decode the terminal plan during a
+// rolling upgrade. New clients use TerminalResourceVersion to distinguish the
+// appended resource facts from a legacy bare PhyPlan payload.
 type remoteTerminalEnvelope struct {
-	Plan                     *models.PhyPlan       `json:"plan,omitempty"`
-	Delta                    resource.Delta        `json:"resource"`
+	models.PhyPlan
+	TerminalResourceVersion  uint32                `json:"terminal_resource_version,omitempty"`
+	Delta                    resource.Delta        `json:"resource_delta"`
 	Memory                   resource.MemoryTotals `json:"memory"`
 	MissingFragmentCount     uint64                `json:"missing_fragment_count,omitempty"`
 	MissingMemoryDomainCount uint64                `json:"missing_memory_domain_count,omitempty"`
@@ -100,7 +107,7 @@ func (r *executionResourceRecorder) finishAttempt(
 	if r == nil {
 		return
 	}
-	attempt := resource.NewAttempt(generation, 0, 0)
+	attempt := resource.NewAttempt()
 	delta := collectScopeResourceDelta(scopes, localAddress)
 	remote := remoteResourceSnapshot{}
 	if anal != nil {

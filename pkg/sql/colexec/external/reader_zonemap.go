@@ -92,7 +92,9 @@ func (r *ZonemapReader) ReadBatch(
 	}
 
 	// Read the matching block
-	if err = r.getBatchFromZonemapFile(newCtx, proc, buf); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return r.getBatchFromZonemapFile(newCtx, proc, buf)
+	}); err != nil {
 		return false, err
 	}
 

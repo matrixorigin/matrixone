@@ -119,6 +119,12 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 	return n, nil
 }
 
+func (w *CSVWriter) Abort() {
+	w.releaseBuffer()
+	w.buf = nil
+	w.writer = nil
+}
+
 // FlushBuffer flush the input buf content into file.
 // The writer should NOT call function WriteRow, WriteStrings, FlushAndClose.
 func (w *CSVWriter) FlushBuffer(buf *bytes.Buffer) (int, error) {
