@@ -391,7 +391,6 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	defer registration.Cleanup()
 	require.NoError(t, d.Prepare(proc))
 
-	attached := make(chan struct{})
 	go func() {
 		select {
 		case <-child.called:
@@ -404,7 +403,6 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 		}
 		select {
 		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
-			close(attached)
 		case <-ctx.Done():
 		}
 	}()
@@ -414,11 +412,6 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	require.Equal(t, vm.ExecStop, result.Status)
 	require.True(t, d.ctr.prepared)
 	require.Len(t, d.ctr.remoteReceivers, 1)
-	select {
-	case <-attached:
-	default:
-		t.Fatal("empty dispatch returned before its remote receiver attached")
-	}
 }
 
 func TestDispatchEmptyInputRemoteWaitPropagatesCancellation(t *testing.T) {

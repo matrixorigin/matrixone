@@ -438,7 +438,7 @@ func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
 	require.True(t, sender.safeToClose)
-	require.True(t, sender.alreadyClose)
+	require.True(t, sender.receiveClosed)
 }
 
 func TestNewParallelScope(t *testing.T) {
