@@ -65,7 +65,7 @@ func commonDecimalType(known []types.Type, outer *types.Type) (types.Type, bool,
 	maxScale := int32(0)
 	minStorage := types.T_decimal64
 	for _, typ := range known {
-		if typ.Oid.IsInteger() {
+		if typ.Oid.IsInteger() || typ.Oid == types.T_bit {
 			maxIntegerDigits = max32(maxIntegerDigits, integerDecimalDigits(typ.Oid))
 			continue
 		}
@@ -87,7 +87,7 @@ func commonDecimalType(known []types.Type, outer *types.Type) (types.Type, bool,
 		return types.Type{}, false, false
 	}
 	if outer != nil {
-		if outer.Oid.IsInteger() {
+		if outer.Oid.IsInteger() || outer.Oid == types.T_bit {
 			maxIntegerDigits = max32(maxIntegerDigits, integerDecimalDigits(outer.Oid))
 		} else if outer.Oid.IsDecimal() {
 			width := outer.Width
@@ -127,7 +127,7 @@ func integerDecimalDigits(oid types.T) int32 {
 		return 10
 	case types.T_int64:
 		return 19
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		return 20
 	default:
 		return 0
@@ -199,7 +199,7 @@ func integerTypeBits(oid types.T) (int, bool) {
 		return 16, false
 	case types.T_uint32:
 		return 32, false
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		return 64, false
 	default:
 		return 0, false

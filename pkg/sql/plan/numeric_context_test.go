@@ -145,6 +145,61 @@ func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericContextTreatsBitColumnAsUnsignedBigint(t *testing.T) {
+	require.True(t, shouldActivateWeakDecimal(nil, typePtrForPlanTest(types.New(types.T_bit, 64, 0))))
+
+	tests := []struct {
+		name      string
+		sql       string
+		want      types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name: "bit only",
+			sql:  "select ? + n_regionkey from nation",
+			want: types.T_uint64,
+		},
+		{
+			name:      "bit with weak decimal",
+			sql:       "select (? + 0.5) + n_regionkey from nation",
+			want:      types.T_decimal128,
+			wantWidth: 21,
+			wantScale: 1,
+		},
+		{
+			name:      "bit with weak decimal reverse order",
+			sql:       "select n_regionkey + (0.5 + ?) from nation",
+			want:      types.T_decimal128,
+			wantWidth: 21,
+			wantScale: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			optimizer.ctxt.tables["nation"].Cols[2].Typ = makePlan2Type(typePtrForPlanTest(
+				types.New(types.T_bit, 64, 0),
+			))
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			paramTypes := collectPlanParamPlanTypes(queryPlan)
+			require.Len(t, paramTypes, 1)
+			require.Equal(t, int32(test.want), paramTypes[0].Id)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, paramTypes[0].Width)
+			}
+			if test.wantScale != 0 {
+				require.Equal(t, test.wantScale, paramTypes[0].Scale)
+			}
+		})
+	}
+}
+
 func TestPreparedNumericContextCoversUnaryAndModFunction(t *testing.T) {
 	tests := []struct {
 		name string

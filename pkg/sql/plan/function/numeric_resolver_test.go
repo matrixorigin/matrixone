@@ -192,6 +192,12 @@ func TestInferNumericParameterTypeDecimalIncludesIntegerCapacity(t *testing.T) {
 			outer:     typePtr(types.T_decimal128.ToType()),
 			wantWidth: 39,
 		},
+		{
+			name:      "bit outer context uses unsigned bigint capacity",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1)},
+			outer:     typePtr(types.New(types.T_bit, 64, 0)),
+			wantWidth: 21,
+		},
 	}
 
 	for _, test := range tests {
@@ -205,6 +211,56 @@ func TestInferNumericParameterTypeDecimalIncludesIntegerCapacity(t *testing.T) {
 			}
 			require.Equal(t, test.wantWidth, got.Width)
 			require.Equal(t, int32(1), got.Scale)
+		})
+	}
+}
+
+func TestInferNumericParameterTypeTreatsBitAsUnsignedBigint(t *testing.T) {
+	tests := []struct {
+		name      string
+		known     []types.Type
+		want      types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name:  "bit only",
+			known: []types.Type{types.New(types.T_bit, 64, 0)},
+			want:  types.T_uint64,
+		},
+		{
+			name:      "bit with decimal",
+			known:     []types.Type{types.New(types.T_bit, 64, 0), types.New(types.T_decimal64, 2, 1)},
+			want:      types.T_decimal128,
+			wantWidth: 21,
+			wantScale: 1,
+		},
+		{
+			name:      "bit with decimal reverse order",
+			known:     []types.Type{types.New(types.T_decimal64, 2, 1), types.New(types.T_bit, 64, 0)},
+			want:      types.T_decimal128,
+			wantWidth: 21,
+			wantScale: 1,
+		},
+		{
+			name:      "bit with signed integer",
+			known:     []types.Type{types.New(types.T_bit, 64, 0), types.T_int64.ToType()},
+			want:      types.T_decimal128,
+			wantWidth: 38,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := InferNumericParameterType(test.known, nil)
+			require.True(t, ok)
+			require.Equal(t, test.want, got.Oid)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, got.Width)
+			}
+			if test.wantScale != 0 {
+				require.Equal(t, test.wantScale, got.Scale)
+			}
 		})
 	}
 }
