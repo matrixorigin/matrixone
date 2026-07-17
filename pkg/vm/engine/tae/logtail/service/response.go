@@ -17,11 +17,46 @@ package service
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
+
+const maxRPCMessageSize = 100 * 1024 * 1024
+
+// ValidateRPCMaxMessageSize verifies that response segments have room for a
+// payload and cannot request an unsafe allocation.
+func ValidateRPCMaxMessageSize(maxMessageSize int64) error {
+	if maxMessageSize <= 0 {
+		return moerr.NewBadConfigNoCtxf(
+			"logtail rpc max message size must be positive, got %d", maxMessageSize)
+	}
+	if maxMessageSize > maxRPCMessageSize {
+		return moerr.NewBadConfigNoCtxf(
+			"logtail rpc max message size %d exceeds the supported limit %d",
+			maxMessageSize, maxRPCMessageSize)
+	}
+	if leastEffectiveCapacity(int(maxMessageSize)) <= 0 {
+		return moerr.NewBadConfigNoCtxf(
+			"logtail rpc max message size %d is too small", maxMessageSize)
+	}
+	return nil
+}
+
+func leastEffectiveCapacity(maxMessageSize int) int {
+	segment := LogtailResponseSegment{}
+	segment.StreamID = math.MaxUint64
+	segment.Sequence = math.MaxInt32
+	segment.MaxSequence = math.MaxInt32
+	segment.MessageSize = math.MaxInt32
+	// Payload contributes one field tag and the encoded length. Compute the
+	// worst-case header without allocating a maxMessageSize payload.
+	headerSize := segment.ProtoSize() + 1 + (bits.Len64(uint64(maxMessageSize)|1)+6)/7
+	return maxMessageSize - headerSize
+}
 
 // LogtailPhase is the logtail information of one phase of
 // subscription request. Phase 1 is executed asynchronously
@@ -165,15 +200,5 @@ func (p *serverSegmentPool) Release(seg *LogtailResponseSegment) {
 }
 
 func (p *serverSegmentPool) LeastEffectiveCapacity() int {
-	segment := p.Acquire()
-	defer p.Release(segment)
-
-	segment.StreamID = math.MaxUint64
-	segment.Sequence = math.MaxInt32
-	segment.MaxSequence = math.MaxInt32
-	segment.MessageSize = math.MaxInt32
-	maxHeaderSize := segment.ProtoSize() - p.maxMessageSize
-
-	// Take out reserved size, then effective capacity left.
-	return p.maxMessageSize - maxHeaderSize
+	return leastEffectiveCapacity(p.maxMessageSize)
 }

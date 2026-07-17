@@ -415,6 +415,11 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						continue
 					}
 
+					if !cs.assignStreamSequence(&f.send) {
+						cs.releaseMessage(f.send)
+						f.messageSent(backendClosed)
+						continue
+					}
 					timeout += v
 					// Record the information of some responses in advance, because after flush,
 					// these responses will be released, thus avoiding causing data race.
@@ -556,6 +561,71 @@ func (s *server) getSessionCount() int {
 	return n
 }
 
+// sentStreamState owns the complete lifecycle of server-side stream response
+// sequences. Its lock is never held across queue operations, network I/O, or
+// future waits.
+type sentStreamState struct {
+	mu        sync.Mutex
+	closed    bool
+	sequences map[uint64]uint32
+}
+
+func (s *sentStreamState) start(id uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.sequences == nil {
+		s.sequences = make(map[uint64]uint32)
+	}
+	if _, ok := s.sequences[id]; ok {
+		return false
+	}
+	s.sequences[id] = 0
+	return true
+}
+
+func (s *sentStreamState) next(id uint64) (uint32, bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, false, false
+	}
+	seq, ok := s.sequences[id]
+	if !ok {
+		return 0, false, true
+	}
+	seq++
+	s.sequences[id] = seq
+	return seq, true, true
+}
+
+func (s *sentStreamState) finish(id uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sequences, id)
+}
+
+func (s *sentStreamState) close() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0
+	}
+	s.closed = true
+	count := len(s.sequences)
+	clear(s.sequences)
+	return count
+}
+
+func (s *sentStreamState) contains(id uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.sequences[id]
+	return ok
+}
+
 type clientSession struct {
 	metrics       *serverMetrics
 	codec         Codec
@@ -567,16 +637,14 @@ type clientSession struct {
 	// boundary for validation and terminal retirement.
 	streamStateMu           sync.Mutex
 	receivedStreamSequences map[uint64]uint32
-	// streaming id -> last sent sequence, multi-stream access in multi-goroutines if
-	// the tcp connection is shared. But no concurrent in one stream.
-	sentStreamSequences   sync.Map
-	cancel                context.CancelFunc
-	ctx                   context.Context
-	releaseMessageFunc    func(Message)
-	checkTimeoutCacheOnce sync.Once
-	closedC               chan struct{}
-	disconnectedC         chan struct{}
-	mu                    struct {
+	sentStreams             sentStreamState
+	cancel                  context.CancelFunc
+	ctx                     context.Context
+	releaseMessageFunc      func(Message)
+	checkTimeoutCacheOnce   sync.Once
+	closedC                 chan struct{}
+	disconnectedC           chan struct{}
+	mu                      struct {
 		sync.RWMutex
 		closed bool
 		caches map[uint64]cacheWithContext
@@ -623,15 +691,13 @@ func (cs *clientSession) Close() error {
 	cs.cleanSend()
 	close(cs.c)
 	cs.mu.closed = true
+	sentCount := cs.sentStreams.close()
 	if cs.metrics != nil {
 		cs.metrics.receivedStreamStateGauge.Sub(float64(len(cs.receivedStreamSequences)))
-		sentCount := 0
-		cs.sentStreamSequences.Range(func(_, _ any) bool { sentCount++; return true })
 		cs.metrics.sentStreamStateGauge.Sub(float64(sentCount))
 		cs.metrics.messageCacheStateGauge.Sub(float64(len(cs.mu.caches)))
 	}
 	clear(cs.receivedStreamSequences)
-	cs.sentStreamSequences.Clear()
 	for _, c := range cs.mu.caches {
 		c.cache.Close()
 	}
@@ -718,14 +784,6 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
 
-	id := response.GetID()
-	if v, ok := cs.sentStreamSequences.Load(id); ok {
-		seq := v.(uint32) + 1
-		cs.sentStreamSequences.Store(id, seq)
-		msg.stream = true
-		msg.streamSequence = seq
-	}
-
 	f := cs.newFutureFunc()
 	f.init(msg)
 	if !f.oneWay {
@@ -743,6 +801,22 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
+}
+
+// assignStreamSequence runs in the single server write loop after a response
+// has passed the filter and context checks. Assigning the sequence at enqueue
+// time leaves a permanent gap when the queued response expires before it is
+// written, causing the client to tear down an otherwise healthy stream.
+func (cs *clientSession) assignStreamSequence(msg *RPCMessage) bool {
+	seq, stream, open := cs.sentStreams.next(msg.Message.GetID())
+	if !open {
+		return false
+	}
+	if stream {
+		msg.stream = true
+		msg.streamSequence = seq
+	}
+	return true
 }
 
 func (cs *clientSession) releaseMessage(msg RPCMessage) {
@@ -795,14 +869,16 @@ func (cs *clientSession) validateStreamRequest(
 	if sequence != expectSequence {
 		return false
 	}
-	cs.receivedStreamSequences[id] = sequence
 	if sequence == 1 {
-		cs.sentStreamSequences.Store(id, uint32(0))
+		if !cs.sentStreams.start(id) {
+			return false
+		}
 		if cs.metrics != nil {
 			cs.metrics.receivedStreamStateGauge.Inc()
 			cs.metrics.sentStreamStateGauge.Inc()
 		}
 	}
+	cs.receivedStreamSequences[id] = sequence
 	return true
 }
 
@@ -843,7 +919,7 @@ func (cs *clientSession) FinishStream(
 	err = cs.Write(ctx, response)
 	if err == nil {
 		delete(cs.receivedStreamSequences, token.streamID)
-		cs.sentStreamSequences.Delete(token.streamID)
+		cs.sentStreams.finish(token.streamID)
 		if cs.metrics != nil {
 			cs.metrics.receivedStreamStateGauge.Dec()
 			cs.metrics.sentStreamStateGauge.Dec()
