@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -45,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -212,6 +213,20 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	target = &plan.LockTarget{LockTable: false, LockTableAtTheEnd: true}
 	require.False(t, c.shouldPrePipelineLockTable(target))
 	require.False(t, target.LockTableAtTheEnd)
+}
+
+func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
+	node := &plan.Node{LockTargets: []*plan.LockTarget{{
+		TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+		Mode: lockpb.LockMode_Shared, LockTable: true,
+	}}}
+
+	op, err := constructLockOp(node, nil)
+	require.NoError(t, err)
+	targets := op.CopyToPipelineTarget()
+	require.Len(t, targets, 1)
+	assert.True(t, targets[0].LockTable)
+	assert.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 }
 
 func TestValidateReplaceParentTxnMode(t *testing.T) {

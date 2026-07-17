@@ -946,7 +946,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
-				lockArg.LockTable(target.TableId, target.ChangeDef)
+				lockArg.LockTableWithMode(target.TableId, target.Mode, target.ChangeDef)
 			}
 		}
 		op = lockArg

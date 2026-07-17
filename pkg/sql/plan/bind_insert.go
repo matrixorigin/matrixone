@@ -1113,6 +1113,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		var lockExpr *plan.Expr
 		var lockTableDef *plan.TableDef
 		var lockObjRef *plan.ObjectRef
+		lockTable := false
 		var pkeyNames []string
 		if parentTableDef.Pkey != nil {
 			pkeyNames = parentTableDef.Pkey.Names
@@ -1127,6 +1128,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 				lockExpr = childExprs[0]
 			} else {
 				lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", childExprs)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
 		} else {
 			var matchedIndex *plan.IndexDef
@@ -1137,33 +1141,39 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 				}
 			}
 			if matchedIndex == nil {
-				return 0, nil, moerr.NewNotSupportedf(builder.GetContext(),
-					"foreign key %s does not reference a lockable primary or unique key", fk.Name)
-			}
-			lockObjRef, lockTableDef, err = builder.compCtx.ResolveIndexTableByRef(
-				parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
-			if err != nil {
-				return 0, nil, err
-			}
-			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(matchedIndex.IndexAlgoParams)
-			if err != nil {
-				return 0, nil, err
-			}
-			keyParts := make([]*plan.Expr, len(childExprs))
-			for i, expr := range childExprs {
-				keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
+				// Legacy schemas may reference a non-unique prefix of a composite key.
+				// Such a reference has no physical point-lock key, so serialize it with
+				// parent mutations before the validation scan using a shared table lock.
+				lockTableDef = parentTableDef
+				lockObjRef = parentObjRef
+				lockExpr = childExprs[0]
+				lockTable = true
+			} else {
+				lockObjRef, lockTableDef, err = builder.compCtx.ResolveIndexTableByRef(
+					parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
 				if err != nil {
 					return 0, nil, err
 				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(matchedIndex.IndexAlgoParams)
+				if err != nil {
+					return 0, nil, err
+				}
+				keyParts := make([]*plan.Expr, len(childExprs))
+				for i, expr := range childExprs {
+					keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
+					if err != nil {
+						return 0, nil, err
+					}
+				}
+				if indexTableStoresSerializedKey(matchedIndex) {
+					lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+					if err != nil {
+						return 0, nil, err
+					}
+				} else {
+					lockExpr = keyParts[0]
+				}
 			}
-			if indexTableStoresSerializedKey(matchedIndex) {
-				lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
-			} else {
-				lockExpr = keyParts[0]
-			}
-		}
-		if err != nil {
-			return 0, nil, err
 		}
 		lockPkPos, lockTyp := getPkPos(lockTableDef, false)
 		if lockPkPos < 0 {
@@ -1185,7 +1195,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			LockTargets: []*plan.LockTarget{{
 				TableId: lockTableDef.TblId, ObjRef: lockObjRef,
 				PrimaryColIdxInBat: 0, PrimaryColRelPos: lockTag,
-				PrimaryColTyp: lockTyp, Mode: lockpb.LockMode_Shared,
+				PrimaryColTyp: lockTyp, Mode: lockpb.LockMode_Shared, LockTable: lockTable,
 			}},
 		}, bindCtx)
 		builder.appendStep(lockNodeID)

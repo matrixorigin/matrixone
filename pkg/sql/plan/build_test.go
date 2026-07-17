@@ -3426,6 +3426,69 @@ func TestChildInsertLocksCompositeParentPrimaryKey(t *testing.T) {
 	t.Fatal("composite parent primary key shared lock not found")
 }
 
+func TestChildInsertLocksCompositeParentPrimaryKeyPrefixTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_p"]
+	parent.Cols = append(parent.Cols,
+		&plan.ColDef{Name: "k", ColId: 3, Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
+		&plan.ColDef{Name: catalog.CPrimaryKeyColName, ColId: 4, Hidden: true,
+			Typ: plan.Type{Id: int32(types.T_varchar), Width: 65535}},
+	)
+	parent.Pkey = &plan.PrimaryKeyDef{Names: []string{"id", "k"}, PkeyColName: catalog.CPrimaryKeyColName}
+	if parent.Name2ColIndex == nil {
+		parent.Name2ColIndex = make(map[string]int32, len(parent.Cols))
+		for i, col := range parent.Cols {
+			parent.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	parent.Name2ColIndex["k"] = int32(len(parent.Cols) - 2)
+	parent.Name2ColIndex[catalog.CPrimaryKeyColName] = int32(len(parent.Cols) - 1)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	stepContaining := func(target int32) int {
+		var contains func(int32) bool
+		contains = func(nodeID int32) bool {
+			if nodeID == target {
+				return true
+			}
+			for _, childID := range query.Nodes[nodeID].Children {
+				if contains(childID) {
+					return true
+				}
+			}
+			return false
+		}
+		for step, rootID := range query.Steps {
+			if contains(rootID) {
+				return step
+			}
+		}
+		return -1
+	}
+	foundParentScan := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.TblId == parent.TblId {
+			foundParentScan = true
+		}
+	}
+	for nodeID, node := range query.Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId != parent.TblId || target.Mode != lockpb.LockMode_Shared {
+				continue
+			}
+			assert.True(t, target.LockTable)
+			lockStep := stepContaining(int32(nodeID))
+			require.GreaterOrEqual(t, lockStep, 0)
+			assert.Less(t, lockStep, len(query.Steps)-1)
+			assert.True(t, foundParentScan)
+			return
+		}
+	}
+	t.Fatal("composite parent primary-key prefix shared table lock not found")
+}
+
 func TestChildInsertLocksReferencedUniqueIndexKey(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	parent := mock.ctxt.tables["replace_fk_p"]

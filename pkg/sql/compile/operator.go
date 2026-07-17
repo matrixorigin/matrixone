@@ -791,7 +791,7 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {
-			arg.LockTable(target.TableId, false)
+			arg.LockTableWithMode(target.TableId, target.Mode, false)
 		}
 	}
 	return arg, nil

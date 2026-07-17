@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -358,6 +359,22 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
 		require.Equal(t, vm.IntersectAll, restored.OpType())
+	})
+
+	t.Run("SharedTableLock", func(t *testing.T) {
+		original := lockop.NewArgumentByEngine(nil)
+		original.AddLockTargetWithMode(42, nil, lockpb.LockMode_Shared, 0,
+			types.T_int64.ToType(), -1, -1, nil, false)
+		original.LockTableWithMode(42, lockpb.LockMode_Shared, false)
+
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredLock, ok := restored.(*lockop.LockOp)
+		require.True(t, ok)
+		targets := restoredLock.CopyToPipelineTarget()
+		require.Len(t, targets, 1)
+		require.True(t, targets[0].LockTable)
+		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
 }
 
