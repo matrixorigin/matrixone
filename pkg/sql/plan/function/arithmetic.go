@@ -18,6 +18,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -540,6 +541,29 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	panic("unreached code")
 }
 
+// maskUnselectedRows marks rows short-circuited by selectList (e.g. the
+// untaken branch of CASE/IF) as NULL so kernels skip them; per-row checks
+// such as overflow or division by zero must not fire on masked rows.
+// done means every row is masked and the caller can return immediately.
+func maskUnselectedRows(rsNull *nulls.Nulls, selectList *FunctionSelectList, length int) (done bool, skipMasked bool) {
+	if selectList == nil {
+		return false, false
+	}
+	if selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return true, false
+	}
+	if !selectList.ShouldEvalAllRow() {
+		for i := range selectList.SelectList {
+			if selectList.Contains(uint64(i)) {
+				rsNull.Add(uint64(i))
+			}
+		}
+		return false, true
+	}
+	return false, false
+}
+
 // integerDivSigned handles DIV for signed integer types
 func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if length == 0 {
@@ -552,12 +576,19 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
+	if done {
+		return nil
+	}
 
 	switch paramType.Oid {
 	case types.T_int8:
 		p1 := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int8](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -573,6 +604,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 		p1 := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int16](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -588,6 +622,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 		p1 := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int32](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -603,6 +640,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 		p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -636,12 +676,19 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
+	if done {
+		return nil
+	}
 
 	switch paramType.Oid {
 	case types.T_uint8:
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -657,6 +704,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint16](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint16](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -672,6 +722,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint32](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint32](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -687,6 +740,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
+			if skipMasked && rsNull.Contains(i) {
+				continue
+			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {

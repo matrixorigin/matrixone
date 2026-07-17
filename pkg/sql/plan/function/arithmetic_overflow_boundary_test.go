@@ -16,6 +16,7 @@ package function
 
 import (
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -620,9 +621,11 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 }
 
 // Rows masked by selectList (e.g. short-circuited by CASE/IF) must not be
-// evaluated, so an overflow on a masked row must not raise an error. The
-// vector/const branch of specialTemplateForDivFunction used to check only
-// p1.WithAnyNullValue() and evaluated masked rows anyway.
+// evaluated, so an overflow on a masked row must not raise an error. Two
+// kernels used to evaluate masked rows anyway: the vector/const branch of
+// specialTemplateForDivFunction checked only p1.WithAnyNullValue(), and the
+// hand-written integerDivSigned/integerDivUnsigned ignored selectList
+// entirely.
 func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	maskRow1 := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
@@ -652,7 +655,8 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 		require.Equal(t, 1e308, vector.MustFixedColNoTypeCheck[float64](rsVec)[0])
 	}
 
-	// integerDivFn vector / const: masked row 1 would exceed BIGINT range
+	// integerDivFn float branch (specialTemplateForDivFunction) vector / const:
+	// masked row 1 would exceed BIGINT range
 	{
 		rsVec := runMasked("select case when .. then float64_col DIV 1 end",
 			integerDivFn,
@@ -678,5 +682,64 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 			},
 			types.T_float64.ToType())
 		require.Equal(t, 0.5, vector.MustFixedColNoTypeCheck[float64](rsVec)[0])
+	}
+
+	// integerDivSigned vector / const: masked MinInt64 DIV 1 must not raise
+	{
+		rsVec := runMasked("select case when .. then int64_col DIV 1 end",
+			integerDivFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7, math.MinInt64}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{1, 1}, []bool{false, false}),
+			},
+			types.T_int64.ToType())
+		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+	}
+
+	// integerDivSigned vector / vector: masked MinInt64 DIV -1 must not raise
+	{
+		rsVec := runMasked("select case when .. then int64_col1 DIV int64_col2 end",
+			integerDivFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7, math.MinInt64}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, -1}, []bool{false, false}),
+			},
+			types.T_int64.ToType())
+		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+	}
+
+	// integerDivUnsigned vector / vector: masked MaxUint64 DIV 1 must not raise
+	{
+		rsVec := runMasked("select case when .. then uint64_col1 DIV uint64_col2 end",
+			integerDivFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{7, math.MaxUint64}, []bool{false, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{1, 1}, []bool{false, false}),
+			},
+			types.T_int64.ToType())
+		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+	}
+
+	// integerDivSigned vector / vector: masked zero divisor must not raise
+	// even in strict mode (division-by-zero check must also skip masked rows)
+	{
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+		defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+		rsVec := runMasked("select case when .. then int64_col1 DIV int64_col2 end",
+			integerDivFn,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7, 5}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 0}, []bool{false, false}),
+			},
+			types.T_int64.ToType())
+		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
 	}
 }
