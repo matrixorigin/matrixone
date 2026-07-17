@@ -120,6 +120,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		}
 		keyVecs[i] = vec
 	}
+	ctr.hashmapBuilder.observeNullKeys(keyVecs)
 
 	// Reuse hashValues buffer
 	rowCount := bat.RowCount()

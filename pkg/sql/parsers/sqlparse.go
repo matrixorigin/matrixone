@@ -211,7 +211,15 @@ func SplitSqlBySemicolon(sql string) []string {
 	return ret
 }
 
-// fragmentHasStatement reports whether a semicolon-separated fragment carries an
+func SplitSqlByStatement(ctx context.Context, sql string) ([]string, error) {
+	return SplitSqlByStatementWithSQLMode(ctx, sql, "")
+}
+
+func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	return mysql.SplitSqlByStatementWithSQLMode(ctx, sql, 1, sqlMode)
+}
+
+// FragmentHasStatement reports whether a semicolon-separated fragment carries an
 // actual statement rather than being blank or comment-only. The scanner skips
 // every comment form (-- , #, //, /* */, /*+ */) so the first token of a
 // comment-only or empty fragment is EOF. It is used to align the leading-hint
@@ -219,7 +227,7 @@ func SplitSqlBySemicolon(sql string) []string {
 // into two fragments but parses into one statement, and the comment-only tail
 // must not be counted as a statement (otherwise the hint/statement counts
 // mismatch and AddRewriteHints rejects an otherwise valid query).
-func fragmentHasStatement(fragment string) bool {
+func FragmentHasStatement(fragment string) bool {
 	if strings.TrimSpace(fragment) == "" {
 		return false
 	}
@@ -233,15 +241,22 @@ func fragmentHasStatement(fragment string) bool {
 // of the leading /*+ ... */ (or /*! ... */) hint on that statement, or "" if it
 // has none. Blank/comment-only fragments carry no statement and are skipped so
 // the returned slice lines up positionally with the parser's statement list.
-func extractLeadingHints(sql string) []string {
+func extractLeadingHints(ctx context.Context, sql string) ([]string, error) {
+	return extractLeadingHintsWithSQLMode(ctx, sql, "")
+}
+
+func extractLeadingHintsWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
 	if len(sql) == 0 {
-		return []string{""}
+		return []string{""}, nil
 	}
 
-	fragments := SplitSqlBySemicolon(sql)
+	fragments, err := SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
+	}
 	stmts := make([]string, 0, len(fragments))
 	for _, f := range fragments {
-		if fragmentHasStatement(f) {
+		if FragmentHasStatement(f) {
 			stmts = append(stmts, f)
 		}
 	}
@@ -307,7 +322,7 @@ func extractLeadingHints(sql string) []string {
 		}
 	}
 
-	return results
+	return results, nil
 }
 
 type RewriteMap struct {
@@ -467,7 +482,14 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 }
 
 func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) error {
-	hints := extractLeadingHints(sql)
+	return AddRewriteHintsWithSQLMode(ctx, stmts, sql, "")
+}
+
+func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
+	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return err
+	}
 	if len(hints) != len(stmts) {
 		// A SQL that is entirely blank/comments carries no statement-bearing
 		// fragment, so hints is empty while the parser returns a single
@@ -516,7 +538,7 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 				if v == "" {
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
+				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, 1, sqlMode)
 				if err != nil {
 					return moerr.NewParseError(ctx, err.Error())
 				}
@@ -552,4 +574,20 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 		}
 	}
 	return nil
+}
+
+func HandleSqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
+	return HandleSqlForRecordByStatementWithSQLMode(ctx, sql, "")
+}
+
+func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	fragments, err := SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]string, len(fragments))
+	for i, fragment := range fragments {
+		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
+	}
+	return records, nil
 }
