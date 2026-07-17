@@ -96,7 +96,7 @@ func TombstoneRangeScanByObject(
 	defer it.Release()
 	for ok := it.Last(); ok; ok = it.Prev() {
 		tombstone := it.Item()
-		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
+		if tombstone.IsCEntry() && tombstone.HasDCounterpart() {
 			// The dropped counterpart owns the persisted appendable tombstone data.
 			// Scanning both versions duplicates the same committed delete rows.
 			continue

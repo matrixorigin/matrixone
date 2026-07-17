@@ -11764,6 +11764,9 @@ func TestRW3(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer func() {
+		t.Log(tae.Catalog.SimplePPString(common.PPL3))
+	}()
 
 	objCount := 100
 	schema := catalog.MockSchemaAll(1, -1)
