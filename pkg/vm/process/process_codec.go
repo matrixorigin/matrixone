@@ -60,6 +60,9 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 		procInfo.AccountId = accountId
+		// Carry ROW_COUNT() state so it is correct when an expression that reads
+		// it (e.g. row_count() in a projection) is pushed down to a remote CN.
+		procInfo.AffectedRows = proc.GetAffectedRows()
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -77,6 +80,7 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
+			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
 		}
 	}
 	{ // session info
@@ -218,18 +222,25 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	proc.SetAffectedRows(value.AffectedRows)
 	if value.PrepareParams.Length > 0 {
-		proc.Base.prepareParams = vector.NewVecWithData(
+		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
 			int(value.PrepareParams.Length),
 			value.PrepareParams.Data,
 			value.PrepareParams.Area,
+			proc.Mp(),
 		)
+		if err != nil {
+			proc.Free()
+			return nil, err
+		}
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
-				proc.Base.prepareParams.GetNulls().Add(uint64(i))
+				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
 	}
 	return proc, nil
 }

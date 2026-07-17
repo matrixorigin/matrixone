@@ -225,7 +225,12 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.rightRowsMatched == nil || (hashJoin.NumCPU > 1 && !hashJoin.IsMerger) {
+			// Only enter Finalize when syncBitmap ran to completion and set
+			// the iterator. It stays nil for non-merger workers, when there
+			// is no bitmap at all, or when the merger observed teardown (a
+			// worker sent a nil bitmap on Reset, or the context was
+			// canceled) — in all these cases there is nothing to finalize.
+			if ctr.rightMatchedIter == nil {
 				ctr.state = End
 			} else {
 				ctr.state = Finalize
@@ -480,7 +485,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 					if ctr.probeRightJoin {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						ctr.rightRowsMatched.Add(uint64(idx))
@@ -503,7 +508,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 						if ctr.probeRightJoin {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 
 							ctr.rightRowsMatched.Add(uint64(idx))
@@ -523,7 +528,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if hashJoin.NonEqCond == nil {
 					if ctr.probeLeftSingle {
 						if len(ctr.sels) > 1 {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
 						ctr.appendOneNotMatch(hashJoin, proc, row)
@@ -559,7 +564,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if ctr.probeRightJoin {
 					for _, sel := range sels {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						ctr.rightRowsMatched.Add(uint64(sel))
@@ -599,13 +604,13 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					if ok {
 						if ctr.probeRightJoin {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 
 							ctr.rightRowsMatched.Add(uint64(sel))
 						} else {
 							if ctr.probeSingle && ctr.leftRowMatched {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 						}
 
@@ -684,16 +689,24 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 
 			for cnt := 1; cnt < int(hashJoin.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
-				if v != nil {
-					matchedCnt += v.Count()
-					ctr.rightRowsMatched.Or(v)
-				} else {
+				if v == nil {
+					// A worker was torn down before syncing (its Reset sends
+					// nil) or the context was canceled. The merge is aborted,
+					// but keep draining this generation's remaining messages
+					// so no stale bitmap is left behind in the shared
+					// channel, then bail out without initializing the
+					// iterator — Call routes to End and nothing is finalized.
+					for cnt++; cnt < int(hashJoin.NumCPU); cnt++ {
+						colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
+					}
 					return nil
 				}
+				matchedCnt += v.Count()
+				ctr.rightRowsMatched.Or(v)
 			}
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
-				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+				return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 			}
 
 			close(hashJoin.Channel)

@@ -47,6 +47,28 @@ var (
 	ClosedEvent          = EventType{99, "closed"}
 )
 
+// defaultTxnEventCallbacks is initialized once by txnClient and is immutable
+// after the client is published.
+type defaultTxnEventCallbacks struct {
+	closed [2]TxnEventCallback
+}
+
+// txnEventCallbacks points at the client-owned defaults until a caller appends
+// a custom callback. The custom callback map is then allocated per operator.
+type txnEventCallbacks struct {
+	defaults  *defaultTxnEventCallbacks
+	callbacks map[EventType][]TxnEventCallback
+}
+
+func (tc *txnOperator) setDefaultEventCallbacks(callbacks *txnEventCallbacks) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.mu.closed {
+		panic("set default callbacks on closed txn")
+	}
+	tc.mu.callbacks = callbacks
+}
+
 func (tc *txnOperator) AppendEventCallback(
 	event EventType,
 	callbacks ...TxnEventCallback) {
@@ -55,10 +77,17 @@ func (tc *txnOperator) AppendEventCallback(
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
-	if tc.mu.callbacks == nil {
-		tc.mu.callbacks = make(map[EventType][]TxnEventCallback, 1)
+	if tc.mu.callbacks == nil || tc.mu.callbacks.callbacks == nil {
+		var defaults *defaultTxnEventCallbacks
+		if tc.mu.callbacks != nil {
+			defaults = tc.mu.callbacks.defaults
+		}
+		tc.mu.callbacks = &txnEventCallbacks{
+			defaults:  defaults,
+			callbacks: make(map[EventType][]TxnEventCallback, 1),
+		}
 	}
-	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
+	tc.mu.callbacks.callbacks[event] = append(tc.mu.callbacks.callbacks[event], callbacks...)
 }
 
 func (tc *txnOperator) triggerEvent(ctx context.Context, event TxnEvent) error {
@@ -71,7 +100,15 @@ func (tc *txnOperator) triggerEventLocked(ctx context.Context, event TxnEvent) (
 	if tc.mu.callbacks == nil {
 		return
 	}
-	for _, cb := range tc.mu.callbacks[event.Event] {
+	if event.Event == ClosedEvent && tc.mu.callbacks.defaults != nil {
+		for _, cb := range tc.mu.callbacks.defaults.closed {
+			err = cb.Func(ctx, tc, event, cb.Value)
+			if err != nil {
+				return
+			}
+		}
+	}
+	for _, cb := range tc.mu.callbacks.callbacks[event.Event] {
 		err = cb.Func(ctx, tc, event, cb.Value)
 		if err != nil {
 			return

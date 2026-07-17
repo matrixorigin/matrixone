@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -52,4 +53,27 @@ func TestCreateTxnStorage(t *testing.T) {
 	v, err = s.createTxnStorage(ctx, metadata.TNShard{}, nil)
 	assert.Error(t, err)
 	assert.Nil(t, v)
+}
+
+func TestCreateMemoryStorageDoesNotCreateUnusedLogClient(t *testing.T) {
+	catalog.SetupDefines("")
+	ctx := context.Background()
+	s := &store{
+		rt:             runtime.DefaultRuntime(),
+		cfg:            &Config{},
+		stopper:        stopper.NewStopper(""),
+		hakeeperClient: newTestHAKeeperClient(),
+	}
+	calls := 0
+	s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+		calls++
+		return mem.NewMemLog(), nil
+	}
+	s.cfg.Txn.Storage.Backend = StorageMEM
+
+	v, err := s.createTxnStorage(ctx, metadata.TNShard{}, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, v)
+	assert.Zero(t, calls)
+	assert.NoError(t, v.Close(ctx))
 }

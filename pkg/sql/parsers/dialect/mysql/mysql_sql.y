@@ -29,7 +29,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
     if node == nil {
         return ""
     }
-    return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
+    return tree.StringWithOpts(node, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString())
 }
 
 // makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
@@ -51,7 +51,7 @@ func sqlTaskBodyString(stmt tree.Statement) string {
     parts := make([]string, 0, len(compound.Stmts))
     for _, s := range compound.Stmts {
         if s != nil {
-            parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithSingleQuoteString()))
+            parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
         }
     }
     return strings.Join(parts, "; ")
@@ -351,7 +351,8 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
-%left <str> OR PIPE_CONCAT
+%left <str> OR
+%token <str> PIPE_CONCAT
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
@@ -364,6 +365,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> '+' '-'
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
+%left PIPE_CONCAT
 %right <str> '~' UNARY
 %nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
@@ -930,11 +932,7 @@ start_command:
     stmt_type
 
 stmt_type:
-    block_stmt
-    {
-        yylex.(*Lexer).AppendStmt($1)
-    }
-|   stmt_list
+    stmt_list
 
 stmt_list:
     stmt
@@ -986,7 +984,11 @@ block_type_stmt:
     }
 
 stmt:
-    normal_stmt
+    block_stmt
+    {
+        $$ = $1
+    }
+|   normal_stmt
     {
         $$ = $1
     }
@@ -10969,6 +10971,15 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.BIT_XOR, $1, $3)
     }
+|   bit_expr PIPE_CONCAT bit_expr
+    {
+        name := tree.NewUnresolvedColName("concat")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("concat", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
 |   bit_expr '+' bit_expr %prec '+'
     {
         $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3)
@@ -12694,15 +12705,6 @@ expression:
     {
         $$ = tree.NewOrExpr($1, $3)
     }
-|   expression PIPE_CONCAT expression %prec PIPE_CONCAT
-    {
-        name := tree.NewUnresolvedColName("concat")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr("concat", 1),
-            Exprs: tree.Exprs{$1, $3},
-        }
-    }
 |   expression XOR expression %prec XOR
     {
         $$ = tree.NewXorExpr($1, $3)
@@ -13391,13 +13393,19 @@ decimal_type:
 |   REAL float_length_opt
     {
         locale := ""
+        width := int32(64)
+        oid := uint32(defines.MYSQL_TYPE_DOUBLE)
+        if yylex.(*Lexer).HasSQLMode(SQLModeRealAsFloat) {
+            width = 32
+            oid = uint32(defines.MYSQL_TYPE_FLOAT)
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.FloatFamily,
                 FamilyString: $1,
-                Width:  64,
+                Width:  width,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+                Oid:    oid,
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
             },

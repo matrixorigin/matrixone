@@ -388,6 +388,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
 				return nil, nil
 			}
+			trimmed := strings.TrimSpace(def.OriginString)
+			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+				return functionUtil.QuickStrToBytes(trimmed), nil
+			}
 
 			fStr := formatStr(def.OriginString)
 			if len(fStr) == 0 {
