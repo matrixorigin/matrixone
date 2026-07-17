@@ -1254,6 +1254,41 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	})
 }
 
+func TestPrepareStringStatementCombinesSQLModeAndRemapPolicy(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = make(map[string]string)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"remapdb":{"src":"session_db"}}`))
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.rewriteEnabled = true
+	outerSQL, err := rewriteSQL(ctx, ses, `prepare test_stmt from 'select 1'`)
+	require.NoError(t, err)
+	execCtx.sqlOfStmt = outerSQL
+
+	_, stmt, remap, err := prepareStringStatement(execCtx, ses,
+		`select "c" from src.t`)
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+	defer stmt.Free()
+	require.Equal(t, "session_db", remap["src"])
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, selectClause.Exprs, 1)
+	name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	require.True(t, ok, "ANSI_QUOTES must parse a double-quoted token as an identifier")
+	require.Equal(t, "c", name.ColName())
+	require.Contains(t, tree.String(stmt, dialect.MYSQL), "session_db.t")
+}
+
 func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
