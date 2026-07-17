@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,11 +70,24 @@ func manifestHTTPHandler(d *db.DB) http.HandlerFunc {
 	}
 }
 
-var registerManifestOnce sync.Once
+var (
+	registerManifestOnce sync.Once
+	activeManifestDB     atomic.Pointer[db.DB]
+)
+
+func activeManifestHTTPHandler(w http.ResponseWriter, r *http.Request) {
+	d := activeManifestDB.Load()
+	if d == nil {
+		writeJSONError(w, "TAE manifest DB is not available", http.StatusServiceUnavailable)
+		return
+	}
+	manifestHTTPHandler(d)(w, r)
+}
 
 // RegisterManifestHTTP registers /debug/tae/manifest on the default HTTP mux.
 // The endpoint is served by the debug HTTP server (-debug-http flag).
-// Safe to call multiple times; the handler is registered only once.
+// Safe to call multiple times; the handler is registered only once, while the
+// active TAE DB generation is replaced on every call.
 //
 // Usage:
 //
@@ -81,8 +95,13 @@ var registerManifestOnce sync.Once
 //
 // Returns the DuckDB TAE scanner manifest as JSON.
 func RegisterManifestHTTP(d *db.DB) {
+	activeManifestDB.Store(d)
 	registerManifestOnce.Do(func() {
-		http.HandleFunc("/debug/tae/manifest", manifestHTTPHandler(d))
+		http.HandleFunc("/debug/tae/manifest", activeManifestHTTPHandler)
 		logutil.Infof("registered /debug/tae/manifest HTTP endpoint")
 	})
+}
+
+func UnregisterManifestHTTP(d *db.DB) {
+	activeManifestDB.CompareAndSwap(d, nil)
 }

@@ -132,6 +132,7 @@ func NewService(
 		return nil, err
 	}
 	if err := store.loadMetadata(); err != nil {
+		_ = store.close()
 		return nil, err
 	}
 	startCtx, cancelStart := context.WithCancel(context.Background())
@@ -148,6 +149,7 @@ func NewService(
 	}
 	defer cancelStart()
 	if err := store.startReplicas(startCtx); err != nil {
+		_ = store.close()
 		return nil, err
 	}
 	pool := &sync.Pool{}

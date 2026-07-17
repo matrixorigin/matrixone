@@ -355,6 +355,8 @@ type BindContext struct {
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
 
+	projectColByAst map[string]int32
+
 	projectByAst []SelectField
 
 	timeAsts []tree.Expr
@@ -485,6 +487,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
@@ -508,7 +511,8 @@ type ProjectionBinder struct {
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {

@@ -15,12 +15,12 @@
 package frontend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -734,8 +734,8 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			return nil, err
 		}
 
-		sort.Slice(matchedList, func(i, j int) bool {
-			return matchedList[i].Cost < matchedList[j].Cost
+		slices.SortFunc(matchedList, func(a, b *MatchUdf) int {
+			return cmp.Compare(a.Cost, b.Cost)
 		})
 
 		minCost := matchedList[0].Cost
