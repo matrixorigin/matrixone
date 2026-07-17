@@ -88,6 +88,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	newColName2Idx := make(map[string]int32)
 	updateAutoIncrCols := make([]bool, len(dmlCtx.aliases))
 	colOffsets := make([]int32, len(dmlCtx.aliases))
+	updateNumericTargets := make(map[int32]Type)
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -220,6 +221,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
+			updateNumericTargets[oldPos] = tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
 			selectList = append(selectList, selectList[oldPos])
@@ -251,6 +253,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 		With:    stmt.With,
+	}
+	bindCtx.numericProjectionTypes = make([]Type, len(selectList))
+	for pos, typ := range updateNumericTargets {
+		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
 	lastNodeID, err := builder.bindSelect(selectAst, bindCtx, false)

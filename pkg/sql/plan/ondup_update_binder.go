@@ -76,6 +76,10 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
+func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
+	return b.bindNumericExprWithContext(astExpr, 0, &target)
+}
+
 func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	colName := astExpr.ColName()
 	idx, ok := b.tableDef.Name2ColIndex[colName]

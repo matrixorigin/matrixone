@@ -1322,7 +1322,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 			} else {
-				updateExpr, err = binder.BindExpr(astExpr, 0, true)
+				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
 				if err != nil {
 					return 0, err
 				}
@@ -2695,6 +2695,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, err
@@ -2705,6 +2706,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = selectImpl.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, err
@@ -2767,6 +2769,14 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 	}
+}
+
+func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
+	targets := make([]Type, len(insertColumns))
+	for i, column := range insertColumns {
+		targets[i] = tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
+	}
+	return targets
 }
 
 func (builder *QueryBuilder) appendNodesForInsertStmt(
@@ -2981,7 +2991,8 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 		case *tree.CastExpr:
 			e = v.Expr
 		case *tree.FuncExpr:
-			return true
+			funcRef, ok := v.Func.FunctionReference.(*tree.UnresolvedName)
+			return !ok || !strings.EqualFold(funcRef.ColName(), "mod")
 		default:
 			return false
 		}

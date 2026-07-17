@@ -2564,6 +2564,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
+		subCtx.numericProjectionTypes = ctx.numericProjectionTypes
 		savedIsForUpdate := builder.isForUpdate
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
@@ -4765,7 +4766,7 @@ func bindProjectionList(
 		}
 
 		for i := range selectList[:sampleRangeLeft] {
-			expr, err := projectionBinder.BindExpr(selectList[i].Expr, 0, true)
+			expr, err := bindProjectionExprWithNumericTarget(ctx, projectionBinder, selectList[i].Expr, i)
 			if err != nil {
 				return err
 			}
@@ -4775,7 +4776,8 @@ func bindProjectionList(
 	}
 
 	for i := range selectList[sampleRangeRight:] {
-		expr, err := projectionBinder.BindExpr(selectList[i].Expr, 0, true)
+		projectIdx := sampleRangeRight + i
+		expr, err := bindProjectionExprWithNumericTarget(ctx, projectionBinder, selectList[i].Expr, projectIdx)
 		if err != nil {
 			return err
 		}
@@ -4783,6 +4785,22 @@ func bindProjectionList(
 		ctx.projects = append(ctx.projects, expr)
 	}
 	return nil
+}
+
+func bindProjectionExprWithNumericTarget(
+	ctx *BindContext,
+	projectionBinder *ProjectionBinder,
+	astExpr tree.Expr,
+	projectIdx int,
+) (*plan.Expr, error) {
+	if projectIdx < len(ctx.numericProjectionTypes) {
+		target := ctx.numericProjectionTypes[projectIdx]
+		if target.Id != 0 {
+			projectionBinder.numericTargetType = &target
+			defer func() { projectionBinder.numericTargetType = nil }()
+		}
+	}
+	return projectionBinder.BindExpr(astExpr, 0, true)
 }
 
 func (builder *QueryBuilder) appendStep(nodeID int32) int32 {

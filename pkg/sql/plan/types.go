@@ -356,6 +356,8 @@ type BindContext struct {
 
 	projectByAst []SelectField
 
+	numericProjectionTypes []Type
+
 	timeAsts []tree.Expr
 
 	aliasMap       map[string]*aliasItem
@@ -502,7 +504,8 @@ type HavingBinder struct {
 
 type ProjectionBinder struct {
 	baseBinder
-	havingBinder *HavingBinder
+	havingBinder      *HavingBinder
+	numericTargetType *Type
 }
 
 type OrderBinder struct {
