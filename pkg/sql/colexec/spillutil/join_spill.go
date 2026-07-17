@@ -877,7 +877,6 @@ type SpillEngine struct {
 	// Reusable scatter state
 	buildPool ReusableBufferPool
 	probePool ReusableBufferPool
-	writeBuf  bytes.Buffer
 
 	// Cached key executors for re-spill
 	keyExecs []colexec.ExpressionExecutor
@@ -1371,7 +1370,10 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		enqueue := hasBuild || (hasProbe && e.cfg.NeedsProbeForEmptyBuild)
 		if enqueue {
 			if len(e.buckets)-1+len(subBuckets)+1 > e.cfg.MaxQueue {
-				return nil, fmt.Errorf("spill queue limit exceeded: %w", process.ErrHashBuildBudgetAdmission)
+				return nil, &process.HashBuildBudgetError{
+					Kind:    process.HashBuildBudgetErrorAdmission,
+					Message: fmt.Sprintf("spill queue limit exceeded: %s", process.ErrHashBuildBudgetAdmission),
+				}
 			}
 			buildFile, err := buildWriters[i].handOffSpillFile()
 			if err != nil {
@@ -1530,7 +1532,10 @@ func isBudgetAdmission(err error) bool {
 
 func noProgressError(proc *process.Process, depth int) error {
 	_ = proc
-	return fmt.Errorf("join spill cannot make progress at depth %d: %w", depth, process.ErrHashBuildBudgetAdmission)
+	return &process.HashBuildBudgetError{
+		Kind:    process.HashBuildBudgetErrorAdmission,
+		Message: fmt.Sprintf("join spill cannot make progress at depth %d: %s", depth, process.ErrHashBuildBudgetAdmission),
+	}
 }
 
 // Cleanup releases all engine resources.

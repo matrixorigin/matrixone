@@ -175,24 +175,6 @@ func (b *spillFileBundle) growDisk(file *os.File, budget *process.HashBuildBudge
 	return old, false, nil
 }
 
-func (b *spillFileBundle) rollbackDisk(file *os.File, old uint64, created bool) {
-	if b == nil || file == nil {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	entry := b.entries[file]
-	if entry == nil || entry.diskToken == nil {
-		return
-	}
-	if created {
-		entry.diskToken.Release()
-		entry.diskToken = nil
-		return
-	}
-	_, _ = entry.diskToken.ReconcileDown(old)
-}
-
 func (b *spillFileBundle) recordDiskWrite(file *os.File, rows int64, bytes uint64) {
 	if b == nil || file == nil {
 		return

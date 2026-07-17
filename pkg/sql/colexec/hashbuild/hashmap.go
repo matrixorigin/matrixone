@@ -397,9 +397,7 @@ func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
 			types.T_geometry, types.T_geometry32, types.T_array_float32, types.T_array_float64:
 			hardMax = int64(types.MaxBlobLen)
 		}
-		if width <= 0 {
-			width = hardMax
-		} else if width > hardMax {
+		if width > hardMax {
 			// Never clamp a declared bound downward.
 			hardMax = width
 		}

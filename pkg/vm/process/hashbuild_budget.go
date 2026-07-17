@@ -15,12 +15,12 @@
 package process
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -43,16 +43,16 @@ func observeHashBuildBudget(component, event, scope string, bytes uint64) {
 // process rather than the SQL layer so that operators and remote execution
 // code can make an admission decision without importing frontend packages.
 var (
-	ErrHashBuildBudgetAdmission = errors.New("hash build budget admission rejected")
+	ErrHashBuildBudgetAdmission = moerr.NewInternalErrorNoCtx("hash build budget admission rejected")
 	// ErrHashBuildBudgetRejected is kept as a more discoverable spelling of the
 	// admission sentinel.  It is the same value, so errors.Is works with either.
 	ErrHashBuildBudgetRejected             = ErrHashBuildBudgetAdmission
-	ErrHashBuildBudgetClosed               = errors.New("hash build budget is closed")
-	ErrHashBuildBudgetInvalid              = errors.New("invalid hash build budget")
-	ErrHashBuildCeilingMissing             = errors.New("hash build budget ceiling unavailable")
+	ErrHashBuildBudgetClosed               = moerr.NewInternalErrorNoCtx("hash build budget is closed")
+	ErrHashBuildBudgetInvalid              = moerr.NewInternalErrorNoCtx("invalid hash build budget")
+	ErrHashBuildCeilingMissing             = moerr.NewInternalErrorNoCtx("hash build budget ceiling unavailable")
 	ErrHashBuildBudgetUnavailable          = ErrHashBuildCeilingMissing
-	ErrHashBuildReservationInactive        = errors.New("hash build reservation is inactive")
-	ErrHashBuildReservationUpward          = errors.New("hash build reservation reconciliation would increase charge")
+	ErrHashBuildReservationInactive        = moerr.NewInternalErrorNoCtx("hash build reservation is inactive")
+	ErrHashBuildReservationUpward          = moerr.NewInternalErrorNoCtx("hash build reservation reconciliation would increase charge")
 	ErrHashBuildReservationReconcileUpward = ErrHashBuildReservationUpward
 	ErrHashBuildReservationClosed          = ErrHashBuildReservationInactive
 )
