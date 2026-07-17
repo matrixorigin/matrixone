@@ -27,14 +27,6 @@ import (
 
 var _ vm.Operator = new(Fill)
 
-const (
-	receiveBat  = 0
-	findNull    = 2
-	findValue   = 3
-	fillValue   = 4
-	findNullPre = 5
-)
-
 type container struct {
 
 	// value
@@ -42,26 +34,26 @@ type container struct {
 
 	// prev
 	prevVecs []*vector.Vector
+	// prevValid marks which prevVecs hold a value from the current partition.
+	// A partition boundary invalidates them without freeing the vectors.
+	prevValid []bool
+	// prevPartKey / prevPartNull snapshot the partition key of the last row of
+	// the previous batch, so the first row of the next batch can detect a
+	// boundary without keeping the old batch alive.
+	prevPartKey  [][]byte
+	prevPartNull []bool
+	prevPartSet  bool
 
-	// next
-	bats      []*batch.Batch
-	preIdx    int
-	preRow    int
-	curIdx    int
-	curRow    int
-	status    int
-	subStatus int
-	idx       int
-	buf       *batch.Batch
-	i         int
-	doneIdx   []int
-	endBatch  []bool
+	// next / linear: the materialized input, the gather cursor i, and the
+	// emit cursor idx.
+	bats []*batch.Batch
+	idx  int
+	buf  *batch.Batch
+	i    int
 
 	// linear
-	nullIdx int
-	nullRow int
-	exes    []colexec.ExpressionExecutor
-	done    bool
+	exes []colexec.ExpressionExecutor
+	done bool
 
 	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyzer) (vm.CallResult, error)
 }
@@ -72,6 +64,10 @@ type Fill struct {
 	ColLen   int
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
+	// PartitionColIdx locates the time window's partition keys inside the
+	// input batch. fill(prev/next/linear) treats a change in these columns as
+	// a hard boundary: values never cross it in either direction.
+	PartitionColIdx []int32
 
 	vm.OperatorBase
 	colexec.Projection
@@ -189,4 +185,10 @@ func (ctr *container) resetExes() {
 func (ctr *container) resetCtrParma() {
 	ctr.initIndex()
 	ctr.done = false
+	for i := range ctr.prevValid {
+		ctr.prevValid[i] = false
+	}
+	ctr.prevPartKey = nil
+	ctr.prevPartNull = nil
+	ctr.prevPartSet = false
 }

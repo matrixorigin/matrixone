@@ -75,13 +75,12 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	case plan.Node_PREV:
 		if len(ctr.prevVecs) == 0 {
 			ctr.prevVecs = make([]*vector.Vector, fill.ColLen)
+			ctr.prevValid = make([]bool, fill.ColLen)
 		}
 		ctr.process = processPrev
 	case plan.Node_NEXT:
 		ctr.i = 0
 		ctr.idx = 0
-		ctr.status = receiveBat
-		ctr.subStatus = findNull
 		ctr.process = processNext
 	case plan.Node_LINEAR:
 		ctr.i = 0
@@ -167,129 +166,143 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 }
 
 func (ctr *container) initIndex() {
-	ctr.nullIdx = 0
-	ctr.nullRow = 0
-	ctr.preIdx = 0
-	ctr.preRow = 0
-	ctr.curIdx = 0
-	ctr.curRow = 0
-	ctr.status = receiveBat
-	ctr.subStatus = findNullPre
+	ctr.idx = 0
+	ctr.i = 0
 }
 
-func processNextCol(ctr *container, ap *Fill, idx int, proc *process.Process, analyzer process.Analyzer) error {
-	var err error
-	ctr.initIndex()
-	ctr.preIdx = ctr.doneIdx[idx]
-	ctr.status = findNull
-	for {
-		switch ctr.status {
-		case receiveBat:
-			if ctr.doneIdx[idx] == len(ctr.bats) ||
-				ctr.endBatch[idx] {
-				return nil
-			}
+// partKeyAt reads one partition-key cell, tolerating the constant vectors the
+// time window emits when it broadcasts a key across a flushed batch.
+func partKeyAt(vec *vector.Vector, row int) (val []byte, isNull bool) {
+	if vec.IsConstNull() {
+		return nil, true
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.IsNull(uint64(row)) {
+		return nil, true
+	}
+	return vec.GetRawBytesAt(row), false
+}
 
-			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+// samePartitionRows reports whether two rows carry the same partition key.
+// NULL keys compare equal, matching how GROUP BY folded them into one group.
+func samePartitionRows(partIdx []int32, batA *batch.Batch, rowA int, batB *batch.Batch, rowB int) bool {
+	for _, col := range partIdx {
+		valA, nullA := partKeyAt(batA.Vecs[col], rowA)
+		valB, nullB := partKeyAt(batB.Vecs[col], rowB)
+		if nullA || nullB {
+			if nullA != nullB {
+				return false
+			}
+			continue
+		}
+		if !bytes.Equal(valA, valB) {
+			return false
+		}
+	}
+	return true
+}
+
+// snapshotPartKey copies a row's partition key out of the batch, so the next
+// batch can detect a boundary after this one has been recycled.
+func (ctr *container) snapshotPartKey(partIdx []int32, bat *batch.Batch, row int) {
+	if cap(ctr.prevPartKey) < len(partIdx) {
+		ctr.prevPartKey = make([][]byte, len(partIdx))
+		ctr.prevPartNull = make([]bool, len(partIdx))
+	}
+	ctr.prevPartKey = ctr.prevPartKey[:len(partIdx)]
+	ctr.prevPartNull = ctr.prevPartNull[:len(partIdx)]
+	for i, col := range partIdx {
+		val, isNull := partKeyAt(bat.Vecs[col], row)
+		ctr.prevPartNull[i] = isNull
+		ctr.prevPartKey[i] = append(ctr.prevPartKey[i][:0], val...)
+	}
+	ctr.prevPartSet = true
+}
+
+// matchesSnapshot compares a row against the saved cross-batch partition key.
+func (ctr *container) matchesSnapshot(partIdx []int32, bat *batch.Batch, row int) bool {
+	if !ctr.prevPartSet {
+		return true
+	}
+	for i, col := range partIdx {
+		val, isNull := partKeyAt(bat.Vecs[col], row)
+		if isNull || ctr.prevPartNull[i] {
+			if isNull != ctr.prevPartNull[i] {
+				return false
+			}
+			continue
+		}
+		if !bytes.Equal(val, ctr.prevPartKey[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// gatherBats materializes the whole child stream into ctr.bats. NEXT and
+// LINEAR read values that lie after the gap being filled, so they cannot
+// stream; materializing first also means no batch is ever dropped because an
+// earlier one happened to contain no NULL.
+func (ctr *container) gatherBats(ap *Fill, proc *process.Process, analyzer process.Analyzer) error {
+	for {
+		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return err
+		}
+		if result.Batch == nil {
+			return nil
+		}
+		if len(ctr.bats) > ctr.i {
+			if ctr.bats[ctr.i] != nil {
+				ctr.bats[ctr.i].CleanOnlyData()
+			}
+			ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
 				return err
 			}
-			if result.Batch == nil {
-				ctr.endBatch[idx] = true
-				return nil
-			} else {
-				if len(ctr.bats) > ctr.i {
-					if ctr.bats[ctr.i] != nil {
-						ctr.bats[ctr.i].CleanOnlyData()
-					}
-					ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-					if err != nil {
-						return err
-					}
-				} else {
-					appBat, err := result.Batch.Dup(proc.Mp())
-					if err != nil {
-						return err
-					}
-					analyzer.Alloc(int64(appBat.Size()))
-					ctr.bats = append(ctr.bats, appBat)
-				}
-				ctr.i++
+		} else {
+			appBat, err := result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return err
 			}
+			if analyzer != nil {
+				analyzer.Alloc(int64(appBat.Size()))
+			}
+			ctr.bats = append(ctr.bats, appBat)
+		}
+		ctr.i++
+	}
+}
 
-			if ctr.subStatus == findNull {
-				ctr.status = findNull
-			} else {
-				ctr.status = findValue
+// fillNextCol replaces every NULL with the nearest following non-NULL value of
+// the same partition. Walking backwards keeps that candidate in one cursor,
+// and a partition boundary simply drops it: the NULLs at the tail of the
+// previous partition have no next value of their own.
+func (ctr *container) fillNextCol(ap *Fill, col int, proc *process.Process) error {
+	nextBat, nextRow := -1, -1
+	for b := len(ctr.bats) - 1; b >= 0; b-- {
+		vec := ctr.bats[b].Vecs[col]
+		for r := ctr.bats[b].RowCount() - 1; r >= 0; r-- {
+			if !vec.IsNull(uint64(r)) {
+				nextBat, nextRow = b, r
+				continue
 			}
-
-		case findNull:
-			b := ctr.bats[ctr.preIdx]
-			hasNull := false
-			for ; ctr.preRow < b.RowCount(); ctr.preRow++ {
-				if b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
-					hasNull = true
-					break
-				}
+			if nextBat < 0 {
+				continue
 			}
-			ctr.subStatus = findNull
-			if hasNull {
-				ctr.status = findValue
-			} else {
-				ctr.preIdx++
-				ctr.doneIdx[idx] = ctr.preIdx
-				return nil
+			if len(ap.PartitionColIdx) > 0 &&
+				!samePartitionRows(ap.PartitionColIdx, ctr.bats[b], r, ctr.bats[nextBat], nextRow) {
+				nextBat, nextRow = -1, -1
+				continue
 			}
-		case findValue:
-			ctr.curIdx = ctr.preIdx
-			ctr.curRow = ctr.preRow
-			b := ctr.bats[ctr.curIdx]
-			hasValue := false
-			for ; ctr.curRow < b.RowCount(); ctr.curRow++ {
-				if !b.Vecs[idx].IsNull(uint64(ctr.curRow)) {
-					hasValue = true
-					break
-				}
+			if err := setValue(vec, ctr.bats[nextBat].Vecs[col], r, nextRow, proc); err != nil {
+				return err
 			}
-			ctr.subStatus = findValue
-			if hasValue {
-				ctr.status = fillValue
-			} else {
-				ctr.status = receiveBat
-			}
-		case fillValue:
-			for ; ctr.preIdx < ctr.curIdx-1; ctr.preIdx++ {
-				for ; ctr.preRow < ctr.bats[ctr.preIdx].RowCount(); ctr.preRow++ {
-					vec := ctr.bats[ctr.preIdx].Vecs[idx]
-					if !vec.IsNull(uint64(ctr.preRow)) {
-						continue
-					}
-					err = setValue(vec, ctr.bats[ctr.curIdx].Vecs[idx], ctr.preRow, ctr.curRow, proc)
-					if err != nil {
-						return err
-					}
-
-				}
-				if ctr.preRow == ctr.bats[ctr.preRow].RowCount() {
-					ctr.preRow = 0
-				}
-			}
-
-			for ; ctr.preRow < ctr.curRow; ctr.preRow++ {
-				vec := ctr.bats[ctr.preIdx].Vecs[idx]
-				if !vec.IsNull(uint64(ctr.preRow)) {
-					continue
-				}
-				err = setValue(vec, ctr.bats[ctr.curIdx].Vecs[idx], ctr.preRow, ctr.curRow, proc)
-				if err != nil {
-					return err
-				}
-			}
-
-			ctr.status = findNull
-
 		}
 	}
+	return nil
 }
 
 func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -311,10 +324,32 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		return result, err
 	}
 
+	if len(ctr.prevValid) < ap.ColLen {
+		ctr.prevValid = make([]bool, ap.ColLen)
+	}
+
+	// A previous value must not leak across a partition boundary, so find
+	// where new partitions start before filling: row 0 against the key saved
+	// from the previous batch, later rows against their predecessor.
+	rowCount := ctr.buf.RowCount()
+	var newSegment []bool
+	if len(ap.PartitionColIdx) > 0 && rowCount > 0 {
+		newSegment = make([]bool, rowCount)
+		newSegment[0] = !ctr.matchesSnapshot(ap.PartitionColIdx, ctr.buf, 0)
+		for j := 1; j < rowCount; j++ {
+			newSegment[j] = !samePartitionRows(ap.PartitionColIdx, ctr.buf, j-1, ctr.buf, j)
+		}
+	}
+
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
+			if newSegment != nil && newSegment[j] {
+				// The new partition has no previous value yet. The vector is
+				// kept for reuse; only its validity is dropped.
+				ctr.prevValid[i] = false
+			}
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
-				if ctr.prevVecs[i] != nil {
+				if ctr.prevVecs[i] != nil && ctr.prevValid[i] {
 					if err = setValue(ctr.buf.Vecs[i], ctr.prevVecs[i], j, 0, proc); err != nil {
 						return result, err
 					}
@@ -331,172 +366,74 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 						return result, err
 					}
 				}
-
+				ctr.prevValid[i] = true
 			}
 		}
+	}
+	if len(ap.PartitionColIdx) > 0 && rowCount > 0 {
+		ctr.snapshotPartKey(ap.PartitionColIdx, ctr.buf, rowCount-1)
 	}
 	result.Batch = ctr.buf
 	return result, nil
 }
 
-func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, analyzer process.Analyzer) error {
-	var err error
+// fillLinearCol fills each run of NULLs that sits strictly between two
+// non-NULL values of the same partition with their midpoint. A run touching a
+// partition boundary on either side stays NULL: its neighbour belongs to a
+// different group, so there is nothing to interpolate between.
+func (ctr *container) fillLinearCol(ap *Fill, col int, proc *process.Process) error {
+	type pos struct{ bat, row int }
+	preBat, preRow := -1, -1
+	var run []pos
 
-	ctr.initIndex()
-	ctr.status = findNullPre
-	ctr.preIdx = ctr.doneIdx[idx]
-
-	for {
-		switch ctr.status {
-		case receiveBat:
-			if ctr.doneIdx[idx] == len(ctr.bats) ||
-				ctr.endBatch[idx] {
-				return nil
+	for b := 0; b < len(ctr.bats); b++ {
+		vec := ctr.bats[b].Vecs[col]
+		for r := 0; r < ctr.bats[b].RowCount(); r++ {
+			if preBat >= 0 && len(ap.PartitionColIdx) > 0 &&
+				!samePartitionRows(ap.PartitionColIdx, ctr.bats[b], r, ctr.bats[preBat], preRow) {
+				preBat, preRow = -1, -1
+				run = run[:0]
 			}
 
-			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
-			if err != nil {
-				return err
-			}
-			if result.Batch == nil {
-				ctr.endBatch[idx] = true
-				return nil
-			} else {
-				if len(ctr.bats) > ctr.i {
-					if ctr.bats[ctr.i] != nil {
-						ctr.bats[ctr.i].CleanOnlyData()
-					}
-					ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-					if err != nil {
-						return err
-					}
-				} else {
-					appBat, err := result.Batch.Dup(proc.Mp())
-					if err != nil {
-						return err
-					}
-					analyzer.Alloc(int64(appBat.Size()))
-					ctr.bats = append(ctr.bats, appBat)
+			if vec.IsNull(uint64(r)) {
+				// Only NULLs with a known previous value can ever be filled.
+				if preBat >= 0 {
+					run = append(run, pos{b, r})
 				}
+				continue
 			}
 
-			if ctr.subStatus == findNullPre {
-				ctr.status = findNullPre
-			} else {
-				ctr.status = findValue
-			}
-		case findNullPre:
-			b := ctr.bats[ctr.nullIdx]
-
-			if ctr.nullIdx > ctr.preRow {
-				if b.Vecs[idx].IsNull(uint64(ctr.nullIdx)) {
-					ctr.status = findValue
-					continue
+			if len(run) > 0 {
+				valVec, owned, err := linearFillValue(ctr, proc, col, preBat, preRow, b, r)
+				if err != nil {
+					return err
 				}
-			}
-
-			hasNullPre := false
-			ctr.preRow = ctr.nullRow - 1
-			for ; ctr.nullRow < b.RowCount(); ctr.nullRow++ {
-				if ctr.preRow >= 0 && b.Vecs[idx].IsNull(uint64(ctr.nullRow)) && !b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
-					hasNullPre = true
-					break
-				}
-				ctr.preRow++
-			}
-
-			ctr.subStatus = findNullPre
-			if hasNullPre {
-				ctr.status = findValue
-			} else {
-				ctr.nullIdx++
-				ctr.nullRow = 0
-				ctr.doneIdx[idx] = ctr.nullIdx
-				if b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
-					ctr.preIdx++
-					ctr.nullRow = 0
-					ctr.doneIdx[idx] = ctr.preIdx
-				}
-				return nil
-			}
-		case findValue:
-			ctr.curIdx = ctr.nullIdx
-			ctr.curRow = ctr.nullRow
-			b := ctr.bats[ctr.curIdx]
-			hasValue := false
-			for ; ctr.curRow < b.RowCount(); ctr.curRow++ {
-				if !b.Vecs[idx].IsNull(uint64(ctr.curRow)) {
-					hasValue = true
-					break
-				}
-			}
-			ctr.subStatus = findValue
-			if hasValue {
-				ctr.status = fillValue
-			} else {
-				ctr.status = receiveBat
-			}
-		case fillValue:
-			var valVec *vector.Vector
-			var owned bool
-			valVec, owned, err = linearFillValue(ctr, proc, idx)
-			if err != nil {
-				return err
-			}
-
-			ctr.preRow++
-			for ; ctr.preIdx < ctr.curIdx-1; ctr.preIdx++ {
-				for ; ctr.preRow < ctr.bats[ctr.preIdx].RowCount(); ctr.preRow++ {
-
-					vec := ctr.bats[ctr.preIdx].Vecs[idx]
-					if !vec.IsNull(uint64(ctr.preRow)) {
-						continue
-					}
-					err = setValue(vec, valVec, ctr.preRow, 0, proc)
-					if err != nil {
+				for _, p := range run {
+					if err = setValue(ctr.bats[p.bat].Vecs[col], valVec, p.row, 0, proc); err != nil {
 						if owned {
 							valVec.Free(proc.Mp())
 						}
 						return err
 					}
-
 				}
-				if ctr.preRow == ctr.bats[ctr.preRow].RowCount() {
-					ctr.preRow = 0
-				}
-			}
-
-			for ; ctr.preRow < ctr.curRow; ctr.preRow++ {
-				vec := ctr.bats[ctr.preIdx].Vecs[idx]
-				if !vec.IsNull(uint64(ctr.preRow)) {
-					continue
-				}
-				err = setValue(vec, valVec, ctr.preRow, 0, proc)
-				if err != nil {
-					if owned {
-						valVec.Free(proc.Mp())
-					}
-					return err
+				if owned {
+					valVec.Free(proc.Mp())
 				}
 			}
-			if owned {
-				valVec.Free(proc.Mp())
-			}
-
-			ctr.nullIdx = ctr.preIdx
-			ctr.nullRow = ctr.preRow
-			ctr.status = findNullPre
+			preBat, preRow = b, r
+			run = run[:0]
 		}
 	}
+	return nil
 }
 
-func linearFillValue(ctr *container, proc *process.Process, idx int) (*vector.Vector, bool, error) {
-	preVec := ctr.bats[ctr.preIdx].Vecs[idx]
-	curVec := ctr.bats[ctr.curIdx].Vecs[idx]
+func linearFillValue(ctr *container, proc *process.Process, idx, preIdx, preRow, curIdx, curRow int) (*vector.Vector, bool, error) {
+	preVec := ctr.bats[preIdx].Vecs[idx]
+	curVec := ctr.bats[curIdx].Vecs[idx]
 	if preVec.GetType().Oid == types.T_decimal128 && curVec.GetType().Oid == types.T_decimal128 {
 		result := vector.NewVec(*preVec.GetType())
-		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, ctr.preRow)
-		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, ctr.curRow)
+		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
+		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, curRow)
 		value, err := decimal128LinearMidpoint(left, right, preVec.GetType().Scale)
 		if err != nil {
 			result.Free(proc.Mp())
@@ -511,16 +448,17 @@ func linearFillValue(ctr *container, proc *process.Process, idx int) (*vector.Ve
 
 	b := batch.NewWithSize(2)
 	b.Vecs[0] = vector.NewVec(*preVec.GetType())
-	if err := appendValue(b.Vecs[0], preVec, ctr.preRow, proc); err != nil {
+	if err := appendValue(b.Vecs[0], preVec, preRow, proc); err != nil {
 		b.Clean(proc.Mp())
 		return nil, false, err
 	}
 	b.Vecs[1] = vector.NewVec(*curVec.GetType())
-	if err := appendValue(b.Vecs[1], curVec, ctr.curRow, proc); err != nil {
+	if err := appendValue(b.Vecs[1], curVec, curRow, proc); err != nil {
 		b.Clean(proc.Mp())
 		return nil, false, err
 	}
 	b.SetRowCount(1)
+	defer b.Clean(proc.Mp())
 	result, err := ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
 	return result, false, err
 }
@@ -540,120 +478,54 @@ func decimal128LinearMidpoint(left, right types.Decimal128, scale int32) (types.
 func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
-	if ctr.done {
-		if ctr.idx == len(ctr.bats) {
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
-		}
-		result.Batch = ctr.bats[ctr.idx]
-		result.Status = vm.ExecNext
-		ctr.idx++
-		return result, nil
-	}
-	for ; ctr.i < 1; ctr.i++ {
-		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
-		if err != nil {
+	if !ctr.done {
+		if err = ctr.gatherBats(ap, proc, analyzer); err != nil {
 			return result, err
 		}
-		if result.Batch == nil {
-			break
-		}
-		if len(ctr.bats) > ctr.i {
-			if ctr.bats[ctr.i] != nil {
-				ctr.bats[ctr.i].CleanOnlyData()
-			}
-			ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-			if err != nil {
+		// Only the aggregate prefix is filled: the columns behind it are the
+		// window boundaries and partition keys, whose NULLs are data.
+		for col := 0; col < ap.ColLen; col++ {
+			if err = ctr.fillNextCol(ap, col, proc); err != nil {
 				return result, err
 			}
-		} else {
-			appBat, err := result.Batch.Dup(proc.Mp())
-			if err != nil {
-				return result, err
-			}
-			analyzer.Alloc(int64(appBat.Size()))
-			ctr.bats = append(ctr.bats, appBat)
 		}
-		ctr.doneIdx = make([]int, ctr.bats[0].VectorCount())
-		ctr.endBatch = make([]bool, ctr.bats[0].VectorCount())
+		ctr.done = true
 	}
-	if len(ctr.bats) == 0 {
+	if ctr.idx == len(ctr.bats) {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-
-	for i := range ctr.bats[0].Vecs {
-		if err = processNextCol(ctr, ap, i, proc, analyzer); err != nil {
-			return result, err
-		}
-	}
-	ctr.done = true
 	result.Batch = ctr.bats[ctr.idx]
 	result.Status = vm.ExecNext
 	ctr.idx++
-
 	return result, nil
 }
 
 func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
-	if ctr.done {
-		if ctr.idx == len(ctr.bats) {
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
-		}
-		result.Batch = ctr.bats[ctr.idx]
-		result.Status = vm.ExecNext
-		ctr.idx++
-		return result, nil
-	}
-	for ; ctr.i < 1; ctr.i++ {
-		result, err = vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
-		if err != nil {
+	if !ctr.done {
+		if err = ctr.gatherBats(ap, proc, analyzer); err != nil {
 			return result, err
 		}
-		if result.Batch == nil {
-			break
-		}
-
-		if len(ctr.bats) > ctr.i {
-			if ctr.bats[ctr.i] != nil {
-				ctr.bats[ctr.i].CleanOnlyData()
-			}
-			ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-			if err != nil {
+		// Only the aggregate prefix is filled: the columns behind it are the
+		// window boundaries and partition keys, whose NULLs are data.
+		for col := 0; col < ap.ColLen; col++ {
+			if err = ctr.fillLinearCol(ap, col, proc); err != nil {
 				return result, err
 			}
-		} else {
-			appBat, err := result.Batch.Dup(proc.Mp())
-			if err != nil {
-				return result, err
-			}
-			analyzer.Alloc(int64(appBat.Size()))
-			ctr.bats = append(ctr.bats, appBat)
 		}
-		ctr.doneIdx = make([]int, ctr.bats[0].VectorCount())
-		ctr.endBatch = make([]bool, ctr.bats[0].VectorCount())
+		ctr.done = true
 	}
-	if len(ctr.bats) == 0 {
+	if ctr.idx == len(ctr.bats) {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	for i := range ctr.bats[0].Vecs {
-		if err = processLinearCol(ctr, ap, proc, i, analyzer); err != nil {
-			return result, err
-		}
-	}
-	ctr.done = true
 	result.Batch = ctr.bats[ctr.idx]
 	result.Status = vm.ExecNext
 	ctr.idx++
-
 	return result, nil
 }
 

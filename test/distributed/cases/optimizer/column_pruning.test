@@ -114,4 +114,17 @@ select p, _wstart, max(v), min(v) from twp group by p interval(ts, 10, second) s
 select b from (select _wstart as a, p, max(v) as b from twp group by p interval(ts, 5, second)) x order by b;
 select count(*) from (select _wstart as a, p, max(v) as b from twp group by p interval(ts, 5, second)) x;
 
+-- fill() must not carry values across partitions: each group's leading NULL
+-- has no previous value and its trailing NULL has no next value.
+create table twf(ts datetime, p int, v int);
+insert into twf values
+  ('2026-01-01 00:00:00', 1, 10), ('2026-01-01 00:00:07', 1, null),
+  ('2026-01-01 00:00:00', 2, null), ('2026-01-01 00:00:07', 2, 40);
+
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) order by p, _wstart;
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) fill(prev) order by p, _wstart;
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) fill(next) order by p, _wstart;
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) fill(value, 99) order by p, _wstart;
+select p, _wstart, max(v) from twf group by p interval(ts, 10, second) sliding(5, second) fill(prev) order by p, _wstart;
+
 drop database column_pruning;

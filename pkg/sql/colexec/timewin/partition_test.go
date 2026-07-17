@@ -323,3 +323,105 @@ func TestTimeWinIntervalPathForwardsPartitionKeys(t *testing.T) {
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
+
+// runPartArgBats drives the operator over several child batches; the
+// partition state machine must behave identically no matter where the
+// batch boundaries fall.
+func runPartArgBats(t *testing.T, arg *TimeWin, proc *process.Process, bats []*batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
+	t.Helper()
+	op := colexec.NewMockOperator().WithBatchs(bats)
+	arg.Children = nil
+	arg.AppendChild(op)
+	require.NoError(t, arg.Prepare(proc))
+
+	for {
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if res.Batch == nil {
+			break
+		}
+		bat := res.Batch
+		n := bat.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[1])[:n]...)
+		if len(arg.PartitionBy) > 0 {
+			pv := bat.Vecs[2]
+			for i := 0; i < n; i++ {
+				if pv.IsConst() {
+					parts = append(parts, vector.MustFixedColNoTypeCheck[int64](pv)[0])
+				} else {
+					parts = append(parts, vector.MustFixedColNoTypeCheck[int64](pv)[i])
+				}
+			}
+		}
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+	return
+}
+
+// The same rows produce the same windows regardless of how the child chops
+// them into batches: one partition spanning two batches, a partition starting
+// exactly on a batch's first row, and a boundary in the middle of the second
+// batch must all match the single-batch run.
+func TestTimeWinPartitionAcrossChildBatches(t *testing.T) {
+	rows := []row{
+		{"2023-08-01 00:00:00", 10, 1},
+		{"2023-08-01 00:00:01", 20, 1},
+		{"2023-08-01 00:00:06", 30, 1},
+		{"2023-08-01 00:00:00", 100, 2},
+		{"2023-08-01 00:00:07", 400, 2},
+		{"2023-08-01 00:00:02", 7, 3},
+	}
+	splits := []struct {
+		name  string
+		sizes []int
+	}{
+		{"single batch", []int{6}},
+		{"partition 1 spans two batches", []int{2, 4}},
+		{"partition 2 starts a new batch", []int{3, 3}},
+		{"boundary inside the second batch", []int{3, 2, 1}},
+	}
+
+	sliding, err := calcDatetime(5, 2)
+	require.NoError(t, err)
+
+	var wantStarts []types.Datetime
+	var wantSums, wantParts []int64
+	for _, split := range splits {
+		sizes := split.sizes
+		t.Run(split.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+			var bats []*batch.Batch
+			offset := 0
+			for _, size := range sizes {
+				bats = append(bats, makePartInput(t, proc.Mp(), rows[offset:offset+size]))
+				offset += size
+			}
+			require.Equal(t, len(rows), offset)
+
+			arg := newPartArg(t, proc, sliding, true)
+			starts, sums, parts := runPartArgBats(t, arg, proc, bats)
+
+			if wantSums == nil {
+				// The single-batch run is the reference every split must match.
+				wantStarts, wantSums, wantParts = starts, sums, parts
+				require.Equal(t, []int64{30, 30, 100, 400, 7}, sums)
+				require.Equal(t, []int64{1, 1, 2, 2, 3}, parts)
+			} else {
+				require.Equal(t, wantStarts, starts)
+				require.Equal(t, wantSums, sums)
+				require.Equal(t, wantParts, parts)
+			}
+
+			arg.Free(proc, false, nil)
+			for _, b := range bats {
+				b.Clean(proc.Mp())
+			}
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}

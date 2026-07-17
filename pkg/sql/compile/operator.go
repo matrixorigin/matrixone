@@ -1352,16 +1352,16 @@ func constructFill(node *plan.Node) *fill.Fill {
 	arg.ColLen = len(node.AggList)
 	arg.FillType = node.FillType
 	arg.FillVal = node.FillVal
+	arg.PartitionColIdx = node.TimeWindowPartitionColPos
 	return arg
 }
 
 func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Process) *timewin.TimeWin {
-	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
-	var typs []types.Type
-
 	// The planner addresses this operator's output through the same layout,
 	// so derive both from BuildTimeWindowLayout rather than re-deriving here.
 	layout := plan2.BuildTimeWindowLayout(node)
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, 0, len(layout.AggIdx))
+	typs := make([]types.Type, 0, len(layout.AggIdx))
 	for _, aggIdx := range layout.AggIdx {
 		f := node.AggList[aggIdx].Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0

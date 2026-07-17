@@ -343,9 +343,15 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 }
 
 // remakeAggs rebuilds the aggregate executors; their state cannot be reused
-// once a batch of results has been flushed out of them.
+// once a batch of results has been flushed out of them. The old executor still
+// owns its internal state after Flush -- only the result vectors moved into
+// ctr.bat -- so release it before overwriting, or every flush (one per
+// partition now) leaks a full set of aggregate state.
 func (ctr *container) remakeAggs(timeWin *TimeWin, proc *process.Process) (err error) {
 	for i, ag := range timeWin.Aggs {
+		if ctr.aggs[i] != nil {
+			ctr.aggs[i].Free()
+		}
 		ctr.aggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
 		if err != nil {
 			return err
@@ -382,6 +388,8 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 		}
 		ctr.group++
 	}
+	// See firstWindow: the new window is empty until a row lands in it.
+	ctr.withoutFill = true
 	return nil
 }
 
@@ -404,6 +412,11 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 		}
 	}
 	ctr.group++
+	// The window is empty until fillRows lands a row in it. This must live at
+	// window switches, not at the top of fillRows: a window's rows can arrive
+	// in one batch and its closing row in the next, and resetting the flag
+	// per batch made such a window look empty and drop from the output.
+	ctr.withoutFill = true
 	return nil
 }
 
@@ -413,7 +426,6 @@ func (ctr *container) fillRows() error {
 
 	outRange := false
 	partBreak := false
-	ctr.withoutFill = true
 	for ; ctr.curRowIdx < cnt; ctr.curRowIdx++ {
 		// Input arrives ordered by partition key, so the first row that
 		// disagrees with the key this window opened on ends the partition's
