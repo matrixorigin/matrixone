@@ -32,7 +32,11 @@ import (
 type Fulltext2Query struct {
 	Pattern []byte
 	Boolean bool
-	Algo    ScoreAlgo
+	// BagOfWords is IN BM25 MODE: ranked bag-of-words retrieval (each token an OR
+	// term, no positional phrase), so it works on a POSITION_FREE index. Takes
+	// precedence over Boolean.
+	BagOfWords bool
+	Algo       ScoreAlgo
 	// FilterBytes is the optional serialized docfilter membership — the WHERE-clause
 	// prefilter pushed down as a runtime filter (built in C from the eligible pks),
 	// applied INSIDE the search so a pushed LIMIT bounds the filtered set. nil = none.
@@ -122,13 +126,24 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	// batches — no top-K heap, no materialization of the whole result set. Results are
 	// handed off through Emit, so return empty keys/distances (mirrors bm25).
 	if rt.Emit != nil {
-		if serr := s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, filter, rt.Emit); serr != nil {
+		var serr error
+		if q.BagOfWords {
+			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, filter, rt.Emit)
+		} else {
+			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, filter, rt.Emit)
+		}
+		if serr != nil {
 			return nil, nil, serr
 		}
 		return []any{}, []float64{}, nil
 	}
 
-	results, err := s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, filter)
+	var results []Result
+	if q.BagOfWords {
+		results, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, filter)
+	} else {
+		results, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, filter)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

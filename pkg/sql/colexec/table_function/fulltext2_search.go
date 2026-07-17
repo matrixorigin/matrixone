@@ -244,6 +244,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	q := fulltext2.Fulltext2Query{
 		Pattern:     []byte(pattern),
 		Boolean:     mode == int64(tree.FULLTEXT_BOOLEAN),
+		BagOfWords:  mode == int64(tree.FULLTEXT_BM25),
 		Algo:        fulltext2ScoreAlgo(proc),
 		FilterBytes: u.filterBytes,
 	}

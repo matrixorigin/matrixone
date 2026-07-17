@@ -162,3 +162,33 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 	sink.flush()
 	return sink.err
 }
+
+// StreamBagOfWords is the no-LIMIT IN BM25 MODE path: it tokenizes the pattern into a
+// pure disjunction of its tokens (bm25-style bag-of-words) and streams the ranked hits
+// heap-free via streamWAND — the position-free analogue of StreamQuery's disjunctive
+// branch, but a CJK run is tokenized to OR terms instead of a positional phrase, so it
+// works on a POSITION_FREE index.
+func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys []any, distances []float64) error) error {
+	if idx.globalN == 0 {
+		return nil
+	}
+	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser))
+	if err != nil {
+		return err
+	}
+	terms, ok := disjunctiveTerms(q)
+	if !ok {
+		return nil // no resolvable tokens → nothing to stream
+	}
+	sink := &streamSink{emit: emit}
+	gs := idx.newGlobalStats()
+	for si, seg := range idx.segments {
+		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
+		seg.streamWAND(terms, algo, gs, allow, sink)
+		if sink.err != nil {
+			return sink.err
+		}
+	}
+	sink.flush()
+	return sink.err
+}

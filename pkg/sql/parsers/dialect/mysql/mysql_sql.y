@@ -11000,6 +11000,10 @@ fulltext_search_opt:
     {
 	$$ = tree.FULLTEXT_QUERY_EXPANSION
     }
+|   IN BM25 MODE
+    {
+	$$ = tree.FULLTEXT_BM25
+    }
 
 index_column_list_opt:
     {

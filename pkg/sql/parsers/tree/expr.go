@@ -1862,6 +1862,11 @@ const (
 	FULLTEXT_NL_QUERY_EXPANSION
 	FULLTEXT_BOOLEAN
 	FULLTEXT_QUERY_EXPANSION
+	// FULLTEXT_BM25 — IN BM25 MODE: ranked bag-of-words retrieval on a fulltext2
+	// index (each token an OR term, no positional phrase), so it works on a
+	// POSITION_FREE index. Distinct from FullTextMatchExpr.IsBm25 (the BM25() verb
+	// of the standalone bm25 index).
+	FULLTEXT_BM25
 )
 
 type FullTextMatchExpr struct {
@@ -1893,6 +1898,8 @@ func (node *FullTextSearchType) ToString() string {
 		return "IN BOOLEAN MODE"
 	case FULLTEXT_QUERY_EXPANSION:
 		return "WITH QUERY EXPANSION"
+	case FULLTEXT_BM25:
+		return "IN BM25 MODE"
 
 	default:
 		return "Unknown FullSearchType"
