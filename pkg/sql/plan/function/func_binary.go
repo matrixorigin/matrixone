@@ -7281,13 +7281,17 @@ func makeTimeIntegerSecond(value int64, null bool) (int64, uint32, bool) {
 }
 
 // makeTimeFromInt64: Helper function to create Time from int64 values
-func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vector.FunctionResult[types.Time], i uint64) error {
-	if hour < -838 || hour > 838 {
+func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vector.FunctionResult[types.Time]) error {
+	if minute < 0 || minute > 59 || second < 0 || second > 60 || microsecond >= types.MicroSecsPerSec {
 		return rs.Append(types.Time(0), true)
 	}
 
-	if minute < 0 || minute > 59 || second < 0 || second > 60 || microsecond >= types.MicroSecsPerSec {
-		return rs.Append(types.Time(0), true)
+	maxTime := types.TimeFromClock(false, 838, 59, 59, 0)
+	if hour > 838 {
+		return rs.Append(maxTime, false)
+	}
+	if hour < -838 {
+		return rs.Append(-maxTime, false)
 	}
 
 	isNegative := hour < 0
@@ -7295,10 +7299,10 @@ func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vecto
 		hour = -hour
 	}
 	timeValue := types.TimeFromClock(isNegative, uint64(hour), uint8(minute), uint8(second), microsecond)
-
-	normalizedHour, _, _, _, _ := timeValue.ClockFormat()
-	if normalizedHour > 838 {
-		return rs.Append(types.Time(0), true)
+	if timeValue > maxTime {
+		timeValue = maxTime
+	} else if timeValue < -maxTime {
+		timeValue = -maxTime
 	}
 
 	return rs.Append(timeValue, false)
@@ -7348,8 +7352,8 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		hourParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 		getHourValue = func(i uint64) (int64, bool) {
 			val, null := hourParam.GetValue(i)
-			if null || val > 838 {
-				return 0, true
+			if val > math.MaxInt64 {
+				return math.MaxInt64, null
 			}
 			return int64(val), null
 		}
@@ -7464,7 +7468,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			continue
 		}
 
-		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, microsecond, rs, i); err != nil {
+		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, microsecond, rs); err != nil {
 			return err
 		}
 	}

@@ -9507,25 +9507,29 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(floatWithMicrosecondScale,
-				[]float64{12, -12, 12, 838, 12, 12},
-				[]bool{false, false, false, false, false, false}),
+				[]float64{12, -12, 12, 838, -838, 839, -839, 12, 12, 12},
+				[]bool{false, false, false, false, false, false, false, false, false, false}),
 			NewFunctionTestInput(floatWithMicrosecondScale,
-				[]float64{34, 34, 59, 59, 34, 34},
-				[]bool{false, false, false, false, false, false}),
+				[]float64{34, 34, 59, 59, 59, 0, 0, 60, 34, 34},
+				[]bool{false, false, false, false, false, false, false, false, false, false}),
 			NewFunctionTestInput(floatWithMicrosecondScale,
-				[]float64{56.789012, 56.789012, 59.9999996, 59.9999996, math.NaN(), math.Inf(1)},
-				[]bool{false, false, false, false, false, false}),
+				[]float64{56.789012, 56.789012, 59.9999996, 59.9999996, 59.9999996, 0, 0, 0, math.NaN(), math.Inf(1)},
+				[]bool{false, false, false, false, false, false, false, false, false, false}),
 		},
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
 			[]types.Time{
 				types.TimeFromClock(false, 12, 34, 56, 789012),
 				types.TimeFromClock(true, 12, 34, 56, 789012),
 				types.TimeFromClock(false, 13, 0, 0, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
 				0,
 				0,
 				0,
 			},
-			[]bool{false, false, false, true, true, true}),
+			[]bool{false, false, false, false, false, false, false, true, true, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
@@ -9549,9 +9553,9 @@ func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
 		NewFunctionTestResult(types.T_time.ToType(), false,
 			[]types.Time{
 				types.TimeFromClock(false, 838, 34, 56, 0),
-				0,
+				types.TimeFromClock(false, 838, 59, 59, 0),
 			},
-			[]bool{false, true}),
+			[]bool{false, false}),
 		MakeTime)
 
 	s, info := fcTC.Run()
