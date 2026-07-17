@@ -308,13 +308,15 @@ func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []by
 			// per-doc pc + ascending gaps in doc order, so materializePositions is
 			// unaffected). V4 wrote them once per term after all blocks.
 			posStart := pw.b.Len()
-			for j := lo; j < hi; j++ {
-				pos := tp.positions[j]
-				pw.uvarint(uint64(len(pos)))
-				var pp int32
-				for _, p := range pos { // ascending positions → non-negative gaps
-					pw.uvarint(uint64(p - pp))
-					pp = p
+			if tp.positions != nil { // position-free segments omit the positional payload
+				for j := lo; j < hi; j++ {
+					pos := tp.positions[j]
+					pw.uvarint(uint64(len(pos)))
+					var pp int32
+					for _, p := range pos { // ascending positions → non-negative gaps
+						pw.uvarint(uint64(p - pp))
+						pp = p
+					}
 				}
 			}
 			// directory entry.

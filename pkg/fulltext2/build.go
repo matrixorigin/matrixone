@@ -34,6 +34,70 @@ func tokenWord(tk tokenizer.Token) string {
 	return string(tk.TokenBytes[1 : 1+n])
 }
 
+// buildOpts carries optional build settings shared by the build entry points.
+type buildOpts struct {
+	positionFree bool // drop the positional payload (keep the FST + docID/tf postings)
+}
+
+// BuildOpt configures a segment build (functional-options, so existing callers are
+// unaffected).
+type BuildOpt func(*buildOpts)
+
+// WithPositionFree builds a POSITION-FREE segment: term frequencies are still derived
+// (so BM25 ranking is unchanged), but the per-token positional payload — the largest
+// section (~half the segment) — is omitted and the FST term dictionary is kept. Phrase
+// / NL exact-match is therefore unavailable on such a segment (bag-of-words retrieval
+// only). Mirrors the footprint of a position-free bm25 index while keeping the FST.
+func WithPositionFree() BuildOpt { return func(o *buildOpts) { o.positionFree = true } }
+
+func applyBuildOpts(opts []BuildOpt) buildOpts {
+	var bo buildOpts
+	for _, o := range opts {
+		o(&bo)
+	}
+	return bo
+}
+
+// buildEntry is one (doc ord, positions-in-that-doc) occurrence of a term, collected
+// in ascending doc order (SearchPhrase relies on the ordering).
+type buildEntry struct {
+	ord       int64
+	positions []int32
+}
+
+// assembleTerms turns the collected per-term (ord, positions) lists into termPostings.
+// When positionFree, tf is still derived from the occurrence count but the positional
+// payload is dropped (tp.positions left nil) — Serialize then writes an empty positions
+// section while the FST/docID/tf sections are unchanged.
+func assembleTerms(global map[string][]buildEntry, docLen []int32, positionFree bool) map[string]*termPostings {
+	terms := make(map[string]*termPostings, len(global))
+	for w, entries := range global {
+		tp := &termPostings{
+			docIDs: make([]int64, len(entries)),
+			tfs:    make([]uint8, len(entries)),
+		}
+		if !positionFree {
+			tp.positions = make([][]int32, len(entries))
+		}
+		for i, e := range entries {
+			tp.docIDs[i] = e.ord
+			tf := len(e.positions)
+			if tf > MaxCappedTf {
+				tf = MaxCappedTf
+			}
+			tp.tfs[i] = uint8(tf)
+			if !positionFree {
+				tp.positions[i] = e.positions
+			}
+		}
+		// Derive the raw term-level + Block-Max score-UB fields (mirrors the load
+		// path), so a build-side segment gets the same WAND block-skip bounds.
+		deriveTermStats(tp, docLen)
+		terms[w] = tp
+	}
+	return terms
+}
+
 // BuildSegmentFromDocs tokenizes each doc with tok and builds an in-memory
 // (build-side) segment: per-term posting lists with per-doc token positions,
 // the docmap (pk + token-count length), and AvgDocLen. Docs are indexed by their
@@ -42,18 +106,15 @@ func tokenWord(tk tokenizer.Token) string {
 // It is the minimal build path used to produce queryable segments (tests, and
 // the seed for the eventual CDC/sync build sink). Positions are the tokenizer's
 // TokenPos, so phrase adjacency in a query matches adjacency in the source text.
-func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tokenizer) (*Segment, error) {
+func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tokenizer, opts ...BuildOpt) (*Segment, error) {
+	bo := applyBuildOpts(opts)
 	s := NewSegment(id, pkType)
 	s.pks = make([]any, len(docs))
 	s.docLen = make([]int32, len(docs))
 
 	// term -> ascending list of (doc ord, positions-in-that-doc). Built in doc
 	// order, so each term's list is ascending by ord (SearchPhrase relies on it).
-	type entry struct {
-		ord       int64
-		positions []int32
-	}
-	global := make(map[string][]entry)
+	global := make(map[string][]buildEntry)
 
 	for ord, d := range docs {
 		s.pks[ord] = d.Pk
@@ -69,31 +130,11 @@ func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tok
 		}
 		s.docLen[ord] = ntok
 		for w, pos := range local {
-			global[w] = append(global[w], entry{int64(ord), pos})
+			global[w] = append(global[w], buildEntry{int64(ord), pos})
 		}
 	}
 
-	terms := make(map[string]*termPostings, len(global))
-	for w, entries := range global {
-		tp := &termPostings{
-			docIDs:    make([]int64, len(entries)),
-			tfs:       make([]uint8, len(entries)),
-			positions: make([][]int32, len(entries)),
-		}
-		for i, e := range entries {
-			tp.docIDs[i] = e.ord
-			tf := len(e.positions)
-			if tf > MaxCappedTf {
-				tf = MaxCappedTf
-			}
-			tp.tfs[i] = uint8(tf)
-			tp.positions[i] = e.positions
-		}
-		// Derive the raw term-level + Block-Max score-UB fields (mirrors the load
-		// path), so a build-side segment gets the same WAND block-skip bounds.
-		deriveTermStats(tp, s.docLen)
-		terms[w] = tp
-	}
+	terms := assembleTerms(global, s.docLen, bo.positionFree)
 
 	s.N = int64(len(docs))
 	s.setTerms(terms)
@@ -121,16 +162,13 @@ type TokenizedDoc struct {
 // BuildSegmentFromTokenized builds a segment from pre-tokenized docs (positions
 // are term indices). It is the assembly half of BuildSegmentFromDocs without the
 // tokenizer — the terms already came from fulltext2_tokenize at execution.
-func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc) (*Segment, error) {
+func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc, opts ...BuildOpt) (*Segment, error) {
+	bo := applyBuildOpts(opts)
 	s := NewSegment(id, pkType)
 	s.pks = make([]any, len(docs))
 	s.docLen = make([]int32, len(docs))
 
-	type entry struct {
-		ord       int64
-		positions []int32
-	}
-	global := make(map[string][]entry)
+	global := make(map[string][]buildEntry)
 
 	for ord, d := range docs {
 		s.pks[ord] = d.Pk
@@ -144,31 +182,11 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc) (*S
 		}
 		s.docLen[ord] = int32(len(d.Terms))
 		for w, pos := range local {
-			global[w] = append(global[w], entry{int64(ord), pos})
+			global[w] = append(global[w], buildEntry{int64(ord), pos})
 		}
 	}
 
-	terms := make(map[string]*termPostings, len(global))
-	for w, entries := range global {
-		tp := &termPostings{
-			docIDs:    make([]int64, len(entries)),
-			tfs:       make([]uint8, len(entries)),
-			positions: make([][]int32, len(entries)),
-		}
-		for i, e := range entries {
-			tp.docIDs[i] = e.ord
-			tf := len(e.positions)
-			if tf > MaxCappedTf {
-				tf = MaxCappedTf
-			}
-			tp.tfs[i] = uint8(tf)
-			tp.positions[i] = e.positions
-		}
-		// Derive the raw term-level + Block-Max score-UB fields (mirrors the load
-		// path), so a build-side segment gets the same WAND block-skip bounds.
-		deriveTermStats(tp, s.docLen)
-		terms[w] = tp
-	}
+	terms := assembleTerms(global, s.docLen, bo.positionFree)
 
 	s.N = int64(len(docs))
 	s.setTerms(terms)
@@ -186,11 +204,13 @@ type Builder struct {
 	pkType int32
 	ordMap map[any]int64 // normalized pk -> ord
 	docs   []TokenizedDoc
+	opts   []BuildOpt // carried into FinishSegments (e.g. WithPositionFree)
 }
 
-// NewBuilder creates a Builder for an index id and source pk type (types.T).
-func NewBuilder(id string, pkType int32) *Builder {
-	return &Builder{id: id, pkType: pkType, ordMap: make(map[any]int64)}
+// NewBuilder creates a Builder for an index id and source pk type (types.T). Pass
+// WithPositionFree() to build position-free segments.
+func NewBuilder(id string, pkType int32, opts ...BuildOpt) *Builder {
+	return &Builder{id: id, pkType: pkType, ordMap: make(map[any]int64), opts: opts}
 }
 
 // docOrd returns the dense ord for a pk, assigning one on first sight (mirrors
@@ -242,7 +262,7 @@ func (b *Builder) FinishSegments(capacity int64) ([]*Segment, error) {
 		return nil, nil
 	}
 	if capacity <= 0 || n <= capacity {
-		seg, err := BuildSegmentFromTokenized(SubIndexId(b.id, 0), b.pkType, b.docs)
+		seg, err := BuildSegmentFromTokenized(SubIndexId(b.id, 0), b.pkType, b.docs, b.opts...)
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +275,7 @@ func (b *Builder) FinishSegments(capacity int64) ([]*Segment, error) {
 		if hi > n {
 			hi = n
 		}
-		seg, err := BuildSegmentFromTokenized(SubIndexId(b.id, i), b.pkType, b.docs[lo:hi])
+		seg, err := BuildSegmentFromTokenized(SubIndexId(b.id, i), b.pkType, b.docs[lo:hi], b.opts...)
 		if err != nil {
 			return nil, err
 		}
