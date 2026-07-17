@@ -98,6 +98,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
 	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
+	proc.SetAffectedRows(42)
 	return proc, txnOp
 }
 
@@ -179,6 +180,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(2), info.PrepareParams.Length)
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
+	require.Equal(t, int64(42), info.AffectedRows)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
@@ -216,6 +218,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())

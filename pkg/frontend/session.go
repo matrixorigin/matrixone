@@ -161,6 +161,11 @@ type Session struct {
 
 	lastInsertID uint64
 
+	// lastAffectedRows records the rows affected by the previous statement,
+	// consumed by the ROW_COUNT() builtin. MySQL semantics: -1 after a
+	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
+	lastAffectedRows int64
+
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
 	tStmt *motrace.StatementInfo
@@ -731,6 +736,7 @@ func NewSession(
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	ses.proc.Session = ses
+	setRowCount(ses, ses.proc, -1)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -1137,6 +1143,18 @@ func (ses *Session) GetLastInsertID() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.lastInsertID
+}
+
+func (ses *Session) SetLastAffectedRows(num int64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastAffectedRows = num
+}
+
+func (ses *Session) GetLastAffectedRows() int64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastAffectedRows
 }
 
 func (ses *Session) SetCmd(cmd CommandType) {
@@ -2074,6 +2092,9 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
+	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
+	// Restore the source session value after all replay work has finished.
+	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx
