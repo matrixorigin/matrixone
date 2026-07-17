@@ -434,18 +434,43 @@ func TestAlterSchemaAutoIncrementOffset(t *testing.T) {
 	require.Zero(t, original.Extra.AutoIncrOffset)
 }
 
-func TestAutoIncrementOffsetSchemaRoundTrip(t *testing.T) {
-	_, extra, err := engine.PlanDefsToExeDefs(&plan.TableDef{AutoIncrOffset: 99})
+func TestTableEntryAutoIncrementEpochTracksOnlyAutoIncrementAlter(t *testing.T) {
+	schema := MockSchemaAll(3, 1)
+	schema.Version = 7
+	entry := MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &TableMVCCNode{
+		Schema: schema, TombstoneSchema: GetTombstoneSchema(schema),
+	})
+
+	txn := txnbase.NewTxn(nil, nil, []byte("alter"), types.BuildTS(2, 0), types.TS{})
+	_, altered, err := entry.AlterTable(context.Background(), txn,
+		api.NewUpdateCommentReq(0, 42, "ordinary ddl"))
+	require.NoError(t, err)
+	require.Equal(t, uint32(8), altered.Version)
+	require.Zero(t, altered.Extra.AutoIncrEpoch)
+
+	_, altered, err = entry.AlterTable(context.Background(), txn,
+		api.NewUpdateAutoIncrementReq(0, 42, 99))
+	require.NoError(t, err)
+	require.Equal(t, uint32(8), altered.Version)
+	require.Equal(t, uint32(8), altered.Extra.AutoIncrEpoch)
+}
+
+func TestAutoIncrementMetadataSchemaRoundTrip(t *testing.T) {
+	_, extra, err := engine.PlanDefsToExeDefs(&plan.TableDef{AutoIncrOffset: 99, AutoIncrEpoch: 7})
 	require.NoError(t, err)
 	require.Equal(t, uint64(99), extra.AutoIncrOffset)
+	require.Equal(t, uint32(7), extra.AutoIncrEpoch)
 
 	encoded := api.MustMarshalTblExtra(extra)
 	restored := api.MustUnmarshalTblExtra(encoded)
 	require.Equal(t, uint64(99), restored.AutoIncrOffset)
+	require.Equal(t, uint32(7), restored.AutoIncrEpoch)
 
 	schema := MockSchema(1, 0)
 	schema.Extra = api.CloneExtra(restored)
 	require.Equal(t, uint64(99), schema.Clone().Extra.AutoIncrOffset)
+	require.Equal(t, uint32(7), schema.Clone().Extra.AutoIncrEpoch)
 }
 
 func randomTxnID(t *testing.T) []byte {

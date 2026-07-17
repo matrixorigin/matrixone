@@ -6579,10 +6579,12 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 	initial := rel.Schema(false).(*catalog.Schema)
 	require.Equal(t, uint64(10), initial.Extra.AutoIncrOffset)
+	require.Zero(t, initial.Extra.AutoIncrEpoch)
 	require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 99)))
 	altered := rel.Schema(false).(*catalog.Schema)
 	require.Equal(t, initial.Version+1, altered.Version)
 	require.Equal(t, uint64(99), altered.Extra.AutoIncrOffset)
+	require.Equal(t, altered.Version, altered.Extra.AutoIncrEpoch)
 	require.NoError(t, txn.Commit(ctx))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -6590,6 +6592,7 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	committedVersion := committed.Version
 	require.Equal(t, initial.Version+1, committedVersion)
 	require.Equal(t, uint64(99), committed.Extra.AutoIncrOffset)
+	require.Equal(t, committedVersion, committed.Extra.AutoIncrEpoch)
 	require.NoError(t, txn.Commit(ctx))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -6597,12 +6600,14 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	uncommitted := rel.Schema(false).(*catalog.Schema)
 	require.Equal(t, committedVersion+1, uncommitted.Version)
 	require.Equal(t, uint64(123), uncommitted.Extra.AutoIncrOffset)
+	require.Equal(t, uncommitted.Version, uncommitted.Extra.AutoIncrEpoch)
 	require.NoError(t, txn.Rollback(ctx))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	afterRollback := rel.Schema(false).(*catalog.Schema)
 	require.Equal(t, committedVersion, afterRollback.Version)
 	require.Equal(t, uint64(99), afterRollback.Extra.AutoIncrOffset)
+	require.Equal(t, committedVersion, afterRollback.Extra.AutoIncrEpoch)
 	require.NoError(t, txn.Commit(ctx))
 }
 

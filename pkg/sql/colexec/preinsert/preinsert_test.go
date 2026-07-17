@@ -513,9 +513,9 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
 	gomock.InOrder(
-		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), uint32(17), txnOperator, gomock.Any(), 1, int64(1)).
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), uint32(5), txnOperator, gomock.Any(), 1, int64(1)).
 			Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100")),
-		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), uint32(17), txnOperator, gomock.Any(), 1, int64(1)).
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), uint32(5), txnOperator, gomock.Any(), 1, int64(1)).
 			Return(uint64(111111), nil),
 	)
 
@@ -530,9 +530,10 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 		HasAutoCol: true,
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
-			Name:    "idx_tbl",
-			TblId:   100,
-			Version: 17,
+			Name:          "idx_tbl",
+			TblId:         100,
+			Version:       17,
+			AutoIncrEpoch: 5,
 			Cols: []*plan.ColDef{
 				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
 			},

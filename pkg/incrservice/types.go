@@ -63,7 +63,7 @@ type AutoIncrementService interface {
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// InsertValues inserts auto-column values, using a reset cache owned by txn when present.
-	InsertValues(ctx context.Context, tableID uint64, tableVersion uint32, txn client.TxnOperator, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
+	InsertValues(ctx context.Context, tableID uint64, autoIncrEpoch uint32, txn client.TxnOperator, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
@@ -76,7 +76,7 @@ type AutoIncrementService interface {
 	Close()
 	// GetLastAllocateTS gets the oldest allocation timestamp that can still
 	// issue a value from the transaction-private or committed column cache.
-	GetLastAllocateTS(ctx context.Context, tableID uint64, tableVersion uint32, txn client.TxnOperator, colName string) (timestamp.Timestamp, error)
+	GetLastAllocateTS(ctx context.Context, tableID uint64, autoIncrEpoch uint32, txn client.TxnOperator, colName string) (timestamp.Timestamp, error)
 }
 
 // incrTableCache a cache containing auto-incremented columns of a table, an incrCache may
@@ -112,7 +112,7 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
-	version() uint32
+	epoch() uint32
 	acquire()
 	release()
 	retire()

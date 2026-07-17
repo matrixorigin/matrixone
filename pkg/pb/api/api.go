@@ -77,6 +77,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		IndexTables:       append([]uint64{}, info.IndexTables...),
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
+		AutoIncrEpoch:     info.AutoIncrEpoch,
 	}
 }
 

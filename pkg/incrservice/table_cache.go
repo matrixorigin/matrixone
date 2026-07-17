@@ -28,7 +28,7 @@ import (
 type tableCache struct {
 	logger  *log.MOLogger
 	tableID uint64
-	ver     uint32
+	epochID uint32
 	cols    []AutoColumn
 
 	lifecycle struct {
@@ -50,7 +50,7 @@ func newTableCache(
 	ctx context.Context,
 	sid string,
 	tableID uint64,
-	version uint32,
+	epoch uint32,
 	cols []AutoColumn,
 	cfg Config,
 	allocator valueAllocator,
@@ -59,7 +59,7 @@ func newTableCache(
 	c := &tableCache{
 		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
-		ver:     version,
+		epochID: epoch,
 		cols:    cols,
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
@@ -176,8 +176,8 @@ func (c *tableCache) table() uint64 {
 	return c.tableID
 }
 
-func (c *tableCache) version() uint32 {
-	return c.ver
+func (c *tableCache) epoch() uint32 {
+	return c.epochID
 }
 
 func (c *tableCache) acquire() {

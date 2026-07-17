@@ -51,7 +51,7 @@ type privateResetCallback struct {
 	registration *privateResetRegistration
 }
 
-type txnVersionCacheCallback struct {
+type txnEpochCacheCallback struct {
 	tableID      uint64
 	cache        incrTableCache
 	registration *privateResetRegistration
@@ -236,14 +236,14 @@ func (s *service) Delete(
 func (s *service) GetLastAllocateTS(
 	ctx context.Context,
 	tableID uint64,
-	tableVersion uint32,
+	autoIncrEpoch uint32,
 	txnOp client.TxnOperator,
 	colName string,
 ) (timestamp.Timestamp, error) {
-	tc, err := s.acquireTableCacheForVersion(
+	tc, err := s.acquireTableCacheForEpoch(
 		ctx,
 		tableID,
-		tableVersion,
+		autoIncrEpoch,
 		txnOp)
 	if err != nil {
 		return timestamp.Timestamp{}, err
@@ -260,16 +260,16 @@ func (s *service) GetLastAllocateTS(
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
-	tableVersion uint32,
+	autoIncrEpoch uint32,
 	txnOp client.TxnOperator,
 	vecs []*vector.Vector,
 	rows int,
 	estimate int64,
 ) (uint64, error) {
-	ts, err := s.acquireTableCacheForVersion(
+	ts, err := s.acquireTableCacheForEpoch(
 		ctx,
 		tableID,
-		tableVersion,
+		autoIncrEpoch,
 		txnOp)
 	if err != nil {
 		return 0, err
@@ -461,10 +461,10 @@ func (s *service) Close() {
 	s.store.Close()
 }
 
-func (s *service) acquireTableCacheForVersion(
+func (s *service) acquireTableCacheForEpoch(
 	ctx context.Context,
 	tableID uint64,
-	tableVersion uint32,
+	autoIncrEpoch uint32,
 	txnOp client.TxnOperator,
 ) (incrTableCache, error) {
 	if txnOp != nil {
@@ -477,14 +477,14 @@ func (s *service) acquireTableCacheForVersion(
 		if private, ok := s.mu.private[key]; ok {
 			// A reset cache is transaction-private and authoritative while it
 			// exists. Never mask a private-cache error by falling back to a
-			// committed table-version cache.
+			// committed AUTO_INCREMENT epoch cache.
 			private.acquire()
 			s.mu.Unlock()
 			return private, nil
 		}
 		s.mu.Unlock()
 	}
-	return s.getCommittedTableCacheForVersion(ctx, tableID, tableVersion, txnOp)
+	return s.getCommittedTableCacheForEpoch(ctx, tableID, autoIncrEpoch, txnOp)
 }
 
 func (s *service) installPrivateReset(
@@ -584,13 +584,13 @@ func (s *service) privateResetClosed(
 	return nil
 }
 
-func (s *service) txnVersionCacheClosed(
+func (s *service) txnEpochCacheClosed(
 	_ context.Context,
 	_ client.TxnOperator,
 	event client.TxnEvent,
 	v any,
 ) error {
-	callback := v.(txnVersionCacheCallback)
+	callback := v.(txnEpochCacheCallback)
 	<-callback.registration.ready
 	if event.Txn.Status == txn.TxnStatus_Committed {
 		return nil
@@ -663,10 +663,10 @@ func (s *service) getCommittedTableCache(
 	return c, nil
 }
 
-func (s *service) getCommittedTableCacheForVersion(
+func (s *service) getCommittedTableCacheForEpoch(
 	ctx context.Context,
 	tableID uint64,
-	tableVersion uint32,
+	autoIncrEpoch uint32,
 	txnOp client.TxnOperator,
 ) (incrTableCache, error) {
 	s.mu.Lock()
@@ -675,12 +675,12 @@ func (s *service) getCommittedTableCacheForVersion(
 		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 	c, ok := s.mu.tables[tableID]
-	if ok && c.version() == tableVersion {
+	if ok && c.epoch() == autoIncrEpoch {
 		c.acquire()
 		s.mu.Unlock()
 		return c, nil
 	}
-	if ok && c.version() > tableVersion {
+	if ok && c.epoch() > autoIncrEpoch {
 		s.mu.Unlock()
 		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
@@ -707,12 +707,12 @@ func (s *service) getCommittedTableCacheForVersion(
 		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 	if current, ok := s.mu.tables[tableID]; ok {
-		if current.version() == tableVersion {
+		if current.epoch() == autoIncrEpoch {
 			current.acquire()
 			s.mu.Unlock()
 			return current, nil
 		}
-		if current.version() > tableVersion {
+		if current.epoch() > autoIncrEpoch {
 			s.mu.Unlock()
 			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
@@ -723,7 +723,7 @@ func (s *service) getCommittedTableCacheForVersion(
 		ctx,
 		s.sid,
 		tableID,
-		tableVersion,
+		autoIncrEpoch,
 		cols,
 		s.cfg,
 		s.allocator,
@@ -736,12 +736,12 @@ func (s *service) getCommittedTableCacheForVersion(
 	var registration *privateResetRegistration
 	if txnOp != nil {
 		registration = &privateResetRegistration{ready: make(chan struct{})}
-		callback := txnVersionCacheCallback{
+		callback := txnEpochCacheCallback{
 			tableID:      tableID,
 			cache:        replacement,
 			registration: registration,
 		}
-		if err := s.appendTxnVersionCacheCallback(txnOp, callback); err != nil {
+		if err := s.appendTxnEpochCacheCallback(txnOp, callback); err != nil {
 			close(registration.ready)
 			_ = replacement.close()
 			return nil, err
@@ -761,13 +761,13 @@ func (s *service) getCommittedTableCacheForVersion(
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 	if current, ok := s.mu.tables[tableID]; ok {
-		if current.version() == tableVersion {
+		if current.epoch() == autoIncrEpoch {
 			current.acquire()
 			s.mu.Unlock()
 			_ = replacement.close()
 			return current, nil
 		}
-		if current.version() > tableVersion {
+		if current.epoch() > autoIncrEpoch {
 			s.mu.Unlock()
 			_ = replacement.close()
 			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
@@ -785,9 +785,9 @@ func (s *service) getCommittedTableCacheForVersion(
 	return replacement, nil
 }
 
-func (s *service) appendTxnVersionCacheCallback(
+func (s *service) appendTxnEpochCacheCallback(
 	txnOp client.TxnOperator,
-	callback txnVersionCacheCallback,
+	callback txnEpochCacheCallback,
 ) (err error) {
 	defer func() {
 		if recover() != nil {
@@ -796,7 +796,7 @@ func (s *service) appendTxnVersionCacheCallback(
 	}()
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
-		client.NewTxnEventCallbackWithValue(s.txnVersionCacheClosed, callback),
+		client.NewTxnEventCallbackWithValue(s.txnEpochCacheClosed, callback),
 	)
 	return nil
 }

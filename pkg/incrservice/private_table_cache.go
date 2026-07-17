@@ -131,8 +131,8 @@ func (c *lazyPrivateTableCache) load(ctx context.Context) (incrTableCache, error
 	return cache, nil
 }
 
-func (c *lazyPrivateTableCache) table() uint64   { return c.tableID }
-func (c *lazyPrivateTableCache) version() uint32 { return 0 }
+func (c *lazyPrivateTableCache) table() uint64 { return c.tableID }
+func (c *lazyPrivateTableCache) epoch() uint32 { return 0 }
 func (c *lazyPrivateTableCache) columns() []AutoColumn {
 	return c.cols
 }

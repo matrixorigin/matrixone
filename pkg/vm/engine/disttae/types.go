@@ -350,6 +350,11 @@ func (txn *Transaction) String() string {
 	return fmt.Sprintf("writes %v", txn.writes)
 }
 
+type alteredTableState struct {
+	version       uint32
+	autoIncrEpoch uint32
+}
+
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
@@ -398,6 +403,10 @@ type Transaction struct {
 	tableOps            *tableOpsChain
 	databaseOps         *dbOpsChain
 	restoreTxnTableFunc []func()
+	// alteredTableStates stores the schema state chosen for each table altered
+	// by this transaction. TN creates one table MVCC node per transaction, so
+	// every CN-side ALTER for the same table must reuse that state.
+	alteredTableStates map[uint64]alteredTableState
 
 	// record the table dropped in the txn,
 	// for filtering effortless inserts and deletes before committing.

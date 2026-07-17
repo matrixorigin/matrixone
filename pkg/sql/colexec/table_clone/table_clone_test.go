@@ -69,6 +69,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesRequestedOffsetWithCopiedMaximum(t *t
 			def := &plan.TableDef{
 				TblId:          42,
 				Version:        7,
+				AutoIncrEpoch:  3,
 				AutoIncrOffset: tt.requested,
 				Cols: []*plan.ColDef{{
 					Name: "id",
@@ -86,7 +87,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesRequestedOffsetWithCopiedMaximum(t *t
 			}
 
 			incrSvc.EXPECT().InsertValues(
-				gomock.Any(), def.TblId, def.Version, gomock.Any(), gomock.Any(), 1, int64(1),
+				gomock.Any(), def.TblId, def.AutoIncrEpoch, gomock.Any(), gomock.Any(), 1, int64(1),
 			).DoAndReturn(func(
 				_ context.Context,
 				_ uint64,
@@ -114,6 +115,7 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 	def := &plan.TableDef{
 		TblId:          42,
 		Version:        7,
+		AutoIncrEpoch:  3,
 		AutoIncrOffset: 999,
 		Cols: []*plan.ColDef{
 			{
@@ -138,7 +140,7 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 	}
 
 	incrSvc.EXPECT().InsertValues(
-		gomock.Any(), def.TblId, def.Version, gomock.Any(), gomock.Any(), 1, int64(1),
+		gomock.Any(), def.TblId, def.AutoIncrEpoch, gomock.Any(), gomock.Any(), 1, int64(1),
 	).DoAndReturn(func(
 		_ context.Context,
 		_ uint64,
@@ -180,8 +182,9 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeEffectiveOffset(t *testing.T) 
 			proc.Base.IncrService = incrSvc
 
 			def := &plan.TableDef{
-				TblId:   42,
-				Version: 7,
+				TblId:         42,
+				Version:       7,
+				AutoIncrEpoch: 3,
 				Cols: []*plan.ColDef{{
 					Name: "id",
 					Typ:  plan.Type{Id: int32(tt.oid), AutoIncr: true},
@@ -198,7 +201,7 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeEffectiveOffset(t *testing.T) 
 
 			insertCalls := 0
 			incrSvc.EXPECT().InsertValues(
-				gomock.Any(), def.TblId, def.Version, gomock.Any(), gomock.Any(), 1, int64(1),
+				gomock.Any(), def.TblId, def.AutoIncrEpoch, gomock.Any(), gomock.Any(), 1, int64(1),
 			).DoAndReturn(func(
 				_ context.Context,
 				_ uint64,

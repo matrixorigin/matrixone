@@ -133,10 +133,10 @@ type countingIncrTableCache struct {
 	retired  atomic.Bool
 }
 
-func (c *countingIncrTableCache) table() uint64   { return c.tableID }
-func (c *countingIncrTableCache) version() uint32 { return 0 }
-func (c *countingIncrTableCache) acquire()        { c.acquires.Add(1) }
-func (c *countingIncrTableCache) release()        { c.releases.Add(1) }
+func (c *countingIncrTableCache) table() uint64 { return c.tableID }
+func (c *countingIncrTableCache) epoch() uint32 { return 0 }
+func (c *countingIncrTableCache) acquire()      { c.acquires.Add(1) }
+func (c *countingIncrTableCache) release()      { c.releases.Add(1) }
 func (c *countingIncrTableCache) retire() {
 	if c.retired.CompareAndSwap(false, true) {
 		c.retires.Add(1)
@@ -675,9 +675,9 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 		require.NoError(t, s.Create(ctx, 0, def, createTxn))
 		require.NoError(t, createTxn.Commit(ctx))
 
-		const tableVersion = 7
+		const autoIncrEpoch = 7
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		lastBeforeAlter, err := s.InsertValues(ctx, 0, tableVersion, nil, []*vector.Vector{input}, 1, 0)
+		lastBeforeAlter, err := s.InsertValues(ctx, 0, autoIncrEpoch, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 
 		// Drain any background pre-allocation before recording the durable
@@ -710,7 +710,7 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 		require.Equal(t, committedOffset, committedCols[0].Offset)
 
 		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		lastAfterRollback, err := s.InsertValues(ctx, 0, tableVersion, nil, []*vector.Vector{input}, 1, 0)
+		lastAfterRollback, err := s.InsertValues(ctx, 0, autoIncrEpoch, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Greater(t, lastAfterRollback, committedOffset)
 		require.Greater(t, lastAfterRollback, lastBeforeAlter)
@@ -1231,7 +1231,7 @@ func TestFailedPrivateOffsetResetInstallRetiresCache(t *testing.T) {
 	})
 }
 
-func TestInsertValuesReplacesCacheOnTableVersionChange(t *testing.T) {
+func TestInsertValuesReplacesCacheOnAutoIncrementEpochChange(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
@@ -1262,7 +1262,7 @@ func TestInsertValuesReplacesCacheOnTableVersionChange(t *testing.T) {
 		s.mu.Lock()
 		cached := s.mu.tables[0]
 		s.mu.Unlock()
-		require.Equal(t, uint32(8), cached.version())
+		require.Equal(t, uint32(8), cached.epoch())
 	})
 }
 
@@ -1285,19 +1285,19 @@ func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
 		require.NoError(t, createTxn.Commit(ctx))
 
 		const (
-			oldVersion      = uint32(7)
-			newVersion      = uint32(8)
+			oldEpoch        = uint32(7)
+			newEpoch        = uint32(8)
 			effectiveOffset = uint64(999)
 		)
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input1 := newTestVector[uint64](1, vecType, nil, nil)
-		last1, err := cn1.InsertValues(ctx, 0, oldVersion, nil, []*vector.Vector{input1}, 1, 0)
+		last1, err := cn1.InsertValues(ctx, 0, oldEpoch, nil, []*vector.Vector{input1}, 1, 0)
 		require.NoError(t, err)
 		input2 := newTestVector[uint64](1, vecType, nil, nil)
-		last2, err := cn2.InsertValues(ctx, 0, oldVersion, nil, []*vector.Vector{input2}, 1, 0)
+		last2, err := cn2.InsertValues(ctx, 0, oldEpoch, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
-		// Create reserves the first range in its transaction; the first V7
+		// Create reserves the first range in its transaction; the first epoch-7
 		// committed caches therefore start at 101 and 201 respectively.
 		require.Equal(t, uint64(101), last1)
 		require.Equal(t, uint64(201), last2)
@@ -1311,25 +1311,25 @@ func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
 		require.NoError(t, cn1.SetOffset(ctx, 0, def[0].ColName, effectiveOffset, alterTxn))
 		require.NoError(t, alterTxn.Commit(ctx))
 
-		// CN2 is deliberately not reloaded. Its known-V7 cache can still generate
+		// CN2 is deliberately not reloaded. Its known epoch-7 cache can still generate
 		// a value below the effective offset; the TN fence test consumes this same
-		// stale-value/version shape and proves that it cannot commit after ALTER.
+		// stale-value/epoch shape and proves that it cannot commit after ALTER.
 		input2 = newTestVector[uint64](1, vecType, nil, nil)
-		staleGenerated, err := cn2.InsertValues(ctx, 0, oldVersion, nil, []*vector.Vector{input2}, 1, 0)
+		staleGenerated, err := cn2.InsertValues(ctx, 0, oldEpoch, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(202), staleGenerated)
 		require.LessOrEqual(t, staleGenerated, effectiveOffset)
 
-		// A retry planned at V8 replaces CN2's stale cache from durable metadata.
+		// A retry planned at epoch 8 replaces CN2's stale cache from durable metadata.
 		input2 = newTestVector[uint64](1, vecType, nil, nil)
-		retryGenerated, err := cn2.InsertValues(ctx, 0, newVersion, nil, []*vector.Vector{input2}, 1, 0)
+		retryGenerated, err := cn2.InsertValues(ctx, 0, newEpoch, nil, []*vector.Vector{input2}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1000), retryGenerated)
 		require.Greater(t, retryGenerated, effectiveOffset)
 	})
 }
 
-func TestInsertValuesFailedVersionReplacementPreservesOldCache(t *testing.T) {
+func TestInsertValuesFailedEpochReplacementPreservesOldCache(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
@@ -1379,7 +1379,7 @@ func TestTableCacheRetireWaitsForActiveUsers(t *testing.T) {
 	c.lifecycle.Unlock()
 }
 
-func TestInsertValuesRejectsOlderVersion(t *testing.T) {
+func TestInsertValuesRejectsOlderEpoch(t *testing.T) {
 	runServiceTests(t, 1, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
 		s := ss[0]
 		def := newTestTableDef(1)
@@ -1393,11 +1393,11 @@ func TestInsertValuesRejectsOlderVersion(t *testing.T) {
 		input = newTestVector[uint64](1, vecType, nil, nil)
 		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
-		require.Equal(t, uint32(8), s.getTableCache(0).version())
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
 	})
 }
 
-func TestInsertValuesRollbackDiscardsTxnInstalledNewerVersion(t *testing.T) {
+func TestInsertValuesRollbackDiscardsTxnInstalledNewerEpoch(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -1419,17 +1419,17 @@ func TestInsertValuesRollbackDiscardsTxnInstalledNewerVersion(t *testing.T) {
 		input = newTestVector[uint64](1, vecType, nil, nil)
 		_, err = s.InsertValues(ctx, 0, 8, alterTxn, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
-		require.Equal(t, uint32(8), s.getTableCache(0).version())
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
 		require.NoError(t, alterTxn.Rollback(ctx))
 
 		input = newTestVector[uint64](1, vecType, nil, nil)
 		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
-		require.Equal(t, uint32(7), s.getTableCache(0).version())
+		require.Equal(t, uint32(7), s.getTableCache(0).epoch())
 	})
 }
 
-func TestInsertValuesCommitKeepsTxnInstalledNewerVersion(t *testing.T) {
+func TestInsertValuesCommitKeepsTxnInstalledNewerEpoch(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -1451,11 +1451,11 @@ func TestInsertValuesCommitKeepsTxnInstalledNewerVersion(t *testing.T) {
 		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
 		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
-		require.Equal(t, uint32(8), s.getTableCache(0).version())
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
 	})
 }
 
-func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerVersion(t *testing.T) {
+func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -1480,7 +1480,7 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerVersion(t *testing.T)
 		require.NoError(t, err)
 		close(release)
 		require.True(t, moerr.IsMoErrCode(<-oldErr, moerr.ErrTxnNeedRetryWithDefChanged))
-		require.Equal(t, uint32(8), s.getTableCache(0).version())
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
 	})
 }
 
@@ -1528,7 +1528,7 @@ func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
 	})
 }
 
-func TestGetLastAllocateTSUsesRequestedVersionCache(t *testing.T) {
+func TestGetLastAllocateTSUsesRequestedEpochCache(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -1667,7 +1667,7 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		s.mu.Unlock()
 		if closeService {
 			require.True(t, installed)
-			require.Equal(t, uint32(0), cache.version())
+			require.Equal(t, uint32(0), cache.epoch())
 		} else {
 			require.False(t, installed)
 		}

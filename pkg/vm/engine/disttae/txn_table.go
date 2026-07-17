@@ -1596,6 +1596,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
+			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 		}
 	}
 	return tbl.tableDef
@@ -1657,6 +1658,56 @@ func marshalAlterTableRequestsForTN(reqs []*api.AlterTableReq) ([][]byte, error)
 	return payloads, nil
 }
 
+func (txn *Transaction) getAlteredTableState(tableID uint64) (alteredTableState, bool) {
+	txn.Lock()
+	defer txn.Unlock()
+	state, ok := txn.alteredTableStates[tableID]
+	return state, ok
+}
+
+func (txn *Transaction) getOrSetAlteredTableState(
+	tableID uint64,
+	currentVersion uint32,
+	currentAutoIncrEpoch uint32,
+) (state alteredTableState, created bool) {
+	txn.Lock()
+	defer txn.Unlock()
+	if state, ok := txn.alteredTableStates[tableID]; ok {
+		return state, false
+	}
+	if txn.alteredTableStates == nil {
+		txn.alteredTableStates = make(map[uint64]alteredTableState)
+	}
+	state = alteredTableState{
+		version:       currentVersion + 1,
+		autoIncrEpoch: currentAutoIncrEpoch,
+	}
+	txn.alteredTableStates[tableID] = state
+	return state, true
+}
+
+func (txn *Transaction) setAlteredTableAutoIncrEpoch(tableID uint64, epoch uint32) {
+	txn.Lock()
+	defer txn.Unlock()
+	state := txn.alteredTableStates[tableID]
+	state.autoIncrEpoch = epoch
+	txn.alteredTableStates[tableID] = state
+}
+
+// restoreAlteredTableStateLocked is called only from statement restore hooks,
+// which RollbackLastStatement executes while holding txn.Lock.
+func (txn *Transaction) restoreAlteredTableStateLocked(
+	tableID uint64,
+	previous alteredTableState,
+	existed bool,
+) {
+	if existed {
+		txn.alteredTableStates[tableID] = previous
+	} else {
+		delete(txn.alteredTableStates, tableID)
+	}
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
@@ -1665,6 +1716,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	var err error
 	var checkCstr []byte
+	txn := tbl.getTxn()
+	previousAlteredState, alteredBefore := txn.getAlteredTableState(tbl.tableId)
+	if alteredBefore {
+		tbl.version = previousAlteredState.version
+		tbl.extraInfo.AutoIncrEpoch = previousAlteredState.autoIncrEpoch
+	}
 	oldTableName := tbl.tableName
 	olddefs := tbl.defs
 	oldPart := tbl.partitioned
@@ -1672,13 +1729,14 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldComment := tbl.comment
 	oldConstraint := tbl.constraint
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
+	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
 	oldVersion := tbl.version
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
 	appendDef := make([]engine.TableDef, 0)
 
-	txn := tbl.getTxn()
+	var registeredState bool
 	restore := func() {
 		for _, req := range reqs {
 			switch req.GetKind() {
@@ -1697,10 +1755,14 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				// RenameColumn takes effect in form of ReplaceDef
 			case api.AlterKind_UpdateAutoIncrement:
 				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
+				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
 			}
 		}
 		tbl.defs = olddefs
 		tbl.version = oldVersion
+		if registeredState || alteredBefore {
+			txn.restoreAlteredTableStateLocked(tbl.tableId, previousAlteredState, alteredBefore)
+		}
 		tbl.tableDef = nil
 		tbl.GetTableDef(ctx)
 	}
@@ -1710,6 +1772,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	// update tbl properties and reconstruct supplement TableDef
 	var hasReplaceDef bool
+	var hasAutoIncrementAlter bool
 	var replaceDefReq *api.AlterTableReq
 	renameColMap := make(map[string]string)
 	for _, req := range reqs {
@@ -1737,6 +1800,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			renameColMap[re.OldName] = re.NewName
 		case api.AlterKind_UpdateAutoIncrement:
 			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+			hasAutoIncrementAlter = true
 		default:
 			panic("not supported")
 		}
@@ -1771,7 +1835,17 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		return err
 	}
 	if !createdInTxn {
-		tbl.version += 1
+		state, created := txn.getOrSetAlteredTableState(
+			tbl.tableId,
+			tbl.version,
+			tbl.extraInfo.AutoIncrEpoch,
+		)
+		registeredState = created
+		tbl.version = state.version
+		if hasAutoIncrementAlter {
+			tbl.extraInfo.AutoIncrEpoch = tbl.version
+			txn.setAlteredTableAutoIncrEpoch(tbl.tableId, tbl.extraInfo.AutoIncrEpoch)
+		}
 		appendDef = append(appendDef, &engine.VersionDef{Version: tbl.version})
 		// For normal Alter, send Alter request to TN
 		reqPayload, err := marshalAlterTableRequestsForTN(reqs)
@@ -1787,6 +1861,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			bat.Clean(txn.proc.Mp())
 			return err
 		}
+	} else if hasAutoIncrementAlter {
+		// A newly created table has no prior schema version to advance, but an
+		// in-transaction allocation cache may still need a distinct epoch.
+		tbl.extraInfo.AutoIncrEpoch++
 	}
 
 	//------------------------------------------------------------------------------------------------------------------

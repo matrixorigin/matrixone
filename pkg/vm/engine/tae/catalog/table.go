@@ -919,6 +919,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
+			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
 		}
 
 	}
@@ -927,6 +928,9 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	}
 	if isNewNode {
 		node.BaseNode.Schema.Version += 1
+	}
+	if req.Kind == apipb.AlterKind_UpdateAutoIncrement {
+		node.BaseNode.Schema.Extra.AutoIncrEpoch = node.BaseNode.Schema.Version
 	}
 	return
 }

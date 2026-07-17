@@ -397,6 +397,8 @@ message SchemaExtra {
     // mark if table is created by publication (CCPR), should skip merge
     bool FromPublication = 15;
     uint64 auto_incr_offset = 16;
+    // Advances only when ALTER TABLE ... AUTO_INCREMENT resets allocation.
+    uint32 auto_incr_epoch = 17;
 }
 
 // Int64Map mainly used in unit test

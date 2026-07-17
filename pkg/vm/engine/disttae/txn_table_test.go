@@ -83,15 +83,38 @@ func newTxnTableForTest() *txnTable {
 	return table
 }
 
-func TestGetTableDefAutoIncrementOffset(t *testing.T) {
+func TestGetTableDefAutoIncrementMetadata(t *testing.T) {
 	tbl := &txnTable{
 		db:        &txnDatabase{databaseId: 1, databaseName: "db"},
-		extraInfo: &api.SchemaExtra{AutoIncrOffset: 99},
+		extraInfo: &api.SchemaExtra{AutoIncrOffset: 99, AutoIncrEpoch: 7},
 	}
-	require.Equal(t, uint64(99), tbl.GetTableDef(context.Background()).AutoIncrOffset)
+	def := tbl.GetTableDef(context.Background())
+	require.Equal(t, uint64(99), def.AutoIncrOffset)
+	require.Equal(t, uint32(7), def.AutoIncrEpoch)
 }
 
-func TestRollbackLastStatementRestoresAutoIncrementOffsetAndVersion(t *testing.T) {
+func TestAlteredTableStateRollbackRestoresPreviousEpoch(t *testing.T) {
+	txn := &Transaction{
+		alteredTableStates: map[uint64]alteredTableState{
+			42: {version: 6, autoIncrEpoch: 0},
+		},
+	}
+	previous, existed := txn.getAlteredTableState(42)
+	require.True(t, existed)
+
+	txn.setAlteredTableAutoIncrEpoch(42, 6)
+	changed, _ := txn.getAlteredTableState(42)
+	require.Equal(t, uint32(6), changed.autoIncrEpoch)
+
+	txn.Lock()
+	txn.restoreAlteredTableStateLocked(42, previous, existed)
+	txn.Unlock()
+	restored, ok := txn.getAlteredTableState(42)
+	require.True(t, ok)
+	require.Equal(t, previous, restored)
+}
+
+func TestAlterTableReusesVersionWithinTransactionAndRollsBack(t *testing.T) {
 	eng := &Engine{
 		packerPool: fileservice.NewPool(
 			1,
@@ -139,10 +162,22 @@ func TestRollbackLastStatementRestoresAutoIncrementOffsetAndVersion(t *testing.T
 	require.Error(t, err)
 	require.Equal(t, uint64(99), tbl.extraInfo.AutoIncrOffset)
 	require.Equal(t, uint32(6), tbl.version)
+	require.Equal(t, uint32(6), tbl.extraInfo.AutoIncrEpoch)
+
+	// A table receives one new schema version per transaction on TN. CN must
+	// reuse that transaction-local version for every later ALTER request.
+	err = tbl.AlterTable(context.Background(), nil, []*api.AlterTableReq{
+		api.NewUpdateAutoIncrementReq(7, 42, 100),
+	})
+	require.Error(t, err)
+	require.Equal(t, uint64(100), tbl.extraInfo.AutoIncrOffset)
+	require.Equal(t, uint32(6), tbl.version)
+	require.Equal(t, uint32(6), tbl.extraInfo.AutoIncrEpoch)
 
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
 	require.Equal(t, uint64(10), tbl.extraInfo.AutoIncrOffset)
 	require.Equal(t, uint32(5), tbl.version)
+	require.Zero(t, tbl.extraInfo.AutoIncrEpoch)
 }
 
 func TestMarshalAlterTableRequestsForTNPreservesReplaceDef(t *testing.T) {
