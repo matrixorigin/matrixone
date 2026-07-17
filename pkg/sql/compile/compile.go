@@ -402,7 +402,6 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(1)
 		return nil
 	case CreateTable:
 		return s.CreateTable(c)
