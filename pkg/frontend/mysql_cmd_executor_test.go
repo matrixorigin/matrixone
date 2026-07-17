@@ -2054,7 +2054,7 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -2099,7 +2099,7 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).DoAndReturn(func(context.CancelFunc, string) uint64 {
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).DoAndReturn(func(context.CancelFunc, string) (uint64, error) {
 		derived := ses.GetResponser()
 		require.Equal(t, uint32(24659), derived.GetU32(CONNID))
 		require.Equal(t, "192.0.2.1:6001", derived.GetStr(PEER))
@@ -2130,7 +2130,7 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 		derived.SetU32(CONNID, 1)
 		derived.SetU8(SEQUENCEID, 1)
 		derived.SetBool(ESTABLISHED, false)
-		return 0
+		return 0, nil
 	}).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
