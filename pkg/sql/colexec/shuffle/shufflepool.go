@@ -18,7 +18,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -51,7 +50,6 @@ type ShufflePool struct {
 
 	readyLimit   int
 	readyCount   int
-	readyPeak    int
 	readyLock    sync.Mutex
 	spaceWaiter  chan struct{}
 	readyBuckets chan int32
@@ -275,7 +273,6 @@ func (sp *ShufflePool) reserveReady(count int) (<-chan struct{}, bool) {
 		return sp.spaceWaiter, false
 	}
 	sp.readyCount += count
-	sp.readyPeak = max(sp.readyPeak, sp.readyCount)
 	return nil, true
 }
 
@@ -445,25 +442,4 @@ func (sp *ShufflePool) tryWrite(
 		}
 	}
 	return len(sp.batchSets), 0, nil, true, nil
-}
-
-// Compatibility helpers for focused pool tests and non-resumable callers.
-func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
-	_, _, _, done, err := sp.tryWrite(srcBatch, sels, 0, 0, proc)
-	if err != nil {
-		return err
-	}
-	if !done {
-		return moerr.NewInternalError(proc.Ctx, "shuffle pool buffer is full")
-	}
-	return nil
-}
-
-func (sp *ShufflePool) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
-	sels := make([][]int32, sp.bucketNum)
-	sels[shuffleIDX] = make([]int32, srcBatch.RowCount())
-	for i := range sels[shuffleIDX] {
-		sels[shuffleIDX][i] = int32(i)
-	}
-	return sp.putBatchIntoShuffledPoolsBySels(srcBatch, sels, proc)
 }

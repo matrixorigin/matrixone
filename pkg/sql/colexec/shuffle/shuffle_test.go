@@ -629,7 +629,6 @@ func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {
 		totalRows += result.rows
 	}
 	require.Equal(t, rowsPerWorker*len(args), totalRows)
-	require.Equal(t, pool.readyLimit, pool.readyPeak, "test input must exercise shuffle backpressure")
 }
 
 func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {

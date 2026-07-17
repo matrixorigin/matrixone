@@ -115,10 +115,6 @@ func newOperatorDupContext() *operatorDupContext {
 	return &operatorDupContext{shufflePools: make(map[*shuffle.Shuffle]*shuffle.ShufflePool)}
 }
 
-func dupOperatorRecursively(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
-	return dupOperatorRecursivelyWithContext(sourceOp, index, maxParallel, newOperatorDupContext())
-}
-
 func dupOperatorRecursivelyWithContext(sourceOp vm.Operator, index int, maxParallel int, dupCtx *operatorDupContext) vm.Operator {
 	op := dupOperatorWithContext(sourceOp, index, maxParallel, dupCtx)
 	opBase := op.GetOperatorBase()

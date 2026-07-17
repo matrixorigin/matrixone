@@ -28,6 +28,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func writeSelectionsForTest(sp *ShufflePool, src *batch.Batch, sels [][]int32, proc *process.Process) (bool, error) {
+	_, _, _, done, err := sp.tryWrite(src, sels, 0, 0, proc)
+	return done, err
+}
+
+func writeBatchToBucketForTest(sp *ShufflePool, src *batch.Batch, proc *process.Process, bucket int32) (bool, error) {
+	sels := make([][]int32, sp.bucketNum)
+	sels[bucket] = make([]int32, src.RowCount())
+	for i := range sels[bucket] {
+		sels[bucket][i] = int32(i)
+	}
+	return writeSelectionsForTest(sp, src, sels, proc)
+}
+
 func TestShufflePoolStopsOnlyAfterEveryWriter(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -51,7 +65,9 @@ func TestShufflePoolDrainAllBucketsIsFair(t *testing.T) {
 
 	for bucket := int32(0); bucket < 3; bucket++ {
 		bat := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
-		require.NoError(t, sp.putAllBatchIntoPoolByShuffleIdx(bat, proc, bucket))
+		done, err := writeBatchToBucketForTest(sp, bat, proc, bucket)
+		require.NoError(t, err)
+		require.True(t, done)
 		bat.Clean(proc.Mp())
 	}
 
@@ -73,7 +89,9 @@ func TestShufflePoolAbortDefersCleanupUntilLastHolderAndIsIdempotent(t *testing.
 	require.True(t, sp.hold())
 
 	bat := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, 8, proc.Mp())
-	require.NoError(t, sp.putAllBatchIntoPoolByShuffleIdx(bat, proc, 0))
+	done, err := writeBatchToBucketForTest(sp, bat, proc, 0)
+	require.NoError(t, err)
+	require.True(t, done)
 	bat.Clean(proc.Mp())
 
 	sp.abort(proc.Mp())
@@ -216,7 +234,8 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 		{
 			name: "extend returns unconsumed reuse buffer to pool",
 			write: func(sp *ShufflePool, input *batch.Batch, proc *process.Process) error {
-				return sp.putAllBatchIntoPoolByShuffleIdx(input, proc, 0)
+				_, err := writeBatchToBucketForTest(sp, input, proc, 0)
+				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
 				require.Len(t, sp.batchPool, 1)
@@ -230,7 +249,8 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 				for i := range sels {
 					sels[i] = int32(i * 2)
 				}
-				return sp.putBatchIntoShuffledPoolsBySels(input, [][]int32{sels}, proc)
+				_, err := writeSelectionsForTest(sp, input, [][]int32{sels}, proc)
+				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
 				require.Empty(t, sp.batchPool)
