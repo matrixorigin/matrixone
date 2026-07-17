@@ -205,12 +205,22 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 	if size := uint64(src.Size()); size > projected {
 		projected = size
 	}
-	// Once Batches contains more than one batch, CopyIntoBatches preallocates a
-	// full DefaultBatchSize destination even for a tiny trailing source batch.
-	// Scale the observed source footprint to that policy before applying the
-	// allocation-growth allowance.
 	rows := uint64(src.RowCount())
-	if len(hb.Batches.Buf) > 1 && rows > 0 && rows < uint64(colexec.DefaultBatchSize) {
+	last := len(hb.Batches.Buf) - 1
+	if last >= 0 && hb.Batches.Buf[last] != nil && hb.Batches.Buf[last].RowCount() != colexec.DefaultBatchSize {
+		// CopyIntoBatches appends into the partial tail. Vector growth briefly
+		// keeps the old allocation alive, so the source alone is not a safe
+		// bound for small spill records appended to a much larger tail.
+		tail := uint64(hb.Batches.Buf[last].Allocated())
+		if size := uint64(hb.Batches.Buf[last].Size()); size > tail {
+			tail = size
+		}
+		if tail > projected {
+			projected = tail
+		}
+	} else if len(hb.Batches.Buf) > 1 && rows > 0 && rows < uint64(colexec.DefaultBatchSize) {
+		// Once Batches contains more than one full batch, CopyIntoBatches
+		// preallocates a full DefaultBatchSize destination for a tiny tail.
 		if projected > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
 			return 0, process.ErrHashBuildBudgetInvalid
 		}

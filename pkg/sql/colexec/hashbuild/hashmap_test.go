@@ -138,6 +138,30 @@ func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestCopyBuildBatchBudgetsPartialTailGrowth(t *testing.T) {
+	const budgetCap = uint64(32 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for range 1000 {
+		// Deep spill partitions contain many tiny records. They coalesce into
+		// one physical batch whose vector capacity grows geometrically.
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 7, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 1)
+	require.Equal(t, 7000, hb.Batches.Buf[0].RowCount())
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	const budgetCap = uint64(4 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
