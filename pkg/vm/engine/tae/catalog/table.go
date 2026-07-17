@@ -72,7 +72,7 @@ type TableEntry struct {
 	tombstoneObjects *ObjectList
 }
 
-// RecordKnownDMLPrepare advances the accepted known-version DML watermark.
+// RecordKnownDMLPrepare advances the accepted epoch-aware DML watermark.
 func (entry *TableEntry) RecordKnownDMLPrepare(ts types.TS) {
 	for old := entry.latestKnownDMLPrepare.Load(); old == nil || ts.GT(old); old = entry.latestKnownDMLPrepare.Load() {
 		candidate := ts
@@ -82,7 +82,7 @@ func (entry *TableEntry) RecordKnownDMLPrepare(ts types.TS) {
 	}
 }
 
-// GetLatestKnownDMLPrepare returns the accepted known-version DML watermark.
+// GetLatestKnownDMLPrepare returns the accepted epoch-aware DML watermark.
 func (entry *TableEntry) GetLatestKnownDMLPrepare() types.TS {
 	if ts := entry.latestKnownDMLPrepare.Load(); ts != nil {
 		return *ts

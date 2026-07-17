@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -105,8 +104,8 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 	if tc.Ctx.SrcAutoIncrMaxValues != nil {
 		clear(tc.Ctx.SrcAutoIncrMaxValues)
 	}
-	if tc.Ctx.SrcInternalAutoOffsets != nil {
-		clear(tc.Ctx.SrcInternalAutoOffsets)
+	if tc.Ctx.SrcAutoIncrOffsets != nil {
+		clear(tc.Ctx.SrcAutoIncrOffsets)
 	}
 }
 
@@ -473,125 +472,87 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	dstCtx context.Context,
 	proc *process.Process,
 ) error {
-
-	if tc.Ctx.SrcAutoIncrMaxValues == nil && tc.Ctx.SrcInternalAutoOffsets == nil {
+	if tc.Ctx.SrcAutoIncrMaxValues == nil && tc.Ctx.SrcAutoIncrOffsets == nil {
 		return nil
 	}
 
-	var (
-		err              error
-		typs             []types.Type
-		userIncrCols     []incrservice.AutoColumn
-		internalIncrCols []incrservice.AutoColumn
-
-		maxVal uint64
-
-		dstTblDef *plan.TableDef
-	)
-
-	dstTblDef = tc.dstMasterRel.GetTableDef(dstCtx)
+	dstTblDef := tc.dstMasterRel.GetTableDef(dstCtx)
+	var typs []types.Type
 	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(dstTblDef)
-	userIncrCols = incrservice.GetUserAutoColumnFromDef(dstTblDef)
-	internalIncrCols = incrservice.GetInternalAutoColumnFromDef(dstTblDef)
+	userIncrCols := incrservice.GetUserAutoColumnFromDef(dstTblDef)
+	internalIncrCols := incrservice.GetInternalAutoColumnFromDef(dstTblDef)
 
-	vecs := make([]*vector.Vector, len(typs))
-	for i, typ := range typs {
-		vecs[i] = vector.NewVec(typ)
-	}
-
-	defer func() {
-		for i := range vecs {
-			vecs[i].Free(proc.Mp())
-		}
-	}()
-
-	rows := 0
-	appendValue := func(col incrservice.AutoColumn, maxVal uint64) error {
-		var val any
+	validateOffset := func(col incrservice.AutoColumn, offset uint64) error {
 		typ := typs[col.ColIndex]
 		outOfRange := func() error {
 			return moerr.NewOutOfRangef(
 				dstCtx,
 				typ.String(),
 				"AUTO_INCREMENT value %d",
-				maxVal,
+				offset,
 			)
 		}
 		switch typ.Oid {
 		case types.T_uint8:
-			if maxVal > math.MaxUint8 {
+			if offset > math.MaxUint8 {
 				return outOfRange()
 			}
-			val = uint8(maxVal)
 		case types.T_uint16:
-			if maxVal > math.MaxUint16 {
+			if offset > math.MaxUint16 {
 				return outOfRange()
 			}
-			val = uint16(maxVal)
 		case types.T_uint32:
-			if maxVal > math.MaxUint32 {
+			if offset > math.MaxUint32 {
 				return outOfRange()
 			}
-			val = uint32(maxVal)
-		case types.T_uint64:
-			val = maxVal
 		case types.T_int8:
-			if maxVal > math.MaxInt8 {
+			if offset > math.MaxInt8 {
 				return outOfRange()
 			}
-			val = int8(maxVal)
 		case types.T_int16:
-			if maxVal > math.MaxInt16 {
+			if offset > math.MaxInt16 {
 				return outOfRange()
 			}
-			val = int16(maxVal)
 		case types.T_int32:
-			if maxVal > math.MaxInt32 {
+			if offset > math.MaxInt32 {
 				return outOfRange()
 			}
-			val = int32(maxVal)
 		case types.T_int64:
-			if maxVal > math.MaxInt64 {
+			if offset > math.MaxInt64 {
 				return outOfRange()
 			}
-			val = int64(maxVal)
-		}
-
-		if err = vector.AppendAny(
-			vecs[col.ColIndex], val, false, proc.Mp(),
-		); err != nil {
-			return err
-		}
-		if rows == 0 {
-			rows = vecs[col.ColIndex].Length()
 		}
 		return nil
 	}
 
+	tableID := tc.dstMasterRel.GetTableID(dstCtx)
+	setOffset := func(col incrservice.AutoColumn, offset uint64) error {
+		if err := validateOffset(col, offset); err != nil {
+			return err
+		}
+		return proc.GetIncrService().SetOffset(
+			dstCtx,
+			tableID,
+			col.ColName,
+			offset,
+			proc.Base.TxnOperator,
+		)
+	}
+
 	for _, col := range userIncrCols {
-		maxVal = max(
+		offset := max(
 			tc.Ctx.RequestedAutoIncrOffset,
 			tc.Ctx.SrcAutoIncrMaxValues[int32(col.ColIndex)],
+			tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)],
 		)
-		if err = appendValue(col, maxVal); err != nil {
+		if err := setOffset(col, offset); err != nil {
 			return err
 		}
 	}
 	for _, col := range internalIncrCols {
-		maxVal = tc.Ctx.SrcInternalAutoOffsets[int32(col.ColIndex)]
-		if err = appendValue(col, maxVal); err != nil {
+		if err := setOffset(col, tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)]); err != nil {
 			return err
 		}
-	}
-
-	if rows == 0 {
-		return nil
-	}
-
-	if _, err = proc.GetIncrService().InsertValues(
-		dstCtx, tc.dstMasterRel.GetTableID(dstCtx), dstTblDef.AutoIncrEpoch, proc.Base.TxnOperator, vecs, rows, int64(rows),
-	); err != nil {
-		return err
 	}
 
 	return nil

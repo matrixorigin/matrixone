@@ -66,7 +66,7 @@ func (txn *waitingSchemaTxn) GetTxnState(wait bool) txnif.TxnState {
 	return txnif.TxnStateCommitted
 }
 
-func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
+func TestAutoIncrEpochFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		rollback bool
@@ -77,6 +77,7 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			schema := catalog.MockSchemaAll(3, 1)
 			schema.Version = 7
+			schema.Extra.AutoIncrEpoch = 7
 			entry := catalog.MockTableEntryWithDB(nil, 42)
 			entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 				Schema:          schema,
@@ -99,17 +100,17 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 			assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
 			dmlTxn.Unlock()
 			tbl := &txnTable{
-				store:                    &txnStore{txn: dmlTxn},
-				entry:                    entry,
-				expectedTableDefVersions: map[uint32]struct{}{7: {}},
+				store:                  &txnStore{txn: dmlTxn},
+				entry:                  entry,
+				expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
 			}
 
 			result := make(chan error, 1)
-			go func() { result <- tbl.validateTableDefVersion() }()
+			go func() { result <- tbl.validateAutoIncrEpoch() }()
 			select {
 			case <-alterTxn.waited:
 			case <-time.After(5 * time.Second):
-				t.Fatal("version fence did not wait for earlier schema prepare")
+				t.Fatal("epoch fence did not wait for earlier schema prepare")
 			}
 
 			if tc.rollback {
@@ -124,7 +125,7 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 			select {
 			case err = <-result:
 			case <-time.After(5 * time.Second):
-				t.Fatal("version fence did not resume after schema transaction finished")
+				t.Fatal("epoch fence did not resume after schema transaction finished")
 			}
 			if tc.rollback {
 				assert.NoError(t, err)
@@ -135,13 +136,13 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 	}
 }
 
-func TestTableDefVersionDependencyRecordsMultipleExpectations(t *testing.T) {
+func TestAutoIncrEpochDependencyRecordsMultipleExpectations(t *testing.T) {
 	tbl := new(txnTable)
-	assert.NoError(t, tbl.setExpectedTableDefVersion(0))
-	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
-	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
-	assert.NoError(t, tbl.setExpectedTableDefVersion(8))
-	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedTableDefVersions)
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(0))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(7))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(7))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(8))
+	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedAutoIncrEpochs)
 }
 
 func newPreparingTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {
@@ -204,9 +205,10 @@ func TestAutoIncrementAlterDetectsAcceptedDMLAfterSnapshot(t *testing.T) {
 	})
 }
 
-func TestTableDefVersionFencePublishesOnlyAcceptedDML(t *testing.T) {
+func TestAutoIncrEpochFencePublishesOnlyAcceptedDML(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
 	entry := catalog.MockTableEntryWithDB(nil, 42)
 	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
@@ -215,11 +217,11 @@ func TestTableDefVersionFencePublishesOnlyAcceptedDML(t *testing.T) {
 	t.Run("accepted known dml publishes", func(t *testing.T) {
 		txn := newPreparingTestTxn(t, "accepted", types.BuildTS(2, 0), types.BuildTS(3, 0))
 		tbl := &txnTable{
-			store:                    &txnStore{txn: txn},
-			entry:                    entry,
-			expectedTableDefVersions: map[uint32]struct{}{7: {}},
+			store:                  &txnStore{txn: txn},
+			entry:                  entry,
+			expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
 		}
-		assert.NoError(t, tbl.validateTableDefVersion())
+		assert.NoError(t, tbl.validateAutoIncrEpoch())
 		assert.NoError(t, tbl.validateAutoIncrementDMLOrder())
 		assert.Equal(t, types.BuildTS(3, 0), entry.GetLatestKnownDMLPrepare())
 	})
@@ -231,9 +233,9 @@ func TestTableDefVersionFencePublishesOnlyAcceptedDML(t *testing.T) {
 		})
 		txn := newPreparingTestTxn(t, "rejected", types.BuildTS(2, 0), types.BuildTS(4, 0))
 		tbl := &txnTable{
-			store:                    &txnStore{txn: txn},
-			entry:                    other,
-			expectedTableDefVersions: map[uint32]struct{}{6: {}},
+			store:                  &txnStore{txn: txn},
+			entry:                  other,
+			expectedAutoIncrEpochs: map[uint32]struct{}{6: {}},
 		}
 		err := tbl.PrepareCommit()
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
@@ -254,9 +256,10 @@ func TestAutoIncrementDMLWatermarkIsTableScoped(t *testing.T) {
 	assert.NoError(t, safe.validateAutoIncrementDMLOrder())
 }
 
-func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
+func TestAutoIncrEpochFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
 	entry := catalog.MockTableEntryWithDB(nil, 42)
 	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
@@ -280,16 +283,42 @@ func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
 	dmlTxn.Unlock()
 	tbl := &txnTable{
-		store:                    &txnStore{txn: dmlTxn},
-		entry:                    entry,
-		expectedTableDefVersions: map[uint32]struct{}{7: {}},
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
 	}
-	assert.NoError(t, tbl.validateTableDefVersion())
+	assert.NoError(t, tbl.validateAutoIncrEpoch())
 }
 
-func TestTableDefVersionFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing.T) {
+func TestAutoIncrementFenceIgnoresConstraintOnlySchemaVersionChange(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+	})
+
+	alterTxn := newPreparingTestTxn(t, "constraint-alter", types.BuildTS(2, 0), types.BuildTS(3, 0))
+	_, _, err := entry.AlterTable(context.Background(), alterTxn,
+		apipb.NewUpdateConstraintReq(0, 42, "constraint"))
+	assert.NoError(t, err)
+	assert.NoError(t, entry.BaseEntryImpl.PrepareCommit())
+	assert.NoError(t, entry.BaseEntryImpl.ApplyCommit(alterTxn.GetID()))
+
+	dmlTxn := newPreparingTestTxn(t, "dml", types.BuildTS(2, 1), types.BuildTS(4, 0))
+	tbl := &txnTable{
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
+	}
+	assert.NoError(t, tbl.validateAutoIncrEpoch())
+}
+
+func TestAutoIncrEpochFenceRejectsMultipleEpochsWithoutLocalAlter(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
 	entry := catalog.MockTableEntryWithDB(nil, 42)
 	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
@@ -300,11 +329,11 @@ func TestTableDefVersionFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing
 	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(3, 0)))
 	dmlTxn.Unlock()
 	tbl := &txnTable{
-		store:                    &txnStore{txn: dmlTxn},
-		entry:                    entry,
-		expectedTableDefVersions: map[uint32]struct{}{7: {}, 8: {}},
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}, 8: {}},
 	}
-	err := tbl.validateTableDefVersion()
+	err := tbl.validateAutoIncrEpoch()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 }
 

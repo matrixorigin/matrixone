@@ -6611,11 +6611,11 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 }
 
-type tableDefVersionSetter interface {
-	SetTableDefVersion(uint32) error
+type autoIncrEpochSetter interface {
+	SetAutoIncrEpoch(uint32) error
 }
 
-func waitTableVersionBarrier(t *testing.T, ch <-chan struct{}, name string) {
+func waitAutoIncrEpochBarrier(t *testing.T, ch <-chan struct{}, name string) {
 	t.Helper()
 	select {
 	case <-ch:
@@ -6624,23 +6624,23 @@ func waitTableVersionBarrier(t *testing.T, ch <-chan struct{}, name string) {
 	}
 }
 
-func TestTableDefVersionCommitFence(t *testing.T) {
+func TestAutoIncrEpochCommitFence(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	const (
-		oldVersion      = uint32(7)
-		newVersion      = uint32(8)
+		oldEpoch        = uint32(7)
+		newEpoch        = uint32(8)
 		staleGenerated  = 5000
 		effectiveOffset = 999
 		retryGenerated  = 5001
 	)
 
-	newVersionedTable := func(t *testing.T) (*db.DB, *catalog.Schema, uint32) {
+	newEpochTable := func(t *testing.T) (*db.DB, *catalog.Schema, uint32) {
 		t.Helper()
 		tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
 		schema := catalog.MockSchemaAll(3, 1)
-		schema.Version = oldVersion - 1
+		schema.Version = oldEpoch - 1
 		testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
 
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -6648,32 +6648,32 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 
 		txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-		version := rel.Schema(false).(*catalog.Schema).Version
-		require.Equal(t, oldVersion, version)
+		epoch := rel.Schema(false).(*catalog.Schema).Extra.AutoIncrEpoch
+		require.Equal(t, oldEpoch, epoch)
 		require.NoError(t, txn.Commit(ctx))
-		return tae, schema, version
+		return tae, schema, epoch
 	}
 
-	appendWithVersion := func(t *testing.T, tae *db.DB, schema *catalog.Schema, version uint32) txnif.AsyncTxn {
+	appendWithEpoch := func(t *testing.T, tae *db.DB, schema *catalog.Schema, epoch uint32) txnif.AsyncTxn {
 		t.Helper()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(epoch))
 		bat := catalog.MockBatch(schema, 1)
 		t.Cleanup(bat.Close)
 		require.NoError(t, rel.Append(ctx, bat))
 		return txn
 	}
 
-	appendGeneratedWithVersion := func(
+	appendGeneratedWithEpoch := func(
 		t *testing.T,
 		tae *db.DB,
 		schema *catalog.Schema,
 		generatedValue int,
-		version uint32,
+		epoch uint32,
 	) txnif.AsyncTxn {
 		t.Helper()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(epoch))
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, generatedValue)
 		t.Cleanup(bat.Close)
 		require.Equal(t, int16(generatedValue), bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0))
@@ -6686,7 +6686,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		defer tae.Close()
 		schema := catalog.MockSchemaAll(3, 1)
 		testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
-		dmlTxn := appendWithVersion(t, tae, schema, 0)
+		dmlTxn := appendWithEpoch(t, tae, schema, 0)
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 10)))
@@ -6706,23 +6706,23 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 10)))
 		require.NoError(t, alterTxn.Commit(ctx))
-		// Rolling-upgrade compatibility boundary: a legacy CN has no version
+		// Rolling-upgrade compatibility boundary: a legacy CN has no epoch
 		// presence bit, so TN accepts it. Strict fencing starts only after every
-		// writer supplies table_def_version_known=true.
+		// writer supplies auto_incr_epoch_known=true.
 		require.NoError(t, unknownTxn.Commit(ctx))
 	})
 
-	t.Run("matching version", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+	t.Run("matching epoch", func(t *testing.T) {
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
-		require.NoError(t, appendWithVersion(t, tae, schema, version).Commit(ctx))
+		require.NoError(t, appendWithEpoch(t, tae, schema, epoch).Commit(ctx))
 	})
 
 	t.Run("same txn dml then alter", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(epoch))
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer bat.Close()
 		require.NoError(t, rel.Append(ctx, bat))
@@ -6733,13 +6733,13 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 	})
 
 	t.Run("same txn alter then dml", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
-		localVersion := rel.Schema(false).(*catalog.Schema).Version
-		require.Equal(t, version+1, localVersion)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(localVersion))
+		localEpoch := rel.Schema(false).(*catalog.Schema).Extra.AutoIncrEpoch
+		require.Equal(t, epoch+1, localEpoch)
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(localEpoch))
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer bat.Close()
 		require.NoError(t, rel.Append(ctx, bat))
@@ -6749,17 +6749,17 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 	})
 
 	t.Run("same txn dml alter dml", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(epoch))
 		before := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer before.Close()
 		require.NoError(t, rel.Append(ctx, before))
 		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
-		localVersion := rel.Schema(false).(*catalog.Schema).Version
-		require.Equal(t, version+1, localVersion)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(localVersion))
+		localEpoch := rel.Schema(false).(*catalog.Schema).Extra.AutoIncrEpoch
+		require.Equal(t, epoch+1, localEpoch)
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(localEpoch))
 		after := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 10)
 		defer after.Close()
 		require.NoError(t, rel.Append(ctx, after))
@@ -6770,10 +6770,10 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 	})
 
-	t.Run("committed newer schema retries", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+	t.Run("committed newer epoch retries", func(t *testing.T) {
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
-		dmlTxn := appendWithVersion(t, tae, schema, version)
+		dmlTxn := appendWithEpoch(t, tae, schema, epoch)
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
@@ -6784,9 +6784,9 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 	})
 
 	t.Run("alter prepared first is ordered before dml", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
-		dmlTxn := appendGeneratedWithVersion(t, tae, schema, staleGenerated, version)
+		dmlTxn := appendGeneratedWithEpoch(t, tae, schema, staleGenerated, epoch)
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, alterRel.AlterTable(ctx,
@@ -6799,7 +6799,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		})
 		alterResult := make(chan error, 1)
 		go func() { alterResult <- alterTxn.Commit(ctx) }()
-		waitTableVersionBarrier(t, alterPrepared, "ALTER prepare")
+		waitAutoIncrEpochBarrier(t, alterPrepared, "ALTER prepare")
 
 		dmlStarted := make(chan struct{})
 		dmlResult := make(chan error, 1)
@@ -6807,7 +6807,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 			close(dmlStarted)
 			dmlResult <- dmlTxn.Commit(ctx)
 		}()
-		waitTableVersionBarrier(t, dmlStarted, "DML commit start")
+		waitAutoIncrEpochBarrier(t, dmlStarted, "DML commit start")
 		close(releaseAlter)
 
 		require.NoError(t, <-alterResult)
@@ -6815,15 +6815,15 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 
 		// This is the retry shape produced by the second incrservice instance:
-		// regenerate using V8 and a value at/above the committed effective offset.
-		require.NoError(t, appendGeneratedWithVersion(
-			t, tae, schema, retryGenerated, newVersion).Commit(ctx))
+		// regenerate using epoch 8 and a value at/above the committed effective offset.
+		require.NoError(t, appendGeneratedWithEpoch(
+			t, tae, schema, retryGenerated, newEpoch).Commit(ctx))
 	})
 
 	t.Run("dml prepared first forces alter to recompute max", func(t *testing.T) {
-		tae, schema, version := newVersionedTable(t)
+		tae, schema, epoch := newEpochTable(t)
 		defer tae.Close()
-		dmlTxn := appendGeneratedWithVersion(t, tae, schema, staleGenerated, version)
+		dmlTxn := appendGeneratedWithEpoch(t, tae, schema, staleGenerated, epoch)
 
 		dmlPrepared, releaseDML := make(chan struct{}), make(chan struct{})
 		dmlTxn.SetPrepareCommitFn(func(txn txnif.AsyncTxn) error {
@@ -6833,7 +6833,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		})
 		dmlResult := make(chan error, 1)
 		go func() { dmlResult <- dmlTxn.Commit(ctx) }()
-		waitTableVersionBarrier(t, dmlPrepared, "DML prepare")
+		waitAutoIncrEpochBarrier(t, dmlPrepared, "DML prepare")
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, alterRel.AlterTable(ctx,
@@ -6844,21 +6844,21 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 			close(alterStarted)
 			alterResult <- alterTxn.Commit(ctx)
 		}()
-		waitTableVersionBarrier(t, alterStarted, "ALTER commit start")
+		waitAutoIncrEpochBarrier(t, alterStarted, "ALTER commit start")
 
 		close(releaseDML)
 		require.NoError(t, <-dmlResult)
 		err := <-alterResult
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 
-		// A retry starts after the accepted V7 DML is visible, so the CN-side
+		// A retry starts after the accepted epoch-7 DML is visible, so the CN-side
 		// MAX query reconciles the requested offset with the committed 5000.
 		retryAlterTxn, retryAlterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, retryAlterRel.AlterTable(ctx,
 			api.NewUpdateAutoIncrementReq(0, retryAlterRel.ID(), staleGenerated)))
 		require.NoError(t, retryAlterTxn.Commit(ctx))
 
-		freshTxn := appendGeneratedWithVersion(t, tae, schema, retryGenerated, newVersion)
+		freshTxn := appendGeneratedWithEpoch(t, tae, schema, retryGenerated, newEpoch)
 		require.NoError(t, freshTxn.Commit(ctx))
 	})
 }
@@ -6879,7 +6879,7 @@ func TestPreparedDMLReplayRestoresAutoIncrementFence(t *testing.T) {
 			require.NoError(t, initTxn.Commit(ctx))
 
 			dmlTxn, dmlRel := testutil.GetDefaultRelation(t, wTae.DB, schema.Name)
-			require.NoError(t, dmlRel.(tableDefVersionSetter).SetTableDefVersion(7))
+			require.NoError(t, dmlRel.(autoIncrEpochSetter).SetAutoIncrEpoch(7))
 			bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 5000)
 			defer bat.Close()
 			require.NoError(t, dmlRel.Append(ctx, bat))

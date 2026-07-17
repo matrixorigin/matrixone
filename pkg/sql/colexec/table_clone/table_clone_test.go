@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -86,20 +85,9 @@ func TestUpdateDstAutoIncrColumnsReconcilesRequestedOffsetWithCopiedMaximum(t *t
 				dstMasterRel: rel,
 			}
 
-			incrSvc.EXPECT().InsertValues(
-				gomock.Any(), def.TblId, def.AutoIncrEpoch, gomock.Any(), gomock.Any(), 1, int64(1),
-			).DoAndReturn(func(
-				_ context.Context,
-				_ uint64,
-				_ uint32,
-				_ client.TxnOperator,
-				vecs []*vector.Vector,
-				_ int,
-				_ int64,
-			) (uint64, error) {
-				require.Equal(t, tt.want, vector.MustFixedColWithTypeCheck[uint64](vecs[0])[0])
-				return 0, nil
-			})
+			incrSvc.EXPECT().SetOffset(
+				gomock.Any(), def.TblId, "id", tt.want, gomock.Any(),
+			)
 
 			require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 		})
@@ -134,26 +122,43 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 		Ctx: &TableCloneCtx{
 			RequestedAutoIncrOffset: 999,
 			SrcAutoIncrMaxValues:    map[int32]uint64{0: 40},
-			SrcInternalAutoOffsets:  map[int32]uint64{1: 40},
+			SrcAutoIncrOffsets:      map[int32]uint64{1: 40},
 		},
 		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
 	}
 
-	incrSvc.EXPECT().InsertValues(
-		gomock.Any(), def.TblId, def.AutoIncrEpoch, gomock.Any(), gomock.Any(), 1, int64(1),
-	).DoAndReturn(func(
-		_ context.Context,
-		_ uint64,
-		_ uint32,
-		_ client.TxnOperator,
-		vecs []*vector.Vector,
-		_ int,
-		_ int64,
-	) (uint64, error) {
-		require.Equal(t, uint64(999), vector.MustFixedColWithTypeCheck[uint64](vecs[0])[0])
-		require.Equal(t, uint64(40), vector.MustFixedColWithTypeCheck[uint64](vecs[1])[0])
-		return 0, nil
-	})
+	gomock.InOrder(
+		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "id", uint64(999), gomock.Any()),
+		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "__mo_fake_pk_col", uint64(40), gomock.Any()),
+	)
+
+	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
+}
+
+func TestUpdateDstAutoIncrColumnsUsesSourceAllocatorOffset(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	proc.Base.IncrService = incrSvc
+
+	def := &plan.TableDef{
+		TblId:         42,
+		AutoIncrEpoch: 3,
+		Cols: []*plan.ColDef{{
+			Name: "id",
+			Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+	}
+	tc := &TableClone{
+		Ctx: &TableCloneCtx{
+			SrcAutoIncrMaxValues: map[int32]uint64{0: 40},
+			SrcAutoIncrOffsets:   map[int32]uint64{0: 50},
+		},
+		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
+	}
+
+	incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "id", uint64(50), gomock.Any())
 
 	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 }
@@ -199,40 +204,24 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeEffectiveOffset(t *testing.T) 
 				dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
 			}
 
-			insertCalls := 0
-			incrSvc.EXPECT().InsertValues(
-				gomock.Any(), def.TblId, def.AutoIncrEpoch, gomock.Any(), gomock.Any(), 1, int64(1),
-			).DoAndReturn(func(
-				_ context.Context,
-				_ uint64,
-				_ uint32,
-				_ client.TxnOperator,
-				vecs []*vector.Vector,
-				_ int,
-				_ int64,
-			) (uint64, error) {
-				insertCalls++
-				switch tt.oid {
-				case types.T_uint8:
-					require.Equal(t, uint8(tt.value), vector.MustFixedColWithTypeCheck[uint8](vecs[0])[0])
-				case types.T_int8:
-					require.Equal(t, int8(tt.value), vector.MustFixedColWithTypeCheck[int8](vecs[0])[0])
-				case types.T_uint64:
-					require.Equal(t, tt.value, vector.MustFixedColWithTypeCheck[uint64](vecs[0])[0])
-				case types.T_int64:
-					require.Equal(t, int64(tt.value), vector.MustFixedColWithTypeCheck[int64](vecs[0])[0])
-				}
-				return 0, nil
-			}).AnyTimes()
+			setOffsetCalls := 0
+			if !tt.wantErr {
+				incrSvc.EXPECT().SetOffset(
+					gomock.Any(), def.TblId, "id", tt.value, gomock.Any(),
+				).DoAndReturn(func(context.Context, uint64, string, uint64, client.TxnOperator) error {
+					setOffsetCalls++
+					return nil
+				})
+			}
 
 			err := tc.updateDstAutoIncrColumns(proc.Ctx, proc)
 			if tt.wantErr {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 				require.ErrorContains(t, err, "AUTO_INCREMENT value")
-				require.Zero(t, insertCalls)
+				require.Zero(t, setOffsetCalls)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, 1, insertCalls)
+				require.Equal(t, 1, setOffsetCalls)
 			}
 		})
 	}

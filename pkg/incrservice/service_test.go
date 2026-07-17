@@ -745,6 +745,30 @@ func TestSetOffsetTransactionUsesPendingOffsetForInsert(t *testing.T) {
 	})
 }
 
+func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
 func TestSetOffsetWithoutInsertDoesNotReservePrivateRange(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)

@@ -2231,19 +2231,15 @@ func constructTableClone(
 		ret executor.Result
 		sql string
 
-		account            = uint32(math.MaxUint32)
-		colMaxValue        map[int32]uint64
-		internalColOffsets map[int32]uint64
-		hasAutoIncr        bool
-		hasInternalAuto    bool
+		account         = uint32(math.MaxUint32)
+		colMaxValue     map[int32]uint64
+		autoIncrOffsets map[int32]uint64
+		hasAutoIncr     bool
 	)
 
 	for _, colDef := range clonePlan.SrcTableDef.Cols {
 		if colDef.Typ.AutoIncr {
 			hasAutoIncr = true
-			if colDef.Hidden {
-				hasInternalAuto = true
-			}
 		}
 	}
 
@@ -2266,7 +2262,7 @@ func constructTableClone(
 		}
 	}
 
-	if hasInternalAuto {
+	if hasAutoIncr {
 		sql = fmt.Sprintf(
 			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
 			clonePlan.SrcTableDef.TblId,
@@ -2286,7 +2282,7 @@ func constructTableClone(
 			ret.Close()
 			return nil, err
 		}
-		internalColOffsets = make(map[int32]uint64)
+		autoIncrOffsets = make(map[int32]uint64)
 		func() {
 			defer ret.Close()
 			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -2295,9 +2291,8 @@ func constructTableClone(
 				for i := 0; i < rows; i++ {
 					idx := colIdxes[i]
 					if idx >= 0 && int(idx) < len(clonePlan.SrcTableDef.Cols) &&
-						clonePlan.SrcTableDef.Cols[idx].Hidden &&
 						clonePlan.SrcTableDef.Cols[idx].Typ.AutoIncr {
-						internalColOffsets[idx] = offsets[i]
+						autoIncrOffsets[idx] = offsets[i]
 					}
 				}
 				return true
@@ -2346,7 +2341,7 @@ func constructTableClone(
 	}
 
 	metaCopy.Ctx.SrcAutoIncrMaxValues = colMaxValue
-	metaCopy.Ctx.SrcInternalAutoOffsets = internalColOffsets
+	metaCopy.Ctx.SrcAutoIncrOffsets = autoIncrOffsets
 
 	success = true
 	return metaCopy, nil

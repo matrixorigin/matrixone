@@ -244,11 +244,11 @@ message Entry {
     Batch bat            = 7;
     // whether TN do the PK uniqueness check against txn's workspace or not.
     int32 pk_check_by_tn = 8;
-    // table definition version used by the CN when planning this write.
-    // Consult table_def_version_known because zero is a valid initial version.
-    uint32 table_def_version = 9;
-    // whether table_def_version was supplied by a version-aware CN.
-    bool table_def_version_known = 10;
+    // AUTO_INCREMENT epoch used by the CN when planning this write.
+    // Consult auto_incr_epoch_known because zero is a valid initial epoch.
+    uint32 auto_incr_epoch = 9;
+    // whether auto_incr_epoch was supplied by an epoch-aware CN.
+    bool auto_incr_epoch_known = 10;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,

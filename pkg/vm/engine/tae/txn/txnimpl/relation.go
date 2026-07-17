@@ -115,9 +115,9 @@ type txnRelation struct {
 	table *txnTable
 }
 
-// SetTableDefVersion records the CN schema dependency for this relation.
-func (h *txnRelation) SetTableDefVersion(version uint32) error {
-	return h.table.setExpectedTableDefVersion(version)
+// SetAutoIncrEpoch records the CN allocator dependency for this relation.
+func (h *txnRelation) SetAutoIncrEpoch(epoch uint32) error {
+	return h.table.setExpectedAutoIncrEpoch(epoch)
 }
 
 func newRelation(table *txnTable) *txnRelation {

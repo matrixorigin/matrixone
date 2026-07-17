@@ -331,17 +331,48 @@ func (s *service) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
+	var (
+		txnKey           string
+		ownedCreate      bool
+		createCache      incrTableCache
+		createEpoch      uint32
+		createGeneration uint64
+	)
+
 	s.mu.Lock()
 	if s.mu.closed {
 		s.mu.Unlock()
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 	s.builders.Add(1)
+	if txnOp != nil {
+		txnKey = string(txnOp.Txn().ID)
+		ownedCreate = s.ownsCreateLocked(txnKey, tableID)
+		if ownedCreate {
+			createCache = s.mu.tables[tableID]
+			if createCache != nil {
+				createEpoch = createCache.epoch()
+				if s.mu.generation == nil {
+					s.mu.generation = make(map[uint64]uint64)
+				}
+				s.mu.generation[tableID]++
+				createGeneration = s.mu.generation[tableID]
+				delete(s.mu.tables, tableID)
+			}
+		}
+	}
 	s.mu.Unlock()
 	defer s.builders.Done()
 
-	if err := s.Reload(ctx, tableID); err != nil {
-		return err
+	if ownedCreate {
+		if createCache == nil {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		createCache.retire()
+	} else {
+		if err := s.Reload(ctx, tableID); err != nil {
+			return err
+		}
 	}
 
 	// ALTER TABLE AUTO_INCREMENT explicitly resets the next value. The caller
@@ -361,6 +392,40 @@ func (s *service) SetOffset(
 	if len(cols) == 0 {
 		return moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
+
+	if ownedCreate {
+		// CREATE TABLE (including clone/copy ALTER) is tracked by
+		// handleCreatesLocked. Publish the post-reset cache through that path so
+		// the committed table cannot retain its pre-reset range.
+		replacement, err := newTableCache(
+			ctx,
+			s.sid,
+			tableID,
+			createEpoch,
+			cols,
+			s.cfg,
+			s.allocator,
+			txnOp,
+			false,
+		)
+		if err != nil {
+			return err
+		}
+
+		s.mu.Lock()
+		if s.mu.closed ||
+			!s.ownsCreateLocked(txnKey, tableID) ||
+			s.mu.generation[tableID] != createGeneration ||
+			s.mu.tables[tableID] != nil {
+			s.mu.Unlock()
+			replacement.retire()
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		s.mu.tables[tableID] = replacement
+		s.mu.Unlock()
+		return nil
+	}
+
 	private := newLazyPrivateTableCache(
 		tableID,
 		cols,
@@ -376,6 +441,15 @@ func (s *service) SetOffset(
 		return err
 	}
 	return nil
+}
+
+func (s *service) ownsCreateLocked(txnKey string, tableID uint64) bool {
+	for _, id := range s.mu.creates[txnKey] {
+		if id == tableID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *service) buildPrivateTableCache(

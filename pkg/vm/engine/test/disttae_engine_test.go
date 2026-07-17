@@ -1532,7 +1532,7 @@ func TestCacheNotServing(t *testing.T) {
 	require.NoError(t, staleTxn.Commit(p.Ctx))
 }
 
-func TestTableDefVersionFenceAcrossCNTxnModes(t *testing.T) {
+func TestAutoIncrEpochFenceAcrossCNTxnModes(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		mode      pbtxn.TxnMode
@@ -1588,9 +1588,9 @@ func TestTableDefVersionFenceAcrossCNTxnModes(t *testing.T) {
 			require.Equal(t, tc.mode, staleTxn.Txn().Mode)
 			require.Equal(t, tc.isolation, staleTxn.Txn().Isolation)
 			staleRel := openRelation(staleTxn)
-			staleVersion := staleRel.GetTableDef(p.Ctx).Version
+			staleEpoch := staleRel.GetTableDef(p.Ctx).AutoIncrEpoch
 			// Mode is consumed at the CN transaction/lock layer. The workspace
-			// write below then converges for both modes and records the version
+			// write below then converges for both modes and records the epoch
 			// of the relation opened by this transaction.
 			if tc.mode == pbtxn.TxnMode_Optimistic {
 				require.Panics(t, func() { staleTxn.HasLockTable(staleRel.GetTableID(p.Ctx)) })
@@ -1614,7 +1614,7 @@ func TestTableDefVersionFenceAcrossCNTxnModes(t *testing.T) {
 
 			retryTxn := newModeTxn()
 			retryRel := openRelation(retryTxn)
-			require.Greater(t, retryRel.GetTableDef(p.Ctx).Version, staleVersion)
+			require.Greater(t, retryRel.GetTableDef(p.Ctx).AutoIncrEpoch, staleEpoch)
 			writeOne(retryTxn, retryRel)
 			require.NoError(t, retryTxn.Commit(p.Ctx))
 

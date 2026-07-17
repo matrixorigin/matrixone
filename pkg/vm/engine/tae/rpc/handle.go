@@ -316,7 +316,7 @@ func (h *Handle) handleRequests(
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
 				// Check if this is a soft delete object request
 				if wr.FileName != "" && isSoftDeleteEntry(wr.FileName) {
-					if err = h.registerWriteTableDefVersion(txn, wr); err != nil {
+					if err = h.registerWriteAutoIncrEpoch(txn, wr); err != nil {
 						return
 					}
 					// Handle soft delete object separately
@@ -330,7 +330,7 @@ func (h *Handle) handleRequests(
 				wr = req.(*cmd_util.WriteReq)
 				// Check if this is a soft delete object request
 				if wr.Type == cmd_util.EntrySoftDeleteObject {
-					if err = h.registerWriteTableDefVersion(txn, wr); err != nil {
+					if err = h.registerWriteAutoIncrEpoch(txn, wr); err != nil {
 						return
 					}
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
@@ -412,23 +412,23 @@ func (h *Handle) handleRequests(
 	return
 }
 
-type tableDefVersionRecorder interface {
-	SetTableDefVersion(uint32) error
+type autoIncrEpochRecorder interface {
+	SetAutoIncrEpoch(uint32) error
 }
 
-func setTableDefVersionDependency(rel handle.Relation, version uint32, known bool) error {
+func setAutoIncrEpochDependency(rel handle.Relation, epoch uint32, known bool) error {
 	if !known {
 		return nil
 	}
-	recorder, ok := rel.(tableDefVersionRecorder)
+	recorder, ok := rel.(autoIncrEpochRecorder)
 	if !ok {
-		return moerr.NewInternalErrorNoCtxf("relation %T cannot record table definition version", rel)
+		return moerr.NewInternalErrorNoCtxf("relation %T cannot record AUTO_INCREMENT epoch", rel)
 	}
-	return recorder.SetTableDefVersion(version)
+	return recorder.SetAutoIncrEpoch(epoch)
 }
 
-func (h *Handle) registerWriteTableDefVersion(txn txnif.AsyncTxn, req *cmd_util.WriteReq) error {
-	if !req.TableDefVersionKnown {
+func (h *Handle) registerWriteAutoIncrEpoch(txn txnif.AsyncTxn, req *cmd_util.WriteReq) error {
+	if !req.AutoIncrEpochKnown {
 		return nil
 	}
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
@@ -439,7 +439,7 @@ func (h *Handle) registerWriteTableDefVersion(txn txnif.AsyncTxn, req *cmd_util.
 	if err != nil {
 		return err
 	}
-	return setTableDefVersionDependency(rel, req.TableDefVersion, req.TableDefVersionKnown)
+	return setAutoIncrEpochDependency(rel, req.AutoIncrEpoch, req.AutoIncrEpochKnown)
 }
 
 //#endregion
@@ -460,16 +460,16 @@ func (h *Handle) apiEntryToWriteEntry(
 	}
 
 	req := &cmd_util.WriteReq{
-		Type:                 cmd_util.EntryType(pe.EntryType),
-		DatabaseId:           pe.GetDatabaseId(),
-		TableID:              pe.GetTableId(),
-		DatabaseName:         pe.GetDatabaseName(),
-		TableName:            pe.GetTableName(),
-		TableDefVersion:      pe.GetTableDefVersion(),
-		TableDefVersionKnown: pe.GetTableDefVersionKnown(),
-		FileName:             pe.GetFileName(),
-		Batch:                moBat,
-		PkCheck:              cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+		Type:               cmd_util.EntryType(pe.EntryType),
+		DatabaseId:         pe.GetDatabaseId(),
+		TableID:            pe.GetTableId(),
+		DatabaseName:       pe.GetDatabaseName(),
+		TableName:          pe.GetTableName(),
+		AutoIncrEpoch:      pe.GetAutoIncrEpoch(),
+		AutoIncrEpochKnown: pe.GetAutoIncrEpochKnown(),
+		FileName:           pe.GetFileName(),
+		Batch:              moBat,
+		PkCheck:            cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
 	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
@@ -937,7 +937,7 @@ func (h *Handle) HandleWrite(
 			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
 		return
 	}
-	if err = setTableDefVersionDependency(tb, req.TableDefVersion, req.TableDefVersionKnown); err != nil {
+	if err = setAutoIncrEpochDependency(tb, req.AutoIncrEpoch, req.AutoIncrEpochKnown); err != nil {
 		return
 	}
 

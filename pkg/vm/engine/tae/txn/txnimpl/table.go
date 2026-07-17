@@ -119,24 +119,23 @@ type txnTable struct {
 
 	idx int
 
-	// expectedTableDefVersions are the known CN schema versions this
-	// transaction's user-table writes were planned against. A transaction can
-	// legitimately use both the committed version and the version created by
-	// its own ALTER TABLE.
-	expectedTableDefVersions map[uint32]struct{}
-	autoIncrementAlter       bool
+	// expectedAutoIncrEpochs are the known allocator epochs used by this
+	// transaction's user-table writes. A transaction can legitimately use both
+	// the committed epoch and the epoch created by its own AUTO_INCREMENT alter.
+	expectedAutoIncrEpochs map[uint32]struct{}
+	autoIncrementAlter     bool
 }
 
-func (tbl *txnTable) setExpectedTableDefVersion(version uint32) error {
-	if tbl.expectedTableDefVersions == nil {
-		tbl.expectedTableDefVersions = make(map[uint32]struct{}, 2)
+func (tbl *txnTable) setExpectedAutoIncrEpoch(epoch uint32) error {
+	if tbl.expectedAutoIncrEpochs == nil {
+		tbl.expectedAutoIncrEpochs = make(map[uint32]struct{}, 2)
 	}
-	tbl.expectedTableDefVersions[version] = struct{}{}
+	tbl.expectedAutoIncrEpochs[epoch] = struct{}{}
 	return nil
 }
 
-func (tbl *txnTable) validateTableDefVersion() error {
-	if len(tbl.expectedTableDefVersions) == 0 {
+func (tbl *txnTable) validateAutoIncrEpoch() error {
+	if len(tbl.expectedAutoIncrEpochs) == 0 {
 		return nil
 	}
 
@@ -152,33 +151,34 @@ func (tbl *txnTable) validateTableDefVersion() error {
 			}
 		}
 
-		baseVersion := uint32(0)
-		localVersion := uint32(0)
-		hasLocalVersion := false
+		baseEpoch := uint32(0)
+		localEpoch := uint32(0)
+		hasLocalEpoch := false
 		tbl.entry.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.TableMVCCNode]) bool {
-			// A same-transaction ALTER is unordered with the transaction's DML.
-			// Keep scanning for the committed base version as both are valid.
+			// A same-transaction AUTO_INCREMENT alter is unordered with the
+			// transaction's DML. Keep scanning for the committed base epoch as
+			// both are valid.
 			if node.IsSameTxn(tbl.store.txn) {
-				localVersion = node.BaseNode.Schema.Version
-				hasLocalVersion = true
+				localEpoch = node.BaseNode.Schema.Extra.AutoIncrEpoch
+				hasLocalEpoch = true
 				return true
 			}
 			if node.IsActive() || node.IsCommitting() || node.IsAborted() {
 				return true
 			}
-			// A schema committed with a later prepare timestamp is ordered after
+			// An epoch committed with a later prepare timestamp is ordered after
 			// this DML and must not invalidate it.
 			nodePrepareTS := node.GetPrepare()
 			if nodePrepareTS.GT(&prepareTS) {
 				return true
 			}
-			baseVersion = node.BaseNode.Schema.Version
+			baseEpoch = node.BaseNode.Schema.Extra.AutoIncrEpoch
 			return false
 		})
 		tbl.entry.RUnlock()
 
-		for expected := range tbl.expectedTableDefVersions {
-			if expected != baseVersion && (!hasLocalVersion || expected != localVersion) {
+		for expected := range tbl.expectedAutoIncrEpochs {
+			if expected != baseEpoch && (!hasLocalEpoch || expected != localEpoch) {
 				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 			}
 		}
@@ -196,10 +196,10 @@ func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
 		return nil
 	}
 
-	// SetTableDefVersion is registered only for known-version user writes.
-	// Publish after the schema fence accepts the write; rejected stale writes
+	// SetAutoIncrEpoch is registered only for epoch-aware user writes. Publish
+	// after the epoch fence accepts the write; rejected stale writes
 	// must not force a later ALTER retry.
-	if len(tbl.expectedTableDefVersions) > 0 {
+	if len(tbl.expectedAutoIncrEpochs) > 0 {
 		tbl.entry.RecordKnownDMLPrepare(tbl.store.txn.GetPrepareTS())
 	}
 	return nil
@@ -1534,7 +1534,7 @@ func (tbl *txnTable) dumpCore(errMsg string) {
 }
 
 func (tbl *txnTable) PrepareCommit() (err error) {
-	if err = tbl.validateTableDefVersion(); err != nil {
+	if err = tbl.validateAutoIncrEpoch(); err != nil {
 		return err
 	}
 	if err = tbl.validateAutoIncrementDMLOrder(); err != nil {

@@ -40,7 +40,7 @@ type TableCloneCtx struct {
 
 	RequestedAutoIncrOffset uint64
 	SrcAutoIncrMaxValues    map[int32]uint64
-	SrcInternalAutoOffsets  map[int32]uint64
+	SrcAutoIncrOffsets      map[int32]uint64
 }
 
 type TableClone struct {

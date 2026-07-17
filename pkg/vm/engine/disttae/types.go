@@ -506,12 +506,12 @@ func (txn *Transaction) GetSyncProtectionJobID() string {
 }
 
 type Summary struct {
-	objBat               *batch.Batch
-	accountId            uint32
-	tbName               string
-	dbName               string
-	tableDefVersion      uint32
-	tableDefVersionKnown bool
+	objBat             *batch.Batch
+	accountId          uint32
+	tbName             string
+	dbName             string
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -1146,11 +1146,11 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
-	// tableDefVersion is the schema version used to plan this user-table write.
-	// tableDefVersionKnown distinguishes a valid initial zero version from an
+	// autoIncrEpoch is the allocator epoch used to plan this user-table write.
+	// autoIncrEpochKnown distinguishes a valid initial zero epoch from an
 	// old CN that did not send the dependency.
-	tableDefVersion      uint32
-	tableDefVersionKnown bool
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 
 	// skipTransfer indicates this entry should skip transfer processing
 	// Used by CCPR to avoid transfer errors for cross-cluster tombstones
@@ -1209,12 +1209,12 @@ type tableKey struct {
 	name       string
 }
 
-// workspaceTableKey keeps batches planned against different table definitions
+// workspaceTableKey keeps batches planned against different allocator epochs
 // from being coalesced when the CN workspace is flushed to S3.
 type workspaceTableKey struct {
 	tableKey
-	tableDefVersion      uint32
-	tableDefVersionKnown bool
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 func (e Entry) workspaceTableKey() workspaceTableKey {
@@ -1225,8 +1225,8 @@ func (e Entry) workspaceTableKey() workspaceTableKey {
 			dbName:     e.databaseName,
 			name:       e.tableName,
 		},
-		tableDefVersion:      e.tableDefVersion,
-		tableDefVersionKnown: e.tableDefVersionKnown,
+		autoIncrEpoch:      e.autoIncrEpoch,
+		autoIncrEpochKnown: e.autoIncrEpochKnown,
 	}
 }
 
@@ -1237,8 +1237,8 @@ func (s Summary) workspaceTableKey() workspaceTableKey {
 			dbName:    s.dbName,
 			name:      s.tbName,
 		},
-		tableDefVersion:      s.tableDefVersion,
-		tableDefVersionKnown: s.tableDefVersionKnown,
+		autoIncrEpoch:      s.autoIncrEpoch,
+		autoIncrEpochKnown: s.autoIncrEpochKnown,
 	}
 }
 

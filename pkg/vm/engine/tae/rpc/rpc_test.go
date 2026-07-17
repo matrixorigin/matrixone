@@ -46,7 +46,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTableDefVersionFenceAtTNConvergence(t *testing.T) {
+func TestAutoIncrEpochFenceAtTNConvergence(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
@@ -67,8 +67,8 @@ func TestTableDefVersionFenceAtTNConvergence(t *testing.T) {
 	entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
 		schema.Name, "", containers.ToCNBatch(insertBatch))
 	require.NoError(t, err)
-	entry.TableDefVersion = 0
-	entry.TableDefVersionKnown = true
+	entry.AutoIncrEpoch = 0
+	entry.AutoIncrEpochKnown = true
 	payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
 	require.NoError(t, err)
 	commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
@@ -84,7 +84,7 @@ func TestTableDefVersionFenceAtTNConvergence(t *testing.T) {
 	// Rolling-upgrade compatibility boundary: the same raw V0 from a legacy CN
 	// has no presence bit and remains accepted after ALTER. Strict fencing
 	// requires all CN writers to send Known=true.
-	entry.TableDefVersionKnown = false
+	entry.AutoIncrEpochKnown = false
 	payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
 	require.NoError(t, err)
 	commitReq.Payload[0].CNRequest.Payload = payload

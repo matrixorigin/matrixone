@@ -95,11 +95,11 @@ func (txn *Transaction) WriteBatch(
 	tableName string,
 	bat *batch.Batch,
 	tnStore DNStore) (genRowidVec *vector.Vector, err error) {
-	return txn.writeBatchWithVersionKnown(typ, note, accountId, databaseId, tableId,
+	return txn.writeBatchWithAutoIncrEpochKnown(typ, note, accountId, databaseId, tableId,
 		databaseName, tableName, bat, tnStore, 0, false)
 }
 
-func (txn *Transaction) writeBatchWithVersion(
+func (txn *Transaction) writeBatchWithAutoIncrEpoch(
 	typ int, note string,
 	accountId uint32,
 	databaseId uint64,
@@ -108,13 +108,13 @@ func (txn *Transaction) writeBatchWithVersion(
 	tableName string,
 	bat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
+	autoIncrEpoch uint32,
 ) (genRowidVec *vector.Vector, err error) {
-	return txn.writeBatchWithVersionKnown(typ, note, accountId, databaseId, tableId,
-		databaseName, tableName, bat, tnStore, tableDefVersion, true)
+	return txn.writeBatchWithAutoIncrEpochKnown(typ, note, accountId, databaseId, tableId,
+		databaseName, tableName, bat, tnStore, autoIncrEpoch, true)
 }
 
-func (txn *Transaction) writeBatchWithVersionKnown(
+func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	typ int, note string,
 	accountId uint32,
 	databaseId uint64,
@@ -123,8 +123,8 @@ func (txn *Transaction) writeBatchWithVersionKnown(
 	tableName string,
 	bat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
-	tableDefVersionKnown bool,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
 ) (genRowidVec *vector.Vector, err error) {
 	start := time.Now()
 	seq := txn.op.NextSequence()
@@ -267,19 +267,19 @@ func (txn *Transaction) writeBatchWithVersionKnown(
 	}
 
 	e := Entry{
-		typ:                  typ,
-		accountId:            accountId,
-		bat:                  bat,
-		tableId:              tableId,
-		databaseId:           databaseId,
-		tableName:            tableName,
-		databaseName:         databaseName,
-		tnStore:              tnStore,
-		tableDefVersion:      tableDefVersion,
-		tableDefVersionKnown: tableDefVersionKnown,
-		note:                 note,
-		pkCheckPos:           pkCheckPos,
-		pkCheckReady:         pkCheckReady,
+		typ:                typ,
+		accountId:          accountId,
+		bat:                bat,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		tnStore:            tnStore,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+		note:               note,
+		pkCheckPos:         pkCheckPos,
+		pkCheckReady:       pkCheckReady,
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
@@ -1314,16 +1314,16 @@ func (txn *Transaction) registerCNObjects(
 	objBat *batch.Batch,
 	dbName string,
 	tbName string,
-	tableDefVersion uint32,
-	tableDefVersionKnown bool,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
 ) {
 	txn.cnObjsSummary[objId] = Summary{
-		objBat:               objBat,
-		accountId:            accountId,
-		dbName:               dbName,
-		tbName:               tbName,
-		tableDefVersion:      tableDefVersion,
-		tableDefVersionKnown: tableDefVersionKnown,
+		objBat:             objBat,
+		accountId:          accountId,
+		dbName:             dbName,
+		tbName:             tbName,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 }
 
@@ -1338,11 +1338,11 @@ func (txn *Transaction) WriteFileLocked(
 	inputBat *batch.Batch,
 	tnStore DNStore,
 ) (err error) {
-	return txn.writeFileLockedWithVersionKnown(typ, accountId, databaseId, tableId,
+	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
 		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
 }
 
-func (txn *Transaction) writeFileLockedWithVersion(
+func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
 	typ int,
 	accountId uint32,
 	databaseId,
@@ -1352,14 +1352,14 @@ func (txn *Transaction) writeFileLockedWithVersion(
 	fileName string,
 	inputBat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
+	autoIncrEpoch uint32,
 ) (err error) {
-	return txn.writeFileLockedWithVersionKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, tableDefVersion, true)
+	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
 }
 
 // writeFileLockedWithWorkspaceKey is the convergence seam for workspace flush
-// and object compaction. Keeping the version and its presence bit in one value
+// and object compaction. Keeping the epoch and its presence bit in one value
 // prevents either field from being dropped while an in-memory entry is
 // transformed into an S3 entry.
 func (txn *Transaction) writeFileLockedWithWorkspaceKey(
@@ -1374,7 +1374,7 @@ func (txn *Transaction) writeFileLockedWithWorkspaceKey(
 	tnStore DNStore,
 	tableKey workspaceTableKey,
 ) error {
-	return txn.writeFileLockedWithVersionKnown(
+	return txn.writeFileLockedWithAutoIncrEpochKnown(
 		typ,
 		accountId,
 		databaseId,
@@ -1384,12 +1384,12 @@ func (txn *Transaction) writeFileLockedWithWorkspaceKey(
 		fileName,
 		inputBat,
 		tnStore,
-		tableKey.tableDefVersion,
-		tableKey.tableDefVersionKnown,
+		tableKey.autoIncrEpoch,
+		tableKey.autoIncrEpochKnown,
 	)
 }
 
-func (txn *Transaction) writeFileLockedWithVersionKnown(
+func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	typ int,
 	accountId uint32,
 	databaseId,
@@ -1399,8 +1399,8 @@ func (txn *Transaction) writeFileLockedWithVersionKnown(
 	fileName string,
 	inputBat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
-	tableDefVersionKnown bool,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
 ) (err error) {
 
 	txn.hasS3Op.Store(true)
@@ -1422,7 +1422,7 @@ func (txn *Transaction) writeFileLockedWithVersionKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, tableDefVersion, tableDefVersionKnown)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -1438,19 +1438,19 @@ func (txn *Transaction) writeFileLockedWithVersionKnown(
 	}
 
 	entry := Entry{
-		typ:                  typ,
-		accountId:            accountId,
-		tableId:              tableId,
-		databaseId:           databaseId,
-		tableName:            tableName,
-		databaseName:         databaseName,
-		fileName:             fileName,
-		bat:                  copied,
-		tnStore:              tnStore,
-		pkCheckPos:           -1,
-		pkCheckReady:         true,
-		tableDefVersion:      tableDefVersion,
-		tableDefVersionKnown: tableDefVersionKnown,
+		typ:                typ,
+		accountId:          accountId,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		fileName:           fileName,
+		bat:                copied,
+		tnStore:            tnStore,
+		pkCheckPos:         -1,
+		pkCheckReady:       true,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -1471,11 +1471,11 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 	inputBat *batch.Batch,
 	tnStore DNStore,
 ) (err error) {
-	return txn.writeFileLockedSkipTransferWithVersionKnown(typ, accountId, databaseId, tableId,
+	return txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
 		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
 }
 
-func (txn *Transaction) writeFileLockedSkipTransferWithVersion(
+func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpoch(
 	typ int,
 	accountId uint32,
 	databaseId,
@@ -1485,13 +1485,13 @@ func (txn *Transaction) writeFileLockedSkipTransferWithVersion(
 	fileName string,
 	inputBat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
+	autoIncrEpoch uint32,
 ) (err error) {
-	return txn.writeFileLockedSkipTransferWithVersionKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, tableDefVersion, true)
+	return txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
 }
 
-func (txn *Transaction) writeFileLockedSkipTransferWithVersionKnown(
+func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	typ int,
 	accountId uint32,
 	databaseId,
@@ -1501,8 +1501,8 @@ func (txn *Transaction) writeFileLockedSkipTransferWithVersionKnown(
 	fileName string,
 	inputBat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
-	tableDefVersionKnown bool,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
 ) (err error) {
 
 	txn.hasS3Op.Store(true)
@@ -1524,7 +1524,7 @@ func (txn *Transaction) writeFileLockedSkipTransferWithVersionKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, tableDefVersion, tableDefVersionKnown)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -1540,18 +1540,18 @@ func (txn *Transaction) writeFileLockedSkipTransferWithVersionKnown(
 	}
 
 	entry := Entry{
-		typ:                  typ,
-		accountId:            accountId,
-		tableId:              tableId,
-		databaseId:           databaseId,
-		tableName:            tableName,
-		databaseName:         databaseName,
-		fileName:             fileName,
-		bat:                  copied,
-		tnStore:              tnStore,
-		skipTransfer:         true,
-		tableDefVersion:      tableDefVersion,
-		tableDefVersionKnown: tableDefVersionKnown,
+		typ:                typ,
+		accountId:          accountId,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		fileName:           fileName,
+		bat:                copied,
+		tnStore:            tnStore,
+		skipTransfer:       true,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -1572,11 +1572,11 @@ func (txn *Transaction) WriteFile(
 	bat *batch.Batch,
 	tnStore DNStore,
 ) error {
-	return txn.writeFileWithVersionKnown(typ, accountId, databaseId, tableId,
+	return txn.writeFileWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
 		databaseName, tableName, fileName, bat, tnStore, 0, false)
 }
 
-func (txn *Transaction) writeFileWithVersion(
+func (txn *Transaction) writeFileWithAutoIncrEpoch(
 	typ int,
 	accountId uint32,
 	databaseId,
@@ -1586,13 +1586,13 @@ func (txn *Transaction) writeFileWithVersion(
 	fileName string,
 	bat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
+	autoIncrEpoch uint32,
 ) error {
-	return txn.writeFileWithVersionKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, bat, tnStore, tableDefVersion, true)
+	return txn.writeFileWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, bat, tnStore, autoIncrEpoch, true)
 }
 
-func (txn *Transaction) writeFileWithVersionKnown(
+func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
 	typ int,
 	accountId uint32,
 	databaseId,
@@ -1602,14 +1602,14 @@ func (txn *Transaction) writeFileWithVersionKnown(
 	fileName string,
 	bat *batch.Batch,
 	tnStore DNStore,
-	tableDefVersion uint32,
-	tableDefVersionKnown bool,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
 ) error {
 
 	txn.Lock()
 	defer txn.Unlock()
 
-	return txn.writeFileLockedWithVersionKnown(
+	return txn.writeFileLockedWithAutoIncrEpochKnown(
 		typ,
 		accountId,
 		databaseId,
@@ -1619,8 +1619,8 @@ func (txn *Transaction) writeFileWithVersionKnown(
 		fileName,
 		bat,
 		tnStore,
-		tableDefVersion,
-		tableDefVersionKnown,
+		autoIncrEpoch,
+		autoIncrEpochKnown,
 	)
 }
 

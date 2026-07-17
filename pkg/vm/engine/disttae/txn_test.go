@@ -44,30 +44,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
+func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newDeleteBatchForTest(t, proc, []int64{1})
 	defer bat.Clean(proc.Mp())
 
 	for _, tc := range []struct {
-		name    string
-		version uint32
-		known   bool
+		name  string
+		epoch uint32
+		known bool
 	}{
-		{name: "known", version: 7, known: true},
-		{name: "known zero", version: 0, known: true},
+		{name: "known", epoch: 7, known: true},
+		{name: "known zero", epoch: 0, known: true},
 		// Rolling-upgrade compatibility boundary: false means the legacy CN did
-		// not send a version dependency. Strict fencing requires known=true.
-		{name: "old cn compatibility", version: 0, known: false},
+		// not send an epoch dependency. Strict fencing requires known=true.
+		{name: "old cn compatibility", epoch: 0, known: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			encoded, err := toPBEntry(Entry{
-				typ:                  DELETE,
-				tableId:              42,
-				databaseId:           7,
-				bat:                  bat,
-				tableDefVersion:      tc.version,
-				tableDefVersionKnown: tc.known,
+				typ:                DELETE,
+				tableId:            42,
+				databaseId:         7,
+				bat:                bat,
+				autoIncrEpoch:      tc.epoch,
+				autoIncrEpochKnown: tc.known,
 			})
 			require.NoError(t, err)
 
@@ -75,33 +75,33 @@ func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
 			require.NoError(t, err)
 			decoded := new(api.Entry)
 			require.NoError(t, decoded.Unmarshal(data))
-			require.Equal(t, tc.version, decoded.TableDefVersion)
-			require.Equal(t, tc.known, decoded.TableDefVersionKnown)
+			require.Equal(t, tc.epoch, decoded.AutoIncrEpoch)
+			require.Equal(t, tc.known, decoded.AutoIncrEpochKnown)
 		})
 	}
 }
 
-func TestWorkspaceFlushKeySeparatesTableDefVersions(t *testing.T) {
+func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
 	batches := map[workspaceTableKey]int{
 		(Entry{accountId: 1, databaseId: 7, databaseName: "db", tableName: "tbl"}).workspaceTableKey(): 1,
 		(Entry{accountId: 1, databaseId: 7, databaseName: "db", tableName: "tbl",
-			tableDefVersion: 0, tableDefVersionKnown: true}).workspaceTableKey(): 1,
+			autoIncrEpoch: 0, autoIncrEpochKnown: true}).workspaceTableKey(): 1,
 	}
 	require.Len(t, batches, 2)
 	require.Contains(t, batches, workspaceTableKey{
-		tableKey: base, tableDefVersion: 0, tableDefVersionKnown: true,
+		tableKey: base, autoIncrEpoch: 0, autoIncrEpochKnown: true,
 	})
 }
 
-func TestCompactionKeyCarriesTableDefVersion(t *testing.T) {
+func TestCompactionKeyCarriesAutoIncrEpoch(t *testing.T) {
 	oid := objectio.NewObjectid()
 	txn := &Transaction{cnObjsSummary: make(map[types.Objectid]Summary)}
 	txn.registerCNObjects(oid, 1, nil, "db", "tbl", 7, true)
 	key := txn.cnObjsSummary[oid].workspaceTableKey()
 	require.Equal(t, workspaceTableKey{
-		tableKey:        tableKey{accountId: 1, dbName: "db", name: "tbl"},
-		tableDefVersion: 7, tableDefVersionKnown: true,
+		tableKey:      tableKey{accountId: 1, dbName: "db", name: "tbl"},
+		autoIncrEpoch: 7, autoIncrEpochKnown: true,
 	}, key)
 }
 
@@ -242,7 +242,7 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.Len(t, txn.writes, 1)
 		require.False(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, -1, txn.writes[0].pkCheckPos)
-		require.False(t, txn.writes[0].tableDefVersionKnown)
+		require.False(t, txn.writes[0].autoIncrEpochKnown)
 
 		bat.Clean(proc.Mp())
 	})
@@ -273,19 +273,19 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		bat.Clean(txn.proc.Mp())
 	})
 
-	t.Run("user write records planned table version", func(t *testing.T) {
+	t.Run("user write records planned auto increment epoch", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
 		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
 
-		_, err := txn.writeBatchWithVersion(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
+		_, err := txn.writeBatchWithAutoIncrEpoch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
-		require.Equal(t, uint32(7), txn.writes[0].tableDefVersion)
-		require.True(t, txn.writes[0].tableDefVersionKnown)
+		require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
+		require.True(t, txn.writes[0].autoIncrEpochKnown)
 		encoded, err := toPBEntry(txn.writes[0])
 		require.NoError(t, err)
-		require.Equal(t, uint32(7), encoded.TableDefVersion)
-		require.True(t, encoded.TableDefVersionKnown)
+		require.Equal(t, uint32(7), encoded.AutoIncrEpoch)
+		require.True(t, encoded.AutoIncrEpochKnown)
 
 		bat.Clean(txn.proc.Mp())
 	})
@@ -696,26 +696,26 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 	txn.writes[0].bat.Clean(proc.Mp())
 }
 
-func TestS3WorkspaceEntryCarriesTableDefVersion(t *testing.T) {
+func TestS3WorkspaceEntryCarriesAutoIncrEpoch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{proc: proc}
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
 
-	require.NoError(t, txn.writeFileLockedWithVersionKnown(
+	require.NoError(t, txn.writeFileLockedWithAutoIncrEpochKnown(
 		ALTER, 1, 7, 42, "db", "tbl", "s3-file", bat, DNStore{}, 7, true))
 	require.Len(t, txn.writes, 1)
-	require.Equal(t, uint32(7), txn.writes[0].tableDefVersion)
-	require.True(t, txn.writes[0].tableDefVersionKnown)
+	require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
+	require.True(t, txn.writes[0].autoIncrEpochKnown)
 	encoded, err := toPBEntry(txn.writes[0])
 	require.NoError(t, err)
-	require.Equal(t, uint32(7), encoded.TableDefVersion)
-	require.True(t, encoded.TableDefVersionKnown)
+	require.Equal(t, uint32(7), encoded.AutoIncrEpoch)
+	require.True(t, encoded.AutoIncrEpochKnown)
 
 	bat.Clean(proc.Mp())
 	txn.writes[0].bat.Clean(proc.Mp())
 }
 
-func TestWorkspaceFileOutputCarriesVersionForFlushAndCompaction(t *testing.T) {
+func TestWorkspaceFileOutputCarriesAutoIncrEpochForFlushAndCompaction(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		typ  int
@@ -748,8 +748,8 @@ func TestWorkspaceFileOutputCarriesVersionForFlushAndCompaction(t *testing.T) {
 				tableKey: tableKey{
 					accountId: 1, databaseId: 7, dbName: "db", name: "tbl",
 				},
-				tableDefVersion:      7,
-				tableDefVersionKnown: true,
+				autoIncrEpoch:      7,
+				autoIncrEpochKnown: true,
 			}
 
 			require.NoError(t, txn.writeFileLockedWithWorkspaceKey(
@@ -765,12 +765,12 @@ func TestWorkspaceFileOutputCarriesVersionForFlushAndCompaction(t *testing.T) {
 				key,
 			))
 			require.Len(t, txn.writes, 1)
-			require.Equal(t, key.tableDefVersion, txn.writes[0].tableDefVersion)
-			require.Equal(t, key.tableDefVersionKnown, txn.writes[0].tableDefVersionKnown)
+			require.Equal(t, key.autoIncrEpoch, txn.writes[0].autoIncrEpoch)
+			require.Equal(t, key.autoIncrEpochKnown, txn.writes[0].autoIncrEpochKnown)
 			pbEntry, err := toPBEntry(txn.writes[0])
 			require.NoError(t, err)
-			require.Equal(t, key.tableDefVersion, pbEntry.TableDefVersion)
-			require.Equal(t, key.tableDefVersionKnown, pbEntry.TableDefVersionKnown)
+			require.Equal(t, key.autoIncrEpoch, pbEntry.AutoIncrEpoch)
+			require.Equal(t, key.autoIncrEpochKnown, pbEntry.AutoIncrEpochKnown)
 
 			input.Clean(proc.Mp())
 			txn.writes[0].bat.Clean(proc.Mp())

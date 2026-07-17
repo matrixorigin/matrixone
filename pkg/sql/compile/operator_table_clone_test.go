@@ -82,7 +82,13 @@ func newTableCloneOffsetResult(t *testing.T, mp *mpool.MPool, colIdx int32, offs
 
 func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	exec := &tableCloneRecordingExecutor{result: newTableCloneResult(t, proc.Mp(), 40)}
+	exec := &tableCloneRecordingExecutor{}
+	exec.run = func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
+			return newTableCloneOffsetResult(t, proc.Mp(), 0, 50), nil
+		}
+		return newTableCloneResult(t, proc.Mp(), 40), nil
+	}
 	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 
 	srcDef := &plan.TableDef{
@@ -114,6 +120,7 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 	t.Cleanup(tc.Release)
 	require.Equal(t, uint64(99), tc.Ctx.RequestedAutoIncrOffset)
 	require.Equal(t, map[int32]uint64{0: 40}, tc.Ctx.SrcAutoIncrMaxValues)
+	require.Equal(t, map[int32]uint64{0: 50}, tc.Ctx.SrcAutoIncrOffsets)
 	require.True(t, exec.opts.HasAccountID())
 	require.Equal(t, uint32(17), exec.opts.AccountID())
 
@@ -155,7 +162,7 @@ func TestConstructTableCloneDoesNotReadHiddenAutoIncrementMaximum(t *testing.T) 
 	t.Cleanup(tc.Release)
 	require.Len(t, exec.sqls, 1)
 	require.Contains(t, exec.sqls[0], "mo_catalog.mo_increment_columns")
-	require.Equal(t, map[int32]uint64{0: 40}, tc.Ctx.SrcInternalAutoOffsets)
+	require.Equal(t, map[int32]uint64{0: 40}, tc.Ctx.SrcAutoIncrOffsets)
 }
 
 func TestConstructTableCloneHonorsCanceledContextBeforeMaximumRead(t *testing.T) {
