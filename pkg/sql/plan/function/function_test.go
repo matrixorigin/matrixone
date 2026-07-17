@@ -377,7 +377,7 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	defaultFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
-		types.Type{Oid: types.T_float64, Size: 8, Scale: -1},
+		{Oid: types.T_float64, Size: 8, Scale: -1},
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
