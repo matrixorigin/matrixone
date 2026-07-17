@@ -59,7 +59,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 		pkType = segs[0].PkType
 	}
 	idx := NewIndex(segs, deletes)
-	docs, err := idx.ReconstructLiveDocs()
+	docs, err := idx.ReconstructLiveDocs(cfg.PositionFree)
 	if err != nil {
 		return 0, err
 	}
@@ -68,7 +68,11 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 	uid := fmt.Sprintf("%s:%d", cfg.IndexTable, ts)
 	var fresh []*Segment
 	if len(docs) > 0 {
-		b := NewBuilder(uid, pkType)
+		var bopts []BuildOpt
+		if cfg.PositionFree {
+			bopts = append(bopts, WithPositionFree())
+		}
+		b := NewBuilder(uid, pkType, bopts...)
 		for _, d := range docs {
 			for i, w := range d.Terms {
 				if e := b.Add(w, d.Positions[i], d.Pk); e != nil {

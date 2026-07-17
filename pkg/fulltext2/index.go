@@ -377,7 +377,7 @@ func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 // compaction that folds base + tail into a fresh dead-doc-free base WITHOUT
 // re-tokenizing the source. Per-doc term order is recovered from token positions;
 // docs are returned in ascending pk-key order (deterministic output).
-func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
+func (idx *Index) ReconstructLiveDocs(positionFree bool) ([]TokenizedDoc, error) {
 	type posTerm struct {
 		pos  int32
 		term string
@@ -389,8 +389,25 @@ func (idx *Index) ReconstructLiveDocs() ([]TokenizedDoc, error) {
 	}
 	for si, seg := range idx.segments {
 		err := seg.forEachPosting(func(term string, tp *termPostings) {
+			docs := tp.materializeDocIDs() // docIDs (block-compressed on load)
+			if positionFree {
+				// A position-free segment has no positions: reconstruct each doc's terms
+				// from tf — emit the term tf times with a synthetic ascending position.
+				// Order is irrelevant (the position-free rebuild drops positions again),
+				// but tf is preserved so BM25 ranking is unchanged.
+				tfs := tp.materializeTfs()
+				for i, ord := range docs {
+					l := docLoc{si, ord}
+					if _, live := buckets[l]; !live {
+						continue
+					}
+					for t := int32(0); t < int32(tfs[i]); t++ {
+						buckets[l] = append(buckets[l], posTerm{t, term})
+					}
+				}
+				return
+			}
 			mat := tp.materializePositions() // decode this term's positions once
-			docs := tp.materializeDocIDs()   // and its docIDs (block-compressed on load)
 			for i, ord := range docs {
 				l := docLoc{si, ord}
 				if _, live := buckets[l]; !live {

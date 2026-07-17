@@ -55,7 +55,7 @@ func TestReconstructLiveDocs(t *testing.T) {
 	// delete doc 0 at recency 100.
 	idx := NewIndex([]*Segment{base, tail}, map[any]int64{normalizeKey(int64(0)): 100})
 
-	docs, err := idx.ReconstructLiveDocs()
+	docs, err := idx.ReconstructLiveDocs(false)
 	require.NoError(t, err)
 
 	got := map[any][]string{}

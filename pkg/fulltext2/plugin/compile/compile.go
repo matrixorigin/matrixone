@@ -256,11 +256,16 @@ func handleMergeCompact(ctx compileplugin.CompileContext, storeDef, metaDef *pla
 	if err != nil {
 		return err
 	}
-	sql := fmt.Sprintf("SELECT * FROM fulltext2_compact(%s, %s, %s, %s) AS f",
+	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	sql := fmt.Sprintf("SELECT * FROM fulltext2_compact(%s, %s, %s, %s, %s) AS f",
 		sqlquote.String(ctx.QryDatabase()),
 		sqlquote.String(storeDef.IndexTableName),
 		sqlquote.String(metaDef.IndexTableName),
-		sqlquote.String(strconv.FormatInt(capacity, 10)))
+		sqlquote.String(strconv.FormatInt(capacity, 10)),
+		sqlquote.String(strconv.FormatBool(positionFree)))
 	return ctx.RunSql(sql)
 }
 

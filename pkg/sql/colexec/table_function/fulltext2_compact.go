@@ -85,6 +85,13 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 		return moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: capacity must be an integer")
 	}
 	u.capacity = c
+	// Optional 5th arg: position_free ("true"/"false"). Absent ⇒ positional, so a
+	// position-free index's MERGE rebuilds position-free (no re-added positions).
+	if len(tf.ctr.argVecs) > 4 {
+		if pv := tf.ctr.argVecs[4]; pv != nil && pv.IsConst() && pv.Length() > 0 {
+			u.tblcfg.PositionFree = pv.UnsafeGetStringAt(0) == "true"
+		}
+	}
 	u.batch = tf.createResultBatch()
 	u.inited = true
 	return nil
@@ -108,8 +115,10 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 }
 
 func fulltext2CompactPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
-	if len(arg.Args) != 4 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: expects 4 args (db, store, meta, capacity)")
+	// 5th arg (position_free) is optional so a position-free index's MERGE rebuilds
+	// position-free; older 4-arg callers stay valid (positional).
+	if len(arg.Args) != 4 && len(arg.Args) != 5 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: expects 4 or 5 args (db, store, meta, capacity[, position_free])")
 	}
 	var err error
 	st := &fulltext2CompactState{}
