@@ -138,14 +138,14 @@ func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
-func TestExpressionHashKeyFailsClosedBeforeEvaluatorAllocation(t *testing.T) {
-	var hb HashmapBuilder
+func TestSpillExpressionHashKeyFailsClosedBeforeEvaluatorAllocation(t *testing.T) {
+	var ctr container
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	err := hb.Prepare([]*plan.Expr{{
+	_, err := ctr.initSpillExprExecs(proc, []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
 		Expr: &plan.Expr_F{F: &plan.Function{}},
-	}}, -1, -1, nil, proc)
+	}})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, process.ErrHashBuildBudgetInvalid))
 	require.Zero(t, proc.Mp().CurrNB())

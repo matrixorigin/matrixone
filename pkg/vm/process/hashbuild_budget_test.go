@@ -217,6 +217,14 @@ func TestHashBuildSpillLedgersTransferReconcile(t *testing.T) {
 	}
 }
 
+func TestDefaultSpillFDCapAdmitsNormalShuffleRepartitionPeak(t *testing.T) {
+	const normalPeak = uint64(16 * (32 + 64))
+	b := MustNewHashBuildBudget(192<<20, 192<<20)
+	if b.SpillFDCap() < normalPeak {
+		t.Fatalf("spill fd cap=%d, want at least normal 16-way peak=%d", b.SpillFDCap(), normalPeak)
+	}
+}
+
 func TestHashBuildBudgetLiveCapProviderShrinksOpenGeneration(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 10)
 	g, _ := b.OpenGenerationWithCap(1, 10)

@@ -183,7 +183,11 @@ func defaultSpillCap(memoryCap uint64) uint64 {
 func defaultSpillFDCap(memoryCap uint64) uint64 {
 	// A finite cap derived from memory keeps FD admission bounded while
 	// retaining enough fanout for normal (32-way) spill partitions.
-	const minFD = uint64(256)
+	// A 16-way shuffle query can have 16 concurrent build partitions, each
+	// owning 32 first-pass files and up to 64 transactional build/probe child
+	// files during re-spill. Keep that normal peak admissible while retaining a
+	// finite query/CN ledger that rejects runaway fanout.
+	const minFD = uint64(2048)
 	const bytesPerFD = uint64(4 << 20)
 	cap := memoryCap / bytesPerFD
 	if cap < minFD {

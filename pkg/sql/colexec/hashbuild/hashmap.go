@@ -150,17 +150,7 @@ func (hb *HashmapBuilder) Prepare(
 	if len(hb.executors) == 0 {
 		needDupVec := false
 		keyWidth := 0
-		for i, expr := range keyCols {
-			if _, ok := keyCols[i].Expr.(*plan.Expr_Col); !ok {
-				// Expression evaluation can allocate unbounded intermediates (for
-				// example repeat(col, N)) before the final vector exists. Until the
-				// expression engine accepts a budget-capped allocator or exposes a
-				// sound peak estimator, fail closed before evaluating it.
-				return &process.HashBuildBudgetError{
-					Kind:    process.HashBuildBudgetErrorInvalid,
-					Message: "hash build expression key has no bounded memory estimator",
-				}
-			}
+		for _, expr := range keyCols {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
