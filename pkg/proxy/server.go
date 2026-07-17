@@ -118,7 +118,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
 		goetty.WithAppHandleSessionFunc(s.handler.handle),
 		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
+			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec(
+				frontend.WithSQLCodecMaxPayloadSize(int(config.ClientHandshakePacketLimit)),
+			))),
 			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
 		),
 	)

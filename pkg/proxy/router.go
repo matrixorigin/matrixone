@@ -116,6 +116,10 @@ type router struct {
 	healthDisabled bool
 	// healthOpts are applied when the default health checker is built.
 	healthOpts []cnHealthOption
+
+	// sessionAllocator is shared by all client and backend protocol sessions
+	// owned by this Proxy instance.
+	sessionAllocator frontend.Allocator
 }
 
 type routeOption func(*router)
@@ -131,6 +135,12 @@ func withConnectTimeout(t time.Duration) routeOption {
 func withAuthTimeout(t time.Duration) routeOption {
 	return func(r *router) {
 		r.authTimeout = t
+	}
+}
+
+func withSessionAllocator(allocator frontend.Allocator) routeOption {
+	return func(r *router) {
+		r.sessionAllocator = allocator
 	}
 }
 
@@ -358,7 +368,7 @@ func (r *router) connect(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel, accountHealth bool,
 ) (ServerConn, []byte, error) {
 	// Creates a server connection.
-	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
+	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout, r.sessionAllocator)
 	if err != nil {
 		// Connection failed, remove the placeholder that was added in selectOne.
 		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)

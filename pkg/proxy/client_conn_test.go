@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -47,6 +48,25 @@ type mockNetConn struct {
 	remoteIP   string
 	remotePort int
 	c          net.Conn
+}
+
+type readDeadlineTrackingConn struct {
+	net.Conn
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (c *readDeadlineTrackingConn) SetReadDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	c.deadline = deadline
+	c.mu.Unlock()
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func (c *readDeadlineTrackingConn) readDeadline() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deadline
 }
 
 func newMockNetConn(
@@ -489,6 +509,28 @@ func TestNewClientConn(t *testing.T) {
 	require.NotNil(t, cc.RawConn())
 }
 
+func TestNewClientConnReleasesIOSessionWhenTLSConfigFails(t *testing.T) {
+	s := goetty.NewIOSession(goetty.WithSessionConn(1,
+		newMockNetConn("127.0.0.1", 30001,
+			"127.0.0.1", 30010, nil)),
+		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())))
+	allocator := frontend.NewLeakCheckAllocator()
+	cfg := &Config{
+		TLSEnabled:  true,
+		TLSCAFile:   "testdata/does-not-exist-ca.pem",
+		TLSCertFile: "testdata/does-not-exist-cert.pem",
+		TLSKeyFile:  "testdata/does-not-exist-key.pem",
+	}
+	cc, err := newClientConn(
+		context.Background(), cfg, runtime.DefaultRuntime().Logger(),
+		newCounterSet(), s, nil, nil, nil, nil, nil, nil, nil,
+		withClientConnAllocator(allocator),
+	)
+	require.Error(t, err)
+	require.Nil(t, cc)
+	require.True(t, allocator.CheckBalance())
+}
+
 func makeClientHandshakeResp() []byte {
 	payload := make([]byte, 200)
 	pos := 0
@@ -585,6 +627,199 @@ func TestClientConn_ConnectToBackend(t *testing.T) {
 		require.NotNil(t, cc.GetHandshakePack())
 		wg.Wait()
 	})
+}
+
+func TestClientConnHandshakeAdmission(t *testing.T) {
+	limiter := newConnectionLimiter(3, 1)
+	handleHandshake := func(lease *connectionLease) error {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		client.admission = lease
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		client.conn.UseConn(local)
+		client.mysqlProto.UseConn(local)
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(makeClientHandshakeResp())
+		}()
+		err := client.handleHandshakeResp()
+		<-writeDone
+		return err
+	}
+
+	first, ok := limiter.acquire()
+	require.True(t, ok)
+	require.NoError(t, handleHandshake(first))
+
+	second, ok := limiter.acquire()
+	require.True(t, ok)
+	require.ErrorIs(t, handleHandshake(second), errProxyConnectionLimit)
+	second.release()
+
+	first.release()
+	third, ok := limiter.acquire()
+	require.True(t, ok)
+	require.NoError(t, handleHandshake(third))
+	third.release()
+	require.Equal(t, 0, limiter.total)
+	require.Empty(t, limiter.byTenant)
+}
+
+func TestClientConnHandshakeTimeout(t *testing.T) {
+	t.Run("silent client times out", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		client.clientHandshakeTimeout = 20 * time.Millisecond
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		client.conn.UseConn(local)
+		client.mysqlProto.UseConn(local)
+
+		err := client.handleHandshakeResp()
+		require.Error(t, err)
+		var netErr net.Error
+		require.ErrorAs(t, err, &netErr)
+		require.True(t, netErr.Timeout())
+	})
+
+	t.Run("fragmented client cannot renew the absolute deadline", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		client.clientHandshakeTimeout = 100 * time.Millisecond
+
+		local, remote := net.Pipe()
+		client.conn.UseConn(local)
+		client.mysqlProto.UseConn(local)
+
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			payload := makeClientHandshakeResp()
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for i := range payload {
+				<-ticker.C
+				_ = remote.SetWriteDeadline(time.Now().Add(40 * time.Millisecond))
+				if _, err := remote.Write(payload[i : i+1]); err != nil {
+					return
+				}
+			}
+		}()
+
+		start := time.Now()
+		errC := make(chan error, 1)
+		go func() {
+			errC <- client.handleHandshakeResp()
+		}()
+		select {
+		case err := <-errC:
+			require.Error(t, err)
+			var netErr net.Error
+			require.ErrorAs(t, err, &netErr)
+			require.True(t, netErr.Timeout())
+			require.Less(t, time.Since(start), 8*client.clientHandshakeTimeout)
+		case <-time.After(10 * client.clientHandshakeTimeout):
+			t.Fatal("fragmented handshake outlived its absolute deadline")
+		}
+		require.NoError(t, remote.Close())
+		<-writeDone
+	})
+
+	t.Run("successful handshake clears read deadline", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		client.clientHandshakeTimeout = time.Second
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		tracked := &readDeadlineTrackingConn{Conn: local}
+		client.conn.UseConn(tracked)
+		client.mysqlProto.UseConn(tracked)
+
+		peerDone := make(chan struct{})
+		go func() {
+			defer close(peerDone)
+			header := make([]byte, 4)
+			if _, err := io.ReadFull(remote, header); err != nil {
+				return
+			}
+			payloadLength := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+			payload := make([]byte, payloadLength)
+			if _, err := io.ReadFull(remote, payload); err != nil {
+				return
+			}
+			_, _ = remote.Write(makeClientHandshakeResp())
+		}()
+
+		_, err := client.BuildConnWithServer("")
+		require.Error(t, err) // no router is configured after the handshake
+		<-peerDone
+		require.Same(t, tracked, client.RawConn())
+		require.True(t, tracked.readDeadline().IsZero())
+	})
+}
+
+func TestOversizedHandshakeErrorPreservesPacketSequence(t *testing.T) {
+	for _, sequenceID := range []uint8{1, 2} {
+		t.Run(fmt.Sprintf("sequence-%d", sequenceID), func(t *testing.T) {
+			local, remote := net.Pipe()
+			defer remote.Close()
+			session := goetty.NewIOSession(
+				goetty.WithSessionConn(1, local),
+				goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec(
+					frontend.WithSQLCodecMaxPayloadSize(16),
+				))),
+			)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cc, err := newClientConn(
+				ctx,
+				&Config{ClientHandshakePacketLimit: 16},
+				runtime.DefaultRuntime().Logger(),
+				newCounterSet(),
+				session,
+				nil, nil, nil, nil, nil, nil, nil,
+			)
+			require.NoError(t, err)
+			defer cc.Close()
+			client := cc.(*clientConn)
+			client.mysqlProto.SetSequenceID(sequenceID)
+
+			writeDone := make(chan struct{})
+			go func() {
+				defer close(writeDone)
+				_, _ = remote.Write([]byte{17, 0, 0, sequenceID})
+			}()
+			_, err = client.readPacketBefore(time.Now().Add(time.Second))
+			<-writeDone
+			require.ErrorIs(t, err, frontend.ErrPacketTooLarge)
+
+			sendDone := make(chan struct{})
+			go func() {
+				defer close(sendDone)
+				client.SendErrToClient(err)
+			}()
+			header := make([]byte, 4)
+			_, err = io.ReadFull(remote, header)
+			require.NoError(t, err)
+			payloadLength := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+			payload := make([]byte, payloadLength)
+			_, err = io.ReadFull(remote, payload)
+			require.NoError(t, err)
+			<-sendDone
+			require.Equal(t, sequenceID+1, header[3])
+			require.Equal(t, byte(0xff), payload[0])
+			require.Equal(t, moerr.ER_SERVER_NET_PACKET_TOO_LARGE, binary.LittleEndian.Uint16(payload[1:3]))
+		})
+	}
 }
 
 func TestClientConn_ReadPacket(t *testing.T) {

@@ -35,6 +35,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/go-sql-driver/mysql"
 	"github.com/lni/goutils/leaktest"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -299,6 +300,38 @@ func TestHandlerCurrentConnections(t *testing.T) {
 			}, 5*time.Second, 10*time.Millisecond)
 		}
 	})
+}
+
+func TestHandlerGlobalAdmissionRejectionIsHandled(t *testing.T) {
+	limiter := newConnectionLimiter(1, 1)
+	lease, ok := limiter.acquire()
+	require.True(t, ok)
+	defer lease.release()
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	session := goetty.NewIOSession(goetty.WithSessionConn(1, serverConn))
+	defer session.Close()
+	h := &handler{
+		logger:            runtime.DefaultRuntime().Logger(),
+		counterSet:        newCounterSet(),
+		connectionLimiter: limiter,
+	}
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		header := make([]byte, 4)
+		if _, err := io.ReadFull(clientConn, header); err != nil {
+			return
+		}
+		payloadLength := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+		payload := make([]byte, payloadLength)
+		_, _ = io.ReadFull(clientConn, payload)
+	}()
+
+	require.NoError(t, h.handle(session))
+	<-readDone
 }
 
 func TestHandler_HandleErr(t *testing.T) {

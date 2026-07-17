@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	moconfig "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -61,6 +63,11 @@ type handler struct {
 	queryClient client.QueryClient
 	// connCache is the cache of server connections.
 	connCache ConnCache
+	// sessionAllocator owns all MySQL protocol buffers retained by this Proxy.
+	// Sharing it avoids one ManagedAllocator (and its arenas) per connection.
+	sessionAllocator frontend.Allocator
+	// connectionLimiter bounds aggregate and per-tenant live connections.
+	connectionLimiter *connectionLimiter
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -75,6 +82,17 @@ func newProxyHandler(
 	haKeeperClient logservice.ProxyHAKeeperClient,
 	test bool,
 ) (*handler, error) {
+	protocolMemoryLimit := cfg.ProtocolMemoryLimit
+	if protocolMemoryLimit == 0 {
+		protocolMemoryLimit = defaultProtocolMemoryLimit
+	}
+	frontendParameters := &moconfig.FrontendParameters{
+		GuestMmuLimitation: int64(protocolMemoryLimit),
+	}
+	sessionAllocator := frontend.NewSessionAllocator(
+		moconfig.NewParameterUnit(frontendParameters, nil, nil, nil),
+	)
+
 	// Create the MO cluster.
 	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
@@ -99,9 +117,11 @@ func newProxyHandler(
 
 	var ru Router
 	if test {
-		ru = newRouter(mc, re, re.connManager, false)
+		ru = newRouter(mc, re, re.connManager, false,
+			withSessionAllocator(sessionAllocator))
 	} else {
 		routerOpts := []routeOption{
+			withSessionAllocator(sessionAllocator),
 			withConnectTimeout(cfg.ConnectTimeout.Duration),
 			withAuthTimeout(cfg.AuthTimeout.Duration),
 			withCNHealthCheckCooldown(
@@ -145,19 +165,32 @@ func newProxyHandler(
 	if err != nil {
 		return nil, err
 	}
+	maxConnections := cfg.MaxConnections
+	if maxConnections == 0 {
+		maxConnections = defaultMaxConnections
+	}
+	maxConnectionsPerTenant := cfg.MaxConnectionsPerTenant
+	if maxConnectionsPerTenant == 0 {
+		maxConnectionsPerTenant = min(defaultMaxConnectionsPerTenant, maxConnections)
+	}
 	h := &handler{
-		ctx:            ctx,
-		logger:         rt.Logger(),
-		config:         cfg,
-		stopper:        st,
-		moCluster:      mc,
-		counterSet:     cs,
-		router:         ru,
-		rebalancer:     re,
-		haKeeperClient: haKeeperClient,
-		ipNetList:      ipNetList,
-		sqlWorker:      sw,
-		queryClient:    qc,
+		ctx:              ctx,
+		logger:           rt.Logger(),
+		config:           cfg,
+		stopper:          st,
+		moCluster:        mc,
+		counterSet:       cs,
+		router:           ru,
+		rebalancer:       re,
+		haKeeperClient:   haKeeperClient,
+		ipNetList:        ipNetList,
+		sqlWorker:        sw,
+		queryClient:      qc,
+		sessionAllocator: sessionAllocator,
+		connectionLimiter: newConnectionLimiter(
+			maxConnections,
+			maxConnectionsPerTenant,
+		),
 	}
 	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
 		var cacheOpts []connCacheOption
@@ -177,11 +210,22 @@ func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
 	v2.ProxyConnectAcceptedCounter.Inc()
 	h.counterSet.connAccepted.Add(1)
+	defer func() {
+		v2.ProxyConnectClosedCounter.Inc()
+	}()
+
+	admission, ok := h.connectionLimiter.acquire()
+	if !ok {
+		v2.ProxyConnectRejectCounter.Inc()
+		writeConnectionLimitError(c.RawConn())
+		return nil
+	}
+	defer admission.release()
+
 	v2.ProxyConnectionsCurrentGauge.Inc()
 	h.counterSet.connTotal.Add(1)
 	defer func() {
 		v2.ProxyConnectionsCurrentGauge.Dec()
-		v2.ProxyConnectClosedCounter.Inc()
 		h.counterSet.connTotal.Add(-1)
 	}()
 
@@ -209,6 +253,8 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.ipNetList,
 		h.queryClient,
 		h.connCache,
+		withClientConnAllocator(h.sessionAllocator),
+		withClientConnAdmission(admission),
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
@@ -222,6 +268,12 @@ func (h *handler) handle(c goetty.IOSession) error {
 	sc, err := cc.BuildConnWithServer("")
 	if err != nil {
 		if isConnEndErr(err) {
+			return nil
+		}
+		if isProxyAdmissionError(err) {
+			v2.ProxyConnectRejectCounter.Inc()
+			h.logger.Debug("connection rejected during handshake", zap.Error(err))
+			cc.SendErrToClient(err)
 			return nil
 		}
 		h.logger.Error("failed to create server conn", zap.Error(err))

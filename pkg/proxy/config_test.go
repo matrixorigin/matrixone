@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +34,16 @@ func TestFillDefault(t *testing.T) {
 	require.Equal(t, defaultCNHealthCheckBaseCooldown, c.CNHealthCheckBaseCooldown.Duration)
 	require.Equal(t, defaultCNHealthCheckMaxCooldown, c.CNHealthCheckMaxCooldown.Duration)
 	require.Equal(t, defaultCNHealthFailThreshold, c.CNHealthCheckFailThreshold)
+	require.Equal(t, defaultClientHandshakeTimeout, c.ClientHandshakeTimeout.Duration)
+	require.Equal(t, defaultMaxConnections, c.MaxConnections)
+	require.Equal(t, defaultMaxConnectionsPerTenant, c.MaxConnectionsPerTenant)
+	require.Equal(t, defaultProtocolMemoryLimit, c.ProtocolMemoryLimit)
+	require.Equal(t, defaultClientHandshakePacketLimit, c.ClientHandshakePacketLimit)
+
+	c = Config{MaxConnections: 1000}
+	c.FillDefault()
+	require.Equal(t, 1000, c.MaxConnections)
+	require.Equal(t, 1000, c.MaxConnectionsPerTenant)
 }
 
 func TestValidate(t *testing.T) {
@@ -43,6 +54,51 @@ func TestValidate(t *testing.T) {
 	}{{
 		name: "empty",
 		cfg:  Config{},
+	}, {
+		name: "negative client handshake timeout",
+		cfg: Config{
+			ClientHandshakeTimeout: toml.Duration{Duration: -time.Second},
+		},
+		wantErr: true,
+	}, {
+		name: "negative global connection limit",
+		cfg: Config{
+			MaxConnections: -1,
+		},
+		wantErr: true,
+	}, {
+		name: "negative tenant connection limit",
+		cfg: Config{
+			MaxConnectionsPerTenant: -1,
+		},
+		wantErr: true,
+	}, {
+		name: "tenant limit exceeds global limit",
+		cfg: Config{
+			MaxConnections:          10,
+			MaxConnectionsPerTenant: 11,
+		},
+		wantErr: true,
+	}, {
+		name: "protocol memory below fixed buffers",
+		cfg: Config{
+			MaxConnections:          10,
+			MaxConnectionsPerTenant: 10,
+			ProtocolMemoryLimit:     1,
+		},
+		wantErr: true,
+	}, {
+		name: "handshake packet limit below protocol minimum",
+		cfg: Config{
+			ClientHandshakePacketLimit: minimumClientHandshakePacketLimit - 1,
+		},
+		wantErr: true,
+	}, {
+		name: "handshake packet limit above protocol maximum",
+		cfg: Config{
+			ClientHandshakePacketLimit: maximumClientHandshakePacketLimit + 1,
+		},
+		wantErr: true,
 	}, {
 		name: "plugin enabled but no backend",
 		cfg: Config{

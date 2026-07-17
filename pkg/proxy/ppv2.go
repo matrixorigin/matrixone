@@ -17,12 +17,14 @@ package proxy
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 const (
@@ -55,6 +57,22 @@ type proxyProtocolCodec struct {
 	codec.Codec
 }
 
+// mysqlPacketDecodeError retains the header information needed to produce a
+// correctly sequenced MySQL error after the underlying codec rejects a payload
+// before constructing a Packet.
+type mysqlPacketDecodeError struct {
+	cause      error
+	sequenceID uint8
+}
+
+func (e *mysqlPacketDecodeError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *mysqlPacketDecodeError) Unwrap() error {
+	return e.cause
+}
+
 // ProxyHeaderV2 is the structure of the Proxy Protocol version 2 header.
 type ProxyHeaderV2 struct {
 	Signature          [12]byte
@@ -80,7 +98,19 @@ func (c *proxyProtocolCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) 
 	if ok {
 		return proxyAddr, ok, nil
 	}
-	return c.Codec.Decode(in)
+	var sequenceID uint8
+	hasPacketHeader := in.Readable() >= frontend.PacketHeaderLength
+	if hasPacketHeader {
+		sequenceID = in.PeekN(0, frontend.PacketHeaderLength)[3]
+	}
+	value, complete, err := c.Codec.Decode(in)
+	if hasPacketHeader && errors.Is(err, frontend.ErrPacketTooLarge) {
+		err = &mysqlPacketDecodeError{
+			cause:      err,
+			sequenceID: sequenceID,
+		}
+	}
+	return value, complete, err
 }
 
 // Encode implements the Codec interface.

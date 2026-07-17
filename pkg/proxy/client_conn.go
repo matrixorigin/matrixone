@@ -116,6 +116,49 @@ type migration struct {
 	setVarStmts   []string
 }
 
+type clientConnOption func(*clientConn)
+
+// absoluteReadDeadlineConn prevents a relative timeout set by an upper layer
+// from extending an already established lifecycle deadline. It remains usable
+// after the handshake; disable makes subsequent deadline updates transparent.
+type absoluteReadDeadlineConn struct {
+	net.Conn
+	deadline time.Time
+	enabled  atomic.Bool
+}
+
+func newAbsoluteReadDeadlineConn(conn net.Conn, deadline time.Time) *absoluteReadDeadlineConn {
+	c := &absoluteReadDeadlineConn{
+		Conn:     conn,
+		deadline: deadline,
+	}
+	c.enabled.Store(true)
+	return c
+}
+
+func (c *absoluteReadDeadlineConn) SetReadDeadline(deadline time.Time) error {
+	if c.enabled.Load() && (deadline.IsZero() || deadline.After(c.deadline)) {
+		deadline = c.deadline
+	}
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func (c *absoluteReadDeadlineConn) disable() {
+	c.enabled.Store(false)
+}
+
+func withClientConnAllocator(allocator frontend.Allocator) clientConnOption {
+	return func(c *clientConn) {
+		c.sessionAllocator = allocator
+	}
+}
+
+func withClientConnAdmission(lease *connectionLease) clientConnOption {
+	return func(c *clientConn) {
+		c.admission = lease
+	}
+}
+
 // clientConn is the connection between proxy and client.
 type clientConn struct {
 	ctx context.Context
@@ -134,6 +177,9 @@ type clientConn struct {
 	connID uint32
 	// clientInfo is the information of the client.
 	clientInfo clientInfo
+	// proxyHeaderReceived prevents repeated PROXY headers from resetting the
+	// handshake read path or growing its recursion depth.
+	proxyHeaderReceived bool
 	// haKeeperClient is the client of HAKeeper.
 	haKeeperClient logservice.ClusterHAKeeperClient
 	// moCluster is the CN server cache, which used to filter CN servers
@@ -147,6 +193,9 @@ type clientConn struct {
 	tlsConfig *tls.Config
 	// tlsConnectTimeout is the TLS connect timeout value.
 	tlsConnectTimeout time.Duration
+	// clientHandshakeTimeout bounds only the unauthenticated login read. Its
+	// deadline is cleared before the connection enters the tunnel data path.
+	clientHandshakeTimeout time.Duration
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
 	// queryClient is used to send query request to CN servers.
@@ -160,6 +209,12 @@ type clientConn struct {
 	sc ServerConn
 	// connCache is the cache of the connections.
 	connCache ConnCache
+	// sessionAllocator is shared across the Proxy instead of creating one
+	// ManagedAllocator for every client connection.
+	sessionAllocator frontend.Allocator
+	// admission owns this connection's global and, after login parsing,
+	// per-tenant capacity. The handler releases it on every exit path.
+	admission *connectionLease
 	// quit tracks quit/cleanup status. It is shared by quit event path and
 	// EOF/connection-end fallback path.
 	quit struct {
@@ -192,6 +247,7 @@ func newClientConn(
 	ipNetList []*net.IPNet,
 	qc qclient.QueryClient,
 	connCache ConnCache,
+	options ...clientConnOption,
 ) (ClientConn, error) {
 	var originIP net.IP
 	var port int
@@ -215,9 +271,18 @@ func newClientConn(
 		},
 		ipNetList: ipNetList,
 		// set the connection timeout value.
-		tlsConnectTimeout: cfg.TLSConnectTimeout.Duration,
-		queryClient:       qc,
-		connCache:         connCache,
+		tlsConnectTimeout:      cfg.TLSConnectTimeout.Duration,
+		clientHandshakeTimeout: cfg.ClientHandshakeTimeout.Duration,
+		queryClient:            qc,
+		connCache:              connCache,
+	}
+	if c.clientHandshakeTimeout == 0 {
+		c.clientHandshakeTimeout = defaultClientHandshakeTimeout
+	}
+	for _, option := range options {
+		if option != nil {
+			option(c)
+		}
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -230,11 +295,31 @@ func newClientConn(
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
 	frontend.InitServerLevelVars(cfg.UUID)
-	frontend.SetSessionAlloc(cfg.UUID, frontend.NewSessionAllocator(pu))
-	ios, err := frontend.NewIOSession(c.RawConn(), pu, cfg.UUID)
+	allocator := c.sessionAllocator
+	if allocator == nil {
+		allocator = frontend.NewSessionAllocator(pu)
+	}
+	handshakePacketLimit := cfg.ClientHandshakePacketLimit
+	if handshakePacketLimit == 0 {
+		handshakePacketLimit = defaultClientHandshakePacketLimit
+	}
+	ios, err := frontend.NewIOSessionWithOptions(
+		c.RawConn(),
+		pu,
+		cfg.UUID,
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(int(handshakePacketLimit)),
+		frontend.WithIOSessionAllocator(allocator),
+	)
 	if err != nil {
 		return nil, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = ios.Close()
+		}
+	}()
 	c.mysqlProto = frontend.NewMysqlClientProtocol(cfg.UUID, c.connID, ios, 0, &fp)
 	if cfg.TLSEnabled {
 		tlsConfig, err := frontend.ConstructTLSConfig(
@@ -245,6 +330,7 @@ func newClientConn(
 		c.tlsConfig = tlsConfig
 	}
 	c.migration.setVarStmtMap = make(map[string]struct{})
+	owned = false
 	return c, nil
 }
 
@@ -279,9 +365,30 @@ func (c *clientConn) GetTenant() Tenant {
 	return EmptyTenant
 }
 
+func rewriteProxyError(err error) (uint16, string, string) {
+	errorCode, sqlState, msg := frontend.RewriteError(err, "")
+	if errors.Is(err, errProxyConnectionLimit) {
+		definition := moerr.MysqlErrorMsgRefer[moerr.ER_CON_COUNT_ERROR]
+		errorCode = definition.ErrorCode
+		sqlState = definition.SqlStates[0]
+		msg = definition.ErrorMsgOrFormat
+	} else if errors.Is(err, frontend.ErrPacketTooLarge) {
+		definition := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_NET_PACKET_TOO_LARGE]
+		errorCode = definition.ErrorCode
+		sqlState = definition.SqlStates[0]
+		msg = definition.ErrorMsgOrFormat
+	}
+	return errorCode, sqlState, msg
+}
+
+func isProxyAdmissionError(err error) bool {
+	return errors.Is(err, errProxyConnectionLimit) ||
+		errors.Is(err, frontend.ErrPacketTooLarge)
+}
+
 // SendErrToClient implements the ClientConn interface.
 func (c *clientConn) SendErrToClient(err error) {
-	errorCode, sqlState, msg := frontend.RewriteError(err, "")
+	errorCode, sqlState, msg := rewriteProxyError(err)
 	p := c.mysqlProto.MakeErrPayload(errorCode, sqlState, msg)
 	if err := c.mysqlProto.WritePacket(p); err != nil {
 		c.log.Error("failed to send access error to client", zap.Error(err))
@@ -307,7 +414,17 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 			if errors.Is(err, io.EOF) {
 				return nil, err
 			}
-			c.log.Error("failed to handle Handshake response", zap.Error(err))
+			if isProxyAdmissionError(err) {
+				c.log.Debug("client handshake rejected", zap.Error(err))
+			} else {
+				c.log.Error("failed to handle Handshake response", zap.Error(err))
+			}
+			return nil, err
+		}
+		// goetty implements read timeouts with a net.Conn deadline, which
+		// otherwise survives the handshake and would abort a legitimate long
+		// query later in the raw tunnel.
+		if err := c.RawConn().SetReadDeadline(time.Time{}); err != nil {
 			return nil, err
 		}
 	}
@@ -776,22 +893,40 @@ func (c *clientConn) sendPacketToClient(r []byte, sc ServerConn) error {
 // readPacket reads MySQL packets from clients. It is mainly used in
 // handshake phase.
 func (c *clientConn) readPacket() (*frontend.Packet, error) {
-	msg, err := c.conn.Read(goetty.ReadOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if proxyAddr, ok := msg.(*ProxyAddr); ok {
-		if proxyAddr.SourceAddress != nil {
-			c.clientInfo.originIP = proxyAddr.SourceAddress
-			c.clientInfo.originPort = proxyAddr.SourcePort
+	return c.readPacketBefore(time.Now().Add(c.clientHandshakeTimeout))
+}
+
+func (c *clientConn) readPacketBefore(deadline time.Time) (*frontend.Packet, error) {
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, context.DeadlineExceeded
 		}
-		return c.readPacket()
+		msg, err := c.conn.Read(goetty.ReadOptions{Timeout: remaining})
+		if err != nil {
+			var packetErr *mysqlPacketDecodeError
+			if errors.As(err, &packetErr) {
+				c.mysqlProto.SetSequenceID(packetErr.sequenceID + 1)
+			}
+			return nil, err
+		}
+		if proxyAddr, ok := msg.(*ProxyAddr); ok {
+			if c.proxyHeaderReceived {
+				return nil, moerr.NewInvalidInputNoCtx("duplicate PROXY protocol header")
+			}
+			c.proxyHeaderReceived = true
+			if proxyAddr.SourceAddress != nil {
+				c.clientInfo.originIP = proxyAddr.SourceAddress
+				c.clientInfo.originPort = proxyAddr.SourcePort
+			}
+			continue
+		}
+		packet, ok := msg.(*frontend.Packet)
+		if !ok {
+			return nil, moerr.NewInternalError(c.ctx, "message is not a Packet")
+		}
+		return packet, nil
 	}
-	packet, ok := msg.(*frontend.Packet)
-	if !ok {
-		return nil, moerr.NewInternalError(c.ctx, "message is not a Packet")
-	}
-	return packet, nil
 }
 
 // nextClientConnID increases baseConnID by 1 and returns the result.

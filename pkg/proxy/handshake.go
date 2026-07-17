@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 
@@ -34,8 +35,28 @@ func (c *clientConn) writeInitialHandshake() error {
 // handleHandshakeResp receives login information from client and saves it
 // in proxy end.
 func (c *clientConn) handleHandshakeResp() error {
+	deadline := time.Now().Add(c.clientHandshakeTimeout)
+	rawConn := c.conn.RawConn()
+	deadlineConn := newAbsoluteReadDeadlineConn(rawConn, deadline)
+	c.conn.UseConn(deadlineConn)
+	c.mysqlProto.UseConn(deadlineConn)
+	defer func() {
+		deadlineConn.disable()
+		// A non-TLS handshake still uses deadlineConn directly, so remove the
+		// now-disabled wrapper instead of retaining one object per connection.
+		// After a TLS upgrade, tls.Conn owns the wrapped transport and the
+		// disabled wrapper remains a transparent part of that stack.
+		if c.conn.RawConn() == deadlineConn {
+			c.conn.UseConn(rawConn)
+			c.mysqlProto.UseConn(rawConn)
+		}
+	}()
+	return c.handleHandshakeRespBefore(deadline)
+}
+
+func (c *clientConn) handleHandshakeRespBefore(deadline time.Time) error {
 	// The proxy reads login request from client.
-	pack, err := c.readPacket()
+	pack, err := c.readPacketBefore(deadline)
 	if err != nil {
 		return err
 	}
@@ -52,15 +73,18 @@ func (c *clientConn) handleHandshakeResp() error {
 		return err
 	}
 	if ssl {
-		if err = c.upgradeToTLS(); err != nil {
+		if err = c.upgradeToTLS(deadline); err != nil {
 			return err
 		}
-		return c.handleHandshakeResp()
+		return c.handleHandshakeRespBefore(deadline)
 	}
 
 	// parse tenant information from client login request.
 	if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
 		return err
+	}
+	if c.admission != nil && !c.admission.bindTenant(c.clientInfo.Tenant) {
+		return errProxyConnectionLimit
 	}
 
 	li := &c.clientInfo.labelInfo
@@ -74,14 +98,19 @@ func (c *clientConn) handleHandshakeResp() error {
 }
 
 // upgradeToTLS upgrades the connection to TLS connection.
-func (c *clientConn) upgradeToTLS() error {
+func (c *clientConn) upgradeToTLS(handshakeDeadline time.Time) error {
 	if c.tlsConfig == nil {
 		return moerr.NewInternalErrorNoCtx("TLS config is invalid")
 	}
+	remaining := time.Until(handshakeDeadline)
+	if remaining <= 0 {
+		return context.DeadlineExceeded
+	}
+	timeout := min(c.tlsConnectTimeout, remaining)
 	// TLS handshake packet from client might have been read into the buffer, use a wrapped conn to
 	// avoid losing handshake packets.
 	tlsConn := tls.Server(c.conn.(goetty.BufferedIOSession).BufferedConn(), c.tlsConfig)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), c.tlsConnectTimeout, moerr.CauseUpgradeToTLS)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseUpgradeToTLS)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		err = moerr.AttachCause(ctx, err)

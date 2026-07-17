@@ -95,8 +95,18 @@ type serverConn struct {
 
 var _ ServerConn = (*serverConn)(nil)
 
+// Proxy only needs a small retained buffer for normal MySQL packets. Larger
+// packets use frontend.Conn's dynamic path and are released after use.
+const proxyIOSessionBufferSize = 16 * 1024
+
 // newServerConn creates a connection to CN server.
-func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Duration) (ServerConn, error) {
+func newServerConn(
+	cn *CNServer,
+	tun *tunnel,
+	r *rebalancer,
+	timeout time.Duration,
+	allocators ...frontend.Allocator,
+) (ServerConn, error) {
 	var logger *zap.Logger
 	if r != nil && r.logger != nil {
 		logger = r.logger.RawLogger()
@@ -123,8 +133,20 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
 	frontend.InitServerLevelVars(cn.uuid)
-	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(pu))
-	ios, err := frontend.NewIOSession(c.RawConn(), pu, cn.uuid)
+	var allocator frontend.Allocator
+	if len(allocators) > 0 {
+		allocator = allocators[0]
+	}
+	if allocator == nil {
+		allocator = frontend.NewSessionAllocator(pu)
+	}
+	ios, err := frontend.NewIOSessionWithOptions(
+		c.RawConn(),
+		pu,
+		cn.uuid,
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllocator(allocator),
+	)
 	if err != nil {
 		return nil, err
 	}
