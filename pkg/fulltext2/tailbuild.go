@@ -47,10 +47,12 @@ type TailBuilder struct {
 	cur      *Builder // current open segment (nil until the first insert row)
 	segs     []TailSegment
 	deletes  []DeleteRecord
+	opts     []BuildOpt // carried into each per-segment Builder (e.g. WithPositionFree)
 }
 
-// NewTailBuilder creates a streaming tail builder backed by a private temp dir.
-func NewTailBuilder(pkType int32, capacity int64, tokenize func(string) []WordPos) (*TailBuilder, error) {
+// NewTailBuilder creates a streaming tail builder backed by a private temp dir. Pass
+// WithPositionFree() so a position-free index's CDC tail stays position-free.
+func NewTailBuilder(pkType int32, capacity int64, tokenize func(string) []WordPos, opts ...BuildOpt) (*TailBuilder, error) {
 	if capacity < 1 {
 		capacity = defaultTailCapacity
 	}
@@ -58,7 +60,7 @@ func NewTailBuilder(pkType int32, capacity int64, tokenize func(string) []WordPo
 	if err != nil {
 		return nil, err
 	}
-	return &TailBuilder{pkType: pkType, capacity: capacity, tokenize: tokenize, dir: dir}, nil
+	return &TailBuilder{pkType: pkType, capacity: capacity, tokenize: tokenize, dir: dir, opts: opts}, nil
 }
 
 // AddBatch streams one decoded CDC batch: insert/upsert rows are tokenized into
@@ -70,7 +72,7 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 		switch e.Op {
 		case cdcInsert, cdcUpsert:
 			if t.cur == nil {
-				t.cur = NewBuilder(fmt.Sprintf("cdctail-%d", t.seq), t.pkType)
+				t.cur = NewBuilder(fmt.Sprintf("cdctail-%d", t.seq), t.pkType, t.opts...)
 			}
 			for _, w := range t.tokenize(e.Text) {
 				if err := t.cur.Add(w.Word, w.Pos, e.Pk); err != nil {

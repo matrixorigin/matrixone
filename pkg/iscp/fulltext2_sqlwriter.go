@@ -94,7 +94,7 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	}
 
 	return &Fulltext2SqlWriter{
-		cfg:      fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"]},
+		cfg:      fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
 		pkType:   int32(pkTyp.Id),
 		pkPos:    pkPos,
 		textPos:  textPos,

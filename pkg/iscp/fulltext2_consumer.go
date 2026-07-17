@@ -49,7 +49,11 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 		errch <- err
 		return
 	}
-	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, tokenize)
+	var bopts []fulltext2.BuildOpt
+	if w.cfg.PositionFree {
+		bopts = append(bopts, fulltext2.WithPositionFree())
+	}
+	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, tokenize, bopts...)
 	if err != nil {
 		errch <- err
 		return
