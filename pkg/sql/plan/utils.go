@@ -3015,22 +3015,24 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
-	copied := preparePlan
-
-	switch pp := copied.Plan.(type) {
+	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	}
+
+	copied := DeepCopyPlan(preparePlan)
+	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, preparePlan, paramVals)
+			err := replaceParamVals(ctx, copied, paramVals)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, preparePlan, paramVals)
+		err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
 			return nil, err
 		}
@@ -3038,9 +3040,19 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
+type ParamValue struct {
+	Value any
+	IsBin bool
+}
+
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
+		isBin := false
+		if param, ok := val.(ParamValue); ok {
+			val = param.Value
+			isBin = param.IsBin
+		}
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -3052,7 +3064,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				},
 			}
 		} else {
-			pc := &plan.Literal{}
+			pc := &plan.Literal{IsBin: isBin}
 			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
 			params[i] = &plan.Expr{
 				Expr: &plan.Expr_Lit{

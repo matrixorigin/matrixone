@@ -37,6 +37,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -91,6 +92,19 @@ func TestRoutineCleanupWithoutSession(t *testing.T) {
 		t.Fatal("cleanup did not cancel routine context")
 	}
 	assert.Nil(t, rt.getProtocol())
+}
+
+func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetLastAffectedRows(7)
+	rt := &Routine{}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Equal(t, int64(7), resp.LastAffectedRows)
 }
 
 const (

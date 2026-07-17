@@ -30,6 +30,25 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type closeTrackingLogClient struct {
+	logservice.Client
+	closed atomic.Int32
+}
+
+func (c *closeTrackingLogClient) Close() error {
+	c.closed.Add(1)
+	return c.Client.Close()
+}
+
+func TestCloseClosesLogClientOnce(t *testing.T) {
+	client := &closeTrackingLogClient{Client: NewMemLog()}
+	storage := NewKVTxnStorage(0, client, newTestClock(1))
+
+	assert.NoError(t, storage.Close(context.Background()))
+	assert.NoError(t, storage.Destroy(context.Background()))
+	assert.Equal(t, int32(1), client.closed.Load())
+}
+
 func TestWrite(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))

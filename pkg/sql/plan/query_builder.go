@@ -5175,7 +5175,11 @@ func (builder *QueryBuilder) bindView(
 		return 0, err
 	}
 
-	originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, ctx.lower)
+	parserSQLMode := legacyViewParserSQLMode
+	if viewData.SQLMode != nil {
+		parserSQLMode = *viewData.SQLMode
+	}
+	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -5242,6 +5246,10 @@ func (builder *QueryBuilder) bindView(
 	ctx.recordViews(viewCtx.views)
 	return
 }
+
+// ViewData persisted before parser SQL mode was recorded used MatrixOne's
+// legacy grammar where || meant concat.
+const legacyViewParserSQLMode = "PIPES_AS_CONCAT"
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {

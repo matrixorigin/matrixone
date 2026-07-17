@@ -60,6 +60,30 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 	})
 }
 
+func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
+	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+
+	t.Run("legacy UDF uses historical pipe concat mode", func(t *testing.T) {
+		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "legacy_pipe", &function.Udf{
+			Body:     "0 || 1",
+			Language: string(tree.SQL),
+		}, nil, 0)
+		require.NoError(t, err)
+		require.Equal(t, "concat", expr.GetF().GetFunc().GetObjName())
+	})
+
+	t.Run("stored empty mode keeps logical or semantics", func(t *testing.T) {
+		emptyMode := ""
+		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "logical_or", &function.Udf{
+			Body:     "0 || 1",
+			Language: string(tree.SQL),
+			SQLMode:  &emptyMode,
+		}, nil, 0)
+		require.NoError(t, err)
+		require.Equal(t, "or", expr.GetF().GetFunc().GetObjName())
+	})
+}
+
 func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
 	ctx := context.Background()
 
