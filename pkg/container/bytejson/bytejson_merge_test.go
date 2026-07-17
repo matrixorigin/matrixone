@@ -253,6 +253,83 @@ func TestMergeBuilderRejectsUnconfiguredUse(t *testing.T) {
 	builder.Clear()
 }
 
+func TestMergeDocumentsRejectsUnconfiguredBuilder(t *testing.T) {
+	_, err := mergeDocuments(&MergeBuilder{}, Null, Null)
+	require.ErrorContains(t, err, "not configured")
+}
+
+func TestMergeBuilderLifecycleAndEncodingContract(t *testing.T) {
+	document, err := ParseFromString(`{"a":1}`)
+	require.NoError(t, err)
+
+	builder := NewMergePatchBuilder()
+	require.Zero(t, builder.TypeCode())
+	require.Zero(t, builder.DataSize())
+	_, err = builder.EncodeDataInto(nil)
+	require.ErrorContains(t, err, "not finalized")
+	require.ErrorContains(t, builder.ResetUnknown(), "not building")
+
+	require.NoError(t, builder.BeginRow())
+	require.NoError(t, builder.ResetUnknown())
+	require.ErrorContains(t, builder.Merge(document), "no current value")
+	require.ErrorContains(t, builder.Finalize(), "not building")
+
+	builder.Clear()
+	require.NoError(t, builder.BeginRow())
+	require.NoError(t, builder.Reset(document))
+	require.NoError(t, builder.Finalize())
+	require.NoError(t, builder.Finalize())
+	require.Equal(t, document.Type, builder.TypeCode())
+	require.Equal(t, uint32(len(document.Data)), builder.DataSize())
+
+	encoded := make([]byte, builder.DataSize())
+	n, err := builder.EncodeDataInto(encoded)
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), n)
+	require.Equal(t, document.Data, encoded)
+
+	_, err = builder.EncodeDataInto(encoded[:len(encoded)-1])
+	require.ErrorContains(t, err, "encoded size mismatch")
+}
+
+func TestMergeValueDepthAndArrayOverflow(t *testing.T) {
+	nested, err := ParseFromString(`{"x":1}`)
+	require.NoError(t, err)
+	rawArray, err := ParseFromString(`[{"x":1}]`)
+	require.NoError(t, err)
+
+	object := mergeValue{
+		kind: mergeValueObject,
+		object: &mergeObjectPlan{entries: map[string]*mergeObjectEntry{
+			"nested": {key: "nested", value: newRawMergeValue(nested)},
+		}},
+	}
+	depth, err := mergeValueDepth(&object)
+	require.NoError(t, err)
+	require.Equal(t, 2, depth)
+
+	array := mergeValue{
+		kind: mergeValueArray,
+		array: &mergeArrayPlan{segments: []mergeArraySegment{
+			{rawArray: rawArray, isRaw: true},
+			{single: newRawMergeValue(Null)},
+		}},
+	}
+	depth, err = mergeValueDepth(&array)
+	require.NoError(t, err)
+	require.Equal(t, 2, depth)
+
+	invalid := mergeValue{kind: mergeValueInvalid}
+	_, err = mergeValueDepth(&invalid)
+	require.ErrorContains(t, err, "invalid merge value")
+	object.object.entries["invalid"] = &mergeObjectEntry{value: invalid}
+	_, err = mergeValueDepth(&object)
+	require.ErrorContains(t, err, "invalid merge value")
+
+	full := mergeArrayPlan{elemCount: ^uint32(0)}
+	require.ErrorContains(t, full.appendValue(newRawMergeValue(Null), 1), "result is too large")
+}
+
 func BenchmarkByteJsonMergeDeepWide(b *testing.B) {
 	leaf := `"` + strings.Repeat("x", 256<<10) + `"`
 	left, err := ParseFromString(nestedJSONObject(100, leaf))

@@ -190,6 +190,38 @@ func TestAppendByteJsonEncoded(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestAppendByteJsonEncodedConstResult(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+	result := MustFunctionResult[types.Varlena](wrapper)
+	result.vec.SetLength(4)
+	result.vec.ToConst()
+
+	value, err := bytejson.ParseFromString(`{"long":"abcdefghijklmnopqrstuvwxyz"}`)
+	require.NoError(t, err)
+	err = result.AppendByteJsonEncoded(testByteJsonEncoder{
+		value: value,
+		write: 8,
+		err:   errors.New("encode failed"),
+	})
+	require.ErrorContains(t, err, "encode failed")
+	require.True(t, result.vec.IsConst())
+	require.Equal(t, 4, result.vec.Length())
+	require.Empty(t, result.vec.area)
+
+	require.NoError(t, result.AppendByteJsonEncoded(testByteJsonEncoder{value: value}))
+	want, err := value.Marshal()
+	require.NoError(t, err)
+	require.True(t, result.vec.IsConst())
+	require.Equal(t, 4, result.vec.Length())
+	require.Equal(t, want, result.vec.GetBytesAt(0))
+	require.Equal(t, want, result.vec.GetBytesAt(3))
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestReuseFunctionParameterStr(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	vec := NewVec(types.T_varchar.ToType())
