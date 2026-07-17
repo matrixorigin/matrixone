@@ -87,21 +87,9 @@ func (s *service) initRemote() {
 			return false, err
 		},
 		func(txn []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
-			req := acquireRequest()
-			defer releaseRequest(req)
-
-			req.Method = pb.Method_CannotCommit
-			req.CannotCommit.OrphanTxnList = txn
-
 			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote1)
 			defer cancel()
-
-			resp, err := s.remote.client.Send(ctx, req)
-			if err != nil {
-				return pb.CannotCommitResponse{}, moerr.AttachCause(ctx, err)
-			}
-			defer releaseResponse(resp)
-			return resp.CannotCommit, nil
+			return s.notifyCannotCommit(ctx, txn)
 		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return checkRemoteActiveTxn(s.remote.client, txn)
@@ -134,6 +122,24 @@ func (s *service) initRemote() {
 	if err := s.stopper.RunTask(s.unlockTimeoutRemoteTxn); err != nil {
 		panic(err)
 	}
+}
+
+func (s *service) notifyCannotCommit(
+	ctx context.Context,
+	txns []pb.OrphanTxn,
+) (pb.CannotCommitResponse, error) {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_CannotCommit
+	req.CannotCommit.OrphanTxnList = txns
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return pb.CannotCommitResponse{}, moerr.AttachCause(ctx, err)
+	}
+	defer releaseResponse(resp)
+	return resp.CannotCommit, nil
 }
 
 // checkRemoteActiveTxn treats a service-identity mismatch as a routing signal,
@@ -184,11 +190,10 @@ func checkRemoteActiveTxn(client Client, txn pb.WaitTxn) (bool, error) {
 				"lockservice client does not support active-txn backend reset")
 		}
 		if err := resetter.ResetBackend(ctx, txn.CreatedOn); err != nil {
-			// Normalize reset failures to an indeterminate/retryable lockservice
-			// error. In particular, a BackendClosed reset error must not flow into
-			// isValidRemoteTxn's definitive-inactive branch.
-			return false, moerr.NewInternalErrorNoCtx(
-				"failed to reset active-txn backend: " + err.Error())
+			// Preserve the original error for observability. The caller treats every
+			// error as an indeterminate observation, independent of its transport
+			// error code.
+			return false, moerr.AttachCause(ctx, err)
 		}
 	}
 	return false, nil
@@ -526,7 +531,16 @@ func (s *service) handleCheckActiveTxn(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CheckActiveTxn.Valid = s.serviceID == req.CheckActiveTxn.ServiceID
-	if resp.CheckActiveTxn.Valid && s.cfg.TxnIterFunc != nil {
+	if resp.CheckActiveTxn.Valid && s.unknownCommitResolver != nil {
+		// TxnIterFunc tracks frontend transaction operators. An unknown Commit
+		// can already have removed its operator while lockservice is still
+		// retaining it to finish a remote proxy ReplaceTo. Only that resolver-
+		// owned state must delay orphan cleanup. activeTxnHolder also contains
+		// ordinary lockservice holders, whose liveness must remain governed by
+		// TxnIterFunc.
+		resp.CheckActiveTxn.Active = s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
+	}
+	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active && s.cfg.TxnIterFunc != nil {
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {
 			resp.CheckActiveTxn.Active = bytes.Equal(req.CheckActiveTxn.Txn, txnID)
 			return !resp.CheckActiveTxn.Active
@@ -557,6 +571,12 @@ func (s *service) handleRemoteGetLock(
 			resp.GetTxnLock.Value = int32(lock.value)
 			values := make([]pb.WaitTxn, 0)
 			lock.waiters.iter(func(w *waiter) bool {
+				// The response is a wait-for graph snapshot. Only waiters that
+				// are actively blocking represent an edge; notified and completed
+				// waiters may still be present in the queue.
+				if w.getStatus() != blocking {
+					return true
+				}
 				values = append(values, w.txn)
 				return true
 			})
@@ -886,7 +906,26 @@ func getLockTableBind(
 	originTableID uint64,
 	serviceID string,
 	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
+	return getLockTableBindWithContext(
+		context.Background(),
+		c,
+		group,
+		tableID,
+		originTableID,
+		serviceID,
+		sharding,
+	)
+}
+
+func getLockTableBindWithContext(
+	parent context.Context,
+	c Client,
+	group uint32,
+	tableID uint64,
+	originTableID uint64,
+	serviceID string,
+	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
+	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
 	req := acquireRequest()

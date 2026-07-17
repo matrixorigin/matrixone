@@ -30,6 +30,10 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 
+	if nodes := c.partitionedIvfScanNodes(node); nodes != nil {
+		return nodes, nil
+	}
+
 	forceSingle := forceSingleScan(node)
 	if node.NodeType == plan.Node_TABLE_CLONE {
 		forceSingle = true
@@ -54,6 +58,26 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	}
 
 	return c.materializeScanNodes(scanPlacement.Workers, stats, node, rel)
+}
+
+func (c *Compile) partitionedIvfScanNodes(node *plan.Node) engine.Nodes {
+	if !plan2.IsIvfSearchEntriesInternalScan(node) {
+		return nil
+	}
+	param := node.GetIndexReaderParam()
+	if param.GetPartitionCnCnt() <= 1 {
+		return nil
+	}
+	mcpu := 1
+	if node.GetStats() != nil && node.GetStats().GetDop() > 0 {
+		mcpu = int(node.GetStats().GetDop())
+	}
+	return engine.Nodes{{
+		Addr:  c.addr,
+		Mcpu:  normalizeMcpu(mcpu),
+		CNCNT: param.GetPartitionCnCnt(),
+		CNIDX: param.GetPartitionCnIdx(),
+	}}
 }
 
 func forceSingleScan(node *plan.Node) bool {

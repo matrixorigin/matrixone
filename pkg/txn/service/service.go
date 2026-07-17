@@ -64,6 +64,7 @@ type service struct {
 	zombieTimeout time.Duration
 	pool          sync.Pool
 	recoveryC     chan struct{}
+	recoveryOnce  sync.Once
 	txnC          chan txn.TxnMeta
 }
 
@@ -109,6 +110,7 @@ func (s *service) Shard() metadata.TNShard {
 
 func (s *service) Start() error {
 	if err := s.storage.Start(); err != nil {
+		s.finishRecovery()
 		return err
 	}
 	s.logger.Info("txn.service.start.recovery")

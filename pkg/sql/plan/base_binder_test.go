@@ -281,6 +281,81 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
+	ctx := context.Background()
+
+	makeJsonExpr := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_json)},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: 0, Name: "j"},
+			},
+		}
+	}
+	makeParamExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{
+				P: &plan.ParamRef{Pos: pos},
+			},
+		}
+	}
+	requireExactJSONParam := func(t *testing.T, expr *plan.Expr) *plan.Expr {
+		t.Helper()
+		require.Equal(t, int32(types.T_json), expr.Typ.Id)
+		normalize := expr.GetF()
+		require.NotNil(t, normalize)
+		require.Equal(t, function.JsonOrderingParamFunctionName, normalize.GetFunc().GetObjName())
+		require.Len(t, normalize.GetArgs(), 1)
+		return normalize.GetArgs()[0]
+	}
+
+	t.Run("json on left", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), param})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		require.Equal(t, int32(types.T_json), args[0].Typ.Id)
+		require.NotNil(t, args[0].GetCol())
+		paramArg := requireExactJSONParam(t, args[1])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	t.Run("json on right", func(t *testing.T) {
+		param := makeParamExpr(0)
+		result, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{param, makeJsonExpr()})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), result.Typ.Id)
+
+		args := result.GetF().Args
+		require.Len(t, args, 2)
+		paramArg := requireExactJSONParam(t, args[0])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+		require.Equal(t, int32(types.T_json), args[1].Typ.Id)
+		require.NotNil(t, args[1].GetCol())
+	})
+
+	t.Run("string literal remains rejected", func(t *testing.T) {
+		_, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
+		require.Error(t, err)
+	})
+
+	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
+		require.NoError(t, err)
+	})
+
+	t.Run("non-ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, "=", []*plan.Expr{makeJsonExpr(), makeParamExpr(0)})
+		require.NoError(t, err)
+	})
+}
+
 func TestBindNameConstConstArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
