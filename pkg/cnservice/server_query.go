@@ -223,7 +223,16 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		return nil
 	}
 	if r.RenewFenceOnly {
-		exec.RenewJobFence(key, iscp.RollbackFenceTTL())
+		if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
+				s.cfg.UUID,
+				r.TableID,
+				r.JobName,
+				r.JobID,
+			)
+		}
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
 	}

@@ -77,7 +77,7 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
 
 	resp := &query.Response{}
-	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			AccountID:      key.AccountID,
 			TableID:        key.TableID,
@@ -85,8 +85,8 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 			JobID:          key.JobID,
 			RenewFenceOnly: true,
 		},
-	}, resp, nil))
-	require.NotNil(t, resp.ISCPDrainConsumerResponse)
+	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+	require.Nil(t, resp.ISCPDrainConsumerResponse)
 	require.False(t, exec.IsJobFenced(key))
 
 	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
@@ -104,6 +104,19 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	}, resp, nil))
 	time.Sleep(700 * time.Millisecond)
 	require.True(t, exec.IsJobFenced(key))
+
+	time.Sleep(1100 * time.Millisecond)
+	require.False(t, exec.IsJobFenced(key))
+	resp = &query.Response{}
+	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
 }
 
 func Test_service_handleGoMaxProcs(t *testing.T) {

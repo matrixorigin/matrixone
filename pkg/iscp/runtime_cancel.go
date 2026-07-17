@@ -153,16 +153,18 @@ func (exec *ISCPTaskExecutor) RemoveJobFence(key JobRuntimeKey) {
 	exec.runtimeMu.Unlock()
 }
 
-func (exec *ISCPTaskExecutor) RenewJobFence(key JobRuntimeKey, ttl time.Duration) {
+func (exec *ISCPTaskExecutor) RenewJobFence(key JobRuntimeKey, ttl time.Duration) bool {
 	if exec == nil || ttl <= 0 {
-		return
+		return false
 	}
 	exec.runtimeMu.Lock()
+	defer exec.runtimeMu.Unlock()
 	exec.ensureRuntimeMapsLocked()
-	if _, ok := exec.fencedJobs[key]; ok {
-		exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(ttl)}
+	if !exec.isJobFencedLocked(key, time.Now()) {
+		return false
 	}
-	exec.runtimeMu.Unlock()
+	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(ttl)}
+	return true
 }
 
 func (exec *ISCPTaskExecutor) RemoveTableJobFences(accountID uint32, tableID uint64) {

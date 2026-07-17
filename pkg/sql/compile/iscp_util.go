@@ -259,7 +259,15 @@ func drainIndexCdcTaskConsumer(
 		}
 		if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 			lease := startISCPJobFenceLease(func() error {
-				exec.RenewJobFence(key, iscp.RollbackFenceTTL())
+				if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+					return moerr.NewInternalErrorf(
+						c.proc.Ctx,
+						"cannot renew ISCP consumer quiescence fence for tableID=%d jobName=%s jobID=%d",
+						tableID,
+						jobName,
+						jobID,
+					)
+				}
 				return nil
 			})
 			cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
@@ -300,9 +308,10 @@ func drainIndexCdcTaskConsumer(
 	}
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		lease := startISCPJobFenceLease(func() error {
+			ttl := iscp.RollbackFenceTTL()
 			renewCtx, cancel := context.WithTimeoutCause(
 				context.Background(),
-				iscp.RollbackFenceTTL(),
+				iscpFenceRenewTimeout(ttl),
 				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
 			)
 			defer cancel()
@@ -367,6 +376,14 @@ func startISCPJobFenceLease(renew func() error) iscpJobFenceLease {
 			close(stopCh)
 		})
 	}}
+}
+
+func iscpFenceRenewTimeout(ttl time.Duration) time.Duration {
+	timeout := ttl / 4
+	if timeout < 10*time.Millisecond {
+		timeout = 10 * time.Millisecond
+	}
+	return timeout
 }
 
 func (l iscpJobFenceLease) Stop() {
