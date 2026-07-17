@@ -1,6 +1,36 @@
 # Issue #25782 多进程复现 Harness 交接说明
 
-更新时间：2026-07-17 15:24（Asia/Shanghai）
+更新时间：2026-07-17 15:55（Asia/Shanghai）
+
+## 0.0 rebase 后最终业务验收（2026-07-17 15:55）
+
+当前源码提交 `f5cc97efe702a62881d9c2cc2aa9811c4e89667c` 已重新执行
+`make pb`、构建、目标包普通/race 测试、vet、harness 22 项测试和 fresh 双 CN
+业务验证。最终 hard-budget evidence：
+
+```text
+runtime=/tmp/mo-25782-hard-budget-final-20260717155140
+query_rc=0
+count(*)=132096
+MemoryUsage=54711424B
+SpillSize=289552B
+CN1 query reject=0->4, initial spill=17->21
+CN2 query reject=0->4, initial spill=18->22
+CN1 peak=365674496, oom=0, oom_kill=0, swap=0
+CN2 peak=340135936, oom=0, oom_kill=0, swap=0
+```
+
+本次仍把 `join_spill_mem` 设为 1 GiB、query hard limit 设为 32 MiB，因而正
+spill 只能来自 hard admission reject 后的 fallback。SQL 返回精确结果，runtime
+已完整清理。证据位于该 runtime 的 `manual/` 目录。
+
+同一提交还执行了自动 fixed classifier：Broadcast 两个 CN 均返回 `132096`；
+Shuffle 的 synthetic stats-sync 在远端 `EXPLAIN PHYPLAN` 阶段按设计触发
+128 MiB CN HashBuild admission reject，因而该轮没有生成新的 overall
+`FIXED_ACCEPTED`。这是 2.5 GiB CN cgroup 配合 4 GiB host reserve 后得到的有限
+HashBuild cap 对 1.61 GiB synthetic estimate 的受控拒绝，不是 OOM，也不否定
+上述实际 Shuffle SQL 的 reject→spill 成功验收。完整 classifier 的既有
+`FIXED_ACCEPTED` 证据仍保留在第 1 节。
 
 ## 0.1 硬预算拒绝转 spill 实机验收（2026-07-17 15:24）
 
@@ -156,7 +186,7 @@ git diff --check                                                            # PA
 
 - worktree：`/home/mo/worktrees/mo-25782-main`
 - 分支：`repro/25782-main-harness`
-- 最终验收代码：以当前分支 HEAD 为准；rebase 后必须重新构建并生成新 evidence，禁止复用旧 binary/source provenance。
+- 最终业务验收代码：`f5cc97efe702a62881d9c2cc2aa9811c4e89667c`；rebase 后的 binary/source provenance 已由 0.0 节 fresh runtime 重新验证。
 - 实现和 harness 已按单 PR、多 commit 的方式提交到当前本地分支；尚未推送或创建 PR。
 - 原工作区 `/home/mo/matrixone` 当前 HEAD 已变为 `8f3aee9cef5d667c6c7686d83cb155d0ba321e1f`，与最初记录的 `c883c48...` 不同。此次工作没有修改、stash 或清理原工作区，因此只能记录该外部漂移，不能再声称它自 harness 创建以来未变化。
 
