@@ -5306,6 +5306,10 @@ func prefixedDigitsToDecimalString(digits string, base int) (string, error) {
 }
 
 func parseFloatCastString(s string) (float64, error) {
+	return parseFloatCastStringWithBitSize(s, 64)
+}
+
+func parseFloatCastStringWithBitSize(s string, bitSize int) (float64, error) {
 	trimmed := strings.TrimSpace(s)
 	token, err := parseCastNumericToken(trimmed)
 	if err != nil {
@@ -5315,7 +5319,7 @@ func parseFloatCastString(s string) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := strconv.ParseFloat(parseStr, 64)
+	value, err := strconv.ParseFloat(parseStr, bitSize)
 	if err != nil {
 		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 	}
@@ -5418,12 +5422,22 @@ func strToFloat[T constraints.Float](
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		to.SetNullResult(l)
+		return nil
+	}
 
 	var result T
 	var tErr error
 	var r1 uint64
 	var r2 float64
 	for i = 0; i < l; i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -5434,8 +5448,7 @@ func strToFloat[T constraints.Float](
 				s := hex.EncodeToString(v)
 				r1, tErr = strconv.ParseUint(s, 16, 64)
 				if tErr != nil {
-					// MySQL non-strict mode: invalid binary converts to 0
-					r1 = 0
+					return moerr.NewInvalidInputf(ctx, "%q is invalid numeric string", string(v))
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r1)
@@ -5448,13 +5461,11 @@ func strToFloat[T constraints.Float](
 				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
-				r2, tErr = strconv.ParseFloat(s, bitSize)
+				r2, tErr = parseFloatCastStringWithBitSize(s, bitSize)
 				if tErr != nil {
-					// MySQL non-strict mode: invalid string converts to 0 (no error)
-					// This matches MySQL's default behavior for implicit conversions
-					r2 = 0
+					return tErr
 				} else if bitSize == 32 {
-					r2, _ = strconv.ParseFloat(s, 64)
+					r2, _ = parseFloatCastStringWithBitSize(s, 64)
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r2)

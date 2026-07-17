@@ -31,70 +31,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_StringToFloatInvalidConversion(t *testing.T) {
-	// Test invalid string to float conversion (should return 0, not error)
-	// This matches MySQL behavior where invalid strings convert to 0
+func TestStringToFloatInvalidConversionReturnsError(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	testCases := []tcTemp{
-		{
-			info: "cast invalid string 'a' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast invalid string 'abc123' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abc123"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast empty string to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast date string '2020-01-01' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2020-01-01"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast datetime string '2020-01-01 12:34:56' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2020-01-01 12:34:56"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.info, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
+	for _, input := range []string{"a", "abc123", "", "2020-01-01", "2020-01-01 12:34:56"} {
+		t.Run(input, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), NewCast)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
 		})
+	}
+}
+
+func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"1.5", "invalid"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	err := strToFloat(context.Background(), vector.GenerateFunctionStrParameter(input), result, 64, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+	require.NoError(t, err)
+	resultVec := result.GetResultVector()
+	require.Equal(t, 2, resultVec.Length())
+	require.Equal(t, 1.5, vector.GetFixedAtNoTypeCheck[float64](resultVec, 0))
+	require.True(t, resultVec.GetNulls().Contains(1))
+
+	require.NoError(t, result.PreExtendAndReset(2))
+	err = strToFloat(context.Background(), vector.GenerateFunctionStrParameter(input), result, 64, 2,
+		&FunctionSelectList{AllNull: true})
+	require.NoError(t, err)
+	resultVec = result.GetResultVector()
+	require.Equal(t, 2, resultVec.Length())
+	for i := uint64(0); i < 2; i++ {
+		require.True(t, resultVec.GetNulls().Contains(i))
 	}
 }
 
@@ -244,9 +222,7 @@ func TestCastStringNumericSignRejectsInvalidBodies(t *testing.T) {
 	}
 }
 
-func Test_BinaryToFloatInvalidConversion(t *testing.T) {
-	// Test binary to float conversion with invalid hex values
-	// Should return 0, not error (MySQL non-strict mode behavior)
+func TestBinaryToFloatConversion(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	ctx := context.Background()
@@ -259,13 +235,6 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 		wantNulls []uint64
 	}{
 		{
-			name:      "overflow binary (>8 bytes) should return 0",
-			inputs:    []string{"this-is-a-very-long-string"}, // > 8 bytes, will overflow uint64
-			nulls:     []uint64{},
-			want:      []float64{0},
-			wantNulls: []uint64{}, // Not null, just 0
-		},
-		{
 			name:      "date string as binary should work",
 			inputs:    []string{"2020-01"}, // 7 bytes, fits in uint64
 			nulls:     []uint64{},
@@ -277,13 +246,6 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 			inputs:    []string{"A"}, // 'A' = 0x41
 			nulls:     []uint64{},
 			want:      []float64{65}, // 0x41 = 65
-			wantNulls: []uint64{},
-		},
-		{
-			name:      "empty binary should return 0",
-			inputs:    []string{""},
-			nulls:     []uint64{},
-			want:      []float64{0},
 			wantNulls: []uint64{},
 		},
 	}
@@ -317,6 +279,22 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 
 			nulls := resultVec.GetNulls()
 			require.Equal(t, tt.wantNulls, nulls.ToArray())
+		})
+	}
+
+	for _, input := range []string{"", "this-is-a-very-long-string"} {
+		t.Run("invalid_"+input, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_blob.ToType(), mp)
+			defer inputVec.Free(mp)
+			inputVec.SetIsBin(true)
+
+			to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			err := strToFloat(ctx, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
 	}
 }
