@@ -47,6 +47,14 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 		return 0, nil
 	}
 	rows := uint64(bat.RowCount())
+	source := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > source {
+		source = size
+	}
+	return spillBudgetFor(rows, source)
+}
+
+func spillBudgetFor(rows, source uint64) (uint64, error) {
 	if rows > math.MaxUint64/12 {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -54,10 +62,6 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 	// varlen area may overlap the source capacity, hence a full additional
 	// source allocation is charged rather than just logical Size().
 	total := rows * 12
-	source := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > source {
-		source = size
-	}
 	if source > math.MaxUint64-total {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -79,6 +83,41 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 	return total, nil
 }
 
+// spillEmergencyBudgetBytes covers both the upstream ingress batch and the
+// largest physical batch CopyIntoBatches can form by coalescing small inputs.
+func spillEmergencyBudgetBytes(bat *batch.Batch) (uint64, error) {
+	need, err := spillBudgetBytes(bat)
+	if err != nil || bat == nil || bat.RowCount() <= 0 || bat.RowCount() >= colexec.DefaultBatchSize {
+		return need, err
+	}
+	rows := uint64(bat.RowCount())
+	source := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > source {
+		source = size
+	}
+	if source > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	scaled := (source*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
+	metadata, ok := retainedMetadataAllowance(bat)
+	if !ok || metadata > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	scaledMetadata := (metadata*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
+	if scaled > math.MaxUint64-scaledMetadata {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	scaled += scaledMetadata
+	physicalNeed, err := spillBudgetFor(uint64(colexec.DefaultBatchSize), scaled)
+	if err != nil {
+		return 0, err
+	}
+	if physicalNeed > need {
+		need = physicalNeed
+	}
+	return need, nil
+}
+
 func (ctr *container) reserveSpillScratch(bat *batch.Batch) (*process.HashBuildReservation, error) {
 	if ctr.hashmapBuilder.budget == nil {
 		return nil, nil
@@ -91,6 +130,40 @@ func (ctr *container) reserveSpillScratch(bat *batch.Batch) (*process.HashBuildR
 		return nil, nil
 	}
 	return ctr.hashmapBuilder.budget.Reserve(bytes)
+}
+
+func (ctr *container) ensureSpillScratchReservation(bat *batch.Batch) error {
+	if ctr.hashmapBuilder.budget == nil {
+		return nil
+	}
+	need, err := spillEmergencyBudgetBytes(bat)
+	if err != nil || need == 0 {
+		return err
+	}
+	if ctr.spillScratchReservation == nil {
+		ctr.spillScratchReservation, err = ctr.hashmapBuilder.budget.Reserve(need)
+		return err
+	}
+	current := ctr.spillScratchReservation.Size()
+	if current >= need {
+		return nil
+	}
+	return ctr.spillScratchReservation.Grow(need - current)
+}
+
+func (ctr *container) releaseSpillScratchReservation() {
+	if ctr.spillScratchReservation != nil {
+		ctr.spillScratchReservation.Release()
+		ctr.spillScratchReservation = nil
+	}
+}
+
+func (ctr *container) dropSpillScratchBuffers() {
+	ctr.spillHashValues = nil
+	ctr.spillBucketRowIds = nil
+	ctr.spillSelection = nil
+	ctr.spillKeyVecs = nil
+	ctr.spillWriteBuf = bytes.Buffer{}
 }
 
 func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch, file *os.File, analyzer process.Analyzer) (int64, error) {
@@ -210,19 +283,28 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
-	reservation, err := ctr.reserveSpillScratch(bat)
+	need, err := spillBudgetBytes(bat)
 	if err != nil {
 		return err
+	}
+	reservation := ctr.spillScratchReservation
+	borrowed := reservation != nil
+	if borrowed {
+		if reservation.Size() < need {
+			return process.ErrHashBuildBudgetAdmission
+		}
+	} else {
+		reservation, err = ctr.reserveSpillScratch(bat)
+		if err != nil {
+			return err
+		}
 	}
 	defer func() {
 		// Go scratch capacities are temporary.  Drop the backing arrays before
 		// releasing the admission token; retaining them would make a later,
 		// smaller batch reuse uncharged capacity.
-		ctr.spillHashValues = nil
-		ctr.spillSelection = nil
-		ctr.spillKeyVecs = nil
-		ctr.spillWriteBuf = bytes.Buffer{}
-		if reservation != nil {
+		ctr.dropSpillScratchBuffers()
+		if reservation != nil && !borrowed {
 			// All temporary scratch is gone at this point; retaining a zero-sized
 			// token until Release keeps exactly-once accounting on error paths.
 			_, _ = reservation.ReconcileDown(0)

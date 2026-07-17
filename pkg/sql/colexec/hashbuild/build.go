@@ -203,6 +203,8 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			ctr.spillBundle = nil
 		}
 		ctr.freeSpillExprExecs()
+		ctr.dropSpillScratchBuffers()
+		ctr.releaseSpillScratchReservation()
 	}()
 
 	startSpill := func() error {
@@ -256,6 +258,22 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// particular, a rejected retained-copy admission below must not add the
 		// same upstream batch a second time when it is spilled directly.
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
+		if hashBuild.IsShuffle {
+			if err := ctr.ensureSpillScratchReservation(result.Batch); err != nil {
+				// A larger ingress batch may require growing the emergency lease.
+				// If retained copies are consuming the missing headroom, drain them
+				// under the already-admitted lease, then retry for the current batch.
+				if spillMode || !errors.Is(err, process.ErrHashBuildBudgetAdmission) || len(ctr.hashmapBuilder.Batches.Buf) == 0 {
+					return err
+				}
+				if err := startSpill(); err != nil {
+					return err
+				}
+				if err := ctr.ensureSpillScratchReservation(result.Batch); err != nil {
+					return err
+				}
+			}
+		}
 
 		// If in spill mode, spill this batch directly to open files.
 		if spillMode {
@@ -292,25 +310,6 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 	}
 
-	// spillBatchBounded flushes each selected bucket immediately; no persistent
-	// 32-bucket buffers remain here.  Rewind every file before publishing the
-	// complete set, and never publish a partially rewound set.
-	if spillMode {
-		for _, f := range spillFiles {
-			if f != nil {
-				if _, err := f.Seek(0, io.SeekStart); err != nil {
-					return err
-				}
-			}
-		}
-		// Transfer ownership to container; nil local slice so defer won't close
-		ctr.spilledFds = spillFiles
-		spillFiles = nil
-		// Ownership is published only after all files were successfully rewound.
-		// SendJoinMap will transfer the bundle to message.SpillFile values.
-		bundleTransferred = true
-	}
-
 	// If we never entered spill mode, build the hashmap
 	if !spillMode && hashBuild.NeedHashMap {
 		needUniqueVec := true
@@ -320,8 +319,32 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
 		if err != nil {
-			return err
+			if !hashBuild.IsShuffle || !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+				return err
+			}
+			// Preserve the copied batches, discard only partial map state, and use
+			// the pre-admitted emergency scratch lease to recover through spill.
+			ctr.hashmapBuilder.FreeHashMapOnly(proc)
+			if err := startSpill(); err != nil {
+				return err
+			}
 		}
+	}
+
+	// spillBatchBounded flushes each selected bucket immediately; no persistent
+	// 32-bucket buffers remain here. Rewind every file before publishing the
+	// complete set, including a spill entered after hard map-budget rejection.
+	if spillMode {
+		for _, f := range spillFiles {
+			if f != nil {
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return err
+				}
+			}
+		}
+		ctr.spilledFds = spillFiles
+		spillFiles = nil
+		bundleTransferred = true
 	}
 
 	if !hashBuild.NeedBatches {

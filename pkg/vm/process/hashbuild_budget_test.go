@@ -171,6 +171,12 @@ func TestHashBuildReservationReconcileCopyAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	alias := *tok
+	if err := tok.Grow(2); err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if tok.Size() != 12 || alias.Size() != 12 || g.Used() != 12 {
+		t.Fatalf("alias grow diverged: token=%d alias=%d used=%d", tok.Size(), alias.Size(), g.Used())
+	}
 	if ok, err := alias.ReconcileDown(4); !ok || err != nil {
 		t.Fatalf("reconcile: ok=%v err=%v", ok, err)
 	}
@@ -182,6 +188,95 @@ func TestHashBuildReservationReconcileCopyAlias(t *testing.T) {
 	}
 	if !tok.Release() || alias.Release() {
 		t.Fatal("copy aliases must release exactly once")
+	}
+}
+
+func TestHashBuildReservationGrowRejectsWithoutChangingCharge(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	g, _ := b.OpenGeneration(1)
+	tok, err := g.Reserve(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := g.Snapshot()
+	if err = tok.Grow(3); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("grow rejection=%v", err)
+	}
+	after := g.Snapshot()
+	if tok.Size() != 8 || after.Used != before.Used || b.AggregateUsed() != 8 {
+		t.Fatalf("rejected grow changed charge: token=%d generation=%d aggregate=%d", tok.Size(), after.Used, b.AggregateUsed())
+	}
+	if after.RejectCount != before.RejectCount+1 {
+		t.Fatalf("reject count=%d, want %d", after.RejectCount, before.RejectCount+1)
+	}
+	tok.Release()
+}
+
+func TestHashBuildReservationGrowHonorsInactiveClosedAndLiveCap(t *testing.T) {
+	b := MustNewHashBuildBudget(20, 20)
+	g, _ := b.OpenGeneration(1)
+	cap := uint64(20)
+	b.SetAggregateCapProvider(func() (uint64, error) { return cap, nil })
+	tok, err := g.Reserve(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap = 8
+	if err = tok.Grow(1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("live-cap grow=%v", err)
+	}
+	if tok.Size() != 8 || g.Used() != 8 || b.AggregateUsed() != 8 {
+		t.Fatalf("live-cap rejection changed charge")
+	}
+	tok.Release()
+	if err = tok.Grow(1); !errors.Is(err, ErrHashBuildReservationInactive) {
+		t.Fatalf("released grow=%v", err)
+	}
+
+	cap = 20
+	closed, err := g.Reserve(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	if err = closed.Grow(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed grow=%v", err)
+	}
+	closed.Release()
+}
+
+func TestHashBuildReservationGrowConcurrentTerminalTransitions(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		b := MustNewHashBuildBudget(64, 64)
+		g, _ := b.OpenGeneration(uint64(i + 1))
+		tok, err := g.Reserve(10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(3)
+		movedC := make(chan *HashBuildReservation, 1)
+		go func() {
+			defer wg.Done()
+			_ = tok.Grow(5)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = tok.ReconcileDown(4)
+		}()
+		go func() {
+			defer wg.Done()
+			movedC <- tok.Transfer()
+		}()
+		wg.Wait()
+		close(movedC)
+		tok.Release()
+		if moved := <-movedC; moved != nil {
+			moved.Release()
+		}
+		if g.Used() != 0 || b.AggregateUsed() != 0 {
+			t.Fatalf("iteration %d leaked charge: generation=%d aggregate=%d", i, g.Used(), b.AggregateUsed())
+		}
 	}
 }
 

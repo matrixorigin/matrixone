@@ -684,6 +684,72 @@ func (g *HashBuildBudgetGeneration) TryReserve(size uint64) bool {
 	return true
 }
 
+// Grow increases a live memory reservation atomically. It is used for the
+// Shuffle emergency spill-scratch lease so retained copies cannot consume the
+// memory required to recover from a later admission rejection.
+func (r *HashBuildReservation) Grow(additional uint64) error {
+	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
+		return ErrHashBuildReservationInactive
+	}
+	if additional == 0 {
+		return nil
+	}
+	b := r.budget
+	g := r.generation
+	b.refreshMu.Lock()
+	defer b.refreshMu.Unlock()
+	b.mu.Lock()
+	provider := b.capProvider
+	b.mu.Unlock()
+	if provider != nil {
+		cap, err := provider()
+		if err != nil {
+			return err
+		}
+		if cap == 0 {
+			return &HashBuildBudgetError{Kind: HashBuildBudgetErrorCeilingMissing, Message: "live hash build budget ceiling is zero"}
+		}
+		b.mu.Lock()
+		b.aggregateCap = cap
+		if b.queryCap > cap {
+			b.queryCap = cap
+		}
+		b.mu.Unlock()
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if r.core.state.Load() != hashBuildReservationActive {
+		return ErrHashBuildReservationInactive
+	}
+	if b.closed || g.closed {
+		g.rejectCount++
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: g.used, Cap: g.cap}
+	}
+	if b.aggregateUsed > b.aggregateCap || additional > b.aggregateCap-b.aggregateUsed {
+		g.rejectCount++
+		observeHashBuildBudget("memory", "reject", "cn", additional)
+		return newAdmissionError(additional, b.aggregateUsed, b.aggregateCap)
+	}
+	if g.used > g.cap || additional > g.cap-g.used {
+		g.rejectCount++
+		observeHashBuildBudget("memory", "reject", "query", additional)
+		return newAdmissionError(additional, g.used, g.cap)
+	}
+	if r.core.size > math.MaxUint64-additional {
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "hash build reservation size overflow"}
+	}
+	b.aggregateUsed += additional
+	g.used += additional
+	r.core.size += additional
+	if g.used > g.peakUsed {
+		g.peakUsed = g.used
+	}
+	g.reserveCount++
+	observeHashBuildBudget("memory", "reserve", "query", additional)
+	observeHashBuildBudget("memory", "reserve", "cn", additional)
+	return nil
+}
+
 func newAdmissionError(requested, used, cap uint64) error {
 	return &HashBuildBudgetError{
 		Kind:      HashBuildBudgetErrorAdmission,

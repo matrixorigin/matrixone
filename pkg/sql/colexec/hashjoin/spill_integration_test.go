@@ -167,3 +167,74 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
+
+func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
+	)
+	// This cap admits one bounded scatter pass and per-bucket rebuild, but not
+	// the complete 8K-row retained build/map. The very high soft threshold
+	// proves that spill is entered from hard admission rejection, not policy.
+	tc.proc.Base.Lim.Size = 2168 << 10
+	tc.proc.Base.Lim.SpillSize = 64 << 20
+
+	const rows = 8192
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	probe := makeInt32Batch(tc.proc, values)
+	build1 := makeInt32Batch(tc.proc, values[:rows/2])
+	build2 := makeInt32Batch(tc.proc, values[rows/2:])
+
+	tc.arg.NonEqCond = nil
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1 << 30
+	tc.barg.IsShuffle = true
+	tc.barg.ShuffleIdx = 0
+	tc.barg.SpillThreshold = 1 << 30
+	tc.barg.NeedBatches = false
+	tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 2000}
+	resetChildrenWithBatch(tc.arg, probe)
+	buildInput := colexec.NewMockOperator().WithBatchs([]*batch.Batch{build1, build2})
+	tc.barg.Children = nil
+	tc.barg.AppendChild(buildInput)
+
+	rejectBefore := promtestutil.ToFloat64(metricv2.HashBuildBudgetEventCounter.WithLabelValues("memory", "reject", "query"))
+	spillBefore := promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	buildResult, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, buildResult.Batch)
+
+	var resultValues []int32
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			resultValues = append(resultValues, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])...)
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.ElementsMatch(t, values, resultValues)
+	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildBudgetEventCounter.WithLabelValues("memory", "reject", "query")), rejectBefore)
+	require.Greater(t, promtestutil.ToFloat64(metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	budget, err := tc.proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}

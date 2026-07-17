@@ -138,6 +138,40 @@ func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
+	const budgetCap = uint64(4 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	var emergencyNeed uint64
+	for range 2 {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize/2, proc.Mp())
+		if emergencyNeed == 0 {
+			emergencyNeed, err = spillEmergencyBudgetBytes(input)
+			require.NoError(t, err)
+		}
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 1, "small ingress batches should coalesce")
+	require.Len(t, hb.batchReservations, 2, "reservations follow ingress, not physical batches")
+	require.Greater(t, generation.Used(), uint64(0))
+	physicalNeed, err := spillBudgetBytes(hb.Batches.Buf[0])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, emergencyNeed, physicalNeed)
+
+	require.NoError(t, hb.CleanCopiedBatchAt(0, proc))
+	require.Empty(t, hb.Batches.Buf)
+	require.Empty(t, hb.batchReservations)
+	require.Zero(t, generation.Used())
+}
+
 func TestSpillExpressionHashKeyFailsClosedBeforeEvaluatorAllocation(t *testing.T) {
 	var ctr container
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())

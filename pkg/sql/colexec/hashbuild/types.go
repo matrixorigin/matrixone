@@ -68,6 +68,10 @@ type container struct {
 	spillSelection    []int32
 	spillWriteBuf     bytes.Buffer
 	spillKeyVecs      []*vector.Vector
+	// spillScratchReservation is a query/CN-charged emergency lease retained
+	// while Shuffle build batches accumulate. It prevents retained copies from
+	// consuming the scratch required to recover from hard-budget rejection.
+	spillScratchReservation *process.HashBuildReservation
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
@@ -317,6 +321,8 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
+	hashBuild.ctr.dropSpillScratchBuffers()
+	hashBuild.ctr.releaseSpillScratchReservation()
 	// Only clean up build files when the join map was NOT successfully sent.
 	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
 	if !mapSucceed {
@@ -352,10 +358,8 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
-	hashBuild.ctr.spillKeyVecs = nil
-	hashBuild.ctr.spillHashValues = nil
-	hashBuild.ctr.spillBucketRowIds = nil
-	hashBuild.ctr.spillSelection = nil
+	hashBuild.ctr.dropSpillScratchBuffers()
+	hashBuild.ctr.releaseSpillScratchReservation()
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
@@ -420,12 +424,12 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 			hb.Batches.MemSize += int64(bat.Size())
 		}
 	}
-	if idx < len(hb.batchReservations) {
-		if hb.batchReservations[idx] != nil {
-			hb.batchReservations[idx].Release()
-		}
-		copy(hb.batchReservations[idx:], hb.batchReservations[idx+1:])
-		hb.batchReservations = hb.batchReservations[:len(hb.batchReservations)-1]
+	// CopyIntoBatches can coalesce several ingress batches into one physical
+	// batch (and can reorder a full batch around a partial tail), so an ingress
+	// reservation cannot be matched safely to Batches.Buf[idx]. Keep the
+	// conservative charges until the last physical batch has been dropped.
+	if len(hb.Batches.Buf) == 0 {
+		hb.releaseBatchReservations()
 	}
 	return nil
 }
