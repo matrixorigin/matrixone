@@ -154,6 +154,25 @@ func TestConstructBroadcastHashBuildForMark(t *testing.T) {
 	require.True(t, build.TrackNullKeys)
 }
 
+func TestConstructShuffleHashBuildForMarkPreservesSemanticFlags(t *testing.T) {
+	op := hashjoin.NewArgument()
+	op.JoinType = plan.Node_MARK
+	op.JoinMapTag = 1
+	op.ShuffleIdx = 0
+	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{Tag: 2}}
+	op.EqConds = [][]*plan.Expr{
+		{makeMarkJoinTestColumn(0, 0, false)},
+		{makeMarkJoinTestColumn(1, 0, false)},
+	}
+	defer op.Release()
+
+	build := constructShuffleHashBuild(&plan.Node{}, op, nil)
+	defer build.Release()
+
+	require.True(t, build.TrackNullKeys)
+	require.False(t, build.NeedAllocateSels)
+}
+
 func makeMarkJoinTestCondition(t *testing.T, name string, colPos int32, notNullable bool) *plan.Expr {
 	t.Helper()
 

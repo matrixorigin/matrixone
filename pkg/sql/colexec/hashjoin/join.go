@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -69,8 +70,10 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
-	if hashJoin.IsMark() && hashJoin.NonEqCond != nil {
-		return moerr.NewInternalError(proc.Ctx, "hash MARK join does not support residual conditions")
+	if hashJoin.IsMark() {
+		if err := hashJoin.validateMarkJoin(proc); err != nil {
+			return err
+		}
 	}
 
 	if hashJoin.OpAnalyzer == nil {
@@ -109,6 +112,28 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	return err
+}
+
+func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
+	if hashJoin.NonEqCond != nil {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join does not support residual conditions")
+	}
+	if len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 || len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join requires matching non-empty probe and build keys")
+	}
+	if len(hashJoin.EqConds[0]) > 1 {
+		for i := range hashJoin.EqConds[0] {
+			if !hashJoin.EqConds[0][i].Typ.NotNullable || !hashJoin.EqConds[1][i].Typ.NotNullable {
+				return moerr.NewInternalError(proc.Ctx, "hash MARK join requires composite keys to be not nullable")
+			}
+		}
+	}
+	for _, result := range hashJoin.ResultCols {
+		if result.Rel != 0 && result.Rel != -1 {
+			return moerr.NewInternalErrorf(proc.Ctx, "hash MARK join has unexpected result relation %d", result.Rel)
+		}
+	}
+	return nil
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
@@ -293,17 +318,19 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
 	ctr.probeMark = hashJoin.IsMark()
 	ctr.buildHasNullKey = false
+	ctr.globalBuildRowCnt = 0
 
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		ctr.buildHasNullKey = ctr.mp.HasNullKey()
+		ctr.globalBuildRowCnt = ctr.mp.GetRowCount()
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
 				SpillThreshold:          ctr.spillThreshold,
-				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe(),
+				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
 				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
 				HashOnPK:                hashJoin.HashOnPK,
 				NeedAllocateSels:        !hashJoin.HashOnPK,
@@ -692,8 +719,11 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 			if err != nil {
 				return err
 			}
-		} else if rp.Rel == -1 && hashJoin.IsMark() {
-			if err := vector.SetConstFixed(ctr.resBat.Vecs[i], false, rowCnt, proc.Mp()); err != nil {
+		} else if hashJoin.IsMark() {
+			if rp.Rel != -1 {
+				return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
+			}
+			if err := ctr.appendMarkForEmptyBuildBucket(ctr.resBat.Vecs[i], proc, rowCnt); err != nil {
 				return err
 			}
 		} else {
@@ -706,6 +736,37 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 	result.Batch = ctr.resBat
 	ctr.lastIdx = 0
 	ctr.leftBat = nil
+	return nil
+}
+
+// appendMarkForEmptyBuildBucket evaluates a MARK join when the current spill
+// bucket has no build rows. A local empty bucket does not imply a globally
+// empty build side: global build emptiness and global build NULLs still decide
+// the SQL three-valued result.
+func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc *process.Process, rowCnt int) error {
+	if ctr.globalBuildRowCnt == 0 {
+		return vector.SetConstFixed(marker, false, rowCnt, proc.Mp())
+	}
+	if ctr.buildHasNullKey {
+		return vector.SetConstNull(marker, rowCnt, proc.Mp())
+	}
+
+	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+		return err
+	}
+	if err := vector.AppendMultiFixed(marker, false, false, rowCnt, proc.Mp()); err != nil {
+		return err
+	}
+	for _, vec := range ctr.eqCondVecs {
+		if vec.IsConstNull() {
+			marker.GetNulls().AddRange(0, uint64(rowCnt))
+			return nil
+		}
+		if !vec.GetNulls().Any() {
+			continue
+		}
+		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
+	}
 	return nil
 }
 

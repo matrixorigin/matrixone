@@ -52,6 +52,9 @@ type container struct {
 	itr         hashmap.Iterator
 	rightBats   []*batch.Batch
 	rightRowCnt int64
+	// globalBuildRowCnt is independent of the currently loaded spill bucket.
+	// MARK join needs the global empty-build fact for SQL three-valued logic.
+	globalBuildRowCnt int64
 
 	leftBat *batch.Batch
 	resBat  *batch.Batch
@@ -197,6 +200,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.bitmapSynced = false
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
+	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0

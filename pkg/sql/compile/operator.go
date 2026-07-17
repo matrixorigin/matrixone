@@ -157,6 +157,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.TrackNullKeys = t.TrackNullKeys
 		return op
 
 	case vm.Group:
@@ -1970,7 +1971,8 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = !arg.HashOnPK
+		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

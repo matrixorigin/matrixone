@@ -114,6 +114,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
+				jm.SetHasNullKey(ctr.hashmapBuilder.HasNullKey)
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 

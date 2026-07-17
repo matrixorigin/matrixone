@@ -105,6 +105,21 @@ func (hb *HashmapBuilder) GetGroupCount() uint64 {
 	return 0
 }
 
+// observeNullKeys records the global fact that at least one build key contains
+// NULL. MARK joins need this fact even when the build rows are partitioned and
+// the NULL row lives in a different spill bucket from the current probe row.
+func (hb *HashmapBuilder) observeNullKeys(keyVecs []*vector.Vector) {
+	if !hb.TrackNullKeys || hb.HasNullKey {
+		return
+	}
+	for _, vec := range keyVecs {
+		if vec.HasNull() {
+			hb.HasNullKey = true
+			return
+		}
+	}
+}
+
 func (hb *HashmapBuilder) Prepare(
 	keyCols []*plan.Expr,
 	delColIdx int32,
@@ -410,19 +425,12 @@ func (hb *HashmapBuilder) buildHashmap(
 			if err = hb.evalBatch(vecIdx1, proc); err != nil {
 				return err
 			}
+			hb.observeNullKeys(hb.curVecs)
 			lastBatch = vecIdx1
 		}
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)
 		if err != nil {
 			return err
-		}
-		if hb.TrackNullKeys && !hb.HasNullKey {
-			for _, zval := range zvals[:n] {
-				if zval == 0 {
-					hb.HasNullKey = true
-					break
-				}
-			}
 		}
 		if ignoreSurvivorRows != nil {
 			// Iterator result buffers are reused by Find, so preserve the group
