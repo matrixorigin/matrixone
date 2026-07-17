@@ -209,6 +209,41 @@ func TestExprCanRemoveProjectFunctionMetadata(t *testing.T) {
 	require.False(t, exprCanRemoveProject(unknown))
 }
 
+func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		refCnt      int
+		wantProject bool
+	}{
+		{name: "unused", refCnt: 0, wantProject: true},
+		{name: "single consumer", refCnt: 1, wantProject: false},
+		{name: "multiple consumers", refCnt: 2, wantProject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtx()
+			volatileExpr, err := BindFuncExprImplByPlanExpr(
+				context.Background(),
+				"nextval",
+				[]*plan.Expr{MakePlan2StringConstExprWithType("sample_seq")},
+			)
+			require.NoError(t, err)
+
+			scanID := builder.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, bindCtx)
+			projectTag := builder.genNewBindTag()
+			projectID := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{scanID},
+				BindingTags: []int32{projectTag},
+				ProjectList: []*plan.Expr{volatileExpr},
+			}, bindCtx)
+			refCnts := map[[2]int32]int{{projectTag, 0}: test.refCnt}
+
+			newNodeID, _ := builder.removeSimpleProjections(projectID, plan.Node_PROJECT, false, refCnts)
+			require.Equal(t, test.wantProject, newNodeID == projectID)
+		})
+	}
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

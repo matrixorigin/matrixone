@@ -984,6 +984,42 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		})
 	}
 
+	t.Run("single-consumer volatile functions remain inline above order", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select attname, mo_table_col_max(att_database, att_relname, attname), mo_table_col_min(att_database, att_relname, attname) from mo_catalog.mo_columns order by attnum",
+		)
+		require.NoError(t, err)
+
+		root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
+		require.Equal(t, plan.Node_PROJECT, root.NodeType)
+		functionProjects := 0
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			containsTableStats := false
+			var visitExpr func(*plan.Expr)
+			visitExpr = func(expr *plan.Expr) {
+				if f := expr.GetF(); f != nil &&
+					(f.Func.ObjName == "mo_table_col_max" || f.Func.ObjName == "mo_table_col_min") {
+					containsTableStats = true
+				}
+				if f := expr.GetF(); f != nil {
+					for _, arg := range f.Args {
+						visitExpr(arg)
+					}
+				}
+			}
+			for _, expr := range node.ProjectList {
+				visitExpr(expr)
+			}
+			if containsTableStats {
+				functionProjects++
+				require.Same(t, root, node)
+			}
+		}
+		require.Equal(t, 1, functionProjects)
+	})
+
 	t.Run("sample retains nullable outputs for row cardinality", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
