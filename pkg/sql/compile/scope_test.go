@@ -438,7 +438,7 @@ func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
 	require.True(t, sender.safeToClose)
-	require.True(t, sender.alreadyClose)
+	require.True(t, sender.receiveClosed)
 }
 
 func TestNewParallelScope(t *testing.T) {
@@ -1681,6 +1681,7 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorContains(t, err, "malformed remote CN address")
+		require.ErrorIs(t, context.Cause(parent.Proc.Ctx), err)
 	case <-time.After(2 * time.Second):
 		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
 		t.Fatal("merge run hung after malformed remote pre-scope failed")

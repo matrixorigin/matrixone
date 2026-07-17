@@ -491,6 +491,28 @@ func chooseUnionRowCarrier(left, right []*plan.Expr, size int) int {
 	return best
 }
 
+func canPruneSampleExprs(node, child *plan.Node) bool {
+	if len(node.AggList) <= 1 {
+		return true
+	}
+	if child.NodeType != plan.Node_TABLE_SCAN || child.TableDef == nil || len(child.BindingTags) == 0 {
+		return false
+	}
+
+	tag := child.BindingTags[0]
+	for _, expr := range node.AggList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != tag || col.ColPos < 0 || int(col.ColPos) >= len(child.TableDef.Cols) {
+			return false
+		}
+		tableCol := child.TableDef.Cols[col.ColPos]
+		if tableCol == nil || !expr.Typ.NotNullable || !tableCol.Typ.NotNullable {
+			return false
+		}
+	}
+	return true
+}
+
 // retainInputOrder keeps windows on each order-transparent input path.
 // Order-sensitive aggregates expose the input sequence in their result, even
 // when a window's own output column is not referenced. Stacked windows must all
@@ -1318,8 +1340,60 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_SAMPLE:
 		groupTag := node.BindingTags[0]
 		sampleTag := node.BindingTags[1]
+		groupSize := int32(len(node.GroupBy))
+
+		// HAVING is evaluated inside the sample node, so its output refs are
+		// consumers even when the outer projection does not expose them.
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+
+		neededSampleCount := 0
+		for i, expr := range node.AggList {
+			if colRefCnt[[2]int32{sampleTag, int32(i)}] > 0 || !exprCanRemoveProject(expr) {
+				neededSampleCount++
+			}
+		}
+
+		// Multi-column sampling maintains capacity independently for each
+		// expression. Only direct NOT NULL table columns provide a strict enough
+		// runtime guarantee that removing an expression cannot change the sampled
+		// row set. Function nullability inference is intentionally insufficient:
+		// functions such as json_extract can return NULL for non-NULL arguments.
+		canPruneSample := canPruneSampleExprs(node, builder.qry.Nodes[node.Children[0]])
+
+		keepCarrier := false
+		carrier := -1
+		if canPruneSample && remapping.preserveRowCount && len(node.AggList) > 0 && neededSampleCount == 0 {
+			carrier = chooseRowCarrier(node.AggList, false)
+			neededSampleCount = 1
+			keepCarrier = true
+		}
+
+		pruneSample := canPruneSample && neededSampleCount < len(node.AggList)
+		var samplePos []int32
+		if pruneSample {
+			samplePos = make([]int32, len(node.AggList))
+			for i := range samplePos {
+				samplePos[i] = -1
+			}
+			newPos := int32(0)
+			for i, expr := range node.AggList {
+				globalRef := [2]int32{sampleTag, int32(i)}
+				if colRefCnt[globalRef] == 0 && exprCanRemoveProject(expr) && !(keepCarrier && i == carrier) {
+					continue
+				}
+				samplePos[i] = newPos
+				newPos++
+			}
+		}
+
 		increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
-		increaseRefCntForExprList(node.AggList, 1, colRefCnt)
+		for i, expr := range node.AggList {
+			if !pruneSample || samplePos[i] >= 0 {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
 
 		// the result order of sample will follow [group by columns, sample columns, other columns].
 		// and the projection list needs to be based on the result order.
@@ -1329,7 +1403,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for _, expr := range node.FilterList {
-			if err = builder.remapHavingClause(expr, groupTag, sampleTag, int32(len(node.GroupBy)), int32(len(node.AggList)), nil); err != nil {
+			increaseRefCnt(expr, -1, colRefCnt)
+			if err = builder.remapHavingClause(
+				expr, groupTag, sampleTag, groupSize, int32(len(node.AggList)), samplePos,
+			); err != nil {
 				return nil, err
 			}
 		}
@@ -1363,15 +1440,21 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		offsetSize := int32(len(node.GroupBy))
+		offsetSize := groupSize
 		remapInfo.tip = "AggList"
+		newAggList := node.AggList[:0]
 		for i, expr := range node.AggList {
+			if pruneSample && samplePos[i] < 0 {
+				continue
+			}
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = i
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
+			newSampleIdx := int32(len(newAggList))
+			newAggList = append(newAggList, expr)
 
 			globalRef := [2]int32{sampleTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
@@ -1385,12 +1468,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
-						ColPos: int32(i) + offsetSize,
+						ColPos: newSampleIdx + offsetSize,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
 			})
 		}
+		clear(node.AggList[len(newAggList):])
+		node.AggList = newAggList
 
 		offsetSize += int32(len(node.AggList))
 		childProjectionList := builder.qry.Nodes[node.Children[0]].ProjectList
@@ -3615,8 +3700,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// append DISTINCT node
+	resultSourceTag := ctx.projectTag
 	if ctx.isDistinct {
 		nodeID = builder.appendDistinctNode(ctx, nodeID)
+		if len(boundOrderBys) > 0 {
+			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
+				return
+			}
+		}
 	}
 
 	// append SORT node (include limit, offset)
@@ -3637,7 +3728,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	// append result PROJECT node
 	if builder.qry.Nodes[nodeID].NodeType != plan.Node_PROJECT {
-		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen)
+		nodeID = builder.appendResultProjectionNode(ctx, nodeID, resultLen, resultSourceTag)
 	} else {
 		ctx.results = ctx.projects
 	}
@@ -3741,6 +3832,7 @@ func (builder *QueryBuilder) bindSelectClause(
 
 	// Preprocess aliases
 	for i := range selectList {
+		_, columnLike := unwrapParenExpr(selectList[i].Expr).(*tree.UnresolvedName)
 		if selectList[i].Expr, err = ctx.qualifyColumnNames(selectList[i].Expr, NoAlias); err != nil {
 			return
 		}
@@ -3755,9 +3847,12 @@ func (builder *QueryBuilder) bindSelectClause(
 			ctx.aliasFrequency[selectList[i].As.Compare()]++
 		}
 
-		field := SelectField{
-			ast: selectList[i].Expr,
-			pos: int32(i),
+		field := SelectField{ast: selectList[i].Expr, pos: int32(i)}
+		if columnLike {
+			key := windowExprAstKey(selectList[i].Expr)
+			if _, exists := ctx.projectColByAst[key]; !exists {
+				ctx.projectColByAst[key] = int32(i)
+			}
 		}
 
 		if selectList[i].As != nil && !selectList[i].As.Empty() {
@@ -4646,17 +4741,75 @@ func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boun
 	}, ctx)
 }
 
-func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID int32, resultLen int) int32 {
+// appendDistinctOrderProjectionNode materializes derived DISTINCT ordering
+// expressions after duplicate elimination. This keeps the DISTINCT tuple
+// unchanged and preserves the column-only sort-key shape used by optimizer and
+// spill paths.
+func (builder *QueryBuilder) appendDistinctOrderProjectionNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundOrderBys []*plan.OrderBySpec,
+) (newNodeID int32, outputTag int32, err error) {
+	needsProjection := false
+	for _, orderBy := range boundOrderBys {
+		col := orderBy.Expr.GetCol()
+		if col == nil || col.RelPos != ctx.projectTag {
+			needsProjection = true
+			break
+		}
+	}
+	if !needsProjection {
+		return nodeID, ctx.projectTag, nil
+	}
+
+	outputTag = builder.genNewBindTag()
+	projects := make([]*plan.Expr, 0, len(ctx.projects)+len(boundOrderBys))
+	for i, project := range ctx.projects {
+		projects = append(projects, GetColExpr(project.Typ, ctx.projectTag, int32(i)))
+	}
+
+	derivedByExpr := make(map[string]int32, len(boundOrderBys))
+	projectTags := map[int32]bool{ctx.projectTag: true}
+	notCacheable := false
+	for _, orderBy := range boundOrderBys {
+		orderExpr := orderBy.Expr
+		if col := orderExpr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
+			orderBy.Expr = GetColExpr(orderExpr.Typ, outputTag, col.ColPos)
+			continue
+		}
+
+		if !containsOnlyTags(orderExpr, projectTags) {
+			return 0, 0, moerr.NewInternalError(builder.GetContext(), "DISTINCT ORDER BY expression escaped projection scope")
+		}
+		key, keyErr := projectExprKey(orderExpr)
+		if keyErr != nil {
+			return 0, 0, keyErr
+		}
+		pos, exists := derivedByExpr[key]
+		if !exists {
+			pos = int32(len(projects))
+			derivedByExpr[key] = pos
+			projects = append(projects, orderExpr)
+			if detectedExprWhetherTimeRelated(orderExpr) {
+				notCacheable = true
+			}
+		}
+		orderBy.Expr = GetColExpr(orderExpr.Typ, outputTag, pos)
+	}
+
+	newNodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  projects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{outputTag},
+		NotCacheable: notCacheable,
+	}, ctx)
+	return newNodeID, outputTag, nil
+}
+
+func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID int32, resultLen int, sourceTag int32) int32 {
 	for i := 0; i < resultLen; i++ {
-		ctx.results = append(ctx.results, &plan.Expr{
-			Typ: ctx.projects[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ctx.projectTag,
-					ColPos: int32(i),
-				},
-			},
-		})
+		ctx.results = append(ctx.results, GetColExpr(ctx.projects[i].Typ, sourceTag, int32(i)))
 	}
 
 	ctx.resultTag = builder.genNewBindTag()
@@ -5107,7 +5260,11 @@ func (builder *QueryBuilder) bindView(
 		return 0, err
 	}
 
-	originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, ctx.lower)
+	parserSQLMode := legacyViewParserSQLMode
+	if viewData.SQLMode != nil {
+		parserSQLMode = *viewData.SQLMode
+	}
+	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -5174,6 +5331,10 @@ func (builder *QueryBuilder) bindView(
 	ctx.recordViews(viewCtx.views)
 	return
 }
+
+// ViewData persisted before parser SQL mode was recorded used MatrixOne's
+// legacy grammar where || meant concat.
+const legacyViewParserSQLMode = "PIPES_AS_CONCAT"
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {

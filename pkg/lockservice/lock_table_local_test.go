@@ -128,6 +128,64 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 		})
 }
 
+func TestSynchronousWaiterRemovedFromEventsBeforeAfterWait(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			rows := newTestRows(1, 2)
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+
+			_, err := s.Lock(ctx, table, rows, txn1, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			waiting := make(chan struct{})
+			removed := make(chan bool, 1)
+			lt.options.beforeWait = func(c *lockContext) func() {
+				if bytes.Equal(c.txn.txnID, txn2) {
+					return func() { close(waiting) }
+				}
+				return func() {}
+			}
+			lt.options.afterWait = func(c *lockContext) func() {
+				if !bytes.Equal(c.txn.txnID, txn2) {
+					return func() {}
+				}
+				return func() {
+					lt.events.mu.RLock()
+					defer lt.events.mu.RUnlock()
+					for _, w := range lt.events.mu.blockedWaiters {
+						if w == c.w {
+							removed <- false
+							return
+						}
+					}
+					removed <- true
+				}
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rows, txn2, newTestRangeExclusiveOptions())
+				done <- err
+			}()
+
+			select {
+			case <-waiting:
+			case <-time.After(time.Second):
+				t.Fatal("txn2 did not begin waiting for the range lock")
+			}
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.True(t, <-removed)
+			require.NoError(t, <-done)
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestMergeRangeWithNoConflict(t *testing.T) {
 	cases := []struct {
 		txnID         string
