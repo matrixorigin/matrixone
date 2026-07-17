@@ -33,6 +33,9 @@ SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
 SELECT CAST(MAKETIME(12, 34, '56.789012') AS VARCHAR) AS string_fractional_seconds;
+SELECT CAST(MAKETIME('12.7', '15.8', '30.9') AS VARCHAR) AS all_string_values;
+SELECT CAST(MAKETIME('12.7', 15.8, 30.9) AS VARCHAR) AS string_hour_float_minute;
+SELECT CAST(MAKETIME(12.7, '15.8', 30.9) AS VARCHAR) AS float_hour_string_minute;
 SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
 SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
 SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
@@ -49,6 +52,12 @@ CREATE TABLE maketime_varchar_seconds(h INT, m INT, s VARCHAR(20));
 INSERT INTO maketime_varchar_seconds VALUES (12, 34, '56.789012');
 SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_column_microseconds FROM maketime_varchar_seconds;
 DROP TABLE maketime_varchar_seconds;
+
+# VARCHAR hour/minute retain val_int semantics with a DOUBLE second
+CREATE TABLE maketime_varchar_parts_double_second(h VARCHAR(20), m VARCHAR(20), s DOUBLE);
+INSERT INTO maketime_varchar_parts_double_second VALUES ('12', '34', 56.789012);
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_parts_double_second FROM maketime_varchar_parts_double_second;
+DROP TABLE maketime_varchar_parts_double_second;
 
 # Table usage
 CREATE TABLE t1(h INT, m INT, s INT);

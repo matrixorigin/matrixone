@@ -7358,6 +7358,29 @@ func makeTimeFloatGetter[T constraints.Float](vec *vector.Vector) func(uint64) (
 	}
 }
 
+func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionStrParameter(vec)
+	isBinary := vec.GetIsBin()
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetStrValue(i)
+		if null {
+			return 0, true
+		}
+		if isBinary {
+			if len(value) > 8 {
+				return 0, false
+			}
+			var result uint64
+			for _, b := range value {
+				result = result<<8 | uint64(b)
+			}
+			return int64(result), false
+		}
+		result, _ := parseLeadingInteger(strings.TrimSpace(functionUtil.QuickBytesToStr(value)))
+		return result, false
+	}
+}
+
 // MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
 func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
@@ -7366,7 +7389,9 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	var getMinuteValue func(uint64) (int64, bool)
 	var getSecondValue func(uint64) (int64, uint32, bool)
 
-	if getter, ok := makeTimeIntegerGetter(ivecs[0]); ok {
+	if ivecs[0].GetType().Oid.IsMySQLString() {
+		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
+	} else if getter, ok := makeTimeIntegerGetter(ivecs[0]); ok {
 		getHourValue = getter
 	} else {
 		var getFloat func(uint64) (float64, bool)
@@ -7394,7 +7419,9 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		}
 	}
 
-	if getter, ok := makeTimeIntegerGetter(ivecs[1]); ok {
+	if ivecs[1].GetType().Oid.IsMySQLString() {
+		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
+	} else if getter, ok := makeTimeIntegerGetter(ivecs[1]); ok {
 		getMinuteValue = getter
 	} else {
 		var getFloat func(uint64) (float64, bool)

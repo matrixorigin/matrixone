@@ -10748,22 +10748,37 @@ func makeTimeReturnType(parameters []types.Type) types.Type {
 }
 
 func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
-		for i, ov := range overloads {
-			if len(ov.args) != 3 || ov.args[0] != types.T_float64 || ov.args[1] != types.T_float64 || ov.args[2] != types.T_float64 {
-				continue
-			}
-			if status, _ := tryToMatch(inputs, ov.args); status != matchFailed {
-				targets := make([]types.Type, len(inputs))
-				for j := range targets {
-					targets[j] = ov.args[j].ToType()
-					SetTargetScaleFromSource(&inputs[j], &targets[j])
-				}
-				return newCheckResultWithCast(i, targets)
-			}
-		}
+	if len(inputs) != 3 || (!inputs[0].Oid.IsMySQLString() && !inputs[1].Oid.IsMySQLString() && !inputs[2].Oid.IsMySQLString()) {
+		return fixedTypeMatch(overloads, inputs)
 	}
-	return fixedTypeMatch(overloads, inputs)
+
+	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
+	if inputs[0].Oid.IsMySQLString() {
+		targetOids[0] = types.T_varchar
+	}
+	if inputs[1].Oid.IsMySQLString() {
+		targetOids[1] = types.T_varchar
+	}
+	status, _ := tryToMatch(inputs, targetOids)
+	if status == matchFailed {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	for i, ov := range overloads {
+		if len(ov.args) != len(targetOids) || ov.args[0] != targetOids[0] || ov.args[1] != targetOids[1] || ov.args[2] != targetOids[2] {
+			continue
+		}
+		if status == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		}
+		targets := make([]types.Type, len(inputs))
+		for j := range targets {
+			targets[j] = targetOids[j].ToType()
+			SetTargetScaleFromSource(&inputs[j], &targets[j])
+		}
+		return newCheckResultWithCast(i, targets)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
 var supportedControlBuiltIns = []FuncNew{
@@ -11253,6 +11268,30 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_uint32, types.T_uint32, types.T_uint32},
+				retType:    makeTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varchar, types.T_float64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_float64, types.T_varchar, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_float64},
 				retType:    makeTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
