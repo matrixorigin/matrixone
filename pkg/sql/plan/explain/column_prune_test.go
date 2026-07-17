@@ -16,6 +16,7 @@ package explain
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1058,6 +1059,32 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 			require.True(t, retained)
 		})
 	}
+
+	t.Run("project retains volatile sibling evaluation order", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2)",
+		)
+		require.NoError(t, err)
+
+		retained := false
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 3 {
+				continue
+			}
+			functions := make([]string, 0, 3)
+			for _, expr := range node.ProjectList {
+				if f := expr.GetF(); f != nil {
+					functions = append(functions, f.Func.ObjName)
+				}
+			}
+			if slices.Equal(functions, []string{"sysdate", "sleep", "sysdate"}) {
+				retained = true
+			}
+		}
+		require.True(t, retained)
+	})
 
 	t.Run("sample retains nullable outputs for row cardinality", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(

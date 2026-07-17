@@ -217,7 +217,7 @@ func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
 		wantProject bool
 	}{
 		{name: "unused", refCnt: 0, parentType: plan.Node_PROJECT, wantProject: true},
-		{name: "single project consumer", refCnt: 1, parentType: plan.Node_PROJECT, wantProject: false},
+		{name: "single project consumer", refCnt: 1, parentType: plan.Node_PROJECT, wantProject: true},
 		{name: "single sort consumer", refCnt: 1, parentType: plan.Node_SORT, wantProject: false},
 		{name: "single join consumer", refCnt: 1, parentType: plan.Node_JOIN, wantProject: true},
 		{name: "multiple consumers", refCnt: 2, parentType: plan.Node_PROJECT, wantProject: true},
