@@ -117,6 +117,18 @@ func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
 	require.Equal(t, tree.P_ScoreBinary, binaryString.ValType)
 }
 
+func TestCreateSourceWithOptionsFree(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create source src1(a varchar) with (
+		"type"='kafka',
+		"topic"='t1',
+		"partition"='0',
+		"value"='json',
+		"bootstrap.servers"='127.0.0.1:9092'
+	)`, 1)
+	require.NoError(t, err)
+	require.NotPanics(t, stmt.Free)
+}
+
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
