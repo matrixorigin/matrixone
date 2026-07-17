@@ -504,6 +504,7 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) error {
 	ses := rt.getSession()
 	resp.DB = ses.GetDatabaseName()
+	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,

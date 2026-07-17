@@ -9144,6 +9144,72 @@ func Test_doInterpretCall(t *testing.T) {
 	})
 }
 
+func TestParseStoredProcedureBodyUsesCreationSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
+	creationSQLMode := sessionSQLModeForParser(ses)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", ""))
+
+	stmts, err := parseStoredProcedureBody(context.Background(), ses, "begin select 'a'||'b' as c; end", creationSQLMode)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.NotEmpty(t, stmts)
+
+	compound, ok := stmts[0].(*tree.CompoundStmt)
+	require.True(t, ok)
+	var selectStmt *tree.Select
+	for _, stmt := range compound.Stmts {
+		if selectStmt, ok = stmt.(*tree.Select); ok {
+			break
+		}
+	}
+	require.NotNil(t, selectStmt)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "concat", name.ColName())
+}
+
+func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	cp := &tree.CreateProcedure{
+		Name: tree.NewProcedureName("procedure_sql_mode", tree.ObjectNamePrefix{}),
+		Lang: "sql",
+		Body: "begin select 'a'||'b' as c; end",
+	}
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
+
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
+}
+
 func Test_initProcedure(t *testing.T) {
 	convey.Convey("init precedure fail", t, func() {
 		ctrl := gomock.NewController(t)
@@ -11152,6 +11218,7 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 
 type backgroundExecTest struct {
 	currentSql                     string
+	parserSQLMode                  string
 	sql2result                     map[string]ExecResult
 	sql2err                        map[string]error
 	executedSQLs                   []string
@@ -11196,6 +11263,11 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
 	return bt.sql2err[s]
+}
+
+func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sqlMode string) error {
+	bt.parserSQLMode = sqlMode
+	return bt.Exec(ctx, s)
 }
 
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
