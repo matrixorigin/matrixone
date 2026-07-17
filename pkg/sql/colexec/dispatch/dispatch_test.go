@@ -301,17 +301,15 @@ func TestWaitRemoteRegsReadyFailsWhenRegistrationChannelCloses(t *testing.T) {
 	require.Empty(t, d.ctr.remoteReceivers)
 }
 
-func TestWaitRemoteRegsReadyTimesOutWhenRegistrationNeverArrives(t *testing.T) {
-	stub := gostub.Stub(&waitRemoteRegTimeout, 20*time.Millisecond)
-	defer stub.Reset()
-
+func TestWaitRemoteRegsReadyWaitsPastFormerAdmissionLimit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
 	uid := uuid.Must(uuid.NewV7())
+	remoteInfo := make(process.RemotePipelineInformationChannel)
 	d := &Dispatch{
 		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
 		ctr: &container{
-			remoteInfo: make(process.RemotePipelineInformationChannel),
+			remoteInfo: remoteInfo,
 		},
 	}
 
@@ -325,27 +323,34 @@ func TestWaitRemoteRegsReadyTimesOutWhenRegistrationNeverArrives(t *testing.T) {
 		done <- result{end: end, err: err}
 	}()
 
+	formerLimit := time.NewTimer(20 * time.Millisecond)
+	defer formerLimit.Stop()
+	select {
+	case got := <-done:
+		t.Fatalf("receiver wait returned without lifecycle evidence: %v", got.err)
+	case <-formerLimit.C:
+	}
+
+	attached := &process.WrapCs{Uid: uid}
+	remoteInfo <- attached
 	select {
 	case got := <-done:
 		require.False(t, got.end)
-		require.Error(t, got.err)
-		require.Contains(t, got.err.Error(), "1 of 1 remote receivers were not registered within 20ms")
-		require.False(t, d.ctr.prepared)
-		require.Empty(t, d.ctr.remoteReceivers)
+		require.NoError(t, got.err)
+		require.True(t, d.ctr.prepared)
+		require.Equal(t, []*process.WrapCs{attached}, d.ctr.remoteReceivers)
 	case <-time.After(time.Second):
-		t.Fatal("waitRemoteRegsReady did not observe its registration timeout")
+		t.Fatal("waitRemoteRegsReady did not return after receiver attachment")
 	}
 }
 
-func TestWaitRemoteRegsReadyTimesOutAfterPartialRegistration(t *testing.T) {
-	stub := gostub.Stub(&waitRemoteRegTimeout, 20*time.Millisecond)
-	defer stub.Reset()
-
+func TestWaitRemoteRegsReadyCancellationAfterPartialRegistration(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
-	remoteInfo := make(process.RemotePipelineInformationChannel, 1)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	proc.Ctx = ctx
+	proc.Cancel = cancel
+	remoteInfo := make(process.RemotePipelineInformationChannel)
 	attached := &process.WrapCs{Uid: uuid.Must(uuid.NewV7())}
-	remoteInfo <- attached
 	d := &Dispatch{
 		RemoteRegs: []colexec.ReceiveInfo{
 			{Uuid: attached.Uid},
@@ -354,12 +359,28 @@ func TestWaitRemoteRegsReadyTimesOutAfterPartialRegistration(t *testing.T) {
 		ctr: &container{remoteInfo: remoteInfo},
 	}
 
-	end, err := d.waitRemoteRegsReady(proc)
-	require.False(t, end)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "1 of 2 remote receivers were not registered within 20ms")
-	require.False(t, d.ctr.prepared)
-	require.Equal(t, []*process.WrapCs{attached}, d.ctr.remoteReceivers)
+	type result struct {
+		end bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		end, err := d.waitRemoteRegsReady(proc)
+		done <- result{end: end, err: err}
+	}()
+	remoteInfo <- attached
+	cause := moerr.NewInternalErrorNoCtx("query canceled after partial receiver attachment")
+	cancel(cause)
+
+	select {
+	case got := <-done:
+		require.False(t, got.end)
+		require.ErrorIs(t, got.err, cause)
+		require.True(t, d.ctr.prepared)
+		require.Equal(t, []*process.WrapCs{attached}, d.ctr.remoteReceivers)
+	case <-time.After(time.Second):
+		t.Fatal("partial receiver wait did not return after query cancellation")
+	}
 }
 
 func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {

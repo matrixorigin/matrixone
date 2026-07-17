@@ -78,7 +78,7 @@ var (
 			Help:      "Remote receiver registration wait duration by terminal outcome.",
 			// Registration is normally sub-millisecond but may legitimately
 			// wait through scheduler or overload delays. This compact range
-			// reaches beyond the admission timeout while avoiding the
+			// covers multi-minute lifecycle waits while avoiding the
 			// repository-wide high-resolution duration buckets.
 			Buckets: prometheus.ExponentialBuckets(0.000001, 4, 15),
 		}, []string{"outcome"})
@@ -95,10 +95,6 @@ var (
 	PipelineRemoteReceiverWaitAlreadyClosedHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
 		"already_closed",
 	)
-	PipelineRemoteReceiverWaitTimeoutHistogram = PipelineRemoteReceiverWaitDurationHistogram.WithLabelValues(
-		"timeout",
-	)
-
 	PipelineRemoteNotifyRetryCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "mo",

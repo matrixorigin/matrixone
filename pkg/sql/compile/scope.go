@@ -990,10 +990,6 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 
 		errSubmit := ants.Submit(
 			func() {
-				timeout := remoteDispatchRegistrationTimeout
-				registrationDeadline := time.Now().Add(timeout)
-				var registrationCtx context.Context
-
 				attempt := 0
 				for {
 					sender, err := newSender(
@@ -1033,16 +1029,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					sender.prepareForLocalCleanup()
 					sender.close()
 					metricv2.PipelineRemoteNotifyRetryCounter.Inc()
-					if registrationCtx == nil {
-						retryCtx, cancelRegistration := context.WithDeadlineCause(
-							s.Proc.Ctx,
-							registrationDeadline,
-							newRemoteDispatchRegistrationTimeoutError(op.Uuid, timeout),
-						)
-						registrationCtx = retryCtx
-						defer cancelRegistration()
-					}
-					if err = waitRetry(registrationCtx, attempt, op.Uuid); err != nil {
+					if err = waitRetry(s.Proc.Ctx, attempt, op.Uuid); err != nil {
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					}

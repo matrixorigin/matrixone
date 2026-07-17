@@ -803,16 +803,6 @@ func isRemoteDispatchNotRegisteredYetError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrRemoteDispatchNotRegistered)
 }
 
-var remoteDispatchRegistrationTimeout = colexec.RemoteReceiverRegistrationTimeout
-
-func newRemoteDispatchRegistrationTimeoutError(uid uuid.UUID, timeout time.Duration) error {
-	return moerr.NewInternalErrorNoCtxf(
-		"remote dispatch receiver %s was not registered within %s",
-		uid.String(),
-		timeout,
-	)
-}
-
 func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
 	dispatchProc, notifyChannel, state, waiter := receiver.colexecServer.AttachProcByUuidOrWait(uid)
 	waiter.Close()
@@ -836,9 +826,6 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	connectionDone := contextDone(receiver.connectionCtx)
 	messageDone := contextDone(receiver.messageCtx)
 	start := time.Now()
-	timeout := remoteDispatchRegistrationTimeout
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
 	var publishedWaiter *colexec.RemoteReceiverWaiter
 	releasePublishedWaiter := func() {
 		if publishedWaiter != nil {
@@ -922,25 +909,6 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 			waiter.Close()
 			v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
 			return nil, nil, remoteRegistrationContextError(receiver.getMessageContext())
-		case <-deadline.C:
-			// Prefer a receiver published at the timeout boundary. The registry
-			// lock is the ownership linearization point; keep the current waiter
-			// alive during the final lookup so a just-closed published receiver
-			// retains its terminal state until we observe it.
-			dispatchProc, notifyChannel, state, finalWaiter :=
-				receiver.colexecServer.AttachProcByUuidOrWait(uid)
-			finalWaiter.Close()
-			if proc, ch, done, err := handleAttachState(dispatchProc, notifyChannel, state); done {
-				waiter.Close()
-				return proc, ch, err
-			}
-			waiter.Close()
-			releasePublishedWaiter()
-			v2.PipelineRemoteReceiverWaitTimeoutHistogram.Observe(time.Since(start).Seconds())
-			return nil, nil, newRemoteDispatchRegistrationTimeoutError(
-				uid,
-				timeout,
-			)
 		case <-waiter.Done():
 			publishedWaiter = waiter
 		}

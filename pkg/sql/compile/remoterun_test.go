@@ -899,19 +899,15 @@ func Test_GetProcByUuid_CancellationDoesNotPoisonLaterRegistration(t *testing.T)
 	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
-func Test_GetProcByUuid_RegistrationTimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
-	oldTimeout := remoteDispatchRegistrationTimeout
-	remoteDispatchRegistrationTimeout = 20 * time.Millisecond
-	t.Cleanup(func() {
-		remoteDispatchRegistrationTimeout = oldTimeout
-	})
-
+func Test_GetProcByUuid_WaitsPastFormerAdmissionLimitForRegistration(t *testing.T) {
 	server := colexec.NewServer("")
 	uid := uuid.Must(uuid.NewV7())
+	messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+	defer cancelMessage(context.Canceled)
 	receiver := &messageReceiverOnServer{
 		colexecServer: server,
 		connectionCtx: context.Background(),
-		messageCtx:    context.Background(),
+		messageCtx:    messageCtx,
 	}
 
 	type result struct {
@@ -925,18 +921,25 @@ func Test_GetProcByUuid_RegistrationTimeoutDoesNotPoisonLaterRegistration(t *tes
 		done <- result{proc: proc, ch: ch, err: err}
 	}()
 
+	formerLimit := time.NewTimer(20 * time.Millisecond)
+	defer formerLimit.Stop()
 	select {
 	case got := <-done:
-		require.Nil(t, got.proc)
-		require.Nil(t, got.ch)
-		require.Error(t, got.err)
-		require.Contains(t, got.err.Error(), "not registered within 20ms")
-	case <-time.After(time.Second):
-		t.Fatal("GetProcByUuid did not observe its registration timeout")
+		t.Fatalf("receiver lookup returned without lifecycle evidence: %v", got.err)
+	case <-formerLimit.C:
 	}
 
+	ownerProc := &process.Process{}
 	ownerCh := make(process.RemotePipelineInformationChannel)
-	require.NoError(t, server.PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+	require.NoError(t, server.PutProcIntoUuidMap(uid, ownerProc, ownerCh))
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.Same(t, ownerProc, got.proc)
+		require.Equal(t, ownerCh, got.ch)
+	case <-time.After(time.Second):
+		t.Fatal("GetProcByUuid did not attach after delayed registration")
+	}
 	server.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 }
 
@@ -1927,13 +1930,7 @@ func TestSendNotifyMessageLegacyRetryStopsAtQueryCancellation(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSendNotifyMessageLegacyRetryStopsAtRegistrationTimeout(t *testing.T) {
-	oldTimeout := remoteDispatchRegistrationTimeout
-	remoteDispatchRegistrationTimeout = 20 * time.Millisecond
-	t.Cleanup(func() {
-		remoteDispatchRegistrationTimeout = oldTimeout
-	})
-
+func TestSendNotifyMessageLegacyRetryWaitsPastFormerAdmissionLimit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
 	scopeProc := proc.NewContextChildProc(1)
@@ -1945,6 +1942,7 @@ func TestSendNotifyMessageLegacyRetryStopsAtRegistrationTimeout(t *testing.T) {
 		},
 	}
 
+	var attempts atomic.Int32
 	factory := func(
 		ctx context.Context,
 		sid string,
@@ -1954,7 +1952,9 @@ func TestSendNotifyMessageLegacyRetryStopsAtRegistrationTimeout(t *testing.T) {
 	) (*messageSenderOnClient, error) {
 		receiveCh := make(chan morpc.Message, 1)
 		msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
-		msg.SetMoError(ctx, moerr.NewRemoteDispatchNotRegistered(ctx, uid.String()))
+		if attempts.Add(1) == 1 {
+			msg.SetMoError(ctx, moerr.NewRemoteDispatchNotRegistered(ctx, uid.String()))
+		}
 		receiveCh <- msg
 		return &messageSenderOnClient{
 			ctx:          ctx,
@@ -1965,44 +1965,62 @@ func TestSendNotifyMessageLegacyRetryStopsAtRegistrationTimeout(t *testing.T) {
 		}, nil
 	}
 
-	retryEntered := make(chan struct{})
+	type retryContextObservation struct {
+		sameQueryContext bool
+		hasDeadline      bool
+	}
+	retryEntered := make(chan retryContextObservation, 1)
+	allowRetry := make(chan struct{})
 	waitRetry := func(ctx context.Context, _ int, _ uuid.UUID) error {
-		close(retryEntered)
-		<-ctx.Done()
-		return remoteRegistrationContextError(ctx)
+		_, hasDeadline := ctx.Deadline()
+		retryEntered <- retryContextObservation{
+			sameQueryContext: ctx == scopeProc.Ctx,
+			hasDeadline:      hasDeadline,
+		}
+		select {
+		case <-allowRetry:
+			return nil
+		case <-ctx.Done():
+			return remoteRegistrationContextError(ctx)
+		}
 	}
 
 	var wg sync.WaitGroup
 	resultCh := make(chan notifyMessageResult, 1)
 	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
-	<-retryEntered
+	observation := <-retryEntered
+	require.True(t, observation.sameQueryContext)
+	require.False(t, observation.hasDeadline, "legacy retry must use the query lifecycle context directly")
+
+	formerLimit := time.NewTimer(20 * time.Millisecond)
+	defer formerLimit.Stop()
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		t.Fatalf("legacy retry returned without lifecycle evidence: %v", result.err)
+	case <-formerLimit.C:
+	}
+	close(allowRetry)
 
 	select {
 	case result := <-resultCh:
 		result.clean(scopeProc)
-		require.Error(t, result.err)
-		require.Contains(t, result.err.Error(), "not registered within 20ms")
+		require.NoError(t, result.err)
 	case <-time.After(time.Second):
-		t.Fatal("legacy notify retry did not observe its registration timeout")
+		t.Fatal("legacy notify retry did not succeed after delayed registration")
 	}
 	select {
 	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
 		_, err := signal.Action()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "not registered within 20ms")
+		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("registration timeout did not send cleanup signal")
+		t.Fatal("successful legacy retry did not send cleanup signal")
 	}
 	wg.Wait()
+	require.Equal(t, int32(2), attempts.Load())
 }
 
-func TestSendNotifyMessageRegistrationTimeoutStopsAfterSuccessfulAttach(t *testing.T) {
-	oldTimeout := remoteDispatchRegistrationTimeout
-	remoteDispatchRegistrationTimeout = time.Nanosecond
-	t.Cleanup(func() {
-		remoteDispatchRegistrationTimeout = oldTimeout
-	})
-
+func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
 	scopeProc := proc.NewContextChildProc(1)
@@ -2023,7 +2041,7 @@ func TestSendNotifyMessageRegistrationTimeoutStopsAfterSuccessfulAttach(t *testi
 	) (*messageSenderOnClient, error) {
 		_, hasDeadline := ctx.Deadline()
 		if hasDeadline {
-			return nil, errors.New("successful stream received the admission deadline")
+			return nil, errors.New("successful stream did not inherit the query context directly")
 		}
 		receiveCh := make(chan morpc.Message, 1)
 		receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
@@ -2054,7 +2072,7 @@ func TestSendNotifyMessageRegistrationTimeoutStopsAfterSuccessfulAttach(t *testi
 		result.clean(scopeProc)
 		require.NoError(t, result.err)
 	case <-time.After(time.Second):
-		t.Fatal("successful notify stream was limited by the registration timeout")
+		t.Fatal("successful notify stream did not finish")
 	}
 	select {
 	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
