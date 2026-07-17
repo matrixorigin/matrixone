@@ -449,8 +449,7 @@ func mergePreserveInto(left *mergeValue, right mergeValue, outputDepth int) erro
 		for i := 0; i < right.raw.GetElemCnt(); i++ {
 			keyBytes := right.raw.GetObjectKey(i)
 			rightValue := newRawMergeValue(right.raw.GetObjectVal(i))
-			key := string(keyBytes)
-			entry, ok := left.object.entries[key]
+			entry, ok := left.object.entries[string(keyBytes)]
 			if !ok {
 				if err := ensureMergeValueFits(&rightValue, outputDepth+1); err != nil {
 					return err
