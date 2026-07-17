@@ -112,8 +112,14 @@ func CnServerMessageHandler(
 	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
-	receiver := newMessageReceiverOnServer(ctx, serverAddress, msg,
+	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM, colexecServer)
+	if err != nil {
+		if sendErr := receiver.sendError(err); sendErr != nil {
+			return errors.Join(err, sendErr)
+		}
+		return nil
+	}
 
 	finishNegotiated := false
 	if receiver.supportsFinishAck() {
@@ -524,11 +530,11 @@ func newMessageReceiverOnServer(
 	udfService udf.Service,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
-	colexecServer *colexec.Server) messageReceiverOnServer {
-
+	colexecServer *colexec.Server) (messageReceiverOnServer, error) {
+	connectionCtx := cs.SessionCtx()
 	receiver := messageReceiverOnServer{
 		messageCtx:            ctx,
-		connectionCtx:         cs.SessionCtx(),
+		connectionCtx:         connectionCtx,
 		messageId:             m.GetId(),
 		messageTyp:            m.GetCmd(),
 		clientSession:         cs,
@@ -553,22 +559,29 @@ func newMessageReceiverOnServer(
 	case pipeline.Method_PrepareDoneNotifyMessage:
 		opUuid, err := uuid.FromBytes(m.GetUuid())
 		if err != nil {
-			logutil.Errorf("decode uuid from pipeline.Message failed, bytes are %v", m.GetUuid())
-			panic("cn receive a message with wrong uuid bytes")
+			return receiver, err
 		}
 		receiver.messageUuid = opUuid
 
 	case pipeline.Method_PipelineMessage:
 		var err error
-		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
+		// The morpc message context carries query cancellation and deadlines,
+		// while the session context observes an early client disconnect. Either
+		// event must release a remote snapshot logtail wait.
+		processCtx, cancelProcess := context.WithCancel(ctx)
+		stopConnectionCancel := context.AfterFunc(connectionCtx, cancelProcess)
+		func() {
+			defer cancelProcess()
+			defer stopConnectionCancel()
+			receiver.procBuildHelper, err = generateProcessHelper(processCtx, m.GetProcInfoData(), txnClient)
+		}()
 		if err != nil {
-			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
-			panic("cn receive a message with wrong process bytes")
+			return receiver, err
 		}
 		receiver.scopeData = m.Data
 	}
 
-	return receiver
+	return receiver, nil
 }
 
 func (receiver *messageReceiverOnServer) supportsFinishAck() bool {
@@ -743,7 +756,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
-func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
+func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {
 	procInfo := &pipeline.ProcessInfo{}
 	err := procInfo.Unmarshal(data)
 	if err != nil {
@@ -758,7 +771,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		txnClient:    cli,
 		affectedRows: procInfo.AffectedRows,
 	}
-	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
+	result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
 	}
