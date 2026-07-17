@@ -96,6 +96,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 		for _, it := range iters {
 			if it.doc() == minDoc {
 				it.idx++
+				it.refresh() // keep the cached doc() in sync with idx
 			}
 		}
 	}

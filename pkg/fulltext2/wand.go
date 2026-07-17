@@ -16,7 +16,6 @@ package fulltext2
 
 import (
 	"math"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -55,6 +54,7 @@ type wandIter struct {
 	idx       int
 	curBlk    int     // block index currently decoded into bDocs/bTfs (-1 = none)
 	blen      int     // valid entries in bDocs/bTfs
+	cur       int64   // cached doc() for the current idx (math.MaxInt64 when exhausted)
 	bDocs     []int64 // decoded docIDs of curBlk (cap BlockSize)
 	bTfs      []uint8 // decoded tfs of curBlk (cap BlockSize)
 	idf2      float64
@@ -74,14 +74,21 @@ func (it *wandIter) ensure() {
 	}
 }
 
-// doc returns the current doc ord, or math.MaxInt64 when exhausted (so an
-// exhausted cursor sorts last).
-func (it *wandIter) doc() int64 {
+// doc returns the cached current doc ord (math.MaxInt64 when exhausted, so an
+// exhausted cursor sorts last). It is read many times per pivot iteration
+// (insertion sort, pivot scan, blockMax, chooseSkip, alignment) while the cursor
+// moves at most once, so cur is recomputed only on move (refresh) — avoiding the
+// atEnd() check, the idx/BlockSize division in ensure, and the modulo per read.
+func (it *wandIter) doc() int64 { return it.cur }
+
+// refresh recomputes cur after idx changes (construction/advance/skipTo).
+func (it *wandIter) refresh() {
 	if it.atEnd() {
-		return math.MaxInt64
+		it.cur = math.MaxInt64
+		return
 	}
 	it.ensure()
-	return it.bDocs[it.idx%BlockSize]
+	it.cur = it.bDocs[it.idx%BlockSize]
 }
 
 // tf returns the current posting's capped term frequency.
@@ -96,6 +103,7 @@ func (it *wandIter) skipTo(d int64) {
 	b := it.blockIndexAt(d)
 	if b >= it.tp.nblk() {
 		it.idx = it.tp.df() // past the last posting → exhausted
+		it.cur = math.MaxInt64
 		return
 	}
 	if b != it.curBlk {
@@ -103,9 +111,20 @@ func (it *wandIter) skipTo(d int64) {
 		it.curBlk = b
 	}
 	// d <= blockLastDoc[b] = bDocs[blen-1], so the lower bound is within the block
-	// and never moves the cursor backward (d >= current doc).
-	w := sort.Search(it.blen, func(i int) bool { return it.bDocs[i] >= d })
-	it.idx = b*BlockSize + w
+	// and never moves the cursor backward (d >= current doc). Inline lower-bound
+	// binary search rather than sort.Search: avoids the per-call closure and the
+	// generic sort.Search frame in this hot skip path.
+	lo, hi := 0, it.blen
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if it.bDocs[mid] < d {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	it.idx = b*BlockSize + lo
+	it.cur = it.bDocs[lo]
 }
 
 // blockIndexAt returns the index of the block (>= the current block) containing
@@ -202,7 +221,7 @@ func (s *Segment) buildWandIters(clauses []clause, algo ScoreAlgo, gs *globalSta
 			continue
 		}
 		idf2 := gs.idfFor(s, c.terms[0], pl)
-		iters = append(iters, &wandIter{
+		it := &wandIter{
 			tp:        pl,
 			curBlk:    -1,
 			bDocs:     make([]int64, BlockSize),
@@ -210,7 +229,9 @@ func (s *Segment) buildWandIters(clauses []clause, algo ScoreAlgo, gs *globalSta
 			idf2:      idf2,
 			weight:    c.weight,
 			maxImpact: c.weight * s.termMaxImpact(algo, idf2, pl, avgDocLen),
-		})
+		}
+		it.refresh() // prime cur for idx=0
+		iters = append(iters, it)
 	}
 	return iters
 }
@@ -328,6 +349,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 			for _, it := range iters {
 				if it.doc() == pivotDoc {
 					it.idx++
+					it.refresh()
 				}
 			}
 		} else {
