@@ -1220,7 +1220,7 @@ func TestRemoteLockRechecksBindChangedAfterGetLocalLockTable(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
-		func(_ *lockTableAllocator, s []*service) {
+		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -1240,6 +1240,9 @@ func TestRemoteLockRechecksBindChangedAfterGetLocalLockTable(t *testing.T) {
 			var changed atomic.Bool
 			l1.option.beforeRemoteLockBindCheck = func() {
 				if changed.CompareAndSwap(false, true) {
+					alloc.mu.Lock()
+					alloc.getLockTablesLocked(newBind.Group)[newBind.Table] = newBind
+					alloc.mu.Unlock()
 					l1.handleBindChanged(newBind)
 				}
 			}

@@ -540,21 +540,21 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 	newBind := *resp.NewBind
 	if l.allocatorBindChangedHandler != nil &&
 		l.allocatorStateProvider != nil &&
-		l.client != nil &&
-		l.bind.AllocatorID != "" &&
-		newBind.AllocatorID != "" &&
-		l.bind.AllocatorID != newBind.AllocatorID {
+		l.client != nil {
+		// NewBind belongs to the owner response's point in time. The local
+		// service may have observed a newer allocator while the RPC was in
+		// flight, so only publish a bind refreshed from the current allocator.
 		requestAllocator := l.allocatorStateProvider()
 		refreshedBind, allocator, err := getLockTableBind(
 			l.client,
-			newBind.Group,
-			newBind.Table,
-			newBind.OriginTable,
+			l.bind.Group,
+			l.bind.Table,
+			l.bind.OriginTable,
 			l.serviceID,
-			newBind.Sharding,
+			l.bind.Sharding,
 		)
 		if err != nil {
-			logGetRemoteBindFailed(l.logger, newBind.Table, err)
+			logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 			return ErrLockTableBindChanged
 		}
 		if !refreshedBind.Changed(l.bind) {

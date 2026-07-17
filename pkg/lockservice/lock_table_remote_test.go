@@ -539,6 +539,78 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 	)
 }
 
+func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldAllocator := allocatorState{id: "old-remote-response", version: 100}
+			newAllocator := allocatorState{id: "new-remote-response", version: 90}
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     oldAllocator.version,
+				Valid:       true,
+				AllocatorID: oldAllocator.id,
+			}
+			lateBind := oldBind
+			lateBind.ServiceID = "s3"
+			lateBind.Version++
+			currentBind := oldBind
+			currentBind.ServiceID = "s4"
+			currentBind.Version = newAllocator.version
+			currentBind.AllocatorID = newAllocator.id
+
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = currentBind
+					resp.GetBind.AllocatorID = newAllocator.id
+					resp.GetBind.AllocatorVersion = newAllocator.version
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			svc := &service{serviceID: "s1", logger: logger}
+			svc.tableGroups = &lockTableHolders{
+				service: svc.serviceID,
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			svc.allocatorVersionMu.Lock()
+			svc.lastAllocatorID = newAllocator.id
+			svc.lastAllocatorVersion = newAllocator.version
+			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
+			svc.allocatorVersionMu.Unlock()
+
+			remote := newRemoteLockTable(
+				svc.serviceID,
+				time.Second,
+				oldBind,
+				c,
+				svc.handleBindChanged,
+				logger,
+			)
+			remote.allocatorStateProvider = svc.allocatorStateSnapshot
+			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
+
+			err := remote.maybeHandleBindChanged(&pb.Response{NewBind: &lateBind})
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+			got := svc.tableGroups.get(currentBind.Group, currentBind.Table)
+			require.NotNil(t, got)
+			require.Equal(t, currentBind, got.getBind())
+			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
+			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+		},
+	)
+}
+
 func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 	runRemoteLockTableTests(
 		t,

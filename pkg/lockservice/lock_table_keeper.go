@@ -186,13 +186,10 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 					maybeHandleRemoteBindChanged(binds[idx])
 				}
 			} else if resp.NewBind != nil {
-				if binds[idx].AllocatorID != "" &&
-					resp.NewBind.AllocatorID != "" &&
-					binds[idx].AllocatorID != resp.NewBind.AllocatorID {
-					maybeHandleRemoteBindChanged(binds[idx])
-				} else {
-					k.service.handleBindChanged(*resp.NewBind)
-				}
+				// The response can arrive after this CN has observed a newer
+				// allocator and purged the request bind. Refresh from the current
+				// allocator so a late response cannot republish a superseded bind.
+				maybeHandleRemoteBindChanged(binds[idx])
 			}
 			releaseResponse(resp)
 		} else {

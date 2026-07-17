@@ -223,6 +223,17 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 					resp.NewBind = &newBind
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = newBind
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
 
 			logger := getLogger("")
 			fsp := newFixedSlicePool(2)
@@ -416,6 +427,121 @@ func TestKeepRemoteLockRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 			keeper.maybeHandleRemoteBindChanged(oldBind)
 
 			require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
+			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+		},
+	)
+}
+
+func TestKeepRemoteLockLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldAllocator := allocatorState{id: "old-keeper-response", version: 100}
+			newAllocator := allocatorState{id: "new-keeper-response", version: 90}
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     oldAllocator.version,
+				Valid:       true,
+				AllocatorID: oldAllocator.id,
+			}
+			lateBind := oldBind
+			lateBind.ServiceID = "s3"
+			lateBind.Version++
+			currentBind := oldBind
+			currentBind.ServiceID = "s4"
+			currentBind.Version = newAllocator.version
+			currentBind.AllocatorID = newAllocator.id
+
+			keepEntered := make(chan struct{})
+			releaseKeep := make(chan struct{})
+			server.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					close(keepEntered)
+					select {
+					case <-releaseKeep:
+						resp.NewBind = &lateBind
+						writeResponse(getLogger(""), cancel, resp, nil, cs)
+					case <-ctx.Done():
+						writeResponse(getLogger(""), cancel, resp, ctx.Err(), cs)
+					}
+				})
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = currentBind
+					resp.GetBind.AllocatorID = newAllocator.id
+					resp.GetBind.AllocatorVersion = newAllocator.version
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			svc := &service{serviceID: "s1", logger: logger}
+			svc.remote.client = c
+			svc.tableGroups = &lockTableHolders{
+				service: svc.serviceID,
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			svc.lastAllocatorID = oldAllocator.id
+			svc.lastAllocatorVersion = oldAllocator.version
+			svc.tableGroups.set(
+				oldBind.Group,
+				oldBind.Table,
+				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+			)
+			keeper := &lockTableKeeper{
+				serviceID:   svc.serviceID,
+				client:      c,
+				groupTables: svc.tableGroups,
+				service:     svc,
+			}
+
+			done := make(chan struct{})
+			go func() {
+				keeper.doKeepRemoteLock(context.Background(), nil, nil)
+				close(done)
+			}()
+			select {
+			case <-keepEntered:
+			case <-time.After(time.Second):
+				require.FailNow(t, "keep-remote request did not reach the old owner")
+			}
+
+			removed, accepted := svc.observeAllocatorStateWithHoldersFromSnapshot(
+				"test-new-allocator",
+				newAllocator,
+				oldAllocator,
+				true,
+				svc.tableGroups)
+			require.True(t, accepted)
+			require.Equal(t, 1, removed)
+			require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+
+			close(releaseKeep)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				require.FailNow(t, "keep-remote refresh did not finish")
+			}
+
+			got := svc.tableGroups.get(currentBind.Group, currentBind.Table)
+			require.NotNil(t, got)
+			require.Equal(t, currentBind, got.getBind())
 			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
 			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
 		},
