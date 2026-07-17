@@ -1,12 +1,12 @@
 # Issue #25782 多进程复现 Harness 交接说明
 
-更新时间：2026-07-17 12:05（Asia/Shanghai）
+更新时间：2026-07-17 12:10（Asia/Shanghai）
 
-## 0. 当前修复进度（2026-07-17 12:05）
+## 0. 当前修复进度（2026-07-17 12:10）
 
 完整 no-OOM + Shuffle spill/re-spill 方案已经实现。HashBuild retained batches、HashMap 扩容峰值、表达式执行树、spill/re-spill scratch、reader、磁盘字节和文件描述符均进入同一 statement generation / CN aggregate 预算；实际内存会向下 reconciliation。Shuffle 超预算后执行单 bucket 有界 spill，re-spill 每层消费下一组 hash bits，并校验 build/probe 行守恒、最大 child 变小、深度和队列上限。Broadcast 仍不共享 spill 文件：能在预算内完成就成功，超预算则所有消费者收到一致的受控 query error。
 
-代码已经通过目标包普通测试和 race；新增集成测试在 8 MiB 内存、64 MiB spill 限额下强制 initial spill + re-spill，包含 1,024 个不匹配 probe key，最终精确返回 8,192 行，并验证内存、磁盘和 FD ledger 全部归零。本机多 CN 业务验证使用每表 132,096 行：Broadcast 两次均返回 `132096` 且 spill=0；Shuffle 两次均返回 `132096` 且产生正 spill。运行期间服务存活且无 OOM。最终 fresh runtime 和停止前 telemetry 见本文件后续“最终验收记录”（完成最终 classifier run 后更新）。
+代码已经通过目标包普通测试和 race；新增集成测试在 8 MiB 内存、64 MiB spill 限额下强制 initial spill + re-spill，包含 1,024 个不匹配 probe key，最终精确返回 8,192 行，并验证内存、磁盘和 FD ledger 全部归零。本机多 CN 业务验证使用每表 132,096 行：Broadcast 两次均返回 `132096` 且 spill=0；Shuffle 两次均返回 `132096` 且产生正 spill。最终 fresh runtime 已完整停止，telemetry 有效，两个 CN 均为 `oom=0, oom_kill=0, swap=0`。
 
 ## 1. 最终结论
 
@@ -21,17 +21,20 @@ classification=FIXED_ACCEPTED
 最终使用全新 runtime 完成一轮自包含验证：
 
 ```text
-runtime=/tmp/mo-25782-harness-final6-20260716184209
-result=/tmp/mo-25782-harness-final6-20260716184209/results/20260716T184239-1679970
+source_commit=39b38a10c
+runtime=/tmp/mo-25782-accepted3-20260717120731
+result=/tmp/mo-25782-accepted3-20260717120731/results/20260717T120751-2285328
 ```
 
 结果目录中的三个分类文件分别为：
 
 ```text
-classification.overall   REPRODUCED
+classification.overall   FIXED_ACCEPTED
 classification.broadcast REPRODUCED / broadcast_hashbuild_spill_bypassed
 classification.shuffle   REPRODUCED / shuffle_positive_control_spilled
 ```
+
+`REPRODUCED` 在两个 phase 文件中表示各自的预期证据模式被观察到；fixed mode 的总体业务结论由 `classification.overall=FIXED_ACCEPTED` 给出。
 
 ## 2. 关键证据
 
@@ -47,8 +50,8 @@ attempt-2 / CN2  InRows=132096  is_shuffle=false  SpillRows=0  SpillSize=0
 Shuffle 正对照：
 
 ```text
-CN1  instances=16  eligible=16  input=132096  spill_instances=16  spill_rows=132096  spill_size=1102848
-CN2  instances=16  eligible=9   input=132096  spill_instances=9   spill_rows=132096  spill_size=1082688
+CN1  instances=16  eligible=16  input=132096  spill_instances=16  spill_rows=132096  spill_size=1143438
+CN2  instances=16  eligible=9   input=132096  spill_instances=9   spill_rows=132096  spill_size=1105818
 ```
 
 CN2 的其余 7 个实例是 `InRows=0, SpillRows=0, SpillSize=0` 的空 shuffle partition，不是阈值以上却未 spill 的反例。两个 attempt 都存在阈值以上实例，且这些实例在两个 CN 上均产生了 spill。
@@ -78,8 +81,8 @@ shuffle:   AP QUERY PLAN ON MULTICN, Join Type LEFT, Join Cond 带 shuffle: rang
 停止前审计值：
 
 ```text
-CN1 memory.peak=671641600, memory.max=2684354560, swap.current=0, oom=0, oom_kill=0
-CN2 memory.peak=611315712, memory.max=2684354560, swap.current=0, oom=0, oom_kill=0
+CN1 memory.peak=400613376, memory.max=2684354560, swap.current=0, oom=0, oom_kill=0
+CN2 memory.peak=393752576, memory.max=2684354560, swap.current=0, oom=0, oom_kill=0
 ```
 
 `manifest.final_telemetry` 为：
@@ -95,7 +98,7 @@ stop_rc=0
 
 - PHYPLAN extractor 不再依赖 `idx`，使用 CN/scope/HashBuild ordinal 生成稳定 ID；只接受带运行时 `CallNum` 和完整计数器的实例，避免远端占位 plan 被误判。
 - Evidence 使用当前 run 的只读 snapshot、SHA256 provenance 和完成标记；classifier 会重新验证路径、phase、run ID 和内容 hash。
-- 启动和运行门禁把已锁定 source commit、二进制报告的 commit、二进制 SHA256 与每个实际运行进程的 `/proc/<pid>/exe` hash 绑定；最终二进制 SHA256 为 `b34b6c25aa34e3fd59c5c791f1c8d26ccafd0435b93a9624492a34b96bb3b246`。
+- 启动和运行门禁把已锁定 source commit、二进制报告的 commit、二进制 SHA256 与每个实际运行进程的 `/proc/<pid>/exe` hash 绑定；最终二进制 SHA256 为 `a95aa6f0a71b24b9e5a610904df07b36c81ff61b1ad1f03f1f41c5cdcd10a839`。
 - Classifier 拒绝重复实例、未知 CN、字段不完整、attempt/CN 路由错配和错误 shuffle flag；broadcast 必须覆盖两个 CN。Shuffle 允许零输入且零 spill 的自然空 partition，但每个 attempt 都必须有阈值以上实例并实际 spill。
 - SQL 使用固定 `LEFT JOIN`，物理行数固定为每表 `132096`；通过分块 flush 产生多个持久对象。
 - planner stats 同步到两个 CN，避免 Proxy 后端切换后使用不同的本地 stats cache。
@@ -110,17 +113,20 @@ stop_rc=0
 ```text
 bash -n optools/repro/issue25782/*.sh optools/repro/issue25782/tests/run.sh  # PASS
 optools/repro/issue25782/tests/run.sh                                        # 22 passed
+go test ./pkg/vm/process ./pkg/vm/message ./pkg/sql/colexec/{hashbuild,spillutil,hashjoin,dedupjoin,rightdedupjoin}  # PASS
+go test -race ./pkg/vm/process ./pkg/vm/message ./pkg/sql/colexec/{hashbuild,spillutil,hashjoin,dedupjoin,rightdedupjoin} # PASS
+make build                                                                  # PASS
 git diff --check                                                            # PASS
 ```
 
-`shellcheck` 在当前主机未安装，因此没有 shellcheck 结果。此次未修改 Go 代码，也没有执行直接 `go test`。
+`shellcheck` 在当前主机未安装，因此没有 shellcheck 结果。
 
 ## 6. 工作区状态与约束
 
 - worktree：`/home/mo/worktrees/mo-25782-main`
 - 分支：`repro/25782-main-harness`
-- 锁定代码：`cd741923cd847ae26faacffc5b6adb101bb6dcb7`
-- Harness 文件仍全部未提交；未经用户指示不要提交、推送或创建 PR。
+- 最终验收代码：`39b38a10cf29cce0824698286523ead5b9c0fee4`
+- 实现和 harness 已按单 PR、多 commit 的方式提交到当前本地分支；尚未推送或创建 PR。
 - 原工作区 `/home/mo/matrixone` 当前 HEAD 已变为 `8f3aee9cef5d667c6c7686d83cb155d0ba321e1f`，与最初记录的 `c883c48...` 不同。此次工作没有修改、stash 或清理原工作区，因此只能记录该外部漂移，不能再声称它自 harness 创建以来未变化。
 
 ## 7. 重新运行
