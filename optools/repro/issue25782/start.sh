@@ -13,7 +13,7 @@ done
 load_runtime "${runtime_arg}"
 [[ -x "${BINARY:-}" && "${BINARY}" = /* && ! -L "${BINARY}" ]] || die "BINARY must be an executable absolute non-symlink path"
 binary_real="$(readlink -e -- "${BINARY}")"
-readonly EXPECTED_COMMIT="${MO_25782_EXPECTED_COMMIT:-cd741923c}"
+readonly EXPECTED_COMMIT="${MO_25782_EXPECTED_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
 [[ "${EXPECTED_COMMIT}" =~ ^[0-9a-f]{9,40}$ ]] || die "MO_25782_EXPECTED_COMMIT must be a 9-40 digit lowercase git commit prefix"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 binary_sha256="$(sha256sum -- "${binary_real}" | awk '{print $1}')"

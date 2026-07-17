@@ -1,10 +1,10 @@
 # Issue #25782 修复方案与实施计划
 
-更新时间：2026-07-16（Asia/Shanghai）
+更新时间：2026-07-17（Asia/Shanghai）
 
-状态：方案已审查通过，正在按单 PR、多 commit 实施。第一阶段“硬预算拒绝 + Broadcast/Shuffle 受控失败”的无 OOM 安全切片已完成代码、包级/race/build 测试，并用 issue harness 的 Broadcast SQL 完成 fixed E2E。Pre-dispatch lease、Shuffle 有界 spill/re-spill 和完整 observability 仍待实现。
+状态：单 PR、多 commit 的本期 no-OOM 与 Shuffle 有界 spill/re-spill 已完成实现和代码级验收；本机 132,096×132,096 多 CN 业务 SQL 已验证 Broadcast 与 Shuffle 均返回正确结果，Shuffle 产生正 spill。第 5 节所述跨 CN pre-dispatch lease 协议仍是后续增强项，不是本次业务验收的前置条件；当前由每 CN statement generation、pipeline 限额传递和有限 remote backstop 兜底。最终 fresh-runtime classifier/telemetry 运行完成后，只需把证据路径回填到 HANDOFF。
 
-### 2026-07-16 实施进度
+### 2026-07-17 实施进度
 
 已完成：
 
@@ -16,7 +16,7 @@
 - `ReallocZero` temporary peak cap 检查和 rollback；
 - unsafe legacy spill scratch 暂时在进入前受控拒绝，避免绕过 CN budget。
 
-当前业务语义：超预算或触发尚未预算化的 spill/expression 路径时，SQL 返回 query error；不会把失败伪装成 empty build，也不承诺本阶段 spill 成功。Shuffle spill 成功属于后续 commit 6/7。
+当前业务语义：Shuffle 在有限预算内执行有界 spill/re-spill并返回正确结果；无法取得进展、达到深度/队列/磁盘/FD 上限时返回受控 query error。Broadcast 在预算内成功，超预算时所有消费者收到同一受控错误，不会伪装成 empty build。
 
 Fixed E2E（`/tmp/mo-25782-fixed2-20260716235218`）：Broadcast 计划在 132,096×132,096 的受控物理数据上返回 `132096`，PHYPLAN 总内存 `291164058B`、spill `0B`；两 CN 的后续查询均成功，CN cgroup `oom=0, oom_kill=0`，峰值分别为 `346140672` 和 `310169600` bytes，随后完整停止清理。该结果证明未超 hard budget 时业务成功；超预算受控错误由 Broadcast 多消费者、Shuffle 和 retained-batch 单测覆盖。
 

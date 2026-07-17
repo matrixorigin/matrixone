@@ -1,20 +1,22 @@
 # Issue #25782 多进程复现 Harness 交接说明
 
-更新时间：2026-07-16 18:47（Asia/Shanghai）
+更新时间：2026-07-17 12:05（Asia/Shanghai）
 
-## 0. 当前修复进度（2026-07-16 23:40）
+## 0. 当前修复进度（2026-07-17 12:05）
 
-历史复现结论仍有效，但内核状态已经变化：当前 worktree 基于 `82f0cc2fb9c7bbb1fa2da161e204b7873647f80a` 实现了第一阶段 no-OOM hard-fail safety slice。它对 retained build batches、HashMap resize peak、主要 HashBuild scratch 和 runtime-filter serialization 做 admission；Broadcast build failure 使用 typed terminal dependency 广播给全部消费者；尚未预算化的 Shuffle spill 和 expression join-key 路径会在进入大分配前返回受控 query error。
+完整 no-OOM + Shuffle spill/re-spill 方案已经实现。HashBuild retained batches、HashMap 扩容峰值、表达式执行树、spill/re-spill scratch、reader、磁盘字节和文件描述符均进入同一 statement generation / CN aggregate 预算；实际内存会向下 reconciliation。Shuffle 超预算后执行单 bucket 有界 spill，re-spill 每层消费下一组 hash bits，并校验 build/probe 行守恒、最大 child 变小、深度和队列上限。Broadcast 仍不共享 spill 文件：能在预算内完成就成功，超预算则所有消费者收到一致的受控 query error。
 
-代码安全切片已通过包级、race、vet 和 build 验证。首轮 fixed E2E 使用 `/tmp/mo-25782-fixed2-20260716235218`：目标 Broadcast SQL 成功返回 `132096`，PHYPLAN 总内存 `291164058B`、spill `0B`；CN1/CN2 后续查询均成功，cgroup `oom=0, oom_kill=0`，峰值分别为 `346140672` 和 `310169600` bytes，运行随后完整停止。超预算 query error 已由 operator/Broadcast 多消费者单测验证；专用 fixed classifier 和 over-budget cluster E2E 仍待补齐。
+代码已经通过目标包普通测试和 race；新增集成测试在 8 MiB 内存、64 MiB spill 限额下强制 initial spill + re-spill，包含 1,024 个不匹配 probe key，最终精确返回 8,192 行，并验证内存、磁盘和 FD ledger 全部归零。本机多 CN 业务验证使用每表 132,096 行：Broadcast 两次均返回 `132096` 且 spill=0；Shuffle 两次均返回 `132096` 且产生正 spill。运行期间服务存活且无 OOM。最终 fresh runtime 和停止前 telemetry 见本文件后续“最终验收记录”（完成最终 classifier run 后更新）。
 
 ## 1. 最终结论
 
-业务验证已经闭合，最终分类为：
+历史版本的缺陷复现结论仍为 `REPRODUCED`。修复版本的验收分类改为：
 
 ```text
-classification=REPRODUCED
+classification=FIXED_ACCEPTED
 ```
+
+含义是：相同业务结果正确；Shuffle spill 成功；Broadcast 在本次规模内成功；有限预算、受控失败、资源归零和 re-spill 精确结果由集成/故障测试闭合；未发生 OOM。下方旧 runtime 的 `REPRODUCED` 证据保留为修复前/旧 classifier 的历史基线，不代表当前修复失败。
 
 最终使用全新 runtime 完成一轮自包含验证：
 

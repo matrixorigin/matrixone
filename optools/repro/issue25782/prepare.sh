@@ -3,6 +3,16 @@ set -euo pipefail
 # shellcheck source=lib.sh
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/lib.sh"
 
+mode="${MO_25782_MODE:-fixed}"
+case "${mode}" in
+    fixed|historical) ;;
+    *) die "MO_25782_MODE must be fixed or historical" ;;
+esac
+fixed_frontend_limits=""
+if [[ "${mode}" == fixed ]]; then
+    fixed_frontend_limits=$'processLimitationSize = 201326592\nprocessLimitationSpillSize = 1073741824'
+fi
+
 runtime_arg="${MO_25782_RUNTIME:-}"
 while (($#)); do
     case "$1" in
@@ -171,6 +181,7 @@ type = "distributed-tae"
 host = "127.0.0.1"
 port = ${sql}
 proxy-enabled = true
+${fixed_frontend_limits}
 [observability]
 host = "127.0.0.1"
 status-port = ${status}
@@ -207,6 +218,7 @@ precheck_ports "${ports_all}"
 env_tmp="${runtime}/harness.env.tmp.$$"
 {
     printf 'MO_25782_RUNTIME=%q\n' "${runtime}"
+    printf 'MO_25782_MODE=%q\n' "${mode}"
     printf 'BINARY=%q\n' "${MO_25782_BINARY:-${REPO_ROOT}/mo-service}"
     printf 'MO_25782_MYSQL_PASSWORD=%q\n' "${MO_25782_MYSQL_PASSWORD:-111}"
     printf 'LOG_UUID=%q\nTN_UUID=%q\nCN1_UUID=%q\nCN2_UUID=%q\nPROXY_UUID=%q\n' "${uuid_log}" "${uuid_tn}" "${uuid_cn1}" "${uuid_cn2}" "${uuid_proxy}"

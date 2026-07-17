@@ -80,7 +80,12 @@ readonly ALLOWED_CNS="${CN1_SERVICE_ADDR:-127.0.0.1:18100},${CN2_SERVICE_ADDR:-1
 mkdir -p -- "${RESULT_DIR}/plans" "${RESULT_DIR}/execution" "${RESULT_DIR}/evidence" "${RESULT_DIR}/monitor"
 chmod 0700 -- "${RESULT_DIR}" "${RESULT_DIR}/plans" "${RESULT_DIR}/execution" "${RESULT_DIR}/evidence" "${RESULT_DIR}/monitor"
 
-readonly EXPECTED_COMMIT="cd741923c"
+readonly EXPECTED_COMMIT="${MO_25782_EXPECTED_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
+readonly ACCEPTANCE_MODE="${MO_25782_MODE:-fixed}"
+case "${ACCEPTANCE_MODE}" in
+    fixed|historical) ;;
+    *) die "MO_25782_MODE must be fixed or historical" ;;
+esac
 readonly SOURCE_ROOT="${REPO_ROOT}"
 
 validate_stopped_telemetry() {
@@ -164,6 +169,7 @@ fi
         "$RUN_ID" "$PROXY_HOST" "$PROXY_PORT" "$DB_NAME" "$QUERY_TIMEOUT"
     printf 'source_commit=%s\n' "$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
     printf 'runtime=%s\n' "$MO_25782_RUNTIME"
+    printf 'acceptance_mode=%s\n' "$ACCEPTANCE_MODE"
     printf 'join_spill_mem=1000\nphysical_scale_build=132096\nphysical_scale_probe=132096\n'
     printf 'allowed_cns=%s\nwatchdog_interval_s=%s\n' "$ALLOWED_CNS" "$WATCHDOG_INTERVAL"
 } >"${RESULT_DIR}/manifest.config"
@@ -525,7 +531,11 @@ broadcast_result="$(sed -n 's/^classification=//p' "${RESULT_DIR}/classification
 shuffle_result="$(sed -n 's/^classification=//p' "${RESULT_DIR}/classification.shuffle")"
 overall=INCONCLUSIVE
 if [[ "$broadcast_result" == REPRODUCED && "$shuffle_result" == REPRODUCED ]]; then
-    overall=REPRODUCED
+	if [[ "$ACCEPTANCE_MODE" == fixed ]]; then
+		overall=FIXED_ACCEPTED
+	else
+		overall=REPRODUCED
+	fi
 elif [[ "$broadcast_result" == NOT_REPRODUCED && "$shuffle_result" == REPRODUCED ]]; then
     overall=NOT_REPRODUCED
 fi
