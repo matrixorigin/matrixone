@@ -547,13 +547,97 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	require.Equal(t, []uint64{1, 2, 3}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
 	require.Equal(t, []checkpointtool.TableCatalogEntry{parent}, orderTablesForRestore([]checkpointtool.TableCatalogEntry{parent}, byID))
 
-	// Cycles are tolerated; traversal should terminate and keep every table once.
 	byID[1].Schema.ForeignKeys = []checkpointtool.TableForeignKey{{ReferDatabase: child.DatabaseName, ReferTable: child.TableName}}
 	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, parent}, byID)
 	require.Len(t, ordered, 2)
+	restoreOrder := buildRestoreTableOrder([]checkpointtool.TableCatalogEntry{child, parent}, byID)
+	require.True(t, restoreOrder.cyclicFKTables[parent.TableID])
+	require.True(t, restoreOrder.cyclicFKTables[child.TableID])
 
 	ordered = orderTablesForRestore([]checkpointtool.TableCatalogEntry{view, view2, base}, byID)
 	require.Equal(t, []uint64{4, 5, 6}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
+}
+
+func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
+	ctx := context.Background()
+	dumpOut := &dumpOutput{}
+	scriptDir := filepath.Join(t.TempDir(), "scripts")
+	parent := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "parent", TableID: 1}
+	child := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "child", TableID: 2}
+	columns := []checkpointtool.TableColumn{
+		{Name: "id", SQLType: "BIGINT", Position: 1},
+		{Name: "other_id", SQLType: "BIGINT", Position: 2},
+	}
+	dumpDataByTable := map[uint64]*checkpointtool.TableDumpData{
+		parent.TableID: {
+			TableID: parent.TableID,
+			Schema: &checkpointtool.TableSchema{
+				TableName: "parent",
+				Columns:   columns,
+				ForeignKeys: []checkpointtool.TableForeignKey{{
+					Name:          "fk_parent_child",
+					Columns:       []string{"other_id"},
+					ReferDatabase: "db",
+					ReferTable:    "child",
+					ReferColumns:  []string{"id"},
+				}},
+			},
+		},
+		child.TableID: {
+			TableID: child.TableID,
+			Schema: &checkpointtool.TableSchema{
+				TableName: "child",
+				Columns:   columns,
+				ForeignKeys: []checkpointtool.TableForeignKey{{
+					Name:          "fk_child_parent",
+					Columns:       []string{"other_id"},
+					ReferDatabase: "db",
+					ReferTable:    "parent",
+					ReferColumns:  []string{"id"},
+				}},
+			},
+		},
+	}
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *checkpointtool.CheckpointReader, _ uint64) (*checkpointtool.LogicalTableView, error) {
+		return &checkpointtool.LogicalTableView{}, nil
+	})
+
+	path, err := writeRestoreScript(
+		ctx,
+		reader,
+		dumpOut,
+		[]checkpointtool.TableCatalogEntry{parent, child},
+		dumpDataByTable,
+		types.BuildTS(1, 0),
+		scriptDir,
+		"csv",
+		loadDataPathResolver{},
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	sql := string(data)
+	parentCreate := strings.Index(sql, "CREATE TABLE `db`.`parent`")
+	childCreate := strings.Index(sql, "CREATE TABLE `db`.`child`")
+	parentLoad := strings.Index(sql, "INTO TABLE `parent`")
+	childLoad := strings.Index(sql, "INTO TABLE `child`")
+	parentAlter := strings.Index(sql, "ALTER TABLE `parent` ADD CONSTRAINT `fk_parent_child`")
+	childAlter := strings.Index(sql, "ALTER TABLE `child` ADD CONSTRAINT `fk_child_parent`")
+	require.NotEqual(t, -1, parentCreate)
+	require.NotEqual(t, -1, childCreate)
+	require.NotEqual(t, -1, parentLoad)
+	require.NotEqual(t, -1, childLoad)
+	require.NotEqual(t, -1, parentAlter)
+	require.NotEqual(t, -1, childAlter)
+	require.Greater(t, parentAlter, parentLoad)
+	require.Greater(t, parentAlter, childLoad)
+	require.Greater(t, childAlter, parentLoad)
+	require.Greater(t, childAlter, childLoad)
+	require.NotContains(t, sql[parentCreate:parentAlter], "CONSTRAINT `fk_parent_child`")
+	require.NotContains(t, sql[childCreate:childAlter], "CONSTRAINT `fk_child_parent`")
 }
 
 func TestWriteRestoreScriptForViewAndErrors(t *testing.T) {

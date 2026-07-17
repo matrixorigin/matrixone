@@ -59,7 +59,7 @@ func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
 		},
 	}
 
-	view, err := reader.ComposeAt(types.BuildTS(30, 0))
+	view, err := reader.ComposeAt(types.BuildTS(20, 0))
 	require.NoError(t, err)
 	require.NotNil(t, view.BaseEntry)
 	assert.Equal(t, 0, view.BaseEntry.Index)
@@ -101,6 +101,47 @@ func TestComposeAtIncludesBoundaryIncrementalAndFailsRequiredGap(t *testing.T) {
 	require.ErrorContains(t, err, "required incremental checkpoint")
 }
 
+func TestComposeAtIncludesIncrementalCoveringSnapshot(t *testing.T) {
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	coveringIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(20, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{coveringIncr, baseEntry},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			switch entry {
+			case baseEntry:
+				return []*TableInfo{{TableID: 1}}, nil
+			case coveringIncr:
+				return []*TableInfo{{TableID: 2}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(15, 0))
+	require.NoError(t, err)
+	require.Len(t, view.Incrementals, 1)
+	require.Contains(t, view.Tables, uint64(2))
+}
+
+func TestComposeAtFailsMissingMiddleIncremental(t *testing.T) {
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	firstIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
+	gappedIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(20, 0), types.BuildTS(25, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{gappedIncr, firstIncr, baseEntry},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: uint64(entry.GetEnd().Physical())}}, nil
+		},
+	}
+
+	_, err := reader.ComposeAt(types.BuildTS(25, 0))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "checkpoint chain cannot cover")
+}
+
 func TestGetTableEntriesAtReturnsNonMissingObjectEntryError(t *testing.T) {
 	readErr := errors.New("decode checkpoint entry failed")
 	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
@@ -116,6 +157,24 @@ func TestGetTableEntriesAtReturnsNonMissingObjectEntryError(t *testing.T) {
 
 	_, _, err := reader.getTableEntriesAt(context.Background(), 42, types.BuildTS(10, 0))
 	require.ErrorIs(t, err, readErr)
+}
+
+func TestGetTableEntriesAtReturnsMissingSelectedObjectEntries(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42, DataRanges: []ckputil.TableRange{{TableID: 42}}}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			return nil, nil, moerr.NewFileNotFoundNoCtx("missing-selected")
+		},
+	}
+
+	_, _, err := reader.getTableEntriesAt(context.Background(), 42, types.BuildTS(10, 0))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "required checkpoint object entries")
 }
 
 func TestWriteCSVChunksPreservesStorageOrder(t *testing.T) {
@@ -453,6 +512,27 @@ func TestPrepareTableDumpDataForTablesEmptySelection(t *testing.T) {
 	data, err := reader.PrepareTableDumpDataForTables(context.Background(), nil, types.BuildTS(10, 0))
 	require.NoError(t, err)
 	require.Empty(t, data)
+}
+
+func TestPrepareTableDumpDataForTablesReturnsMissingSelectedObjectEntries(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: moTablesID, DataRanges: []ckputil.TableRange{{TableID: moTablesID}}}}, nil
+		},
+		getObjectsForTablesTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+			return nil, nil, moerr.NewFileNotFoundNoCtx("missing-selected")
+		},
+		getLogicalViewForTest: func(_ *CheckpointReader, _ uint64) (*LogicalTableView, error) {
+			return &LogicalTableView{}, nil
+		},
+	}
+
+	_, err := reader.PrepareTableDumpDataForTables(context.Background(), []uint64{moTablesID}, types.BuildTS(10, 0))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "required checkpoint object entries")
 }
 
 func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {

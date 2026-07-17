@@ -93,11 +93,11 @@ func TestShouldIncludeIncrementalCheckpointWithoutBase(t *testing.T) {
 
 	assert.True(t, shouldIncludeIncrementalCheckpoint(zero, ts1, zero, ts1, false))
 	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, false))
-	assert.False(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts1, false))
+	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts1, false))
 
 	assert.True(t, shouldIncludeIncrementalCheckpoint(zero, ts1, zero, ts1, true))
 	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, ts1, ts2, true))
-	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, true))
+	assert.False(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, true))
 }
 
 // TestOpenWithKind verifies the offline checkpoint reader honors WithKind (the
@@ -428,7 +428,7 @@ func TestCheckpointReaderComposeAtWithHooks(t *testing.T) {
 	tombStats := testCheckpointObjectStats(t, 2)
 	gcEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(5, 0), checkpoint.ET_Global)
 	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(6, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
-	incrEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(11, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
+	incrEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
 	futureEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(16, 0), types.BuildTS(25, 0), checkpoint.ET_Incremental)
 	reader := &CheckpointReader{
 		ctx:     context.Background(),
@@ -448,7 +448,7 @@ func TestCheckpointReaderComposeAtWithHooks(t *testing.T) {
 		}
 	}
 
-	view, err := reader.ComposeAt(types.BuildTS(20, 0))
+	view, err := reader.ComposeAt(types.BuildTS(15, 0))
 	require.NoError(t, err)
 	require.NotNil(t, view.BaseEntry)
 	require.Equal(t, 1, view.BaseEntry.Index)
@@ -465,7 +465,7 @@ func TestCheckpointReaderComposeAtWithHooks(t *testing.T) {
 		}
 		return nil, hookErr
 	}
-	_, err = reader.ComposeAt(types.BuildTS(20, 0))
+	_, err = reader.ComposeAt(types.BuildTS(15, 0))
 	require.ErrorIs(t, err, hookErr)
 }
 

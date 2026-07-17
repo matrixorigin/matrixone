@@ -521,50 +521,105 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 		}
 	}
 
-	// Add ICKPs from GCKP.end and <= ts. The checkpoint store uses the
-	// selected GCKP end as the start of the first following ICKP.
+	// Add ICKPs from GCKP.end through the first entry that covers ts. The
+	// checkpoint store uses the selected GCKP end as the start of the first
+	// following ICKP, then previous.end.Next() for each subsequent ICKP.
 	baseEnd := types.TS{}
 	if baseEntry != nil {
 		baseEnd = baseEntry.GetEnd()
 	}
+	type incrementalEntry struct {
+		index int
+		entry *checkpoint.CheckpointEntry
+	}
+	incrementals := make([]incrementalEntry, 0, len(r.entries))
 	for i, e := range r.entries {
+		if e.IsIncremental() {
+			incrementals = append(incrementals, incrementalEntry{index: i, entry: e})
+		}
+	}
+	slices.SortFunc(incrementals, func(a, b incrementalEntry) int {
+		aStart := a.entry.GetStart()
+		bStart := b.entry.GetStart()
+		if c := aStart.Compare(&bStart); c != 0 {
+			return c
+		}
+		aEnd := a.entry.GetEnd()
+		bEnd := b.entry.GetEnd()
+		return aEnd.Compare(&bEnd)
+	})
+	expectedStart := baseEnd
+	covered := baseEntry != nil && ts.LE(&baseEnd)
+	for _, incr := range incrementals {
+		e := incr.entry
 		start := e.GetStart()
 		end := e.GetEnd()
-		if e.IsIncremental() && shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts, baseEntry != nil) {
-			tables, err := r.GetTables(e)
-			if err != nil {
-				if isDataFileNotFound(err) {
-					return nil, moerr.NewFileNotFoundErrorf(
-						r.ctx,
-						"required incremental checkpoint data file not found (may have been GC'd): start=%s end=%s",
-						start.ToString(),
-						end.ToString(),
-					)
-				}
-				return nil, err
+		if end.LE(&baseEnd) || end.LT(&expectedStart) {
+			continue
+		}
+		hasChain := baseEntry != nil || len(view.Incrementals) > 0
+		if !shouldIncludeIncrementalCheckpoint(start, end, expectedStart, ts, hasChain) {
+			if hasChain && !covered && start.GT(&expectedStart) && expectedStart.LE(&ts) {
+				return nil, moerr.NewInternalErrorf(
+					r.ctx,
+					"checkpoint chain cannot cover snapshot %s: missing incremental checkpoint at start=%s before next start=%s end=%s",
+					ts.ToString(),
+					expectedStart.ToString(),
+					start.ToString(),
+					end.ToString(),
+				)
 			}
-			view.Incrementals = append(view.Incrementals, r.EntryInfo(i, e))
-			for _, t := range tables {
-				if existing, ok := view.Tables[t.TableID]; ok {
-					existing.DataRanges = append(existing.DataRanges, t.DataRanges...)
-					existing.TombRanges = append(existing.TombRanges, t.TombRanges...)
-				} else {
-					view.Tables[t.TableID] = t
-				}
+			continue
+		}
+		tables, err := r.GetTables(e)
+		if err != nil {
+			if isDataFileNotFound(err) {
+				return nil, moerr.NewFileNotFoundErrorf(
+					r.ctx,
+					"required incremental checkpoint data file not found (may have been GC'd): start=%s end=%s",
+					start.ToString(),
+					end.ToString(),
+				)
+			}
+			return nil, err
+		}
+		view.Incrementals = append(view.Incrementals, r.EntryInfo(incr.index, e))
+		for _, t := range tables {
+			if existing, ok := view.Tables[t.TableID]; ok {
+				existing.DataRanges = append(existing.DataRanges, t.DataRanges...)
+				existing.TombRanges = append(existing.TombRanges, t.TombRanges...)
+			} else {
+				view.Tables[t.TableID] = t
 			}
 		}
+		if ts.LE(&end) {
+			covered = true
+			break
+		}
+		expectedStart = end.Next()
+	}
+	if !covered && expectedStart.LE(&ts) && (baseEntry != nil || len(view.Incrementals) > 0) {
+		return nil, moerr.NewInternalErrorf(
+			r.ctx,
+			"checkpoint chain cannot cover snapshot %s: missing incremental checkpoint at start=%s",
+			ts.ToString(),
+			expectedStart.ToString(),
+		)
 	}
 	return view, nil
 }
 
 func shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts types.TS, hasBase bool) bool {
-	if !end.LE(&ts) {
+	if !hasBase {
+		return start.GE(&baseEnd) && start.LE(&ts)
+	}
+	if start.GT(&baseEnd) {
 		return false
 	}
-	if hasBase {
-		return start.GE(&baseEnd)
+	if start.LT(&baseEnd) {
+		return false
 	}
-	return start.GE(&baseEnd)
+	return end.GE(&baseEnd) && start.LE(&ts)
 }
 
 // ValidateSnapshot checks that ts can compose a catalog-backed checkpoint view.

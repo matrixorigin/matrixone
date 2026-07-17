@@ -853,7 +853,9 @@ func writeRestoreScript(
 
 	var script bytes.Buffer
 	currentDB := ""
-	for _, table := range orderTablesForRestore(tables, dumpDataByTable) {
+	restoreOrder := buildRestoreTableOrder(tables, dumpDataByTable)
+	deferredFKs := make([]deferredForeignKeyDDL, 0)
+	for _, table := range restoreOrder.tables {
 		if table.DatabaseName == "" {
 			return "", fmt.Errorf("table %d has empty database name in checkpoint catalog", table.TableID)
 		}
@@ -872,9 +874,15 @@ func writeRestoreScript(
 			currentDB = table.DatabaseName
 		}
 
-		ddl, err := restoreCreateTableDDL(ctx, reader, table, dumpDataByTable[table.TableID], snapshotTS)
+		omitForeignKeys := restoreOrder.cyclicFKTables[table.TableID]
+		ddl, err := restoreCreateTableDDLWithOptions(ctx, reader, table, dumpDataByTable[table.TableID], snapshotTS, restoreCreateTableDDLOptions{
+			omitForeignKeys: omitForeignKeys,
+		})
 		if err != nil {
 			return "", err
+		}
+		if omitForeignKeys {
+			deferredFKs = append(deferredFKs, deferredForeignKeyDDLsForTable(table, dumpDataByTable[table.TableID])...)
 		}
 		if isExternalRelation(table) {
 			ddl, err = packageExternalTableSource(ctx, dumpOut, csvRoot, table, ddl)
@@ -930,6 +938,25 @@ func writeRestoreScript(
 			return "", err
 		}
 	}
+	for _, deferred := range deferredFKs {
+		if deferred.database == "" || deferred.ddl == "" {
+			continue
+		}
+		if deferred.database != currentDB {
+			if currentDB != "" {
+				if _, err := fmt.Fprintln(&script); err != nil {
+					return "", err
+				}
+			}
+			if _, err := fmt.Fprintf(&script, "USE %s;\n\n", quoteSQLIdent(deferred.database)); err != nil {
+				return "", err
+			}
+			currentDB = deferred.database
+		}
+		if _, err := fmt.Fprintln(&script, deferred.ddl); err != nil {
+			return "", err
+		}
+	}
 
 	f, err := dumpOut.Create(ctx, scriptPath)
 	if err != nil {
@@ -943,6 +970,11 @@ func writeRestoreScript(
 		return "", fmt.Errorf("write restore script: %w", writeErr)
 	}
 	return scriptPath, nil
+}
+
+type deferredForeignKeyDDL struct {
+	database string
+	ddl      string
 }
 
 func filterAccountRestoreScriptTables(
@@ -977,8 +1009,23 @@ func orderTablesForRestore(
 	tables []checkpointtool.TableCatalogEntry,
 	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
 ) []checkpointtool.TableCatalogEntry {
+	return buildRestoreTableOrder(tables, dumpDataByTable).tables
+}
+
+type restoreTableOrder struct {
+	tables         []checkpointtool.TableCatalogEntry
+	cyclicFKTables map[uint64]bool
+}
+
+func buildRestoreTableOrder(
+	tables []checkpointtool.TableCatalogEntry,
+	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
+) restoreTableOrder {
 	if len(tables) <= 1 {
-		return tables
+		return restoreTableOrder{
+			tables:         tables,
+			cyclicFKTables: detectCyclicForeignKeyTables(tables, dumpDataByTable),
+		}
 	}
 	type tableKey struct {
 		database string
@@ -1076,7 +1123,67 @@ func orderTablesForRestore(
 	for _, table := range tables {
 		visit(table)
 	}
-	return ordered
+	return restoreTableOrder{
+		tables:         ordered,
+		cyclicFKTables: detectCyclicForeignKeyTables(tables, dumpDataByTable),
+	}
+}
+
+func detectCyclicForeignKeyTables(
+	tables []checkpointtool.TableCatalogEntry,
+	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
+) map[uint64]bool {
+	type tableKey struct {
+		database string
+		table    string
+	}
+	tableByKey := make(map[tableKey]checkpointtool.TableCatalogEntry, len(tables))
+	for _, table := range tables {
+		tableByKey[tableKey{database: table.DatabaseName, table: table.TableName}] = table
+	}
+	deps := make(map[uint64][]uint64, len(tables))
+	for _, table := range tables {
+		dumpData := dumpDataByTable[table.TableID]
+		if dumpData == nil || dumpData.Schema == nil {
+			continue
+		}
+		for _, fk := range dumpData.Schema.ForeignKeys {
+			parent, ok := tableByKey[tableKey{database: fk.ReferDatabase, table: fk.ReferTable}]
+			if !ok {
+				continue
+			}
+			deps[table.TableID] = append(deps[table.TableID], parent.TableID)
+		}
+	}
+	cyclic := make(map[uint64]bool)
+	visited := make(map[uint64]bool, len(tables))
+	onStack := make(map[uint64]int, len(tables))
+	stack := make([]uint64, 0, len(tables))
+	var visit func(uint64)
+	visit = func(tableID uint64) {
+		if idx, ok := onStack[tableID]; ok {
+			for _, cyclicID := range stack[idx:] {
+				cyclic[cyclicID] = true
+			}
+			cyclic[tableID] = true
+			return
+		}
+		if visited[tableID] {
+			return
+		}
+		visited[tableID] = true
+		onStack[tableID] = len(stack)
+		stack = append(stack, tableID)
+		for _, parentID := range deps[tableID] {
+			visit(parentID)
+		}
+		delete(onStack, tableID)
+		stack = stack[:len(stack)-1]
+	}
+	for _, table := range tables {
+		visit(table.TableID)
+	}
+	return cyclic
 }
 
 func restoreCreateTableDDL(
@@ -1085,6 +1192,21 @@ func restoreCreateTableDDL(
 	table checkpointtool.TableCatalogEntry,
 	dumpData *checkpointtool.TableDumpData,
 	snapshotTS types.TS,
+) (string, error) {
+	return restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{})
+}
+
+type restoreCreateTableDDLOptions struct {
+	omitForeignKeys bool
+}
+
+func restoreCreateTableDDLWithOptions(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	table checkpointtool.TableCatalogEntry,
+	dumpData *checkpointtool.TableDumpData,
+	snapshotTS types.TS,
+	options restoreCreateTableDDLOptions,
 ) (string, error) {
 	ddl := ""
 	if dumpData != nil && dumpData.Schema != nil {
@@ -1110,6 +1232,9 @@ func restoreCreateTableDDL(
 			schemaCopy := *schema
 			schemaCopy.TableName = table.TableName
 			schemaCopy.DatabaseName = table.DatabaseName
+			if options.omitForeignKeys {
+				schemaCopy.ForeignKeys = nil
+			}
 			ddl = checkpointtool.RenderCreateTableDDLFromSchema(&schemaCopy)
 		}
 	}
@@ -1121,6 +1246,24 @@ func restoreCreateTableDDL(
 		}
 	}
 	return normalizeCreateTableDDLName(ddl, table), nil
+}
+
+func deferredForeignKeyDDLsForTable(table checkpointtool.TableCatalogEntry, dumpData *checkpointtool.TableDumpData) []deferredForeignKeyDDL {
+	if dumpData == nil || dumpData.Schema == nil || len(dumpData.Schema.ForeignKeys) == 0 {
+		return nil
+	}
+	ddls := make([]deferredForeignKeyDDL, 0, len(dumpData.Schema.ForeignKeys))
+	for _, fk := range dumpData.Schema.ForeignKeys {
+		ddl := checkpointtool.RenderAddForeignKeyDDL(table.TableName, fk)
+		if ddl == "" {
+			continue
+		}
+		ddls = append(ddls, deferredForeignKeyDDL{
+			database: table.DatabaseName,
+			ddl:      ddl,
+		})
+	}
+	return ddls
 }
 
 func renderExternalCreateTableDDLFromParamJSON(table checkpointtool.TableCatalogEntry, schema *checkpointtool.TableSchema) (string, error) {

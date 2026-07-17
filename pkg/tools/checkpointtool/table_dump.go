@@ -874,6 +874,18 @@ func renderForeignKeyClause(key TableForeignKey) string {
 	return sb.String()
 }
 
+func RenderAddForeignKeyDDL(tableName string, key TableForeignKey) string {
+	tableName = strings.TrimSpace(tableName)
+	if tableName == "" {
+		return ""
+	}
+	keys := normalizedForeignKeys([]TableForeignKey{key})
+	if len(keys) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("ALTER TABLE %s ADD %s;", quoteDDLIdent(tableName), renderForeignKeyClause(keys[0]))
+}
+
 func appendDDLIdentList(sb *strings.Builder, names []string) {
 	for i, name := range names {
 		if i > 0 {
@@ -1190,7 +1202,13 @@ func (r *CheckpointReader) getTableEntriesAt(
 		dataEntries, tombEntries, err := r.GetObjectEntries(e, tableID)
 		if err != nil {
 			if isDataFileNotFound(err) {
-				continue
+				return nil, nil, moerr.NewFileNotFoundErrorf(
+					ctx,
+					"required checkpoint object entries not found for table %d: checkpoint start=%s end=%s",
+					tableID,
+					e.GetStart().ToString(),
+					e.GetEnd().ToString(),
+				)
 			}
 			return nil, nil, err
 		}
@@ -1354,7 +1372,12 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 		dataByTable, tombByTable, err := r.GetObjectEntriesForTables(e, tableSet)
 		if err != nil {
 			if isDataFileNotFound(err) {
-				continue
+				return nil, moerr.NewFileNotFoundErrorf(
+					ctx,
+					"required checkpoint object entries not found for checkpoint start=%s end=%s",
+					e.GetStart().ToString(),
+					e.GetEnd().ToString(),
+				)
 			}
 			return nil, err
 		}
