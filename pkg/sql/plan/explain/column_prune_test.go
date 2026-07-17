@@ -985,7 +985,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		})
 	}
 
-	t.Run("single-consumer volatile functions remain inline above order", func(t *testing.T) {
+	t.Run("order consumes retained volatile project", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
@@ -993,10 +993,11 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
-		require.Equal(t, plan.Node_PROJECT, root.NodeType)
+		query := logicPlan.GetQuery()
+		root := query.Nodes[query.Steps[0]]
 		functionProjects := 0
-		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+		var functionProject *plan.Node
+		for _, node := range reachablePlanNodes(query) {
 			containsTableStats := false
 			var visitExpr func(*plan.Expr)
 			visitExpr = func(expr *plan.Expr) {
@@ -1015,10 +1016,27 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 			}
 			if containsTableStats {
 				functionProjects++
-				require.Same(t, root, node)
+				functionProject = node
 			}
 		}
 		require.Equal(t, 1, functionProjects)
+		require.NotSame(t, root, functionProject)
+		require.Len(t, functionProject.ProjectList, 4, "hidden attnum must remain available to ORDER BY")
+
+		sortConsumesProject := false
+		for _, node := range reachablePlanNodes(query) {
+			if node.NodeType != plan.Node_SORT || len(node.Children) != 1 || query.Nodes[node.Children[0]] != functionProject {
+				continue
+			}
+			sortConsumesProject = true
+			for _, orderBy := range node.OrderBy {
+				col := orderBy.Expr.GetCol()
+				require.NotNil(t, col)
+				require.GreaterOrEqual(t, col.ColPos, int32(0))
+				require.Less(t, int(col.ColPos), len(functionProject.ProjectList))
+			}
+		}
+		require.True(t, sortConsumesProject)
 	})
 
 	for _, test := range []struct {

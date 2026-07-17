@@ -137,12 +137,6 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
 			refCnt := colRefCnt[[2]int32{tag, int32(i)}]
-			if !exprCanRemoveProject(proj) {
-				if refCnt == 0 || parentType != plan.Node_SORT {
-					allColRef = false
-					break
-				}
-			}
 			if flag || refCnt > 1 {
 				if proj.GetCol() == nil && (proj.GetLit() == nil || flag) {
 					allColRef = false
@@ -205,6 +199,11 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	}
 	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
+	}
+	for _, expr := range node.ProjectList {
+		if !exprCanRemoveProject(expr) {
+			return false
+		}
 	}
 
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
