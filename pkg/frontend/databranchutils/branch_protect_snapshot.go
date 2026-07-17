@@ -15,12 +15,12 @@
 package databranchutils
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -48,6 +48,14 @@ func NextAlterLineageLevel(parentLevel string) string {
 		return AlterLineageLevel
 	}
 	return AlterLineageLevel + ":" + parentLevel
+}
+
+// isLogicalBranchOwnerLevel reports whether a live metadata row represents a
+// logical branch. A plain "alter" row exists only for a historical source,
+// while "alter:<level>" carries the logical ownership inherited across
+// ALTER's copy-and-swap.
+func isLogicalBranchOwnerLevel(level string) bool {
+	return !IsAlterLineageLevel(level) || strings.HasPrefix(level, AlterLineageLevel+":")
 }
 
 // BranchSnapshotSnamePrefix is the sname prefix used by branch-owned snapshot
@@ -152,7 +160,7 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 // frontend and compile-layer decisions on the same boundary.
 func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, error) {
 	if length < 0 {
-		return 0, fmt.Errorf("invalid PITR length %d", length)
+		return 0, moerr.NewInvalidInputNoCtxf("invalid PITR length %d", length)
 	}
 	now = now.UTC()
 	var lower time.Time
@@ -166,7 +174,7 @@ func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, err
 	case "y":
 		lower = now.AddDate(-length, 0, 0)
 	default:
-		return 0, fmt.Errorf("unknown PITR unit %q", unit)
+		return 0, moerr.NewInvalidInputNoCtxf("unknown PITR unit %q", unit)
 	}
 	return lower.UnixNano(), nil
 }
@@ -241,7 +249,7 @@ func ComputeAlterLineageCompactionPlan(
 			component = append(component, tableID)
 
 			if meta, ok := dag.Info[tableID]; ok {
-				if !meta.Deleted && !IsAlterLineageLevel(meta.Level) {
+				if !meta.Deleted && isLogicalBranchOwnerLevel(meta.Level) {
 					logicalOwner = true
 				}
 				if meta.ParentTableID != 0 {

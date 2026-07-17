@@ -322,6 +322,23 @@ func TestComputeAlterLineageCompactionPlanScopeAndOwners(t *testing.T) {
 	plan = ComputeAlterLineageCompactionPlan(withDeletedLogicalSibling, edges, nil)
 	require.Equal(t, []uint64{2}, plan.TableIDs)
 
+	// ALTER preserves the logical owner's level after the prefix. Once the
+	// copy-and-swap drops the old physical table, this live alter:table row is
+	// the only remaining representation of the logical branch and must keep
+	// the lineage component alive.
+	withInheritedLogicalOwner := NewBranchReclaimDag([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "table", TableDeleted: true},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter:table"},
+	})
+	inheritedEdges := map[uint64]HistoricalLineageEdge{
+		3: {
+			ChildTableID: 3, ParentTableID: 2, CloneTS: 200,
+			AccountName: "acc", DatabaseName: "db", TableName: "t",
+		},
+	}
+	plan = ComputeAlterLineageCompactionPlan(withInheritedLogicalOwner, inheritedEdges, nil)
+	require.Empty(t, plan.TableIDs)
+
 	plan = ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(baseRows), nil, nil)
 	require.Empty(t, plan.TableIDs, "missing identity must be retained conservatively")
 }
