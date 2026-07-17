@@ -1264,6 +1264,158 @@ func Test_HandlePrepareStmt(t *testing.T) {
 	})
 }
 
+func Test_HandlePrepareStringUsesSessionSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStringUsesSessionSQLMode", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		ec.resper = ses.respr
+		preStmt, err := handlePrepareString(ses, ec, tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"))
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareVarUsesSessionSQLMode", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		require.NoError(t, ses.SetUserDefinedVar("stmt_var_sql", "select 'a'||'b'", "set @stmt_var_sql = 'select ''a''||''b'''"))
+		ec.resper = ses.respr
+		preStmt, err := handlePrepareVar(ses, ec, tree.NewPrepareVar("stmt_sql_mode_var", tree.NewVarExpr("stmt_var_sql", false, false, nil)))
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func requirePreparedSelectConcat(t *testing.T, preStmt *PrepareStmt) {
+	t.Helper()
+	selectStmt, ok := preStmt.PrepareStmt.(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, selectClause.Exprs, 1)
+	fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "concat", name.ColName())
+}
+
+func TestPrepareSQLModeStagedExecution(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+	tests := []struct {
+		name      string
+		sql       string
+		staged    bool
+		wantError bool
+		first     string
+	}{
+		{
+			name:   "expression value",
+			sql:    `set sql_mode=concat('ANSI_','QUOTES'); select "c"`,
+			staged: true,
+			first:  `set sql_mode=concat('ANSI_','QUOTES');`,
+		},
+		{
+			name:   "user variable value",
+			sql:    `set @mode='ANSI_QUOTES'; set sql_mode=@mode; select "c"`,
+			staged: true,
+			first:  `set @mode='ANSI_QUOTES';`,
+		},
+		{
+			name:   "failing expression precedes mode-sensitive syntax error",
+			sql:    `set sql_mode=unknown_function(); select 'a\'; select 1`,
+			staged: true,
+			first:  `set sql_mode=unknown_function();`,
+		},
+		{
+			name:   "compound statement",
+			sql:    `set sql_mode='ANSI_QUOTES'; begin select 1; end; select "c"`,
+			staged: true,
+			first:  `set sql_mode='ANSI_QUOTES';`,
+		},
+		{
+			name:   "mode set is final statement",
+			sql:    `select 1; set sql_mode='ANSI_QUOTES'`,
+			staged: false,
+		},
+		{
+			name:   "global mode does not affect session parser",
+			sql:    `set global sql_mode='ANSI_QUOTES'; select "c"`,
+			staged: false,
+		},
+		{
+			name:      "unrelated parse error",
+			sql:       `select from`,
+			wantError: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.staged, staged)
+			require.Equal(t, test.first, first)
+		})
+	}
+}
+
+func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+	input := &UserInput{sql: `set sql_mode=concat('ANSI_','QUOTES'); select "c"`}
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	require.NoError(t, err)
+	require.True(t, staged)
+	require.NotEmpty(t, first)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	nextInput, rest, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: nextInput}
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.Len(t, stmts, 1)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "c", name.ColName())
+}
+
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
