@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -170,7 +171,8 @@ func TestClientClosedEventDefaultsRunBeforeCustomOnce(t *testing.T) {
 				))
 
 				require.NoError(t, tt.close(ctx, op))
-				require.NoError(t, tt.close(ctx, op))
+				err = tt.close(ctx, op)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 				require.Equal(t, 1, called)
 			})
 		})
