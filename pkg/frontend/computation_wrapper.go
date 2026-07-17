@@ -850,7 +850,9 @@ func createCompile(
 	} else {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatement(ses, schedulingSQL))
 	}
-	retCompile.SetResourceAttemptOwnerEligible()
+	if resourceAttemptOwnerEligible(ses) {
+		retCompile.SetResourceAttemptOwnerEligible()
+	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		// No permission verification is required when retry execute buildPlan
@@ -916,6 +918,14 @@ func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
 		}
 	}
 	return intent
+}
+
+// Only the client statement owns retry-attempt cardinality. Back-exec SQL is
+// derived work under that statement's resource root and contributes resources,
+// but it must not claim the root's single attempt owner.
+func resourceAttemptOwnerEligible(ses FeSession) bool {
+	_, isBackExec := ses.(*backSession)
+	return !isBackExec
 }
 
 func currentCNPipelineAddress(ses FeSession) string {

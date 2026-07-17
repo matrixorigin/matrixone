@@ -46,6 +46,11 @@ type mockCompile struct {
 	releaseFunc func()
 }
 
+func TestResourceAttemptOwnerEligible(t *testing.T) {
+	require.True(t, resourceAttemptOwnerEligible(&Session{}))
+	require.False(t, resourceAttemptOwnerEligible(&backSession{}))
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) Release()                                { m.releaseFunc() }
