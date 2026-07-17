@@ -25,7 +25,6 @@ import (
 	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
-	logtailservice "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
@@ -98,7 +97,7 @@ func TestNewTAEStorageHandleCreationFailure(t *testing.T) {
 			string,
 			*options.LogtailServerCfg,
 			runtime.Runtime,
-		) (*logtailservice.LogtailServer, error) {
+		) (logtailServer, error) {
 			serverCalls++
 			return nil, nil
 		},
@@ -109,6 +108,32 @@ func TestNewTAEStorageHandleCreationFailure(t *testing.T) {
 	require.ErrorIs(t, err, primaryErr)
 	require.Equal(t, 1, handleCalls)
 	require.Equal(t, 0, serverCalls)
+}
+
+func TestNewTAEStorageRejectsInvalidLogtailMessageSizeBeforeOpeningHandle(t *testing.T) {
+	handleCalls := 0
+	deps := taeStorageDependencies{
+		newTAEHandle: func(
+			context.Context,
+			string,
+			client.QueryClient,
+			*options.Options,
+		) (taeHandle, error) {
+			handleCalls++
+			return nil, nil
+		},
+	}
+	rt := runtime.DefaultRuntime()
+	cfg := options.NewDefaultLogtailServerCfg()
+	cfg.RpcMaxMessageSize = 1
+
+	storage, err := newTAEStorage(
+		context.Background(), t.TempDir(),
+		&options.Options{SID: rt.ServiceUUID()}, metadata.TNShard{}, rt,
+		"", cfg, nil, nil, deps)
+	require.Nil(t, storage)
+	require.Error(t, err)
+	require.Zero(t, handleCalls)
 }
 
 func TestNewTAEStorageLogtailServerFailureClosesHandle(t *testing.T) {
@@ -131,7 +156,7 @@ func TestNewTAEStorageLogtailServerFailureClosesHandle(t *testing.T) {
 			string,
 			*options.LogtailServerCfg,
 			runtime.Runtime,
-		) (*logtailservice.LogtailServer, error) {
+		) (logtailServer, error) {
 			serverCalls++
 			return nil, primaryErr
 		},
@@ -158,7 +183,7 @@ func newTAEStorageForTest(
 		metadata.TNShard{},
 		rt,
 		"",
-		&options.LogtailServerCfg{},
+		options.NewDefaultLogtailServerCfg(),
 		nil,
 		nil,
 		deps,

@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +30,64 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRetryWaitHonorsContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		req := txn.TxnRequest{Options: &txn.TxnRequestOptions{
+			RetryCodes:    []int32{int32(moerr.ErrTNShardNotFound)},
+			RetryInterval: int64(time.Hour),
+		}}
+		resp := &txn.TxnResponse{}
+		var calls atomic.Int32
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var resultErr error
+		done := false
+		go func() {
+			resultErr = (&store{}).handleWithRetry(ctx, &req, resp,
+				func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+					calls.Add(1)
+					resp.TxnError = txn.WrapError(moerr.NewTNShardNotFoundNoCtx("tn", 1), 0)
+					return nil
+				})
+			done = true
+		}()
+
+		// The fake clock cannot advance while Wait is active, so returning here
+		// proves the request is blocked in the one-hour retry wait.
+		synctest.Wait()
+		require.False(t, done)
+		require.Equal(t, int32(1), calls.Load())
+
+		cancel()
+		synctest.Wait()
+		require.True(t, done)
+		require.NoError(t, resultErr)
+		require.Equal(t, int32(1), calls.Load())
+		require.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
+	})
+}
+
+func TestRetryDoesNotRedispatchWhenContextAndTimerAreReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req := txn.TxnRequest{Options: &txn.TxnRequestOptions{
+		RetryCodes:    []int32{int32(moerr.ErrTNShardNotFound)},
+		RetryInterval: -1,
+	}}
+	resp := &txn.TxnResponse{}
+	var calls atomic.Int32
+
+	err := (&store{}).handleWithRetry(ctx, &req, resp,
+		func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+			calls.Add(1)
+			resp.TxnError = txn.WrapError(moerr.NewTNShardNotFoundNoCtx("tn", 1), 0)
+			cancel()
+			return nil
+		})
+
+	assert.NoError(t, err)
+	assert.Equal(t, int32(1), calls.Load())
+}
 
 func TestStartedTNReplicaLifecycle(t *testing.T) {
 	newStore := func() *store {
@@ -41,6 +101,9 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 	newReadyReplica := func(t *testing.T, shardID, replicaID uint64) *replica {
 		r := newReplica(newTestTNShard(shardID, replicaID, shardID), runtime.DefaultRuntime())
 		require.True(t, r.reserveStart())
+		r.mu.Lock()
+		r.service = &closeTrackingTxnService{}
+		r.mu.Unlock()
 		r.finishStart(nil)
 		return r
 	}
@@ -55,9 +118,11 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 		s.replicas.Store(uint64(1), r)
 		req := newRequest(1, 2)
 
-		got, err := s.startedTNReplica(context.Background(), &req, &txn.TxnResponse{})
+		got, err := s.acquireTNReplica(context.Background(), &req, &txn.TxnResponse{})
 		require.NoError(t, err)
-		require.Same(t, r, got)
+		require.NotNil(t, got)
+		defer got.release()
+		require.Same(t, r.service, got.service)
 	})
 
 	t.Run("wait then ready", func(t *testing.T) {
@@ -67,18 +132,24 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 		s.replicas.Store(uint64(1), r)
 		req := newRequest(1, 2)
 		entered := make(chan struct{})
-		result := make(chan *replica, 1)
+		result := make(chan *txnServiceLease, 1)
 		errC := make(chan error, 1)
 		go func() {
 			close(entered)
-			got, err := s.startedTNReplica(context.Background(), &req, &txn.TxnResponse{})
+			got, err := s.acquireTNReplica(context.Background(), &req, &txn.TxnResponse{})
 			result <- got
 			errC <- err
 		}()
 
 		<-entered
+		r.mu.Lock()
+		r.service = &closeTrackingTxnService{}
+		r.mu.Unlock()
 		r.finishStart(nil)
-		require.Same(t, r, <-result)
+		lease := <-result
+		require.NotNil(t, lease)
+		defer lease.release()
+		require.Same(t, r.service, lease.service)
 		require.NoError(t, <-errC)
 	})
 
@@ -93,7 +164,7 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 		errC := make(chan error, 1)
 		go func() {
 			close(entered)
-			_, err := s.startedTNReplica(ctx, &req, &txn.TxnResponse{})
+			_, err := s.acquireTNReplica(ctx, &req, &txn.TxnResponse{})
 			errC <- err
 		}()
 
@@ -118,7 +189,7 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 			req := newRequest(1, 2)
 			response := &txn.TxnResponse{}
 
-			got, err := s.startedTNReplica(context.Background(), &req, response)
+			got, err := s.acquireTNReplica(context.Background(), &req, response)
 			require.NoError(t, err)
 			require.Nil(t, got)
 			requireNotFound(t, response)
@@ -130,23 +201,27 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 		oldReplica := newReadyReplica(t, 1, 2)
 		s.replicas.Store(uint64(1), oldReplica)
 		oldRequest := newRequest(1, 2)
-		got, err := s.startedTNReplica(context.Background(), &oldRequest, &txn.TxnResponse{})
+		got, err := s.acquireTNReplica(context.Background(), &oldRequest, &txn.TxnResponse{})
 		require.NoError(t, err)
-		require.Same(t, oldReplica, got)
+		require.NotNil(t, got)
+		require.Same(t, oldReplica.service, got.service)
+		got.release()
 
 		s.replicas.Delete(uint64(1))
 		replacement := newReadyReplica(t, 1, 4)
 		s.replicas.Store(uint64(1), replacement)
 		oldResponse := &txn.TxnResponse{}
-		got, err = s.startedTNReplica(context.Background(), &oldRequest, oldResponse)
+		got, err = s.acquireTNReplica(context.Background(), &oldRequest, oldResponse)
 		require.NoError(t, err)
 		require.Nil(t, got)
 		requireNotFound(t, oldResponse)
 
 		newRequest := newRequest(1, 4)
-		got, err = s.startedTNReplica(context.Background(), &newRequest, &txn.TxnResponse{})
+		got, err = s.acquireTNReplica(context.Background(), &newRequest, &txn.TxnResponse{})
 		require.NoError(t, err)
-		require.Same(t, replacement, got)
+		require.NotNil(t, got)
+		defer got.release()
+		require.Same(t, replacement.service, got.service)
 	})
 }
 
