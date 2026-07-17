@@ -116,7 +116,7 @@ func NewFlushTableTailEntry(
 				time.Sleep(time.Second)
 			}
 			var err error
-			entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(ctx, "flush", entry.txn.GetStartTS(), entry.collectTs)
+			entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(ctx, entry.txn.GetStartTS(), entry.collectTs)
 			if err != nil {
 				return nil, err
 			}
@@ -195,28 +195,9 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 // collectDelsAndTransfer collects deletes in flush process and moves them to the created obj
 // ATTENTION !!! (from, to] !!!
 func (entry *flushTableTailEntry) collectDelsAndTransfer(
-	ctx context.Context, phase string, from, to types.TS,
+	ctx context.Context, from, to types.TS,
 ) (transCnt int, err error) {
 	scanStart := from.Next()
-	defer func() {
-		fields := []zap.Field{
-			zap.String("task", entry.taskName),
-			zap.String("phase", phase),
-			zap.String("range-from", from.ToString()),
-			zap.String("range-scan-start", scanStart.ToString()),
-			zap.String("range-to", to.ToString()),
-			zap.String("txn-start-ts", entry.txn.GetStartTS().ToString()),
-			zap.String("collect-ts", entry.collectTs.ToString()),
-			zap.String("prepare-ts", entry.txn.GetPrepareTS().ToString()),
-			zap.Int("aobjs", len(entry.aobjHandles)),
-			zap.Bool("has-created-object", entry.createdObjHandle != nil),
-			zap.Int("transfer-rows", transCnt),
-		}
-		if err != nil {
-			fields = append(fields, zap.Error(err))
-		}
-		logutil.Info("[FLUSH-TRANSFER]", fields...)
-	}()
 	if len(entry.aobjHandles) == 0 {
 		return
 	}
@@ -310,7 +291,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	commitScanStart := entry.collectTs.Next()
 	prepareTS := entry.txn.GetPrepareTS()
 	preparePrev := prepareTS.Prev()
-	trans, err := entry.collectDelsAndTransfer(ctx, "prepare-commit", entry.collectTs, preparePrev)
+	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, preparePrev)
 	if err != nil {
 		return err
 	}
@@ -320,6 +301,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			"[FLUSH-PREPARE-COMMIT]",
 			zap.String("task", entry.taskName),
 			zap.String("commit-ts", prepareTS.ToString()),
+			zap.String("transfer-split-ts", entry.collectTs.ToString()),
 			zap.String("flush-range-from", txnStart.ToString()),
 			zap.String("flush-range-scan-start", flushScanStart.ToString()),
 			zap.String("flush-range-to", entry.collectTs.ToString()),
