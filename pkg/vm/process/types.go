@@ -107,6 +107,8 @@ type SessionInfo struct {
 	Host                 string
 	Role                 string
 	ConnectionID         uint64
+	UserLevelLockOwner   string
+	UserLevelLockConnID  uint64
 	LastInsertID         uint64
 	Database             string
 	Version              string

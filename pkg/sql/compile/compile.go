@@ -2989,6 +2989,10 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 
+	if hasUserLevelLockFunction(node.ProjectList) && !c.userLevelLockProjectionRunsOnCoordinator(ss) {
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
+
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
@@ -3046,6 +3050,47 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 
 	c.anal.isFirst = false
 	return ss
+}
+
+func (c *Compile) userLevelLockProjectionRunsOnCoordinator(ss []*Scope) bool {
+	if len(ss) != 1 {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu == 1 && sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
+}
+
+func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprHasUserLevelLockFunction(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasUserLevelLockFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F == nil {
+			return false
+		}
+		if e.F.Func != nil {
+			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
+			if function.IsUserLevelLockFunctionID(fid) {
+				return true
+			}
+		}
+		return hasUserLevelLockFunction(e.F.Args)
+	case *plan.Expr_List:
+		if e.List == nil {
+			return false
+		}
+		return hasUserLevelLockFunction(e.List.List)
+	}
+	return false
 }
 
 func (c *Compile) setProjection(node *plan.Node, s *Scope) {

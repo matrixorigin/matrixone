@@ -7010,6 +7010,20 @@ func userLevelLockOwner(proc *process.Process) string {
 		return ""
 	}
 	si := proc.GetSessionInfo()
+	userLevelLocks.Lock()
+	owner := si.UserLevelLockOwner
+	userLevelLocks.Unlock()
+	if owner != "" {
+		return owner
+	}
+	return deriveUserLevelLockOwner(proc)
+}
+
+func deriveUserLevelLockOwner(proc *process.Process) string {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return ""
+	}
+	si := proc.GetSessionInfo()
 	if si.GetConnectionID() != 0 {
 		return fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID())
 	}
@@ -7023,7 +7037,55 @@ func userLevelLockConnectionID(proc *process.Process) uint64 {
 	if proc == nil || proc.GetSessionInfo() == nil {
 		return 0
 	}
-	return proc.GetSessionInfo().GetConnectionID()
+	si := proc.GetSessionInfo()
+	userLevelLocks.Lock()
+	owner := si.UserLevelLockOwner
+	connID := si.UserLevelLockConnID
+	userLevelLocks.Unlock()
+	if owner != "" {
+		return connID
+	}
+	return si.GetConnectionID()
+}
+
+func ensureUserLevelLockIdentity(proc *process.Process) (string, uint64) {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return "", 0
+	}
+	si := proc.GetSessionInfo()
+	userLevelLocks.Lock()
+	owner := si.UserLevelLockOwner
+	connID := si.UserLevelLockConnID
+	userLevelLocks.Unlock()
+	if owner != "" {
+		return owner, connID
+	}
+
+	owner = deriveUserLevelLockOwner(proc)
+	connID = si.GetConnectionID()
+	userLevelLocks.Lock()
+	if si.UserLevelLockOwner == "" {
+		si.UserLevelLockOwner = owner
+		si.UserLevelLockConnID = connID
+	} else {
+		owner = si.UserLevelLockOwner
+		connID = si.UserLevelLockConnID
+	}
+	userLevelLocks.Unlock()
+	return owner, connID
+}
+
+func clearUserLevelLockIdentityIfUnused(proc *process.Process, owner string) {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return
+	}
+	si := proc.GetSessionInfo()
+	userLevelLocks.Lock()
+	if si.UserLevelLockOwner == owner && len(userLevelLocks.byOwner[owner]) == 0 {
+		si.UserLevelLockOwner = ""
+		si.UserLevelLockConnID = 0
+	}
+	userLevelLocks.Unlock()
 }
 
 func userLevelLockSessionID(proc *process.Process) string {
@@ -7249,8 +7311,11 @@ func UserLevelLocksForMigration(proc *process.Process) []UserLevelLockState {
 }
 
 func RestoreUserLevelLocksFromMigration(proc *process.Process, states []UserLevelLockState) {
-	owner := userLevelLockOwner(proc)
-	if owner == "" || len(states) == 0 {
+	if len(states) == 0 {
+		return
+	}
+	owner, _ := ensureUserLevelLockIdentity(proc)
+	if owner == "" {
 		return
 	}
 	sessionID := userLevelLockSessionID(proc)
@@ -7290,6 +7355,13 @@ func DiscardMigratedUserLevelLocks(proc *process.Process) {
 	}
 	delete(userLevelLocks.byOwner, owner)
 	delete(userLevelLocks.ownerSessions, owner)
+	if proc != nil && proc.GetSessionInfo() != nil {
+		si := proc.GetSessionInfo()
+		if si.UserLevelLockOwner == owner {
+			si.UserLevelLockOwner = ""
+			si.UserLevelLockConnID = 0
+		}
+	}
 }
 
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
@@ -7301,10 +7373,10 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if err != nil {
 		return 0, err
 	}
-	//owner = sessionid or serviceid:connectionid  or  connectionid
-	owner := userLevelLockOwner(proc)
-	//connectionid
-	connID := userLevelLockConnectionID(proc)
+	// Pin the owner/txn identity for the lifetime of held user-level locks.
+	// SessionInfo.ConnectionID may be changed by proxy restore or SET CONNECTION
+	// ID, but existing lock txns must remain releasable by this session.
+	owner, connID := ensureUserLevelLockIdentity(proc)
 	//owner+lockname -> count
 	//serviceid:connectionid + lockname -> count
 	if userLevelLockRefCount(owner, name) > 0 {
@@ -7324,6 +7396,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		userLevelLockTxnID(owner, connID, name),
 		userLevelLockOptions(policy))
 	if err != nil {
+		clearUserLevelLockIdentityIfUnused(proc, owner)
 		if userLevelLockConflictOrTimeout(err) {
 			return 0, nil
 		}
@@ -7381,6 +7454,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		return 0, false, err
 	}
 	untrackUserLevelLock(owner, name)
+	clearUserLevelLockIdentityIfUnused(proc, owner)
 	return 1, false, nil
 }
 
@@ -7463,6 +7537,7 @@ func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 			released += int64(count)
 		}
 	}
+	clearUserLevelLockIdentityIfUnused(proc, owner)
 	return released, nil
 }
 

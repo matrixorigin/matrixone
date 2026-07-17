@@ -7630,6 +7630,53 @@ func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 	})
 }
 
+func TestUserLevelLockConnectionIDMutationKeepsPinnedOwnerForRelease(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		proc1.GetSessionInfo().ConnectionID = 1001
+		proc2.GetSessionInfo().ConnectionID = 2002
+
+		v, err := getUserLevelLock("conn_id_mutation_release", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		proc1.GetSessionInfo().ConnectionID = 3003
+		v, isNull, err := releaseUserLevelLock("conn_id_mutation_release", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		require.Empty(t, proc1.GetSessionInfo().UserLevelLockOwner)
+		require.Zero(t, proc1.GetSessionInfo().UserLevelLockConnID)
+
+		v, err = getUserLevelLock("conn_id_mutation_release", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockConnectionIDMutationKeepsPinnedOwnerForCloseCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		proc1.GetSessionInfo().ConnectionID = 1001
+		proc2.GetSessionInfo().ConnectionID = 2002
+
+		v, err := getUserLevelLock("conn_id_mutation_close", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		proc1.GetSessionInfo().ConnectionID = 3003
+		ReleaseUserLevelLocks(proc1)
+		require.Empty(t, proc1.GetSessionInfo().UserLevelLockOwner)
+		require.Zero(t, proc1.GetSessionInfo().UserLevelLockConnID)
+
+		v, err = getUserLevelLock("conn_id_mutation_close", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
 func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		const (
@@ -7736,6 +7783,53 @@ func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, isNull)
 		require.Equal(t, int64(1), released)
+	})
+}
+
+func TestUserLevelLockConcurrentSameSessionIdentity(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		const workers = 8
+
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc.GetSessionInfo().ConnectionID = 1001
+
+		start := make(chan struct{})
+		errCh := make(chan error, workers)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				name := fmt.Sprintf("same_session_identity_%d", i)
+				v, err := getUserLevelLock(name, 0, proc)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if v != 1 {
+					errCh <- fmt.Errorf("expected GET_LOCK to return 1, got %d", v)
+					return
+				}
+				v, isNull, err := releaseUserLevelLock(name, proc)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if isNull || v != 1 {
+					errCh <- fmt.Errorf("unexpected RELEASE_LOCK result: value=%d isNull=%v", v, isNull)
+				}
+			}(i)
+		}
+
+		close(start)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			require.NoError(t, err)
+		}
+		require.Empty(t, proc.GetSessionInfo().UserLevelLockOwner)
+		require.Zero(t, proc.GetSessionInfo().UserLevelLockConnID)
 	})
 }
 

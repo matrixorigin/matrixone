@@ -321,6 +321,15 @@ func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {
 	return fid, oIndex
 }
 
+func IsUserLevelLockFunctionID(fid int32) bool {
+	switch fid {
+	case GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK, RELEASE_ALL_LOCKS:
+		return true
+	default:
+		return false
+	}
+}
+
 func getFunctionIdByName(ctx context.Context, name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
