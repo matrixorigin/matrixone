@@ -29,10 +29,21 @@ type executionResourceRecorder struct {
 }
 
 type remoteTerminalEnvelope struct {
-	Plan          *models.PhyPlan              `json:"plan,omitempty"`
-	Delta         resource.Delta               `json:"resource"`
-	Memory        resource.MemoryDomainSummary `json:"memory"`
-	MemoryQuality resource.QualityFlags        `json:"memory_quality,omitempty"`
+	Plan                     *models.PhyPlan       `json:"plan,omitempty"`
+	Delta                    resource.Delta        `json:"resource"`
+	Memory                   resource.MemoryTotals `json:"memory"`
+	MissingFragmentCount     uint64                `json:"missing_fragment_count,omitempty"`
+	MissingMemoryDomainCount uint64                `json:"missing_memory_domain_count,omitempty"`
+}
+
+// remoteResourceAggregate is the already-reduced terminal output sent by one
+// remote hop. Delta contains local plus descendant usage and quality, but its
+// outcome belongs only to the sending hop; descendant outcomes are not reduced.
+type remoteResourceAggregate struct {
+	Delta                    resource.Delta
+	Memory                   resource.MemoryTotals
+	MissingFragmentCount     uint64
+	MissingMemoryDomainCount uint64
 }
 
 func newExecutionResourceRecorder(
@@ -85,21 +96,18 @@ func (r *executionResourceRecorder) finishAttempt(
 	}
 	attempt := resource.NewAttempt(generation, 0, 0)
 	delta := collectScopeResourceDelta(scopes, localAddress)
-	var (
-		remoteUsage   resource.Usage
-		remoteMemory  resource.MemoryTotals
-		remoteQuality resource.QualityFlags
-		remoteReports uint64
-	)
+	remote := remoteResourceSnapshot{}
 	if anal != nil {
-		remoteUsage, remoteMemory, remoteQuality, remoteReports = anal.remoteResourceSummary()
+		remote = anal.remoteResourceSummary()
 	}
-	delta.Quality |= remoteQuality | resource.MergeUsage(&delta.Usage, remoteUsage)
-	var missingRemote uint64
-	if expected := countExpectedRemoteScopes(scopes, localAddress); remoteReports < expected {
-		missingRemote = expected - remoteReports
-		delta.Quality |= resource.QualityPartial | resource.QualityMissingFragment
-	}
+	remoteAggregate := composeRemoteResourceAggregate(
+		delta,
+		resource.MemoryDomainSummary{},
+		0,
+		remote,
+		countExpectedRemoteScopes(scopes, localAddress),
+	)
+	delta = remoteAggregate.Delta
 
 	var coordinator resource.LocalRecorder
 	preRunNS := durationNS(preRunWall, &delta.Quality)
@@ -150,20 +158,14 @@ func (r *executionResourceRecorder) finishAttempt(
 	attempt.BeginClosing()
 	wallNS := durationNS(time.Since(attemptStart), &delta.Quality)
 	summary := attempt.Seal(wallNS, outcome)
-	summary.Quality |= delta.Quality | resource.MergeMemoryTotals(&summary.Memory, remoteMemory)
-	if missingRemote > 0 {
-		addMissing := func(value *uint64) {
-			if *value > math.MaxUint64-missingRemote {
-				*value = math.MaxUint64
-				summary.Quality |= resource.QualityInvariantFailure
-				return
-			}
-			*value += missingRemote
-		}
-		addMissing(&summary.MissingFragmentCount)
-		addMissing(&summary.MissingMemoryDomainCount)
-		summary.Quality |= resource.QualityPartial | resource.QualityMissingMemoryDomain
-	}
+	summary.Quality |= delta.Quality | resource.MergeMemoryTotals(&summary.Memory, remoteAggregate.Memory)
+	var quality resource.QualityFlags
+	summary.MissingFragmentCount, quality = addCheckedRemoteCounter(
+		summary.MissingFragmentCount, remoteAggregate.MissingFragmentCount, summary.Quality)
+	summary.Quality = quality
+	summary.MissingMemoryDomainCount, quality = addCheckedRemoteCounter(
+		summary.MissingMemoryDomainCount, remoteAggregate.MissingMemoryDomainCount, summary.Quality)
+	summary.Quality = quality
 	r.execution.AddAttempt(summary, retried)
 }
 
@@ -195,6 +197,50 @@ func addS3Requests(
 	add(resource.S3Get, requests.Get)
 	add(resource.S3Delete, requests.Delete)
 	add(resource.S3DeleteMulti, requests.DeleteMul)
+}
+
+// addCheckedRemoteCounter adds an aggregate report/missing counter without
+// allowing wraparound to masquerade as a valid complete result.
+func addCheckedRemoteCounter(value, add uint64, quality resource.QualityFlags) (uint64, resource.QualityFlags) {
+	if math.MaxUint64-value < add {
+		return math.MaxUint64, quality | resource.QualityInvariantFailure
+	}
+	return value + add, quality
+}
+
+// composeRemoteResourceAggregate composes one hop's captured local resource
+// facts with an already-reduced descendant aggregate. It is pure so every
+// remote hop and the coordinator use the same merge algebra.
+func composeRemoteResourceAggregate(
+	localDelta resource.Delta,
+	localMemory resource.MemoryDomainSummary,
+	localMemoryQuality resource.QualityFlags,
+	descendant remoteResourceSnapshot,
+	expectedDirect uint64,
+) remoteResourceAggregate {
+	result := remoteResourceAggregate{Delta: localDelta}
+	result.Delta.Quality |= descendant.Quality | localMemoryQuality
+	result.Delta.Quality |= resource.MergeUsage(&result.Delta.Usage, descendant.Usage)
+	result.Delta.Quality |= resource.MergeMemoryDomain(&result.Memory, localMemory)
+	result.Delta.Quality |= resource.MergeMemoryTotals(&result.Memory, descendant.Memory)
+	result.MissingFragmentCount = descendant.MissingFragmentCount
+	result.MissingMemoryDomainCount = descendant.MissingMemoryDomainCount
+	if descendant.MissingFragmentCount > 0 {
+		result.Delta.Quality |= resource.QualityPartial | resource.QualityMissingFragment
+	}
+	if descendant.MissingMemoryDomainCount > 0 {
+		result.Delta.Quality |= resource.QualityPartial | resource.QualityMissingMemoryDomain
+	}
+	if descendant.DirectReportCount < expectedDirect {
+		directMissing := expectedDirect - descendant.DirectReportCount
+		result.MissingFragmentCount, result.Delta.Quality = addCheckedRemoteCounter(
+			result.MissingFragmentCount, directMissing, result.Delta.Quality)
+		result.MissingMemoryDomainCount, result.Delta.Quality = addCheckedRemoteCounter(
+			result.MissingMemoryDomainCount, directMissing, result.Delta.Quality)
+		result.Delta.Quality |= resource.QualityPartial |
+			resource.QualityMissingFragment | resource.QualityMissingMemoryDomain
+	}
+	return result
 }
 
 func collectScopeResourceDelta(scopes []*Scope, localAddress string) resource.Delta {

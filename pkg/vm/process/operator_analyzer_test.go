@@ -603,7 +603,7 @@ func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
 	assert.Contains(t, got, "ParquetReadPageTime:41ns ")
 	assert.Contains(t, got, "ParquetMapTime:61ns ")
 	assert.Contains(t, got, "ParquetRowModeTime:81ns ")
-	assert.Contains(t, got, "ParquetPeakBatchBytes:4096bytes ")
+	assert.Contains(t, got, "ParquetPeakBatchBytes:4096bytes")
 	assert.NotContains(t, got, "s3://")
 	assert.NotContains(t, got, "warehouse")
 	assert.NotContains(t, got, "secret")

@@ -44,18 +44,35 @@ type AnalyzeModule struct {
 	phyPlan        *models.PhyPlan
 	remotePhyPlans []models.PhyPlan
 	// Added read-write lock
-	mu               sync.RWMutex
-	retryTimes       int
-	explainPhyBuffer *bytes.Buffer
-	remoteUsage      resource.Usage
-	remoteMemory     resource.MemoryTotals
-	remoteQuality    resource.QualityFlags
-	remoteReports    uint64
+	mu                         sync.RWMutex
+	retryTimes                 int
+	explainPhyBuffer           *bytes.Buffer
+	remoteUsage                resource.Usage
+	remoteMemory               resource.MemoryTotals
+	remoteQuality              resource.QualityFlags
+	remoteMissingFragments     uint64
+	remoteMissingMemoryDomains uint64
+	remoteReports              uint64
+}
+
+// remoteResourceSnapshot is a by-value view of the terminal resource facts
+// received from descendant remote runs. The direct report count is kept
+// separately from the nested missing counts so each hop can account for the
+// remote scopes it expected to hear from exactly once.
+type remoteResourceSnapshot struct {
+	Usage                    resource.Usage
+	Memory                   resource.MemoryTotals
+	Quality                  resource.QualityFlags
+	MissingFragmentCount     uint64
+	MissingMemoryDomainCount uint64
+	DirectReportCount        uint64
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
 func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
+		anal.mu.Lock()
+		defer anal.mu.Unlock()
 		if !isPrepare {
 			anal.phyPlan = nil
 		}
@@ -66,12 +83,16 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		anal.remoteUsage = resource.Usage{}
 		anal.remoteMemory = resource.MemoryTotals{}
 		anal.remoteQuality = 0
+		anal.remoteMissingFragments = 0
+		anal.remoteMissingMemoryDomains = 0
 		anal.remoteReports = 0
-		for _, node := range anal.qry.Nodes {
-			if node.AnalyzeInfo == nil {
-				node.AnalyzeInfo = new(plan.AnalyzeInfo)
-			} else {
-				node.AnalyzeInfo.Reset()
+		if anal.qry != nil {
+			for _, node := range anal.qry.Nodes {
+				if node.AnalyzeInfo == nil {
+					node.AnalyzeInfo = new(plan.AnalyzeInfo)
+				} else {
+					node.AnalyzeInfo.Reset()
+				}
 			}
 		}
 	}
@@ -80,32 +101,40 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 
 func (anal *AnalyzeModule) appendRemoteResource(
 	delta resource.Delta,
-	memory resource.MemoryDomainSummary,
-	memoryQuality resource.QualityFlags,
+	memory resource.MemoryTotals,
+	missingFragments uint64,
+	missingMemoryDomains uint64,
 ) {
 	if anal == nil {
 		return
 	}
 	anal.mu.Lock()
 	defer anal.mu.Unlock()
-	anal.remoteQuality |= delta.Quality | memoryQuality |
-		resource.MergeUsage(&anal.remoteUsage, delta.Usage) |
-		resource.MergeMemoryDomain(&anal.remoteMemory, memory)
-	anal.remoteReports++
+	quality := delta.Quality
+	quality |= resource.MergeUsage(&anal.remoteUsage, delta.Usage)
+	quality |= resource.MergeMemoryTotals(&anal.remoteMemory, memory)
+	anal.remoteMissingFragments, quality = addCheckedRemoteCounter(
+		anal.remoteMissingFragments, missingFragments, quality)
+	anal.remoteMissingMemoryDomains, quality = addCheckedRemoteCounter(
+		anal.remoteMissingMemoryDomains, missingMemoryDomains, quality)
+	anal.remoteReports, quality = addCheckedRemoteCounter(anal.remoteReports, 1, quality)
+	anal.remoteQuality |= quality
 }
 
-func (anal *AnalyzeModule) remoteResourceSummary() (
-	resource.Usage,
-	resource.MemoryTotals,
-	resource.QualityFlags,
-	uint64,
-) {
+func (anal *AnalyzeModule) remoteResourceSummary() remoteResourceSnapshot {
 	if anal == nil {
-		return resource.Usage{}, resource.MemoryTotals{}, 0, 0
+		return remoteResourceSnapshot{}
 	}
 	anal.mu.RLock()
 	defer anal.mu.RUnlock()
-	return anal.remoteUsage, anal.remoteMemory, anal.remoteQuality, anal.remoteReports
+	return remoteResourceSnapshot{
+		Usage:                    anal.remoteUsage,
+		Memory:                   anal.remoteMemory,
+		Quality:                  anal.remoteQuality,
+		MissingFragmentCount:     anal.remoteMissingFragments,
+		MissingMemoryDomainCount: anal.remoteMissingMemoryDomains,
+		DirectReportCount:        anal.remoteReports,
+	}
 }
 
 func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {

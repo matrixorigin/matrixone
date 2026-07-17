@@ -251,11 +251,30 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		var runErr error
 		defer func() {
-			receiver.resourceDelta = collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
-			receiver.resourceDelta.Outcome = resourceOutcome(runErr)
+			// Capture operator and descendant facts before cleanup. The MPool
+			// snapshot intentionally follows Compile.clear so temporary execution
+			// allocations are released before LiveBytesAtSeal is measured. The
+			// descendant snapshot is already reduced under AnalyzeModule's mutex;
+			// sender quiescence remains the lifecycle contract for this boundary.
+			localDelta := collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
+			localDelta.Outcome = resourceOutcome(runErr)
+			descendant := runCompile.anal.remoteResourceSummary()
+			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
 			memoryPool := runCompile.proc.Mp()
 			runCompile.clear()
-			receiver.resourceMemory, receiver.resourceMemoryQuality = memoryPool.ResourceSnapshot()
+			localMemory, localMemoryQuality := memoryPool.ResourceSnapshot()
+			aggregate := composeRemoteResourceAggregate(
+				localDelta,
+				localMemory,
+				localMemoryQuality,
+				descendant,
+				expectedDirect,
+			)
+			receiver.resourceDelta = aggregate.Delta
+			receiver.resourceMemory = aggregate.Memory
+			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
+			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
+
 			mpool.DeleteMPool(memoryPool)
 			runCompile.Release()
 		}()
@@ -536,10 +555,11 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan               *models.PhyPlan
-	resourceDelta         resource.Delta
-	resourceMemory        resource.MemoryDomainSummary
-	resourceMemoryQuality resource.QualityFlags
+	phyPlan                      *models.PhyPlan
+	resourceDelta                resource.Delta
+	resourceMemory               resource.MemoryTotals
+	resourceMissingFragments     uint64
+	resourceMissingMemoryDomains uint64
 }
 
 func newMessageReceiverOnServer(
@@ -785,10 +805,11 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
-		Plan:          receiver.phyPlan,
-		Delta:         receiver.resourceDelta,
-		Memory:        receiver.resourceMemory,
-		MemoryQuality: receiver.resourceMemoryQuality,
+		Plan:                     receiver.phyPlan,
+		Delta:                    receiver.resourceDelta,
+		Memory:                   receiver.resourceMemory,
+		MissingFragmentCount:     receiver.resourceMissingFragments,
+		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {

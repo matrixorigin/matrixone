@@ -805,7 +805,8 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,
-			envelope.MemoryQuality,
+			envelope.MissingFragmentCount,
+			envelope.MissingMemoryDomainCount,
 		)
 	}
 	sender.terminalSeen = true
