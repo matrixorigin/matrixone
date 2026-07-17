@@ -1,0 +1,53 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_posfree;
+create database ft2_posfree;
+use ft2_posfree;
+create table t (id bigint primary key, body text);
+insert into t values
+(1,'我家有三个人'),(2,'三个人都住在我家'),(3,'我家的花园很漂亮'),
+(4,'教室里有三个人'),(5,'昨天我家有三个人来吃饭');
+create fulltext2 index bad1 on t(body) with parser ngram position_free = true;
+invalid input: fulltext2 POSITION_FREE requires WITH PARSER gojieba (got "ngram"): a position-free index answers only IN BM25 MODE bag-of-words, and ngram/json tokens are meaningless without positions
+create fulltext2 index bad2 on t(body) position_free = true;
+invalid input: fulltext2 POSITION_FREE requires WITH PARSER gojieba (got "ngram"): a position-free index answers only IN BM25 MODE bag-of-words, and ngram/json tokens are meaningless without positions
+create fulltext2 index ft on t(body) with parser gojieba position_free = true;
+select algo_params from mo_catalog.mo_indexes where name = 'ft' and algo_params like '%parser%' limit 1;
+algo_params
+{"parser":"gojieba","position_free":"true"}
+select id from t where match(body) against('我家有三个人' in bm25 mode) order by id;
+id
+1
+2
+3
+4
+5
+select id from t where match(body) against('教室' in bm25 mode) order by id;
+id
+4
+select id from t where match(body) against('我家有三个人' in boolean mode) order by id;
+invalid input: fulltext2 index "ft" is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching
+select id from t where match(body) against('我家有三个人' in natural language mode) order by id;
+invalid input: fulltext2 index "ft" is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching
+select id from t where match(body) against('我家有三个人') order by id;
+invalid input: fulltext2 index "ft" is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching
+alter table t alter reindex ft fulltext2 position_free = false;
+select algo_params from mo_catalog.mo_indexes where name = 'ft' and algo_params like '%parser%' limit 1;
+algo_params
+{"parser":"gojieba"}
+select id from t where match(body) against('我家有三个人' in boolean mode) order by id;
+id
+1
+5
+alter table t alter reindex ft fulltext2 position_free = true;
+select algo_params from mo_catalog.mo_indexes where name = 'ft' and algo_params like '%parser%' limit 1;
+algo_params
+{"parser":"gojieba","position_free":"true"}
+select id from t where match(body) against('我家有三个人' in boolean mode) order by id;
+invalid input: fulltext2 index "ft" is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching
+select id from t where match(body) against('三个人' in bm25 mode) order by id;
+id
+1
+2
+4
+5
+drop database ft2_posfree;
