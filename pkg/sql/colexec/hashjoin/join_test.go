@@ -19,9 +19,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -47,6 +50,29 @@ type joinTestCase struct {
 	cancel      context.CancelFunc
 	barg        *hashbuild.HashBuild
 	resultBatch *batch.Batch
+}
+
+func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &HashJoin{
+		EqConds:   [][]*plan.Expr{{valid}, {valid}},
+		NonEqCond: invalid,
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.eqCondVecs)
+	require.Nil(t, arg.ctr.eqCondExecs)
+	require.Nil(t, arg.ctr.nonEqCondExec)
+
+	arg.NonEqCond = valid
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.eqCondExecs, 1)
+	require.NotNil(t, arg.ctr.nonEqCondExec)
+	arg.Free(proc, false, nil)
+	proc.Free()
 }
 
 var (
@@ -256,6 +282,250 @@ func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
 	tc.barg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		probeValues []int32
+		buildValues []int32
+		hashOnPK    bool
+		isRightJoin bool
+		nonEqCond   bool
+	}{
+		{
+			name:        "right single unique build",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1},
+			hashOnPK:    true,
+			isRightJoin: true,
+		},
+		{
+			name:        "right single unique build with non-equi condition",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1},
+			hashOnPK:    true,
+			isRightJoin: true,
+			nonEqCond:   true,
+		},
+		{
+			name:        "left single duplicate build",
+			probeValues: []int32{1},
+			buildValues: []int32{1, 1},
+		},
+		{
+			name:        "right single duplicate probe",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1, 2, 2},
+			isRightJoin: true,
+		},
+		{
+			name:        "right single duplicate probe with non-equi condition",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1, 2, 2},
+			isRightJoin: true,
+			nonEqCond:   true,
+		},
+		{
+			name:        "left single duplicate build with non-equi condition",
+			probeValues: []int32{1},
+			buildValues: []int32{1, 1},
+			nonEqCond:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTestCase(t,
+				[]bool{false},
+				[]types.Type{types.T_int32.ToType()},
+				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+				[][]*plan.Expr{
+					{newExpr(0, types.T_int32.ToType())},
+					{newExpr(0, types.T_int32.ToType())},
+				})
+			tc.arg.JoinType = plan.Node_SINGLE
+			tc.arg.IsRightJoin = tt.isRightJoin
+			tc.arg.HashOnPK = tt.hashOnPK
+			tc.barg.HashOnPK = tt.hashOnPK
+			if !tt.nonEqCond {
+				tc.arg.NonEqCond = nil
+			}
+
+			resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, tt.probeValues))
+			resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, tt.buildValues))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			_, err = vm.Exec(tc.arg, tc.proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrSubqueryNo1Row))
+
+			tc.arg.Reset(tc.proc, true, err)
+			tc.barg.Reset(tc.proc, true, err)
+			tc.arg.Free(tc.proc, true, err)
+			tc.barg.Free(tc.proc, true, err)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	localMatches := new(bitmap.Bitmap)
+	localMatches.InitWithSize(1)
+	localMatches.Add(0)
+	remoteMatches := localMatches.Clone()
+
+	hashJoin := &HashJoin{
+		JoinType: plan.Node_SINGLE,
+		NumCPU:   2,
+		IsMerger: true,
+		Channel:  make(chan *bitmap.Bitmap, 1),
+	}
+	hashJoin.Channel <- remoteMatches
+	ctr := container{rightRowsMatched: localMatches, probeSingle: true}
+
+	err := ctr.syncBitmap(hashJoin, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrSubqueryNo1Row))
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// A merger whose syncBitmap is aborted by a nil bitmap from the channel (a
+// worker torn down before syncing, e.g. when an outer LIMIT stops the query
+// early, sends nil from Reset) must go to End instead of entering Finalize
+// with a nil rightMatchedIter. The aborted generation must also drain the
+// remaining worker messages so a later run over the same channel does not
+// observe stale bitmaps.
+func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
+
+	matched := new(bitmap.Bitmap)
+	matched.InitWithSize(4)
+	matched.Add(0)
+	staleMatches := new(bitmap.Bitmap)
+	staleMatches.InitWithSize(4)
+	staleMatches.Add(1)
+
+	hashJoin := &HashJoin{
+		JoinType:    plan.Node_RIGHT,
+		IsRightJoin: true,
+		NumCPU:      3,
+		IsMerger:    true,
+		Channel:     make(chan *bitmap.Bitmap, 3),
+		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+		RightTypes:  []types.Type{types.T_int32.ToType()},
+	}
+	// Worker A was torn down before syncing (its Reset sends nil); worker B
+	// synced normally and its bitmap lands after the abort marker.
+	hashJoin.Channel <- nil
+	hashJoin.Channel <- staleMatches
+	hashJoin.ctr.state = SyncBitmap
+	hashJoin.ctr.rightRowsMatched = matched
+	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
+
+	result, err := hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+	// Worker B's bitmap must not be left behind in the shared channel.
+	require.Empty(t, hashJoin.Channel)
+
+	// The merger already synced this generation, so Reset must not push the
+	// nil abort marker either.
+	hashJoin.Reset(proc, false, nil)
+	require.Empty(t, hashJoin.Channel)
+
+	// Next generation over the same operator and channel: a clean sync must
+	// only observe this generation's bitmaps.
+	matched2 := new(bitmap.Bitmap)
+	matched2.InitWithSize(4)
+	matched2.Add(0)
+	workerMatches1 := new(bitmap.Bitmap)
+	workerMatches1.InitWithSize(4)
+	workerMatches1.Add(1)
+	workerMatches2 := new(bitmap.Bitmap)
+	workerMatches2.InitWithSize(4)
+	workerMatches2.Add(2)
+
+	hashJoin.Channel <- workerMatches1
+	hashJoin.Channel <- workerMatches2
+	hashJoin.ctr.state = SyncBitmap
+	hashJoin.ctr.rightRowsMatched = matched2
+	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
+
+	result, err = hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	vals := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+	require.Equal(t, []int32{40}, vals[:1])
+
+	result, err = hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	rightBat.Clean(proc.Mp())
+	hashJoin.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
+
+	matched := new(bitmap.Bitmap)
+	matched.InitWithSize(4)
+	matched.Add(0)
+	remoteMatches := new(bitmap.Bitmap)
+	remoteMatches.InitWithSize(4)
+	remoteMatches.Add(1)
+
+	hashJoin := &HashJoin{
+		JoinType:    plan.Node_RIGHT,
+		IsRightJoin: true,
+		NumCPU:      2,
+		IsMerger:    true,
+		Channel:     make(chan *bitmap.Bitmap, 2),
+		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+		RightTypes:  []types.Type{types.T_int32.ToType()},
+	}
+	hashJoin.Channel <- remoteMatches
+	hashJoin.ctr.state = SyncBitmap
+	hashJoin.ctr.rightRowsMatched = matched
+	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
+
+	result, err := hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 2, result.Batch.RowCount())
+	vals := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+	require.Equal(t, []int32{30, 40}, vals[:2])
+
+	result, err = hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	rightBat.Clean(proc.Mp())
+	hashJoin.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(len(values))
+	return bat
 }
 
 /*

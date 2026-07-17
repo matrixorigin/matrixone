@@ -502,6 +502,36 @@ func NewVecWithData(
 	return vec
 }
 
+// NewVecWithDataCopy copies external backing data into allocations owned by mp.
+func NewVecWithDataCopy(
+	typ types.Type,
+	length int,
+	data []byte,
+	area []byte,
+	mp *mpool.MPool,
+) (*Vector, error) {
+	vec := NewVec(typ)
+	vec.length = length
+	var err error
+	if len(data) > 0 {
+		vec.data, err = mp.Alloc(len(data), false)
+		if err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+		copy(vec.data, data)
+	}
+	if len(area) > 0 {
+		vec.area, err = mp.Alloc(len(area), false)
+		if err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+		copy(vec.area, area)
+	}
+	return vec, nil
+}
+
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
@@ -974,6 +1004,15 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
+	return v.dup(mp, false, v.offHeap)
+}
+
+// DupOffHeap copies a vector with all owned backing data allocated off-heap.
+func (v *Vector) DupOffHeap(mp *mpool.MPool) (*Vector, error) {
+	return v.dup(mp, true, true)
+}
+
+func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error) {
 	if v.IsConstNull() {
 		return NewConstNull(v.typ, v.Length(), mp), nil
 	}
@@ -981,6 +1020,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	var err error
 
 	w := NewVecFromReuse()
+	w.offHeap = offHeap
 	w.class = v.class
 	w.typ = v.typ
 	w.length = v.length
@@ -990,10 +1030,12 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
 		if err := extend(w, 1, mp); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 	} else {
 		if err := extend(w, v.length, mp); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 		dataLen *= v.length
@@ -1001,12 +1043,96 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area), v.offHeap); err != nil {
+		if w.area, err = mp.Alloc(len(v.area), areaOffHeap); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 		copy(w.area, v.area)
 	}
 	return w, nil
+}
+
+// CloneToFlatCompact returns a deep, flat copy of v. Unlike Dup, the clone only
+// retains varlen payload referenced by the vector's logical rows, so stale or
+// unreferenced bytes in area are not propagated into batch memory accounting.
+func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
+	w := NewVec(v.typ)
+	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
+		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+		return w, nil
+	}
+
+	if v.length == 0 {
+		return w, nil
+	}
+	if err := extend(w, v.length, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
+	w.length = v.length
+	copyBitmapWithinLength(&w.nsp, &v.nsp, v.length)
+	copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+
+	if v.typ.IsFixedLen() {
+		dataLen := v.length * v.typ.TypeSize()
+		copy(w.data[:dataLen], v.data[:dataLen])
+		return w, nil
+	}
+
+	var src, dst []types.Varlena
+	ToSliceNoTypeCheck(v, &src)
+	ToSliceNoTypeCheck(w, &dst)
+	totalArea := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) || src[i].IsSmall() {
+			continue
+		}
+		_, n := src[i].OffsetLen()
+		totalArea += int(n)
+	}
+	if totalArea > 0 {
+		var err error
+		w.area, err = mp.Alloc(totalArea, w.offHeap)
+		if err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
+
+	offset := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) {
+			dst[i] = types.Varlena{}
+			continue
+		}
+		if src[i].IsSmall() {
+			dst[i] = src[i]
+			continue
+		}
+		value := src[i].GetByteSlice(v.area)
+		copy(w.area[offset:], value)
+		dst[i].SetOffsetLen(uint32(offset), uint32(len(value)))
+		offset += len(value)
+	}
+	return w, nil
+}
+
+func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
+	if src.EmptyByFlag() {
+		return
+	}
+	limit := uint64(length)
+	src.Foreach(func(row uint64) bool {
+		if row >= limit {
+			return false
+		}
+		nulls.Add(dst, row)
+		return true
+	})
 }
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered

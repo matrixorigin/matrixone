@@ -177,9 +177,11 @@ func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
 	v2.ProxyConnectAcceptedCounter.Inc()
 	h.counterSet.connAccepted.Add(1)
+	v2.ProxyConnectionsCurrentGauge.Inc()
 	h.counterSet.connTotal.Add(1)
 	defer func() {
-		v2.ProxyConnectCurrentCounter.Inc()
+		v2.ProxyConnectionsCurrentGauge.Dec()
+		v2.ProxyConnectClosedCounter.Inc()
 		h.counterSet.connTotal.Add(-1)
 	}()
 

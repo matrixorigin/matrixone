@@ -15,7 +15,8 @@
 package logservice
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -56,8 +57,8 @@ func selectStore(
 		return ""
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].ID < candidates[j].ID
+	slices.SortFunc(candidates, func(a, b *util.Store) int {
+		return cmp.Compare(a.ID, b.ID)
 	})
 
 	return candidates[0].ID

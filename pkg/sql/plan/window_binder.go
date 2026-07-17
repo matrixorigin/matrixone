@@ -50,6 +50,166 @@ func windowExprAstKey(astExpr tree.Expr) string {
 	return tree.String(&funcExprCopy, dialect.MYSQL)
 }
 
+func windowFuncAstName(astExpr *tree.FuncExpr) string {
+	if astExpr.FuncName != nil {
+		return astExpr.FuncName.Origin()
+	}
+	if funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName); ok {
+		return funcRef.ColName()
+	}
+	return "unknown"
+}
+
+func findNestedWindowFuncNameInExprs(exprs ...tree.Expr) (string, bool) {
+	for _, expr := range exprs {
+		if name, ok := findNestedWindowFuncName(expr); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func findNestedWindowFuncNameInOrderBy(orderBy tree.OrderBy) (string, bool) {
+	for _, order := range orderBy {
+		if order == nil {
+			continue
+		}
+		if name, ok := findNestedWindowFuncName(order.Expr); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func findNestedWindowFuncName(expr tree.Expr) (string, bool) {
+	switch e := expr.(type) {
+	case nil:
+		return "", false
+	case *tree.FuncExpr:
+		if e.WindowSpec != nil {
+			return windowFuncAstName(e), true
+		}
+		if name, ok := findNestedWindowFuncNameInExprs(e.Exprs...); ok {
+			return name, true
+		}
+		return findNestedWindowFuncNameInOrderBy(e.OrderBy)
+	case *tree.BinaryExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.UnaryExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.ComparisonExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right, e.Escape)
+	case *tree.AndExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.XorExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.OrExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.NotExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNullExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotNullExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsUnknownExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotUnknownExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsTrueExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotTrueExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsFalseExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotFalseExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.ParenExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.CastExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.BitCastExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.Tuple:
+		return findNestedWindowFuncNameInExprs(e.Exprs...)
+	case *tree.RangeCond:
+		return findNestedWindowFuncNameInExprs(e.Left, e.From, e.To)
+	case *tree.CaseExpr:
+		if name, ok := findNestedWindowFuncName(e.Expr); ok {
+			return name, true
+		}
+		for _, when := range e.Whens {
+			if when == nil {
+				continue
+			}
+			if name, ok := findNestedWindowFuncNameInExprs(when.Cond, when.Val); ok {
+				return name, true
+			}
+		}
+		return findNestedWindowFuncName(e.Else)
+	case *tree.IntervalExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.DefaultVal:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.SerialExtractExpr:
+		return findNestedWindowFuncNameInExprs(e.SerialExpr, e.IndexExpr)
+	case *tree.Subquery:
+		return "", false
+	default:
+		return "", false
+	}
+}
+
+func rejectNestedWindowFunc(ctx context.Context, expr tree.Expr) error {
+	if name, ok := findNestedWindowFuncName(expr); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
+	return nil
+}
+
+func validateWindowFuncNoNested(ctx context.Context, astExpr *tree.FuncExpr) error {
+	for _, arg := range astExpr.Exprs {
+		if err := rejectNestedWindowFunc(ctx, arg); err != nil {
+			return err
+		}
+	}
+	if name, ok := findNestedWindowFuncNameInOrderBy(astExpr.OrderBy); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
+
+	ws := astExpr.WindowSpec
+	if ws == nil {
+		return nil
+	}
+	for _, group := range ws.PartitionBy {
+		if err := rejectNestedWindowFunc(ctx, group); err != nil {
+			return err
+		}
+	}
+	if name, ok := findNestedWindowFuncNameInOrderBy(ws.OrderBy); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
+	if ws.Frame != nil {
+		if ws.Frame.Start != nil {
+			if err := rejectNestedWindowFunc(ctx, ws.Frame.Start.Expr); err != nil {
+				return err
+			}
+		}
+		if ws.Frame.End != nil {
+			if err := rejectNestedWindowFunc(ctx, ws.Frame.End.Expr); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func rejectWindowResultDependency(ctx context.Context, expr *plan.Expr, windowTag int32) error {
+	if HasTag(expr, windowTag) {
+		return moerr.NewSyntaxError(ctx, "You cannot use a window function result in another window function in the same query block")
+	}
+	return nil
+}
+
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
@@ -57,6 +217,12 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 
 	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
 		return nil, err
+	}
+	if err := validateWindowFuncNoNested(b.GetContext(), astExpr); err != nil {
+		return nil, err
+	}
+	if len(astExpr.OrderBy) > 0 {
+		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
 	}
 
 	astStr := windowExprAstKey(astExpr)
@@ -71,6 +237,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	// window function
 	windowFunc, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
+		return nil, err
+	}
+	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
 		return nil, err
 	}
 	w.WindowFunc = windowFunc
@@ -88,6 +257,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
+			return nil, err
+		}
 		w.PartitionBy = append(w.PartitionBy, expr)
 	}
 
@@ -96,6 +268,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		for _, order := range ws.OrderBy {
 			expr, err := b.BindExpr(order.Expr, depth, isRoot)
 			if err != nil {
+				return nil, err
+			}
+			if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
 				return nil, err
 			}
 
@@ -181,10 +356,16 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectWindowResultDependency(b.GetContext(), w.Frame.Start.Val, ctx.windowTag); err != nil {
+			return nil, err
+		}
 	}
 	if ws.Frame.End.Expr != nil {
 		w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
 		if err != nil {
+			return nil, err
+		}
+		if err = rejectWindowResultDependency(b.GetContext(), w.Frame.End.Val, ctx.windowTag); err != nil {
 			return nil, err
 		}
 	}
