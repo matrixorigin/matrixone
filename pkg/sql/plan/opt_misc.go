@@ -231,7 +231,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if ne.F.Func.ObjName == "sleep" {
+		overload, exists := function.GetFunctionByIdWithoutError(ne.F.Func.Obj)
+		if !exists || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
 		}
 		for _, arg := range ne.F.GetArgs() {

@@ -187,6 +187,28 @@ func TestCanPruneSampleExprs(t *testing.T) {
 	})
 }
 
+func TestExprCanRemoveProjectFunctionMetadata(t *testing.T) {
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	sequence := func(name string) *plan.Expr {
+		return MakePlan2StringConstExprWithType(name)
+	}
+
+	require.True(t, exprCanRemoveProject(bind("abs", MakePlan2Int64ConstExprWithType(1))))
+	require.False(t, exprCanRemoveProject(bind("sleep", MakePlan2Int64ConstExprWithType(0))))
+	require.False(t, exprCanRemoveProject(bind("nextval", sequence("sample_seq"))))
+	require.False(t, exprCanRemoveProject(bind("setval", sequence("sample_seq"), sequence("10"))))
+
+	nested := bind("isnull", bind("nextval", sequence("sample_seq")))
+	require.False(t, exprCanRemoveProject(nested))
+
+	unknown := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: -1}}}}
+	require.False(t, exprCanRemoveProject(unknown))
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

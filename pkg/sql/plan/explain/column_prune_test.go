@@ -946,25 +946,43 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Equal(t, int32(1), havingCol.ColPos)
 	})
 
-	t.Run("sample retains side-effecting output", func(t *testing.T) {
-		logicPlan, err := buildOneStmt(
-			plan2.NewMockOptimizer(false),
-			t,
-			"select n_regionkey from (select sample(sleep(0), n_regionkey, 2 rows) from nation) s",
-		)
-		require.NoError(t, err)
+	for _, test := range []struct {
+		name     string
+		function string
+		sql      string
+	}{
+		{
+			name:     "sleep",
+			function: "sleep",
+			sql:      "select n_regionkey from (select sample(sleep(0), n_regionkey, 2 rows) from nation) s",
+		},
+		{
+			name:     "nextval",
+			function: "nextval",
+			sql:      "select n_regionkey from (select sample(nextval('sample_seq'), n_regionkey, 2 rows) from nation) s",
+		},
+		{
+			name:     "setval",
+			function: "setval",
+			sql:      "select n_regionkey from (select sample(setval('sample_seq', '10'), n_regionkey, 2 rows) from nation) s",
+		},
+	} {
+		t.Run("sample retains side-effecting output "+test.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
 
-		var sampleNode *plan.Node
-		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
-			if node.NodeType == plan.Node_SAMPLE {
-				sampleNode = node
-				break
+			var sampleNode *plan.Node
+			for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+				if node.NodeType == plan.Node_SAMPLE {
+					sampleNode = node
+					break
+				}
 			}
-		}
-		require.NotNil(t, sampleNode)
-		require.Len(t, sampleNode.AggList, 2)
-		require.Equal(t, "sleep", sampleNode.AggList[0].GetF().Func.ObjName)
-	})
+			require.NotNil(t, sampleNode)
+			require.Len(t, sampleNode.AggList, 2)
+			require.Equal(t, test.function, sampleNode.AggList[0].GetF().Func.ObjName)
+		})
+	}
 
 	t.Run("sample retains nullable outputs for row cardinality", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
