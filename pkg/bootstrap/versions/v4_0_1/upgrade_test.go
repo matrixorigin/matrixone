@@ -47,7 +47,7 @@ func Test_Upgrade(t *testing.T) {
 			t.Logf("version metadata:%v", metadata)
 			assert.Equal(t, "4.0.1", metadata.Version)
 			assert.Equal(t, "4.0.0", metadata.MinUpgradeVersion)
-			assert.Equal(t, versions.No, metadata.UpgradeCluster)
+			assert.Equal(t, versions.Yes, metadata.UpgradeCluster)
 			assert.Equal(t, versions.Yes, metadata.UpgradeTenant)
 
 			if err := Handler.Prepare(context.Background(), executor, true); err != nil {

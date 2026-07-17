@@ -612,6 +612,20 @@ func (mr *MockBackgroundExecMockRecorder) Exec(arg0, arg1 interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exec", reflect.TypeOf((*MockBackgroundExec)(nil).Exec), arg0, arg1)
 }
 
+// ExecWithSQLMode mocks base method.
+func (m *MockBackgroundExec) ExecWithSQLMode(arg0 context.Context, arg1, arg2 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecWithSQLMode", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ExecWithSQLMode indicates an expected call of ExecWithSQLMode.
+func (mr *MockBackgroundExecMockRecorder) ExecWithSQLMode(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecWithSQLMode", reflect.TypeOf((*MockBackgroundExec)(nil).ExecWithSQLMode), arg0, arg1, arg2)
+}
+
 // ExecRestore mocks base method.
 func (m *MockBackgroundExec) ExecRestore(arg0 context.Context, arg1 string, arg2, arg3 uint32) error {
 	m.ctrl.T.Helper()

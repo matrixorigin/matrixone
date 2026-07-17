@@ -172,7 +172,8 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SecurityType    string `json:"security_type,omitempty"`
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {

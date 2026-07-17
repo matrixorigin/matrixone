@@ -1381,7 +1381,7 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
+	stmts, err := mysql.ParseWithSQLMode(execCtx.reqCtx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 	if err != nil {
 		return nil, err
 	}
@@ -2581,15 +2581,165 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
-	v, err := execCtx.ses.GetSessionSysVar("lower_case_table_names")
-	var lctn int64 = 1 // default
-	if err == nil {
-		switch vv := v.(type) {
-		case int64:
-			lctn = vv
+	return p.ParseWithSQLMode(
+		execCtx.reqCtx,
+		execCtx.input.getSql(),
+		parserLowerCaseTableNames(execCtx.ses),
+		sessionSQLModeForParser(execCtx.ses),
+	)
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	v, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return ""
+	}
+	mode, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return mysql.SessionSQLModeForParser(mode)
+}
+
+func parserLowerCaseTableNames(ses FeSession) int64 {
+	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return 1
+	}
+	lctn, ok := v.(int64)
+	if !ok {
+		return 1
+	}
+	return lctn
+}
+
+func isSessionSQLModeSet(stmt tree.Statement) bool {
+	setVar, ok := stmt.(*tree.SetVar)
+	if !ok {
+		return false
+	}
+	for _, assignment := range setVar.Assignments {
+		if assignment != nil && assignment.System && !assignment.Global && strings.EqualFold(assignment.Name, "sql_mode") {
+			return true
 		}
 	}
-	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
+	return false
+}
+
+func hasStatement(fragment string, parserSQLMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0, mysql.EofChar():
+			return false
+		case int(';'):
+			continue
+		default:
+			return true
+		}
+	}
+}
+
+func mayNeedSQLModeStaging(sql string) bool {
+	return strings.Contains(sql, ";") && strings.Contains(strings.ToLower(sql), "sql_mode")
+}
+
+func prepareSQLModeStagedExecution(
+	ctx context.Context,
+	ses FeSession,
+	p *mysql.MySQLParser,
+	sql string,
+) (first string, remaining string, staged bool, err error) {
+	lctn := parserLowerCaseTableNames(ses)
+	parserSQLMode := sessionSQLModeForParser(ses)
+	stmts, parseErr := p.ParseWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	if parseErr == nil {
+		stageAt := -1
+		for i, stmt := range stmts {
+			if isSessionSQLModeSet(stmt) {
+				stageAt = i
+				break
+			}
+		}
+		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
+		freeStatements(stmts)
+		if !shouldStage {
+			return "", "", false, nil
+		}
+	} else {
+		probe := sql
+		foundSQLModeSet := false
+		for hasStatement(probe, parserSQLMode) {
+			stmt, end, firstErr := p.ParseFirstWithSQLMode(ctx, probe, lctn, parserSQLMode)
+			if firstErr != nil {
+				return "", "", false, parseErr
+			}
+			foundSQLModeSet = isSessionSQLModeSet(stmt)
+			stmt.Free()
+			probe = probe[end:]
+			if foundSQLModeSet {
+				break
+			}
+		}
+		if !foundSQLModeSet || !hasStatement(probe, parserSQLMode) {
+			return "", "", false, parseErr
+		}
+	}
+
+	stmt, end, err := p.ParseFirstWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	if err != nil {
+		return "", "", false, err
+	}
+	stmt.Free()
+	return sql[:end], sql[end:], true, nil
+}
+
+func nextSQLModeStatementInput(
+	ctx context.Context,
+	ses FeSession,
+	p *mysql.MySQLParser,
+	input *UserInput,
+	sql string,
+) (*UserInput, string, error) {
+	stmt, end, err := p.ParseFirstWithSQLMode(
+		ctx,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sessionSQLModeForParser(ses),
+	)
+	if err != nil {
+		return nil, sql, err
+	}
+	stmt.Free()
+	return newSQLStatementInput(input, ses, sql[:end]), sql[end:], nil
+}
+
+func newSQLStatementInput(input *UserInput, ses FeSession, sql string) *UserInput {
+	statementInput := *input
+	statementInput.sql = sql
+	statementInput.hashedSql = ""
+	statementInput.sqlSourceType = nil
+	statementInput.genHash()
+	statementInput.genSqlSourceType(ses)
+	return &statementInput
+}
+
+func sqlForRecord(sql string) string {
+	parts := parsers.HandleSqlForRecord(sql)
+	if len(parts) == 0 {
+		return strings.TrimSpace(sql)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func freeStatements(stmts []tree.Statement) {
+	for _, stmt := range stmts {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}
 }
 
 func incTransactionCounter(tenant string, tenantId uint32) {
@@ -3510,32 +3660,65 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
-	execCtx.input = input
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 
-	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
-		ses.GetUserName(),
-		pu.StorageEngine,
-		proc, ses)
-
-	ParseDuration := time.Since(beginInstant)
-
-	if err != nil {
-		statsInfo.ParseStage.ParseDuration = ParseDuration
-		var err2 error
-		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
-		if err2 != nil {
-			return err2
+	executionInput := input
+	stagedSQLMode := false
+	stagedRemaining := ""
+	var err error
+	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
+		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
+			execCtx.reqCtx,
+			ses,
+			ses.GetMySQLParser(),
+			input.getSql(),
+		)
+		if stageErr != nil {
+			err = stageErr
+		} else if staged {
+			stagedSQLMode = true
+			stagedRemaining = remaining
+			executionInput = newSQLStatementInput(input, ses, first)
 		}
-		retErr = err
-		if _, ok := err.(*moerr.Error); !ok {
-			retErr = moerr.NewParseError(execCtx.reqCtx, err.Error())
-		}
-		logStatementStringStatus(execCtx.reqCtx, ses, input.getSql(), fail, retErr)
-		return retErr
 	}
 
-	singleStatement := len(cws) == 1
+	var cws []ComputationWrapper
+	if err == nil {
+		execCtx.input = executionInput
+		cws, err = GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+			ses.GetUserName(),
+			pu.StorageEngine,
+			proc, ses)
+	}
+
+	ParseDuration := time.Since(beginInstant)
+	recordParseError := func(errorInput *UserInput, parseErr error) error {
+		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
+		var recordErr error
+		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
+			execCtx.reqCtx,
+			ses,
+			proc,
+			beginInstant,
+			parsers.HandleSqlForRecord(errorInput.getSql()),
+			errorInput.getSqlSourceTypes(),
+			parseErr,
+		)
+		if recordErr != nil {
+			return recordErr
+		}
+		if _, ok := parseErr.(*moerr.Error); !ok {
+			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
+		}
+		logStatementStringStatus(execCtx.reqCtx, ses, errorInput.getSql(), fail, parseErr)
+		return parseErr
+	}
+
+	if err != nil {
+		return recordParseError(input, err)
+	}
+
+	singleStatement := len(cws) == 1 && !stagedSQLMode
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
 		return moerr.NewNotSupported(execCtx.reqCtx, "prepare multi statements")
 	}
@@ -3546,7 +3729,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := true
+	canCache := !stagedSQLMode
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -3560,8 +3743,25 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 	}()
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	stagedInputs := make([]*UserInput, 0, 1)
+	stagedSQLRecords := make([]string, 0, 1)
+	if stagedSQLMode {
+		stagedInputs = append(stagedInputs, executionInput)
+		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql()))
+	}
 
-	for i, cw := range cws {
+	for i := 0; i < len(cws); i++ {
+		cw := cws[i]
+		currentInput := input
+		currentSQLRecord := sqlRecord[i]
+		sqlType := input.getSqlSourceType(i)
+		hasMoreStatements := i < len(cws)-1
+		if stagedSQLMode {
+			currentInput = stagedInputs[i]
+			currentSQLRecord = stagedSQLRecords[i]
+			sqlType = currentInput.getSqlSourceType(0)
+			hasMoreStatements = hasStatement(stagedRemaining, sessionSQLModeForParser(ses))
+		}
 		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
 			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
 			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
@@ -3580,9 +3780,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
 		stmt := cw.GetAst()
-		sqlType := input.getSqlSourceType(i)
 		var err2 error
-		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
 			return err2
 		}
@@ -3632,21 +3831,60 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
-		execCtx.isLastStmt = i >= len(cws)-1
+		execCtx.isLastStmt = !hasMoreStatements
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
-		execCtx.sqlOfStmt = sqlRecord[i]
+		execCtx.sqlOfStmt = currentSQLRecord
 		execCtx.cw = cw
 		execCtx.proc = proc
 		execCtx.resper = resper
 		execCtx.ses = ses
-		execCtx.cws = cws
-		execCtx.input = input
+		if stagedSQLMode {
+			execCtx.cws = []ComputationWrapper{cw}
+		} else {
+			execCtx.cws = cws
+		}
+		execCtx.input = currentInput
 
 		err = executeStmtWithResponse(ses, execCtx)
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
+		}
+
+		if stagedSQLMode && hasMoreStatements {
+			// SET expressions may execute an internal query, which temporarily
+			// replaces the compiler context's ExecCtx. Restore this outer query
+			// before planning the next staged statement.
+			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			nextInput, remaining, nextErr := nextSQLModeStatementInput(
+				execCtx.reqCtx,
+				ses,
+				ses.GetMySQLParser(),
+				input,
+				stagedRemaining,
+			)
+			if nextErr != nil {
+				return recordParseError(newSQLStatementInput(input, ses, stagedRemaining), nextErr)
+			}
+			execCtx.input = nextInput
+			nextCWs, nextErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+				ses.GetUserName(),
+				pu.StorageEngine,
+				proc, ses)
+			if nextErr != nil {
+				return recordParseError(nextInput, nextErr)
+			}
+			if len(nextCWs) != 1 {
+				for _, nextCW := range nextCWs {
+					nextCW.Free()
+				}
+				return moerr.NewInternalError(execCtx.reqCtx, "staged sql_mode execution parsed an unexpected statement count")
+			}
+			cws = append(cws, nextCWs[0])
+			stagedInputs = append(stagedInputs, nextInput)
+			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql()))
+			stagedRemaining = remaining
 		}
 
 	} // end of for

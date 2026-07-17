@@ -1052,6 +1052,89 @@ func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error
 	return w, nil
 }
 
+// CloneToFlatCompact returns a deep, flat copy of v. Unlike Dup, the clone only
+// retains varlen payload referenced by the vector's logical rows, so stale or
+// unreferenced bytes in area are not propagated into batch memory accounting.
+func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
+	w := NewVec(v.typ)
+	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
+		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+		return w, nil
+	}
+
+	if v.length == 0 {
+		return w, nil
+	}
+	if err := extend(w, v.length, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
+	w.length = v.length
+	copyBitmapWithinLength(&w.nsp, &v.nsp, v.length)
+	copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+
+	if v.typ.IsFixedLen() {
+		dataLen := v.length * v.typ.TypeSize()
+		copy(w.data[:dataLen], v.data[:dataLen])
+		return w, nil
+	}
+
+	var src, dst []types.Varlena
+	ToSliceNoTypeCheck(v, &src)
+	ToSliceNoTypeCheck(w, &dst)
+	totalArea := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) || src[i].IsSmall() {
+			continue
+		}
+		_, n := src[i].OffsetLen()
+		totalArea += int(n)
+	}
+	if totalArea > 0 {
+		var err error
+		w.area, err = mp.Alloc(totalArea, w.offHeap)
+		if err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
+
+	offset := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) {
+			dst[i] = types.Varlena{}
+			continue
+		}
+		if src[i].IsSmall() {
+			dst[i] = src[i]
+			continue
+		}
+		value := src[i].GetByteSlice(v.area)
+		copy(w.area[offset:], value)
+		dst[i].SetOffsetLen(uint32(offset), uint32(len(value)))
+		offset += len(value)
+	}
+	return w, nil
+}
+
+func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
+	if src.EmptyByFlag() {
+		return
+	}
+	limit := uint64(length)
+	src.Foreach(func(row uint64) bool {
+		if row >= limit {
+			return false
+		}
+		nulls.Add(dst, row)
+		return true
+	})
+}
+
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool) {
 
