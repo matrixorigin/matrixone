@@ -136,7 +136,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
-			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
+			refCnt := colRefCnt[[2]int32{tag, int32(i)}]
+			if flag || refCnt > 1 {
 				if proj.GetCol() == nil && (proj.GetLit() == nil || flag) {
 					allColRef = false
 					break
@@ -199,9 +200,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
-
-	for _, e := range node.ProjectList {
-		if !exprCanRemoveProject(e) {
+	for _, expr := range node.ProjectList {
+		if !exprCanRemoveProject(expr) {
 			return false
 		}
 	}
@@ -231,7 +231,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if ne.F.Func.ObjName == "sleep" {
+		overload, exists := function.GetFunctionByIdWithoutError(ne.F.Func.Obj)
+		if !exists || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
 		}
 		for _, arg := range ne.F.GetArgs() {

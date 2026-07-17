@@ -136,6 +136,117 @@ func TestChooseRowCarrier(t *testing.T) {
 	})
 }
 
+func TestCanPruneSampleExprs(t *testing.T) {
+	makeCol := func(tag, pos int32, notNullable bool) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}},
+		}
+	}
+	makeScan := func(tag int32, notNullable ...bool) *plan.Node {
+		cols := make([]*plan.ColDef, len(notNullable))
+		for i := range notNullable {
+			cols[i] = &plan.ColDef{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable[i]}}
+		}
+		return &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{tag},
+			TableDef:    &plan.TableDef{Cols: cols},
+		}
+	}
+
+	t.Run("single expression needs no cross-expression proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{}}}}}
+		require.True(t, canPruneSampleExprs(node, &plan.Node{NodeType: plan.Node_PROJECT}))
+	})
+
+	t.Run("direct not null table columns", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.True(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("function inference is not runtime proof", func(t *testing.T) {
+		functionExpr := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_json), NotNullable: true},
+			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "json_extract"}}},
+		}
+		node := &plan.Node{AggList: []*plan.Expr{functionExpr, makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("derived projection is not runtime proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		child := makeScan(7, true, true)
+		child.NodeType = plan.Node_PROJECT
+		require.False(t, canPruneSampleExprs(node, child))
+	})
+
+	t.Run("nullable table column", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, false)))
+	})
+}
+
+func TestExprCanRemoveProjectFunctionMetadata(t *testing.T) {
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	sequence := func(name string) *plan.Expr {
+		return MakePlan2StringConstExprWithType(name)
+	}
+
+	require.True(t, exprCanRemoveProject(bind("abs", MakePlan2Int64ConstExprWithType(1))))
+	require.False(t, exprCanRemoveProject(bind("sleep", MakePlan2Int64ConstExprWithType(0))))
+	require.False(t, exprCanRemoveProject(bind("nextval", sequence("sample_seq"))))
+	require.False(t, exprCanRemoveProject(bind("setval", sequence("sample_seq"), sequence("10"))))
+
+	nested := bind("isnull", bind("nextval", sequence("sample_seq")))
+	require.False(t, exprCanRemoveProject(nested))
+
+	unknown := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: -1}}}}
+	require.False(t, exprCanRemoveProject(unknown))
+}
+
+func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		refCnt      int
+		parentType  plan.Node_NodeType
+		wantProject bool
+	}{
+		{name: "unused", refCnt: 0, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single project consumer", refCnt: 1, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single sort consumer", refCnt: 1, parentType: plan.Node_SORT, wantProject: true},
+		{name: "single join consumer", refCnt: 1, parentType: plan.Node_JOIN, wantProject: true},
+		{name: "multiple consumers", refCnt: 2, parentType: plan.Node_PROJECT, wantProject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtx()
+			volatileExpr, err := BindFuncExprImplByPlanExpr(
+				context.Background(),
+				"nextval",
+				[]*plan.Expr{MakePlan2StringConstExprWithType("sample_seq")},
+			)
+			require.NoError(t, err)
+
+			scanID := builder.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, bindCtx)
+			projectTag := builder.genNewBindTag()
+			projectID := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{scanID},
+				BindingTags: []int32{projectTag},
+				ProjectList: []*plan.Expr{volatileExpr},
+			}, bindCtx)
+			refCnts := map[[2]int32]int{{projectTag, 0}: test.refCnt}
+
+			newNodeID, _ := builder.removeSimpleProjections(projectID, test.parentType, false, refCnts)
+			require.Equal(t, test.wantProject, newNodeID == projectID)
+		})
+	}
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
