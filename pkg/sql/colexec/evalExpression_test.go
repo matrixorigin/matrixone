@@ -614,6 +614,86 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		require.Equal(t, []int64{7, 9}, vector.MustFixedColWithTypeCheck[int64](result))
 	})
 
+	t.Run("case preserves first match across multiple when clauses and reuse", func(t *testing.T) {
+		expr := bindFunction("case",
+			column(0, types.T_bool.ToType()),
+			makePlan2Int64ConstExprWithType(1),
+			column(1, types.T_bool.ToType()),
+			castToInt64(column(2, types.T_varchar.ToType())),
+			makePlan2Int64ConstExprWithType(7))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		tests := []struct {
+			name            string
+			firstCondition  []bool
+			firstNulls      []bool
+			secondCondition []bool
+			secondNulls     []bool
+			values          []string
+			parentSelect    []bool
+			want            []int64
+		}{
+			{
+				name:            "multiple rows choose first later else and null conditions",
+				firstCondition:  []bool{true, false, false, false, true},
+				firstNulls:      []bool{false, false, true, true, false},
+				secondCondition: []bool{true, true, false, true, true},
+				secondNulls:     []bool{false, false, true, false, false},
+				values:          []string{"bad", "9", "bad", "11", "bad"},
+				want:            []int64{1, 9, 7, 11, 1},
+			},
+			{
+				name:            "changing and shrinking batch selects later branch",
+				firstCondition:  []bool{false, true},
+				secondCondition: []bool{true, true},
+				values:          []string{"13", "bad"},
+				want:            []int64{13, 1},
+			},
+			{
+				name:            "subsequent reuse keeps first match state",
+				firstCondition:  []bool{true, false, false},
+				secondCondition: []bool{true, false, true},
+				values:          []string{"bad", "bad", "17"},
+				want:            []int64{1, 7, 17},
+			},
+			{
+				name:            "parent partial selection cannot be reselected",
+				firstCondition:  []bool{true, false, false, true},
+				secondCondition: []bool{true, true, true, true},
+				values:          []string{"bad", "19", "bad", "bad"},
+				parentSelect:    []bool{true, true, false, false},
+				want:            []int64{1, 19, 0, 0},
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				require.Len(t, test.secondCondition, len(test.firstCondition))
+				require.Len(t, test.values, len(test.firstCondition))
+				input := testutil.NewBatchWithVectors([]*vector.Vector{
+					testutil.NewVectorWithNulls(len(test.firstCondition), types.T_bool.ToType(), proc.Mp(), false, test.firstNulls, test.firstCondition),
+					testutil.NewVectorWithNulls(len(test.secondCondition), types.T_bool.ToType(), proc.Mp(), false, test.secondNulls, test.secondCondition),
+					testutil.NewVector(len(test.values), types.T_varchar.ToType(), proc.Mp(), false, test.values),
+				}, nil)
+				defer input.Clean(proc.Mp())
+
+				result, err := executor.Eval(proc, []*batch.Batch{input}, test.parentSelect)
+				require.NoError(t, err)
+				values := vector.MustFixedColWithTypeCheck[int64](result)
+				require.Len(t, values, len(test.want))
+				for row := range test.want {
+					if test.parentSelect != nil && !test.parentSelect[row] {
+						continue
+					}
+					require.False(t, result.IsNull(uint64(row)), "row %d", row)
+					require.Equal(t, test.want[row], values[row], "row %d", row)
+				}
+			})
+		}
+	})
+
 	for _, test := range []struct {
 		name       string
 		targetType types.Type

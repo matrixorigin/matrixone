@@ -572,7 +572,7 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 
 			for j := 0; j < rowCount; j++ {
 				b, null := bs.GetValue(uint64(j))
-				if !null && b {
+				if remaining[j] && !null && b {
 					remaining[j] = false
 					selectedBranch[j] = true
 				} else {
