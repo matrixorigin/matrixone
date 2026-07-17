@@ -250,7 +250,11 @@ func (s *service) handleRemoteLock(
 		ctx,
 		txn,
 		req.Lock.Rows,
-		LockOptions{LockOptions: req.Lock.Options, async: true},
+		LockOptions{
+			LockOptions:                req.Lock.Options,
+			async:                      true,
+			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+		},
 		func(result pb.Result, err error) {
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
@@ -260,8 +264,20 @@ func (s *service) handleRemoteLock(
 			}
 			lockErr = err
 			resp.Lock.Result = result
-			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+			_ = writeResponseWithDeadline(s.logger, cancel, resp, remoteLockWireError(err), cs, defaultRPCWriteTimeout, logFields)
 		})
+}
+
+// remoteLockWireError keeps Method_Lock v1 compatible during a rolling 4.1
+// upgrade. Old origins do not recognize ErrRemoteLockWaitTimeout as a
+// whole-transaction rollback error. Returning the established deadlock code
+// makes every supported origin roll back and issue remote unlock for any
+// partially granted rows.
+func remoteLockWireError(err error) error {
+	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
+		return ErrDeadLockDetected
+	}
+	return err
 }
 
 func (s *service) handleForwardLock(
@@ -334,7 +350,11 @@ func (s *service) handleForwardLock(
 		ctx,
 		txn,
 		req.Lock.Rows,
-		LockOptions{LockOptions: req.Lock.Options, async: true},
+		LockOptions{
+			LockOptions:                req.Lock.Options,
+			async:                      true,
+			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+		},
 		func(result pb.Result, err error) {
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
@@ -344,7 +364,7 @@ func (s *service) handleForwardLock(
 			}
 			lockErr = err
 			resp.Lock.Result = result
-			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+			_ = writeResponseWithDeadline(s.logger, cancel, resp, remoteLockWireError(err), cs, defaultRPCWriteTimeout, logFields)
 		})
 }
 
