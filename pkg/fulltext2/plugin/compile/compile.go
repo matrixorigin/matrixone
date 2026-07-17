@@ -291,6 +291,12 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		merged[k] = v
 	}
 	if pf == "true" {
+		// Only gojieba is meaningful position-free (ngram/json trigrams are noise as
+		// bag-of-words). Mirrors the CREATE-time check.
+		if old["parser"] != "gojieba" {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"fulltext2 POSITION_FREE requires the gojieba parser (this index uses %q); ngram/json need positions", old["parser"])
+		}
 		merged[catalog.IndexAlgoParamPositionFree] = "true"
 	} else {
 		delete(merged, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (param absent)

@@ -45,6 +45,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"escape":            "legacy parser behavior before incremental keyword policy",
 	"force_sync":        "legacy parser behavior before incremental keyword policy",
 	"full":              "legacy parser behavior before incremental keyword policy",
+	"fulltext2":         "fulltext2 index-type keyword (CREATE FULLTEXT2 / REINDEX ... FULLTEXT2); non_reserved_keyword introduces a grammar conflict, so it stays contextual",
 	"ilike":             "legacy parser behavior before incremental keyword policy",
 	"intersect":         "legacy parser behavior before incremental keyword policy",
 	"minus":             "legacy parser behavior before incremental keyword policy",

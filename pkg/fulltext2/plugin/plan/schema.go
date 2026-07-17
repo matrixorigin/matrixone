@@ -196,8 +196,15 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 		}
 		// position_free ⇒ build without the positional payload (bag-of-words retrieval
-		// only). Recorded only when TRUE; absence ⇒ positional (phrase-capable).
+		// only). Recorded only when TRUE; absence ⇒ positional (phrase-capable). Only
+		// gojieba (word tokens) is meaningful position-free: ngram/json emit overlapping
+		// trigrams/values whose bag-of-words (IN BM25 MODE) result is noise — those need
+		// positions to reconstruct the term, so POSITION_FREE is rejected for them.
 		if idx.IndexOption.PositionFree {
+			if parser != "gojieba" {
+				return "", moerr.NewInvalidInputNoCtxf(
+					"fulltext2 POSITION_FREE requires WITH PARSER gojieba (got %q): a position-free index answers only IN BM25 MODE bag-of-words, and ngram/json tokens are meaningless without positions", parser)
+			}
 			res[catalog.IndexAlgoParamPositionFree] = "true"
 		}
 		// auto_update + day/hour/second drive the idxcron scheduled compaction
