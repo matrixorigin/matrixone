@@ -214,6 +214,18 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
+func TestValidateReplaceParentTxnMode(t *testing.T) {
+	ctx := context.Background()
+	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
+
+	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+		"optimistic transaction mode")
+	require.NoError(t, validateReplaceParentTxnMode(ctx,
+		&plan.Query{DetectSqls: []string{"select true"}}, false))
+	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))
+}
+
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 	runtime.RunTest(
 		"",

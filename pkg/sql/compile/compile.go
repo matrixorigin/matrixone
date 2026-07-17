@@ -527,6 +527,10 @@ func (c *Compile) runOnce() (err error) {
 	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		if err = validateReplaceParentTxnMode(
+			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
+			return err
+		}
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
@@ -661,6 +665,19 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+	if pessimistic || query == nil {
+		return nil
+	}
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+			return moerr.NewNotSupported(ctx,
+				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+	}
+	return nil
 }
 
 // add log to check if background sql return NeedRetry error when origin sql execute successfully

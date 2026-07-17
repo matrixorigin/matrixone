@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1389,14 +1390,14 @@ func genParentSideReplaceFKSqls(
 			parts := make([]string, 0, len(key.parts))
 			keyCannotConflict := false
 			for _, colName := range key.parts {
+				col, found := findParentCol(colName)
+				if !found {
+					return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
+						"REPLACE conflict column %s not found", colName)
+				}
 				pos, supplied := positions[colName]
 				var incomingExpr string
 				if !supplied || pos >= len(row) {
-					col, found := findParentCol(colName)
-					if !found {
-						return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
-							"REPLACE conflict column %s not found", colName)
-					}
 					if col.Typ.AutoIncr {
 						keyCannotConflict = true
 						break
@@ -1412,8 +1413,25 @@ func genParentSideReplaceFKSqls(
 						break
 					}
 				} else {
-					switch row[pos].(type) {
-					case *tree.NumVal, *tree.StrVal:
+					switch value := row[pos].(type) {
+					case *tree.NumVal:
+						if value.ValType == tree.P_char &&
+							(types.T(col.Typ.Id) == types.T_char || types.T(col.Typ.Id) == types.T_varchar) &&
+							col.Typ.Width > 0 && int32(utf8.RuneCountInString(value.String())) > col.Typ.Width {
+							return "", nil, nil, moerr.NewInvalidInputf(ctx.GetContext(),
+								"Src length %d is larger than Dest length %d",
+								utf8.RuneCountInString(value.String()), col.Typ.Width)
+						}
+						row[pos].Format(literalFmt)
+						incomingExpr = literalFmt.String()
+						literalFmt.Reset()
+					case *tree.StrVal:
+						if (types.T(col.Typ.Id) == types.T_char || types.T(col.Typ.Id) == types.T_varchar) &&
+							col.Typ.Width > 0 && int32(utf8.RuneCountInString(value.String())) > col.Typ.Width {
+							return "", nil, nil, moerr.NewInvalidInputf(ctx.GetContext(),
+								"Src length %d is larger than Dest length %d",
+								utf8.RuneCountInString(value.String()), col.Typ.Width)
+						}
 						row[pos].Format(literalFmt)
 						incomingExpr = literalFmt.String()
 						literalFmt.Reset()
@@ -1434,11 +1452,6 @@ func genParentSideReplaceFKSqls(
 				}
 				if keyCannotConflict {
 					break
-				}
-				col, found := findParentCol(colName)
-				if !found {
-					return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
-						"REPLACE conflict column %s not found", colName)
 				}
 				incomingExpr = castForColumn(incomingExpr, col)
 				parentExpr := qualifiedCol(parentAlias, colName)

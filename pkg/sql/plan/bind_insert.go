@@ -1035,23 +1035,169 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	childColPos func(colName string) int32,
 ) (int32, []*plan.Expr, error) {
 	selectNode := builder.qry.Nodes[lastNodeID]
+	inputTypes := make([]plan.Type, len(selectNode.ProjectList))
+	for i, expr := range selectNode.ProjectList {
+		inputTypes[i] = expr.Typ
+	}
 
 	id2name := make(map[uint64]string, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		id2name[col.ColId] = col.Name
 	}
 
-	oks := make([]*plan.Expr, 0, len(tableDef.Fkeys))
+	nonSelfFks := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
 	for _, fk := range tableDef.Fkeys {
-		if fk.ForeignTbl == 0 {
-			continue // self-referencing FK handled post-execution via DetectSql
+		if fk.ForeignTbl != 0 {
+			nonSelfFks = append(nonSelfFks, fk)
 		}
+	}
+	if len(nonSelfFks) == 0 {
+		return lastNodeID, nil, nil
+	}
+
+	// Evaluate the incoming row image once. Prerequisite steps lock every referenced
+	// key from this materialized stream before the final step scans any parent table.
+	sourceSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectTag)
+	sourceStep := builder.appendStep(sourceSinkID)
+	appendSourceScan := func() int32 {
+		return builder.appendTaggedSinkScan(bindCtx, sourceStep, selectTag)
+	}
+
+	parentColNames := func(parent *plan.TableDef, colIDs []uint64) ([]string, error) {
+		idToName := make(map[uint64]string, len(parent.Cols))
+		for _, col := range parent.Cols {
+			idToName[col.ColId] = col.Name
+		}
+		names := make([]string, len(colIDs))
+		for i, id := range colIDs {
+			var ok bool
+			if names[i], ok = idToName[id]; !ok {
+				return nil, moerr.NewInternalErrorf(builder.GetContext(),
+					"foreign-key parent column %d not found", id)
+			}
+		}
+		return names, nil
+	}
+	partsEqual := func(parts, names []string) bool {
+		if len(parts) != len(names) {
+			return false
+		}
+		for i := range parts {
+			if catalog.ResolveAlias(parts[i]) != names[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, fk := range nonSelfFks {
 		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
 		if err != nil {
 			return 0, nil, err
 		}
 		if parentTableDef == nil {
 			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+		}
+		referencedNames, err := parentColNames(parentTableDef, fk.ForeignCols)
+		if err != nil {
+			return 0, nil, err
+		}
+		childExprs := make([]*plan.Expr, len(fk.Cols))
+		for i, childColID := range fk.Cols {
+			pos := childColPos(id2name[childColID])
+			childExprs[i] = &plan.Expr{Typ: inputTypes[pos], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectTag, ColPos: int32(pos),
+			}}}
+		}
+
+		var lockExpr *plan.Expr
+		var lockTableDef *plan.TableDef
+		var lockObjRef *plan.ObjectRef
+		var pkeyNames []string
+		if parentTableDef.Pkey != nil {
+			pkeyNames = parentTableDef.Pkey.Names
+			if len(pkeyNames) == 0 && parentTableDef.Pkey.PkeyColName != "" {
+				pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
+			}
+		}
+		if partsEqual(pkeyNames, referencedNames) {
+			lockTableDef = parentTableDef
+			lockObjRef = parentObjRef
+			if len(childExprs) == 1 {
+				lockExpr = childExprs[0]
+			} else {
+				lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", childExprs)
+			}
+		} else {
+			var matchedIndex *plan.IndexDef
+			for _, idxDef := range parentTableDef.Indexes {
+				if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+					matchedIndex = idxDef
+					break
+				}
+			}
+			if matchedIndex == nil {
+				return 0, nil, moerr.NewNotSupportedf(builder.GetContext(),
+					"foreign key %s does not reference a lockable primary or unique key", fk.Name)
+			}
+			lockObjRef, lockTableDef, err = builder.compCtx.ResolveIndexTableByRef(
+				parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, nil, err
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(matchedIndex.IndexAlgoParams)
+			if err != nil {
+				return 0, nil, err
+			}
+			keyParts := make([]*plan.Expr, len(childExprs))
+			for i, expr := range childExprs {
+				keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
+				if err != nil {
+					return 0, nil, err
+				}
+			}
+			if indexTableStoresSerializedKey(matchedIndex) {
+				lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+			} else {
+				lockExpr = keyParts[0]
+			}
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		lockPkPos, lockTyp := getPkPos(lockTableDef, false)
+		if lockPkPos < 0 {
+			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
+				"foreign-key lock table %s has no primary key", lockTableDef.Name)
+		}
+		lockInputID := appendSourceScan()
+		lockTag := builder.genNewBindTag()
+		lockProject := []*plan.Expr{lockExpr}
+		lockInputID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lockInputID},
+			ProjectList: lockProject, BindingTags: []int32{lockTag},
+		}, bindCtx)
+		lockKeySinkID := appendSinkNodeWithTag(builder, bindCtx, lockInputID, lockTag)
+		lockKeyStep := builder.appendStep(lockKeySinkID)
+		lockInputID = builder.appendTaggedSinkScan(bindCtx, lockKeyStep, lockTag)
+		lockNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_LOCK_OP, Children: []int32{lockInputID}, TableDef: lockTableDef,
+			LockTargets: []*plan.LockTarget{{
+				TableId: lockTableDef.TblId, ObjRef: lockObjRef,
+				PrimaryColIdxInBat: 0, PrimaryColRelPos: lockTag,
+				PrimaryColTyp: lockTyp, Mode: lockpb.LockMode_Shared,
+			}},
+		}, bindCtx)
+		builder.appendStep(lockNodeID)
+	}
+
+	lastNodeID = appendSourceScan()
+	selectNode = builder.qry.Nodes[lastNodeID]
+	oks := make([]*plan.Expr, 0, len(nonSelfFks))
+	for _, fk := range nonSelfFks {
+		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
+		if err != nil {
+			return 0, nil, err
 		}
 
 		parentTag := builder.genNewBindTag()
@@ -1062,25 +1208,6 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			ObjRef:       parentObjRef,
 			BindingTags:  []int32{parentTag},
 			ScanSnapshot: bindCtx.snapshot,
-		}, bindCtx)
-		pkPos, pkTyp := getPkPos(parentTableDef, false)
-		if pkPos < 0 {
-			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
-				"foreign-key parent table %s has no lockable primary key", parentTableDef.Name)
-		}
-		parentScanID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_LOCK_OP,
-			Children: []int32{parentScanID},
-			TableDef: parentTableDef,
-			LockTargets: []*plan.LockTarget{{
-				TableId:            parentTableDef.TblId,
-				ObjRef:             parentObjRef,
-				PrimaryColIdxInBat: int32(pkPos),
-				PrimaryColRelPos:   parentTag,
-				PrimaryColTyp:      pkTyp,
-				Mode:               lockpb.LockMode_Shared,
-			}},
-			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindCtx)
 
 		parentColId2Pos := make(map[uint64]int, len(parentTableDef.Cols))

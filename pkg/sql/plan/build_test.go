@@ -3287,21 +3287,167 @@ func TestReplaceParentSideFKAssignmentCastAndLock(t *testing.T) {
 	assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = cast(1.234 as DECIMAL(5,2))")
 }
 
+func TestReplaceParentSideFKRejectsOverWidthConflictLiteral(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+	for _, col := range parent.Cols {
+		if col.Name == "v" {
+			col.Typ = plan.Type{Id: int32(types.T_varchar), Width: 3}
+		}
+	}
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"v"}})
+	stmt, err := mysql.ParseOne(context.Background(),
+		"REPLACE INTO replace_fk_cp VALUES (2, 'abcd')", 1)
+	require.NoError(t, err)
+
+	lockSQL, checks, actions, err := genParentSideReplaceFKSqls(
+		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
+	require.ErrorContains(t, err, "larger than Dest length")
+	assert.Empty(t, lockSQL)
+	assert.Empty(t, checks)
+	assert.Empty(t, actions)
+}
+
 func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1)")
 	require.NoError(t, err)
 
 	parentID := mock.ctxt.tables["replace_fk_p"].TblId
+	query := logicPlan.GetQuery()
 	found := false
-	for _, node := range logicPlan.GetQuery().Nodes {
+	lockNodeID := int32(-1)
+	parentScanIDs := make([]int32, 0, 1)
+	for nodeID, node := range query.Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.TblId == parentID {
+			assert.Empty(t, node.LockTargets, "the raw parent scan must not carry a shared lock")
+			parentScanIDs = append(parentScanIDs, int32(nodeID))
+		}
 		for _, target := range node.LockTargets {
 			if target.TableId == parentID && target.Mode == lockpb.LockMode_Shared {
 				found = true
+				lockNodeID = int32(nodeID)
+				assert.Equal(t, int32(0), target.PrimaryColRelPos)
+				require.Len(t, node.Children, 1)
+				lockInput := query.Nodes[node.Children[0]]
+				require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
+				assert.Equal(t, target.PrimaryColTyp.Id, lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
+				child := lockInput
+				for child.NodeType != plan.Node_SINK_SCAN && len(child.Children) == 1 {
+					child = query.Nodes[child.Children[0]]
+				}
+				assert.Equal(t, plan.Node_SINK_SCAN, child.NodeType,
+					"the prerequisite lock must read the materialized child row image")
 			}
 		}
 	}
 	assert.True(t, found, "child FK validation must hold a shared lock on its parent row")
+	require.NotEmpty(t, parentScanIDs)
+	stepContaining := func(target int32) int {
+		var contains func(int32) bool
+		contains = func(nodeID int32) bool {
+			if nodeID == target {
+				return true
+			}
+			for _, childID := range query.Nodes[nodeID].Children {
+				if contains(childID) {
+					return true
+				}
+			}
+			return false
+		}
+		for step, rootID := range query.Steps {
+			if contains(rootID) {
+				return step
+			}
+		}
+		return -1
+	}
+	lockStep := stepContaining(lockNodeID)
+	require.GreaterOrEqual(t, lockStep, 0)
+	for _, scanID := range parentScanIDs {
+		assert.Greater(t, stepContaining(scanID), lockStep,
+			"the referenced-key lock step must finish before the parent scan step starts")
+	}
+}
+
+func TestChildInsertLocksCompositeParentPrimaryKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_p"]
+	child := mock.ctxt.tables["replace_fk_c"]
+	parent.Cols = append(parent.Cols,
+		&plan.ColDef{Name: "k", ColId: 3, Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
+		&plan.ColDef{Name: catalog.CPrimaryKeyColName, ColId: 4, Hidden: true,
+			Typ: plan.Type{Id: int32(types.T_varchar), Width: 65535}},
+	)
+	parent.Pkey = &plan.PrimaryKeyDef{Names: []string{"id", "k"}, PkeyColName: catalog.CPrimaryKeyColName}
+	if parent.Name2ColIndex == nil {
+		parent.Name2ColIndex = make(map[string]int32, len(parent.Cols))
+		for i, col := range parent.Cols {
+			parent.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	parent.Name2ColIndex["k"] = int32(len(parent.Cols) - 2)
+	parent.Name2ColIndex[catalog.CPrimaryKeyColName] = int32(len(parent.Cols) - 1)
+	child.Fkeys[0].Cols = []uint64{0, 1}
+	child.Fkeys[0].ForeignCols = []uint64{0, 3}
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1)")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId != parent.TblId || target.Mode != lockpb.LockMode_Shared {
+				continue
+			}
+			lockInput := logicPlan.GetQuery().Nodes[node.Children[0]]
+			require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList),
+				"lock input=%+v target=%+v", lockInput, target)
+			assert.Equal(t, target.PrimaryColTyp.Id, lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
+			assert.Equal(t, int32(types.T_varchar), target.PrimaryColTyp.Id)
+			return
+		}
+	}
+	t.Fatal("composite parent primary key shared lock not found")
+}
+
+func TestChildInsertLocksReferencedUniqueIndexKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_p"]
+	child := mock.ctxt.tables["replace_fk_c"]
+	child.Cols[1].Typ = plan.Type{Id: int32(types.T_varchar), Width: 20}
+	child.Fkeys[0].ForeignCols = []uint64{1}
+	indexName := "__mo_index_fk_parent_v"
+	indexID := uint64(77901)
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
+		IndexName: "uk_v", IndexTableName: indexName, Parts: []string{"v"},
+		Unique: true, TableExist: true, IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+	})
+	indexTable := &plan.TableDef{
+		TblId: indexID, Name: indexName,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, ColId: 0, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: catalog.Row_ID, ColId: 1, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.IndexTableIndexColName},
+			PkeyColName: catalog.IndexTableIndexColName},
+		Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.Row_ID: 1},
+	}
+	mock.ctxt.tables[indexName] = indexTable
+	mock.ctxt.objects[indexName] = &plan.ObjectRef{
+		Obj: int64(indexID), SchemaName: mock.ctxt.objects["replace_fk_p"].SchemaName, ObjName: indexName,
+	}
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 'x')")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId == indexID && target.Mode == lockpb.LockMode_Shared {
+				assert.Equal(t, int32(types.T_varchar), target.PrimaryColTyp.Id)
+				return
+			}
+		}
+	}
+	t.Fatal("referenced unique-index shared lock not found")
 }
 
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
