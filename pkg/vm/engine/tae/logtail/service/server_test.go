@@ -122,6 +122,30 @@ func TestService(t *testing.T) {
 	}
 }
 
+func TestNewLogtailServerRejectsSmallRPCMessageSize(t *testing.T) {
+	cfg := options.NewDefaultLogtailServerCfg()
+	cfg.RpcMaxMessageSize = 1
+
+	require.NotPanics(t, func() {
+		server, err := NewLogtailServer(
+			"127.0.0.1:0", cfg, mockLocktailer(), mockRuntime(), nil)
+		require.Nil(t, server)
+		require.Error(t, err)
+	})
+}
+
+func TestNewLogtailServerValidatesFinalOptionMessageSize(t *testing.T) {
+	cfg := options.NewDefaultLogtailServerCfg()
+
+	require.NotPanics(t, func() {
+		server, err := NewLogtailServer(
+			"127.0.0.1:0", cfg, mockLocktailer(), mockRuntime(), nil,
+			WithServerMaxMessageSize(1))
+		require.Nil(t, server)
+		require.Error(t, err)
+	})
+}
+
 type logtailer struct {
 	tables []api.TableID
 }

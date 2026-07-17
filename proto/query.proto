@@ -534,6 +534,7 @@ message MigrateConnFromRequest {
 message MigrateConnFromResponse {
   string DB = 1;
   repeated PrepareStmt PrepareStmts = 2;
+  int64 LastAffectedRows = 3;
 }
 
 message MigrateConnToRequest {
@@ -541,6 +542,7 @@ message MigrateConnToRequest {
   string DB = 2;
   repeated string SetVarStmts = 3;
   repeated PrepareStmt PrepareStmts = 4;
+  int64 LastAffectedRows = 5;
 }
 
 message MigrateConnToResponse {

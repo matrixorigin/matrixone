@@ -37,6 +37,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type sqlModeMockCompilerContext struct {
+	*MockCompilerContext
+	sqlMode string
+}
+
+func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if varName == "sql_mode" {
+		return c.sqlMode, nil
+	}
+	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
+}
+
 func BenchmarkInsert(b *testing.B) {
 	typ := types.T_varchar.ToType()
 	typ.Width = 1024
@@ -63,6 +75,41 @@ func BenchmarkInsert(b *testing.B) {
 			break
 		}
 	}
+}
+
+func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "PIPES_AS_CONCAT",
+	}
+	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
+}
+
+func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "ANSI_QUOTES",
+	}
+	stmt, err := mysql.ParseOneWithSQLMode(
+		context.Background(),
+		`create view v_sql_mode as select 1 as "c"`,
+		1,
+		ctx.sqlMode,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	viewDef := p.GetDdl().GetCreateView().GetTableDef().GetViewSql()
+	require.NotNil(t, viewDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(viewDef.GetView()), &viewData))
+	require.NotNil(t, viewData.SQLMode)
+	require.Equal(t, ctx.sqlMode, *viewData.SQLMode)
 }
 
 // only use in developing
@@ -3779,7 +3826,36 @@ func TestCountDistinctRowSubqueryRejected(t *testing.T) {
 func TestSubqueryInJoinOn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
+		"SELECT a.n_nationkey FROM nation a JOIN nation b ON b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z WHERE z.n_regionkey = a.n_regionkey)",
 		"SELECT n_name FROM nation JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+		"SELECT n_name FROM nation JOIN region ON n_regionkey = r_regionkey AND r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		foundFilter := false
+		foundJoinCondition := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				foundFilter = true
+			}
+			for _, expr := range node.OnList {
+				foundJoinCondition = true
+				require.False(t, hasSubquery(expr), "JOIN OnList contains an executable Expr_Sub: %s", sql)
+			}
+			for _, expr := range node.FilterList {
+				require.False(t, hasSubquery(expr), "FILTER contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundFilter, "subquery predicate was not lowered to a FILTER: %s", sql)
+		if strings.Contains(sql, "n_regionkey = r_regionkey AND") {
+			require.True(t, foundJoinCondition, "ordinary ON predicate was removed from the JOIN: %s", sql)
+		}
+	}
+
+	runTestShouldError(mock, t, []string{
+		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	})
 }

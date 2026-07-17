@@ -370,17 +370,12 @@ func (h *holders) remove(txnID []byte) {
 func (h *holders) replace(
 	from []byte,
 	to pb.WaitTxn) {
-	find := false
-	for i := range h.txns {
-		if bytes.Equal(h.txns[i].TxnID, from) {
-			h.txns[i] = to
-			find = true
-			continue
-		}
-	}
-	if !find {
+	fromKey := util.UnsafeBytesToString(from)
+	if _, ok := h.txns[fromKey]; !ok {
 		panic("BUG: missing holder")
 	}
+	delete(h.txns, fromKey)
+	h.txns[util.UnsafeBytesToString(to.TxnID)] = to
 }
 
 func (h *holders) clear() {

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,25 @@ func TestWrapForGPUExecution(t *testing.T) {
 	assert.Equal(t,
 		"CALL gpu_execution('SELECT * FROM tae_scan(''http://localhost:8888/debug/tae/manifest?table=db.t'')')",
 		wrapForGPUExecution("SELECT * FROM tae_scan('http://localhost:8888/debug/tae/manifest?table=db.t')"))
+}
+
+func TestRewriteTablesForGPUUsesSessionSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("testdb")
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
+
+	rewritten, err := rewriteTablesForGPU(
+		context.Background(),
+		ses,
+		"select 'a'||'b' as c from t",
+		"http://mo:6060",
+	)
+	require.NoError(t, err)
+	require.Contains(t, strings.ToLower(rewritten), "concat(")
 }
 
 func TestGetManifestBaseURL(t *testing.T) {

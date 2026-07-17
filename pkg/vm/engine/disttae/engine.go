@@ -848,6 +848,7 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 
 	ncpu := system.GoMaxProcs()
 	var candidates engine.QueryCandidates
+	hasMixedCommit := false
 	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
 		ctx,
 		cluster,
@@ -855,6 +856,9 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 		func(c metadata.CNService) bool {
 			if ctx.Err() != nil {
 				return false
+			}
+			if c.CommitID != version.CommitID {
+				hasMixedCommit = true
 			}
 			if c.CommitID == version.CommitID {
 				candidates = append(candidates, engine.QueryCandidate{Service: c, Mcpu: ncpu})
@@ -866,6 +870,11 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if hasMixedCommit {
+		for i := range candidates {
+			candidates[i].HasMixedCommit = true
+		}
 	}
 	return candidates, nil
 }
@@ -945,10 +954,11 @@ func queryCandidateNodes(ctx context.Context, candidates engine.QueryCandidates)
 
 func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
 	return engine.Node{
-		Mcpu:      candidate.Mcpu,
-		Id:        candidate.Service.ServiceID,
-		Addr:      candidate.Service.PipelineServiceAddress,
-		WorkState: candidate.Service.WorkState,
+		Mcpu:           candidate.Mcpu,
+		Id:             candidate.Service.ServiceID,
+		Addr:           candidate.Service.PipelineServiceAddress,
+		WorkState:      candidate.Service.WorkState,
+		HasMixedCommit: candidate.HasMixedCommit,
 	}
 }
 

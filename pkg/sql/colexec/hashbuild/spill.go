@@ -128,9 +128,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	}
 	hashValues := ctr.spillHashValues[:rowCount]
 
-	if err := computeXXHash(keyVecs, hashValues); err != nil {
-		return err
-	}
+	computeXXHash(keyVecs, hashValues)
 
 	// Reuse bucketRowIds buffer
 	if cap(ctr.spillBucketRowIds) < spillNumBuckets {
@@ -147,17 +145,11 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		bucketRowIds[b] = append(bucketRowIds[b], int32(row))
 	}
 
-	// Collect non-empty buckets (reuse cached slice).
-	ctr.spillNonEmptyBuckets = ctr.spillNonEmptyBuckets[:0]
-	for i := 0; i < spillNumBuckets; i++ {
-		if len(bucketRowIds[i]) > 0 {
-			ctr.spillNonEmptyBuckets = append(ctr.spillNonEmptyBuckets, i)
-		}
-	}
-
 	// Add rows to buffers and flush when needed
-	for _, bucketId := range ctr.spillNonEmptyBuckets {
-		sels := bucketRowIds[bucketId]
+	for bucketId, sels := range bucketRowIds {
+		if len(sels) == 0 {
+			continue
+		}
 
 		buf := buffers[bucketId]
 		if buf == nil {
@@ -198,20 +190,12 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 // Returns the executors slice ready for use. Called once when entering spill mode.
 func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
 	if len(ctr.spillExprExecs) != len(conditions) {
-		// Clean up old executors if count changed
-		ctr.freeSpillExprExecs()
-		ctr.spillExprExecs = make([]colexec.ExpressionExecutor, len(conditions))
-		for i, expr := range conditions {
-			var err error
-			if ctr.spillExprExecs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
-				// Clean up what we already created
-				for j := 0; j < i; j++ {
-					ctr.spillExprExecs[j].Free()
-				}
-				ctr.spillExprExecs = nil
-				return nil, err
-			}
+		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, conditions)
+		if err != nil {
+			return nil, err
 		}
+		ctr.freeSpillExprExecs()
+		ctr.spillExprExecs = execs
 	}
 	return ctr.spillExprExecs, nil
 }
@@ -226,31 +210,6 @@ func (ctr *container) freeSpillExprExecs() {
 	ctr.spillExprExecs = nil
 }
 
-// acquireSpillBuffers returns a slice of spillNumBuckets buffers, reusing from pool if available.
-// All returned buffers have CleanOnlyData() called to reset them for fresh use.
-func (ctr *container) acquireSpillBuffers(proc *process.Process) []*batch.Batch {
-	if len(ctr.spillBuffers) < spillNumBuckets {
-		ctr.spillBuffers = append(ctr.spillBuffers, make([]*batch.Batch, spillNumBuckets-len(ctr.spillBuffers))...)
-	}
-	bufs := ctr.spillBuffers[:spillNumBuckets]
-	for i := range bufs {
-		if bufs[i] != nil {
-			bufs[i].CleanOnlyData()
-		}
-	}
-	return bufs
-}
-
-// cleanSpillBufferPool cleans all pooled buffers.
-func (ctr *container) cleanSpillBufferPool(proc *process.Process) {
-	for _, buf := range ctr.spillBuffers {
-		if buf != nil {
-			buf.Clean(proc.Mp())
-		}
-	}
-	ctr.spillBuffers = nil
-}
-
 func (ctr *container) memUsed() int64 {
 	sz := ctr.hashmapBuilder.GetSize() + ctr.hashmapBuilder.Batches.MemSize
 	// If MemSize is 0 but Buf is non-empty (e.g. set directly in tests), fall back to summing.
@@ -262,27 +221,12 @@ func (ctr *container) memUsed() int64 {
 	return sz
 }
 
-func (ctr *container) rowCnt() int64 {
-	sz := 0
-	for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-		sz += bat.RowCount()
-	}
-	return int64(sz)
-}
-
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
-	if !hashBuild.CanSpill || !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
+	if !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
 		return false
 	}
 	ctr := &hashBuild.ctr
-	if ctr.spillThreshold <= 0 {
-		return false
-	}
-	if ctr.spillThreshold <= 100000 {
-		return ctr.rowCnt() >= ctr.spillThreshold
-	} else {
-		return ctr.memUsed() > ctr.spillThreshold
-	}
+	return colexec.ShouldSpill(ctr.memUsed(), int64(ctr.hashmapBuilder.InputBatchRowCount), ctr.spillThreshold)
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).
@@ -294,9 +238,9 @@ func hashCombine(h, val uint64) uint64 {
 // column-at-a-time processing for better cache locality.
 // Each column is processed in a tight loop over all rows, avoiding
 // per-row buffer concatenation and giving sequential vector access.
-func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
+func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) {
 	if len(keyVecs) == 0 || len(hashValues) == 0 {
-		return nil
+		return
 	}
 
 	rowCount := len(hashValues)
@@ -321,5 +265,4 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 		}
 	}
 
-	return nil
 }

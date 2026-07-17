@@ -141,6 +141,7 @@ func Test_InitServer(t *testing.T) {
 	session := mock_morpc.NewMockClientSession(ctrl)
 	msg.Cmd = pipeline.Method_PipelineMessage
 	session.EXPECT().CreateCache(ctx, uint64(0)).Return(&testMessageCache{}, nil).Times(2)
+	session.EXPECT().DeleteCache(uint64(0)).Times(1)
 
 	msg.Sid = pipeline.Status_WaitingNext
 	err = srv.handleRequest(
@@ -171,6 +172,36 @@ func Test_InitServer(t *testing.T) {
 
 type testMessageCache struct {
 	cache []morpc.Message
+}
+
+func TestHandleAssemblePipelineDeletesCacheAndRejectsMixedNegotiation(t *testing.T) {
+	t.Run("assembles and deletes", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		session := mock_morpc.NewMockClientSession(ctrl)
+		ctx := context.Background()
+		cache := &testMessageCache{cache: []morpc.Message{
+			&pipeline.Message{Id: 42, Cmd: pipeline.Method_PipelineMessage, Data: []byte("a"), RequestedTeardownMode: pipeline.StreamTeardownMode_FinishAck},
+			&pipeline.Message{Id: 42, Cmd: pipeline.Method_PipelineMessage, Data: []byte("b"), RequestedTeardownMode: pipeline.StreamTeardownMode_FinishAck},
+		}}
+		session.EXPECT().CreateCache(ctx, uint64(42)).Return(cache, nil)
+		session.EXPECT().DeleteCache(uint64(42))
+		final := &pipeline.Message{Id: 42, Cmd: pipeline.Method_PipelineMessage, Data: []byte("c"), RequestedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+		require.NoError(t, handleAssemblePipeline(ctx, final, session))
+		require.Equal(t, []byte("abc"), final.GetData())
+	})
+
+	t.Run("mixed teardown mode is protocol error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		session := mock_morpc.NewMockClientSession(ctrl)
+		ctx := context.Background()
+		cache := &testMessageCache{cache: []morpc.Message{
+			&pipeline.Message{Id: 43, Cmd: pipeline.Method_PipelineMessage, RequestedTeardownMode: pipeline.StreamTeardownMode_LegacyClose},
+		}}
+		session.EXPECT().CreateCache(ctx, uint64(43)).Return(cache, nil)
+		session.EXPECT().DeleteCache(uint64(43))
+		final := &pipeline.Message{Id: 43, Cmd: pipeline.Method_PipelineMessage, RequestedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+		require.Error(t, handleAssemblePipeline(ctx, final, session))
+	})
 }
 
 func (c *testMessageCache) Add(val morpc.Message) error {
