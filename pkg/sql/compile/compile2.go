@@ -278,7 +278,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 	}()
 	var carriedPreRunWall time.Duration
-	statsPrepared := false
+	resetStatsInfoPreRun(stats, isInExecutor)
 	for {
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
@@ -288,11 +288,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseBase = carriedPreRunWall
 		var preRunWall time.Duration
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
-		if statsPrepared {
-			statsPrepared = false
-		} else {
-			resetStatsInfoPreRun(stats, isInExecutor)
-		}
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
@@ -419,7 +414,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseBase = 0
 		stats.ResetRetryAttemptResource()
 		resetStatsInfoPreRun(stats, isInExecutor)
-		statsPrepared = true
 
 		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
 		carriedPreRunWall = time.Since(attemptStart)

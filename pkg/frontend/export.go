@@ -580,9 +580,6 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		return
 	}
 
-	if ss != nil {
-	}
-
 	bat.Clean(mp)
 
 }
@@ -1156,9 +1153,6 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 		index:     index,
 		writeByte: result,
 		err:       nil,
-	}
-
-	if ss != nil {
 	}
 
 	bat.Clean(mp)

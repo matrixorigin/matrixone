@@ -16,8 +16,8 @@ package resource
 
 import (
 	"math"
+	"reflect"
 	"testing"
-	"unsafe"
 )
 
 func TestExclusiveActive(t *testing.T) {
@@ -104,16 +104,16 @@ func TestLocalRecorder(t *testing.T) {
 }
 
 func TestHotPathStructureSizes(t *testing.T) {
-	if got := unsafe.Sizeof(Usage{}); got > 160 {
+	if got := reflect.TypeOf(Usage{}).Size(); got > 160 {
 		t.Fatalf("Usage is %d bytes, limit is 160", got)
 	}
-	if got := unsafe.Sizeof(LocalRecorder{}); got > 160 {
+	if got := reflect.TypeOf(LocalRecorder{}).Size(); got > 160 {
 		t.Fatalf("LocalRecorder is %d bytes, limit is 160", got)
 	}
-	if got := unsafe.Sizeof(Delta{}); got > 192 {
+	if got := reflect.TypeOf(Delta{}).Size(); got > 192 {
 		t.Fatalf("Delta is %d bytes, limit is 192", got)
 	}
-	if got := unsafe.Sizeof(MemoryDomainSummary{}); got > 40 {
+	if got := reflect.TypeOf(MemoryDomainSummary{}).Size(); got > 40 {
 		t.Fatalf("MemoryDomainSummary is %d bytes, limit is 40", got)
 	}
 }
