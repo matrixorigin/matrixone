@@ -3153,6 +3153,42 @@ func TestSubQuery(t *testing.T) {
 	}
 }
 
+func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
+	tests := []string{
+		`SELECT AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		 FROM NATION n`,
+		`SELECT n.N_REGIONKEY,
+		        COUNT(*),
+		        AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		 FROM NATION n
+		 GROUP BY n.N_REGIONKEY`,
+		`WITH stats AS (
+		     SELECT n.N_REGIONKEY,
+		            SUM((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY)) AS total_regions
+		     FROM NATION n
+		     GROUP BY n.N_REGIONKEY
+		 )
+		 SELECT * FROM stats`,
+	}
+
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, sql)
+
+		foundAgg := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType != plan.Node_AGG {
+				continue
+			}
+			foundAgg = true
+			for _, agg := range node.AggList {
+				require.False(t, hasSubquery(agg), "AGG contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundAgg, sql)
+	}
+}
+
 func TestMysqlCompatibilityMode(t *testing.T) {
 	mock := NewMockOptimizer(false)
 

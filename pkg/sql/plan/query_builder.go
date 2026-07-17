@@ -4435,6 +4435,12 @@ func (builder *QueryBuilder) appendAggNode(
 		return
 	}
 
+	for i, agg := range ctx.aggregates {
+		if nodeID, ctx.aggregates[i], err = builder.flattenSubqueries(nodeID, agg, ctx); err != nil {
+			return
+		}
+	}
+
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_AGG,
 		Children:     []int32{nodeID},
