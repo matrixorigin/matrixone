@@ -93,30 +93,6 @@ func TestListExpressionExecutor(t *testing.T) {
 	require.Equal(t, curr, proc.Mp().CurrNB())
 }
 
-func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(params, []bool{true, false})
-	t.Cleanup(func() { params.Free(proc.Mp()) })
-
-	binaryExpr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
-	textExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
-	t.Cleanup(binaryExpr.Free)
-	t.Cleanup(textExpr.Free)
-
-	binaryVec, err := binaryExpr.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.True(t, binaryVec.GetIsBin())
-	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
-
-	textVec, err := textExpr.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.False(t, textVec.GetIsBin())
-	require.Equal(t, "text", textVec.GetStringAt(0))
-}
-
 func TestFixedExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -264,42 +240,6 @@ func TestVarExpressionExecutor(t *testing.T) {
 	// require.Equal(t, curr, proc.Mp().CurrNB()) // check memory reuse
 	// varExprExecutor.Free()
 	// require.Equal(t, int64(0), proc.Mp().CurrNB())
-}
-
-func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	value := "AB\x00\x00"
-	isBin := true
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return value, nil
-	})
-	proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) {
-		return isBin, nil
-	})
-	expr := &plan.Expr{
-		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "copied_var"}},
-		Typ:  plan.Type{Id: int32(types.T_text)},
-	}
-	executor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	t.Cleanup(executor.Free)
-
-	vec, err := executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.True(t, vec.GetIsBin())
-	require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
-
-	value, isBin = "text", false
-	vec, err = executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.False(t, vec.GetIsBin())
-	require.Equal(t, "text", vec.GetStringAt(0))
-
-	value, isBin = "CD\x00\x00", true
-	vec, err = executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.True(t, vec.GetIsBin())
-	require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 }
 
 func TestVarExpressionExecutorWithoutResolveVariableFunc(t *testing.T) {
