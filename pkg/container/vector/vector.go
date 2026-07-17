@@ -502,36 +502,6 @@ func NewVecWithData(
 	return vec
 }
 
-// NewVecWithDataCopy copies external backing data into allocations owned by mp.
-func NewVecWithDataCopy(
-	typ types.Type,
-	length int,
-	data []byte,
-	area []byte,
-	mp *mpool.MPool,
-) (*Vector, error) {
-	vec := NewVec(typ)
-	vec.length = length
-	var err error
-	if len(data) > 0 {
-		vec.data, err = mp.Alloc(len(data), false)
-		if err != nil {
-			vec.Free(mp)
-			return nil, err
-		}
-		copy(vec.data, data)
-	}
-	if len(area) > 0 {
-		vec.area, err = mp.Alloc(len(area), false)
-		if err != nil {
-			vec.Free(mp)
-			return nil, err
-		}
-		copy(vec.area, area)
-	}
-	return vec, nil
-}
-
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
