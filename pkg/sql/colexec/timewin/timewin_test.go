@@ -161,6 +161,43 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+// TestTimeWinAggResultAcrossChunks verifies that calRes materializes one
+// logical result vector even when AggFuncExec.Flush returns multiple physical
+// chunks. It exercises the same contract as a TimeWin producing >8192 groups
+// without making the state-machine setup obscure the regression.
+func TestTimeWinAggResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize + 17
+	values := make([]int32, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+		groups[i] = uint64(i + 1)
+	}
+	input := testutil.MakeInt32Vector(values, nil, proc.Mp())
+
+	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, false, types.T_int32.ToType())
+	require.NoError(t, err)
+	require.NoError(t, agg.GroupGrow(rows))
+	require.NoError(t, agg.BatchFill(0, groups, []*vector.Vector{input}))
+
+	arg := &TimeWin{}
+	arg.ctr.colCnt = 1
+	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+	require.NoError(t, arg.ctr.calRes(arg, proc))
+	require.NotNil(t, arg.ctr.bat)
+	resultValues := vector.MustFixedColWithTypeCheck[int64](arg.ctr.bat.Vecs[0])
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
+
+	arg.Free(proc, false, nil)
+	input.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func resetChildren(arg *TimeWin, m *mpool.MPool) {
 	bat := colexec.MakeMockTimeWinBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

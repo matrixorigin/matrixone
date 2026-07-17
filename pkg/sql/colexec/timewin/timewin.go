@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -408,14 +406,12 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
-		if len(vecs) > 1 {
-			for _, vec := range vecs {
-				vec.Free(proc.Mp())
-			}
-			return moerr.NewInternalErrorNoCtx("the TimeWin operator currently does not support sending split result of window function.")
+		result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+		if err != nil {
+			return err
 		}
 
-		ctr.bat.SetVector(int32(i), vecs[0])
+		ctr.bat.SetVector(int32(i), result)
 		i++
 	}
 
