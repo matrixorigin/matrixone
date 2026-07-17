@@ -542,6 +542,8 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	require.Len(t, byID, 6)
 	require.Equal(t, uint64(2), byID[2].TableID)
 	require.Nil(t, dumpDataByTableID(nil))
+	require.Equal(t, []checkpointtool.TableCatalogEntry{child, parent, other, base, view, view2}, tablesFromDumpPlans(plans))
+	require.Nil(t, tablesFromDumpPlans(nil))
 
 	ordered := orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, other, parent}, byID)
 	require.Equal(t, []uint64{1, 2, 3}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})
@@ -964,6 +966,14 @@ func TestWriteRestoreScriptRejectsMissingDatabase(t *testing.T) {
 	require.NoError(t, err)
 	_, err = writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{{TableID: 7, TableName: "t"}}, nil, types.BuildTS(1, 0), t.TempDir(), t.TempDir(), loadDataPathResolver{}, true, true)
 	require.ErrorContains(t, err, "empty database name")
+
+	_, err = writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{{
+		TableID:      8,
+		DatabaseName: "db",
+		TableName:    "missing_data",
+		RelKind:      "r",
+	}}, nil, types.BuildTS(1, 0), t.TempDir(), t.TempDir(), loadDataPathResolver{}, true, true)
+	require.ErrorContains(t, err, "missing prepared dump data")
 }
 
 func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {

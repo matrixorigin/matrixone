@@ -652,7 +652,7 @@ Examples:
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
 				}
 				if loadScript {
-					scriptTables, skippedSystemTables := filterAccountRestoreScriptTables(tables, accountIDSet)
+					scriptTables, skippedSystemTables := filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
 					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, dumpDataByTableID(dumpPlans), snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
@@ -875,14 +875,18 @@ func writeRestoreScript(
 		}
 
 		omitForeignKeys := restoreOrder.cyclicFKTables[table.TableID]
-		ddl, err := restoreCreateTableDDLWithOptions(ctx, reader, table, dumpDataByTable[table.TableID], snapshotTS, restoreCreateTableDDLOptions{
+		dumpData := dumpDataByTable[table.TableID]
+		if shouldWriteLoadData(includeLoad, table) && dumpData == nil {
+			return "", fmt.Errorf("restore script table %d (%s.%s): missing prepared dump data", table.TableID, table.DatabaseName, table.TableName)
+		}
+		ddl, err := restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{
 			omitForeignKeys: omitForeignKeys,
 		})
 		if err != nil {
 			return "", err
 		}
 		if omitForeignKeys {
-			deferredFKs = append(deferredFKs, deferredForeignKeyDDLsForTable(table, dumpDataByTable[table.TableID])...)
+			deferredFKs = append(deferredFKs, deferredForeignKeyDDLsForTable(table, dumpData)...)
 		}
 		if isExternalRelation(table) {
 			ddl, err = packageExternalTableSource(ctx, dumpOut, csvRoot, table, ddl)
@@ -2057,6 +2061,17 @@ func dumpDataByTableID(plans []tableDumpPlan) map[uint64]*checkpointtool.TableDu
 		byID[plan.table.TableID] = plan.data
 	}
 	return byID
+}
+
+func tablesFromDumpPlans(plans []tableDumpPlan) []checkpointtool.TableCatalogEntry {
+	if len(plans) == 0 {
+		return nil
+	}
+	tables := make([]checkpointtool.TableCatalogEntry, 0, len(plans))
+	for _, plan := range plans {
+		tables = append(tables, plan.table)
+	}
+	return tables
 }
 
 func prepareTableDumpPlans(
