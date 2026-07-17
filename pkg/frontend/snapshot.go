@@ -564,6 +564,9 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 		if err != nil {
 			return err
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("drop snapshot %s success", string(stmt.Name)))
