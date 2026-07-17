@@ -338,6 +338,26 @@ func TestNumericContextDoesNotCrossComparisonOrTemporalBoundary(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericContextPreservesTemporalSubtraction(t *testing.T) {
+	tests := []string{
+		"select O_ORDERDATE - ? from orders",
+		"select ? - O_ORDERDATE from orders",
+		"select cast('2024-01-02 03:04:05' as datetime) - ?",
+		"select ? - cast('2024-01-02 03:04:05' as datetime)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestPreparedNumericInspectionPreservesGroupAndAliasState(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	stmts, err := mysql.Parse(
@@ -549,6 +569,7 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 		{name: "decimal literal is weak", sql: "select 0.0 + ?", want: types.T_float64},
 		{name: "approximate literal is strong", sql: "select 0e0 + ?", want: types.T_float64},
 		{name: "integer literal is strong", sql: "select 0 + ?", want: types.T_int64},
+		{name: "null literal remains unknown", sql: "select null + ?", want: types.T_float64},
 		{
 			name: "explicit decimal cast is strong",
 			sql:  "select cast(0 as decimal(10, 1)) + ?",

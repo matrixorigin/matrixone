@@ -775,7 +775,7 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 	}
 
 	scan, err := b.numericAstTypes(astExpr, depth)
-	if err != nil || !scan.hasParam {
+	if err != nil || !scan.hasParam || scan.incompatible {
 		if err != nil {
 			return nil, err
 		}
@@ -828,13 +828,26 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	incompatible bool
 }
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.incompatible = s.incompatible || other.incompatible
 	return s
+}
+
+func numericAstTypedOperand(typ Type) numericAstTypeScan {
+	oid := types.T(typ.Id)
+	if oid == types.T_any {
+		return numericAstTypeScan{}
+	}
+	if !makeTypeByPlan2Type(typ).IsNumeric() {
+		return numericAstTypeScan{incompatible: true}
+	}
+	return numericAstTypeScan{strong: []Type{typ}}
 }
 
 func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
@@ -875,7 +888,7 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		return numericAstTypeScan{strong: []Type{typ}}, nil
+		return numericAstTypedOperand(typ), nil
 	case *tree.NumVal:
 		bound, err := b.bindNumVal(expr, Type{})
 		if err != nil {
@@ -884,7 +897,7 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 		if types.T(bound.Typ.Id).IsDecimal() {
 			return numericAstTypeScan{weakDecimals: []Type{bound.Typ}}, nil
 		}
-		return numericAstTypeScan{strong: []Type{bound.Typ}}, nil
+		return numericAstTypedOperand(bound.Typ), nil
 	case *tree.FuncExpr:
 		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
 			return numericAstTypeScan{}, nil
@@ -900,7 +913,7 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 		return left.merge(right), nil
 	case *tree.UnresolvedName:
 		if typ, ok := b.numericColumnType(expr); ok {
-			return numericAstTypeScan{strong: []Type{typ}}, nil
+			return numericAstTypedOperand(typ), nil
 		}
 		return numericAstTypeScan{}, nil
 	default:
