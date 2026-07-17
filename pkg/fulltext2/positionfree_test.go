@@ -78,3 +78,33 @@ func TestPositionFreeFootprint(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, resultIDs(fres), resultIDs(res))
 }
+
+// TestSearchBagOfWordsCJK: the IN BM25 MODE engine path (SearchBagOfWords) turns a CJK
+// query into a disjunction of its gojieba tokens, so it returns the BAG-OF-WORDS
+// superset — every doc containing any of 我家/有/三个/人 — whereas NL/phrase mode
+// returns only the exact contiguous phrase. (Mirrors the SQL pre-flight.)
+func TestSearchBagOfWordsCJK(t *testing.T) {
+	docs := []Doc{
+		{Pk: int64(1), Text: []byte("我家有三个人")},
+		{Pk: int64(2), Text: []byte("三个人都住在我家")},
+		{Pk: int64(3), Text: []byte("我家的花园很漂亮")},
+		{Pk: int64(4), Text: []byte("教室里有三个人")},
+		{Pk: int64(5), Text: []byte("昨天我家有三个人来吃饭")},
+	}
+	seg, err := BuildSegmentFromDocsParser("zh", int32(types.T_int64), docs, ParserGojieba)
+	require.NoError(t, err)
+	idx := NewIndex([]*Segment{seg}, nil)
+
+	phrase, err := idx.SearchQuery([]byte("我家有三个人"), false, ParserGojieba, BM25, 10, nil)
+	require.NoError(t, err)
+	phraseIDs := resultIDs(phrase)
+
+	bow, err := idx.SearchBagOfWords([]byte("我家有三个人"), ParserGojieba, BM25, 10, nil)
+	require.NoError(t, err)
+	bowIDs := resultIDs(bow)
+
+	t.Logf("phrase(exact)=%v  bag-of-words=%v", phraseIDs, bowIDs)
+	require.Contains(t, phraseIDs, int64(1), "doc 1 is the exact phrase")
+	require.Subset(t, bowIDs, phraseIDs, "bag-of-words must be a superset of the exact phrase")
+	require.Greater(t, len(bowIDs), len(phraseIDs), "bag-of-words must match strictly more docs than the phrase")
+}

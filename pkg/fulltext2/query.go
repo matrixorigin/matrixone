@@ -380,6 +380,47 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 	return idx.SearchPhrase(slots, algo, k, filter), nil
 }
 
+// SearchBagOfWords is the IN BM25 MODE path: it tokenizes the whole pattern and runs a
+// pure disjunction of the tokens (each a SHOULD term), which SearchBoolean routes to
+// the position-free searchWAND — bm25-style ranked bag-of-words retrieval. Unlike NL/
+// BOOLEAN mode, a CJK run does NOT become a positional phrase (a query "我家有三个人"
+// scores every doc containing 我家/有/三个/人 in any order), so it works on a
+// POSITION_FREE index. Positions are never touched.
+func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+	if k <= 0 || idx.globalN == 0 {
+		return nil, nil
+	}
+	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser))
+	if err != nil {
+		return nil, err
+	}
+	return idx.SearchBoolean(q, algo, k, filter)
+}
+
+// buildBagOfWordsQuery tokenizes pattern into a pure disjunction of DISTINCT single
+// terms (SHOULD clauseTerm). Dedup avoids two cursors on one term's postings; the
+// disjunction of single-term SHOULD clauses is exactly what disjunctiveTerms routes to
+// searchWAND.
+func buildBagOfWordsQuery(pattern, parser string) (BoolQuery, error) {
+	slots, err := phraseSlots(pattern, parser)
+	if err != nil {
+		return BoolQuery{}, err
+	}
+	var q BoolQuery
+	seen := make(map[string]struct{}, len(slots))
+	for _, s := range slots {
+		if s.term == "" {
+			continue
+		}
+		if _, ok := seen[s.term]; ok {
+			continue
+		}
+		seen[s.term] = struct{}{}
+		q.should = append(q.should, clause{kind: clauseTerm, terms: []string{s.term}, weight: 1.0})
+	}
+	return q, nil
+}
+
 // phraseSlots turns an NL pattern into the positional phrase slots to match. For
 // gojieba it tokenizes into words with byte positions. For ngram/default/json it uses
 // ngramPhraseSlots: EXACT full trigrams covering each CJK run (no word* prefix for runs
