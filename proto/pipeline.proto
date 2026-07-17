@@ -549,6 +549,7 @@ message PrepareParamInfo {
   bytes data = 2;
   bytes area = 3;
   repeated bool nulls = 4;
+  repeated bool is_bin = 5;
 }
 
 message ProcessInfo {
