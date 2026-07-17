@@ -1878,12 +1878,6 @@ type FullTextMatchExpr struct {
 	Pattern string
 
 	Mode FullTextSearchType
-
-	// IsBm25 marks a BM25(col) AGAINST('query') expression — the distinct
-	// ranked-retrieval surface of the bm25 index. It binds to the bm25_match
-	// function (not fulltext_match) so the planner routes it to bm25_search, and
-	// it carries no mode (bm25 is always ranked bag-of-words; Mode stays DEFAULT).
-	IsBm25 bool
 }
 
 func (node *FullTextSearchType) ToString() string {
@@ -1930,27 +1924,8 @@ func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode Ful
 	return e, nil
 }
 
-// NewBm25MatchFuncExpression builds a BM25(col) AGAINST('query') expression — the
-// bm25 index's ranked-retrieval surface. It carries no mode (always DEFAULT ranked
-// bag-of-words) and binds to the bm25_match function.
-func NewBm25MatchFuncExpression(columns []*KeyPart, pattern string) (*FullTextMatchExpr, error) {
-
-	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: FULLTEXT_DEFAULT, IsBm25: true}
-	if err := e.Valid(); err != nil {
-		return nil, err
-	}
-	return e, nil
-}
-
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
-	// A BM25() expression must deparse back to BM25(), not MATCH() — otherwise a
-	// deparse+reparse (e.g. CTAS's CreateAsSelectSql) would lose IsBm25 and re-bind
-	// to the classic fulltext index. BM25 carries no mode (always ranked).
-	if node.IsBm25 {
-		ctx.WriteString("BM25 (")
-	} else {
-		ctx.WriteString("MATCH (")
-	}
+	ctx.WriteString("MATCH (")
 	for i, k := range node.KeyParts {
 		if i > 0 {
 			ctx.WriteString(", ")
@@ -1961,7 +1936,7 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("AGAINST (")
 	ctx.WriteString(node.Pattern)
 
-	if !node.IsBm25 && node.Mode != FULLTEXT_DEFAULT {
+	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")
 		ctx.WriteString(node.Mode.ToString())
 	}

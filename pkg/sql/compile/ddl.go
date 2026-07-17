@@ -1035,7 +1035,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && indexAlgo != catalog.MoIndexBm25Algo.ToString() {
+					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && !catalog.IsFullText2IndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update

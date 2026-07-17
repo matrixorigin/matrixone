@@ -455,7 +455,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 // builds SQL text and needs the SQL-display string (the historical default).
 func (c *IndexConsumer) valueRepr() ValueRepr {
 	switch c.sqlWriter.(type) {
-	case *WandSqlWriter, *Fulltext2SqlWriter:
+	case *Fulltext2SqlWriter:
 		return ReprNative
 	}
 	return ReprSQLString

@@ -4179,19 +4179,6 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident BM25 index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_BM25
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_BM25
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
 | REINDEX ident FULLTEXT2 index_option_list
     {
         var io *tree.IndexOption = nil
@@ -8714,10 +8701,6 @@ using_opt:
     {
 	$$ = tree.INDEX_TYPE_CAGRA
     }
-|   USING BM25
-    {
-	$$ = tree.INDEX_TYPE_BM25
-    }
 |   USING MASTER
     {
 	$$ = tree.INDEX_TYPE_MASTER
@@ -10398,8 +10381,6 @@ index_def:
  	        keyTyp = tree.INDEX_TYPE_CAGRA
 	    case "ivfpq":
  	        keyTyp = tree.INDEX_TYPE_IVFPQ
-	    case "bm25":
- 	        keyTyp = tree.INDEX_TYPE_BM25
             default:
                 yylex.Error("Invalid the type of index")
                 goto ret1
@@ -11287,16 +11268,6 @@ simple_expr:
 	}
 	$$ = val
     }
-|   BM25 '(' index_column_list ')' AGAINST '(' search_pattern ')'
-    {
-	val, err := tree.NewBm25MatchFuncExpression($3, $7)
-	if err != nil {
-		yylex.Error(err.Error())
-		goto ret1
-	}
-	$$ = val
-    }
-
 search_pattern:
     STRING
     {

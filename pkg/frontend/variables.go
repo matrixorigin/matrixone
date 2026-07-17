@@ -3740,14 +3740,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int8(0),
 	},
-	"experimental_bm25_index": {
-		Name:              "experimental_bm25_index",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("experimental_bm25_index"),
-		Default:           int8(0),
-	},
 	"experimental_fulltext2_index": {
 		Name:              "experimental_fulltext2_index",
 		Scope:             ScopeBoth,

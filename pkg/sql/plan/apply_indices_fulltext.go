@@ -285,13 +285,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// ONE combined score sort. Dispatch the per-match TVF by the resolved index's
 		// algo; both TVFs emit the same (doc_id, score) shape so the rest is identical.
 		var tmpTableFunc *tree.AliasedTableExpr
-		if idxdef.IndexAlgo == catalog.MoIndexBm25Algo.ToString() {
-			var berr error
-			tmpTableFunc, berr = builder.buildBm25SearchTableFunc(scanNode, idxdef, pattern, alias_name)
-			if berr != nil {
-				return -1, nil, nil, berr
-			}
-		} else if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
+		if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
 			var berr error
 			tmpTableFunc, berr = builder.buildFulltext2SearchTableFunc(scanNode, idxdef, pattern, mode, alias_name)
 			if berr != nil {
@@ -800,8 +794,6 @@ func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node
 		switch fn.Func.ObjName {
 		case "fulltext_match":
 			idx = builder.findMatchFullTextIndex(fn, node)
-		case "bm25_match":
-			idx = builder.findMatchBm25Index(fn, node)
 		default:
 		}
 		if idx != nil {
@@ -838,13 +830,6 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 				// change the fulltext_match function to fulltext_match_score
 				// which has return type float32 instead of bool
 				projNode.ProjectList[i] = builder.getFullTextMatchScoreExpr(expr)
-			}
-		case "bm25_match":
-
-			idx := builder.findMatchBm25Index(fn, scanNode)
-			if idx != nil {
-				ftidxs = append(ftidxs, idx)
-				projids = append(projids, int32(i))
 			}
 		default:
 		}

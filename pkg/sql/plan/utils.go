@@ -386,7 +386,7 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 			// fulltext_match / bm25_match are rewritten to an index-scan join by the
 			// optimizer; leave them un-cast so the rewrite can find them by name in the
 			// filter list (a wrapping cast(... AS BOOL) would hide the function).
-			needCast = fn.Func.ObjName != "fulltext_match" && fn.Func.ObjName != "bm25_match"
+			needCast = fn.Func.ObjName != "fulltext_match"
 		}
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.

@@ -38,7 +38,6 @@ const (
 	MoIndexHnswAlgo      = tree.INDEX_TYPE_HNSW      // used for HNSW Index on Vector/Array columns
 	MoIndexCagraAlgo     = tree.INDEX_TYPE_CAGRA     // used for CAGRA Index on Vector/Array columns
 	MoIndexIvfpqAlgo     = tree.INDEX_TYPE_IVFPQ     // used for IVFPQ Index on Vector/Array columns
-	MoIndexBm25Algo      = tree.INDEX_TYPE_BM25      // used for BM25 ranked-retrieval Index on TEXT/VARCHAR columns
 	MoIndexFullText2Algo = tree.INDEX_TYPE_FULLTEXT2 // CREATE FULLTEXT2 INDEX: WAND positional engine on TEXT/VARCHAR columns
 )
 

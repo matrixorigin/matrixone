@@ -22,27 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
-func TestBm25MatchFuncExpression(t *testing.T) {
-	cols := []*KeyPart{{ColName: NewUnresolvedColName("body")}}
-
-	// BM25(): IsBm25 set, mode fixed to DEFAULT, deparses as BM25 with no mode.
-	bm, err := NewBm25MatchFuncExpression(cols, "apple banana")
-	require.NoError(t, err)
-	require.True(t, bm.IsBm25)
-	require.Equal(t, FULLTEXT_DEFAULT, bm.Mode)
-
-	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
-	bm.Format(ctx)
-	require.Equal(t, "BM25 (body) AGAINST (apple banana)", ctx.String())
-}
-
 func TestFullTextMatchFuncExpressionFormat(t *testing.T) {
 	cols := []*KeyPart{{ColName: NewUnresolvedColName("body")}}
 
-	// classic MATCH: IsBm25 false, deparses as MATCH and carries its mode.
+	// classic MATCH deparses as MATCH and carries its mode.
 	ft, err := NewFullTextMatchFuncExpression(cols, "apple", FULLTEXT_BOOLEAN)
 	require.NoError(t, err)
-	require.False(t, ft.IsBm25)
 
 	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	ft.Format(ctx)
@@ -59,14 +44,10 @@ func TestFullTextMatchExprValid(t *testing.T) {
 	cols := []*KeyPart{{ColName: NewUnresolvedColName("body")}}
 
 	// empty column list is rejected
-	_, err := NewBm25MatchFuncExpression(nil, "apple")
+	_, err := NewFullTextMatchFuncExpression(nil, "apple", FULLTEXT_DEFAULT)
 	require.Error(t, err)
 
 	// empty pattern is rejected
-	_, err = NewBm25MatchFuncExpression(cols, "")
-	require.Error(t, err)
-
-	// same for the classic constructor
-	_, err = NewFullTextMatchFuncExpression(nil, "apple", FULLTEXT_DEFAULT)
+	_, err = NewFullTextMatchFuncExpression(cols, "", FULLTEXT_DEFAULT)
 	require.Error(t, err)
 }

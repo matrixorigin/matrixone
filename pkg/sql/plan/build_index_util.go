@@ -191,8 +191,6 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 		return "ivfpq"
 	case tree.INDEX_TYPE_RTREE:
 		return "rtree"
-	case tree.INDEX_TYPE_BM25:
-		return "bm25"
 	default:
 		return "secondary"
 	}

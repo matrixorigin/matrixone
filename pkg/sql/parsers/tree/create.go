@@ -2067,8 +2067,6 @@ func (it IndexType) ToString() string {
 		return "cagra"
 	case INDEX_TYPE_IVFPQ:
 		return "ivfpq"
-	case INDEX_TYPE_BM25:
-		return "bm25"
 	case INDEX_TYPE_FULLTEXT2:
 		return "fulltext2"
 	case INDEX_TYPE_INVALID:
@@ -2091,7 +2089,6 @@ const (
 	INDEX_TYPE_HNSW
 	INDEX_TYPE_CAGRA
 	INDEX_TYPE_IVFPQ
-	INDEX_TYPE_BM25
 	INDEX_TYPE_FULLTEXT2
 )
 

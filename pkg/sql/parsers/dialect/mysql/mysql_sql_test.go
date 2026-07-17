@@ -3638,15 +3638,6 @@ var (
 			output: "select * from t1 where MATCH (body, title) AGAINST (abc dfc ghc)",
 		},
 		{
-			// BM25() must deparse back to BM25() (not MATCH), and carries no mode.
-			input:  "select * from t1 where BM25 (body) AGAINST ('abc dfc')",
-			output: "select * from t1 where BM25 (body) AGAINST (abc dfc)",
-		},
-		{
-			input:  "select BM25 (body) AGAINST ('abc') as score from t1",
-			output: "select BM25 (body) AGAINST (abc) as score from t1",
-		},
-		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
 			output: "select * from t1 where MATCH (body, title) AGAINST (abc- +abc IN BOOLEAN MODE)",
 		},
