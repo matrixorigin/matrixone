@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -397,6 +398,11 @@ func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandMode
 	if empty {
 		return nil, nil, 0, nil
 	}
+	// Fail fast if the tail can't fit in the memory budget, rather than letting it
+	// OOM-kill the CN as it decodes into the Go heap.
+	if err := checkTailLoadBudget(sqlproc, cfg); err != nil {
+		return nil, nil, 0, err
+	}
 	span := maxC - minC + 1
 	filesize := span * int64(vectorindex.MaxChunkSize)
 
@@ -456,6 +462,43 @@ func tailChunkBounds(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (minC, maxC i
 		return minC, maxC, false, nil
 	}
 	return 0, 0, true, nil
+}
+
+// checkTailLoadBudget fails fast when the CDC tail's stored bytes exceed the CN memory
+// budget, returning a clear, actionable error instead of letting the tail load OOM-kill
+// the CN (which would take down EVERY query on the node, not just this one). The tail
+// decodes into the Go HEAP (frames read from the streamed temp file), so its stored size
+// — SUM(LENGTH(data)), the ACTUAL bytes, not the padded span*MaxChunkSize file — is a
+// good proxy for the load footprint. The mmap'd base is reclaimable OS page cache and is
+// deliberately NOT counted (it cannot cause an OOM-kill). Budget = MemoryTotal*0.8 - live
+// Go heap; MemoryTotal is cgroup-aware, and MemoryGolang already includes any tails
+// currently resident, so this correctly gates an INCREMENTAL load. The 0.8 headroom
+// absorbs the (small, post-mmap) C-allocator/query-mpool usage the formula omits.
+func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
+	sql := fmt.Sprintf("SELECT COALESCE(SUM(LENGTH(%s)), 0) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.Bm25Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.Bm25Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.Bm25Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	var need int64
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		need = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+	}
+	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
+	if need > avail {
+		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
+			"bm25 CDC tail for %s.%s needs ~%d MB to load but only ~%d MB is free "+
+				"(MemoryTotal*0.8 - Go heap); compact it (ALTER ... REINDEX) or increase CN memory",
+			cfg.DbName, cfg.IndexTable, need>>20, avail>>20))
+	}
+	return nil
 }
 
 // streamChunksToFile streams a tag=0 index's chunk rows and writes each at
