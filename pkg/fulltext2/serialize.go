@@ -256,24 +256,37 @@ func (s *Segment) decodeDocmap(data []byte) error {
 // postingsFormatV5 adds a per-block positions byte length to each directory entry
 // (V4 stored one positions length per term), making positions block-seekable for the
 // phrase cursor. fulltext2 is experimental, so the old layout is dropped.
-const postingsFormatV5 byte = 5
+// postingsFormatV6 makes each term's ranking entry SELF-CONTAINED (it prepends the
+// term's absolute base offsets into the blocks/positions sections + term-level maxTf/
+// minDocLen), and the FST value becomes the BYTE OFFSET of that entry (V5: the ordinal).
+// This lets LookupLoaded decode one term's directory on demand instead of decodePostings
+// expanding all of them at load — the resident directory heap drops from O(vocabulary) to
+// O(the current query). fulltext2 is experimental, so the old layout is dropped.
+const postingsFormatV6 byte = 6
 
 func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []byte, err error) {
 	n := len(s.sortedTerms)
 	values := make([]uint64, n)
 	var w, bw, pw leBuf // w=ranking directory, bw=blocks, pw=positions
-	w.b.WriteByte(postingsFormatV5)
+	w.b.WriteByte(postingsFormatV6)
 	w.i64(int64(n))
 	for i, term := range s.sortedTerms {
-		values[i] = uint64(i)
 		tp := s.terms[term]
 		if tp.blockLastDoc == nil { // ensure the block-max directory (build normally sets it)
 			deriveTermStats(tp, s.docLen)
 		}
 		df := len(tp.docIDs)
 		nblk := (df + BlockSize - 1) / BlockSize
+		// Self-contained entry: the FST maps term -> this byte offset, and the entry
+		// carries its own blocks/positions base offsets + term-level max/min so it can be
+		// decoded in isolation (no walk of prior terms).
+		values[i] = uint64(w.b.Len())
 		w.uvarint(uint64(df))
 		w.uvarint(uint64(nblk))
+		w.uvarint(uint64(bw.b.Len())) // blockDataBase: absolute offset into the blocks section
+		w.uvarint(uint64(pw.b.Len())) // posRawBase: absolute offset into the positions section
+		w.b.WriteByte(tp.maxTf)       // term-level max tf (was recomputed at load in V5)
+		w.uvarint(uint64(tp.minDocLen))
 		var prevLast int64
 		for b := 0; b < nblk; b++ {
 			lo := b * BlockSize
@@ -319,129 +332,125 @@ func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []by
 	return fst, w.b.Bytes(), bw.b.Bytes(), pw.b.Bytes(), nil
 }
 
-// decodePostings loads the ranking DIRECTORY into s.loaded (indexed by ordinal):
-// the per-block Block-Max skip metadata (blockLastDoc/blockMaxTf/blockMinDocLn) and
-// a byte-offset directory (blockOff) into the blocks section expand RESIDENT, while
-// each term's docID/tf blocks (blockData) and compressed positions (posRaw) stay as
-// views into the mmap — decoded on demand (the WAND cursor decodes one block; cold
-// paths materialize). No off-heap allocation and no re-derivation: the score-UB
-// fields are read straight from the directory the builder wrote.
+// decodePostings BINDS the loaded segment to its (mmap'd) ranking/blocks/positions
+// sections WITHOUT expanding any term. V6 entries are self-contained and reachable by
+// byte offset (the FST value), so terms decode lazily in LookupLoaded — the resident
+// directory heap is O(the current query), not O(vocabulary).
 func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
+	if len(ranking) == 0 {
+		s.ranking, s.blocks, s.positions = nil, nil, nil
+		return nil
+	}
 	if len(ranking) < 1+8 {
-		if len(ranking) == 0 {
-			s.loaded = nil
-			return nil
-		}
 		return moerr.NewInternalErrorNoCtx("fulltext2: ranking blob too short")
 	}
-	if ranking[0] != postingsFormatV5 {
+	if ranking[0] != postingsFormatV6 {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("fulltext2: unsupported postings format %d", ranking[0]))
 	}
-	p := 1
-	nterms := int64(binary.LittleEndian.Uint64(ranking[p:]))
-	p += 8
+	s.ranking, s.blocks, s.positions = ranking, blocks, positions
+	return nil
+}
 
+// decodeTermEntry lazily decodes ONE term's self-contained directory entry at byte
+// offset `off` in s.ranking (the FST value) into a transient termPostings whose
+// blockData/posRaw are views into s.blocks/s.positions. Callers hold the result for the
+// query's lifetime (WAND/phrase cursors, evalClause), so the entry decodes at most a few
+// times per query and never persists — resident directory heap is O(query), not O(vocab).
+// Returns (nil,false) on a corrupt/out-of-bounds entry (defense-in-depth on already-CRC'd
+// data).
+func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
+	r := s.ranking
+	if off < 0 || off >= len(r) {
+		return nil, false
+	}
+	p := off
 	uv := func() (uint64, bool) {
-		v, n := binary.Uvarint(ranking[p:])
+		v, n := binary.Uvarint(r[p:])
 		if n <= 0 {
 			return 0, false
 		}
 		p += n
 		return v, true
 	}
-	rb := func() (uint8, bool) { // read one raw byte from the directory
-		if p >= len(ranking) {
-			return 0, false
+	dfu, ok := uv()
+	if !ok {
+		return nil, false
+	}
+	nblku, ok := uv()
+	if !ok {
+		return nil, false
+	}
+	baseB, ok := uv() // blockDataBase: absolute offset into s.blocks
+	if !ok {
+		return nil, false
+	}
+	baseP, ok := uv() // posRawBase: absolute offset into s.positions
+	if !ok {
+		return nil, false
+	}
+	if p >= len(r) {
+		return nil, false
+	}
+	termMaxTf := r[p]
+	p++
+	minDLu, ok := uv()
+	if !ok {
+		return nil, false
+	}
+	// A df/nblk larger than the blocks section is impossible (each posting is >= 1 byte).
+	if dfu > uint64(len(s.blocks)) || nblku > uint64(len(s.blocks)) {
+		return nil, false
+	}
+	df, nblk := int(dfu), int(nblku)
+	tp := &termPostings{ndoc: df, maxTf: termMaxTf, minDocLen: int32(minDLu)}
+	if nblk == 0 {
+		return tp, true
+	}
+	tp.blockLastDoc = make([]int64, nblk)
+	tp.blockMaxTf = make([]uint8, nblk)
+	tp.blockMinDocLn = make([]int32, nblk)
+	tp.blockOff = make([]int32, nblk+1)   // byte offsets RELATIVE to this term's blockData
+	tp.blockPosOff = make([]int32, nblk+1) // byte offsets RELATIVE to this term's posRaw
+	var prevLast, cb, cpos int64
+	for b := 0; b < nblk; b++ {
+		gap, ok := uv()
+		if !ok {
+			return nil, false
 		}
-		v := ranking[p]
+		prevLast += int64(gap)
+		tp.blockLastDoc[b] = prevLast
+		if p >= len(r) {
+			return nil, false
+		}
+		tp.blockMaxTf[b] = r[p]
 		p++
-		return v, true
-	}
-	bad := func() error { return moerr.NewInternalErrorNoCtx("fulltext2: corrupt postings stream") }
-
-	s.loaded = make([]*termPostings, nterms)
-	var cb, cpos int64 // running offsets into the blocks and positions sections
-	for t := int64(0); t < nterms; t++ {
-		dfu, ok := uv()
+		mdl, ok := uv()
 		if !ok {
-			return bad()
+			return nil, false
 		}
-		nblku, ok := uv()
-		if !ok {
-			return bad()
+		tp.blockMinDocLn[b] = int32(mdl)
+		blkLen, ok := uv()
+		if !ok || blkLen > uint64(len(s.blocks)) {
+			return nil, false
 		}
-		// Guard the directory against a corrupt/bit-rotted blob (that still passed the
-		// outer CRC): a length whose high bit is set would cast to a negative int and
-		// slip past later bound checks, and an absurd count would make() a huge slice.
-		// df and nblk can never exceed the blocks byte length (each posting is >= 1 byte).
-		if dfu > uint64(len(blocks)) || nblku > uint64(len(blocks)) {
-			return bad()
+		tp.blockOff[b] = int32(cb)
+		cb += int64(blkLen)
+		posLen, ok := uv()
+		if !ok || posLen > uint64(len(s.positions)) {
+			return nil, false
 		}
-		df, nblk := int(dfu), int(nblku)
-		tp := &termPostings{ndoc: df}
-		if nblk > 0 {
-			tp.blockLastDoc = make([]int64, nblk)
-			tp.blockMaxTf = make([]uint8, nblk)
-			tp.blockMinDocLn = make([]int32, nblk)
-			tp.blockOff = make([]int32, nblk+1)
-			tp.blockPosOff = make([]int32, nblk+1)
-		}
-		blkBase := cb
-		posBase := cpos
-		var prevLast int64
-		var termMaxTf uint8
-		termMinDL := int32(math.MaxInt32)
-		for b := 0; b < nblk; b++ {
-			gap, ok := uv()
-			if !ok {
-				return bad()
-			}
-			prevLast += int64(gap)
-			tp.blockLastDoc[b] = prevLast
-			maxTf, ok := rb()
-			if !ok {
-				return bad()
-			}
-			tp.blockMaxTf[b] = maxTf
-			minDL, ok := uv()
-			if !ok {
-				return bad()
-			}
-			tp.blockMinDocLn[b] = int32(minDL)
-			blkLen, ok := uv()
-			if !ok || blkLen > uint64(len(blocks)) { // uint guard: avoid int64(blkLen)<0 overflow
-				return bad()
-			}
-			tp.blockOff[b] = int32(cb - blkBase)
-			cb += int64(blkLen)
-			// per-block positions byte length (V5): builds the block-seekable position offset
-			posLen, ok := uv()
-			if !ok || posLen > uint64(len(positions)) || cpos+int64(posLen) > int64(len(positions)) {
-				return bad()
-			}
-			tp.blockPosOff[b] = int32(cpos - posBase)
-			cpos += int64(posLen)
-			if maxTf > termMaxTf {
-				termMaxTf = maxTf
-			}
-			if int32(minDL) < termMinDL {
-				termMinDL = int32(minDL)
-			}
-		}
-		if nblk > 0 {
-			tp.blockOff[nblk] = int32(cb - blkBase)
-			if cb > int64(len(blocks)) {
-				return bad()
-			}
-			tp.blockData = blocks[blkBase:cb]
-			tp.blockPosOff[nblk] = int32(cpos - posBase)
-			tp.posRaw = positions[posBase:cpos] // this term's whole positions (blockPosOff indexes within)
-			tp.maxTf = termMaxTf
-			tp.minDocLen = termMinDL
-		}
-		s.loaded[t] = tp
+		tp.blockPosOff[b] = int32(cpos)
+		cpos += int64(posLen)
 	}
-	return nil
+	tp.blockOff[nblk] = int32(cb)
+	tp.blockPosOff[nblk] = int32(cpos)
+	// blockData/posRaw are views into the mmap sections at this term's stored bases.
+	if int64(baseB)+cb > int64(len(s.blocks)) || int64(baseP)+cpos > int64(len(s.positions)) {
+		return nil, false
+	}
+	tp.blockData = s.blocks[baseB : int64(baseB)+cb]
+	tp.posRaw = s.positions[baseP : int64(baseP)+cpos]
+	return tp, true
 }
 
 // deriveTermStats fills tp's raw, scorer-agnostic score-UB fields from its
@@ -502,11 +511,11 @@ func (s *Segment) LookupLoaded(term string) (*termPostings, bool) {
 	if s.dict == nil {
 		return nil, false
 	}
-	ord, ok, err := s.dict.get(term)
-	if err != nil || !ok || ord >= uint64(len(s.loaded)) {
+	off, ok, err := s.dict.get(term) // V6: the FST value is the entry's byte offset in ranking
+	if err != nil || !ok {
 		return nil, false
 	}
-	return s.loaded[ord], true
+	return s.decodeTermEntry(int(off))
 }
 
 // ---- pk codec (by types.T) ----

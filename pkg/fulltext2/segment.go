@@ -288,13 +288,15 @@ type Segment struct {
 	sortedTerms []string
 
 	// term dict, LOADED-side representation — set by Deserialize, nil on a
-	// build-side segment. `dict` is the vellum FST mapping term → ordinal (its
-	// position in sorted order); `loaded` holds the posting lists indexed by that
-	// ordinal. Query on a loaded segment resolves term → ordinal → posting list;
-	// the build-side `terms` map is left nil. (Mirrors bm25's build-side per-term
-	// slices vs loaded buffers split.)
-	dict   *termDict
-	loaded []*termPostings
+	// build-side segment. `dict` is the vellum FST mapping term → the BYTE OFFSET of
+	// that term's self-contained directory entry in `ranking`. A loaded segment does
+	// NOT expand any term at load: query lookup (LookupLoaded) decodes just the touched
+	// term's directory entry from `ranking` on demand and points its blocks/positions at
+	// `blocks`/`positions` — so the resident directory heap is O(the current query), not
+	// O(vocabulary). `ranking`/`blocks`/`positions` are views into the mmap/blob (kept
+	// alive by mmapData or GC). The build-side `terms` map is left nil.
+	dict                      *termDict
+	ranking, blocks, positions []byte
 
 	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
 	// FST, the compressed docID/tf blocks, and the compressed positions section are
@@ -322,7 +324,7 @@ func (s *Segment) Free() {
 		_ = os.Remove(s.mmapPath)
 		s.mmapPath = ""
 	}
-	s.loaded = nil
+	s.ranking, s.blocks, s.positions = nil, nil, nil
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

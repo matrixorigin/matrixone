@@ -138,7 +138,6 @@ func TestSegmentRoundtripEmpty(t *testing.T) {
 	loaded := roundtrip(t, orig)
 	require.Equal(t, int64(0), loaded.N)
 	require.Equal(t, 0, loaded.dict.len())
-	require.Empty(t, loaded.loaded)
 	_, ok := loaded.LookupLoaded("anything")
 	require.False(t, ok)
 }
