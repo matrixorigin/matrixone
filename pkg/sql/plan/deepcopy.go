@@ -596,6 +596,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		Params:              DeepCopyExprList(qry.Params),
 		Headings:            qry.Headings,
 		HasForeignKeyAction: qry.HasForeignKeyAction,
+		DetectSqls:          slices.Clone(qry.DetectSqls),
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)

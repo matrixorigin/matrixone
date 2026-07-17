@@ -313,6 +313,17 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
+	return LockTableWithMode(eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef)
+}
+
+// LockTableWithMode locks all rows in a table with the specified lock mode.
+func LockTableWithMode(
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -336,6 +347,7 @@ func LockTable(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		WithLockMode(mode).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
@@ -1540,7 +1552,8 @@ func lockTalbeIfLockCountIsZero(
 			if !target.lockTableAtTheEnd {
 				continue
 			}
-			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
+			err := LockTableWithMode(
+				lockOp.engine, proc, target.tableID, target.primaryColumnType, target.mode, false)
 			if err != nil {
 				return err
 			}

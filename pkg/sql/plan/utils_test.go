@@ -144,7 +144,8 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	}}}
 	queryPlan := &plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{
-			Steps: []int32{0},
+			Steps:      []int32{0},
+			DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update", "REPLACE_PARENT_CHK:select true"},
 			Nodes: []*plan.Node{{
 				NodeType: plan.Node_VALUE_SCAN,
 				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
@@ -177,6 +178,9 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 		require.Equal(t, "AB\x00\x00", copiedLiteral.GetSval())
 		require.NotSame(t, source, copiedLiteral.GetSrc())
 		require.NotNil(t, binaryLiteral.GetLit().GetSrc().GetP())
+		require.Equal(t, queryPlan.GetQuery().DetectSqls, filled.GetQuery().DetectSqls)
+		filled.GetQuery().DetectSqls[0] = "changed"
+		require.Equal(t, "REPLACE_PARENT_LOCK:select 1 for update", queryPlan.GetQuery().DetectSqls[0])
 	}
 }
 

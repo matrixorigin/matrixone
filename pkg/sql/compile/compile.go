@@ -832,11 +832,12 @@ func (c *Compile) lockTable() error {
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		if err := lockop.LockTable(
+		if err := lockop.LockTableWithMode(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
+			tbl.Mode,
 			false); err != nil {
 			return err
 		}

@@ -1087,8 +1087,9 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 				IsFirst: false,
 				IsLast:  false,
 			}
-			arg.AddLockTarget(tableID, nil, 0, pkType, -1, -1, nil, true)
-			arg.LockTable(tableID, false)
+			arg.AddLockTargetWithMode(
+				tableID, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, true)
+			arg.LockTableWithMode(tableID, lock.LockMode_Shared, false)
 			resetChildren(arg, nil)
 			defer arg.Free(proc, false, nil)
 
@@ -1096,6 +1097,16 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.True(t, proc.GetTxnOperator().HasLockTable(tableID))
+
+			sharedTxn, err := proc.Base.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, sharedTxn.Rollback(proc.Ctx)) }()
+			sharedProc := process.NewTopProcess(proc.Ctx, mpool.MustNewZero(), proc.Base.TxnClient,
+				sharedTxn, nil, proc.GetLockService(), nil, nil, nil, nil, nil)
+			require.NoError(t, LockTableWithMode(
+				nil, sharedProc, tableID, pkType, lock.LockMode_Shared, false))
+			require.NoError(t, LockTable(nil, proc, tableID+1, pkType, false))
+			require.True(t, proc.GetTxnOperator().HasLockTable(tableID+1))
 		},
 	)
 }

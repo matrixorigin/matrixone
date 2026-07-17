@@ -376,6 +376,21 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
+
+	t.Run("SharedRowLock", func(t *testing.T) {
+		original := lockop.NewArgumentByEngine(nil)
+		original.AddLockTargetWithMode(43, nil, lockpb.LockMode_Shared, 0,
+			types.T_int64.ToType(), -1, -1, nil, false)
+
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredLock, ok := restored.(*lockop.LockOp)
+		require.True(t, ok)
+		targets := restoredLock.CopyToPipelineTarget()
+		require.Len(t, targets, 1)
+		require.False(t, targets[0].LockTable)
+		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
+	})
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
