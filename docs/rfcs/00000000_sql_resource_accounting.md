@@ -1094,6 +1094,8 @@ do not aggregate each other:
 - `EXPLAIN ANALYZE` overview reads the immutable pre-response snapshot after all
   Executions seal and reports `MaxDomainPeakMemory` plus the explicitly named
   `SumDomainPeakMemoryBound`; node rows show final-attempt operator diagnostics;
+- Explain text formats those memory values as `bytes`, `KiB`, `MiB`, and higher
+  units; JSON and `statement_info.stats` retain the exact raw-byte integers;
 - `mo_explain_phy` and physical-plan display stop contributing to statement
   accounting;
 - `system.sql_statement_hotspot.memorysize` retains its SQL shape but is

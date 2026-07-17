@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -247,8 +248,8 @@ func TestExplainPhyPlanResourceOverviewUsesExactMemorySummary(t *testing.T) {
 			SpillBytes:        17,
 		},
 		Memory: resource.MemoryTotals{
-			MaxDomainPeakLiveBytes:      22,
-			SumDomainPeakLiveBytesBound: 33,
+			MaxDomainPeakLiveBytes:      128 * common.MiB,
+			SumDomainPeakLiveBytesBound: 256 * common.MiB,
 		},
 		AttemptCount: 1,
 		Quality:      resource.QualityPartial,
@@ -261,8 +262,8 @@ func TestExplainPhyPlanResourceOverviewUsesExactMemorySummary(t *testing.T) {
 	for _, token := range []string{
 		"ActiveTime:11ns",
 		"WaitTime:13ns",
-		"MaxDomainPeakMemory:22B",
-		"SumDomainPeakMemoryBound:33B",
+		"MaxDomainPeakMemory:128.00 MiB",
+		"SumDomainPeakMemoryBound:256.00 MiB",
 		"Quality:partial",
 	} {
 		if !strings.Contains(got, token) {

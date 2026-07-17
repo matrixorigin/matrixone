@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -72,11 +73,11 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 		if summary := phy.Resource; summary != nil {
 			waitNS, waitQuality := summary.Usage.TotalWaitNS()
 			quality := summary.Quality | waitQuality
-			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%dB, SumDomainPeakMemoryBound:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
+			buffer.WriteString(fmt.Sprintf("\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s",
 				summary.Usage.ExclusiveActiveNS,
 				waitNS,
-				summary.Memory.MaxDomainPeakLiveBytes,
-				summary.Memory.SumDomainPeakLiveBytesBound,
+				common.ConvertUint64BytesToHumanReadable(summary.Memory.MaxDomainPeakLiveBytes),
+				common.ConvertUint64BytesToHumanReadable(summary.Memory.SumDomainPeakLiveBytesBound),
 				summary.Usage.SpillBytes,
 				summary.Usage.S3ReadBytes,
 				summary.Usage.S3WriteBytes,

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -664,11 +665,11 @@ func explainResourceOverview(
 			waitNS, waitQuality := summary.Usage.TotalWaitNS()
 			quality := summary.Quality | waitQuality
 			fmt.Fprintf(buffer,
-				"\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%dB, SumDomainPeakMemoryBound:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s, AffectedRows:%d",
+				"\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s, AffectedRows:%d",
 				summary.Usage.ExclusiveActiveNS,
 				waitNS,
-				summary.Memory.MaxDomainPeakLiveBytes,
-				summary.Memory.SumDomainPeakLiveBytesBound,
+				common.ConvertUint64BytesToHumanReadable(summary.Memory.MaxDomainPeakLiveBytes),
+				common.ConvertUint64BytesToHumanReadable(summary.Memory.SumDomainPeakLiveBytesBound),
 				summary.Usage.SpillBytes,
 				summary.Usage.S3ReadBytes,
 				summary.Usage.S3WriteBytes,
