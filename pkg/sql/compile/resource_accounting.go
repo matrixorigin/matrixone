@@ -251,7 +251,7 @@ func collectScopeResourceDelta(scopes []*Scope, localAddress string) resource.De
 		if scope == nil {
 			return
 		}
-		if scope.Magic == Remote && !scope.ipAddrMatch(localAddress) {
+		if scope.Magic == Remote && !scope.ipAddrMatch(localAddress) && !scope.resourceExecutedLocally {
 			return
 		}
 		for _, pre := range scope.PreScopes {
@@ -287,7 +287,7 @@ func countExpectedRemoteScopes(scopes []*Scope, localAddress string) uint64 {
 		if scope == nil {
 			return
 		}
-		if scope.Magic == Remote && !scope.ipAddrMatch(localAddress) {
+		if scope.Magic == Remote && !scope.ipAddrMatch(localAddress) && !scope.resourceExecutedLocally {
 			count++
 			return
 		}

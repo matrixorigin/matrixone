@@ -201,6 +201,11 @@ type Scope struct {
 
 	ScopeAnalyzer *ScopeAnalyzer
 
+	// resourceExecutedLocally distinguishes a planned remote scope that fell
+	// back to MergeRun from a scope that was actually dispatched. It is
+	// execution-local state and must be cleared before scope reuse.
+	resourceExecutedLocally bool
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 }
 

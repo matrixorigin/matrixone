@@ -211,7 +211,8 @@ Projection code does not infer missing values from duration or pricing.
 
 ## 6. Remote aggregation
 
-Every direct RemoteRun returns one terminal JSON envelope with:
+Every actually dispatched direct RemoteRun returns one terminal JSON envelope
+with:
 
 - the optional physical plan;
 - hop-local usage, quality, and outcome;
@@ -239,6 +240,11 @@ At attempt completion, the coordinator compares the number of expected direct
 remote scopes with terminal envelopes received. A missing direct envelope adds
 the count difference and sets `partial|missing-fragment`. Extra reports do not
 underflow the count. Counter overflow saturates and sets `invariant-failure`.
+
+A scope planned as remote can fall back to local `MergeRun` when it is not safe
+to execute standalone on the target CN. That execution is collected as local
+work and is not counted as an expected remote report; remote descendants that
+are actually dispatched still follow the envelope path.
 
 ### 6.2 Nested RemoteRun
 

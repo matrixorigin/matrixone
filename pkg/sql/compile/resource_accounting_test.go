@@ -16,9 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -241,6 +243,11 @@ func TestCountExpectedRemoteScopes(t *testing.T) {
 		{Magic: Normal, NodeInfo: engine.Node{Addr: "local:6001"}},
 		{Magic: Remote, NodeInfo: engine.Node{Addr: "remote-a:6001"}},
 		{
+			Magic:                   Remote,
+			NodeInfo:                engine.Node{Addr: "remote-fallback:6001"},
+			resourceExecutedLocally: true,
+		},
+		{
 			Magic:    Merge,
 			NodeInfo: engine.Node{Addr: "local:6001"},
 			PreScopes: []*Scope{
@@ -249,6 +256,32 @@ func TestCountExpectedRemoteScopes(t *testing.T) {
 		},
 	}
 	require.Equal(t, uint64(2), countExpectedRemoteScopes(scopes, "local:6001"))
+}
+
+func TestLocalRemoteFallbackContributesResourceFacts(t *testing.T) {
+	op := value_scan.NewArgument()
+	defer op.Release()
+	op.GetOperatorBase().OpAnalyzer = process.NewAnalyzer(0, false, false, "fallback")
+	stats := op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	stats.TimeConsumed = 11
+	stats.SpillSize = 7
+
+	fallback := &Scope{
+		Magic:                   Remote,
+		NodeInfo:                engine.Node{Addr: "remote-fallback:6001"},
+		RootOp:                  op,
+		resourceExecutedLocally: true,
+	}
+	actualRemote := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "remote:6001"},
+	}
+
+	delta := collectScopeResourceDelta([]*Scope{fallback, actualRemote}, "local:6001")
+	require.Equal(t, uint64(11), delta.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(7), delta.Usage.SpillBytes)
+	require.Equal(t, uint64(1), countExpectedRemoteScopes(
+		[]*Scope{fallback, actualRemote}, "local:6001"))
 }
 
 func TestMissingRemoteCountsFragmentAndMemoryDomain(t *testing.T) {
