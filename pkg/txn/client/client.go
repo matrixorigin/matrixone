@@ -271,6 +271,8 @@ type txnClient struct {
 	enableSacrificingFreshness  bool
 	enableRefreshExpression     bool
 	txnOpenedCallbacks          []func(TxnOperator)
+	defaultEventCallbacks       defaultTxnEventCallbacks
+	sharedEventCallbacks        txnEventCallbacks
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -483,6 +485,11 @@ func NewTxnClient(
 		sender: sender,
 		abortC: make(chan struct{}, 1),
 	}
+	c.defaultEventCallbacks.closed = [2]TxnEventCallback{
+		{Func: c.updateLastCommitTS},
+		{Func: c.closeTxn},
+	}
+	c.sharedEventCallbacks.defaults = &c.defaultEventCallbacks
 	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
 	c.closeCtx, c.closeCancel = context.WithCancel(context.Background())
 	c.mu.state = paused
@@ -634,15 +641,7 @@ func (client *txnClient) doCreateTxn(
 		op.reset.tryAcquireUnknownCommit = client.tryAcquireUnknownCommit
 		op.reset.unknownCommitResolved = client.releaseInternalUnknownCommit
 	}
-	op.AppendEventCallback(
-		ClosedEvent,
-		TxnEventCallback{
-			Func: client.updateLastCommitTS,
-		},
-		TxnEventCallback{
-			Func: client.closeTxn,
-		},
-	)
+	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
 	if err = client.openTxn(ctx, op); err != nil {
 		op.closeUnadmitted(err)
