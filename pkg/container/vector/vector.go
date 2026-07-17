@@ -3486,6 +3486,28 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 	return nil
 }
 
+func SetConstByteJsonEncoded(
+	vec *Vector,
+	enc bytejson.ByteJsonDataEncoder,
+	length int,
+	mp *mpool.MPool,
+) error {
+	oldAreaLen := len(vec.area)
+	var value types.Varlena
+	if err := BuildVarlenaFromByteJsonEncoded(vec, &value, enc, mp); err != nil {
+		return err
+	}
+	if err := extend(vec, 1, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	col[0] = value
+	vec.length = length
+	return nil
+}
+
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
@@ -3608,6 +3630,41 @@ func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MP
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 	return appendOneByteJson(vec, bj, isNull, mp)
+}
+
+func AppendByteJsonEncoded(
+	vec *Vector,
+	enc bytejson.ByteJsonDataEncoder,
+	mp *mpool.MPool,
+) error {
+	if vec.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
+	}
+	if mp == nil {
+		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
+	}
+
+	if err := extend(vec, 1, mp); err != nil {
+		return err
+	}
+	index := vec.length
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, index+1)
+	oldValue := values[index]
+	oldAreaLen := len(vec.area)
+	wasNull := vec.nsp.Contains(uint64(index))
+	if err := BuildVarlenaFromByteJsonEncoded(vec, &values[index], enc, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		values[index] = oldValue
+		if wasNull {
+			vec.nsp.Add(uint64(index))
+		} else {
+			vec.nsp.Del(uint64(index))
+		}
+		return err
+	}
+	vec.nsp.Del(uint64(index))
+	vec.length++
+	return nil
 }
 
 // AppendArray mainly used in tests
@@ -5205,6 +5262,71 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 		return nil
 	}
 	return BuildVarlenaNoInlineFromByteJson(vec, v, bj, m)
+}
+
+func BuildVarlenaFromByteJsonEncoded(
+	vec *Vector,
+	v *types.Varlena,
+	enc bytejson.ByteJsonDataEncoder,
+	m *mpool.MPool,
+) error {
+	dataSize := uint64(enc.DataSize())
+	storageSize := dataSize + 1
+	maxInt := uint64(^uint(0) >> 1)
+	if storageSize > uint64(^uint32(0)) || storageSize > maxInt {
+		return moerr.NewInvalidInputNoCtx("json value is too large")
+	}
+
+	if storageSize <= types.VarlenaInlineSize {
+		clear(v[:])
+		v[0] = byte(storageSize)
+		v[1] = enc.TypeCode()
+		dst := v[2 : 2+int(dataSize)]
+		n, err := enc.EncodeDataInto(dst)
+		if err != nil {
+			return err
+		}
+		if n != len(dst) {
+			return moerr.NewInternalErrorNoCtxf(
+				"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
+			)
+		}
+		return nil
+	}
+
+	oldAreaLen := len(vec.area)
+	newAreaLen := uint64(oldAreaLen) + storageSize
+	if newAreaLen > uint64(^uint32(0)) || newAreaLen > maxInt {
+		return moerr.NewInvalidInputNoCtx("json vector area is too large")
+	}
+
+	if int(newAreaLen) > cap(vec.area) {
+		newArea, err := m.Grow2(vec.area, nil, int(newAreaLen), vec.offHeap)
+		if err != nil {
+			return err
+		}
+		// Grow2 may have freed the old area. Install the replacement before
+		// invoking an encoder that can fail.
+		vec.area = newArea
+	} else {
+		vec.area = vec.area[:int(newAreaLen)]
+	}
+
+	vec.area[oldAreaLen] = enc.TypeCode()
+	dst := vec.area[oldAreaLen+1 : int(newAreaLen)]
+	n, err := enc.EncodeDataInto(dst)
+	if err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	if n != len(dst) {
+		vec.area = vec.area[:oldAreaLen]
+		return moerr.NewInternalErrorNoCtxf(
+			"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
+		)
+	}
+	v.SetOffsetLen(uint32(oldAreaLen), uint32(storageSize))
+	return nil
 }
 
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector

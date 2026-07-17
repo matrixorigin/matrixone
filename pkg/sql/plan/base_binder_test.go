@@ -84,6 +84,97 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 	})
 }
 
+func TestCombinePlanExprsBalancedHasLogarithmicDepth(t *testing.T) {
+	const leafCount = 1024
+
+	exprs := make([]*plan.Expr, leafCount)
+	for i := range exprs {
+		exprs[i] = &plan.Expr{
+			Typ: plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: true,
+			},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	combined, err := combinePlanExprsBalanced(context.Background(), "or", exprs)
+	require.NoError(t, err)
+
+	depth, leaves := planExprDepthAndLeaves(combined)
+	require.Equal(t, leafCount, leaves)
+	require.LessOrEqual(t, depth, 11)
+}
+
+func TestHandleTupleInBuildsBalancedTree(t *testing.T) {
+	const tupleCount = 1024
+
+	left := &plan.Expr_List{
+		List: &plan.ExprList{
+			List: []*plan.Expr{
+				makeTupleInTestColumn(0),
+				makeTupleInTestColumn(1),
+			},
+		},
+	}
+	right := &plan.ExprList{List: make([]*plan.Expr, tupleCount)}
+	for i := range right.List {
+		right.List[i] = &plan.Expr{
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{
+					List: []*plan.Expr{
+						MakePlan2Int64ConstExprWithType(int64(i)),
+						MakePlan2Int64ConstExprWithType(int64(i + 1)),
+					},
+				},
+			},
+		}
+	}
+
+	combined, err := handleTupleIn(context.Background(), "in", left, right)
+	require.NoError(t, err)
+
+	depth, leaves := planExprDepthAndLeaves(combined)
+	require.Equal(t, tupleCount*4, leaves)
+	require.LessOrEqual(t, depth, 13)
+}
+
+func makeTupleInTestColumn(colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: colPos,
+			},
+		},
+	}
+}
+
+func planExprDepthAndLeaves(expr *plan.Expr) (int, int) {
+	f := expr.GetF()
+	if f == nil {
+		return 1, 1
+	}
+
+	maxChildDepth := 0
+	leaves := 0
+	for _, arg := range f.Args {
+		childDepth, childLeaves := planExprDepthAndLeaves(arg)
+		maxChildDepth = max(maxChildDepth, childDepth)
+		leaves += childLeaves
+	}
+	return maxChildDepth + 1, leaves
+}
+
 func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
 	ctx := context.Background()
 
