@@ -528,6 +528,57 @@ func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 }
 
+// TestIntegerDivNullDividendByZeroStrictMode verifies that a NULL dividend
+// over a zero divisor yields NULL even in strict mode: the division-by-zero
+// error must fire only when both operands are non-NULL. MySQL 8.4.8 inserts
+// NULL for NULL DIV 0 under STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,
+// while 5 DIV 0 errors.
+func TestIntegerDivNullDividendByZeroStrictMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Force strict "error on division by zero" behavior.
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+	defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+
+	// NULL DIV 0 must not raise; the row is NULL.
+	signedNullOverZero := tcTemp{
+		info: "int64: NULL DIV 0 = NULL (strict)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+	}
+	tcc := NewFunctionTestCase(proc, signedNullOverZero.inputs, signedNullOverZero.expect, integerDivFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, signedNullOverZero.info, info)
+
+	// Unsigned NULL DIV 0 must not raise either.
+	unsignedNullOverZero := tcTemp{
+		info: "uint64: NULL DIV 0 = NULL (strict)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+	}
+	tcc = NewFunctionTestCase(proc, unsignedNullOverZero.inputs, unsignedNullOverZero.expect, integerDivFn)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, unsignedNullOverZero.info, info)
+
+	// Mixed batch: a non-NULL 5 DIV 0 in the same batch must still error.
+	nonNullOverZero := tcTemp{
+		info: "int64: [NULL, 5] DIV [0, 0] errors on the non-null row (strict)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 5}, []bool{true, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), true, []int64{0, 0}, []bool{true, false}),
+	}
+	tcc = NewFunctionTestCase(proc, nonNullOverZero.inputs, nonNullOverZero.expect, integerDivFn)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, nonNullOverZero.info, info)
+}
+
 // TestIntegerDivConstantVector tests DIV with constant vectors (column DIV constant, constant DIV column)
 func TestIntegerDivConstantVector(t *testing.T) {
 	proc := testutil.NewProcess(t)

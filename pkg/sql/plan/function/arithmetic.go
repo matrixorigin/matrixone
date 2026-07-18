@@ -592,7 +592,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -610,7 +610,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -628,7 +628,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -646,7 +646,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -692,7 +692,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -710,7 +710,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -728,7 +728,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
@@ -746,7 +746,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
-				if v2 == 0 && !null2 && shouldError {
+				if v2 == 0 && !null1 && !null2 && shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.Add(i)
