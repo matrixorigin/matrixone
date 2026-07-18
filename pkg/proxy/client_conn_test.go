@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -674,6 +675,18 @@ type failAfterAllocator struct {
 	remaining int
 }
 
+type failCapacityAllocator struct {
+	frontend.Allocator
+	failCapacity int
+}
+
+func (a *failCapacityAllocator) Alloc(capacity int) ([]byte, error) {
+	if capacity == a.failCapacity {
+		return nil, moerr.NewInternalErrorNoCtx("injected handoff allocator exhaustion")
+	}
+	return a.Allocator.Alloc(capacity)
+}
+
 func (a *failAfterAllocator) Alloc(capacity int) ([]byte, error) {
 	if a.remaining == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("injected allocator exhaustion")
@@ -756,6 +769,130 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 		require.NoError(t, client.Close())
 		require.True(t, leakCheck.CheckBalance())
 		require.NoError(t, session.Close())
+	})
+
+	t.Run("coalesced plaintext login hands off trailing packet", func(t *testing.T) {
+		allocator := frontend.NewLeakCheckAllocator()
+		client, session, remote := newClient(t, allocator)
+		defer remote.Close()
+
+		command := []byte{1, 0, 0, 0, 0x0e}
+		stream := append(append([]byte{}, makeClientHandshakeResp()...), command...)
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(stream)
+		}()
+
+		require.NoError(t, client.handleHandshakeResp())
+		<-writeDone
+		require.IsType(t, &handshakeBufferedConn{}, client.RawConn())
+		require.NoError(t, client.RawConn().SetReadDeadline(time.Now().Add(time.Second)))
+		got := make([]byte, len(command))
+		_, err := io.ReadFull(client.RawConn(), got)
+		require.NoError(t, err)
+		require.Equal(t, command, got)
+		buffered := session.(goetty.BufferedIOSession)
+		require.Nil(t, buffered.InBuf().RawBuf(), "phase-owned handshake buffer must be released")
+
+		require.NoError(t, client.Close())
+		require.NoError(t, session.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("trailing packet allocator exhaustion keeps cleanup balanced", func(t *testing.T) {
+		command := []byte{1, 0, 0, 0, 0x0e}
+		leakCheck := frontend.NewLeakCheckAllocator()
+		allocator := &failCapacityAllocator{
+			Allocator:    leakCheck,
+			failCapacity: len(command),
+		}
+		client, session, remote := newClient(t, allocator)
+		defer remote.Close()
+
+		stream := append(append([]byte{}, makeClientHandshakeResp()...), command...)
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(stream)
+		}()
+
+		require.ErrorContains(t, client.handleHandshakeResp(), "injected handoff allocator exhaustion")
+		<-writeDone
+		require.NoError(t, client.Close())
+		require.NoError(t, session.Close())
+		require.True(t, leakCheck.CheckBalance())
+	})
+
+	t.Run("coalesced TLS login hands off trailing packet", func(t *testing.T) {
+		allocator := frontend.NewLeakCheckAllocator()
+		client, session, remote := newClient(t, allocator)
+
+		cert, err := certGen(t.TempDir())
+		require.NoError(t, err)
+		client.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.Background(), cert.caFile, cert.certFile, cert.keyFile)
+		require.NoError(t, err)
+		client.tlsConnectTimeout = time.Second
+
+		sslRequestPayload := make([]byte, 32)
+		binary.LittleEndian.PutUint32(
+			sslRequestPayload,
+			frontend.DefaultCapability|frontend.CLIENT_SSL,
+		)
+		sslRequest := make([]byte, frontend.PacketHeaderLength+len(sslRequestPayload))
+		sslRequest[0] = byte(len(sslRequestPayload))
+		sslRequest[3] = 1
+		copy(sslRequest[frontend.PacketHeaderLength:], sslRequestPayload)
+
+		command := []byte{1, 0, 0, 0, 0x0e}
+		stream := append(append([]byte{}, makeClientHandshakeResp()...), command...)
+		clientDone := make(chan error, 1)
+		releaseClient := make(chan struct{})
+		clientClosed := make(chan struct{})
+		var releaseClientOnce sync.Once
+		releaseClientRead := func() {
+			releaseClientOnce.Do(func() { close(releaseClient) })
+		}
+		t.Cleanup(func() {
+			releaseClientRead()
+			_ = remote.Close()
+			<-clientClosed
+		})
+		go func() {
+			defer close(clientClosed)
+			if _, err := remote.Write(sslRequest); err != nil {
+				clientDone <- err
+				return
+			}
+			tlsClient := tls.Client(remote, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec
+			if err := tlsClient.Handshake(); err != nil {
+				clientDone <- err
+				return
+			}
+			_, err := tlsClient.Write(stream)
+			clientDone <- err
+			<-releaseClient
+			_, _ = io.Copy(io.Discard, tlsClient)
+			_ = tlsClient.Close()
+		}()
+
+		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, <-clientDone)
+		require.IsType(t, &handshakeBufferedConn{}, client.RawConn())
+		require.NoError(t, client.RawConn().SetReadDeadline(time.Now().Add(time.Second)))
+		got := make([]byte, len(command))
+		_, err = io.ReadFull(client.RawConn(), got)
+		require.NoError(t, err)
+		require.Equal(t, command, got)
+		buffered := session.(goetty.BufferedIOSession)
+		require.Nil(t, buffered.InBuf().RawBuf(), "phase-owned handshake buffer must be released")
+
+		releaseClientRead()
+		require.NoError(t, client.Close())
+		<-clientClosed
+		require.NoError(t, session.Close())
+		require.True(t, allocator.CheckBalance())
 	})
 }
 

@@ -53,18 +53,50 @@ func (c *clientConn) handleHandshakeResp() error {
 	}()
 	err := c.handleHandshakeRespBefore(deadline)
 	if err == nil {
-		// The goetty decoder is used only during the unauthenticated handshake.
-		// A large login packet grows its input ByteBuf, whose capacity otherwise
-		// remains attached to every established connection. No later path calls
-		// IOSession.Read: tunnel traffic reads the raw (possibly TLS) connection.
-		// Close the phase-owned buffer as soon as the final login is accepted.
-		if session, ok := c.conn.(goetty.BufferedIOSession); ok {
-			if input := session.InBuf(); input != nil {
-				input.Close()
-			}
-		}
+		err = c.handoffHandshakeBuffer()
 	}
 	return err
+}
+
+// handoffHandshakeBuffer closes the phase-owned goetty input buffer without
+// dropping bytes that were read past the final login packet. This applies to
+// both plaintext and TLS: for TLS, the same ByteBuf is also referenced by the
+// transport's BufferedConn and must be drained and reset before it is freed.
+func (c *clientConn) handoffHandshakeBuffer() error {
+	session, ok := c.conn.(goetty.BufferedIOSession)
+	if !ok {
+		return nil
+	}
+	input := session.InBuf()
+	if input == nil {
+		return nil
+	}
+
+	readable := input.Readable()
+	if readable == 0 {
+		input.Reset()
+		input.Close()
+		return nil
+	}
+
+	conn, err := newHandshakeBufferedConn(
+		c.conn.RawConn(),
+		input.PeekN(0, readable),
+		c.sessionAllocator,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Ownership moves to conn before the tunnel can observe it. Resetting the
+	// indices is required because a TLS BufferedConn still holds this ByteBuf;
+	// a closed buffer with stale non-zero indices would panic on its next Read.
+	input.Skip(readable)
+	input.Reset()
+	input.Close()
+	c.conn.UseConn(conn)
+	c.mysqlProto.UseConn(conn)
+	return nil
 }
 
 func (c *clientConn) handleHandshakeRespBefore(deadline time.Time) error {
