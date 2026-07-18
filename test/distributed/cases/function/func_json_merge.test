@@ -1,0 +1,93 @@
+-- JSON_MERGE_PATCH follows RFC 7396.
+select json_merge_patch('{"a":1,"b":2}', '{"b":3,"c":4}');
+select json_merge_patch('{"a":1,"b":2}', '{"b":null}');
+select json_merge_patch('{"a":{"x":1}}', '{"a":{"y":2}}');
+select json_merge_patch('{}', '{"a":{"b":null}}');
+select json_merge_patch('[1,2]', '[true,false]');
+select json_merge_patch('[1,2]', '{"id":47}');
+select json_merge_patch('1', 'true');
+select json_merge_patch('{"a":1}', '{"a":2}', '{"a":3,"b":4}');
+select json_merge_patch('null', '{"a":1}');
+select json_merge_patch('{"a":["b"]}', '{"a":"c"}');
+select json_merge_patch('{"a":"c"}', '{"a":["b"]}');
+select json_merge_patch('{"a":[{"b":"c"}]}', '{"a":[1]}');
+select json_merge_patch('{"a":"foo"}', 'null') is null, json_type(json_merge_patch('{"a":"foo"}', 'null'));
+select json_merge_patch('[1,2]', '{"a":"b","c":null}');
+
+-- PATCH SQL NULL is an unknown intermediate state that a later non-object patch can replace.
+select json_merge_patch(null, '[1,2]');
+select json_merge_patch(null, '{}');
+select json_merge_patch('{"a":"b"}', null, '{"c":"d"}');
+select json_merge_patch('{"a":"b"}', null, '[1,2,3]', '{"c":null,"d":"e"}');
+
+-- Distinguish SQL NULL from the JSON literal null in the SQL result contract.
+select json_merge_patch(null, '{}') is null,
+       json_type(json_merge_patch(null, '{}'));
+select json_merge_patch('{"a":"b"}', null, '[1,2,3]') is null,
+       json_type(json_merge_patch('{"a":"b"}', null, '[1,2,3]'));
+select json_merge_patch('{"a":"b"}', null, '{"c":"d"}') is null,
+       json_type(json_merge_patch('{"a":"b"}', null, '{"c":"d"}'));
+
+-- JSON_MERGE_PRESERVE retains both values.
+select json_merge_preserve('[1,2]', '[true,false]');
+select json_merge_preserve('1', 'true');
+select json_merge_preserve('[1,2]', '{"id":47}');
+select json_merge_preserve('{"a":1,"b":2}', '{"a":3,"c":4}', '{"a":5,"d":6}');
+select json_merge_preserve('{"a":{"x":1}}', '{"a":{"y":2}}');
+select json_merge_preserve('{"a":[1]}', '{"a":[2]}');
+select json_merge_preserve('{"a":null}', '{"a":1}');
+select json_merge_preserve('null', '1');
+select json_merge_preserve('{"a":1}', null);
+select json_merge_preserve('{"a":1}', null) is null,
+       json_type(json_merge_preserve('{"a":1}', null));
+select json_merge_preserve('true', '[1,2]');
+select json_merge_preserve('[1,2]', 'true');
+select json_merge_preserve('{"a":["x","y"]}', '{"a":"b","c":"d"}');
+select json_merge_preserve('{"a":"b","c":"d"}', '{"a":["x","y"]}');
+
+-- JSON and VARCHAR inputs may be mixed.
+select json_merge_patch(cast('{"a":1}' as json), '{"b":2}');
+select json_merge_preserve(json_object('a', 1), '{"a":2}');
+
+-- Invalid arity, SQL type, and JSON text are errors.
+select json_merge_patch('{}');
+select json_merge_preserve('{}');
+select json_merge_patch(1, '2');
+select json_merge_preserve('{', '{}');
+select json_merge_patch('{"a":"b"}', '[1,');
+
+-- MySQL limits JSON nesting to 100 levels. Validate merge input and result bounds.
+select json_length(json_merge_patch(
+    concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+    '{}'
+)) as merge_patch_depth_100_length;
+-- @regex("json document nesting depth exceeds 100",true)
+select json_merge_patch(
+    concat(repeat('{"a":', 101), '1', repeat('}', 101)),
+    '{}'
+);
+-- Each input is 100 levels, but preserving conflicting scalar leaves adds an array level.
+-- @regex("json document nesting depth exceeds 100",true)
+select json_merge_preserve(
+    concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+    concat(repeat('{"a":', 100), '2', repeat('}', 100))
+);
+
+drop table if exists json_merge_docs;
+create table json_merge_docs (
+    id int primary key,
+    doc json,
+    patch_doc varchar(200),
+    preserve_doc varchar(200)
+);
+
+insert into json_merge_docs values
+    (1, '{"a":1,"nested":{"x":1}}', '{"nested":{"x":null,"y":2}}', '{"a":2,"nested":{"z":3}}'),
+    (2, '[1,2]', '{"id":47}', '[3,4]'),
+    (3, 'null', '{"a":1}', '1'),
+    (4, null, '[1,2]', null);
+
+select id, json_merge_patch(doc, patch_doc) from json_merge_docs order by id;
+select id, json_merge_preserve(doc, preserve_doc) from json_merge_docs order by id;
+
+drop table json_merge_docs;

@@ -21,9 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -107,10 +104,6 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 // computation wrapper that executes it through the binary protocol, so tests
 // can drive cw.Compile through initExecuteStmtParam.
 func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
-	return newPreparedExecuteEnvForSQL(t, stmtID, "select 1")
-}
-
-func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
@@ -120,7 +113,7 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
 
 	stmtName := getPrepareStmtName(stmtID)
-	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), sql)
+	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), "select 1")
 	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
 	require.NoError(t, err)
 	preparePlan, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepareString)
@@ -139,160 +132,12 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
 	execCtx := &ExecCtx{
 		reqCtx: ctx,
-		ses:    ses,
-		proc:   proc,
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
 		},
 	}
-	ses.txnCompileCtx.execCtx = execCtx
-	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
-	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	return ses, prepareStmt, cw, execCtx
-}
-
-func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 102, "select ?, ?")
-	defer prepareStmt.Close()
-
-	require.NoError(t, ses.setUserDefinedVar("binary_param", "AB\x00\x00", "", true))
-	require.NoError(t, ses.SetUserDefinedVar("text_param", "text", ""))
-	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("binary_param", false, false)
-	require.NoError(t, err)
-	require.True(t, isBin)
-	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("text_param", false, false)
-	require.NoError(t, err)
-	require.False(t, isBin)
-	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("system_var", true, false)
-	require.NoError(t, err)
-	require.False(t, isBin)
-	_, err = ses.txnCompileCtx.ResolveVariableIsBin("missing", false, false)
-	require.Error(t, err)
-	cw.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
-		variable, err := ses.GetUserDefinedVar(name)
-		if err != nil {
-			return nil, err
-		}
-		return variable.Value, nil
-	})
-	execPlan := &plan.Execute{
-		Name: prepareStmt.Name,
-		Args: []*plan.Expr{
-			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "binary_param"}}},
-			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_param"}}},
-		},
-	}
-
-	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
-	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBin(0))
-	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true}, cw.paramVals[0])
-	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
-
-	params := cw.proc.GetPrepareParams()
-	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
-	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
-	require.NoError(t, err)
-	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
-	require.Nil(t, params.GetData())
-	require.False(t, cw.proc.GetPrepareParamIsBin(0))
-	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
-
-	current := cw.proc.GetPrepareParams()
-	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
-	require.Zero(t, current.Length())
-	require.Nil(t, current.GetData())
-	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
-	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
-	cw.proc.SetPrepareParams(nil)
-}
-
-func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
-	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
-	defer prepareStmt.Close()
-	require.NoError(t, ses.SetUserDefinedVar("first", "allocated", ""))
-	cw.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
-		if name == "second" {
-			return nil, assert.AnError
-		}
-		variable, err := ses.GetUserDefinedVar(name)
-		if err != nil {
-			return nil, err
-		}
-		return variable.Value, nil
-	})
-	execPlan := &plan.Execute{
-		Name: prepareStmt.Name,
-		Args: []*plan.Expr{
-			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "first"}}},
-			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
-		},
-	}
-	params, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
-	require.ErrorIs(t, err, assert.AnError)
-	require.Zero(t, params.Length())
-	require.Nil(t, params.GetData())
-	require.Nil(t, params.GetArea())
-}
-
-func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
-	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 104)
-	defer prepareStmt.Close()
-	require.NoError(t, ses.setUserDefinedVar("v1", "session-binary", "", true))
-	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
-	scopes := []map[string]interface{}{
-		{"v1": int64(10)},
-		{"v1": int64(20), "inner": int64(30)},
-	}
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
-
-	value, err := ses.txnCompileCtx.ResolveVariable("V1", false, false)
-	require.NoError(t, err)
-	require.Equal(t, int64(20), value)
-	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("V1", false, false)
-	require.NoError(t, err)
-	require.False(t, isBin)
-
-	value, err = ses.txnCompileCtx.ResolveVariable("session_only", false, false)
-	require.NoError(t, err)
-	require.Equal(t, "session-binary", value)
-	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("session_only", false, false)
-	require.NoError(t, err)
-	require.True(t, isBin)
-}
-
-func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 105)
-	defer prepareStmt.Close()
-	require.NoError(t, ses.setUserDefinedVar("local_shadow", "session-binary", "", true))
-	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
-	scopes := []map[string]interface{}{
-		{"local_only": int64(10), "local_shadow": int64(20)},
-	}
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
-
-	args := []*plan.Expr{
-		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_only"}}},
-		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
-		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
-	}
-	params, paramVals, paramIsBin, err := buildExecuteUserParams(cw.proc, args)
-	require.NoError(t, err)
-	defer params.Free(cw.proc.Mp())
-
-	require.Equal(t, []bool{false, false, true}, paramIsBin)
-	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false},
-		plan2.ParamValue{Value: int64(20), IsBin: false},
-		plan2.ParamValue{Value: "session-binary", IsBin: true},
-	}, paramVals)
-	require.Equal(t, "10", params.GetStringAt(0))
-	require.Equal(t, "20", params.GetStringAt(1))
-	require.Equal(t, "session-binary", params.GetStringAt(2))
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

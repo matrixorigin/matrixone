@@ -254,6 +254,14 @@ func statementCanBeExecutedInUncommittedTransaction(
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.
 		return true, nil
+	case *tree.AnalyzeStmt:
+		// ANALYZE TABLE rewrites to a derived SELECT, so it follows the same
+		// transaction policy as SELECT.
+		return true, nil
+	case *tree.CheckTableStmt, *tree.ShowProfileStmt:
+		// These are not supported, but we let them reach the NotSupported handler
+		// instead of the generic unclassified-transaction error.
+		return true, nil
 	}
 
 	return false, nil
