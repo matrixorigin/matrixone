@@ -7,14 +7,16 @@ create database right_single_rf;
 use right_single_rf;
 
 create table big_pk(id bigint primary key, v bigint, flag int);
+-- Keep the probe comfortably above the default small-scan estimate so these
+-- semantic cases exercise right-SINGLE RF instead of sitting on its cutoff.
 insert into big_pk
-select result, result * 10, result % 2 from generate_series(1, 10000) g;
+select result, result * 10, result % 2 from generate_series(1, 20000) g;
 
 create table small_lookup(id bigint primary key, lookup_id bigint, min_v bigint);
 insert into small_lookup values
     (1, 1, 0),
     (2, 5000, 49999),
-    (3, 20000, 0),
+    (3, 30000, 0),
     (4, null, 0);
 
 -- @case
@@ -53,19 +55,28 @@ where s.id = 1;
 -- @desc: full composite PK correlation remains exact
 -- @label:bvt
 create table big_composite(a bigint, b bigint, v bigint, primary key(a, b));
+-- The same margin makes the leading composite-prefix case deterministic.
 insert into big_composite
-select result, result + 1, result * 100 from generate_series(1, 10000) g;
+select result, result + 1, result * 100 from generate_series(1, 20000) g;
 create table small_composite(id bigint primary key, a bigint, b bigint);
-insert into small_composite values (1, 1, 2), (2, 5000, 5001), (3, 20000, 20001);
+insert into small_composite values (1, 1, 2), (2, 5000, 5001), (3, 30000, 30001);
 select s.id, (select b.v from big_composite b where b.a = s.a and b.b = s.b) as scalar_v
 from small_composite s
 order by s.id;
 
 -- @case
+-- @desc: leading composite-PK RF still reports duplicate scalar matches
+-- @label:bvt
+insert into big_composite values (1, 3, 101);
+select s.id, (select b.v from big_composite b where b.a = s.a) as scalar_v
+from small_composite s
+where s.id = 1;
+
+-- @case
 -- @desc: UPDATE SET correlated scalar preserves affected rows and missing NULL
 -- @label:bvt
 create table update_target(id bigint primary key, lookup_id bigint, v bigint);
-insert into update_target values (1, 1, -1), (2, 5000, -1), (3, 20000, -1);
+insert into update_target values (1, 1, -1), (2, 5000, -1), (3, 30000, -1);
 update update_target t
 set v = (select b.v from big_pk b where b.id = t.lookup_id);
 select * from update_target order by id;
@@ -83,7 +94,7 @@ select * from insert_target order by id;
 -- @desc: DELETE scalar predicate preserves DML semantics
 -- @label:bvt
 create table delete_target(id bigint primary key, lookup_id bigint);
-insert into delete_target values (1, 1), (2, 2), (3, 20000), (4, null);
+insert into delete_target values (1, 1), (2, 2), (3, 30000), (4, null);
 delete from delete_target t
 where (select b.flag from big_pk b where b.id = t.lookup_id) = 1;
 select * from delete_target order by id;
