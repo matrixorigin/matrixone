@@ -161,11 +161,11 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
-// TestTimeWinAggResultAcrossChunks verifies that calRes materializes one
-// logical result vector even when AggFuncExec.Flush returns multiple physical
-// chunks. It exercises the same contract as a TimeWin producing >8192 groups
-// without making the state-machine setup obscure the regression.
-func TestTimeWinAggResultAcrossChunks(t *testing.T) {
+// TestTimeWinSplitDistinctResultAndReplace verifies the complete non-final
+// flush transition: split physical results are materialized as one logical
+// batch, and the flushed DISTINCT executor is freed before its replacement is
+// installed.
+func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
 	values := make([]int32, rows)
@@ -176,23 +176,77 @@ func TestTimeWinAggResultAcrossChunks(t *testing.T) {
 	}
 	input := testutil.MakeInt32Vector(values, nil, proc.Mp())
 
-	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, false, types.T_int32.ToType())
+	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, true, types.T_int32.ToType())
 	require.NoError(t, err)
 	require.NoError(t, agg.GroupGrow(rows))
 	require.NoError(t, agg.BatchFill(0, groups, []*vector.Vector{input}))
 
-	arg := &TimeWin{}
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, true, []*plan.Expr{newExpression(0)}, nil),
+		},
+	}
+	arg.ctr.status = flush
 	arg.ctr.colCnt = 1
 	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
-	require.NoError(t, arg.ctr.calRes(arg, proc))
-	require.NotNil(t, arg.ctr.bat)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](arg.ctr.bat.Vecs[0])
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
+	require.Equal(t, int32(nextWindow), arg.ctr.status)
+	require.Len(t, arg.ctr.aggs, 1)
+	require.NotSame(t, agg, arg.ctr.aggs[0])
+
+	// A second intermediate flush verifies both generations: the first output
+	// batch is released on the next Call, and the first replacement executor is
+	// released when the second replacement is installed.
+	require.NoError(t, arg.ctr.aggs[0].Fill(0, 0, []*vector.Vector{input}))
+	arg.ctr.status = flush
+	secondResult, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, secondResult.Batch)
+	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+
 	arg.Free(proc, false, nil)
+	input.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinReplacementFailurePreservesOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+
+	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, true, types.T_int32.ToType())
+	require.NoError(t, err)
+	require.NoError(t, agg.GroupGrow(1))
+	require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, true, []*plan.Expr{newExpression(0)}, nil),
+			aggexec.MakeAggFunctionExpression(-9999, false, []*plan.Expr{newExpression(0)}, nil),
+		},
+	}
+	arg.ctr.status = flush
+	arg.ctr.colCnt = 1
+	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+
+	_, err = arg.Call(proc)
+	require.Error(t, err)
+	require.Len(t, arg.ctr.aggs, 1)
+	require.Same(t, agg, arg.ctr.aggs[0], "failed replacement must not overwrite the owned executor")
+
+	arg.Free(proc, true, err)
 	input.Free(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
