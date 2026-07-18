@@ -909,6 +909,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		steps = append(steps, scopes...)
 	}
+	if err = validateRightSingleRuntimeFilterTopology(qry, steps); err != nil {
+		return nil, err
+	}
 
 	return steps, err
 }
