@@ -1119,6 +1119,76 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 	}
 }
 
+func TestRollupWindowHavingAvoidsUnsafeASTVisitor(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "searched case",
+			sql: `
+				select n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having case when n_regionkey > 0 then 1 else 0 end = 1`,
+		},
+		{
+			name: "prepared parameter",
+			sql: `
+				prepare stmt1 from select n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having sum(n_nationkey) > ?`,
+		},
+		{
+			name: "case insensitive name in expression",
+			sql: `
+				select n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having abs(N_REGIONKEY) >= 0`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			_, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRollupWindowVolatileExprOccurrencesStayIndependent(t *testing.T) {
+	stmt := mustParseRollupWindowSelect(t, `
+		select rand() as r1, rand() as r2,
+		       row_number() over (order by rand()) as rn
+		from nation
+		group by n_regionkey with rollup`)
+	clause := stmt.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(clause.GroupBy)
+
+	rewritten, ok := rewriteRollupWindowSelect(clause, stmt.OrderBy, stmt.Limit, stmt.RankOption)
+	require.True(t, ok)
+	require.NotNil(t, rewritten)
+
+	outerClause := rewritten.Select.(*tree.SelectClause)
+	require.Len(t, outerClause.Exprs, 3)
+	firstRand, ok := outerClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	secondRand, ok := outerClause.Exprs[1].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.NotEqual(t, firstRand.ColNameOrigin(), secondRand.ColNameOrigin())
+
+	rowNumber, ok := outerClause.Exprs[2].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.NotNil(t, rowNumber.WindowSpec)
+	require.Len(t, rowNumber.WindowSpec.OrderBy, 1)
+	_, ok = rowNumber.WindowSpec.OrderBy[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok, "the window's rand occurrence must not reuse either SELECT projection")
+}
+
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	stmt := mustParseRollupWindowSelect(t, `
 		select
@@ -1145,24 +1215,26 @@ func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	state := newRollupWindowRewriteState(clause.Exprs)
 	outerExprs, ok := buildRollupWindowSelectExprs(clause.Exprs, state)
 	require.True(t, ok)
-	require.Len(t, state.innerExprs, 3)
+	require.Len(t, state.innerExprs, 4)
 	require.Len(t, outerExprs, 4)
 	for _, innerExpr := range state.innerExprs {
 		require.NotNil(t, innerExpr.As)
 		require.True(t, strings.HasPrefix(innerExpr.As.Origin(), rollupWindowInternalAliasPrefix))
 	}
 
-	alias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("l_returnflag"))
+	alias, ok := state.lookupExprAlias(clause.Exprs[0].Expr)
 	require.True(t, ok)
 	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
+	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("l_returnflag"))
+	require.False(t, ok)
 	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
 	require.False(t, ok)
 
 	state.addHavingAliasExprs(clause.Exprs)
-	require.Len(t, state.innerExprs, 6)
-	require.Equal(t, "flag", state.innerExprs[3].As.Origin())
-	require.Equal(t, "status", state.innerExprs[4].As.Origin())
-	require.Equal(t, "total_qty", state.innerExprs[5].As.Origin())
+	require.Len(t, state.innerExprs, 7)
+	require.Equal(t, "flag", state.innerExprs[4].As.Origin())
+	require.Equal(t, "status", state.innerExprs[5].As.Origin())
+	require.Equal(t, "total_qty", state.innerExprs[6].As.Origin())
 }
 
 func TestRewriteRollupWindowSelectGuards(t *testing.T) {
@@ -1217,8 +1289,8 @@ func TestRewriteRollupWindowSelectGuards(t *testing.T) {
 	outerExprs, ok := buildRollupWindowSelectExprs(windowBeforeAliasExprs, state)
 	require.True(t, ok)
 	require.Len(t, state.innerExprs, 2)
-	sourceAlias := state.exprAliases[rollupWindowExprKey(tree.NewUnresolvedColName("total"))]
-	aggregateAlias := state.exprAliases[rollupWindowExprKey(mustParseRollupWindowExpr(t, "sum(a)"))]
+	aggregateAlias := state.innerExprs[0].As.Origin()
+	sourceAlias := state.innerExprs[1].As.Origin()
 	rewrittenWindow := tree.String(outerExprs[0].Expr, dialect.MYSQL)
 	require.Contains(t, rewrittenWindow, sourceAlias)
 	require.NotContains(t, rewrittenWindow, aggregateAlias)
@@ -1279,19 +1351,23 @@ func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
 			order by c
 			rows between 1 preceding and 2 following
 		)`)
-	rewritten, ok = rewriteRollupWindowExpr(windowExpr, state)
+	windowState := newRollupWindowRewriteState(nil)
+	rewritten, ok = rewriteRollupWindowExpr(windowExpr, windowState)
 	require.True(t, ok)
 	rewrittenSQL = tree.String(rewritten, dialect.MYSQL)
-	require.Contains(t, rewrittenSQL, "a_alias")
-	require.Contains(t, rewrittenSQL, "partition by b_alias")
-	require.Contains(t, rewrittenSQL, "order by c_alias")
+	require.Len(t, windowState.innerExprs, 3)
+	require.Contains(t, rewrittenSQL, windowState.innerExprs[0].As.Origin())
+	require.Contains(t, rewrittenSQL, "partition by "+windowState.innerExprs[1].As.Origin())
+	require.Contains(t, rewrittenSQL, "order by "+windowState.innerExprs[2].As.Origin())
 
+	state = newRollupWindowRewriteState(nil)
 	aggregateExpr := mustParseRollupWindowExpr(t, "sum(missing)")
 	rewritten, ok = rewriteRollupWindowExpr(aggregateExpr, state)
 	require.True(t, ok)
 	require.True(t, strings.HasPrefix(tree.String(rewritten, dialect.MYSQL), rollupWindowInternalAliasPrefix))
 	require.Len(t, state.innerExprs, 1)
 
+	state = rollupWindowAliasMap("a", "b")
 	tupleExprs, ok := rewriteRollupWindowExprs(tree.Exprs{tree.NewUnresolvedColName("a"), tree.NewUnresolvedColName("b")}, state)
 	require.True(t, ok)
 	require.Len(t, tupleExprs, 2)
@@ -1300,6 +1376,7 @@ func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
 	require.True(t, ok)
 	require.Nil(t, emptyExprs)
 
+	state = newRollupWindowRewriteState(nil)
 	orderBy, ok := rewriteRollupWindowOrderBy(tree.OrderBy{{Expr: tree.NewUnresolvedColName("another_missing")}}, state)
 	require.True(t, ok)
 	require.Len(t, orderBy, 1)
@@ -1358,8 +1435,9 @@ func mustParseRollupWindowExpr(t *testing.T, expr string) tree.Expr {
 
 func rollupWindowAliasMap(cols ...string) *rollupWindowRewriteState {
 	state := newRollupWindowRewriteState(nil)
+	state.activeNameAliases = make(map[string]string, len(cols))
 	for _, col := range cols {
-		state.addExprAlias(tree.NewUnresolvedColName(col), col+"_alias")
+		state.activeNameAliases[col] = col + "_alias"
 	}
 	return state
 }

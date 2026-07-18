@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -3568,11 +3569,6 @@ func rewriteRollupWindowSelect(
 		// projections retain the original non-window aliases for the fallback.
 		rewriteState.addHavingAliasExprs(selectClause.Exprs)
 		nextHaving := *selectClause.Having
-		normalizedHaving, ok := selectClause.Having.Expr.Accept(rollupWindowHavingNameNormalizer{})
-		if !ok {
-			return nil, true
-		}
-		nextHaving.Expr = normalizedHaving
 		nextHaving.RollupHaving = true
 		rewrittenHaving = &nextHaving
 	}
@@ -3638,25 +3634,9 @@ func rewriteRollupWindowSelect(
 
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
 
-type rollupWindowHavingNameNormalizer struct{}
-
-func (rollupWindowHavingNameNormalizer) Enter(expr tree.Expr) (tree.Expr, bool) {
-	name, ok := expr.(*tree.UnresolvedName)
-	if !ok || name.Star || name.NumParts == 0 {
-		return expr, false
-	}
-	next := *name
-	next.CStrParts[0] = tree.NewCStr(name.ColName(), 1)
-	return &next, true
-}
-
-func (rollupWindowHavingNameNormalizer) Exit(expr tree.Expr) (tree.Expr, bool) {
-	return expr, true
-}
-
 type rollupWindowRewriteState struct {
 	innerExprs        tree.SelectExprs
-	exprAliases       map[string]string
+	exprAliases       map[tree.Expr]string
 	outputAliases     map[string]string
 	activeNameAliases map[string]string
 	usedAliases       map[string]struct{}
@@ -3666,7 +3646,7 @@ type rollupWindowRewriteState struct {
 func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
 	state := &rollupWindowRewriteState{
 		innerExprs:    make(tree.SelectExprs, 0, len(selectExprs)),
-		exprAliases:   make(map[string]string),
+		exprAliases:   make(map[tree.Expr]string),
 		outputAliases: make(map[string]string),
 		usedAliases:   make(map[string]struct{}),
 	}
@@ -3729,14 +3709,14 @@ func (state *rollupWindowRewriteState) ensureInnerExpr(expr tree.Expr) (string, 
 }
 
 func (state *rollupWindowRewriteState) addExprAlias(expr tree.Expr, alias string) {
-	key := rollupWindowExprKey(expr)
-	if _, exists := state.exprAliases[key]; !exists {
-		state.exprAliases[key] = alias
+	// Reuse only the exact AST occurrence. Structural keys such as the SQL
+	// text would incorrectly merge independent volatile calls like rand().
+	if exprType := reflect.TypeOf(expr); exprType != nil && exprType.Comparable() {
+		state.exprAliases[expr] = alias
 	}
 }
 
 func (state *rollupWindowRewriteState) lookupExprAlias(expr tree.Expr) (string, bool) {
-	exprKey := rollupWindowExprKey(expr)
 	if state.activeNameAliases != nil {
 		if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
 			if alias, exists := state.activeNameAliases[strings.ToLower(unresolvedName.ColNameOrigin())]; exists {
@@ -3744,12 +3724,11 @@ func (state *rollupWindowRewriteState) lookupExprAlias(expr tree.Expr) (string, 
 			}
 		}
 	}
-	alias, ok := state.exprAliases[exprKey]
+	if exprType := reflect.TypeOf(expr); exprType == nil || !exprType.Comparable() {
+		return "", false
+	}
+	alias, ok := state.exprAliases[expr]
 	return alias, ok
-}
-
-func rollupWindowExprKey(expr tree.Expr) string {
-	return tree.String(expr, dialect.MYSQL)
 }
 
 func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWindowRewriteState) (tree.SelectExprs, bool) {
@@ -4602,6 +4581,7 @@ func (builder *QueryBuilder) bindHaving(
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
+	havingBinder.rollupHaving = clause.RollupHaving
 	ctx.binder = havingBinder
 	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
 }
