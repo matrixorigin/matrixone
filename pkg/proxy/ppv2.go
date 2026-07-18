@@ -91,9 +91,12 @@ type ProxyAddr struct {
 
 // Decode implements the Codec interface.
 func (c *proxyProtocolCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) {
-	proxyAddr, ok, err := parseProxyHeaderV2(in)
+	proxyAddr, ok, needMore, err := parseProxyHeaderV2(in)
 	if err != nil {
 		return nil, false, err
+	}
+	if needMore {
+		return nil, false, nil
 	}
 	if ok {
 		return proxyAddr, ok, nil
@@ -120,21 +123,40 @@ func (c *proxyProtocolCodec) Encode(data interface{}, out *buf.ByteBuf, writer i
 
 // parseProxyHeader read potential proxy protocol v2 header from the stream
 // ref: https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
-func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
-	// Read the Proxy Protocol header.
+func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, bool, error) {
+	// A stream read may stop anywhere in the signature, fixed header, or
+	// variable-length body. Keep input buffered while every available signature
+	// byte still matches; only a mismatch proves that this is a MySQL packet and
+	// allows the caller to delegate to the SQL codec.
+	prefixLength := min(in.Readable(), len(ProxyProtocolV2Signature))
+	if prefixLength > 0 {
+		prefix := in.PeekN(0, prefixLength)
+		for i := range prefix {
+			if prefix[i] != ProxyProtocolV2Signature[i] {
+				return nil, false, false, nil
+			}
+		}
+	}
 	if in.Readable() < ProxyHeaderLength {
-		return nil, false, nil
+		return nil, false, true, nil
 	}
 	headerBytes := in.PeekN(0, ProxyHeaderLength)
 
 	header := &ProxyHeaderV2{}
 	if err := binary.Read(bytes.NewBuffer(headerBytes), binary.BigEndian, header); err != nil {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	// verify the signature of the header
 	if string(header.Signature[:]) != ProxyProtocolV2Signature {
-		return nil, false, nil
+		return nil, false, false, nil
+	}
+
+	// Do not consume the fixed header until the complete declared body is
+	// buffered. Decoders are retried with the same ByteBuf after the next socket
+	// read, so partial consumption would corrupt the protocol boundary.
+	if in.Readable() < ProxyHeaderLength+int(header.Length) {
+		return nil, false, true, nil
 	}
 
 	// valid proxy header, consume the bytes
@@ -152,26 +174,26 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
 	// read address from it.
 	body := make([]byte, header.Length)
 	if _, err := io.ReadFull(in, body); err != nil {
-		return nil, false, moerr.NewInternalErrorNoCtxf("cannot read proxy address, %s", err.Error())
+		return nil, false, false, moerr.NewInternalErrorNoCtxf("cannot read proxy address, %s", err.Error())
 	}
 	bodyBuf := bytes.NewBuffer(body)
 	addr := &ProxyAddr{}
 	switch header.ProtocolFamily {
 	case tcpOverIPv4, udpOverIPv4:
 		if err := readProxyAddr(bodyBuf, ipv4AddrLength, addr); err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		return addr, true, nil
+		return addr, true, false, nil
 	case tcpOverIPv6, udpOverIPv6:
 		if err := readProxyAddr(bodyBuf, ipv6AddrLength, addr); err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		return addr, true, nil
+		return addr, true, false, nil
 	case unspec, unixStream, unixDatagram:
 		// no address to read
-		return addr, false, nil
+		return addr, false, false, nil
 	default:
-		return nil, false, moerr.NewInternalErrorNoCtxf("unknown protocol family [%x]", header.ProtocolFamily)
+		return nil, false, false, moerr.NewInternalErrorNoCtxf("unknown protocol family [%x]", header.ProtocolFamily)
 	}
 }
 
