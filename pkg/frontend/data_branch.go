@@ -895,8 +895,11 @@ func validate(
 		return nil
 	}
 
-	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
-		return moerr.NewNotSupportedNoCtx("DATA BRANCH DIFF OUTPUT AS")
+	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" &&
+		diffStmt.OutputOpt.As.AtTsExpr != nil {
+		return moerr.NewInvalidInputNoCtx(
+			"destination snapshot option is not supported for DATA BRANCH DIFF OUTPUT AS",
+		)
 	}
 
 	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {

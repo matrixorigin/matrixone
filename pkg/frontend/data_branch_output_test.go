@@ -80,6 +80,68 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
 }
 
+func TestDataBranchOutputTableSpec(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "base_db",
+		Name:   "base_t",
+	}).AnyTimes()
+
+	tblStuff := tableStuff{baseRel: baseRel}
+	tblStuff.def.colNames = []string{"id", "name", "__mo_diff_source", "__mo_diff_flag"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+
+	outName := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+
+	t.Run("all columns retain source names and avoid metadata collisions", func(t *testing.T) {
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, "out_db", output.databaseName)
+		require.Equal(t, "diff_out", output.tableName)
+		require.Equal(t, []string{
+			"__mo_diff_source_1", "__mo_diff_flag_1",
+			"id", "name", "__mo_diff_source", "__mo_diff_flag",
+		}, output.columnNames)
+		require.Equal(t, []int{0, 1, 2, 3}, output.projectedIdxes)
+
+		sql := output.createSQL(ctx, tblStuff)
+		require.Contains(t, sql, "create table `out_db`.`diff_out` as select")
+		require.Contains(t, sql, "cast(null as varchar(255)) as `__mo_diff_source_1`")
+		require.Contains(t, sql, "cast(null as varchar(16)) as `__mo_diff_flag_1`")
+		require.Contains(t, sql, "from `base_db`.`base_t` as src where 1=0")
+	})
+
+	t.Run("projected columns retain request order", func(t *testing.T) {
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+			Columns: tree.IdentifierList{
+				tree.Identifier("name"), tree.Identifier("id"), tree.Identifier("name"),
+			},
+		}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, []int{1, 0}, output.projectedIdxes)
+		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
+	})
+}
+
 func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
@@ -231,6 +293,20 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		col1, err := mrs.GetColumn(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, "HINT", col1.Name())
+	})
+
+	t.Run("output as table acknowledges its materialized result", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt: &tree.DiffOutputOpt{As: *tree.NewTableName(
+				tree.Identifier("diff_out"), tree.ObjectNamePrefix{}, nil,
+			)},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+		require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetColumnCount())
+		require.Equal(t, "TABLE CREATED", ses.GetMysqlResultSet().Columns[0].Name())
 	})
 
 	t.Run("unsupported output", func(t *testing.T) {
