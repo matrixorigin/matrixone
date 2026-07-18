@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -1055,14 +1056,6 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		return lastNodeID, nil, nil
 	}
 
-	// Evaluate the incoming row image once. Prerequisite steps lock every referenced
-	// key from this materialized stream before the final step scans any parent table.
-	sourceSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectTag)
-	sourceStep := builder.appendStep(sourceSinkID)
-	appendSourceScan := func() int32 {
-		return builder.appendTaggedSinkScan(bindCtx, sourceStep, selectTag)
-	}
-
 	parentColNames := func(parent *plan.TableDef, colIDs []uint64) ([]string, error) {
 		idToName := make(map[uint64]string, len(parent.Cols))
 		for _, col := range parent.Cols {
@@ -1105,9 +1098,25 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		childExprs := make([]*plan.Expr, len(fk.Cols))
 		for i, childColID := range fk.Cols {
 			pos := childColPos(id2name[childColID])
-			childExprs[i] = &plan.Expr{Typ: inputTypes[pos], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			childExpr := &plan.Expr{Typ: inputTypes[pos], Expr: &plan.Expr_Col{Col: &plan.ColRef{
 				RelPos: selectTag, ColPos: int32(pos),
 			}}}
+			var parentCol *plan.ColDef
+			for _, col := range parentTableDef.Cols {
+				if col.ColId == fk.ForeignCols[i] {
+					parentCol = col
+					break
+				}
+			}
+			if parentCol == nil {
+				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
+					"foreign-key parent column %s not found", referencedNames[i])
+			}
+			childExprs[i], err = makePlan2AssignmentCastExpr(
+				builder.GetContext(), childExpr, parentCol.Typ)
+			if err != nil {
+				return 0, nil, err
+			}
 		}
 
 		var lockExpr *plan.Expr
@@ -1180,28 +1189,36 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
 				"foreign-key lock table %s has no primary key", lockTableDef.Name)
 		}
-		lockInputID := appendSourceScan()
+		lockInputID := lastNodeID
+		rowProject := getProjectionByLastNodeWithTag(builder, lockInputID, selectTag)
 		lockTag := builder.genNewBindTag()
-		lockProject := []*plan.Expr{lockExpr}
+		lockProject := append(slices.Clone(rowProject), lockExpr)
 		lockInputID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{lockInputID},
 			ProjectList: lockProject, BindingTags: []int32{lockTag},
 		}, bindCtx)
-		lockKeySinkID := appendSinkNodeWithTag(builder, bindCtx, lockInputID, lockTag)
-		lockKeyStep := builder.appendStep(lockKeySinkID)
-		lockInputID = builder.appendTaggedSinkScan(bindCtx, lockKeyStep, lockTag)
+		lockOutput := getProjectionByLastNodeWithTag(builder, lockInputID, lockTag)
 		lockNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_LOCK_OP, Children: []int32{lockInputID}, TableDef: lockTableDef,
 			LockTargets: []*plan.LockTarget{{
 				TableId: lockTableDef.TblId, ObjRef: lockObjRef,
-				PrimaryColIdxInBat: 0, PrimaryColRelPos: lockTag,
+				PrimaryColIdxInBat: int32(len(rowProject)), PrimaryColRelPos: lockTag,
 				PrimaryColTyp: lockTyp, Mode: lockpb.LockMode_Shared, LockTable: lockTable,
 			}},
 		}, bindCtx)
-		builder.appendStep(lockNodeID)
+		lockNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lockNodeID},
+			ProjectList: slices.Clone(lockOutput[:len(rowProject)]), BindingTags: []int32{selectTag},
+		}, bindCtx)
+		lastNodeID = lockNodeID
 	}
 
-	lastNodeID = appendSourceScan()
+	// Materialize the row image only after every referenced key has been locked.
+	// The final validation/DML step consumes this single sink dependency, avoiding
+	// unsupported multi-hop sink chains while preserving lock-before-scan ordering.
+	lockSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectTag)
+	lockStep := builder.appendStep(lockSinkID)
+	lastNodeID = builder.appendTaggedSinkScan(bindCtx, lockStep, selectTag)
 	selectNode = builder.qry.Nodes[lastNodeID]
 	oks := make([]*plan.Expr, 0, len(nonSelfFks))
 	for _, fk := range nonSelfFks {

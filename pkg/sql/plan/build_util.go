@@ -1217,14 +1217,21 @@ func genParentSideReplaceFKSqls(
 	}
 	positions := make(map[string]int)
 	if len(stmt.Columns) > 0 {
-		for i, col := range stmt.Columns {
-			positions[strings.ToLower(string(col))] = i
+		pos := 0
+		for _, col := range stmt.Columns {
+			name := strings.ToLower(string(col))
+			if colIdx, found := parent.Name2ColIndex[name]; found &&
+				int(colIdx) < len(parent.Cols) && parent.Cols[colIdx].GeneratedCol != nil {
+				continue
+			}
+			positions[name] = pos
+			pos++
 		}
 	} else {
 		pos := 0
 		for _, col := range parent.Cols {
-			if !col.Hidden {
-				positions[col.Name] = pos
+			if !col.Hidden && col.GeneratedCol == nil {
+				positions[strings.ToLower(col.Name)] = pos
 				pos++
 			}
 		}
@@ -1396,7 +1403,7 @@ func genParentSideReplaceFKSqls(
 					return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
 						"REPLACE conflict column %s not found", colName)
 				}
-				pos, supplied := positions[colName]
+				pos, supplied := positions[strings.ToLower(colName)]
 				var incomingExpr string
 				if !supplied || pos >= len(row) {
 					if col.Typ.AutoIncr {
@@ -1563,7 +1570,12 @@ func genParentSideReplaceFKSqls(
 		indexNames = append(indexNames, name)
 	}
 	slices.Sort(indexNames)
-	lockFrom := fmt.Sprintf("%s as %s", parentTable, quoteIdentifier(parentAlias))
+	lockSelects := make([]string, 0, len(indexNames)+1)
+	if parent.Pkey != nil && parent.Pkey.PkeyColName != "" {
+		lockSelects = append(lockSelects, qualifiedCol(parentAlias, parent.Pkey.PkeyColName))
+	} else {
+		lockSelects = append(lockSelects, "1")
+	}
 	for i, indexName := range indexNames {
 		idx := referencedIndexes[indexName]
 		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idx.IndexAlgoParams)
@@ -1593,11 +1605,13 @@ func genParentSideReplaceFKSqls(
 		}
 		indexAlias := fmt.Sprintf("__mo_replace_fk_idx_%d", i)
 		indexTable := quoteIdentifier(parentRef.SchemaName) + "." + quoteIdentifier(indexName)
-		lockFrom += fmt.Sprintf(" left join %s as %s on %s = %s",
-			indexTable, quoteIdentifier(indexAlias),
-			qualifiedCol(indexAlias, catalog.IndexTableIndexColName), keyExpr)
+		indexKey := qualifiedCol(indexAlias, catalog.IndexTableIndexColName)
+		lockSelects = append(lockSelects, fmt.Sprintf(
+			"(select %s from %s as %s where %s = %s for update)",
+			indexKey, indexTable, quoteIdentifier(indexAlias), indexKey, keyExpr))
 	}
-	parentLock := fmt.Sprintf("select 1 from %s where %s for update", lockFrom, conflictPredicate)
+	parentLock := fmt.Sprintf("select %s from %s as %s where %s for update",
+		strings.Join(lockSelects, ", "), parentTable, quoteIdentifier(parentAlias), conflictPredicate)
 	return parentLock, checks, actions, nil
 }
 

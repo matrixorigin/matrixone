@@ -3360,6 +3360,18 @@ func TestReplaceParentSideFKLocksReferencedUniqueIndexKey(t *testing.T) {
 		IndexName: "uk_v", IndexTableName: "__mo_index_replace_fk_p_v",
 		Parts: []string{"v"}, Unique: true, TableExist: true,
 	})
+	indexTable := &plan.TableDef{
+		TblId: 77900, Name: "__mo_index_replace_fk_p_v",
+		Cols: []*plan.ColDef{{Name: catalog.IndexTableIndexColName, ColId: 0, Typ: parent.Cols[1].Typ}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.IndexTableIndexColName},
+			PkeyColName: catalog.IndexTableIndexColName},
+		Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0},
+	}
+	mock.ctxt.tables[indexTable.Name] = indexTable
+	mock.ctxt.objects[indexTable.Name] = &plan.ObjectRef{
+		Obj: int64(indexTable.TblId), SchemaName: mock.ctxt.objects["replace_fk_p"].SchemaName,
+		ObjName: indexTable.Name,
+	}
 	stmt, err := mysql.ParseOne(context.Background(),
 		"REPLACE INTO replace_fk_p VALUES (1, 'new')", 1)
 	require.NoError(t, err)
@@ -3370,10 +3382,27 @@ func TestReplaceParentSideFKLocksReferencedUniqueIndexKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, checks, 1)
 	assert.Empty(t, actions)
-	assert.Contains(t, lockSQL, fmt.Sprintf("left join `%s`.`__mo_index_replace_fk_p_v`",
+	assert.Contains(t, lockSQL, fmt.Sprintf("from `%s`.`__mo_index_replace_fk_p_v`",
 		mock.ctxt.objects["replace_fk_p"].SchemaName))
-	assert.Contains(t, lockSQL, "`__mo_replace_fk_idx_0`.`__mo_index_idx_col` = `__mo_replace_parent`.`v`")
+	assert.Contains(t, lockSQL,
+		"where `__mo_replace_fk_idx_0`.`__mo_index_idx_col` = `__mo_replace_parent`.`v` for update")
+	assert.Contains(t, lockSQL,
+		"select `__mo_replace_parent`.`id`, (select `__mo_replace_fk_idx_0`.`__mo_index_idx_col`")
 	assert.Contains(t, lockSQL, "for update")
+
+	lockPlan, err := runOneStmt(mock, t, lockSQL)
+	require.NoError(t, err)
+	for _, node := range lockPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+		require.Len(t, node.Children, 1)
+		lockInput := lockPlan.GetQuery().Nodes[node.Children[0]]
+		for _, target := range node.LockTargets {
+			require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
+			assert.Equal(t, target.PrimaryColTyp.Id, lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
+		}
+	}
 }
 
 func TestReplaceParentSideFKLocksCompositePrefixUniqueIndexOnce(t *testing.T) {
@@ -3401,11 +3430,45 @@ func TestReplaceParentSideFKLocksCompositePrefixUniqueIndexOnce(t *testing.T) {
 	assert.Empty(t, checks)
 	require.Len(t, actions, 2)
 	assert.Equal(t, 1, strings.Count(lockSQL,
-		fmt.Sprintf("left join `%s`.`__mo_index_replace_fk_cp_id_v`",
+		fmt.Sprintf("from `%s`.`__mo_index_replace_fk_cp_id_v`",
 			mock.ctxt.objects["replace_fk_cp"].SchemaName)))
 	assert.Contains(t, lockSQL,
 		"serial(`__mo_replace_parent`.`id`, cast(substring(`__mo_replace_parent`.`v`, 1, 4) as VARCHAR(65535)))")
 	assert.Contains(t, lockSQL, "for update")
+}
+
+func TestReplaceParentSideFKGeneratedColumnValueMapping(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+	generated := &plan.ColDef{
+		Name: "g", ColId: 99, Typ: plan.Type{Id: int32(types.T_int32), Width: 32},
+		GeneratedCol: &plan.GeneratedCol{Expr: makePlan2Int64ConstExprWithType(1)},
+	}
+	parent.Cols = append(parent.Cols[:1], append([]*plan.ColDef{generated}, parent.Cols[1:]...)...)
+	parent.Name2ColIndex = make(map[string]int32, len(parent.Cols))
+	for i, col := range parent.Cols {
+		parent.Name2ColIndex[col.Name] = int32(i)
+	}
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"v"}})
+
+	parse := func(sql string) *tree.Replace {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		return stmt.(*tree.Replace)
+	}
+	assertMappedValue := func(stmt *tree.Replace, value string) {
+		_, _, actions, err := genParentSideReplaceFKSqls(
+			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt)
+		require.NoError(t, err)
+		require.Len(t, actions, 1)
+		assert.Contains(t, actions[0], fmt.Sprintf("`__mo_replace_parent`.`v` = cast(\"%s\" as VARCHAR(20))", value))
+	}
+
+	assertMappedValue(parse("REPLACE INTO replace_fk_cp VALUES (2, 'implicit')"), "implicit")
+	explicit := parse("REPLACE INTO replace_fk_cp (id, g, v) VALUES (2, DEFAULT, 'explicit')")
+	values := explicit.Rows.Select.(*tree.ValuesClause)
+	values.Rows[0] = tree.Exprs{values.Rows[0][0], values.Rows[0][2]}
+	assertMappedValue(explicit, "explicit")
 }
 
 func TestReplaceParentSideFKRejectsOverWidthConflictLiteral(t *testing.T) {
@@ -3453,12 +3516,6 @@ func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
 				lockInput := query.Nodes[node.Children[0]]
 				require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
 				assert.Equal(t, target.PrimaryColTyp.Id, lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
-				child := lockInput
-				for child.NodeType != plan.Node_SINK_SCAN && len(child.Children) == 1 {
-					child = query.Nodes[child.Children[0]]
-				}
-				assert.Equal(t, plan.Node_SINK_SCAN, child.NodeType,
-					"the prerequisite lock must read the materialized child row image")
 			}
 		}
 	}
@@ -3484,12 +3541,118 @@ func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
 		}
 		return -1
 	}
+	var stepDependsOn func(int, int, map[int]bool) bool
+	stepDependsOn = func(step, dependency int, visited map[int]bool) bool {
+		if step == dependency {
+			return true
+		}
+		if visited[step] {
+			return false
+		}
+		visited[step] = true
+		var nodeDependsOn func(int32) bool
+		nodeDependsOn = func(nodeID int32) bool {
+			node := query.Nodes[nodeID]
+			for _, sourceStep := range node.SourceStep {
+				if stepDependsOn(int(sourceStep), dependency, visited) {
+					return true
+				}
+			}
+			for _, childID := range node.Children {
+				if nodeDependsOn(childID) {
+					return true
+				}
+			}
+			return false
+		}
+		return nodeDependsOn(query.Steps[step])
+	}
 	lockStep := stepContaining(lockNodeID)
 	require.GreaterOrEqual(t, lockStep, 0)
+	assert.Equal(t, plan.Node_SINK, query.Nodes[query.Steps[lockStep]].NodeType,
+		"a dependent SINK_SCAN must consume a materialized lock stage")
 	for _, scanID := range parentScanIDs {
-		assert.Greater(t, stepContaining(scanID), lockStep,
-			"the referenced-key lock step must finish before the parent scan step starts")
+		parentStep := stepContaining(scanID)
+		require.GreaterOrEqual(t, parentStep, 0)
+		assert.True(t, stepDependsOn(parentStep, lockStep, make(map[int]bool)),
+			"the parent scan must consume the referenced-key lock step output")
 	}
+}
+
+func TestChildInsertLockKeyUsesParentDecimalType(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_p"]
+	child := mock.ctxt.tables["replace_fk_c"]
+	parent.Cols[0].Typ = plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}
+	child.Cols[1].Typ = plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 3}
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1.230)")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId != parent.TblId || target.Mode != lockpb.LockMode_Shared {
+				continue
+			}
+			lockInput := logicPlan.GetQuery().Nodes[node.Children[0]]
+			require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
+			lockKey := lockInput.ProjectList[target.PrimaryColIdxInBat]
+			assert.Equal(t, int32(types.T_decimal64), lockKey.Typ.Id)
+			assert.Equal(t, int32(2), lockKey.Typ.Scale)
+			assert.Equal(t, target.PrimaryColTyp, lockKey.Typ)
+			require.NotNil(t, lockKey.GetF())
+			assert.Equal(t, "cast", lockKey.GetF().Func.ObjName)
+			return
+		}
+	}
+	t.Fatal("decimal parent shared lock not found")
+}
+
+func TestChildInsertChainsMultipleForeignKeyLocks(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	child := mock.ctxt.tables["replace_fk_c"]
+	fkCopy := *child.Fkeys[0]
+	child.Fkeys = append(child.Fkeys, &fkCopy)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	lockIDs := make([]int32, 0, 2)
+	parentID := mock.ctxt.tables["replace_fk_p"].TblId
+	for nodeID, node := range query.Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId == parentID && target.Mode == lockpb.LockMode_Shared {
+				lockIDs = append(lockIDs, int32(nodeID))
+			}
+		}
+	}
+	require.Len(t, lockIDs, 2)
+
+	contains := func(root, target int32) bool {
+		var visit func(int32) bool
+		visit = func(nodeID int32) bool {
+			if nodeID == target {
+				return true
+			}
+			for _, childID := range query.Nodes[nodeID].Children {
+				if visit(childID) {
+					return true
+				}
+			}
+			return false
+		}
+		return visit(root)
+	}
+	lockStepRoot := int32(-1)
+	for _, stepRoot := range query.Steps {
+		if contains(stepRoot, lockIDs[0]) && contains(stepRoot, lockIDs[1]) {
+			lockStepRoot = stepRoot
+			break
+		}
+	}
+	require.NotEqual(t, int32(-1), lockStepRoot)
+	assert.Equal(t, plan.Node_SINK, query.Nodes[lockStepRoot].NodeType)
+	assert.True(t, contains(lockIDs[0], lockIDs[1]) || contains(lockIDs[1], lockIDs[0]),
+		"foreign-key lock stages must form one serial data pipeline")
 }
 
 func TestChildInsertLocksCompositeParentPrimaryKey(t *testing.T) {
