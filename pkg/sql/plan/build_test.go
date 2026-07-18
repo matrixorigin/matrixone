@@ -38,6 +38,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type sqlModeMockCompilerContext struct {
+	*MockCompilerContext
+	sqlMode string
+}
+
+func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if varName == "sql_mode" {
+		return c.sqlMode, nil
+	}
+	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
+}
+
 func BenchmarkInsert(b *testing.B) {
 	typ := types.T_varchar.ToType()
 	typ.Width = 1024
@@ -64,6 +76,41 @@ func BenchmarkInsert(b *testing.B) {
 			break
 		}
 	}
+}
+
+func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "PIPES_AS_CONCAT",
+	}
+	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
+}
+
+func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "ANSI_QUOTES",
+	}
+	stmt, err := mysql.ParseOneWithSQLMode(
+		context.Background(),
+		`create view v_sql_mode as select 1 as "c"`,
+		1,
+		ctx.sqlMode,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	viewDef := p.GetDdl().GetCreateView().GetTableDef().GetViewSql()
+	require.NotNil(t, viewDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(viewDef.GetView()), &viewData))
+	require.NotNil(t, viewData.SQLMode)
+	require.Equal(t, ctx.sqlMode, *viewData.SQLMode)
 }
 
 // only use in developing
@@ -1787,6 +1834,133 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION a SET a.N_NAME = 'x' FROM NATION2 b WHERE a.N_REGIONKEY = b.NOT_A_COL",    // FROM column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NATIONKEY = N_NATIONKEY + 1")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.JoinType == plan.Node_DEDUP {
+			found = true
+			require.Equal(t, plan.Node_IGNORE, node.OnDuplicateAction)
+		}
+	}
+	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
+func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sql              string
+		expectRecomputed bool
+	}{
+		{
+			name:             "first component",
+			sql:              "update constraint_test.products set pid = pid + 8 where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "last component",
+			sql:              "update constraint_test.products set pname = 'new' where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "all components",
+			sql:              "update constraint_test.products set pid = 9, pname = 'new' where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "non cluster column",
+			sql:              "update constraint_test.products set description = 'new' where pid = 1",
+			expectRecomputed: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			configureProductsAsCompositeClusterByTable(t, mock)
+
+			logicPlan, err := runOneStmt(mock, t, testCase.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var multiUpdate *plan.Node
+			var originUpdateCtx *plan.UpdateCtx
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_MULTI_UPDATE {
+					continue
+				}
+				multiUpdate = node
+				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "products" {
+						originUpdateCtx = updateCtx
+						break
+					}
+				}
+			}
+			require.NotNil(t, multiUpdate)
+			require.NotNil(t, originUpdateCtx)
+
+			clusterByName := originUpdateCtx.TableDef.ClusterBy.Name
+			clusterByPos := originUpdateCtx.TableDef.Name2ColIndex[clusterByName]
+			clusterByInsertCol := originUpdateCtx.InsertCols[clusterByPos]
+
+			require.Len(t, multiUpdate.Children, 1)
+			lockNode := query.Nodes[multiUpdate.Children[0]]
+			require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+			require.Len(t, lockNode.Children, 1)
+			finalProject := query.Nodes[lockNode.Children[0]]
+			require.Equal(t, plan.Node_PROJECT, finalProject.NodeType)
+			clusterByExpr := finalProject.ProjectList[clusterByInsertCol.ColPos]
+
+			if !testCase.expectRecomputed {
+				require.NotNil(t, clusterByExpr.GetCol())
+				return
+			}
+
+			clusterByFunc := clusterByExpr.GetF()
+			require.NotNil(t, clusterByFunc)
+			require.Equal(t, "serial_full", clusterByFunc.Func.ObjName)
+			require.Len(t, clusterByFunc.Args, 2)
+
+			for i, componentName := range []string{"pid", "pname"} {
+				componentPos := originUpdateCtx.TableDef.Name2ColIndex[componentName]
+				componentInsertCol := originUpdateCtx.InsertCols[componentPos]
+				componentExpr := finalProject.ProjectList[componentInsertCol.ColPos]
+				require.Equal(t, componentExpr.GetCol(), clusterByFunc.Args[i].GetCol())
+			}
+		})
+	}
+}
+
+func configureProductsAsCompositeClusterByTable(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["products"]
+	require.NotNil(t, tableDef)
+	require.Len(t, tableDef.Cols, 6)
+
+	clusterByCol := tableDef.Cols[4]
+	clusterByCol.Hidden = true
+	tableDef.ClusterBy.CompCbkeyCol = clusterByCol
+
+	fakePrimaryKey := DeepCopyColDef(mock.ctxt.tables["fake_pk_t"].Cols[2])
+	tableDef.Cols = append(tableDef.Cols, nil)
+	copy(tableDef.Cols[5:], tableDef.Cols[4:])
+	tableDef.Cols[4] = fakePrimaryKey
+	for i, col := range tableDef.Cols {
+		col.ColId = uint64(i)
+	}
+	tableDef.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.FakePrimaryKeyColName},
+		PkeyColName: catalog.FakePrimaryKeyColName,
+		Cols:        []uint64{4},
+		CompPkeyCol: fakePrimaryKey,
+	}
 }
 
 func TestDropIndexIfExistsMissingIndex(t *testing.T) {
@@ -4279,7 +4453,36 @@ func TestCountDistinctRowSubqueryRejected(t *testing.T) {
 func TestSubqueryInJoinOn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
+		"SELECT a.n_nationkey FROM nation a JOIN nation b ON b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z WHERE z.n_regionkey = a.n_regionkey)",
 		"SELECT n_name FROM nation JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+		"SELECT n_name FROM nation JOIN region ON n_regionkey = r_regionkey AND r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		foundFilter := false
+		foundJoinCondition := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				foundFilter = true
+			}
+			for _, expr := range node.OnList {
+				foundJoinCondition = true
+				require.False(t, hasSubquery(expr), "JOIN OnList contains an executable Expr_Sub: %s", sql)
+			}
+			for _, expr := range node.FilterList {
+				require.False(t, hasSubquery(expr), "FILTER contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundFilter, "subquery predicate was not lowered to a FILTER: %s", sql)
+		if strings.Contains(sql, "n_regionkey = r_regionkey AND") {
+			require.True(t, foundJoinCondition, "ordinary ON predicate was removed from the JOIN: %s", sql)
+		}
+	}
+
+	runTestShouldError(mock, t, []string{
+		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	})
 }

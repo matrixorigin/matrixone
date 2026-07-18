@@ -392,7 +392,9 @@ func filterNonAppendableObject(
 	// For data objects (or tombstone without aobjectMap), write directly to fileservice
 	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
 	if writeObjectWorker != nil {
-		writeObjectWorker.SubmitWriteObject(writeJob)
+		if err := writeObjectWorker.SubmitWriteObject(writeJob); err != nil {
+			return objectio.ObjectStats{}, err
+		}
 	} else {
 		writeJob.Execute()
 	}
@@ -427,26 +429,35 @@ var GetObjectFromUpstreamWithWorker = func(
 	}
 
 	totalChunks := metaResult.TotalChunks
+	chunkCtx, cancelChunks := context.WithCancel(ctx)
+	var acceptedChunks acceptedJobBatch[*GetChunkJob]
+	defer func() {
+		// Cancel first so an error or partial admission cannot leave an accepted
+		// sibling blocked in I/O, then join before the shared executor can close.
+		cancelChunks()
+		acceptedChunks.join()
+	}()
 
 	// Fetch data chunks starting from chunk 1
 	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
 	allChunks := make([][]byte, totalChunks)
 
 	// Submit all chunk jobs to worker pool
-	chunkJobs := make([]*GetChunkJob, totalChunks)
 	for i := int64(1); i <= totalChunks; i++ {
-		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
-		chunkJobs[i-1] = chunkJob
+		chunkJob := NewGetChunkJob(chunkCtx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
+			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
+				return nil, err
+			}
 		} else {
 			chunkJob.Execute()
 		}
+		acceptedChunks.add(chunkJob)
 	}
 
 	// Wait for all chunk jobs to complete, retry failed chunks
 	for i := int64(0); i < totalChunks; i++ {
-		chunkResult := chunkJobs[i].WaitDone().(*GetChunkJobResult)
+		chunkResult := acceptedChunks.waitNext().(*GetChunkJobResult)
 		if chunkResult.Err != nil {
 			// Retry failed chunk
 			chunkData, err := getChunkWithRetry(ctx, upstreamExecutor, objectName, i+1, getChunkWorker, subscriptionAccountName, pubName)
@@ -493,7 +504,9 @@ func getMetaWithRetry(
 
 		metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(metaJob)
+			if err := getChunkWorker.SubmitGetChunk(metaJob); err != nil {
+				return nil, err
+			}
 		} else {
 			metaJob.Execute()
 		}
@@ -533,7 +546,9 @@ func getChunkWithRetry(
 
 		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, chunkIndex, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
+			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
+				return nil, err
+			}
 		} else {
 			chunkJob.Execute()
 		}

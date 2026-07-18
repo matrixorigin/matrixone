@@ -45,6 +45,8 @@ import (
 // this is just a number I casually wrote, the purpose of doing this is that any message sent through rpc need a clear deadline.
 const MaxRpcTime = time.Hour * 24
 
+var pipelineStreamFinishClientTimeout = 30 * time.Second
+
 // remoteRun sends a scope to remote node for running.
 // and keep receiving the back results.
 //
@@ -104,8 +106,6 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return sender, err
 	}
 
-	sender.safeToClose = false
-	sender.alreadyClose = false
 	err = receiveMessageFromCnServer(s, withoutOutput, sender)
 	return sender, err
 }
@@ -370,11 +370,23 @@ type messageSenderOnClient struct {
 	// or
 	// 2. we have never sent a message in succeed.
 	safeToClose bool
-	// alreadyClose should be true once we get a stream closed signal.
-	alreadyClose bool
+	// receiveClosed records a terminal signal from the receive channel. It
+	// poisons backend reuse, but does not release the locally owned morpc Stream;
+	// close must still call Stream.Close.
+	receiveClosed      bool
+	reuseEligible      bool
+	terminalNegotiated bool
+	expectedEnd        pipeline.Method
+	stateMu            sync.Mutex
+	closeOnce          sync.Once
+	requestFinishAck   bool
+	// allowCleanupCancellation is set after successful local cleanup. Pipeline
+	// and query contexts may be intentionally cancelled by that cleanup; FIN
+	// then runs on its own bounded context. Cancellation before this transition
+	// still poisons reuse.
+	allowCleanupCancellation bool
 
-	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs
-	// (including when close() returns early because alreadyClose is true, so the gauge still decrements).
+	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs.
 	gaugeDecOnce sync.Once
 }
 
@@ -424,10 +436,11 @@ func newMessageSenderOnClient(
 		ctxCancel:          streamCtxCancel,
 		useInternalTimeout: useInternalTimeout,
 		safeToClose:        true,
-		alreadyClose:       false,
+		receiveClosed:      false,
 		mp:                 mp,
 		anal:               analyzeModule,
 		streamSender:       streamSender,
+		requestFinishAck:   pipelineStreamReuseEnabled(sid),
 	}
 
 	if sender.receiveCh == nil {
@@ -446,6 +459,19 @@ func newMessageSenderOnClient(
 	return sender, nil
 }
 
+func pipelineStreamReuseEnabled(serviceID string) bool {
+	runtime := moruntime.ServiceRuntime(serviceID)
+	if runtime == nil {
+		return true
+	}
+	value, ok := runtime.GetGlobalVariables(moruntime.EnablePipelineStreamReuse)
+	if !ok {
+		return true
+	}
+	enabled, ok := value.(bool)
+	return ok && enabled
+}
+
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sdLen := len(scopeData)
@@ -457,8 +483,15 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
+		if sender.requestFinishAck {
+			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+		}
 		message.NeedNotReply = noDataBack
-		return sender.streamSender.Send(sender.ctx, message)
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+			return err
+		}
+		sender.markStreamActive(pipeline.Method_PipelineMessage)
+		return nil
 	}
 
 	start := 0
@@ -478,13 +511,56 @@ func (sender *messageSenderOnClient) sendPipeline(
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
 		message.NeedNotReply = noDataBack
+		if sender.requestFinishAck {
+			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+		}
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
 		}
 		start = end
 	}
+	sender.markStreamActive(pipeline.Method_PipelineMessage)
 	return nil
+}
+
+func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.safeToClose = false
+	sender.receiveClosed = false
+	sender.reuseEligible = false
+	sender.terminalNegotiated = false
+	sender.allowCleanupCancellation = false
+	sender.expectedEnd = method
+}
+
+func (sender *messageSenderOnClient) markReceiveClosed() {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.safeToClose = true
+	sender.receiveClosed = true
+	sender.reuseEligible = false
+	sender.terminalNegotiated = false
+}
+
+func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful bool) {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.safeToClose = true
+	sender.terminalNegotiated = message.GetCmd() == sender.expectedEnd &&
+		message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
+	sender.reuseEligible = sender.terminalNegotiated &&
+		(successful || sender.allowCleanupCancellation)
+}
+
+func (sender *messageSenderOnClient) prepareForLocalCleanup() {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.allowCleanupCancellation = true
+	if sender.terminalNegotiated {
+		sender.reuseEligible = true
+	}
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
@@ -494,8 +570,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
-			sender.safeToClose = true
-			sender.alreadyClose = true
+			sender.markReceiveClosed()
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -521,17 +596,18 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 
 		m = val.(*pipeline.Message)
 		if info, get := m.TryToGetMoErr(); get {
-			sender.safeToClose = true
+			sender.markTerminal(m, false)
 			return nil, false, info
 		}
 		if m.IsEndMessage() {
-			sender.safeToClose = true
+			sender.markTerminal(m, true)
 
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				var p models.PhyPlan
 				err = json.Unmarshal(anaData, &p)
 				if err != nil {
+					sender.markTerminal(m, false)
 					return nil, false, err
 				}
 
@@ -606,7 +682,10 @@ func forwardRemoteBatchWithContext(
 
 // no matter how we stop the remote-run, we should get the final remote cost here.
 func (sender *messageSenderOnClient) waitingTheStopResponse() {
-	if sender.alreadyClose || sender.safeToClose {
+	sender.stateMu.Lock()
+	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
+	sender.stateMu.Unlock()
+	if receiveClosed || safeToClose {
 		return
 	}
 
@@ -626,15 +705,18 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		select {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
-				sender.safeToClose = true
-				sender.alreadyClose = true
+				sender.markReceiveClosed()
 				return
 			}
 
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				sender.safeToClose = true
+				// StopSending is also a clean teardown when the original server
+				// worker answers with its negotiated terminal response. The later FIN
+				// still waits for the same server cleanup barrier. Unnegotiated or
+				// mismatched terminal responses remain poisoned.
+				sender.markTerminal(message, message.IsEndMessage())
 				// in fact, we should deal the cost analysis information here.
 				return
 			}
@@ -642,6 +724,54 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		case <-maxWaitingTime.Done():
 			return
 		}
+	}
+}
+
+func generatePipelineStreamFinishMessage(streamID uint64) *pipeline.Message {
+	message := cnclient.AcquireMessage()
+	message.SetMessageType(pipeline.Method_PipelineStreamFinish)
+	message.SetSid(pipeline.Status_Last)
+	message.SetID(streamID)
+	message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+	return message
+}
+
+func (sender *messageSenderOnClient) finishStreamForReuse() bool {
+	var senderDone <-chan struct{}
+	sender.stateMu.Lock()
+	allowCleanupCancellation := sender.allowCleanupCancellation
+	sender.stateMu.Unlock()
+	cancelCtx := sender.ctx
+	if allowCleanupCancellation {
+		cancelCtx = nil
+	}
+	if cancelCtx != nil && cancelCtx.Err() != nil {
+		return false
+	}
+	if cancelCtx != nil {
+		senderDone = cancelCtx.Done()
+	}
+	finishCtx, cancel := context.WithTimeout(context.Background(), pipelineStreamFinishClientTimeout)
+	defer cancel()
+	streamID := sender.streamSender.ID()
+	if err := sender.streamSender.Send(finishCtx, generatePipelineStreamFinishMessage(streamID)); err != nil {
+		return false
+	}
+	select {
+	case value, ok := <-sender.receiveCh:
+		if !ok || value == nil {
+			sender.markReceiveClosed()
+			return false
+		}
+		message, ok := value.(*pipeline.Message)
+		return ok && message.GetID() == streamID &&
+			message.GetCmd() == pipeline.Method_PipelineStreamFinishAck &&
+			message.GetSid() == pipeline.Status_MessageEnd && len(message.GetErr()) == 0 &&
+			message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
+	case <-finishCtx.Done():
+		return false
+	case <-senderDone:
+		return false
 	}
 }
 
@@ -661,17 +791,32 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 }
 
 func (sender *messageSenderOnClient) close() {
-	// Ensure Gauge is decremented exactly once when this sender is torn down, including when
-	// alreadyClose is true (stream already closed by remote); otherwise we'd leak the gauge.
-	defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
+	sender.closeOnce.Do(func() {
+		// Ensure Gauge is decremented exactly once when this sender is torn down.
+		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-	sender.waitingTheStopResponse()
-
-	if sender.ctxCancel != nil {
-		sender.ctxCancel()
-	}
-	if sender.alreadyClose {
-		return
-	}
-	_ = sender.streamSender.Close(true)
+		sender.waitingTheStopResponse()
+		sender.stateMu.Lock()
+		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
+		sender.stateMu.Unlock()
+		if !receiveClosed && reuseEligible && sender.finishStreamForReuse() {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
+			if sender.ctxCancel != nil {
+				sender.ctxCancel()
+			}
+			if err := sender.streamSender.Close(false); err != nil {
+				_ = sender.streamSender.Close(true)
+			}
+			return
+		}
+		if reuseEligible {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_fin_failed_close").Inc()
+		} else {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_legacy_or_poisoned_close").Inc()
+		}
+		if sender.ctxCancel != nil {
+			sender.ctxCancel()
+		}
+		_ = sender.streamSender.Close(true)
+	})
 }

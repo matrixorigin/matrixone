@@ -17,6 +17,7 @@ package frontend
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -24,12 +25,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"reflect"
 	gotrace "runtime/trace"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1149,8 +1150,8 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	//sort by name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0].(string) < rows[j][0].(string)
+	slices.SortFunc(rows, func(a, b []interface{}) int {
+		return cmp.Compare(a[0].(string), b[0].(string))
 	})
 
 	for _, row := range rows {
@@ -1174,31 +1175,233 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
 	// `handleAnalyzeStmt` can be easily managed by cron jobs in the future
-	ctx := tree.NewFmtCtx(dialect.MYSQL)
-	ctx.WriteString("select ")
-	for i, ident := range stmt.Cols {
-		if i > 0 {
-			ctx.WriteByte(',')
-		}
-		ctx.WriteString("approx_count_distinct(")
-		ctx.WriteString(string(ident))
-		ctx.WriteByte(')')
-	}
-	ctx.WriteString(" from ")
-	stmt.Table.Format(ctx)
-	sql := ctx.String()
+
 	//backup the inside statement
 	prevInsideStmt := ses.ReplaceDerivedStmt(true)
 	defer func() {
 		//restore the inside statement
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
-	tempExecCtx := ExecCtx{
-		ses:    ses,
-		reqCtx: execCtx.reqCtx,
+	if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+		defer tcc.SetExecCtx(execCtx)
+		tcc.SetExecCtx(execCtx)
 	}
-	defer tempExecCtx.Close()
-	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+
+	if len(stmt.Entries) == 0 {
+		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
+	}
+
+	results := make([]ExecResult, 0, len(stmt.Entries))
+	for _, entry := range stmt.Entries {
+		cols := entry.Cols
+		if len(cols) == 0 {
+			// Restore tcc.execCtx to the outer execCtx; the inner doComQuery
+			// call below may have left it pointing at a closed tempExecCtx
+			// from a previous iteration (Close() nils out reqCtx).
+			if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+				tcc.SetExecCtx(execCtx)
+			}
+			resolved, err := resolveTableVisibleColumns(ses, execCtx.reqCtx, entry.Table)
+			if err != nil {
+				return err
+			}
+			cols = resolved
+		}
+		sql := buildAnalyzeDerivedSQL(entry, cols)
+		sql = inheritAnalyzeRewriteHint(execCtx.sqlOfStmt, sql)
+		result, err := executeAnalyzeDerivedQuery(ses, execCtx, sql)
+		if err != nil {
+			return err
+		}
+		results = append(results, result)
+	}
+	execCtx.results = results
+	return nil
+}
+
+func inheritAnalyzeRewriteHint(outerSQL, derivedSQL string) string {
+	content, ok := leadingHintContent(outerSQL)
+	if !ok || !strings.HasPrefix(strings.TrimSpace(content), "{") {
+		return derivedSQL
+	}
+	return "/*+" + content + "*/ " + derivedSQL
+}
+
+func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) (*MysqlResultSet, error) {
+	liveResponder := ses.GetResponser()
+	proto := &analyzeDerivedProtocol{
+		internalProtocol: &internalProtocol{
+			result:      &internalExecResult{},
+			stashResult: true,
+		},
+		live: liveResponder,
+	}
+	ses.ReplaceResponser(&analyzeDerivedResponder{
+		MysqlResp: NewMysqlResp(proto),
+		live:      liveResponder,
+	})
+	defer ses.ReplaceResponser(liveResponder)
+
+	tempExecCtx := ExecCtx{ses: ses, reqCtx: outerExecCtx.reqCtx}
+	defer func() {
+		tempExecCtx.Close()
+		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+			tcc.SetExecCtx(outerExecCtx)
+		}
+	}()
+	policy := &rewritePolicySnapshot{enabled: outerExecCtx.rewriteEnabled}
+	if outerExecCtx.input != nil && outerExecCtx.input.rewritePolicy != nil {
+		policy = outerExecCtx.input.rewritePolicy
+	}
+	derivedInput := &UserInput{
+		sql:                       sql,
+		rewritePolicy:             policy,
+		rewritePolicyMaterialized: true,
+	}
+	if err := doComQuery(ses, &tempExecCtx, derivedInput); err != nil {
+		return nil, err
+	}
+	return proto.swapOutResult().resultSet, nil
+}
+
+// analyzeDerivedProtocol keeps the internal protocol's output sink while exposing
+// the live connection properties to code executing the derived statement.
+type analyzeDerivedProtocol struct {
+	*internalProtocol
+	live Responser
+}
+
+var _ MysqlRrWr = (*analyzeDerivedProtocol)(nil)
+
+func (p *analyzeDerivedProtocol) GetStr(id PropertyID) string { return p.live.GetStr(id) }
+func (p *analyzeDerivedProtocol) GetU32(id PropertyID) uint32 { return p.live.GetU32(id) }
+func (p *analyzeDerivedProtocol) GetU8(id PropertyID) uint8   { return p.live.GetU8(id) }
+func (p *analyzeDerivedProtocol) GetBool(id PropertyID) bool  { return p.live.GetBool(id) }
+func (p *analyzeDerivedProtocol) ConnectionID() uint32 {
+	if live, ok := p.live.MysqlRrWr().(interface{ ConnectionID() uint32 }); ok {
+		return live.ConnectionID()
+	}
+	return p.live.GetU32(CONNID)
+}
+func (p *analyzeDerivedProtocol) Peer() string {
+	if live, ok := p.live.MysqlRrWr().(interface{ Peer() string }); ok {
+		return live.Peer()
+	}
+	return p.live.GetStr(PEER)
+}
+func (p *analyzeDerivedProtocol) GetCapability() uint32 {
+	if live, ok := p.live.MysqlRrWr().(interface{ GetCapability() uint32 }); ok {
+		return live.GetCapability()
+	}
+	return p.live.GetU32(CAPABILITY)
+}
+func (p *analyzeDerivedProtocol) GetSequenceId() uint8 {
+	if live, ok := p.live.MysqlRrWr().(interface{ GetSequenceId() uint8 }); ok {
+		return live.GetSequenceId()
+	}
+	return p.live.GetU8(SEQUENCEID)
+}
+func (p *analyzeDerivedProtocol) IsEstablished() bool {
+	if live, ok := p.live.MysqlRrWr().(interface{ IsEstablished() bool }); ok {
+		return live.IsEstablished()
+	}
+	return p.live.GetBool(ESTABLISHED)
+}
+func (p *analyzeDerivedProtocol) IsTlsEstablished() bool {
+	if live, ok := p.live.MysqlRrWr().(interface{ IsTlsEstablished() bool }); ok {
+		return live.IsTlsEstablished()
+	}
+	return p.live.GetBool(TLS_ESTABLISHED)
+}
+
+type analyzeDerivedResponder struct {
+	*MysqlResp
+	live Property
+}
+
+var _ Responser = (*analyzeDerivedResponder)(nil)
+
+func (r *analyzeDerivedResponder) GetStr(id PropertyID) string { return r.live.GetStr(id) }
+func (r *analyzeDerivedResponder) GetU32(id PropertyID) uint32 { return r.live.GetU32(id) }
+func (r *analyzeDerivedResponder) GetU8(id PropertyID) uint8   { return r.live.GetU8(id) }
+func (r *analyzeDerivedResponder) GetBool(id PropertyID) bool  { return r.live.GetBool(id) }
+
+func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierList) string {
+	ctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	ctx.WriteString("select ")
+	for i, ident := range cols {
+		if i > 0 {
+			ctx.WriteByte(',')
+		}
+		ctx.WriteString("approx_count_distinct(")
+		ctx.WriteIdentifier(ident)
+		ctx.WriteByte(')')
+	}
+	ctx.WriteString(" from ")
+	entry.Table.Format(ctx)
+	return ctx.String()
+}
+
+func resolveAnalyzeDatabase(tcc *TxnCompilerContext, tbl *tree.TableName) string {
+	if dbName := string(tbl.Schema()); dbName != "" {
+		return dbName
+	}
+	return tcc.DefaultDatabase()
+}
+
+// resolveTableVisibleColumns returns the names of all visible (non-hidden) columns
+// of the given table. Used by ANALYZE TABLE without an explicit column list.
+func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.TableName) (tree.IdentifierList, error) {
+	tcc := ses.GetTxnCompileCtx()
+	dbName := resolveAnalyzeDatabase(tcc, tbl)
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx)
+	}
+	tblName := string(tbl.Name())
+
+	snapshot, err := resolveSnapshot(ses, tbl.AtTsExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	var cols tree.IdentifierList
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		cols = append(cols, tree.Identifier(col.GetOriginCaseName()))
+	}
+	if len(cols) == 0 {
+		return nil, moerr.NewInternalErrorf(ctx, "ANALYZE TABLE: no visible columns found for table %s", tblName)
+	}
+	return cols, nil
+}
+
+func handleCheckTableStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.CheckTableStmt) error {
+	msg := "CHECK TABLE is not supported in MatrixOne"
+	switch stmt.Option {
+	case tree.CheckTableOptionExtended:
+		msg = "CHECK TABLE ... EXTENDED is not supported in MatrixOne"
+	case tree.CheckTableOptionForUpgrade:
+		msg = "CHECK TABLE ... FOR UPGRADE is not supported in MatrixOne"
+	}
+	return moerr.NewNotSupported(execCtx.reqCtx, msg)
+}
+
+func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfileStmt) error {
+	msg := "SHOW PROFILE is not supported in MatrixOne"
+	if stmt.ForQuery > 0 {
+		msg = fmt.Sprintf("SHOW PROFILE FOR QUERY %d is not supported in MatrixOne", stmt.ForQuery)
+	}
+	return moerr.NewNotSupported(execCtx.reqCtx, msg)
 }
 
 func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {
@@ -1374,23 +1577,81 @@ func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*Pre
 }
 
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
-	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, ses, st.Sql)
 	if err != nil {
 		return nil, err
 	}
+	// buildPrepare only understands PrepareStmt and otherwise reparses the
+	// original PrepareString text. Pass the already rewritten/remapped AST so
+	// authorization and planning see the same policy snapshot that is saved for
+	// later EXECUTE and schema-change rebuilds.
+	prepareNode := tree.NewPrepareStmt(st.Name, innerStmt)
+	defer prepareNode.Free()
 
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
+	previousRemapDb := execCtx.remapDb
+	execCtx.remapDb = remapDb
+	prepareStmt, err := createPrepareStmt(execCtx, ses, rewritten, prepareNode, innerStmt)
+	execCtx.remapDb = previousRemapDb
 	if err != nil {
-		return nil, err
-	}
-
-	prepareStmt, err := createPrepareStmt(execCtx, ses, st.Sql, st, stmts[0])
-	if err != nil {
+		innerStmt.Free()
 		return nil, err
 	}
 
 	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
 	return prepareStmt, err
+}
+
+func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string, tree.Statement, map[string]string, error) {
+	rewritten := sql
+	var err error
+	if execCtx.rewriteEnabled {
+		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql)
+		if err != nil {
+			return sql, nil, nil, err
+		}
+	}
+
+	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return rewritten, nil, nil, err
+	}
+
+	stmts, err := mysql.ParseWithSQLMode(
+		execCtx.reqCtx,
+		rewritten,
+		v.(int64),
+		sessionSQLModeForParser(ses),
+	)
+	if err != nil {
+		return rewritten, nil, nil, err
+	}
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return rewritten, nil, nil, moerr.NewInvalidInput(execCtx.reqCtx,
+			"prepared statement must contain exactly one statement")
+	}
+
+	var remapDb map[string]string
+	if execCtx.rewriteEnabled {
+		parserSQLMode := sessionSQLModeForParser(ses)
+		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, rewritten, parserSQLMode); err != nil {
+			stmts[0].Free()
+			return rewritten, nil, nil, err
+		}
+		remaps, err := extractRemapDbByStatementWithSQLMode(execCtx.reqCtx, rewritten, parserSQLMode)
+		if err != nil {
+			stmts[0].Free()
+			return rewritten, nil, nil, err
+		}
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+			stmts[0].Free()
+			return rewritten, nil, nil, err
+		}
+		remapDb = remaps[0]
+	}
+	return rewritten, stmts[0], remapDb, nil
 }
 
 // handlePrepareString
@@ -1404,6 +1665,12 @@ func createPrepareStmt(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// A preceding statement may have run nested/background SQL and left the
+	// compiler context pointing at a temporary ExecCtx that has already been
+	// closed. PREPARE plans synchronously against the current request context.
+	if execCtx.proc != nil {
+		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	}
 
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
@@ -1434,6 +1701,7 @@ func createPrepareStmt(
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
+		remapDb:             maps.Clone(execCtx.remapDb),
 		getFromSendLongData: make(map[int]struct{}),
 	}
 
@@ -2010,8 +2278,8 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	}
 
 	//sort by name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0].(string) < rows[j][0].(string)
+	slices.SortFunc(rows, func(a, b []interface{}) int {
+		return cmp.Compare(a[0].(string), b[0].(string))
 	})
 
 	for _, row := range rows {
@@ -2462,21 +2730,40 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	// COM_QUERY carries the switch captured before its first statement. Other
+	// protocols retain their existing session-level behavior.
+	if execCtx.input.rewritePolicy != nil {
+		execCtx.rewriteEnabled = execCtx.input.rewritePolicy.enabled
+	} else {
+		execCtx.rewriteEnabled = ses.rewriteEnabled.Load()
+	}
+	parserSQLMode := sessionSQLModeForParser(ses)
 	// Reset the per-statement database remap; it is (re)populated below only when
 	// the rewrite feature is enabled and a remapdb is configured.
 	execCtx.remapDb = nil
 	var cws []ComputationWrapper = nil
+	var statementRemaps []map[string]string
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
 		tcw.prepareName = execCtx.input.stmtName
+		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
 	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+		var remapErr error
+		statementRemaps, remapErr = extractRemapDbByStatementWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		if remapErr != nil {
+			return nil, remapErr
+		}
+		if len(statementRemaps) != len(cached.stmts) {
+			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of remapdb policies is not equal to cached statements")
+		}
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
+			tcw.SetRemapDb(statementRemaps[i])
 			cws = append(cws, tcw)
 		}
 
@@ -2548,46 +2835,238 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if err != nil {
 			return nil, err
 		}
-		v, err := ses.GetSessionSysVar("enable_remap_hint")
-		if err == nil {
-			if on, convErr := valueIsBoolTrue(v); convErr == nil && on {
-				err = parsers.AddRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql())
-				if err != nil {
-					return nil, err
+		if execCtx.rewriteEnabled {
+			err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode)
+			if err != nil {
+				return nil, err
+			}
+			// Apply remapdb (database-name substitution) on the parsed AST
+			// before privilege checks and planning resolve the original
+			// database. The effective remapdb (role rules carry none, the
+			// session variable and any inline hint are merged by rewriteSQL
+			// into the leading hint) is read back from the statement text and
+			// applied to qualified references in SELECT and INSERT/UPDATE/
+			// DELETE alike. Only the remapdb field is decoded here, so layered
+			// (array-form) rewrites in the merged hint do not interfere. Each map
+			// travels with its computation wrapper and is installed on execCtx
+			// before authorization/planning, so DefaultDatabase can remap the
+			// current database for UNQUALIFIED references (USE is not remapped).
+			statementRemaps, err = extractRemapDbByStatementWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+			if err != nil {
+				return nil, err
+			}
+			// COM_STMT_PREPARE rewrites the statement before wrapping it in
+			// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
+			// so use the policy captured on UserInput for its single nested stmt.
+			if len(execCtx.input.remapDb) > 0 && len(statementRemaps) == 1 {
+				statementRemaps[0] = execCtx.input.remapDb
+			}
+			// Text EXECUTE similarly contains no original hint. Restore the policy
+			// saved with the prepared statement before authorization/planning.
+			for i, stmt := range stmts {
+				if execute, ok := stmt.(*tree.Execute); ok {
+					if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, string(execute.Name)); getErr == nil {
+						statementRemaps[i] = prepared.remapDb
+					}
 				}
-				// Apply remapdb (database-name substitution) on the parsed AST
-				// before privilege checks and planning resolve the original
-				// database. The effective remapdb (role rules carry none, the
-				// session variable and any inline hint are merged by rewriteSQL
-				// into the leading hint) is read back from the statement text and
-				// applied to qualified references in SELECT and INSERT/UPDATE/
-				// DELETE alike. Only the remapdb field is decoded here, so layered
-				// (array-form) rewrites in the merged hint do not interfere. It is
-				// also stashed on execCtx so DefaultDatabase can remap the current
-				// database for UNQUALIFIED references (USE itself is not remapped).
-				remapDb := extractInlineRemapDb(execCtx.input.getSql())
-				applyRemapDb(stmts, remapDb)
-				execCtx.remapDb = remapDb
+			}
+			if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, statementRemaps); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	for _, stmt := range stmts {
-		cws = append(cws, InitTxnComputationWrapper(ses, stmt, proc))
+	for i, stmt := range stmts {
+		tcw := InitTxnComputationWrapper(ses, stmt, proc)
+		if len(statementRemaps) == len(stmts) {
+			tcw.SetRemapDb(statementRemaps[i])
+		}
+		cws = append(cws, tcw)
 	}
 	return cws, nil
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
-	v, err := execCtx.ses.GetSessionSysVar("lower_case_table_names")
-	var lctn int64 = 1 // default
-	if err == nil {
-		switch vv := v.(type) {
-		case int64:
-			lctn = vv
+	return p.ParseWithSQLMode(
+		execCtx.reqCtx,
+		execCtx.input.getSql(),
+		parserLowerCaseTableNames(execCtx.ses),
+		sessionSQLModeForParser(execCtx.ses),
+	)
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	v, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return ""
+	}
+	mode, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return mysql.SessionSQLModeForParser(mode)
+}
+
+func parserLowerCaseTableNames(ses FeSession) int64 {
+	v, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return 1
+	}
+	lctn, ok := v.(int64)
+	if !ok {
+		return 1
+	}
+	return lctn
+}
+
+func isSessionSQLModeSet(stmt tree.Statement) bool {
+	setVar, ok := stmt.(*tree.SetVar)
+	if !ok {
+		return false
+	}
+	for _, assignment := range setVar.Assignments {
+		if assignment != nil && assignment.System && !assignment.Global && strings.EqualFold(assignment.Name, "sql_mode") {
+			return true
 		}
 	}
-	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
+	return false
+}
+
+func hasStatement(fragment string, parserSQLMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0, mysql.EofChar():
+			return false
+		case int(';'):
+			continue
+		default:
+			return true
+		}
+	}
+}
+
+func mayNeedSQLModeStaging(sql string) bool {
+	return strings.Contains(sql, ";") && strings.Contains(strings.ToLower(sql), "sql_mode")
+}
+
+func prepareSQLModeStagedExecution(
+	ctx context.Context,
+	ses FeSession,
+	p *mysql.MySQLParser,
+	sql string,
+) (first string, remaining string, staged bool, err error) {
+	lctn := parserLowerCaseTableNames(ses)
+	parserSQLMode := sessionSQLModeForParser(ses)
+	stmts, parseErr := p.ParseWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	if parseErr == nil {
+		stageAt := -1
+		for i, stmt := range stmts {
+			if isSessionSQLModeSet(stmt) {
+				stageAt = i
+				break
+			}
+		}
+		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
+		freeStatements(stmts)
+		if !shouldStage {
+			return "", "", false, nil
+		}
+	} else {
+		probe := sql
+		foundSQLModeSet := false
+		for hasStatement(probe, parserSQLMode) {
+			stmt, end, firstErr := p.ParseFirstWithSQLMode(ctx, probe, lctn, parserSQLMode)
+			if firstErr != nil {
+				return "", "", false, parseErr
+			}
+			foundSQLModeSet = isSessionSQLModeSet(stmt)
+			stmt.Free()
+			probe = probe[end:]
+			if foundSQLModeSet {
+				break
+			}
+		}
+		if !foundSQLModeSet || !hasStatement(probe, parserSQLMode) {
+			return "", "", false, parseErr
+		}
+	}
+
+	stmt, end, err := p.ParseFirstWithSQLMode(ctx, sql, lctn, parserSQLMode)
+	if err != nil {
+		return "", "", false, err
+	}
+	stmt.Free()
+	return sql[:end], sql[end:], true, nil
+}
+
+func nextSQLModeStatementInput(
+	ctx context.Context,
+	ses FeSession,
+	p *mysql.MySQLParser,
+	input *UserInput,
+	sql string,
+) (*UserInput, string, error) {
+	stmt, end, err := p.ParseFirstWithSQLMode(
+		ctx,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sessionSQLModeForParser(ses),
+	)
+	if err != nil {
+		return nil, sql, err
+	}
+	stmt.Free()
+	return newSQLStatementInput(input, ses, sql[:end]), sql[end:], nil
+}
+
+func newSQLStatementInput(input *UserInput, ses FeSession, sql string) *UserInput {
+	statementInput := *input
+	statementInput.sql = sql
+	statementInput.hashedSql = ""
+	statementInput.sqlSourceType = nil
+	statementInput.genHash()
+	statementInput.genSqlSourceType(ses)
+	return &statementInput
+}
+
+func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInput) (*UserInput, error) {
+	if input.rewritePolicy == nil || input.rewritePolicyMaterialized {
+		return input, nil
+	}
+	rewritten, err := input.rewritePolicy.rewrite(ctx, input.getSql(), sessionSQLModeForParser(ses))
+	if err != nil {
+		return input, err
+	}
+	if rewritten == input.getSql() {
+		return input, nil
+	}
+	return newSQLStatementInput(input, ses, rewritten), nil
+}
+
+func sqlForRecord(sql string) string {
+	parts := parsers.HandleSqlForRecord(sql)
+	if len(parts) == 0 {
+		return strings.TrimSpace(sql)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func freeStatements(stmts []tree.Statement) {
+	for _, stmt := range stmts {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}
+}
+
+func installStatementRemap(execCtx *ExecCtx, cw ComputationWrapper) {
+	execCtx.remapDb = nil
+	if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
+		execCtx.remapDb = carrier.GetRemapDb()
+	}
 }
 
 func incTransactionCounter(tenant string, tenantId uint32) {
@@ -2979,6 +3458,11 @@ func executeStmtWithResponse(ses *Session,
 		return err
 	}
 
+	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
+	// following statement (same proc for multi-statement COM_QUERY, or the next
+	// COM_QUERY via the session) reads the correct value.
+	recordLastAffectedRows(ses, execCtx)
+
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
 		return err
@@ -3200,6 +3684,20 @@ func dispatchStmt(ses FeSession,
 			}
 			if len(stmts) != len(execCtx.cws) {
 				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
+			}
+			if execCtx.rewriteEnabled {
+				if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+					return err
+				}
+				remaps := make([]map[string]string, len(execCtx.cws))
+				for i, cw := range execCtx.cws {
+					if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
+						remaps[i] = carrier.GetRemapDb()
+					}
+				}
+				if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+					return err
+				}
 			}
 			for i, cw := range execCtx.cws {
 				cw.ResetPlanAndStmt(stmts[i])
@@ -3453,6 +3951,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SessionId:            ses.GetSessId(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
+	// Carry the previous statement's affected rows into this proc so the
+	// ROW_COUNT() builtin can read it.
+	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
@@ -3465,6 +3966,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
+
+	// MySQL semantics: when a statement fails (parse / compile / execution error),
+	// ROW_COUNT() for the following statement must return -1. recordLastAffectedRows
+	// only runs after a statement succeeds, so cover every error path of the main
+	// COM_QUERY / COM_STMT_EXECUTE flow here. proc is the session's reused proc and
+	// is reseeded from the session on the next query, so the session value drives
+	// the next statement; the proc is updated too for completeness.
+	defer func() {
+		if retErr != nil {
+			markRowCountFailed(ses, proc)
+		}
+	}()
+
 	if ses.GetTenantInfo() != nil {
 		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
@@ -3486,32 +4000,71 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
-	execCtx.input = input
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 
-	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
-		ses.GetUserName(),
-		pu.StorageEngine,
-		proc, ses)
-
-	ParseDuration := time.Since(beginInstant)
-
-	if err != nil {
-		statsInfo.ParseStage.ParseDuration = ParseDuration
-		var err2 error
-		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
-		if err2 != nil {
-			return err2
+	executionInput := input
+	stagedSQLMode := false
+	stagedRemaining := ""
+	var err error
+	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
+		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
+			execCtx.reqCtx,
+			ses,
+			ses.GetMySQLParser(),
+			input.getSql(),
+		)
+		if stageErr != nil {
+			err = stageErr
+		} else if staged {
+			stagedSQLMode = true
+			stagedRemaining = remaining
+			executionInput = newSQLStatementInput(input, ses, first)
 		}
-		retErr = err
-		if _, ok := err.(*moerr.Error); !ok {
-			retErr = moerr.NewParseError(execCtx.reqCtx, err.Error())
+	}
+	if err == nil {
+		executionInput, err = rewriteSQLStatementInput(execCtx.reqCtx, ses, executionInput)
+		if !stagedSQLMode {
+			input = executionInput
 		}
-		logStatementStringStatus(execCtx.reqCtx, ses, input.getSql(), fail, retErr)
-		return retErr
 	}
 
-	singleStatement := len(cws) == 1
+	var cws []ComputationWrapper
+	if err == nil {
+		execCtx.input = executionInput
+		cws, err = GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+			ses.GetUserName(),
+			pu.StorageEngine,
+			proc, ses)
+	}
+
+	ParseDuration := time.Since(beginInstant)
+	recordParseError := func(errorInput *UserInput, parseErr error) error {
+		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
+		var recordErr error
+		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
+			execCtx.reqCtx,
+			ses,
+			proc,
+			beginInstant,
+			parsers.HandleSqlForRecord(errorInput.getSql()),
+			errorInput.getSqlSourceTypes(),
+			parseErr,
+		)
+		if recordErr != nil {
+			return recordErr
+		}
+		if _, ok := parseErr.(*moerr.Error); !ok {
+			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
+		}
+		logStatementStringStatus(execCtx.reqCtx, ses, errorInput.getSql(), fail, parseErr)
+		return parseErr
+	}
+
+	if err != nil {
+		return recordParseError(input, err)
+	}
+
+	singleStatement := len(cws) == 1 && !stagedSQLMode
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
 		return moerr.NewNotSupported(execCtx.reqCtx, "prepare multi statements")
 	}
@@ -3522,7 +4075,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := true
+	canCache := !stagedSQLMode
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -3535,9 +4088,37 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 		}
 	}()
-	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	var sqlRecord []string
+	if !stagedSQLMode {
+		sqlRecord, err = sqlForRecordByStatementWithSQLMode(execCtx.reqCtx, input.getSql(), sessionSQLModeForParser(ses))
+		if err != nil {
+			return err
+		}
+	}
+	stagedInputs := make([]*UserInput, 0, 1)
+	stagedSQLRecords := make([]string, 0, 1)
+	if stagedSQLMode {
+		stagedInputs = append(stagedInputs, executionInput)
+		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql()))
+	}
 
-	for i, cw := range cws {
+	for i := 0; i < len(cws); i++ {
+		cw := cws[i]
+		currentInput := input
+		currentSQLRecord := ""
+		sqlType := input.getSqlSourceType(i)
+		hasMoreStatements := i < len(cws)-1
+		if stagedSQLMode {
+			currentInput = stagedInputs[i]
+			currentSQLRecord = stagedSQLRecords[i]
+			sqlType = currentInput.getSqlSourceType(0)
+			hasMoreStatements = hasStatement(stagedRemaining, sessionSQLModeForParser(ses))
+		} else {
+			currentSQLRecord = sqlRecord[i]
+		}
+		// Install the policy that belongs to this wrapper before authorization and
+		// planning. In particular, DefaultDatabase uses it for unqualified names.
+		installStatementRemap(execCtx, cw)
 		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
 			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
 			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
@@ -3551,10 +4132,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.sentRows.Store(int64(0))
 		ses.writeCsvBytes.Store(int64(0))
 		resper.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
+		// ExecCtx is reused across statements in a multi-statement COM_QUERY;
+		// clear the previous statement's run result so a statement that does not
+		// set it (e.g. a status statement) does not inherit a stale AffectRows.
+		execCtx.runResult = nil
 		stmt := cw.GetAst()
-		sqlType := input.getSqlSourceType(i)
 		var err2 error
-		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
 			return err2
 		}
@@ -3604,21 +4188,64 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
-		execCtx.isLastStmt = i >= len(cws)-1
+		execCtx.isLastStmt = !hasMoreStatements
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
-		execCtx.sqlOfStmt = sqlRecord[i]
+		execCtx.sqlOfStmt = currentSQLRecord
 		execCtx.cw = cw
 		execCtx.proc = proc
 		execCtx.resper = resper
 		execCtx.ses = ses
-		execCtx.cws = cws
-		execCtx.input = input
+		if stagedSQLMode {
+			execCtx.cws = []ComputationWrapper{cw}
+		} else {
+			execCtx.cws = cws
+		}
+		execCtx.input = currentInput
 
 		err = executeStmtWithResponse(ses, execCtx)
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
+		}
+
+		if stagedSQLMode && hasMoreStatements {
+			// SET expressions may execute an internal query, which temporarily
+			// replaces the compiler context's ExecCtx. Restore this outer query
+			// before planning the next staged statement.
+			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			nextInput, remaining, nextErr := nextSQLModeStatementInput(
+				execCtx.reqCtx,
+				ses,
+				ses.GetMySQLParser(),
+				input,
+				stagedRemaining,
+			)
+			if nextErr != nil {
+				return recordParseError(newSQLStatementInput(input, ses, stagedRemaining), nextErr)
+			}
+			nextInput, nextErr = rewriteSQLStatementInput(execCtx.reqCtx, ses, nextInput)
+			if nextErr != nil {
+				return recordParseError(nextInput, nextErr)
+			}
+			execCtx.input = nextInput
+			nextCWs, nextErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
+				ses.GetUserName(),
+				pu.StorageEngine,
+				proc, ses)
+			if nextErr != nil {
+				return recordParseError(nextInput, nextErr)
+			}
+			if len(nextCWs) != 1 {
+				for _, nextCW := range nextCWs {
+					nextCW.Free()
+				}
+				return moerr.NewInternalError(execCtx.reqCtx, "staged sql_mode execution parsed an unexpected statement count")
+			}
+			cws = append(cws, nextCWs[0])
+			stagedInputs = append(stagedInputs, nextInput)
+			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql()))
+			stagedRemaining = remaining
 		}
 
 	} // end of for
@@ -3642,6 +4269,44 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	return nil
 }
 
+// sqlForRecordByStatement keeps the sanitized per-statement text aligned with
+// the parser's AST list. HandleSqlForRecord intentionally preserves blank and
+// comment-only semicolon fragments for its existing callers; execution skips
+// those fragments, so filter them here before indexing by computation wrapper.
+func sqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
+	return sqlForRecordByStatementWithSQLMode(ctx, sql, "")
+}
+
+func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
+		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
+		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
+		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
+		return parsers.HandleSqlForRecord(sql), nil
+	}
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	records, err := parsers.HandleSqlForRecordByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	if len(fragments) == 1 {
+		return records, nil
+	}
+	byStatement := make([]string, 0, len(records))
+	for i, fragment := range fragments {
+		if parsers.FragmentHasStatement(fragment) {
+			byStatement = append(byStatement, records[i])
+		}
+	}
+	if len(byStatement) == 0 {
+		return []string{""}, nil
+	}
+	return byStatement, nil
+}
+
 func checkNodeCanCache(p *plan2.Plan) bool {
 	if p == nil {
 		return true
@@ -3663,6 +4328,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
@@ -3700,11 +4366,13 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			ses.addSqlCount(1)
 			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
+				setRowCount(ses, ses.GetProc(), -1)
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
 			if err != errSidecarNotConfigured {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
 			}
@@ -3713,19 +4381,19 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		} else {
 			ses.addSqlCount(1)
 		}
-		// Inject rewrite rules hint before building UserInput (only if enabled)
-		if ses.rewriteEnabled.Load() {
-			var rewriteErr error
-			query, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, query)
-			if rewriteErr != nil {
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-				return resp, nil
-			}
+		// Freeze the policy once, then let doComQuery materialize it under the
+		// SQL mode current for each staged statement.
+		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
+		if rewriteErr != nil {
+			markRowCountFailed(ses, ses.GetProc())
+			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+			return resp, nil
 		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
-		input := &UserInput{sql: query}
+		input := &UserInput{sql: query, rewritePolicy: rewritePolicy}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 			resp.isIssue3482 = input.isIssue3482Sql()
 			if resp.isIssue3482 {
@@ -3754,6 +4422,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_PING:
+		setRowCount(ses, ses.GetProc(), 0)
 		resp = NewGeneralOkResponse(COM_PING, ses.GetTxnHandler().GetServerStatus())
 
 		return resp, nil
@@ -3761,14 +4430,17 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		var preparedRemapDb map[string]string
 		// Inject rewrite rules hint before prepare wrapping (only if enabled)
 		if ses.rewriteEnabled.Load() {
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
+				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
+			preparedRemapDb = extractInlineRemapDb(sql)
 		}
 		ses.addSqlCount(1)
 
@@ -3778,9 +4450,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		savedRowCount := ses.GetLastAffectedRows()
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, remapDb: preparedRemapDb})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		}
 		return resp, nil
 
@@ -3792,11 +4467,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			if prepareStmt != nil {
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This parse failure never reaches doComQuery, so the error defer there
+			// does not run; set the state explicitly here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, remapDb: prepareStmt.remapDb})
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
 		prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -3806,6 +4486,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
 		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
 		}
@@ -3813,11 +4494,19 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		savedRowCount := ses.GetLastAffectedRows()
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
+			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_CLOSE packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
+			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -3827,19 +4516,32 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
+		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
+		restoreRowCount(ses, ses.GetProc(), savedRowCount)
 		return resp, nil
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			// A malformed (too short) packet is a failed statement: reset
+			// ROW_COUNT() to -1 and return an error instead of panicking on the slice.
+			markRowCountFailed(ses, ses.GetProc())
+			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_RESET packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This early return never reaches doComQuery, so set the state here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
@@ -3851,17 +4553,21 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
+		} else {
+			setRowCount(ses, ses.GetProc(), 0)
 		}
 		return resp, nil
 
 	case COM_SET_OPTION:
 		err = handleSetOption(ses, execCtx, req.GetData().([]byte))
+		setRowCount(ses, ses.GetProc(), -1)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err)
+			return NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
+		markRowCountFailed(ses, ses.GetProc())
 		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil

@@ -43,7 +43,7 @@ var (
 	// ErrLockConflict lock option conflict
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
 	// ErrLockTimeout lock table timeout
-	ErrLockTimeout = moerr.NewInvalidStateNoCtx("lock timeout")
+	ErrLockTimeout = moerr.NewLockWaitTimeoutNoCtx()
 	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
 	ErrRemoteLockWaitTimeout = moerr.NewRemoteLockWaitTimeoutNoCtx()
 )
@@ -135,6 +135,38 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+// UnknownCommitResolver resolves a Commit whose request may have reached TN but
+// whose final response was not received by CN. It must not release the txn's
+// locks until the allocator proves that the txn cannot still be committing.
+// The optional completion callback is invoked exactly once after terminal
+// lock cleanup.
+//
+// This is deliberately separate from LockService: callers that only perform
+// regular lock operations do not need to implement the exceptional protocol.
+type UnknownCommitResolver interface {
+	ResolveCommitUnknown(
+		txnID []byte,
+		commitDeadline time.Time,
+		commitSequence uint64,
+		onResolved func(),
+	) error
+}
+
+// CommitSequenceProvider allocates a source-CN-local sequence for Commit
+// admission. A lockservice incarnation has one allocator, so a newer sequence
+// proves that a Commit was created after a fenced unknown Commit on that CN.
+type CommitSequenceProvider interface {
+	NextCommitSequence() uint64
+}
+
+// CommitRequestMeta carries optional wire metadata used only at TN admission.
+// A zero value is reserved for legacy/internal callers and is rejected while a
+// persistent unknown-commit fence is active.
+type CommitRequestMeta struct {
+	DeadlineUnixNano int64
+	Sequence         uint64
+}
+
 type ResumeLockService interface {
 	LockService
 
@@ -194,8 +226,11 @@ type LockTableAllocator interface {
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
 	// Valid checks lock-table bindings and registers a successful commit attempt.
+	// commitMeta carries the absolute Commit deadline and source-CN sequence
+	// when the caller has them. A zero value is accepted for legacy/internal
+	// callers unless an unknown-commit fence is active.
 	// Every successful call must be paired with exactly one FinishCommit call.
-	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
+	Valid(serviceID string, txnID []byte, binds []pb.LockTable, commitMeta ...CommitRequestMeta) ([]uint64, error)
 	// FinishCommit marks the end of a commit attempt registered by Valid.
 	FinishCommit(serviceID string, txnID []byte)
 	// AddCannotCommit add cannot commit txn.
