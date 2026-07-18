@@ -33,6 +33,79 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type blockingBindRefreshClient struct {
+	bindRefreshStarted chan struct{}
+}
+
+func (c *blockingBindRefreshClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	if req.Method != pb.Method_GetBind {
+		return nil, io.ErrClosedPipe
+	}
+	select {
+	case c.bindRefreshStarted <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *blockingBindRefreshClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *blockingBindRefreshClient) Close() error { return nil }
+
+func TestRemoteNewBindRefreshHonorsContext(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	bind := pb.LockTable{
+		Group: 0, Table: 1, OriginTable: 1,
+		ServiceID: "s2", Version: 1, Valid: true,
+	}
+	newBind := bind
+	newBind.ServiceID = "s3"
+	newBind.Version++
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		bind,
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	remote.allocatorStateProvider = func() allocatorState { return allocatorState{} }
+	remote.allocatorBindChangedHandler = func(
+		string,
+		pb.LockTable,
+		pb.LockTable,
+		allocatorState,
+		allocatorState,
+	) error {
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- remote.maybeHandleBindChanged(ctx, &pb.Response{NewBind: &newBind})
+	}()
+
+	select {
+	case <-client.bindRefreshStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote bind refresh did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrLockTableBindChanged)
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote bind refresh ignored cancellation")
+	}
+}
+
 func TestLockRemote(t *testing.T) {
 	runRemoteLockTableTests(
 		t,
@@ -398,7 +471,10 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			remote.allocatorStateProvider = svc.allocatorStateSnapshot
 			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
 
-			err := remote.maybeHandleBindChanged(&pb.Response{NewBind: &newB})
+			err := remote.maybeHandleBindChanged(
+				context.Background(),
+				&pb.Response{NewBind: &newB},
+			)
 			require.ErrorIs(t, err, ErrLockTableBindChanged)
 			require.Nil(t, svc.tableGroups.get(staleA.Group, staleA.Table))
 			require.NotNil(t, svc.tableGroups.get(currentA.Group, currentA.Table))
@@ -415,6 +491,148 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			require.True(t, accepted)
 			require.Zero(t, removed)
 			require.NotNil(t, svc.tableGroups.get(currentA.Group, currentA.Table))
+		},
+	)
+}
+
+func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldAllocator := allocatorState{id: "old-remote-response", version: 100}
+			newAllocator := allocatorState{id: "new-remote-response", version: 90}
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     oldAllocator.version,
+				Valid:       true,
+				AllocatorID: oldAllocator.id,
+			}
+			lateBind := oldBind
+			lateBind.ServiceID = "s3"
+			lateBind.Version++
+			currentBind := oldBind
+			currentBind.ServiceID = "s4"
+			currentBind.Version = newAllocator.version
+			currentBind.AllocatorID = newAllocator.id
+
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = currentBind
+					resp.GetBind.AllocatorID = newAllocator.id
+					resp.GetBind.AllocatorVersion = newAllocator.version
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			svc := &service{serviceID: "s1", logger: logger}
+			svc.tableGroups = &lockTableHolders{
+				service: svc.serviceID,
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			svc.allocatorVersionMu.Lock()
+			svc.lastAllocatorID = newAllocator.id
+			svc.lastAllocatorVersion = newAllocator.version
+			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
+			svc.allocatorVersionMu.Unlock()
+
+			remote := newRemoteLockTable(
+				svc.serviceID,
+				time.Second,
+				oldBind,
+				c,
+				svc.handleBindChanged,
+				logger,
+			)
+			remote.allocatorStateProvider = svc.allocatorStateSnapshot
+			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
+
+			err := remote.maybeHandleBindChanged(
+				context.Background(),
+				&pb.Response{NewBind: &lateBind},
+			)
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+			got := svc.tableGroups.get(currentBind.Group, currentBind.Table)
+			require.NotNil(t, got)
+			require.Equal(t, currentBind, got.getBind())
+			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
+			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+		},
+	)
+}
+
+func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     1,
+				Valid:       true,
+				AllocatorID: "old-allocator",
+			}
+			responseBind := oldBind
+			responseBind.ServiceID = "s3"
+			responseBind.Version++
+
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(
+						getLogger(""),
+						cancel,
+						resp,
+						moerr.NewInternalErrorNoCtx("allocator unavailable"),
+						cs,
+					)
+				})
+
+			published := 0
+			remote := newRemoteLockTable(
+				"s1",
+				time.Second,
+				oldBind,
+				c,
+				func(pb.LockTable) { published++ },
+				getLogger(""),
+			)
+			remote.allocatorStateProvider = func() allocatorState {
+				return allocatorState{id: "current-allocator", version: 2}
+			}
+			remote.allocatorBindChangedHandler = func(
+				string,
+				pb.LockTable,
+				pb.LockTable,
+				allocatorState,
+				allocatorState,
+			) error {
+				published++
+				return nil
+			}
+
+			err := remote.maybeHandleBindChanged(
+				context.Background(),
+				&pb.Response{NewBind: &responseBind},
+			)
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+			require.Zero(t, published)
 		},
 	)
 }

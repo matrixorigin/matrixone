@@ -125,7 +125,11 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	binds = binds[:0]
 	futures = futures[:0]
 	checkedBinds := make(map[bindKey]struct{})
-	maybeHandleRemoteBindChanged := func(bind pb.LockTable) {
+	maybeHandleRemoteBindChanged := func(
+		ctx context.Context,
+		bind pb.LockTable,
+		invalidateOnRefreshFailure bool,
+	) {
 		key := bindKey{
 			group:     bind.Group,
 			table:     bind.Table,
@@ -136,7 +140,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			return
 		}
 		checkedBinds[key] = struct{}{}
-		k.maybeHandleRemoteBindChanged(bind)
+		k.maybeHandleRemoteBindChanged(ctx, bind, invalidateOnRefreshFailure)
 	}
 
 	k.groupTables.iter(func(_ uint64, v lockTable) bool {
@@ -168,7 +172,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		}
 		err = moerr.AttachCause(ctx, err)
 		logKeepRemoteLocksFailed(k.service.logger, bind, err)
-		maybeHandleRemoteBindChanged(bind)
+		maybeHandleRemoteBindChanged(ctx, bind, false)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
@@ -183,21 +187,18 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			if err = resp.UnwrapError(); err != nil {
 				logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
 				if canRefreshRemoteBindOnKeepError(err) {
-					maybeHandleRemoteBindChanged(binds[idx])
+					maybeHandleRemoteBindChanged(ctx, binds[idx], true)
 				}
 			} else if resp.NewBind != nil {
-				if binds[idx].AllocatorID != "" &&
-					resp.NewBind.AllocatorID != "" &&
-					binds[idx].AllocatorID != resp.NewBind.AllocatorID {
-					maybeHandleRemoteBindChanged(binds[idx])
-				} else {
-					k.service.handleBindChanged(*resp.NewBind)
-				}
+				// The response can arrive after this CN has observed a newer
+				// allocator and purged the request bind. Refresh from the current
+				// allocator so a late response cannot republish a superseded bind.
+				maybeHandleRemoteBindChanged(ctx, binds[idx], true)
 			}
 			releaseResponse(resp)
 		} else {
 			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
-			maybeHandleRemoteBindChanged(binds[idx])
+			maybeHandleRemoteBindChanged(ctx, binds[idx], false)
 		}
 		f.Close()
 		futures[idx] = nil // gc
@@ -210,9 +211,14 @@ func canRefreshRemoteBindOnKeepError(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)
 }
 
-func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
+func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
+	ctx context.Context,
+	bind pb.LockTable,
+	invalidateOnRefreshFailure bool,
+) {
 	requestAllocator := k.service.allocatorStateSnapshot()
-	newBind, allocator, err := getLockTableBind(
+	newBind, allocator, err := getLockTableBindWithContext(
+		ctx,
 		k.client,
 		bind.Group,
 		bind.Table,
@@ -222,6 +228,9 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
 	)
 	if err != nil {
 		logGetRemoteBindFailed(k.service.logger, bind.Table, err)
+		if invalidateOnRefreshFailure {
+			k.invalidateRemoteBind(bind, requestAllocator)
+		}
 		return
 	}
 	if newBind.Changed(bind) {
@@ -236,6 +245,24 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
 			}
 		}
 	}
+}
+
+func (k *lockTableKeeper) invalidateRemoteBind(
+	bind pb.LockTable,
+	allocator allocatorState,
+) {
+	k.service.bindChangeMu.Lock()
+	defer k.service.bindChangeMu.Unlock()
+
+	k.service.removeLockTablesWithFence(
+		k.groupTables,
+		func(candidate pb.LockTable) bool {
+			return candidate.Group == bind.Group &&
+				candidate.Table == bind.Table &&
+				!candidate.Changed(bind)
+		},
+		allocator,
+	)
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
