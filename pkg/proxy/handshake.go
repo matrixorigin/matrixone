@@ -103,71 +103,77 @@ func (c *clientConn) handleHandshakeRespBefore(deadline time.Time) error {
 	if c.handshakePack != nil {
 		return moerr.NewInvalidInputNoCtx("client handshake has already been processed")
 	}
-	// The proxy reads login request from client.
-	pack, err := c.readPacketBefore(deadline)
-	if err != nil {
-		return err
-	}
-	c.mysqlProto.AddSequenceId(1)
-
-	// SQLCodec copies the decoded payload out of goetty's input buffer. Move the
-	// one lifetime-retained copy into the Proxy's shared bounded allocator so
-	// ProtocolMemoryLimit covers established connections as well as the fixed
-	// client/backend IO buffers.
-	payload, err := c.sessionAllocator.Alloc(len(pack.Payload))
-	if err != nil {
-		return err
-	}
-	payloadView := payload[:len(pack.Payload)]
-	copy(payloadView, pack.Payload)
-	ownedPack := &frontend.Packet{
-		Length:     pack.Length,
-		SequenceID: pack.SequenceID,
-		Payload:    payloadView,
-	}
-
-	// Parse the login information and returns whether ssl is needed.
-	// Also, we can get connection attributes from client if it sets
-	// some.
-	ssl, err := c.mysqlProto.HandleHandshake(c.ctx, ownedPack.Payload)
-	if err != nil {
-		// HandleHandshake may retain a slice of the payload before a later
-		// validation fails. Keep clientConn as the cleanup owner until Close.
-		c.handshakePack = ownedPack
-		c.handshakePayloadAllocation = payload
-		return err
-	}
-	if ssl {
-		// An SSLRequest contains no authentication state and is superseded by
-		// the login packet sent inside TLS, so it must not cross the phase.
-		c.sessionAllocator.Free(payload)
-		if err = c.upgradeToTLS(deadline); err != nil {
+	tlsEstablished := false
+	for {
+		// The proxy reads a protocol phase packet from the client. The first
+		// packet may be an SSLRequest; the terminal packet must be a login.
+		pack, err := c.readPacketBefore(deadline)
+		if err != nil {
 			return err
 		}
-		return c.handleHandshakeRespBefore(deadline)
-	}
+		c.mysqlProto.AddSequenceId(1)
 
-	// Ownership transfers only for the final non-SSL login packet. It is used
-	// to authenticate fresh backend connections during migration.
-	c.handshakePack = ownedPack
-	c.handshakePayloadAllocation = payload
+		// SQLCodec copies the decoded payload out of goetty's input buffer. Move
+		// the one lifetime-retained copy into the Proxy's shared bounded allocator
+		// so ProtocolMemoryLimit covers established connections as well as the
+		// fixed client/backend IO buffers.
+		payload, err := c.sessionAllocator.Alloc(len(pack.Payload))
+		if err != nil {
+			return err
+		}
+		payloadView := payload[:len(pack.Payload)]
+		copy(payloadView, pack.Payload)
+		ownedPack := &frontend.Packet{
+			Length:     pack.Length,
+			SequenceID: pack.SequenceID,
+			Payload:    payloadView,
+		}
 
-	// parse tenant information from client login request.
-	if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
-		return err
-	}
-	if c.admission != nil && !c.admission.bindTenant(c.clientInfo.Tenant) {
-		return errProxyConnectionLimit
-	}
+		// Parse the phase packet and determine whether it requests TLS.
+		ssl, err := c.mysqlProto.HandleHandshake(c.ctx, ownedPack.Payload)
+		if err != nil {
+			// HandleHandshake may retain a slice of the payload before a later
+			// validation fails. Keep clientConn as the cleanup owner until Close.
+			c.handshakePack = ownedPack
+			c.handshakePayloadAllocation = payload
+			return err
+		}
+		if ssl {
+			// An SSLRequest contains no authentication state and is superseded by
+			// the login sent inside TLS, so it must not cross the phase.
+			c.sessionAllocator.Free(payload)
+			if tlsEstablished {
+				return moerr.NewInvalidInputNoCtx("duplicate TLS request during client handshake")
+			}
+			if err = c.upgradeToTLS(deadline); err != nil {
+				return err
+			}
+			tlsEstablished = true
+			continue
+		}
 
-	li := &c.clientInfo.labelInfo
-	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+		// Ownership transfers only for the final login packet. It is used to
+		// authenticate fresh backend connections during migration.
+		c.handshakePack = ownedPack
+		c.handshakePayloadAllocation = payload
 
-	c.clientInfo.hash, err = c.clientInfo.getHash()
-	if err != nil {
-		return err
+		// Parse tenant information from the final login request.
+		if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
+			return err
+		}
+		if c.admission != nil && !c.admission.bindTenant(c.clientInfo.Tenant) {
+			return errProxyConnectionLimit
+		}
+
+		li := &c.clientInfo.labelInfo
+		c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+
+		c.clientInfo.hash, err = c.clientInfo.getHash()
+		if err != nil {
+			return err
+		}
+		return nil
 	}
-	return nil
 }
 
 // upgradeToTLS upgrades the connection to TLS connection.
@@ -187,7 +193,7 @@ func (c *clientConn) upgradeToTLS(handshakeDeadline time.Time) error {
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		err = moerr.AttachCause(ctx, err)
-		return moerr.NewInternalErrorf(ctx, "TSL handshake error: %v", err)
+		return moerr.NewInternalErrorf(ctx, "TLS handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)
 	c.mysqlProto.UseConn(tlsConn)

@@ -65,9 +65,14 @@ var (
 	// their independent per-connection bound is intentionally small.
 	defaultProtocolMemoryLimit        = toml.ByteSize(1 << 30)
 	defaultClientHandshakePacketLimit = toml.ByteSize(64 << 10)
-	// A protocol 4.1 SSL request is exactly 32 bytes. The packet header itself
-	// can encode at most (1<<24)-1 payload bytes.
-	minimumClientHandshakePacketLimit = toml.ByteSize(32)
+	// A protocol 4.1 SSLRequest contains only the 32-byte fixed response
+	// prefix. A usable final login must additionally carry at least a one-byte
+	// username, its NUL terminator, and one auth length/terminator byte. Keep the
+	// configured minimum tied to a complete login rather than the shorter
+	// intermediate TLS request.
+	protocol41SSLRequestPayloadSize   = toml.ByteSize(32)
+	minimumClientHandshakePacketLimit = protocol41SSLRequestPayloadSize + 3
+	// The packet header itself can encode at most (1<<24)-1 payload bytes.
 	maximumClientHandshakePacketLimit = toml.ByteSize((1 << 24) - 1)
 )
 
@@ -331,7 +336,7 @@ func (c *Config) Validate() error {
 	if c.ClientHandshakePacketLimit > 0 &&
 		c.ClientHandshakePacketLimit < minimumClientHandshakePacketLimit {
 		return moerr.NewInternalError(noReport,
-			"proxy client-handshake-packet-limit is smaller than a protocol 4.1 handshake")
+			"proxy client-handshake-packet-limit is smaller than a complete protocol 4.1 login")
 	}
 	if c.ClientHandshakePacketLimit > maximumClientHandshakePacketLimit {
 		return moerr.NewInternalError(noReport,
@@ -339,7 +344,10 @@ func (c *Config) Validate() error {
 	}
 	if c.ProtocolMemoryLimit > 0 && c.MaxConnections > 0 {
 		cachedSessions := uint64(0)
-		if c.ConnCacheEnabled {
+		// Plugin routing and connection-cache reuse are mutually exclusive in
+		// newProxyHandler, so reserve cached session buffers only when the cache
+		// can actually be instantiated.
+		if c.ConnCacheEnabled && c.Plugin == nil {
 			cachedSessions = defaultMaxNumTotal
 		}
 		maxConnections := uint64(c.MaxConnections)

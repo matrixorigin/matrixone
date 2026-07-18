@@ -567,6 +567,247 @@ func makeClientHandshakeResp() []byte {
 	return data
 }
 
+func makeMinimalClientHandshakeResp(sequenceID byte, capabilities uint32) []byte {
+	payload := make([]byte, minimumClientHandshakePacketLimit)
+	binary.LittleEndian.PutUint32(payload, capabilities)
+	payload[8] = 45 // client charset
+	payload[protocol41SSLRequestPayloadSize] = 'u'
+	// The following zero bytes terminate the username and encode an empty auth
+	// response for CLIENT_SECURE_CONNECTION.
+	data := make([]byte, frontend.PacketHeaderLength+len(payload))
+	data[0] = byte(len(payload))
+	data[1] = byte(len(payload) >> 8)
+	data[2] = byte(len(payload) >> 16)
+	data[3] = sequenceID
+	copy(data[frontend.PacketHeaderLength:], payload)
+	return data
+}
+
+func makeClientSSLRequest(sequenceID byte, capabilities uint32) []byte {
+	payload := make([]byte, protocol41SSLRequestPayloadSize)
+	binary.LittleEndian.PutUint32(payload, capabilities|frontend.CLIENT_SSL)
+	data := make([]byte, frontend.PacketHeaderLength+len(payload))
+	data[0] = byte(len(payload))
+	data[3] = sequenceID
+	copy(data[frontend.PacketHeaderLength:], payload)
+	return data
+}
+
+func TestClientConnHandshakePhases(t *testing.T) {
+	newClient := func(t *testing.T) (*clientConn, goetty.IOSession, net.Conn, *frontend.LeakCheckAllocator) {
+		t.Helper()
+		local, remote := net.Pipe()
+		session := goetty.NewIOSession(
+			goetty.WithSessionConn(1, local),
+			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec(
+				frontend.WithSQLCodecMaxPayloadSize(int(minimumClientHandshakePacketLimit)),
+			))),
+		)
+		allocator := frontend.NewLeakCheckAllocator()
+		cc, err := newClientConn(
+			context.Background(),
+			&Config{ClientHandshakePacketLimit: minimumClientHandshakePacketLimit},
+			runtime.DefaultRuntime().Logger(),
+			newCounterSet(),
+			session,
+			nil, nil, nil, nil, nil, nil, nil,
+			withClientConnAllocator(allocator),
+		)
+		require.NoError(t, err)
+		return cc.(*clientConn), session, remote, allocator
+	}
+
+	assertLogin := func(t *testing.T, client *clientConn) {
+		t.Helper()
+		require.Equal(t, frontend.GetDefaultTenant(), string(client.GetTenant()))
+		require.Equal(t, "u", client.clientInfo.username)
+		require.NotNil(t, client.handshakePack)
+		require.Len(t, client.handshakePack.Payload, int(minimumClientHandshakePacketLimit))
+	}
+
+	t.Run("plaintext final login", func(t *testing.T) {
+		client, session, remote, allocator := newClient(t)
+		t.Cleanup(func() {
+			_ = client.Close()
+			_ = session.Close()
+			_ = remote.Close()
+		})
+		response := makeMinimalClientHandshakeResp(
+			1,
+			frontend.CLIENT_PROTOCOL_41|frontend.CLIENT_SECURE_CONNECTION,
+		)
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(response)
+		}()
+
+		require.NoError(t, client.handleHandshakeResp())
+		<-writeDone
+		assertLogin(t, client)
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("TLS request then final login", func(t *testing.T) {
+		client, session, remote, allocator := newClient(t)
+		t.Cleanup(func() {
+			_ = client.Close()
+			_ = session.Close()
+			_ = remote.Close()
+		})
+		cert, err := certGen(t.TempDir())
+		require.NoError(t, err)
+		client.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.Background(), cert.caFile, cert.certFile, cert.keyFile)
+		require.NoError(t, err)
+		client.tlsConnectTimeout = time.Second
+
+		capabilities := uint32(frontend.CLIENT_PROTOCOL_41 |
+			frontend.CLIENT_SECURE_CONNECTION |
+			frontend.CLIENT_SSL)
+		sslRequest := makeClientSSLRequest(1, capabilities)
+
+		clientDone := make(chan error, 1)
+		go func() {
+			defer remote.Close()
+			if _, err := remote.Write(sslRequest); err != nil {
+				clientDone <- err
+				return
+			}
+			tlsClient := tls.Client(remote, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec
+			if err := tlsClient.Handshake(); err != nil {
+				clientDone <- err
+				return
+			}
+			_, err := tlsClient.Write(makeMinimalClientHandshakeResp(2, capabilities))
+			clientDone <- err
+		}()
+
+		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, <-clientDone)
+		assertLogin(t, client)
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("reject duplicate TLS request", func(t *testing.T) {
+		client, session, remote, allocator := newClient(t)
+		cert, err := certGen(t.TempDir())
+		require.NoError(t, err)
+		client.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.Background(), cert.caFile, cert.certFile, cert.keyFile)
+		require.NoError(t, err)
+		client.tlsConnectTimeout = time.Second
+
+		capabilities := uint32(frontend.CLIENT_PROTOCOL_41 |
+			frontend.CLIENT_SECURE_CONNECTION |
+			frontend.CLIENT_SSL)
+		releaseClient := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() {
+			releaseOnce.Do(func() { close(releaseClient) })
+		}
+		t.Cleanup(func() {
+			release()
+			_ = client.Close()
+			_ = session.Close()
+			_ = remote.Close()
+		})
+
+		clientDone := make(chan error, 1)
+		go func() {
+			defer remote.Close()
+			if _, err := remote.Write(makeClientSSLRequest(1, capabilities)); err != nil {
+				clientDone <- err
+				return
+			}
+			tlsClient := tls.Client(remote, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec
+			if err := tlsClient.Handshake(); err != nil {
+				clientDone <- err
+				return
+			}
+			_, err := tlsClient.Write(makeClientSSLRequest(2, capabilities))
+			clientDone <- err
+			<-releaseClient
+		}()
+
+		serverDone := make(chan error, 1)
+		go func() {
+			serverDone <- client.handleHandshakeResp()
+		}()
+		select {
+		case err := <-serverDone:
+			require.ErrorContains(t, err, "duplicate TLS request")
+		case <-time.After(time.Second):
+			t.Fatal("duplicate TLS request was not rejected promptly")
+		}
+		require.NoError(t, <-clientDone)
+		release()
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("TLS negotiation failure releases phase payload", func(t *testing.T) {
+		client, session, remote, allocator := newClient(t)
+		cert, err := certGen(t.TempDir())
+		require.NoError(t, err)
+		client.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.Background(), cert.caFile, cert.certFile, cert.keyFile)
+		require.NoError(t, err)
+		client.tlsConnectTimeout = time.Second
+		t.Cleanup(func() {
+			_ = client.Close()
+			_ = session.Close()
+			_ = remote.Close()
+		})
+
+		capabilities := uint32(frontend.CLIENT_PROTOCOL_41 |
+			frontend.CLIENT_SECURE_CONNECTION |
+			frontend.CLIENT_SSL)
+		clientDone := make(chan struct{})
+		go func() {
+			defer close(clientDone)
+			_, _ = remote.Write(makeClientSSLRequest(1, capabilities))
+			// A complete invalid TLS record header makes the server fail without
+			// relying on a timing-sensitive connection close.
+			_, _ = remote.Write([]byte{0, 0, 0, 0, 0})
+		}()
+
+		require.ErrorContains(t, client.handleHandshakeResp(), "TLS handshake error")
+		<-clientDone
+		require.Nil(t, client.handshakePack)
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("final login parse failure transfers cleanup ownership", func(t *testing.T) {
+		client, session, remote, allocator := newClient(t)
+		t.Cleanup(func() {
+			_ = client.Close()
+			_ = session.Close()
+			_ = remote.Close()
+		})
+		response := makeMinimalClientHandshakeResp(
+			1,
+			frontend.CLIENT_PROTOCOL_41|frontend.CLIENT_SECURE_CONNECTION,
+		)
+		response[frontend.PacketHeaderLength+8] = 0 // unsupported collation
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(response)
+		}()
+
+		require.ErrorContains(t, client.handleHandshakeResp(), "get collationName")
+		<-writeDone
+		require.NotNil(t, client.handshakePack)
+		require.False(t, allocator.CheckBalance())
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+}
+
 func TestClientConn_ConnectToBackend(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 

@@ -125,6 +125,21 @@ func TestValidate(t *testing.T) {
 		},
 		wantErr: true,
 	}, {
+		name: "handshake packet limit at protocol minimum",
+		cfg: Config{
+			ClientHandshakePacketLimit: minimumClientHandshakePacketLimit,
+		},
+	}, {
+		name: "handshake packet limit above protocol minimum",
+		cfg: Config{
+			ClientHandshakePacketLimit: minimumClientHandshakePacketLimit + 1,
+		},
+	}, {
+		name: "handshake packet limit at protocol maximum",
+		cfg: Config{
+			ClientHandshakePacketLimit: maximumClientHandshakePacketLimit,
+		},
+	}, {
 		name: "handshake packet limit above protocol maximum",
 		cfg: Config{
 			ClientHandshakePacketLimit: maximumClientHandshakePacketLimit + 1,
@@ -147,6 +162,21 @@ func TestValidate(t *testing.T) {
 	}, {
 		name: "plugin valid",
 		cfg: Config{
+			Plugin: &PluginConfig{
+				Backend: "test",
+				Timeout: time.Second,
+			},
+		},
+	}, {
+		name: "plugin mode does not reserve disabled connection cache",
+		cfg: Config{
+			MaxConnections:          10,
+			MaxConnectionsPerTenant: 10,
+			ProtocolMemoryLimit: toml.ByteSize(
+				10 * (2*proxyIOSessionBufferSize + 64),
+			),
+			ClientHandshakePacketLimit: 64,
+			ConnCacheEnabled:           true,
 			Plugin: &PluginConfig{
 				Backend: "test",
 				Timeout: time.Second,
