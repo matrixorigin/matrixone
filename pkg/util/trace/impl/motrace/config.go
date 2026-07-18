@@ -15,11 +15,13 @@
 package motrace
 
 import (
+	"encoding/binary"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -42,6 +44,10 @@ type tracerProviderConfig struct {
 
 	// service used to get global config from mo.runtime
 	service string // WithService
+
+	// idGenerator creates the lightweight, non-recording trace context retained
+	// for log/error correlation and RPC propagation.
+	idGenerator trace.IDGenerator
 
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *trace.Resource // withMOVersion, WithNode,
@@ -296,4 +302,23 @@ func WithInitAction(init bool) tracerProviderOption {
 		defer cfg.mux.Unlock()
 		cfg.needInit = init
 	}
+}
+
+var _ trace.IDGenerator = moIDGenerator{}
+
+type moIDGenerator struct{}
+
+func (moIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
+	var traceID trace.TraceID
+	binary.BigEndian.PutUint64(traceID[:], util.Fastrand64())
+	binary.BigEndian.PutUint64(traceID[8:], util.Fastrand64())
+	var spanID trace.SpanID
+	binary.BigEndian.PutUint64(spanID[:], util.Fastrand64())
+	return traceID, spanID
+}
+
+func (moIDGenerator) NewSpanID() trace.SpanID {
+	var spanID trace.SpanID
+	binary.BigEndian.PutUint64(spanID[:], util.Fastrand64())
+	return spanID
 }

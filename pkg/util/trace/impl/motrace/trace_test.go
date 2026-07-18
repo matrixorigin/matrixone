@@ -39,6 +39,7 @@ var exportMux sync.Mutex
 
 type recordingBatchProcessor struct {
 	registered map[reflect.Type]struct{}
+	collected  []batchpipe.HasName
 	stop       <-chan struct{}
 	stopped    bool
 }
@@ -47,8 +48,11 @@ func newRecordingBatchProcessor() *recordingBatchProcessor {
 	return &recordingBatchProcessor{registered: make(map[reflect.Type]struct{})}
 }
 
-func (p *recordingBatchProcessor) Collect(context.Context, batchpipe.HasName) error { return nil }
-func (p *recordingBatchProcessor) Start() bool                                      { return true }
+func (p *recordingBatchProcessor) Collect(_ context.Context, item batchpipe.HasName) error {
+	p.collected = append(p.collected, item)
+	return nil
+}
+func (p *recordingBatchProcessor) Start() bool { return true }
 func (p *recordingBatchProcessor) Stop(bool) error {
 	if p.stop != nil {
 		<-p.stop
@@ -82,10 +86,16 @@ func TestInitExporterKeepsStatementLogAndErrorWithoutSpanPipeline(t *testing.T) 
 	require.Len(t, processor.registered, 3)
 }
 
-func TestMOTracerProviderCannotEnableSpanRecording(t *testing.T) {
+func TestMOTracerProviderKeepsContextWithoutSpanRecording(t *testing.T) {
 	provider := newMOTracerProvider(EnableTracer(true), WithSpanDisable(false))
-	_, ok := provider.Tracer("test").(trace.NoopTracer)
-	require.True(t, ok)
+	tracer := provider.Tracer("test")
+	require.IsType(t, &trace.NonRecordingTracer{}, tracer)
+
+	ctx, span := tracer.Start(context.Background(), "test")
+	spanContext := span.SpanContext()
+	require.False(t, spanContext.IsEmpty())
+	require.Equal(t, spanContext, trace.SpanFromContext(ctx).SpanContext())
+	span.End()
 }
 
 func TestStopBatchProcessor(t *testing.T) {

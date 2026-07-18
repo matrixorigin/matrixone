@@ -95,9 +95,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	SetTracerProvider(newMOTracerProvider(opts...))
 	config := &GetTracerProvider().tracerProviderConfig
 
-	// Span recording has been retired. Keep the public trace API installed as a
-	// permanent no-op so existing call sites and context propagation stay safe.
-	trace.SetDefaultTracer(trace.NoopTracer{})
+	// Span recording has been retired. Keep only lightweight trace-context
+	// generation so retained log/error telemetry and RPCs remain correlatable.
+	trace.SetDefaultTracer(GetTracerProvider().Tracer("MatrixOne"))
 	if config.disableError {
 		DisableLogErrorReport(true)
 	}
