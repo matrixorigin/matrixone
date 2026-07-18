@@ -282,8 +282,8 @@ func (expr *ColumnExpressionExecutor) GetColIndex() int {
 }
 
 type ParamExpressionExecutor struct {
-	mp         *mpool.MPool
-	null       *vector.Vector
+	mp   *mpool.MPool
+	null *vector.Vector
 	// maskedNull is separate from null/vec because it is not a resolved
 	// parameter value and must never participate in the folded-value cache.
 	maskedNull *vector.Vector
@@ -369,8 +369,8 @@ func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 }
 
 type VarExpressionExecutor struct {
-	mp         *mpool.MPool
-	null       *vector.Vector
+	mp   *mpool.MPool
+	null *vector.Vector
 	// maskedNull lets a skipped variable avoid the resolver without changing
 	// the value cache used by a later selected evaluation.
 	maskedNull *vector.Vector
