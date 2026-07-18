@@ -65,21 +65,22 @@ func TestLockBlockedOnRemote(t *testing.T) {
 }
 
 func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
-	runLockServiceTests(
+	const tableID = uint64(10)
+	row := []byte("row")
+	seedTxn := []byte("seed")
+	holderTxn := []byte("remote-holder")
+	activeWaiterTxn := []byte("active-waiter")
+
+	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2", "s3"},
+		10*time.Second,
 		func(_ *lockTableAllocator, s []*service) {
 			owner := s[0]
 			holderService := s[1]
 			waiterService := s[2]
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-
-			const tableID = uint64(10)
-			row := []byte("row")
-			seedTxn := []byte("seed")
-			holderTxn := []byte("remote-holder")
-			activeWaiterTxn := []byte("active-waiter")
 
 			// Bind the table to owner, then acquire it through holderService so
 			// fetchWhoWaitingMe has to query a remote lock table.
@@ -204,6 +205,42 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 				t.Fatalf("remote waiter did not acquire after holder release: %v", releaseCtx.Err())
 			}
 			require.NoError(t, waiterService.Unlock(releaseCtx, activeWaiterTxn, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			// CheckActiveTxn gets its authoritative transaction liveness from
+			// TxnIterFunc in production. Keep the synthetic remote transactions
+			// visible so the orphan checker cannot legitimately remove the lock
+			// before this test snapshots its waiters.
+			cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{holderTxn, activeWaiterTxn} {
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+		},
+	)
+}
+
+func TestWaitLocalWaitersIsBounded(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(10)
+			row := []byte("row")
+			txnID := []byte("holder")
+			mustAddTestLock(t, ctx, s[0], tableID, txnID, [][]byte{row}, pb.Granularity_Row)
+
+			lt, err := s[0].getLockTable(0, tableID)
+			require.NoError(t, err)
+			err = waitLocalWaitersWithTimeout(lt.(*localLockTable), row, 1, 20*time.Millisecond)
+			require.EqualError(t, err, "internal error: timed out waiting for 1 local lock waiters, observed 0")
+
+			require.NoError(t, s[0].Unlock(ctx, txnID, timestamp.Timestamp{}))
 		},
 	)
 }
