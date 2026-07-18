@@ -87,10 +87,18 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 			require.NoError(t, owner.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
 			mustAddTestLock(t, ctx, holderService, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
 
+			// The waiter must remain live until the holder is explicitly released.
+			// Reusing ctx here couples queue admission to all setup RPCs above: once
+			// that deadline expires, Lock returns before it can enter owner's queue
+			// and the old unbounded waitWaiters call spins forever.
+			waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+			defer cancelWaiter()
 			waitResult := make(chan error, 1)
+			holderReleased := false
+			waiterDone := false
 			go func() {
 				_, err := waiterService.Lock(
-					ctx,
+					waiterCtx,
 					tableID,
 					[][]byte{row},
 					activeWaiterTxn,
@@ -99,12 +107,41 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 				waitResult <- err
 			}()
 			defer func() {
-				require.NoError(t, holderService.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
-				require.NoError(t, <-waitResult)
-				require.NoError(t, waiterService.Unlock(ctx, activeWaiterTxn, timestamp.Timestamp{}))
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				if !holderReleased {
+					_ = holderService.Unlock(cleanupCtx, holderTxn, timestamp.Timestamp{})
+				}
+				cancelWaiter()
+				if !waiterDone {
+					select {
+					case err := <-waitResult:
+						if err == nil {
+							_ = waiterService.Unlock(cleanupCtx, activeWaiterTxn, timestamp.Timestamp{})
+						}
+					case <-cleanupCtx.Done():
+						t.Errorf("remote waiter did not exit during cleanup: %v", cleanupCtx.Err())
+					}
+				}
 			}()
 
-			waitWaiters(t, owner, tableID, row, 1)
+			// This is test admission synchronization, not part of the behavior under
+			// test. Keep it bounded so an unexpected routing failure produces a
+			// useful failure instead of consuming the package's 40-minute timeout.
+			require.Eventually(t, func() bool {
+				lt, err := owner.getLockTable(0, tableID)
+				if err != nil {
+					return false
+				}
+				local, ok := lt.(*localLockTable)
+				if !ok {
+					return false
+				}
+				local.mu.Lock()
+				defer local.mu.Unlock()
+				lock, ok := local.mu.store.Get(row)
+				return ok && lock.waiters.size() == 1
+			}, 10*time.Second, 10*time.Millisecond, "active remote waiter did not reach owner queue")
 			lt, err := owner.getLockTable(0, tableID)
 			require.NoError(t, err)
 			local := lt.(*localLockTable)
@@ -151,6 +188,19 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 				holderService.getLockTable,
 			))
 			require.Equal(t, [][]byte{activeWaiterTxn}, waitingTxnIDs)
+
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer releaseCancel()
+			require.NoError(t, holderService.Unlock(releaseCtx, holderTxn, timestamp.Timestamp{}))
+			holderReleased = true
+			select {
+			case err := <-waitResult:
+				waiterDone = true
+				require.NoError(t, err)
+			case <-releaseCtx.Done():
+				t.Fatalf("remote waiter did not acquire after holder release: %v", releaseCtx.Err())
+			}
+			require.NoError(t, waiterService.Unlock(releaseCtx, activeWaiterTxn, timestamp.Timestamp{}))
 		},
 	)
 }
