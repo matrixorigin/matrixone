@@ -199,8 +199,8 @@ type SpanConfig struct {
 	profileCpuDur   time.Duration // WithProfileCpuSecs
 	profileTraceDur time.Duration // WithProfileTraceSecs
 
-	// hungThreshold set by WithHungThreshold
-	// It will override Span ctx deadline setting, and start a goroutine to check ctx deadline
+	// hungThreshold is retained so existing options remain source compatible.
+	// Runtime timeout semantics now live explicitly at the former production callers.
 	hungThreshold time.Duration
 	Extra         []zap.Field `json:"-"`
 
