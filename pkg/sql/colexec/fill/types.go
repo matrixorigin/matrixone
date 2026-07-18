@@ -27,6 +27,13 @@ import (
 
 var _ vm.Operator = new(Fill)
 
+// fillCoord addresses one buffered row by the batch's absolute sequence number
+// (stable across FIFO popping) and its row within that batch.
+type fillCoord struct {
+	seq int
+	row int
+}
+
 type container struct {
 
 	// value
@@ -44,16 +51,31 @@ type container struct {
 	prevPartNull []bool
 	prevPartSet  bool
 
-	// next / linear: the materialized input, the gather cursor i, and the
-	// emit cursor idx.
-	bats []*batch.Batch
-	idx  int
-	buf  *batch.Batch
-	i    int
+	// next / linear incremental engine. bats is a FIFO of still-pending child
+	// batches; baseSeq is the absolute sequence number of bats[0], so a
+	// fillCoord captured as an absolute seq stays valid after the FIFO pops its
+	// head (local index = seq - baseSeq). toFree holds the batch handed to the
+	// caller on the previous Call, released at the top of the next one.
+	// flushable counts the resolved prefix of bats that may be emitted;
+	// childDone records child EOF.
+	bats      []*batch.Batch
+	baseSeq   int
+	toFree    *batch.Batch
+	flushable int
+	childDone bool
+	// next: per fill-column list of NULL rows still waiting for a following
+	// value of the same partition.
+	nextRun [][]fillCoord
+	// linear: linPre is the last non-NULL row per column (seq < 0 means none in
+	// the current partition), linRun the NULL run waiting to be interpolated
+	// between linPre and the next non-NULL.
+	linPre []fillCoord
+	linRun [][]fillCoord
+
+	buf *batch.Batch
 
 	// linear
 	exes []colexec.ExpressionExecutor
-	done bool
 
 	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyzer) (vm.CallResult, error)
 }
@@ -117,6 +139,11 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 		}
 	}
 	ctr.bats = ctr.bats[:0]
+	// toFree was popped out of bats, so the loop above does not cover it.
+	if ctr.toFree != nil {
+		ctr.toFree.Clean(proc.GetMPool())
+		ctr.toFree = nil
+	}
 
 	if fill.ProjectList != nil {
 		if fill.OpAnalyzer != nil {
@@ -149,6 +176,10 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 		if b != nil {
 			b.Clean(mp)
 		}
+	}
+	if ctr.toFree != nil {
+		ctr.toFree.Clean(mp)
+		ctr.toFree = nil
 	}
 	if ctr.buf != nil {
 		ctr.buf.Clean(mp)
@@ -183,12 +214,22 @@ func (ctr *container) resetExes() {
 }
 
 func (ctr *container) resetCtrParma() {
-	ctr.initIndex()
-	ctr.done = false
+	ctr.baseSeq = 0
+	ctr.flushable = 0
+	ctr.childDone = false
 	for i := range ctr.prevValid {
 		ctr.prevValid[i] = false
 	}
 	ctr.prevPartKey = nil
 	ctr.prevPartNull = nil
 	ctr.prevPartSet = false
+	for i := range ctr.nextRun {
+		ctr.nextRun[i] = ctr.nextRun[i][:0]
+	}
+	for i := range ctr.linRun {
+		ctr.linRun[i] = ctr.linRun[i][:0]
+	}
+	for i := range ctr.linPre {
+		ctr.linPre[i] = fillCoord{seq: -1, row: -1}
+	}
 }

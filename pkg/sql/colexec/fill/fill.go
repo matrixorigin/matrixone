@@ -79,12 +79,18 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		}
 		ctr.process = processPrev
 	case plan.Node_NEXT:
-		ctr.i = 0
-		ctr.idx = 0
+		if len(ctr.nextRun) < fill.ColLen {
+			ctr.nextRun = make([][]fillCoord, fill.ColLen)
+		}
 		ctr.process = processNext
 	case plan.Node_LINEAR:
-		ctr.i = 0
-		ctr.idx = 0
+		if len(ctr.linRun) < fill.ColLen {
+			ctr.linRun = make([][]fillCoord, fill.ColLen)
+			ctr.linPre = make([]fillCoord, fill.ColLen)
+			for i := range ctr.linPre {
+				ctr.linPre[i] = fillCoord{seq: -1, row: -1}
+			}
+		}
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, v := range fill.FillVal {
@@ -165,11 +171,6 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 	return result, nil
 }
 
-func (ctr *container) initIndex() {
-	ctr.idx = 0
-	ctr.i = 0
-}
-
 // partKeyAt reads one partition-key cell, tolerating the constant vectors the
 // time window emits when it broadcasts a key across a flushed batch.
 func partKeyAt(vec *vector.Vector, row int) (val []byte, isNull bool) {
@@ -241,68 +242,104 @@ func (ctr *container) matchesSnapshot(partIdx []int32, bat *batch.Batch, row int
 	return true
 }
 
-// gatherBats materializes the whole child stream into ctr.bats. NEXT and
-// LINEAR read values that lie after the gap being filled, so they cannot
-// stream; materializing first also means no batch is ever dropped because an
-// earlier one happened to contain no NULL.
-func (ctr *container) gatherBats(ap *Fill, proc *process.Process, analyzer process.Analyzer) error {
-	for {
-		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
-		if err != nil {
-			return err
-		}
-		if result.Batch == nil {
-			return nil
-		}
-		if len(ctr.bats) > ctr.i {
-			if ctr.bats[ctr.i] != nil {
-				ctr.bats[ctr.i].CleanOnlyData()
-			}
-			ctr.bats[ctr.i], err = ctr.bats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-			if err != nil {
-				return err
-			}
-		} else {
-			appBat, err := result.Batch.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
-			if analyzer != nil {
-				analyzer.Alloc(int64(appBat.Size()))
-			}
-			ctr.bats = append(ctr.bats, appBat)
-		}
-		ctr.i++
-	}
+// batAt resolves an absolute batch sequence number to its still-pending batch.
+func (ctr *container) batAt(seq int) *batch.Batch {
+	return ctr.bats[seq-ctr.baseSeq]
 }
 
-// fillNextCol replaces every NULL with the nearest following non-NULL value of
-// the same partition. Walking backwards keeps that candidate in one cursor,
-// and a partition boundary simply drops it: the NULLs at the tail of the
-// previous partition have no next value of their own.
-func (ctr *container) fillNextCol(ap *Fill, col int, proc *process.Process) error {
-	nextBat, nextRow := -1, -1
-	for b := len(ctr.bats) - 1; b >= 0; b-- {
-		vec := ctr.bats[b].Vecs[col]
-		for r := ctr.bats[b].RowCount() - 1; r >= 0; r-- {
-			if !vec.IsNull(uint64(r)) {
-				nextBat, nextRow = b, r
-				continue
-			}
-			if nextBat < 0 {
-				continue
-			}
-			if len(ap.PartitionColIdx) > 0 &&
-				!samePartitionRows(ap.PartitionColIdx, ctr.bats[b], r, ctr.bats[nextBat], nextRow) {
-				nextBat, nextRow = -1, -1
-				continue
-			}
-			if err := setValue(vec, ctr.bats[nextBat].Vecs[col], r, nextRow, proc); err != nil {
-				return err
+// pullChild appends the next child batch to the pending FIFO and returns its
+// absolute sequence number, or eof when the child is drained.
+func (ctr *container) pullChild(ap *Fill, proc *process.Process, analyzer process.Analyzer) (seq int, eof bool, err error) {
+	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+	if err != nil {
+		return 0, false, err
+	}
+	if result.Batch == nil {
+		return 0, true, nil
+	}
+	dup, err := result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return 0, false, err
+	}
+	if analyzer != nil {
+		analyzer.Alloc(int64(dup.Size()))
+	}
+	seq = ctr.baseSeq + len(ctr.bats)
+	ctr.bats = append(ctr.bats, dup)
+	return seq, false, nil
+}
+
+// emitResolved pops and returns the resolved prefix of the FIFO one batch at a
+// time. The popped batch is handed to the caller and freed on the next Call
+// (via toFree), because no unresolved coordinate can still reference it.
+func (ctr *container) emitResolved(proc *process.Process) vm.CallResult {
+	b := ctr.bats[0]
+	ctr.bats = ctr.bats[1:]
+	ctr.baseSeq++
+	ctr.flushable--
+	ctr.toFree = b
+	result := vm.NewCallResult()
+	result.Batch = b
+	result.Status = vm.ExecNext
+	return result
+}
+
+// isNewSegment reports whether row r of the just-arrived batch opens a new
+// partition: row 0 is compared against the key snapshotted from the previous
+// batch, later rows against their in-batch predecessor.
+func (ctr *container) isNewSegment(ap *Fill, bat *batch.Batch, r int) bool {
+	if len(ap.PartitionColIdx) == 0 {
+		return false
+	}
+	if r == 0 {
+		return !ctr.matchesSnapshot(ap.PartitionColIdx, bat, 0)
+	}
+	return !samePartitionRows(ap.PartitionColIdx, bat, r-1, bat, r)
+}
+
+// consumeNext folds one freshly pulled batch into the NEXT state: NULLs join
+// their column's pending run, a non-NULL back-fills and clears that run, and a
+// partition boundary drops the previous partition's pending NULLs (they have no
+// next value and stay NULL).
+func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *process.Process) error {
+	rows := bat.RowCount()
+	for r := 0; r < rows; r++ {
+		if ctr.isNewSegment(ap, bat, r) {
+			for c := 0; c < ap.ColLen; c++ {
+				ctr.nextRun[c] = ctr.nextRun[c][:0]
 			}
 		}
+		for c := 0; c < ap.ColLen; c++ {
+			vec := bat.Vecs[c]
+			if vec.IsNull(uint64(r)) {
+				ctr.nextRun[c] = append(ctr.nextRun[c], fillCoord{seq: seq, row: r})
+				continue
+			}
+			for _, cd := range ctr.nextRun[c] {
+				if err := setValue(ctr.batAt(cd.seq).Vecs[c], vec, cd.row, r, proc); err != nil {
+					return err
+				}
+			}
+			ctr.nextRun[c] = ctr.nextRun[c][:0]
+		}
 	}
+	if len(ap.PartitionColIdx) > 0 && rows > 0 {
+		ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1)
+	}
+	ctr.recomputeFlushableNext(ap)
 	return nil
+}
+
+// recomputeFlushableNext marks every batch before the earliest column still
+// awaiting a value as emittable.
+func (ctr *container) recomputeFlushableNext(ap *Fill) {
+	minSeq := ctr.baseSeq + len(ctr.bats)
+	for c := 0; c < ap.ColLen; c++ {
+		if len(ctr.nextRun[c]) > 0 && ctr.nextRun[c][0].seq < minSeq {
+			minSeq = ctr.nextRun[c][0].seq
+		}
+	}
+	ctr.flushable = minSeq - ctr.baseSeq
 }
 
 func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -377,59 +414,85 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 	return result, nil
 }
 
-// fillLinearCol fills each run of NULLs that sits strictly between two
-// non-NULL values of the same partition with their midpoint. A run touching a
-// partition boundary on either side stays NULL: its neighbour belongs to a
-// different group, so there is nothing to interpolate between.
-func (ctr *container) fillLinearCol(ap *Fill, col int, proc *process.Process) error {
-	type pos struct{ bat, row int }
-	preBat, preRow := -1, -1
-	var run []pos
-
-	for b := 0; b < len(ctr.bats); b++ {
-		vec := ctr.bats[b].Vecs[col]
-		for r := 0; r < ctr.bats[b].RowCount(); r++ {
-			if preBat >= 0 && len(ap.PartitionColIdx) > 0 &&
-				!samePartitionRows(ap.PartitionColIdx, ctr.bats[b], r, ctr.bats[preBat], preRow) {
-				preBat, preRow = -1, -1
-				run = run[:0]
+// consumeLinear folds one freshly pulled batch into the LINEAR state. A NULL
+// with a known previous value of the same partition joins that column's run; a
+// non-NULL interpolates the pending run against the midpoint of linPre and
+// itself, then becomes the new linPre. A run whose neighbour lies across a
+// partition boundary stays NULL, because there is nothing to interpolate
+// between.
+func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *process.Process) error {
+	rows := bat.RowCount()
+	for r := 0; r < rows; r++ {
+		if ctr.isNewSegment(ap, bat, r) {
+			for c := 0; c < ap.ColLen; c++ {
+				ctr.linRun[c] = ctr.linRun[c][:0]
+				ctr.linPre[c] = fillCoord{seq: -1, row: -1}
 			}
-
+		}
+		for c := 0; c < ap.ColLen; c++ {
+			vec := bat.Vecs[c]
 			if vec.IsNull(uint64(r)) {
-				// Only NULLs with a known previous value can ever be filled.
-				if preBat >= 0 {
-					run = append(run, pos{b, r})
+				if ctr.linPre[c].seq >= 0 {
+					ctr.linRun[c] = append(ctr.linRun[c], fillCoord{seq: seq, row: r})
 				}
 				continue
 			}
-
-			if len(run) > 0 {
-				valVec, owned, err := linearFillValue(ctr, proc, col, preBat, preRow, b, r)
-				if err != nil {
+			if len(ctr.linRun[c]) > 0 {
+				if err := ctr.interpolateRun(c, ctr.linPre[c], seq, r, proc); err != nil {
 					return err
 				}
-				for _, p := range run {
-					if err = setValue(ctr.bats[p.bat].Vecs[col], valVec, p.row, 0, proc); err != nil {
-						if owned {
-							valVec.Free(proc.Mp())
-						}
-						return err
-					}
-				}
-				if owned {
-					valVec.Free(proc.Mp())
-				}
+				ctr.linRun[c] = ctr.linRun[c][:0]
 			}
-			preBat, preRow = b, r
-			run = run[:0]
+			ctr.linPre[c] = fillCoord{seq: seq, row: r}
 		}
+	}
+	if len(ap.PartitionColIdx) > 0 && rows > 0 {
+		ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1)
+	}
+	ctr.recomputeFlushableLinear(ap)
+	return nil
+}
+
+// interpolateRun writes the midpoint of the pre and cur values into every row
+// of column col's pending run.
+func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int, proc *process.Process) error {
+	valVec, owned, err := linearFillValue(ctr, proc, col, ctr.batAt(pre.seq), pre.row, ctr.batAt(curSeq), curRow)
+	if err != nil {
+		return err
+	}
+	for _, cd := range ctr.linRun[col] {
+		if err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc); err != nil {
+			if owned {
+				valVec.Free(proc.Mp())
+			}
+			return err
+		}
+	}
+	if owned {
+		valVec.Free(proc.Mp())
 	}
 	return nil
 }
 
-func linearFillValue(ctr *container, proc *process.Process, idx, preIdx, preRow, curIdx, curRow int) (*vector.Vector, bool, error) {
-	preVec := ctr.bats[preIdx].Vecs[idx]
-	curVec := ctr.bats[curIdx].Vecs[idx]
+// recomputeFlushableLinear marks batches as emittable up to the earliest one
+// still needed: a pending run, or a linPre that a later non-NULL might yet pair
+// with. linPre therefore pins its batch until the next non-NULL supersedes it.
+func (ctr *container) recomputeFlushableLinear(ap *Fill) {
+	minSeq := ctr.baseSeq + len(ctr.bats)
+	for c := 0; c < ap.ColLen; c++ {
+		if ctr.linPre[c].seq >= 0 && ctr.linPre[c].seq < minSeq {
+			minSeq = ctr.linPre[c].seq
+		}
+		if len(ctr.linRun[c]) > 0 && ctr.linRun[c][0].seq < minSeq {
+			minSeq = ctr.linRun[c][0].seq
+		}
+	}
+	ctr.flushable = minSeq - ctr.baseSeq
+}
+
+func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *batch.Batch, preRow int, curBatch *batch.Batch, curRow int) (*vector.Vector, bool, error) {
+	preVec := preBatch.Vecs[idx]
+	curVec := curBatch.Vecs[idx]
 	if preVec.GetType().Oid == types.T_decimal128 && curVec.GetType().Oid == types.T_decimal128 {
 		result := vector.NewVec(*preVec.GetType())
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
@@ -476,57 +539,70 @@ func decimal128LinearMidpoint(left, right types.Decimal128, scale int32) (types.
 }
 
 func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	var err error
-	result := vm.NewCallResult()
-	if !ctr.done {
-		if err = ctr.gatherBats(ap, proc, analyzer); err != nil {
-			return result, err
-		}
-		// Only the aggregate prefix is filled: the columns behind it are the
-		// window boundaries and partition keys, whose NULLs are data.
-		for col := 0; col < ap.ColLen; col++ {
-			if err = ctr.fillNextCol(ap, col, proc); err != nil {
-				return result, err
-			}
-		}
-		ctr.done = true
-	}
-	if ctr.idx == len(ctr.bats) {
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-	result.Batch = ctr.bats[ctr.idx]
-	result.Status = vm.ExecNext
-	ctr.idx++
-	return result, nil
+	return ctr.driveFill(ap, proc, analyzer, (*container).consumeNext, (*container).flushPendingRunsNext)
 }
 
 func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	var err error
-	result := vm.NewCallResult()
-	if !ctr.done {
-		if err = ctr.gatherBats(ap, proc, analyzer); err != nil {
-			return result, err
+	return ctr.driveFill(ap, proc, analyzer, (*container).consumeLinear, (*container).flushPendingRunsLinear)
+}
+
+// driveFill is the shared incremental loop for NEXT and LINEAR. It emits the
+// resolved batch prefix as soon as it exists — only ever buffering batches that
+// still contain a row whose value depends on a not-yet-seen input — and calls
+// the child again only when nothing is emittable, so a no-NULL stream flows
+// through without ever materializing more than the batch in flight.
+func (ctr *container) driveFill(
+	ap *Fill, proc *process.Process, analyzer process.Analyzer,
+	consume func(*container, *Fill, *batch.Batch, int, *process.Process) error,
+	flushPendingRuns func(*container, *Fill),
+) (vm.CallResult, error) {
+	// The batch returned last Call has been consumed by the parent by now.
+	if ctr.toFree != nil {
+		ctr.toFree.Clean(proc.Mp())
+		ctr.toFree = nil
+	}
+	for {
+		if ctr.flushable > 0 {
+			return ctr.emitResolved(proc), nil
 		}
-		// Only the aggregate prefix is filled: the columns behind it are the
-		// window boundaries and partition keys, whose NULLs are data.
-		for col := 0; col < ap.ColLen; col++ {
-			if err = ctr.fillLinearCol(ap, col, proc); err != nil {
-				return result, err
+		if ctr.childDone {
+			if len(ctr.bats) == 0 {
+				result := vm.NewCallResult()
+				result.Batch = nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
+			// End of input: whatever is still pending has no future value to
+			// wait for, so it stays NULL and the whole tail becomes emittable.
+			flushPendingRuns(ctr, ap)
+			ctr.flushable = len(ctr.bats)
+			continue
 		}
-		ctr.done = true
+		seq, eof, err := ctr.pullChild(ap, proc, analyzer)
+		if err != nil {
+			return vm.NewCallResult(), err
+		}
+		if eof {
+			ctr.childDone = true
+			continue
+		}
+		if err = consume(ctr, ap, ctr.batAt(seq), seq, proc); err != nil {
+			return vm.NewCallResult(), err
+		}
 	}
-	if ctr.idx == len(ctr.bats) {
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, nil
+}
+
+func (ctr *container) flushPendingRunsNext(ap *Fill) {
+	for c := 0; c < ap.ColLen; c++ {
+		ctr.nextRun[c] = ctr.nextRun[c][:0]
 	}
-	result.Batch = ctr.bats[ctr.idx]
-	result.Status = vm.ExecNext
-	ctr.idx++
-	return result, nil
+}
+
+func (ctr *container) flushPendingRunsLinear(ap *Fill) {
+	for c := 0; c < ap.ColLen; c++ {
+		ctr.linRun[c] = ctr.linRun[c][:0]
+		ctr.linPre[c] = fillCoord{seq: -1, row: -1}
+	}
 }
 
 func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {

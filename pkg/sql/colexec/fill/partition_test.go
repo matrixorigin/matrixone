@@ -192,8 +192,10 @@ func TestFillLinearStopsAtPartitionBoundary(t *testing.T) {
 	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}}
 	ctr := &arg.ctr
 	ctr.bats = []*batch.Batch{bat}
+	ctr.linRun = make([][]fillCoord, 1)
+	ctr.linPre = []fillCoord{{seq: -1, row: -1}}
 
-	require.NoError(t, ctr.fillLinearCol(arg, 0, proc))
+	require.NoError(t, ctr.consumeLinear(arg, bat, 0, proc))
 
 	require.False(t, valVec.IsNull(1))
 	require.Equal(t, types.Decimal128FromInt64(20),
