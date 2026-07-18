@@ -537,6 +537,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			result, err := executor.Eval(proc, nil, nil)
 			require.NoError(t, err)
 			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result)[0])
+			require.True(t, executor.(*FunctionExpressionExecutor).folded.canFold)
 		})
 	}
 
@@ -601,6 +602,252 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
 		}
 	}
+
+	t.Run("if skips unresolved variable leaf across reuse", func(t *testing.T) {
+		leafProc := testutil.NewProcess(t)
+		defer leafProc.Free()
+		resolveCalls := 0
+		leafProc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			resolveCalls++
+			return nil, moerr.NewInternalErrorNoCtx("missing variable")
+		})
+
+		variable := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_V{V: &plan.VarRef{
+				Name: "missing_user_variable",
+			}},
+		}
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			variable,
+			stringConst("ok"))
+		executor, err := NewExpressionExecutor(leafProc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		eval := func(condition bool) (*vector.Vector, error) {
+			input := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.NewVector(1, types.T_bool.ToType(), leafProc.Mp(), false, []bool{condition}),
+			}, nil)
+			defer input.Clean(leafProc.Mp())
+			return executor.Eval(leafProc, []*batch.Batch{input}, nil)
+		}
+
+		result, err := eval(false)
+		require.NoError(t, err)
+		require.Equal(t, "ok", result.GetStringAt(0))
+		require.Zero(t, resolveCalls)
+
+		_, err = eval(true)
+		require.ErrorContains(t, err, "missing variable")
+		require.Equal(t, 1, resolveCalls)
+
+		result, err = eval(false)
+		require.NoError(t, err)
+		require.Equal(t, "ok", result.GetStringAt(0))
+		require.Equal(t, 1, resolveCalls)
+	})
+
+	t.Run("case and coalesce skip unresolved variable leaves", func(t *testing.T) {
+		leafProc := testutil.NewProcess(t)
+		defer leafProc.Free()
+		resolveCalls := 0
+		leafProc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			resolveCalls++
+			return nil, moerr.NewInternalErrorNoCtx("missing variable")
+		})
+
+		variable := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_V{V: &plan.VarRef{
+				Name: "missing_user_variable",
+			}},
+		}
+		tests := []struct {
+			name  string
+			expr  *plan.Expr
+			input *vector.Vector
+		}{
+			{
+				name: "case",
+				expr: bindFunction("case",
+					column(0, types.T_bool.ToType()),
+					variable,
+					stringConst("ok")),
+				input: testutil.NewVector(1, types.T_bool.ToType(), leafProc.Mp(), false, []bool{false}),
+			},
+			{
+				name: "coalesce",
+				expr: bindFunction("coalesce",
+					column(0, types.T_varchar.ToType()),
+					variable),
+				input: testutil.NewVector(1, types.T_varchar.ToType(), leafProc.Mp(), false, []string{"ok"}),
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				input := testutil.NewBatchWithVectors([]*vector.Vector{test.input}, nil)
+				defer input.Clean(leafProc.Mp())
+				executor, err := NewExpressionExecutor(leafProc, test.expr)
+				require.NoError(t, err)
+				defer executor.Free()
+
+				result, err := executor.Eval(leafProc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, "ok", result.GetStringAt(0))
+			})
+		}
+		require.Zero(t, resolveCalls)
+	})
+
+	t.Run("if skips missing parameter leaf", func(t *testing.T) {
+		leafProc := testutil.NewProcess(t)
+		defer leafProc.Free()
+		params := vector.NewVec(types.T_text.ToType())
+		defer params.Free(leafProc.Mp())
+		leafProc.SetPrepareParams(params)
+
+		parameter := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			parameter,
+			stringConst("ok"))
+		executor, err := NewExpressionExecutor(leafProc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(1, types.T_bool.ToType(), leafProc.Mp(), false, []bool{false}),
+		}, nil)
+		defer input.Clean(leafProc.Mp())
+		result, err := executor.Eval(leafProc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, "ok", result.GetStringAt(0))
+	})
+
+	t.Run("parameter leaf remains valid after a skipped generation", func(t *testing.T) {
+		leafProc := testutil.NewProcess(t)
+		defer leafProc.Free()
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte("parameter"), false, leafProc.Mp()))
+		defer params.Free(leafProc.Mp())
+		leafProc.SetPrepareParams(params)
+
+		parameter := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}
+		expr := bindFunction("if",
+			column(0, types.T_bool.ToType()),
+			parameter,
+			stringConst("fallback"))
+		executor, err := NewExpressionExecutor(leafProc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		eval := func(condition bool) string {
+			t.Helper()
+			input := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.NewVector(1, types.T_bool.ToType(), leafProc.Mp(), false, []bool{condition}),
+			}, nil)
+			defer input.Clean(leafProc.Mp())
+			result, err := executor.Eval(leafProc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			return result.GetStringAt(0)
+		}
+
+		require.Equal(t, "fallback", eval(false))
+		require.Equal(t, "parameter", eval(true))
+		require.Equal(t, "parameter", eval(true))
+	})
+
+	t.Run("runtime parameter folding follows prepared statement reset", func(t *testing.T) {
+		leafProc := testutil.NewProcess(t)
+		defer leafProc.Free()
+		leafProc.SetBaseProcessRunningStatus(true)
+
+		parameter := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}
+		expr := bindFunction("if",
+			makePlan2BoolConstExprWithType(true),
+			parameter,
+			stringConst("fallback"))
+		executor, err := NewExpressionExecutor(leafProc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		eval := func(value string) string {
+			t.Helper()
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(value), false, leafProc.Mp()))
+			leafProc.SetPrepareParams(params)
+			defer func() {
+				leafProc.SetPrepareParams(nil)
+				params.Free(leafProc.Mp())
+			}()
+
+			result, evalErr := executor.Eval(leafProc, nil, nil)
+			require.NoError(t, evalErr)
+			require.True(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+			return result.GetStringAt(0)
+		}
+
+		require.Equal(t, "first", eval("first"))
+		executor.ResetForNextQuery()
+		require.Equal(t, "second", eval("second"))
+	})
+
+	t.Run("case without else and coalesce all null still fold", func(t *testing.T) {
+		nullInt64 := typedNull(types.T_int64.ToType())
+		expressions := []*plan.Expr{
+			bindFunction("case", makePlan2BoolConstExprWithType(false), makePlan2Int64ConstExprWithType(7)),
+			bindFunction("coalesce", nullInt64, typedNull(types.T_int64.ToType())),
+		}
+		for _, expr := range expressions {
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.True(t, result.IsConstNull())
+			require.True(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+			executor.Free()
+		}
+	})
+
+	t.Run("constant flow control stays allocation-free after folding", func(t *testing.T) {
+		expr := bindFunction("if",
+			makePlan2BoolConstExprWithType(true),
+			makePlan2Int64ConstExprWithType(7),
+			makePlan2Int64ConstExprWithType(9))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		input := batch.New(nil)
+		input.SetRowCount(8192)
+		batches := []*batch.Batch{input}
+		result, err := executor.Eval(proc, batches, nil)
+		require.NoError(t, err)
+		require.True(t, result.IsConst())
+		require.Equal(t, 8192, result.Length())
+		require.Equal(t, int64(7), vector.MustFixedColWithTypeCheck[int64](result)[0])
+		require.True(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+
+		var evalErr error
+		allocations := testing.AllocsPerRun(100, func() {
+			_, evalErr = executor.Eval(proc, batches, nil)
+		})
+		require.NoError(t, evalErr)
+		require.LessOrEqual(t, allocations, 1.0)
+	})
 
 	t.Run("partial evaluation preserves runtime result type", func(t *testing.T) {
 		sourceType := types.New(types.T_float32, 10, 2)
@@ -1019,6 +1266,45 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 				[]int64{10, 7, 12},
 			)
 		})
+	}
+}
+
+func BenchmarkConstantFlowControlExpression(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(proc.Ctx, "if", []types.Type{
+		types.T_bool.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(b, err)
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "if"},
+			Args: []*plan.Expr{
+				makePlan2BoolConstExprWithType(true),
+				makePlan2Int64ConstExprWithType(7),
+				makePlan2Int64ConstExprWithType(9),
+			},
+		}},
+	}
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(b, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(8192)
+	batches := []*batch.Batch{input}
+	_, err = executor.Eval(proc, batches, nil)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err = executor.Eval(proc, batches, nil); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

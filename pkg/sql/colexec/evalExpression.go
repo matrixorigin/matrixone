@@ -282,16 +282,25 @@ func (expr *ColumnExpressionExecutor) GetColIndex() int {
 }
 
 type ParamExpressionExecutor struct {
-	mp   *mpool.MPool
-	null *vector.Vector
-	vec  *vector.Vector
-	pos  int
-	typ  types.Type
+	mp         *mpool.MPool
+	null       *vector.Vector
+	// maskedNull is separate from null/vec because it is not a resolved
+	// parameter value and must never participate in the folded-value cache.
+	maskedNull *vector.Vector
+	vec        *vector.Vector
+	pos        int
+	typ        types.Type
 
 	folded bool
 }
 
-func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	if noRowsSelected(selectList, expressionRowCount(batches)) {
+		if expr.maskedNull == nil {
+			expr.maskedNull = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+		}
+		return expr.maskedNull, nil
+	}
 	if expr.folded {
 		if expr.null != nil {
 			return expr.null, nil
@@ -348,6 +357,10 @@ func (expr *ParamExpressionExecutor) Free() {
 		expr.null.Free(expr.mp)
 		expr.null = nil
 	}
+	if expr.maskedNull != nil {
+		expr.maskedNull.Free(expr.mp)
+		expr.maskedNull = nil
+	}
 	reuse.Free[ParamExpressionExecutor](expr, nil)
 }
 
@@ -356,9 +369,12 @@ func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 }
 
 type VarExpressionExecutor struct {
-	mp   *mpool.MPool
-	null *vector.Vector
-	vec  *vector.Vector
+	mp         *mpool.MPool
+	null       *vector.Vector
+	// maskedNull lets a skipped variable avoid the resolver without changing
+	// the value cache used by a later selected evaluation.
+	maskedNull *vector.Vector
+	vec        *vector.Vector
 
 	name   string
 	system bool
@@ -366,7 +382,13 @@ type VarExpressionExecutor struct {
 	typ    types.Type
 }
 
-func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	if noRowsSelected(selectList, expressionRowCount(batches)) {
+		if expr.maskedNull == nil {
+			expr.maskedNull = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+		}
+		return expr.maskedNull, nil
+	}
 	resolveVariableFunc := proc.GetResolveVariableFunc()
 	if resolveVariableFunc == nil {
 		return nil, moerr.NewInternalErrorf(proc.Ctx, "resolve variable function is not set for variable %s", expr.name)
@@ -422,6 +444,10 @@ func (expr *VarExpressionExecutor) Free() {
 	if expr.null != nil {
 		expr.null.Free(expr.mp)
 		expr.null = nil
+	}
+	if expr.maskedNull != nil {
+		expr.maskedNull.Free(expr.mp)
+		expr.maskedNull = nil
 	}
 	reuse.Free[VarExpressionExecutor](expr, nil)
 }
@@ -531,7 +557,7 @@ func (expr *FunctionExpressionExecutor) resetResultType(result vector.FunctionRe
 	}
 }
 
-func functionExpressionRowCount(batches []*batch.Batch) int {
+func expressionRowCount(batches []*batch.Batch) int {
 	if len(batches) > 0 {
 		return batches[0].RowCount()
 	}
@@ -543,7 +569,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	if err != nil {
 		return err
 	}
-	rowCount := functionExpressionRowCount(batches)
+	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -576,7 +602,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	rowCount := functionExpressionRowCount(batches)
+	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -617,7 +643,7 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 }
 
 func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	rowCount := functionExpressionRowCount(batches)
+	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 	}
@@ -767,7 +793,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	if len(batches) == 0 {
 		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	}
-	rowCount := functionExpressionRowCount(batches)
+	rowCount := expressionRowCount(batches)
 	if !expr.folded.canFold && noRowsSelected(selectList, rowCount) {
 		return expr.makeNullResult(rowCount)
 	}
