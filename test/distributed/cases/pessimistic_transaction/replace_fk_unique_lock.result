@@ -1,0 +1,41 @@
+drop database if exists replace_fk_unique_lock;
+create database replace_fk_unique_lock;
+use replace_fk_unique_lock;
+create table parent_restrict(id int primary key, u int unique);
+create table child_restrict(id int primary key, parent_u int,
+foreign key(parent_u) references parent_restrict(u) on delete restrict);
+insert into parent_restrict values (1, 10);
+begin;
+replace into parent_restrict values (1, 20);
+use replace_fk_unique_lock;
+set session lock_wait_timeout = 1;
+begin;
+insert into child_restrict values (1, 10);
+Lock wait timeout exceeded; try restarting transaction
+rollback;
+commit;
+select * from parent_restrict;
+➤ id[4,32,0]  ¦  u[4,32,0]  𝄀
+1  ¦  20
+select * from child_restrict;
+➤ id[4,32,0]  ¦  parent_u[4,32,0]
+create table parent_cascade(id int primary key, u int unique);
+create table child_cascade(id int primary key, parent_u int,
+foreign key(parent_u) references parent_cascade(u) on delete cascade);
+insert into parent_cascade values (1, 10);
+insert into child_cascade values (1, 10);
+begin;
+replace into parent_cascade values (1, 20);
+use replace_fk_unique_lock;
+set session lock_wait_timeout = 1;
+begin;
+insert into child_cascade values (2, 10);
+Lock wait timeout exceeded; try restarting transaction
+rollback;
+commit;
+select * from parent_cascade;
+➤ id[4,32,0]  ¦  u[4,32,0]  𝄀
+1  ¦  20
+select * from child_cascade;
+➤ id[4,32,0]  ¦  parent_u[4,32,0]
+drop database replace_fk_unique_lock;

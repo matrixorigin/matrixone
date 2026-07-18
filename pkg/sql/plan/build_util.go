@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1472,10 +1473,27 @@ func genParentSideReplaceFKSqls(
 	}
 	conflictPredicate := "(" + strings.Join(conflictPredicates, " or ") + ")"
 	parentTable := quoteIdentifier(parentRef.SchemaName) + "." + quoteIdentifier(parent.Name)
-	parentLock := fmt.Sprintf("select 1 from %s as %s where %s for update",
-		parentTable, quoteIdentifier(parentAlias), conflictPredicate)
 
 	var checks, actions []string
+	referencedIndexes := make(map[string]*plan.IndexDef)
+	partsEqual := func(parts, names []string) bool {
+		if len(parts) != len(names) {
+			return false
+		}
+		for i := range parts {
+			if catalog.ResolveAlias(parts[i]) != names[i] {
+				return false
+			}
+		}
+		return true
+	}
+	pkeyNames := []string(nil)
+	if parent.Pkey != nil {
+		pkeyNames = parent.Pkey.Names
+		if len(pkeyNames) == 0 && parent.Pkey.PkeyColName != "" {
+			pkeyNames = []string{parent.Pkey.PkeyColName}
+		}
+	}
 	seen := make(map[uint64]bool)
 	for _, childID := range parent.RefChildTbls {
 		if childID == 0 || seen[childID] {
@@ -1499,6 +1517,18 @@ func genParentSideReplaceFKSqls(
 			parentCols, err := colIdsToNames(ctx.GetContext(), fk.ForeignCols, parent.Cols)
 			if err != nil {
 				return "", nil, nil, err
+			}
+			if !partsEqual(pkeyNames, parentCols) {
+				for _, idx := range parent.Indexes {
+					if idx.Unique && partsEqual(idx.Parts, parentCols) {
+						if idx.IndexTableName == "" {
+							return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
+								"unique index %s has no index table", idx.IndexName)
+						}
+						referencedIndexes[idx.IndexTableName] = idx
+						break
+					}
+				}
 			}
 			childCols, err := colIdsToNames(ctx.GetContext(), fk.Cols, child.Cols)
 			if err != nil {
@@ -1527,6 +1557,47 @@ func genParentSideReplaceFKSqls(
 			}
 		}
 	}
+
+	indexNames := make([]string, 0, len(referencedIndexes))
+	for name := range referencedIndexes {
+		indexNames = append(indexNames, name)
+	}
+	slices.Sort(indexNames)
+	lockFrom := fmt.Sprintf("%s as %s", parentTable, quoteIdentifier(parentAlias))
+	for i, indexName := range indexNames {
+		idx := referencedIndexes[indexName]
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idx.IndexAlgoParams)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		keyParts := make([]string, len(idx.Parts))
+		for partPos, part := range idx.Parts {
+			colName := catalog.ResolveAlias(part)
+			col, found := findParentCol(colName)
+			if !found {
+				return "", nil, nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"REPLACE referenced index column %s not found", colName)
+			}
+			partExpr := qualifiedCol(parentAlias, colName)
+			if length := prefixLengths[colName]; length > 0 {
+				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+				if prefixType, ok := indexTableKeyTypeForPrefix(col.Typ); ok {
+					partExpr = fmt.Sprintf("cast(%s as %s)", partExpr, makeTypeByPlan2Type(prefixType).DescString())
+				}
+			}
+			keyParts[partPos] = partExpr
+		}
+		keyExpr := keyParts[0]
+		if indexTableStoresSerializedKey(idx) {
+			keyExpr = "serial(" + strings.Join(keyParts, ", ") + ")"
+		}
+		indexAlias := fmt.Sprintf("__mo_replace_fk_idx_%d", i)
+		indexTable := quoteIdentifier(parentRef.SchemaName) + "." + quoteIdentifier(indexName)
+		lockFrom += fmt.Sprintf(" left join %s as %s on %s = %s",
+			indexTable, quoteIdentifier(indexAlias),
+			qualifiedCol(indexAlias, catalog.IndexTableIndexColName), keyExpr)
+	}
+	parentLock := fmt.Sprintf("select 1 from %s where %s for update", lockFrom, conflictPredicate)
 	return parentLock, checks, actions, nil
 }
 

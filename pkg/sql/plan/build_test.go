@@ -3350,6 +3350,64 @@ func TestReplaceParentSideFKAssignmentCastAndLock(t *testing.T) {
 	assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = cast(1.234 as DECIMAL(5,2))")
 }
 
+func TestReplaceParentSideFKLocksReferencedUniqueIndexKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_p"]
+	child := mock.ctxt.tables["replace_fk_c"]
+	child.Cols[1].Typ = plan.Type{Id: int32(types.T_varchar), Width: 20}
+	child.Fkeys[0].ForeignCols = []uint64{1}
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
+		IndexName: "uk_v", IndexTableName: "__mo_index_replace_fk_p_v",
+		Parts: []string{"v"}, Unique: true, TableExist: true,
+	})
+	stmt, err := mysql.ParseOne(context.Background(),
+		"REPLACE INTO replace_fk_p VALUES (1, 'new')", 1)
+	require.NoError(t, err)
+
+	lockSQL, checks, actions, err := genParentSideReplaceFKSqls(
+		&mock.ctxt, mock.ctxt.objects["replace_fk_p"], parent,
+		stmt.(*tree.Replace))
+	require.NoError(t, err)
+	require.Len(t, checks, 1)
+	assert.Empty(t, actions)
+	assert.Contains(t, lockSQL, fmt.Sprintf("left join `%s`.`__mo_index_replace_fk_p_v`",
+		mock.ctxt.objects["replace_fk_p"].SchemaName))
+	assert.Contains(t, lockSQL, "`__mo_replace_fk_idx_0`.`__mo_index_idx_col` = `__mo_replace_parent`.`v`")
+	assert.Contains(t, lockSQL, "for update")
+}
+
+func TestReplaceParentSideFKLocksCompositePrefixUniqueIndexOnce(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_cp"]
+	child := mock.ctxt.tables["replace_fk_cc"]
+	parent.Cols[1].Typ = plan.Type{Id: int32(types.T_text), Width: types.MaxStringSize}
+	child.Cols[1].Typ = parent.Cols[1].Typ
+	child.Fkeys[0].Cols = []uint64{0, 1}
+	child.Fkeys[0].ForeignCols = []uint64{0, 1}
+	child.Fkeys = append(child.Fkeys, child.Fkeys[0])
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
+		IndexName: "uk_id_v", IndexTableName: "__mo_index_replace_fk_cp_id_v",
+		Parts: []string{"id", "v"}, Unique: true, TableExist: true,
+		IndexAlgoParams: `{"prefix_lengths":"v:4"}`,
+	})
+	stmt, err := mysql.ParseOne(context.Background(),
+		"REPLACE INTO replace_fk_cp VALUES (1, 'abcdefgh')", 1)
+	require.NoError(t, err)
+
+	lockSQL, checks, actions, err := genParentSideReplaceFKSqls(
+		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
+		stmt.(*tree.Replace))
+	require.NoError(t, err)
+	assert.Empty(t, checks)
+	require.Len(t, actions, 2)
+	assert.Equal(t, 1, strings.Count(lockSQL,
+		fmt.Sprintf("left join `%s`.`__mo_index_replace_fk_cp_id_v`",
+			mock.ctxt.objects["replace_fk_cp"].SchemaName)))
+	assert.Contains(t, lockSQL,
+		"serial(`__mo_replace_parent`.`id`, cast(substring(`__mo_replace_parent`.`v`, 1, 4) as VARCHAR(65535)))")
+	assert.Contains(t, lockSQL, "for update")
+}
+
 func TestReplaceParentSideFKRejectsOverWidthConflictLiteral(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
