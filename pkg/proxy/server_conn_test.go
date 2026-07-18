@@ -705,6 +705,34 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	require.False(t, isTimeoutErr(err), "early backend close must not be reclassified as timeout/busy")
 }
 
+func TestServerConn_HandleHandshakeTimeoutStopsWorker(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	require.NoError(t, remote.SetWriteDeadline(time.Now().Add(time.Second)))
+	session := goetty.NewIOSession(
+		goetty.WithSessionConn(1, local),
+		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+	)
+	defer session.Close()
+	sc := &serverConn{
+		cnServer: &CNServer{addr: "pipe"},
+		conn:     session,
+		connID:   1,
+	}
+
+	_, err := sc.HandleHandshake(
+		&frontend.Packet{Payload: []byte("auth")},
+		20*time.Millisecond,
+	)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err))
+
+	// HandleHandshake may return only after its worker has stopped. Closing the
+	// transport is the termination edge that makes that guarantee observable.
+	_, err = remote.Write([]byte{1})
+	require.Error(t, err)
+}
+
 func TestFakeCNServer(t *testing.T) {
 	defer leaktest.AfterTest(t)
 

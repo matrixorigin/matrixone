@@ -222,6 +222,15 @@ func (s *serverConn) HandleHandshake(
 	case ret := <-resultC:
 		return ret.resp, ret.err
 	case <-ctx.Done():
+		// A caller may release or reuse handshakeResp as soon as this method
+		// returns. Close only the transport first, then join the worker before
+		// returning; calling s.Close here would free mysqlProto buffers while
+		// the worker may still be using them. net.Conn.Close unblocks both the
+		// goetty read and frontend write paths.
+		if conn := s.conn.RawConn(); conn != nil {
+			_ = conn.Close()
+		}
+		<-resultC
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
 			s.cnServer.addr, timeout, s.connID, goid.Get())
 		// Return a retryable error with timeout flag set.

@@ -181,6 +181,11 @@ type clientConn struct {
 	// The payload is allocated from sessionAllocator and remains immutable after
 	// the unauthenticated handshake transfers ownership to clientConn.
 	handshakePackRelease sync.Once
+	// handshakePackMu transfers read ownership to every backend handshake.
+	// Close takes the write side before returning the retained allocation, so a
+	// concurrent migration cannot observe memory that has already been reused.
+	handshakePackMu     sync.RWMutex
+	handshakePackClosed bool
 	// connID records the connection ID.
 	connID uint32
 	// clientInfo is the information of the client.
@@ -355,7 +360,14 @@ func (c *clientConn) GetSalt() []byte {
 
 // GetHandshakePack implements the ClientConn interface.
 func (c *clientConn) GetHandshakePack() *frontend.Packet {
-	return c.handshakePack
+	c.handshakePackMu.RLock()
+	defer c.handshakePackMu.RUnlock()
+	if c.handshakePack == nil {
+		return nil
+	}
+	pack := *c.handshakePack
+	pack.Payload = append([]byte(nil), c.handshakePack.Payload...)
+	return &pack
 }
 
 // RawConn implements the ClientConn interface.
@@ -489,7 +501,9 @@ func (c *clientConn) sendErr(err error, resp chan<- []byte) {
 }
 
 func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) error {
-	sc, r, err := c.router.Connect(cn, c.handshakePack, nil)
+	sc, r, err := c.connectWithHandshakePack(func(pack *frontend.Packet) (ServerConn, []byte, error) {
+		return c.router.Connect(cn, pack, nil)
+	})
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
 		if resp != nil {
@@ -689,16 +703,33 @@ func (c *clientConn) Close() error {
 		c.mysqlProto.Close()
 	}
 	c.handshakePackRelease.Do(func() {
+		c.handshakePackMu.Lock()
+		defer c.handshakePackMu.Unlock()
+		c.handshakePackClosed = true
 		if c.handshakePayloadAllocation == nil || c.sessionAllocator == nil {
+			c.handshakePack = nil
 			return
 		}
 		c.sessionAllocator.Free(c.handshakePayloadAllocation)
 		c.handshakePayloadAllocation = nil
-		if c.handshakePack != nil {
-			c.handshakePack.Payload = nil
-		}
+		c.handshakePack = nil
 	})
 	return nil
+}
+
+// connectWithHandshakePack holds a read lease for the complete synchronous
+// Connect call. ServerConn.HandleHandshake guarantees that its worker has
+// stopped before Connect returns, including on timeout, so releasing this
+// lease is also the terminal point for every payload reader.
+func (c *clientConn) connectWithHandshakePack(
+	connect func(*frontend.Packet) (ServerConn, []byte, error),
+) (ServerConn, []byte, error) {
+	c.handshakePackMu.RLock()
+	defer c.handshakePackMu.RUnlock()
+	if c.handshakePackClosed {
+		return nil, nil, moerr.NewInternalErrorNoCtx("client handshake packet is unavailable")
+	}
+	return connect(c.handshakePack)
 }
 
 // connectToBackend connect to the real CN server.
@@ -795,16 +826,23 @@ skipConnCache:
 		// feedback into the CN health breaker; internal/admin connects use
 		// plain Router.Connect and intentionally do not.
 		if prevAdd == "" {
-			if rr, ok := c.router.(routeSelectedConnector); ok {
-				sc, r, err = rr.ConnectRouteSelected(cn, c.handshakePack, c.tun)
-			} else {
-				sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
-			}
+			sc, r, err = c.connectWithHandshakePack(
+				func(pack *frontend.Packet) (ServerConn, []byte, error) {
+					if rr, ok := c.router.(routeSelectedConnector); ok {
+						return rr.ConnectRouteSelected(cn, pack, c.tun)
+					}
+					return c.router.Connect(cn, pack, c.tun)
+				},
+			)
 		} else {
 			// Session transfer / migration must not feed success/failure back
 			// into the global CN breaker. It is control-plane traffic, not a
 			// Route-selected new-session connect.
-			sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+			sc, r, err = c.connectWithHandshakePack(
+				func(pack *frontend.Packet) (ServerConn, []byte, error) {
+					return c.router.Connect(cn, pack, c.tun)
+				},
+			)
 		}
 		if err != nil {
 			if isRetryableErr(err) {

@@ -771,6 +771,65 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 		require.NoError(t, session.Close())
 	})
 
+	t.Run("close waits for backend handshake reader", func(t *testing.T) {
+		allocator := frontend.NewLeakCheckAllocator()
+		allocation, err := allocator.Alloc(4)
+		require.NoError(t, err)
+		copy(allocation, "auth")
+		client := &clientConn{
+			handshakePack: &frontend.Packet{
+				Length:  4,
+				Payload: allocation[:4],
+			},
+			handshakePayloadAllocation: allocation,
+			sessionAllocator:           allocator,
+		}
+
+		readerEntered := make(chan struct{})
+		releaseReader := make(chan struct{})
+		readerPayload := make(chan []byte, 1)
+		readerDone := make(chan struct{})
+		go func() {
+			defer close(readerDone)
+			_, _, _ = client.connectWithHandshakePack(
+				func(pack *frontend.Packet) (ServerConn, []byte, error) {
+					close(readerEntered)
+					<-releaseReader
+					readerPayload <- append([]byte(nil), pack.Payload...)
+					return nil, nil, nil
+				},
+			)
+		}()
+		<-readerEntered
+
+		closeErr := make(chan error, 1)
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			closeErr <- client.Close()
+		}()
+		require.Eventually(t, func() bool {
+			if client.handshakePackMu.TryRLock() {
+				client.handshakePackMu.RUnlock()
+				return false
+			}
+			return true
+		}, time.Second, time.Millisecond, "Close must wait as the exclusive payload owner")
+		select {
+		case <-closeDone:
+			t.Fatal("Close released a handshake payload with an active reader")
+		default:
+		}
+
+		close(releaseReader)
+		<-readerDone
+		<-closeDone
+		require.NoError(t, <-closeErr)
+		require.Equal(t, []byte("auth"), <-readerPayload)
+		require.Nil(t, client.GetHandshakePack())
+		require.True(t, allocator.CheckBalance())
+	})
+
 	t.Run("coalesced plaintext login hands off trailing packet", func(t *testing.T) {
 		allocator := frontend.NewLeakCheckAllocator()
 		client, session, remote := newClient(t, allocator)
