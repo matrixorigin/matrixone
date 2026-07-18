@@ -3405,6 +3405,80 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 	return probeScopes
 }
 
+// canUseHashMarkJoin returns true when equality hashing is sufficient to
+// preserve MARK's three-valued result.
+//
+// A single equality key only needs two hash-side facts: exact membership and
+// whether the build contains NULL. Every predicate must be an actual hash key
+// with one relation per operand; residual or mixed-side predicates require
+// row-aware evaluation by LoopJoin. For composite keys, a partially-NULL row
+// can be FALSE or UNKNOWN depending on the other components, so use hash MARK
+// only when every key is statically NOT NULL.
+func canUseHashMarkJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_MARK {
+		return false
+	}
+
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	nonEqCond, hashConditions := extraJoinConditions(conditions)
+	if nonEqCond != nil || len(hashConditions) != len(conditions) {
+		return false
+	}
+
+	allNotNull := true
+	for _, condition := range hashConditions {
+		fn := condition.GetF()
+		if fn == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+			return false
+		}
+		leftRel, leftSingleRel := hashMarkOperandRel(fn.Args[0])
+		rightRel, rightSingleRel := hashMarkOperandRel(fn.Args[1])
+		if !leftSingleRel || !rightSingleRel ||
+			!((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
+			return false
+		}
+		allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
+	}
+	return len(hashConditions) == 1 || allNotNull
+}
+
+// hashMarkOperandRel returns the single relation referenced by an equality
+// operand. MARK cannot hash an operand that mixes probe and build columns: the
+// resulting residual condition needs row-aware evaluation by LoopJoin.
+func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
+	relPos := int32(-1)
+	singleRel := true
+
+	var visit func(*plan.Expr)
+	visit = func(current *plan.Expr) {
+		if current == nil || !singleRel {
+			return
+		}
+		switch impl := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if relPos == -1 {
+				relPos = impl.Col.RelPos
+			} else if relPos != impl.Col.RelPos {
+				singleRel = false
+			}
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				visit(arg)
+			}
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				visit(item)
+			}
+		}
+	}
+
+	visit(expr)
+	return relPos, singleRel && relPos >= 0
+}
+
 func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
@@ -3531,8 +3605,13 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			var op vm.Operator
+			if canUseHashMarkJoin(node) {
+				op = constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			} else {
+				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
+			}
+			op.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false

@@ -156,20 +156,17 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 
 	tests := []struct {
 		value string
-		isBin bool
 	}{
-		{value: "AB\x00\x00", isBin: true},
-		{value: "text", isBin: false},
-		{value: "CD\x00\x00", isBin: true},
+		{value: "AB\x00\x00"},
+		{value: "text"},
+		{value: "CD\x00\x00"},
 	}
 	for _, test := range tests {
-		filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
-			ParamValue{Value: test.value, IsBin: test.isBin},
-		})
+		filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{test.value})
 		require.NoError(t, err)
 		literal := filled.GetQuery().Nodes[0].Limit.GetLit()
 		require.NotNil(t, literal)
-		require.Equal(t, test.isBin, literal.GetIsBin())
+		require.False(t, literal.GetIsBin())
 		require.Equal(t, test.value, literal.GetSval())
 		require.NotSame(t, queryPlan, filled)
 		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())

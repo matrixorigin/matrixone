@@ -3021,8 +3021,8 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	}
 
 	copied := DeepCopyPlan(preparePlan)
-	switch pp := copied.Plan.(type) {
 
+	switch pp := copied.Plan.(type) {
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			err := replaceParamVals(ctx, copied, paramVals)
@@ -3040,19 +3040,9 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
-type ParamValue struct {
-	Value any
-	IsBin bool
-}
-
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
-		isBin := false
-		if param, ok := val.(ParamValue); ok {
-			val = param.Value
-			isBin = param.IsBin
-		}
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -3064,7 +3054,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				},
 			}
 		} else {
-			pc := &plan.Literal{IsBin: isBin}
+			pc := &plan.Literal{}
 			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
 			params[i] = &plan.Expr{
 				Expr: &plan.Expr_Lit{
