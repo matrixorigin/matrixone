@@ -91,7 +91,10 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 			// Reusing ctx here couples queue admission to all setup RPCs above: once
 			// that deadline expires, Lock returns before it can enter owner's queue
 			// and the old unbounded waitWaiters call spins forever.
-			waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+			// Lock may cross MORPC, whose Future contract requires a deadline.
+			// Give the waiter a budget independent from and larger than setup while
+			// retaining a hard bound if admission or cleanup regresses.
+			waiterCtx, cancelWaiter := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancelWaiter()
 			waitResult := make(chan error, 1)
 			holderReleased := false
