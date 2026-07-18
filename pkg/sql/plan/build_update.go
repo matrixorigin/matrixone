@@ -419,7 +419,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName {
-					if makeTypeByPlan2Type(coldef.Typ).IsNumeric() {
+					if isNumericAssignmentTarget(coldef.Typ) {
 						legacyNumericTargets[len(selectList)] = coldef.Typ
 					}
 					if isEnumOrSetPlanType(&coldef.Typ) {

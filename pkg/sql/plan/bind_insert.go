@@ -2771,13 +2771,21 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	}
 }
 
+// isNumericAssignmentTarget reports whether a DML target column type may seed the
+// numeric assignment context. A non-numeric target keeps the default binding path,
+// because InferNumericParameterType falls back to float64 for a non-numeric outer
+// type and would otherwise mistype a bare prepared parameter.
+func isNumericAssignmentTarget(typ Type) bool {
+	return makeTypeByPlan2Type(typ).IsNumeric()
+}
+
 func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
 	// only numeric targets may seed the numeric assignment context; a zero
 	// Type keeps the projection binder on the default binding path
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if makeTypeByPlan2Type(typ).IsNumeric() {
+		if isNumericAssignmentTarget(typ) {
 			targets[i] = typ
 		}
 	}
@@ -2996,8 +3004,10 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 		case *tree.CastExpr:
 			e = v.Expr
 		case *tree.FuncExpr:
-			funcRef, ok := v.Func.FunctionReference.(*tree.UnresolvedName)
-			return !ok || !strings.EqualFold(funcRef.ColName(), "mod")
+			// mod() is arithmetic and shares the numeric-context binder with the
+			// binary operators (see numericAstFunctionName); every other function
+			// binds its arguments by their own types.
+			return numericAstFunctionName(v) != "mod"
 		default:
 			return false
 		}

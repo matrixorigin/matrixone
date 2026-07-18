@@ -200,6 +200,26 @@ func TestPreparedNonNumericAssignmentKeepsTargetType(t *testing.T) {
 	}
 }
 
+func TestNumericAssignmentTargetKeepsGroupedProjection(t *testing.T) {
+	// a numeric assignment target must not re-bind a projection that is itself a
+	// GROUP BY key against the raw scan columns; it should resolve to the grouped
+	// column and plan without a "must appear in the GROUP BY clause" error.
+	tests := []string{
+		"insert into constraint_test.emp (sal) select empno + deptno from constraint_test.emp group by empno + deptno",
+		"insert into constraint_test.emp (sal) select empno + deptno as s from constraint_test.emp group by empno + deptno",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestValuesExprIsFuncCall(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	sql := "insert into constraint_test.emp (sal) values " +

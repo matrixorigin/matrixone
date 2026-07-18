@@ -5059,8 +5059,10 @@ func bindProjectionList(
 	}
 
 	for i := range selectList[sampleRangeRight:] {
-		projectIdx := sampleRangeRight + i
-		expr, err := bindProjectionExprWithNumericTarget(ctx, projectionBinder, selectList[i].Expr, projectIdx)
+		// the numeric target index must track the expression actually bound
+		// (selectList[i]); the two coincide in the common no-sample case where
+		// sampleRangeRight is 0.
+		expr, err := bindProjectionExprWithNumericTarget(ctx, projectionBinder, selectList[i].Expr, i)
 		if err != nil {
 			return err
 		}
