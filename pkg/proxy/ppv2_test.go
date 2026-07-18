@@ -152,8 +152,11 @@ func TestProxyProtocolCodec_Decode(t *testing.T) {
 		pp := WithProxyProtocolCodec(frontend.NewSqlCodec())
 		res, ok, err := pp.Decode(data)
 		require.NoError(t, err)
-		require.False(t, ok)
-		require.Nil(t, res)
+		require.True(t, ok)
+		addr, ok := res.(*ProxyAddr)
+		require.True(t, ok)
+		require.Nil(t, addr.SourceAddress)
+		require.Zero(t, data.Readable())
 	})
 
 	t.Run("ipv4 address", func(t *testing.T) {

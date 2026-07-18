@@ -138,7 +138,8 @@ type Config struct {
 	// It must not exceed MaxConnections.
 	MaxConnectionsPerTenant int `toml:"max-connections-per-tenant" user_setting:"advanced"`
 	// ProtocolMemoryLimit bounds buffers allocated through the Proxy's shared
-	// MySQL protocol allocator.
+	// MySQL protocol allocator, including the login packet retained for
+	// connection migration.
 	ProtocolMemoryLimit toml.ByteSize `toml:"protocol-memory-limit" user_setting:"advanced"`
 	// ClientHandshakePacketLimit bounds the login packet retained for routing
 	// and migration for the lifetime of a client connection.
@@ -337,18 +338,30 @@ func (c *Config) Validate() error {
 			"proxy client-handshake-packet-limit exceeds the MySQL packet payload limit")
 	}
 	if c.ProtocolMemoryLimit > 0 && c.MaxConnections > 0 {
-		maxConnectionsForCalculation := (^uint64(0)/proxyIOSessionBufferSize - defaultMaxNumTotal) / 2
-		if uint64(c.MaxConnections) > maxConnectionsForCalculation {
+		cachedSessions := uint64(0)
+		if c.ConnCacheEnabled {
+			cachedSessions = defaultMaxNumTotal
+		}
+		maxConnections := uint64(c.MaxConnections)
+		if maxConnections > (^uint64(0)-cachedSessions)/2 {
 			return moerr.NewInternalError(noReport, "proxy max-connections is too large")
 		}
-		fixedSessions := uint64(c.MaxConnections) * 2
-		if c.ConnCacheEnabled {
-			fixedSessions += defaultMaxNumTotal
+		fixedSessions := maxConnections*2 + cachedSessions
+		if fixedSessions > ^uint64(0)/proxyIOSessionBufferSize {
+			return moerr.NewInternalError(noReport, "proxy max-connections is too large")
 		}
 		minimum := fixedSessions * proxyIOSessionBufferSize
+		handshakePacketLimit := uint64(c.ClientHandshakePacketLimit)
+		if handshakePacketLimit == 0 {
+			handshakePacketLimit = uint64(defaultClientHandshakePacketLimit)
+		}
+		if maxConnections > (^uint64(0)-minimum)/handshakePacketLimit {
+			return moerr.NewInternalError(noReport, "proxy max-connections is too large")
+		}
+		minimum += maxConnections * handshakePacketLimit
 		if uint64(c.ProtocolMemoryLimit) < minimum {
 			return moerr.NewInternalError(noReport,
-				"proxy protocol-memory-limit is smaller than configured fixed session buffers")
+				"proxy protocol-memory-limit is smaller than configured retained protocol buffers")
 		}
 	}
 	if c.Plugin != nil {

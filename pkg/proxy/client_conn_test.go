@@ -669,6 +669,135 @@ func TestClientConnHandshakeAdmission(t *testing.T) {
 	require.Empty(t, limiter.byTenant)
 }
 
+type failAfterAllocator struct {
+	frontend.Allocator
+	remaining int
+}
+
+func (a *failAfterAllocator) Alloc(capacity int) ([]byte, error) {
+	if a.remaining == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("injected allocator exhaustion")
+	}
+	a.remaining--
+	return a.Allocator.Alloc(capacity)
+}
+
+func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
+	newClient := func(t *testing.T, allocator frontend.Allocator) (*clientConn, goetty.IOSession, net.Conn) {
+		t.Helper()
+		local, remote := net.Pipe()
+		session := goetty.NewIOSession(
+			goetty.WithSessionConn(1, local),
+			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
+		)
+		cc, err := newClientConn(
+			context.Background(),
+			&Config{ClientHandshakePacketLimit: defaultClientHandshakePacketLimit},
+			runtime.DefaultRuntime().Logger(),
+			newCounterSet(),
+			session,
+			nil, nil, nil, nil, nil, nil, nil,
+			withClientConnAllocator(allocator),
+		)
+		require.NoError(t, err)
+		return cc.(*clientConn), session, remote
+	}
+
+	t.Run("successful login transfers and releases ownership", func(t *testing.T) {
+		allocator := frontend.NewLeakCheckAllocator()
+		client, session, remote := newClient(t, allocator)
+		defer remote.Close()
+
+		response := makeClientHandshakeResp()
+		payloadLength := int(defaultClientHandshakePacketLimit) - 1
+		largeResponse := make([]byte, frontend.PacketHeaderLength+payloadLength)
+		largeResponse[0] = byte(payloadLength)
+		largeResponse[1] = byte(payloadLength >> 8)
+		largeResponse[2] = byte(payloadLength >> 16)
+		largeResponse[3] = response[3]
+		copy(largeResponse[frontend.PacketHeaderLength:], response[frontend.PacketHeaderLength:])
+		response = largeResponse
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(response)
+		}()
+
+		require.NoError(t, client.handleHandshakeResp())
+		<-writeDone
+		require.Equal(t, response[frontend.PacketHeaderLength:], client.handshakePack.Payload)
+		buffered, ok := session.(goetty.BufferedIOSession)
+		require.True(t, ok)
+		require.Nil(t, buffered.InBuf().RawBuf(), "handshake-only input buffer must not cross into the tunnel phase")
+		require.False(t, allocator.CheckBalance(), "live connection owns fixed and handshake buffers")
+
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+		require.NoError(t, client.Close(), "close must release the retained login exactly once")
+		require.True(t, allocator.CheckBalance())
+		require.NoError(t, session.Close())
+	})
+
+	t.Run("allocator exhaustion keeps cleanup balanced", func(t *testing.T) {
+		leakCheck := frontend.NewLeakCheckAllocator()
+		allocator := &failAfterAllocator{Allocator: leakCheck, remaining: 1}
+		client, session, remote := newClient(t, allocator)
+		defer remote.Close()
+
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			_, _ = remote.Write(makeClientHandshakeResp())
+		}()
+
+		require.ErrorContains(t, client.handleHandshakeResp(), "injected allocator exhaustion")
+		<-writeDone
+		require.Nil(t, client.handshakePack)
+		require.NoError(t, client.Close())
+		require.True(t, leakCheck.CheckBalance())
+		require.NoError(t, session.Close())
+	})
+}
+
+func TestClientConnRejectsProxyHeaderAfterAddresslessFrame(t *testing.T) {
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	client := cc.(*clientConn)
+
+	local, remote := net.Pipe()
+	defer remote.Close()
+	client.conn.UseConn(local)
+	client.mysqlProto.UseConn(local)
+
+	localHeader := make([]byte, ProxyHeaderLength)
+	copy(localHeader, ProxyProtocolV2Signature)
+	localHeader[12] = 0x20
+	localHeader[13] = unspec
+
+	addressHeader := make([]byte, ProxyHeaderLength+12)
+	copy(addressHeader, ProxyProtocolV2Signature)
+	addressHeader[12] = 0x21
+	addressHeader[13] = tcpOverIPv4
+	binary.BigEndian.PutUint16(addressHeader[14:], 12)
+	copy(addressHeader[ProxyHeaderLength:], []byte{
+		10, 0, 0, 1,
+		10, 0, 0, 2,
+		0x1f, 0x40,
+		0x17, 0x71,
+	})
+
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		_, _ = remote.Write(append(localHeader, addressHeader...))
+	}()
+
+	_, err := client.readPacketBefore(time.Now().Add(time.Second))
+	require.ErrorContains(t, err, "duplicate PROXY protocol header")
+	<-writeDone
+	require.True(t, client.proxyHeaderReceived)
+}
+
 func TestClientConnHandshakeTimeout(t *testing.T) {
 	t.Run("silent client times out", func(t *testing.T) {
 		cc, cleanup := createNewClientConn(t)

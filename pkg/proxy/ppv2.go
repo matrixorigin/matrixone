@@ -190,8 +190,10 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, bool, error) {
 		}
 		return addr, true, false, nil
 	case unspec, unixStream, unixDatagram:
-		// no address to read
-		return addr, false, false, nil
+		// The frame is still a consumed PROXY protocol message even when it
+		// carries no IP address. Returning complete=true lets the connection
+		// state machine record it and reject any later duplicate header.
+		return addr, true, false, nil
 	default:
 		return nil, false, false, moerr.NewInternalErrorNoCtxf("unknown protocol family [%x]", header.ProtocolFamily)
 	}

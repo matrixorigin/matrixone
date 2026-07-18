@@ -39,6 +39,7 @@ func TestFillDefault(t *testing.T) {
 	require.Equal(t, defaultMaxConnectionsPerTenant, c.MaxConnectionsPerTenant)
 	require.Equal(t, defaultProtocolMemoryLimit, c.ProtocolMemoryLimit)
 	require.Equal(t, defaultClientHandshakePacketLimit, c.ClientHandshakePacketLimit)
+	require.NoError(t, c.Validate(), "default limits must form a valid retained-memory budget")
 
 	c = Config{MaxConnections: 1000}
 	c.FillDefault()
@@ -85,6 +86,36 @@ func TestValidate(t *testing.T) {
 			MaxConnections:          10,
 			MaxConnectionsPerTenant: 10,
 			ProtocolMemoryLimit:     1,
+		},
+		wantErr: true,
+	}, {
+		name: "protocol memory below retained handshake budget",
+		cfg: Config{
+			MaxConnections:          10,
+			MaxConnectionsPerTenant: 10,
+			ProtocolMemoryLimit: toml.ByteSize(
+				10*(2*proxyIOSessionBufferSize+64) - 1,
+			),
+			ClientHandshakePacketLimit: 64,
+		},
+		wantErr: true,
+	}, {
+		name: "protocol memory exactly covers retained buffers",
+		cfg: Config{
+			MaxConnections:          10,
+			MaxConnectionsPerTenant: 10,
+			ProtocolMemoryLimit: toml.ByteSize(
+				10 * (2*proxyIOSessionBufferSize + 64),
+			),
+			ClientHandshakePacketLimit: 64,
+		},
+	}, {
+		name: "connection calculation overflow",
+		cfg: Config{
+			MaxConnections:          int(^uint(0) >> 1),
+			MaxConnectionsPerTenant: int(^uint(0) >> 1),
+			ProtocolMemoryLimit:     1,
+			ConnCacheEnabled:        true,
 		},
 		wantErr: true,
 	}, {

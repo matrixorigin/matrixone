@@ -173,6 +173,14 @@ type clientConn struct {
 	// handshakePack is a cached info, used in connection migration.
 	// When connection is transferred, we use it to rebuild handshake.
 	handshakePack *frontend.Packet
+	// handshakePayloadAllocation keeps the exact slice returned by Allocator.
+	// Packet.Payload may be a shorter view because Allocator only guarantees
+	// len >= requested size; cleanup must return the original allocation.
+	handshakePayloadAllocation []byte
+	// handshakePackRelease releases the retained login payload exactly once.
+	// The payload is allocated from sessionAllocator and remains immutable after
+	// the unauthenticated handshake transfers ownership to clientConn.
+	handshakePackRelease sync.Once
 	// connID records the connection ID.
 	connID uint32
 	// clientInfo is the information of the client.
@@ -299,6 +307,7 @@ func newClientConn(
 	if allocator == nil {
 		allocator = frontend.NewSessionAllocator(pu)
 	}
+	c.sessionAllocator = allocator
 	handshakePacketLimit := cfg.ClientHandshakePacketLimit
 	if handshakePacketLimit == 0 {
 		handshakePacketLimit = defaultClientHandshakePacketLimit
@@ -679,6 +688,16 @@ func (c *clientConn) Close() error {
 		}
 		c.mysqlProto.Close()
 	}
+	c.handshakePackRelease.Do(func() {
+		if c.handshakePayloadAllocation == nil || c.sessionAllocator == nil {
+			return
+		}
+		c.sessionAllocator.Free(c.handshakePayloadAllocation)
+		c.handshakePayloadAllocation = nil
+		if c.handshakePack != nil {
+			c.handshakePack.Payload = nil
+		}
+	})
 	return nil
 }
 
