@@ -152,7 +152,7 @@ func (l *remoteLockTable) lock(
 		defer releaseResponse(resp)
 		if resp.NewBind != nil {
 			txn.Unlock()
-			err = l.maybeHandleBindChanged(resp)
+			err = l.maybeHandleBindChanged(ctx, resp)
 			txn.Lock()
 			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
 				cb(pb.Result{}, ErrTxnNotFound)
@@ -373,7 +373,7 @@ func (l *remoteLockTable) doUnlock(
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		return l.maybeHandleBindChanged(resp)
+		return l.maybeHandleBindChanged(ctx, resp)
 	}
 	return moerr.AttachCause(ctx, err)
 }
@@ -393,7 +393,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if err := l.maybeHandleBindChanged(ctx, resp); err != nil {
 			return Lock{}, false, err
 		}
 
@@ -435,7 +435,7 @@ func (l *remoteLockTable) doGetLockHolder(ctx context.Context, key []byte) (pb.W
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if err := l.maybeHandleBindChanged(ctx, resp); err != nil {
 			return pb.WaitTxn{}, false, err
 		}
 		if len(resp.GetLockHolder.Holder.TxnID) == 0 {
@@ -533,7 +533,10 @@ func retryRemoteLockError(err error) bool {
 	return false
 }
 
-func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
+func (l *remoteLockTable) maybeHandleBindChanged(
+	ctx context.Context,
+	resp *pb.Response,
+) error {
 	if resp.NewBind == nil {
 		return nil
 	}
@@ -545,7 +548,8 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 		// service may have observed a newer allocator while the RPC was in
 		// flight, so only publish a bind refreshed from the current allocator.
 		requestAllocator := l.allocatorStateProvider()
-		refreshedBind, allocator, err := getLockTableBind(
+		refreshedBind, allocator, err := getLockTableBindWithContext(
+			ctx,
 			l.client,
 			l.bind.Group,
 			l.bind.Table,

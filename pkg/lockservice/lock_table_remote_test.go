@@ -153,6 +153,57 @@ func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
 	}
 }
 
+func TestRemoteNewBindRefreshHonorsContext(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	bind := pb.LockTable{
+		Group: 0, Table: 1, OriginTable: 1,
+		ServiceID: "s2", Version: 1, Valid: true,
+	}
+	newBind := bind
+	newBind.ServiceID = "s3"
+	newBind.Version++
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		bind,
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	remote.allocatorStateProvider = func() allocatorState { return allocatorState{} }
+	remote.allocatorBindChangedHandler = func(
+		string,
+		pb.LockTable,
+		pb.LockTable,
+		allocatorState,
+		allocatorState,
+	) error {
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- remote.maybeHandleBindChanged(ctx, &pb.Response{NewBind: &newBind})
+	}()
+
+	select {
+	case <-client.bindRefreshStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote bind refresh did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrLockTableBindChanged)
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote bind refresh ignored cancellation")
+	}
+}
+
 func TestLockRemote(t *testing.T) {
 	runRemoteLockTableTests(
 		t,
@@ -518,7 +569,10 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			remote.allocatorStateProvider = svc.allocatorStateSnapshot
 			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
 
-			err := remote.maybeHandleBindChanged(&pb.Response{NewBind: &newB})
+			err := remote.maybeHandleBindChanged(
+				context.Background(),
+				&pb.Response{NewBind: &newB},
+			)
 			require.ErrorIs(t, err, ErrLockTableBindChanged)
 			require.Nil(t, svc.tableGroups.get(staleA.Group, staleA.Table))
 			require.NotNil(t, svc.tableGroups.get(currentA.Group, currentA.Table))
@@ -600,7 +654,10 @@ func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
 			remote.allocatorStateProvider = svc.allocatorStateSnapshot
 			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
 
-			err := remote.maybeHandleBindChanged(&pb.Response{NewBind: &lateBind})
+			err := remote.maybeHandleBindChanged(
+				context.Background(),
+				&pb.Response{NewBind: &lateBind},
+			)
 			require.ErrorIs(t, err, ErrLockTableBindChanged)
 			got := svc.tableGroups.get(currentBind.Group, currentBind.Table)
 			require.NotNil(t, got)
@@ -668,7 +725,10 @@ func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
 				return nil
 			}
 
-			err := remote.maybeHandleBindChanged(&pb.Response{NewBind: &responseBind})
+			err := remote.maybeHandleBindChanged(
+				context.Background(),
+				&pb.Response{NewBind: &responseBind},
+			)
 			require.ErrorIs(t, err, ErrLockTableBindChanged)
 			require.Zero(t, published)
 		},
