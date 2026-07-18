@@ -110,18 +110,21 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 				)
 				waitResult <- err
 			}()
+			// Public Unlock deliberately retries remote cleanup with a background
+			// context. This liveness test uses the internal context-aware path so its
+			// release and failure cleanup remain bounded by their test deadlines.
 			defer func() {
 				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cleanupCancel()
 				if !holderReleased {
-					_ = holderService.Unlock(cleanupCtx, holderTxn, timestamp.Timestamp{})
+					_ = holderService.unlockWithContext(cleanupCtx, holderTxn, timestamp.Timestamp{})
 				}
 				cancelWaiter()
 				if !waiterDone {
 					select {
 					case err := <-waitResult:
 						if err == nil {
-							_ = waiterService.Unlock(cleanupCtx, activeWaiterTxn, timestamp.Timestamp{})
+							_ = waiterService.unlockWithContext(cleanupCtx, activeWaiterTxn, timestamp.Timestamp{})
 						}
 					case <-cleanupCtx.Done():
 						t.Errorf("remote waiter did not exit during cleanup: %v", cleanupCtx.Err())
@@ -195,7 +198,7 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer releaseCancel()
-			require.NoError(t, holderService.Unlock(releaseCtx, holderTxn, timestamp.Timestamp{}))
+			require.NoError(t, holderService.unlockWithContext(releaseCtx, holderTxn, timestamp.Timestamp{}))
 			holderReleased = true
 			select {
 			case err := <-waitResult:
@@ -204,7 +207,7 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 			case <-releaseCtx.Done():
 				t.Fatalf("remote waiter did not acquire after holder release: %v", releaseCtx.Err())
 			}
-			require.NoError(t, waiterService.Unlock(releaseCtx, activeWaiterTxn, timestamp.Timestamp{}))
+			require.NoError(t, waiterService.unlockWithContext(releaseCtx, activeWaiterTxn, timestamp.Timestamp{}))
 		},
 		func(cfg *Config) {
 			// CheckActiveTxn gets its authoritative transaction liveness from
