@@ -176,7 +176,7 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	// boundaries belong to their expression executors and the partition keys to
 	// partOut); in the interval path every vector is a buffer that outlives the
 	// batch, so only the reference is dropped. Aggregates cannot be rewound
-	// once Flush has run (see remakeAggs), so they are discarded here and
+	// once Flush has run (see makeAggExecutors), so they are discarded here and
 	// rebuilt by Prepare. The tsVec/aggVec/partVec buffers stay allocated: with
 	// the cursors back at zero the next generation reuses them from index 0.
 	if timeWin.EndExpr == nil {

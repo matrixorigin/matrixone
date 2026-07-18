@@ -136,6 +136,117 @@ func TestChooseRowCarrier(t *testing.T) {
 	})
 }
 
+func TestCanPruneSampleExprs(t *testing.T) {
+	makeCol := func(tag, pos int32, notNullable bool) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}},
+		}
+	}
+	makeScan := func(tag int32, notNullable ...bool) *plan.Node {
+		cols := make([]*plan.ColDef, len(notNullable))
+		for i := range notNullable {
+			cols[i] = &plan.ColDef{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable[i]}}
+		}
+		return &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{tag},
+			TableDef:    &plan.TableDef{Cols: cols},
+		}
+	}
+
+	t.Run("single expression needs no cross-expression proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{}}}}}
+		require.True(t, canPruneSampleExprs(node, &plan.Node{NodeType: plan.Node_PROJECT}))
+	})
+
+	t.Run("direct not null table columns", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.True(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("function inference is not runtime proof", func(t *testing.T) {
+		functionExpr := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_json), NotNullable: true},
+			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "json_extract"}}},
+		}
+		node := &plan.Node{AggList: []*plan.Expr{functionExpr, makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("derived projection is not runtime proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		child := makeScan(7, true, true)
+		child.NodeType = plan.Node_PROJECT
+		require.False(t, canPruneSampleExprs(node, child))
+	})
+
+	t.Run("nullable table column", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, false)))
+	})
+}
+
+func TestExprCanRemoveProjectFunctionMetadata(t *testing.T) {
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	sequence := func(name string) *plan.Expr {
+		return MakePlan2StringConstExprWithType(name)
+	}
+
+	require.True(t, exprCanRemoveProject(bind("abs", MakePlan2Int64ConstExprWithType(1))))
+	require.False(t, exprCanRemoveProject(bind("sleep", MakePlan2Int64ConstExprWithType(0))))
+	require.False(t, exprCanRemoveProject(bind("nextval", sequence("sample_seq"))))
+	require.False(t, exprCanRemoveProject(bind("setval", sequence("sample_seq"), sequence("10"))))
+
+	nested := bind("isnull", bind("nextval", sequence("sample_seq")))
+	require.False(t, exprCanRemoveProject(nested))
+
+	unknown := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: -1}}}}
+	require.False(t, exprCanRemoveProject(unknown))
+}
+
+func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		refCnt      int
+		parentType  plan.Node_NodeType
+		wantProject bool
+	}{
+		{name: "unused", refCnt: 0, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single project consumer", refCnt: 1, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single sort consumer", refCnt: 1, parentType: plan.Node_SORT, wantProject: true},
+		{name: "single join consumer", refCnt: 1, parentType: plan.Node_JOIN, wantProject: true},
+		{name: "multiple consumers", refCnt: 2, parentType: plan.Node_PROJECT, wantProject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtx()
+			volatileExpr, err := BindFuncExprImplByPlanExpr(
+				context.Background(),
+				"nextval",
+				[]*plan.Expr{MakePlan2StringConstExprWithType("sample_seq")},
+			)
+			require.NoError(t, err)
+
+			scanID := builder.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, bindCtx)
+			projectTag := builder.genNewBindTag()
+			projectID := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{scanID},
+				BindingTags: []int32{projectTag},
+				ProjectList: []*plan.Expr{volatileExpr},
+			}, bindCtx)
+			refCnts := map[[2]int32]int{{projectTag, 0}: test.refCnt}
+
+			newNodeID, _ := builder.removeSimpleProjections(projectID, test.parentType, false, refCnts)
+			require.Equal(t, test.wantProject, newNodeID == projectID)
+		})
+	}
+}
+
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -200,6 +311,134 @@ func TestBuildTable_AlterView(t *testing.T) {
 	bc := NewBindContext(qb, nil)
 	_, err = qb.buildTable(tb, bc, -1, nil)
 	assert.Error(t, err)
+}
+
+func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
+	sqlMode := "PIPES_AS_CONCAT"
+	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
+		Stmt:            "create view v_pipe as select a||b as c from t",
+		DefaultDatabase: "db",
+		SQLMode:         &sqlMode,
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.True(t, exprContainsFunc(projectExpr, "concat"))
+	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func TestBindViewUsesStoredSQLModeForANSIQuotes(t *testing.T) {
+	sqlMode := "ANSI_QUOTES"
+	builder, nodeID := buildViewForSQLModeTest(t, "v_ansi", ViewData{
+		Stmt:            `create view v_ansi as select "a" as c from t`,
+		DefaultDatabase: "db",
+		SQLMode:         &sqlMode,
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.NotNil(t, projectExpr.GetCol())
+	require.Equal(t, "a", projectExpr.GetCol().Name)
+}
+
+func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
+	builder, nodeID := buildViewForSQLModeTest(t, "v_legacy_pipe", ViewData{
+		Stmt:            "create view v_legacy_pipe as select a||b as c from t",
+		DefaultDatabase: "db",
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.True(t, exprContainsFunc(projectExpr, "concat"))
+	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	type arg struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+	viewJSON, err := json.Marshal(viewData)
+	require.NoError(t, err)
+
+	store := map[string]arg{
+		"db.t": {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			table: &plan.TableDef{
+				DbName:    "db",
+				Name:      "t",
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*ColDef{
+					{Name: "a", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: "t"}},
+					{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: "t"}},
+				},
+			},
+		},
+		"db." + viewName: {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: viewName},
+			table: &plan.TableDef{
+				DbName:    "db",
+				Name:      viewName,
+				TableType: catalog.SystemViewRel,
+				ViewSql:   &plan.ViewDef{View: string(viewJSON)},
+			},
+		},
+	}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			x := store[schemaName+"."+tableName]
+			return x.obj, x.table, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	tableName := &tree.TableName{}
+	tableName.SchemaName = "db"
+	tableName.ObjectName = tree.Identifier(viewName)
+	nodeID, err := builder.buildTable(tableName, bindCtx, -1, nil)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
+	require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
+	return builder, nodeID
+}
+
+func exprContainsFunc(expr *plan.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func.GetObjName() == name {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if exprContainsFunc(arg, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTempTableAliasBindingUsesOriginName(t *testing.T) {

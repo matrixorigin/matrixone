@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -67,17 +66,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	// aggregate state (it cannot survive a Flush) while keeping the executors,
 	// so a reused operator arrives here with executors but no aggregates.
 	if len(ctr.aggs) == 0 {
-		ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
-		for i, ag := range timeWin.Aggs {
-			ctr.aggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
-			if err != nil {
-				return err
-			}
-			if config := ag.GetExtraConfig(); config != nil {
-				if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
-					return err
-				}
-			}
+		ctr.aggs, err = makeAggExecutors(timeWin, proc, false)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -271,9 +262,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				// foreign row and rebuild the window state from scratch, so
 				// the new partition's windows are anchored on its own data
 				// rather than sliding the old partition's state forward.
-				if err = ctr.remakeAggs(timeWin, proc); err != nil {
+				replacements, err := makeAggExecutors(timeWin, proc, false)
+				if err != nil {
 					return result, err
 				}
+				ctr.freeAgg()
+				ctr.aggs = replacements
 				ctr.curVecIdx = ctr.breakVecIdx
 				ctr.curRowIdx = ctr.breakRowIdx
 				ctr.preVecIdx = ctr.breakVecIdx
@@ -284,16 +278,20 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.partitionBreak = false
 				ctr.status = firstWindow
 			default:
-				ctr.status = nextWindow
-				if err = ctr.remakeAggs(timeWin, proc); err != nil {
+				replacements, err := makeAggExecutors(timeWin, proc, true)
+				if err != nil {
 					return result, err
 				}
+
+				// Flush transfers only result vectors; executor-owned state (for
+				// example DISTINCT hash tables) remains live until Free. Construct
+				// every replacement first so an allocation/configuration failure
+				// leaves the current executors owned by ctr and available for the
+				// normal terminal cleanup path.
+				ctr.freeAgg()
+				ctr.aggs = replacements
+				ctr.status = nextWindow
 				ctr.group = 0
-				for _, ag := range ctr.aggs {
-					if err := ag.GroupGrow(1); err != nil {
-						return result, err
-					}
-				}
 				ctr.withoutFill = true
 			}
 
@@ -308,6 +306,38 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 	}
+}
+
+func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bool) (_ []aggexec.AggFuncExec, err error) {
+	aggs := make([]aggexec.AggFuncExec, len(timeWin.Aggs))
+	defer func() {
+		if err != nil {
+			for _, agg := range aggs {
+				if agg != nil {
+					agg.Free()
+				}
+			}
+		}
+	}()
+
+	for i, expression := range timeWin.Aggs {
+		aggs[i], err = aggexec.MakeAgg(
+			proc.Mp(), expression.GetAggID(), expression.IsDistinct(), timeWin.Types[i])
+		if err != nil {
+			return nil, err
+		}
+		if config := expression.GetExtraConfig(); config != nil {
+			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
+				return nil, err
+			}
+		}
+		if growFirstGroup {
+			if err = aggs[i].GroupGrow(1); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return aggs, nil
 }
 
 func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
@@ -346,29 +376,6 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 		},
 		Typ: typ,
 	}, nil
-}
-
-// remakeAggs rebuilds the aggregate executors; their state cannot be reused
-// once a batch of results has been flushed out of them. The old executor still
-// owns its internal state after Flush -- only the result vectors moved into
-// ctr.bat -- so release it before overwriting, or every flush (one per
-// partition now) leaks a full set of aggregate state.
-func (ctr *container) remakeAggs(timeWin *TimeWin, proc *process.Process) (err error) {
-	for i, ag := range timeWin.Aggs {
-		if ctr.aggs[i] != nil {
-			ctr.aggs[i].Free()
-		}
-		ctr.aggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
-		if err != nil {
-			return err
-		}
-		if config := ag.GetExtraConfig(); config != nil {
-			if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (ctr *container) nextWindow(t *TimeWin) error {
@@ -507,14 +514,12 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
-		if len(vecs) > 1 {
-			for _, vec := range vecs {
-				vec.Free(proc.Mp())
-			}
-			return moerr.NewInternalErrorNoCtx("the TimeWin operator currently does not support sending split result of window function.")
+		result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+		if err != nil {
+			return err
 		}
 
-		ctr.bat.SetVector(int32(i), vecs[0])
+		ctr.bat.SetVector(int32(i), result)
 		i++
 	}
 

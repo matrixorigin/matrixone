@@ -1361,8 +1361,9 @@ func mergeFilters(
 		finalFilter.Oid = left.Oid
 
 		if !finalFilter.Valid && connector == function.AND && !unsafeInput {
-			// nonempty disjuncts makes the memory pk filter invalid,
-			// so we choose the one whose disjuncts is empty as default here.
+			// Keep one atomic conjunct when representing the full intersection
+			// would require distributing AND over OR.  It remains a safe early
+			// filter because the residual expression evaluates the full predicate.
 			if len(left.Disjuncts) > 0 {
 				finalFilter = *right
 				if right.Vec != nil {

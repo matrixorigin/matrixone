@@ -56,6 +56,34 @@ select 1 from (select group_concat(payload), count(*) from carrier_l) s;
 select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
 select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
 
+-- SAMPLE prunes unused values and compacts a retained nonzero output slot.
+create table sample_nn(a int not null, b int not null, payload varchar(100) not null);
+insert into sample_nn select * from l;
+select b from (select sample(payload, b, 4 rows) from sample_nn) s order by b;
+
+-- A row-only SAMPLE consumer keeps a low-cost carrier and preserves sampled rows.
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn) s) q;
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn where a < 0) s) q;
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn where a = 2) s) q;
+select count(*) from (select 1 from (select sample(payload, b, 100 percent) from sample_nn) s) q;
+
+-- An internal filter is the only consumer of b; payload remains removable.
+select a from (
+    select a, sample(payload, b, 4 rows) from sample_nn group by a
+) s where b > 15 order by a, b;
+
+-- A function inferred as NOT NULL can still return SQL NULL at runtime.
+create table sample_runtime_null(j json not null, id int not null);
+insert into sample_runtime_null values
+    ('{}', 1),
+    ('{}', 2),
+    ('{"x":3}', 3),
+    ('{"x":4}', 4);
+select id from (
+    select sample(json_extract(j, '$.x'), id, 2 rows)
+    from sample_runtime_null
+) s order by id;
+
 -- _wstart is deliberately unprojected. Column pruning must continue and keep
 -- _wend instead of leaving the time-window remapping incomplete.
 create table tw(ts timestamp, v int);

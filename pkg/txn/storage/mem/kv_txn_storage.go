@@ -89,6 +89,8 @@ type Event struct {
 type KVTxnStorage struct {
 	sync.RWMutex
 	logClient            logservice.Client
+	closeOnce            sync.Once
+	closeErr             error
 	clock                clock.Clock
 	recoverFrom          logservice.Lsn
 	uncommittedTxn       map[string]*txn.TxnMeta
@@ -98,7 +100,7 @@ type KVTxnStorage struct {
 	eventC               chan Event
 }
 
-// NewKVTxnStorage create KV-based implementation of TxnStorage
+// NewKVTxnStorage creates KV-based TxnStorage and takes ownership of logClient.
 func NewKVTxnStorage(recoverFrom logservice.Lsn, logClient logservice.Client, clock clock.Clock) *KVTxnStorage {
 	return &KVTxnStorage{
 		logClient:            logClient,
@@ -190,11 +192,14 @@ func (kv *KVTxnStorage) Start() error {
 }
 
 func (kv *KVTxnStorage) Close(ctx context.Context) error {
-	return nil
+	kv.closeOnce.Do(func() {
+		kv.closeErr = kv.logClient.Close()
+	})
+	return kv.closeErr
 }
 
 func (kv *KVTxnStorage) Destroy(ctx context.Context) error {
-	return nil
+	return kv.Close(ctx)
 }
 
 func (kv *KVTxnStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
