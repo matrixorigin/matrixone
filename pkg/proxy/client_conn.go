@@ -407,6 +407,17 @@ func isProxyAdmissionError(err error) bool {
 		errors.Is(err, frontend.ErrPacketTooLarge)
 }
 
+// bindAuthenticatedTenant converts the connection's untrusted login claim
+// into authoritative tenant admission only after a backend (or the connection
+// cache authenticator) has accepted the credentials. Binding during login
+// parsing would let an unauthenticated client reserve another tenant's quota.
+func (c *clientConn) bindAuthenticatedTenant() error {
+	if c.admission == nil || c.admission.bindTenant(c.clientInfo.Tenant) {
+		return nil
+	}
+	return errProxyConnectionLimit
+}
+
 // SendErrToClient implements the ClientConn interface.
 func (c *clientConn) SendErrToClient(err error) {
 	errorCode, sqlState, msg := rewriteProxyError(err)
@@ -452,7 +463,11 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 	// Step 3, proxy connects to a CN server to build connection.
 	conn, err := c.connectToBackend(prevAddr)
 	if err != nil {
-		c.log.Error("failed to connect to backend", zap.Error(err))
+		if isProxyAdmissionError(err) {
+			c.log.Debug("backend connection rejected by proxy admission", zap.Error(err))
+		} else {
+			c.log.Error("failed to connect to backend", zap.Error(err))
+		}
 		return nil, err
 	}
 	// bind the server connection to the client connection.
@@ -758,6 +773,10 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		}
 		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
 		if sc != nil {
+			if err := c.bindAuthenticatedTenant(); err != nil {
+				_ = sc.Close()
+				return nil, err
+			}
 			// get the response from the cn server.
 			re := sc.GetConnResponse()
 			if err := c.sendPacketToClient(re, sc); err != nil {
@@ -882,6 +901,16 @@ skipConnCache:
 				}
 				v2.ProxyConnectCommonFailCounter.Inc()
 				return nil, moerr.NewInternalErrorNoCtx("the response from cn server is not correct")
+			}
+			// The tenant name parsed from the login packet is only a claim until
+			// the backend accepts the credentials. Bind its quota after that
+			// authentication boundary, but before exposing the OK packet to the
+			// client. Global admission already bounds this pre-auth work.
+			if isOKPacket(r) {
+				if err := c.bindAuthenticatedTenant(); err != nil {
+					_ = sc.Close()
+					return nil, err
+				}
 			}
 
 			// set the response from the cn server.

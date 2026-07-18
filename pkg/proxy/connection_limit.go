@@ -28,7 +28,8 @@ var errProxyConnectionLimit = moerr.NewInvalidInputNoCtx("proxy connection limit
 
 // connectionLimiter provides two-stage admission. The global slot is acquired
 // before allocating per-connection protocol state. The tenant slot is bound
-// only after the MySQL login packet reveals the tenant.
+// only after a backend or cached authenticator accepts the login credentials;
+// the tenant name in an unauthenticated packet is not an admission identity.
 type connectionLimiter struct {
 	mu           sync.Mutex
 	maxTotal     int

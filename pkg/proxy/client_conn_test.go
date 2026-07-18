@@ -214,6 +214,7 @@ func (c *mockClientConn) Close() error { return nil }
 
 type mockConnCache struct {
 	pushFn func(cacheKey, ServerConn) bool
+	popFn  func(cacheKey, uint32, []byte, []byte) ServerConn
 }
 
 func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
@@ -223,9 +224,14 @@ func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
 	return true
 }
 
-func (m *mockConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn { return nil }
-func (m *mockConnCache) Count() int                                      { return 0 }
-func (m *mockConnCache) Close() error                                    { return nil }
+func (m *mockConnCache) Pop(key cacheKey, connID uint32, salt, authResp []byte) ServerConn {
+	if m.popFn != nil {
+		return m.popFn(key, connID, salt, authResp)
+	}
+	return nil
+}
+func (m *mockConnCache) Count() int   { return 0 }
+func (m *mockConnCache) Close() error { return nil }
 
 type killTestRouter struct {
 	connectFn func(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error)
@@ -871,7 +877,7 @@ func TestClientConn_ConnectToBackend(t *testing.T) {
 	})
 }
 
-func TestClientConnHandshakeAdmission(t *testing.T) {
+func TestClientConnHandshakeDoesNotTrustClaimedTenant(t *testing.T) {
 	limiter := newConnectionLimiter(3, 1)
 	handleHandshake := func(lease *connectionLease) error {
 		cc, cleanup := createNewClientConn(t)
@@ -899,13 +905,29 @@ func TestClientConnHandshakeAdmission(t *testing.T) {
 
 	second, ok := limiter.acquire()
 	require.True(t, ok)
-	require.ErrorIs(t, handleHandshake(second), errProxyConnectionLimit)
-	second.release()
+	require.NoError(t, handleHandshake(second),
+		"an unauthenticated tenant claim must not consume authoritative tenant capacity")
+	require.Empty(t, limiter.byTenant)
+
+	// Only the connection whose credentials were accepted by a backend may
+	// consume the tenant slot. A second authenticated connection is rejected.
+	require.NoError(t, (&clientConn{
+		admission:  first,
+		clientInfo: clientInfo{labelInfo: labelInfo{Tenant: "tenant1"}},
+	}).bindAuthenticatedTenant())
+	require.ErrorIs(t, (&clientConn{
+		admission:  second,
+		clientInfo: clientInfo{labelInfo: labelInfo{Tenant: "tenant1"}},
+	}).bindAuthenticatedTenant(), errProxyConnectionLimit)
 
 	first.release()
 	third, ok := limiter.acquire()
 	require.True(t, ok)
-	require.NoError(t, handleHandshake(third))
+	require.NoError(t, (&clientConn{
+		admission:  third,
+		clientInfo: clientInfo{labelInfo: labelInfo{Tenant: "tenant1"}},
+	}).bindAuthenticatedTenant())
+	second.release()
 	third.release()
 	require.Equal(t, 0, limiter.total)
 	require.Empty(t, limiter.byTenant)
@@ -1539,6 +1561,7 @@ type shortHandshakeServerConn struct {
 	*mockServerConn
 	closeCount           int
 	setConnResponseCount int
+	connResponse         []byte
 }
 
 func (s *shortHandshakeServerConn) Close() error {
@@ -1548,6 +1571,10 @@ func (s *shortHandshakeServerConn) Close() error {
 
 func (s *shortHandshakeServerConn) SetConnResponse([]byte) {
 	s.setConnResponseCount++
+}
+
+func (s *shortHandshakeServerConn) GetConnResponse() []byte {
+	return s.connResponse
 }
 
 type shortHandshakeRouter struct {
@@ -1771,6 +1798,97 @@ func Test_connectToBackend_ShortHandshakeResponse(t *testing.T) {
 			require.Equal(t, failuresBefore+1, testutil.ToFloat64(v2.ProxyConnectCommonFailCounter))
 		})
 	}
+}
+
+func Test_connectToBackend_BindsOnlyAuthenticatedTenant(t *testing.T) {
+	newClient := func(t *testing.T, limiter *connectionLimiter) (*clientConn, *connectionLease, *writeCountingConn, func()) {
+		t.Helper()
+		cc, cleanup := createNewClientConn(t)
+		client := cc.(*clientConn)
+		client.clientInfo.Tenant = "tenant1"
+		lease, ok := limiter.acquire()
+		require.True(t, ok)
+		client.admission = lease
+		local, remote := net.Pipe()
+		writer := &writeCountingConn{Conn: local}
+		client.mysqlProto.UseConn(writer)
+		return client, lease, writer, func() {
+			_ = remote.Close()
+			_ = local.Close()
+			lease.release()
+			cleanup()
+		}
+	}
+
+	t.Run("fresh backend success binds before client OK", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		serverConn := &shortHandshakeServerConn{mockServerConn: newMockServerConn(nil)}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: serverConn}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, serverConn, got)
+		require.Equal(t, 1, limiter.byTenant[Tenant("tenant1")])
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("fresh backend rejection closes before client OK", func(t *testing.T) {
+		limiter := newConnectionLimiter(3, 1)
+		occupied, ok := limiter.acquire()
+		require.True(t, ok)
+		require.True(t, occupied.bindTenant("tenant1"))
+		defer occupied.release()
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		serverConn := &shortHandshakeServerConn{mockServerConn: newMockServerConn(nil)}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: serverConn}
+
+		got, err := client.connectToBackend("")
+		require.ErrorIs(t, err, errProxyConnectionLimit)
+		require.Nil(t, got)
+		require.Equal(t, 1, serverConn.closeCount)
+		require.Zero(t, writer.writeCount, "a backend OK must not escape before tenant admission")
+	})
+
+	t.Run("backend auth failure does not consume tenant quota", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		serverConn := &shortHandshakeServerConn{mockServerConn: newMockServerConn(nil)}
+		client.router = &shortHandshakeRouter{response: makeErrPacket(8), sc: serverConn}
+
+		got, err := client.connectToBackend("")
+		require.Error(t, err)
+		require.Nil(t, got)
+		require.Empty(t, limiter.byTenant)
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("authenticated cache hit obeys tenant admission", func(t *testing.T) {
+		limiter := newConnectionLimiter(3, 1)
+		occupied, ok := limiter.acquire()
+		require.True(t, ok)
+		require.True(t, occupied.bindTenant("tenant1"))
+		defer occupied.release()
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		serverConn := &shortHandshakeServerConn{
+			mockServerConn: newMockServerConn(nil),
+			connResponse:   makeOKPacket(8)[4:],
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return serverConn
+		}}
+
+		got, err := client.connectToBackend("")
+		require.ErrorIs(t, err, errProxyConnectionLimit)
+		require.Nil(t, got)
+		require.Equal(t, 1, serverConn.closeCount)
+		require.Zero(t, writer.writeCount)
+	})
 }
 
 func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {

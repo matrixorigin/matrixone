@@ -161,10 +161,6 @@ func (c *clientConn) handleHandshakeRespBefore(deadline time.Time) error {
 		if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
 			return err
 		}
-		if c.admission != nil && !c.admission.bindTenant(c.clientInfo.Tenant) {
-			return errProxyConnectionLimit
-		}
-
 		li := &c.clientInfo.labelInfo
 		c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
 
