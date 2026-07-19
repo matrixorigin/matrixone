@@ -27,7 +27,17 @@ from small_lookup s
 order by s.id;
 
 -- @case
--- @desc: empty preserved/build input sends DROP and does not leave the probe waiting
+-- @desc: leading cluster-key RF prunes ranges while a non-PK row filter preserves exact semantics
+-- @label:bvt
+create table big_cluster(id bigint, cluster_key bigint, v bigint) cluster by(cluster_key);
+insert into big_cluster
+select result, result, result * 10 from generate_series(1, 20000) g;
+select s.id, (select b.v from big_cluster b where b.cluster_key = s.lookup_id) as scalar_v
+from small_lookup s
+order by s.id;
+
+-- @case
+-- @desc: empty preserved/build input returns promptly with correct scalar semantics
 -- @label:bvt
 create table empty_lookup(id bigint primary key, lookup_id bigint);
 select e.id, (select b.v from big_pk b where b.id = e.lookup_id) as scalar_v

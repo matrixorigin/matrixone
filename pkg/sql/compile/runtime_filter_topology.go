@@ -130,7 +130,16 @@ func collectRuntimeFilterTopology(roots []*Scope, tags []int32) runtimeFilterTop
 			}
 			tag := build.RuntimeFilterSpec.Tag
 			if _, ok = tracked[tag]; ok {
-				topology.producers[tag] = append(topology.producers[tag], scope)
+				// ParallelRun clones the complete operator tree of a table-scan
+				// pipeline. Count the HashBuild instances which will exist at run
+				// time, not just the pre-expansion Scope visible during compile.
+				multiplicity := 1
+				if scope.NodeInfo.Mcpu > 1 && scope.isTableScan() {
+					multiplicity = scope.NodeInfo.Mcpu
+				}
+				for range multiplicity {
+					topology.producers[tag] = append(topology.producers[tag], scope)
+				}
 			}
 			return nil
 		})

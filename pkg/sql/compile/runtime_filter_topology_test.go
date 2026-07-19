@@ -19,6 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -129,6 +134,34 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		require.ErrorContains(t, err, "expected exactly one colocated producer")
 	})
 
+	t.Run("parallel scan counts future HashBuild clones", func(t *testing.T) {
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
+		defer build.Release()
+		scan := table_scan.NewArgument()
+		defer scan.Release()
+		build.AppendChild(scan)
+		producer.NodeInfo.Mcpu = 4
+		consumer.PreScopes = []*Scope{producer}
+
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
+		require.ErrorContains(t, err, "4 producers")
+		require.ErrorContains(t, err, "expected exactly one colocated producer")
+	})
+
+	t.Run("Mcpu alone does not clone a non-scan producer", func(t *testing.T) {
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
+		defer build.Release()
+		mergeInput := merge.NewArgument()
+		defer mergeInput.Release()
+		build.AppendChild(mergeInput)
+		producer.NodeInfo.Mcpu = 4
+		consumer.PreScopes = []*Scope{producer}
+
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer}))
+	})
+
 	t.Run("one producer on each CN is not a colocated phase-1 topology", func(t *testing.T) {
 		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
 		producer1, build1 := makeRuntimeFilterProducerScope(tag, cn1)
@@ -207,6 +240,38 @@ func TestCollectRuntimeFilterTopologyVisitsSharedScopeOnce(t *testing.T) {
 
 	topology := collectRuntimeFilterTopology([]*Scope{consumer, producer}, []int32{tag})
 	require.Len(t, topology.consumers[tag], 1)
+	require.Len(t, topology.producers[tag], 1)
+}
+
+func TestParallelBuildScanIsMergedBeforeRuntimeFilterHashBuild(t *testing.T) {
+	const tag int32 = 10
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.cnList = engine.Nodes{{Id: "cn1", Addr: testCompile.addr, Mcpu: 8}}
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	buildScan := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	buildScan.NodeInfo = engine.Node{Id: "cn1", Addr: testCompile.addr, Mcpu: 4}
+	probe := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin})
+	probe.NodeInfo = engine.Node{Id: "cn1", Addr: testCompile.addr, Mcpu: 8}
+	probe.RootOp.(*hashjoin.HashJoin).RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{
+		Tag:  tag,
+		Expr: &plan.Expr{},
+	}}
+
+	testCompile.compileBuildSideForBroadcastJoin(
+		&plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}},
+		[]*Scope{probe},
+		[]*Scope{buildScan},
+	)
+
+	require.Len(t, probe.PreScopes, 1)
+	producer := probe.PreScopes[0]
+	require.Equal(t, 1, producer.NodeInfo.Mcpu)
+	require.NoError(t, checkScopeWithExpectedList(producer, []vm.OpType{vm.Merge, vm.HashBuild}))
+	require.NoError(t, checkScopeWithExpectedList(buildScan, []vm.OpType{vm.TableScan, vm.Connector}))
+	topology := collectRuntimeFilterTopology([]*Scope{probe}, []int32{tag})
 	require.Len(t, topology.producers[tag], 1)
 }
 

@@ -324,6 +324,12 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			},
 		},
 		{
+			name: "unavailable build statistics are not an exact size bound",
+			mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[1].Stats = DefaultStats()
+			},
+		},
+		{
 			name: "local placement override is active",
 			mutate: func(builder *QueryBuilder) {
 				builder.optimizerHints = &OptimizerHints{forceOneCN: 1}
@@ -348,6 +354,28 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
 		})
 	}
+
+	t.Run("leading cluster key remains prunable with non-PK row filtering", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probe := builder.qry.Nodes[0]
+		probeType := probe.TableDef.Cols[0].Typ
+		probe.TableDef.Cols = append(probe.TableDef.Cols, &planpb.ColDef{Name: "cluster_key", Typ: probeType})
+		probe.TableDef.Name2ColIndex["cluster_key"] = 1
+		probe.TableDef.ClusterBy = &planpb.ClusterByDef{Name: "cluster_key"}
+		joinKey := builder.qry.Nodes[2].OnList[0].GetF().Args[0]
+		joinKey.GetCol().ColPos = 1
+		joinKey.GetCol().Name = "cluster_key"
+
+		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
+
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Len(t, probe.RuntimeFilterProbeList, 1)
+		require.True(t, probe.RuntimeFilterProbeList[0].NotOnPk)
+		require.Equal(t, int32(1), probe.RuntimeFilterProbeList[0].Expr.GetCol().ColPos)
+		require.True(t, probe.Stats.ForceOneCN)
+		require.True(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+	})
 
 	t.Run("non-leading composite key does not sacrifice multi-CN scan", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)

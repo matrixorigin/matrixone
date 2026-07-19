@@ -132,6 +132,12 @@ func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bo
 	if upperLimit <= 0 || build == nil || build.NodeType != plan.Node_TABLE_SCAN || build.Stats == nil {
 		return false
 	}
+	// DefaultStats is an unavailable-statistics sentinel, not evidence that the
+	// complete build contains 1,000 rows.  Treating it as an exact upper bound
+	// can serialize an arbitrarily large scan only for hashbuild to send PASS.
+	if IsDefaultStats(build.Stats) {
+		return false
+	}
 	// LOCAL_COLOCATED applies to the whole preserved/build subtree. Phase 1
 	// accepts only a direct scan whose full table cardinality and filtered
 	// output both fit exact IN. Looking only at Outcnt would incorrectly force a

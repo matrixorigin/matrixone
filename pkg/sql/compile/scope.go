@@ -721,8 +721,13 @@ func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
 	return engine.Policy_CollectAllData
 }
 
-func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
-	var runtimeInExprList []*plan.Expr
+type receivedRuntimeFilter struct {
+	spec *plan.RuntimeFilterSpec
+	expr *plan.Expr
+}
+
+func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool, error) {
+	var runtimeFilters []receivedRuntimeFilter
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
@@ -746,7 +751,7 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 					return nil, true, nil
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					runtimeInExprList = append(runtimeInExprList, inExpr)
+					runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{spec: spec, expr: inExpr})
 
 					// TODO: implement BETWEEN expression
 				}
@@ -754,23 +759,23 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 		}
 	}
 
-	return runtimeInExprList, false, nil
+	return runtimeFilters, false, nil
 }
 
-func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
-	var nonPkFilters, pkFilters []*plan.Expr
+func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntimeFilter) ([]*plan.Expr, error) {
+	var runtimeInExprList, nonPkFilters, pkFilters []*plan.Expr
 
-	rfSpecs := s.DataSource.RuntimeFilterSpecs
-	for i := range runtimeInExprList {
-		fn := runtimeInExprList[i].GetF()
+	for _, runtimeFilter := range runtimeFilters {
+		runtimeInExprList = append(runtimeInExprList, runtimeFilter.expr)
+		fn := runtimeFilter.expr.GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		if rfSpecs[i].NotOnPk {
-			nonPkFilters = append(nonPkFilters, runtimeInExprList[i])
+		if runtimeFilter.spec.NotOnPk {
+			nonPkFilters = append(nonPkFilters, runtimeFilter.expr)
 		} else {
-			pkFilters = append(pkFilters, runtimeInExprList[i])
+			pkFilters = append(pkFilters, runtimeFilter.expr)
 		}
 	}
 
@@ -1269,7 +1274,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	// receive runtime filter and optimize the datasource.
-	var runtimeFilterList, blockFilterList []*plan.Expr
+	var runtimeFilterList []receivedRuntimeFilter
+	var blockFilterList []*plan.Expr
 	var emptyScan bool
 	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
 	if err != nil {
