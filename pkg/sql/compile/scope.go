@@ -763,7 +763,8 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 }
 
 func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntimeFilter) ([]*plan.Expr, error) {
-	var runtimeInExprList, nonPkFilters, pkFilters []*plan.Expr
+	runtimeInExprList := make([]*plan.Expr, 0, len(runtimeFilters)+len(s.DataSource.BlockFilterList))
+	var nonPkFilters, pkFilters []*plan.Expr
 
 	for _, runtimeFilter := range runtimeFilters {
 		runtimeInExprList = append(runtimeInExprList, runtimeFilter.expr)
@@ -810,6 +811,9 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntim
 		}
 	}
 
+	if len(runtimeInExprList) == 0 && len(s.DataSource.BlockFilterList) == 0 {
+		return nil, nil
+	}
 	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
 }
 
