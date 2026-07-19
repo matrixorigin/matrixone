@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
@@ -91,6 +93,12 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
 		DbName: "base_db",
 		Name:   "base_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_source", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_flag", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+		},
 	}).AnyTimes()
 
 	tblStuff := tableStuff{baseRel: baseRel}
@@ -122,11 +130,28 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		}, output.columnNames)
 		require.Equal(t, []int{0, 1, 2, 3}, output.projectedIdxes)
 
-		sql := output.createSQL(ctx, tblStuff)
-		require.Contains(t, sql, "create table `out_db`.`diff_out` as select")
-		require.Contains(t, sql, "cast(null as varchar(255)) as `__mo_diff_source_1`")
-		require.Contains(t, sql, "cast(null as varchar(16)) as `__mo_diff_flag_1`")
-		require.Contains(t, sql, "from `base_db`.`base_t` as src where 1=0")
+		sql, err := output.createSQL(ctx, tblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "create table `out_db`.`diff_out` (")
+		require.Contains(t, sql, "`__mo_diff_source_1` varchar(255) default null")
+		require.Contains(t, sql, "`__mo_diff_flag_1` varchar(16) default null")
+		require.Contains(t, sql, "`id` BIGINT not null")
+		require.NotContains(t, sql, " as select ")
+	})
+
+	t.Run("base snapshot supplies the materialized schema", func(t *testing.T) {
+		snapshotTS := pbtimestamp.Timestamp{PhysicalTime: 42}
+		snapshotTblStuff := tblStuff
+		snapshotTblStuff.baseSnap = &plan.Snapshot{TS: &snapshotTS}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, snapshotTblStuff)
+		require.NoError(t, err)
+		sql, err := output.createSQL(ctx, snapshotTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`id` BIGINT not null")
+		require.NotContains(t, sql, "{mo_ts=")
 	})
 
 	t.Run("projected columns retain request order", func(t *testing.T) {
@@ -140,6 +165,81 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.Equal(t, []int{1, 0}, output.projectedIdxes)
 		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
 	})
+}
+
+func TestDataBranchDiffCanExecuteInUncommittedTransaction(t *testing.T) {
+	can, err := statementCanBeExecutedInUncommittedTransaction(
+		context.Background(), newValidateSession(t), &tree.DataBranchDiff{},
+	)
+	require.NoError(t, err)
+	require.True(t, can)
+}
+
+func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "base_db",
+		Name:   "base_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		},
+	}).AnyTimes()
+
+	tblStuff := tableStuff{baseRel: baseRel}
+	tblStuff.def.colNames = []string{"id"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.visibleIdxes = []int{0}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.retPool = &retBatchList{}
+	tblStuff.bufPool = &sync.Pool{New: func() any { return &bytes.Buffer{} }}
+
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	defer tblStuff.retPool.freeAllRetBatches(mp)
+
+	retCh := make(chan batchWithKind, 1)
+	retCh <- batchWithKind{name: "branch", kind: diffUpdate, batch: bat}
+	close(retCh)
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	var sqls []string
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+		sqls = append(sqls, sql)
+		if strings.HasPrefix(sql, "insert into") {
+			return moerr.NewInternalErrorNoCtx("injected insert failure")
+		}
+		return nil
+	}).Times(3)
+	bh.EXPECT().ClearExecResultSet().Times(2)
+
+	dst := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+	err := materializeDiffOutputAsTable(
+		ctx,
+		func() {},
+		ses,
+		bh,
+		&tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}},
+		tblStuff,
+		retCh,
+	)
+	require.ErrorContains(t, err, "injected insert failure")
+	require.Len(t, sqls, 3)
+	require.True(t, strings.HasPrefix(sqls[0], "create table `out_db`.`diff_out`"))
+	require.True(t, strings.HasPrefix(sqls[1], "insert into `out_db`.`diff_out`"))
+	require.Equal(t, "drop table if exists `out_db`.`diff_out`", sqls[2])
 }
 
 func TestDataBranchOutputBuildOutputSchema(t *testing.T) {

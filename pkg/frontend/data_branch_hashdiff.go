@@ -67,6 +67,12 @@ func handleDelsOnLCA(
 		expandedPKColIdxes = tblStuff.def.pkColIdxes
 		snapshotTS         = types.TimestampToTS(snapshot)
 	)
+	lcaEnumValues := make(map[string]string)
+	for _, col := range lcaTblDef.Cols {
+		if col != nil && types.T(col.Typ.Id) == types.T_enum {
+			lcaEnumValues[strings.ToLower(col.Name)] = col.Typ.GetEnumvalues()
+		}
+	}
 
 	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
 	if forceReaderProbe {
@@ -277,7 +283,10 @@ func handleDelsOnLCA(
 
 			lcaHitRows++
 			for j := 1; j < len(cols); j++ {
-				if err = dBat.Vecs[j-1].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
+				if err = appendLCAProbeValue(
+					dBat.Vecs[j-1], cols[j], i,
+					lcaEnumValues[strings.ToLower(tblStuff.def.colNames[j-1])], ses.proc.Mp(),
+				); err != nil {
 					return false
 				}
 			}
@@ -320,6 +329,43 @@ func handleDelsOnLCA(
 	)
 
 	return
+}
+
+// appendLCAProbeValue appends a column returned by the LCA SQL probe to the
+// corresponding physical table vector. A RIGHT JOIN exposes ENUM columns as
+// VARCHAR labels, so they need to be restored to their physical enum codes
+// before the batch enters the diff pipeline. Other columns must retain their
+// physical type; copying mismatched vector storage would silently corrupt data.
+func appendLCAProbeValue(
+	dst, src *vector.Vector,
+	row int,
+	enumValues string,
+	mp *mpool.MPool,
+) error {
+	if dst.GetType().Oid == src.GetType().Oid {
+		return dst.UnionOne(src, int64(row), mp)
+	}
+
+	if dst.GetType().Oid != types.T_enum ||
+		(src.GetType().Oid != types.T_varchar && src.GetType().Oid != types.T_char && src.GetType().Oid != types.T_text) {
+		return moerr.NewInternalErrorNoCtxf(
+			"unexpected LCA probe type conversion: source=%s target=%s",
+			src.GetType().String(), dst.GetType().String(),
+		)
+	}
+
+	if src.IsConstNull() || src.GetNulls().Contains(uint64(row)) {
+		return vector.AppendNull(dst, mp)
+	}
+	if src.IsConst() {
+		row = 0
+	}
+
+	val, err := types.ParseEnum(enumValues, src.UnsafeGetStringAt(row))
+	if err != nil {
+		return err
+	}
+	return vector.AppendFixed(dst, val, false, mp)
 }
 
 func lcaProbeJoinCastType(typ types.Type) (string, bool) {

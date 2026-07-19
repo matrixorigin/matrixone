@@ -705,6 +705,7 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+	txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	rangeRel := mock_frontend.NewMockRelation(ctrl)
@@ -1025,6 +1026,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		rangeRel := mock_frontend.NewMockRelation(ctrl)
@@ -1733,6 +1735,33 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAppendLCAProbeValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	t.Run("restores enum code from right join label", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_enum.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("blue"), false, mp))
+		require.NoError(t, appendLCAProbeValue(dst, src, 0, "red,blue,green", mp))
+		require.Equal(t, []types.Enum{2}, vector.MustFixedColWithTypeCheck[types.Enum](dst))
+	})
+
+	t.Run("rejects unsupported storage conversion", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_int64.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
+		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unexpected LCA probe type conversion")
+	})
 }
 
 func TestValidateLeadingRowID(t *testing.T) {

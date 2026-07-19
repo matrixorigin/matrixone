@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
 )
@@ -398,24 +399,48 @@ func (output *diffOutputTable) qualifiedName() string {
 	return qualifiedTableName(output.databaseName, output.tableName)
 }
 
-func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuff) string {
+func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuff) (string, error) {
 	baseTableDef := tblStuff.baseRel.GetTableDef(ctx)
-	baseTable := qualifiedTableName(baseTableDef.DbName, baseTableDef.Name)
+	if baseTableDef == nil {
+		return "", moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS base table definition is unavailable")
+	}
 
-	selectExprs := []string{
-		fmt.Sprintf("cast(null as varchar(255)) as %s", quoteIdentifierForSQL(output.columnNames[0])),
-		fmt.Sprintf("cast(null as varchar(16)) as %s", quoteIdentifierForSQL(output.columnNames[1])),
+	columnDefs := []string{
+		fmt.Sprintf("%s varchar(255) default null", quoteIdentifierForSQL(output.columnNames[0])),
+		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
 	for _, idx := range output.projectedIdxes {
-		selectExprs = append(selectExprs, fmt.Sprintf(
-			"src.%s", quoteIdentifierForSQL(tblStuff.def.colNames[idx]),
-		))
+		name := tblStuff.def.colNames[idx]
+		colDef := dataBranchOutputColumnDef(baseTableDef, name)
+		if colDef == nil {
+			return "", moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH DIFF OUTPUT AS base column %q is unavailable", name,
+			)
+		}
+
+		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
+		if colDef.Typ.NotNullable {
+			columnDef += " not null"
+		} else {
+			columnDef += " default null"
+		}
+		columnDefs = append(columnDefs, columnDef)
 	}
 
-	return fmt.Sprintf(
-		"create table %s as select %s from %s as src where 1=0",
-		output.qualifiedName(), strings.Join(selectExprs, ","), baseTable,
-	)
+	// Use the relation definition already resolved for the DIFF source. In
+	// particular, a named snapshot can refer to a table version whose name has
+	// since been dropped or recreated, so name-based time-travel SQL is not a
+	// reliable way to derive this schema.
+	return fmt.Sprintf("create table %s (%s)", output.qualifiedName(), strings.Join(columnDefs, ",")), nil
+}
+
+func dataBranchOutputColumnDef(tableDef *plan2.TableDef, name string) *plan2.ColDef {
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil && strings.EqualFold(colDef.Name, name) {
+			return colDef
+		}
+	}
+	return nil
 }
 
 func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
@@ -456,7 +481,12 @@ func materializeDiffOutputAsTable(
 		}
 	}()
 
-	if err = execDataBranchOutputSQL(ctx, bh, output.createSQL(ctx, tblStuff)); err != nil {
+	var createSQL string
+	if createSQL, err = output.createSQL(ctx, tblStuff); err != nil {
+		cancel()
+		return err
+	}
+	if err = execDataBranchOutputSQL(ctx, bh, createSQL); err != nil {
 		cancel()
 		return err
 	}

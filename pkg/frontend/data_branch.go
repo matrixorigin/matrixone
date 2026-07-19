@@ -1714,6 +1714,14 @@ func buildSideCollectRange(
 			windowEnd  types.TS
 			nodeCTS    types.TS
 		)
+		// An ancestor must be resolved at the child clone timestamp, not at
+		// the endpoint snapshot. The ancestor may have been altered, dropped,
+		// or recreated after the child was forked.
+		nodeSnapshot := endpointSP
+		if i < len(selfPath)-1 {
+			nodeSnapshot = selfPathTS[i+1]
+		}
+		nodeSnapshotPB := nodeSnapshot.ToTimestamp()
 
 		// Resolve the relation handle for this node.
 		switch {
@@ -1727,7 +1735,7 @@ func buildSideCollectRange(
 			if rel, err = getRelationById(
 				ctx, ses, bh, nodeID, &plan2.Snapshot{
 					Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-					TS:     &timestamp.Timestamp{PhysicalTime: endpointSP.Physical()},
+					TS:     &nodeSnapshotPB,
 				},
 			); err != nil {
 				return
@@ -1742,7 +1750,7 @@ func buildSideCollectRange(
 		} else {
 			ctsList, err2 := getTablesCreationCommitTS(
 				ctx, ses, rel, rel,
-				[]types.TS{endpointSP, endpointSP},
+				[]types.TS{nodeSnapshot, nodeSnapshot},
 			)
 			if err2 != nil {
 				err = err2

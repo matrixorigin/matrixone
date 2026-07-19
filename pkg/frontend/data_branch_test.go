@@ -126,6 +126,31 @@ func TestFormatValIntoString_Nil(t *testing.T) {
 	require.Equal(t, "NULL", buf.String())
 }
 
+func TestFormatValIntoString_DataBranchSpecialTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		val  any
+		typ  types.Type
+		want string
+	}{
+		{"bit", uint64(7), types.New(types.T_bit, 10, 0), "7"},
+		{"uuid string", "12345678-1234-1234-1234-123456789012", types.T_uuid.ToType(), "'12345678-1234-1234-1234-123456789012'"},
+		{"uuid value", types.Uuid{0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12}, types.T_uuid.ToType(), "'12345678-1234-1234-1234-123456789012'"},
+		{"enum", types.Enum(2), types.T_enum.ToType(), "2"},
+		{"datalink", []byte("file:///tmp/a.csv"), types.T_datalink.ToType(), "cast('file:///tmp/a.csv' as datalink)"},
+		{"geometry", []byte("POINT(1 2)"), types.T_geometry.ToType(), "cast(st_geomfromtext('POINT(1 2)') as geometry)"},
+		{"geometry32", []byte("POINT(1 2)"), types.T_geometry32.ToType(), "cast(st_geomfromtext('POINT(1 2)') as geometry32)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, tt.val, tt.typ, &buf))
+			require.Equal(t, tt.want, buf.String())
+		})
+	}
+}
+
 func TestFormatValIntoString_UnsupportedType(t *testing.T) {
 	var buf bytes.Buffer
 	ses := &Session{}
