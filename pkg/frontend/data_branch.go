@@ -1085,7 +1085,7 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 			return false
 		}
 
-		if leftDef.Cols[i].Typ.Id != rightDef.Cols[i].Typ.Id {
+		if !isDataBranchLogicalTypeEquivalent(leftDef.Cols[i].Typ, rightDef.Cols[i].Typ) {
 			return false
 		}
 
@@ -1107,6 +1107,19 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 	}
 
 	return true
+}
+
+// isDataBranchLogicalTypeEquivalent compares the type metadata that controls
+// both DIFF value interpretation and OUTPUT AS table DDL. A relation ID can be
+// preserved by an inplace ALTER, so matching column IDs and OIDs alone do not
+// guarantee that values valid on one side can be materialized into the other.
+func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
+	return left.Id == right.Id &&
+		left.Width == right.Width &&
+		left.Scale == right.Scale &&
+		left.Enumvalues == right.Enumvalues &&
+		left.NotNullable == right.NotNullable &&
+		left.AutoIncr == right.AutoIncr
 }
 
 func getRelationById(

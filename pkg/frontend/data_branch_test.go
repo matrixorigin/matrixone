@@ -59,6 +59,63 @@ func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 	require.Equal(t, []int{0, 2}, dataBranchFakePKColIdxes(tblDef))
 }
 
+func TestDataBranchSchemaEquivalentRequiresCompleteLogicalTypes(t *testing.T) {
+	newTableDef := func() *plan.TableDef {
+		return &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Primary: true, NotNull: true, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{ColId: 2, Name: "payload", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{ColId: 3, Name: "amount", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 2}},
+			{ColId: 4, Name: "color", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}},
+		}}
+	}
+
+	t.Run("equal schemas", func(t *testing.T) {
+		require.True(t, isSchemaEquivalent(newTableDef(), newTableDef()))
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.TableDef)
+	}{
+		{
+			name: "varchar width",
+			mutate: func(def *plan.TableDef) {
+				def.Cols[1].Typ.Width = 80
+			},
+		},
+		{
+			name: "decimal scale",
+			mutate: func(def *plan.TableDef) {
+				def.Cols[2].Typ.Scale = 4
+			},
+		},
+		{
+			name: "enum definition",
+			mutate: func(def *plan.TableDef) {
+				def.Cols[3].Typ.Enumvalues = "red,green"
+			},
+		},
+		{
+			name: "type nullability",
+			mutate: func(def *plan.TableDef) {
+				def.Cols[1].Typ.NotNullable = true
+			},
+		},
+		{
+			name: "auto increment",
+			mutate: func(def *plan.TableDef) {
+				def.Cols[1].Typ.AutoIncr = true
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := newTableDef(), newTableDef()
+			tc.mutate(right)
+			require.False(t, isSchemaEquivalent(left, right))
+		})
+	}
+}
+
 func TestFormatValIntoString_StringEscaping(t *testing.T) {
 	var buf bytes.Buffer
 	ses := &Session{}

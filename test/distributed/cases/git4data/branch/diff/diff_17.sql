@@ -310,5 +310,20 @@ data branch diff branch_empty against base_empty output as diff_txn_existing;
 rollback;
 select * from diff_txn_existing;
 
+-- Case 13: inplace ALTER can preserve the branch column ID while changing
+-- logical type metadata. Reject the DIFF before OUTPUT AS creates a table;
+-- otherwise a target value valid under VARCHAR(80) would be inserted into the
+-- base-side VARCHAR(20) result schema.
+create table base_schema_mismatch(id int primary key, payload varchar(20));
+data branch create table branch_schema_mismatch from base_schema_mismatch;
+alter table branch_schema_mismatch modify payload varchar(80);
+insert into branch_schema_mismatch values (1, repeat(char(120), 40));
+-- @regex("target table schema is not equivalent",true)
+data branch diff branch_schema_mismatch against base_schema_mismatch
+    output as diff_schema_mismatch;
+select count(*) as diff_schema_mismatch_tables
+    from mo_catalog.mo_tables
+    where reldatabase = 'test_diff_output_as' and relname = 'diff_schema_mismatch';
+
 drop database test_diff_output_as_dst;
 drop database test_diff_output_as;
