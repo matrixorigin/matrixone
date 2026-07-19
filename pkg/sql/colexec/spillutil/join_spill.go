@@ -1125,12 +1125,12 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		}
 		builder.InputBatchRowCount += bat.RowCount()
 
-		if colexec.ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
-			if bucket.Depth >= SpillMaxPass {
-				builder.FreeHashMapAndBatches(proc)
-				builder.Free(proc)
-				return nil, BucketSkip, noProgressError(proc, bucket.Depth)
-			}
+		// The spill threshold is a heuristic, not a hard memory limit. At the
+		// recursion limit, attempt the build and let aggregate budget admission
+		// decide whether it is safe; a rejected map allocation remains a
+		// controlled query error instead of an OOM.
+		if bucket.Depth < SpillMaxPass &&
+			colexec.ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader, nil)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
@@ -1350,7 +1350,6 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	}
 
 	var childBuildRows, childProbeRows int64
-	var largestChild int64
 	for i := range buildWriters {
 		hasBuild := buildWriters[i].Created()
 		hasProbe := probeWriters[i].Created()
@@ -1360,9 +1359,6 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		allProbeRows := probeWriters[i].Rows
 		childBuildRows += allBuildRows
 		childProbeRows += allProbeRows
-		if allBuildRows > largestChild {
-			largestChild = allBuildRows
-		}
 		// Keep every non-empty build child even when its probe side is empty.
 		// This preserves exact build-row conservation; the next rebuild simply
 		// skips the child for an inner join. Probe-only children remain relevant
@@ -1418,7 +1414,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		}
 		return nil, nil
 	}
-	if childBuildRows != buildRows || largestChild >= buildRows || len(subBuckets) == 0 {
+	if childBuildRows != buildRows || len(subBuckets) == 0 {
 		for i := range subBuckets {
 			if subBuckets[i].BuildFd != nil {
 				subBuckets[i].BuildFd.Close()

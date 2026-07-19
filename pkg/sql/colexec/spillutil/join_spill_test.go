@@ -1572,6 +1572,11 @@ func TestReSpillConservesBuildAndProbeRows(t *testing.T) {
 func TestReSpillDepthLimit(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(64<<10, 64<<10)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
 
 	bat := makeInt32Batch(proc, []int32{1, 2, 3, 4, 5})
 	fd := writeBuildFile(proc, "test_depth_build", bat)
@@ -1579,6 +1584,7 @@ func TestReSpillDepthLimit(t *testing.T) {
 	engine := NewSpillEngine(SpillEngineConfig{
 		BuildKeyExprs:  makeTestKeyExpr(),
 		SpillThreshold: 1,
+		Budget:         generation,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 	engine.buckets[0].Depth = SpillMaxPass
