@@ -2959,6 +2959,7 @@ func TestReplaceDetectSqls(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction(), "FK-sensitive REPLACE must not be cached")
 
 	var preCheck string
 	for _, sql := range query.DetectSqls {
@@ -2973,6 +2974,114 @@ func TestReplaceDetectSqls(t *testing.T) {
 	assert.Contains(t, preCheck, "parent_id", "pre-check SQL should reference the FK column")
 	assert.Contains(t, preCheck, "`id`", "pre-check SQL should reference the referred PK column")
 	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+}
+
+func TestReplaceForeignKeyPlanRemainsSensitiveWhenChecksDisabled(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case "foreign_key_checks":
+			return int64(0), nil
+		case "sql_mode":
+			return "", nil
+		default:
+			return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+		}
+	}
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_cp VALUES (1, 'new')")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.True(t, query.GetHasForeignKeyAction())
+	require.Empty(t, query.GetDetectSqls())
+}
+
+func TestReplaceParentSideFKAutoIncrementZero(t *testing.T) {
+	parseReplace := func(t *testing.T, literal string) *tree.Replace {
+		t.Helper()
+		stmt, err := mysql.ParseOne(context.Background(),
+			"REPLACE INTO replace_fk_cp VALUES ("+literal+", 'new')", 1)
+		require.NoError(t, err)
+		return stmt.(*tree.Replace)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		sqlMode    string
+		literal    string
+		wantAction bool
+	}{
+		{name: "numeric zero allocates generated value", sqlMode: "", literal: "0", wantAction: false},
+		{name: "string zero allocates generated value", sqlMode: "", literal: "'0'", wantAction: false},
+		{name: "zero is explicit key", sqlMode: "NO_AUTO_VALUE_ON_ZERO", literal: "0", wantAction: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+			parent.Cols[parent.Name2ColIndex["id"]].Typ.AutoIncr = true
+			mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.sqlMode, nil
+				}
+				if name == "foreign_key_checks" {
+					return int64(1), nil
+				}
+				return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+			}
+
+			_, _, actions, err := genParentSideReplaceFKSqls(
+				&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, parseReplace(t, tc.literal))
+			require.NoError(t, err)
+			if tc.wantAction {
+				require.Len(t, actions, 1)
+				assert.Contains(t, actions[0], "`id` = cast(0 as INT)")
+			} else {
+				assert.Empty(t, actions)
+			}
+		})
+	}
+}
+
+func TestReplaceParentSideFKMaterializesGeneratedUniqueKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+	if parent.Name2ColIndex == nil {
+		parent.Name2ColIndex = make(map[string]int32, len(parent.Cols)+1)
+		for i, col := range parent.Cols {
+			parent.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	generatedPos := int32(len(parent.Cols))
+	parent.Name2ColIndex["g"] = generatedPos
+	parent.Cols = append(parent.Cols, &plan.ColDef{
+		Name:  "g",
+		ColId: 999,
+		Typ:   plan.Type{Id: int32(types.T_int32)},
+		GeneratedCol: &plan.GeneratedCol{
+			Expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "+"},
+					Args: []*plan.Expr{
+						{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+						makePlan2Int32ConstExprWithType(1),
+					},
+				}},
+			},
+			OriginString: "`id` + 1",
+		},
+	})
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"g"}})
+	stmt, err := mysql.ParseOne(context.Background(), "REPLACE INTO replace_fk_cp(id, v) VALUES (1, 'new')", 1)
+	require.NoError(t, err)
+
+	lockSQL, _, actions, err := genParentSideReplaceFKSqls(
+		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
+	require.NoError(t, err)
+	require.Len(t, actions, 1)
+	assert.Contains(t, actions[0], "`__mo_replace_parent`.`g` = cast((select cast(`id` + 1 as INT)")
+	assert.Contains(t, actions[0], "cast(1 as INT) as `id`")
+	_, err = mysql.ParseOne(context.Background(), lockSQL, 1)
+	require.NoError(t, err, "generated parent lock SQL must be parseable")
 }
 
 func TestReplaceDetectSqlsExplicitColumnsCaseInsensitive(t *testing.T) {
@@ -3795,6 +3904,96 @@ func TestChildInsertLocksReferencedUniqueIndexKey(t *testing.T) {
 		}
 	}
 	t.Fatal("referenced unique-index shared lock not found")
+}
+
+func TestChildInsertUsesCanonicalForeignKeyLockOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := mock.ctxt.tables["replace_fk_p"]
+	child := mock.ctxt.tables["replace_fk_c"]
+	if parent.Name2ColIndex == nil {
+		parent.Name2ColIndex = make(map[string]int32)
+		for i, col := range parent.Cols {
+			parent.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	if child.Name2ColIndex == nil {
+		child.Name2ColIndex = make(map[string]int32)
+		for i, col := range child.Cols {
+			child.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	parentPos := len(parent.Cols) - 1
+	parent.Cols = append(parent.Cols, nil)
+	copy(parent.Cols[parentPos+1:], parent.Cols[parentPos:])
+	parent.Cols[parentPos] = &plan.ColDef{
+		Name: "k", ColId: 3, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20},
+	}
+	parent.Name2ColIndex["k"] = int32(parentPos)
+	parent.Name2ColIndex[catalog.Row_ID] = int32(parentPos + 1)
+	child.Cols[1].Typ = plan.Type{Id: int32(types.T_varchar), Width: 20}
+	childPos := len(child.Cols) - 1
+	child.Cols = append(child.Cols, nil)
+	copy(child.Cols[childPos+1:], child.Cols[childPos:])
+	child.Cols[childPos] = &plan.ColDef{
+		Name: "pid2", ColId: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20},
+	}
+	child.Name2ColIndex["pid2"] = int32(childPos)
+	child.Name2ColIndex[catalog.Row_ID] = int32(childPos + 1)
+	child.Fkeys[0].ForeignCols = []uint64{1}
+	child.Fkeys = append(child.Fkeys, &plan.ForeignKeyDef{
+		Cols: []uint64{2}, ForeignTbl: parent.TblId, ForeignCols: []uint64{3},
+	})
+
+	addIndex := func(indexName, tableName string, tableID uint64, part string) {
+		parent.Indexes = append(parent.Indexes, &plan.IndexDef{
+			IndexName: indexName, IndexTableName: tableName, Parts: []string{part},
+			Unique: true, TableExist: true, IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		})
+		mock.ctxt.tables[tableName] = &plan.TableDef{
+			TblId: tableID, Name: tableName,
+			Cols: []*plan.ColDef{
+				{Name: catalog.IndexTableIndexColName, ColId: 0, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+				{Name: catalog.Row_ID, ColId: 1, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+			},
+			Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.IndexTableIndexColName},
+				PkeyColName: catalog.IndexTableIndexColName},
+			Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.Row_ID: 1},
+		}
+		mock.ctxt.objects[tableName] = &plan.ObjectRef{
+			Obj: int64(tableID), SchemaName: mock.ctxt.objects["replace_fk_p"].SchemaName, ObjName: tableName,
+		}
+	}
+	// Declaration order is z then a; physical lock order must be a then z.
+	addIndex("uk_v", "__mo_index_z", 77911, "v")
+	addIndex("uk_k", "__mo_index_a", 77912, "k")
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 'x', 'y')")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	lockNode := make(map[uint64]int32)
+	for nodeID, node := range query.Nodes {
+		for _, target := range node.LockTargets {
+			if target.Mode == lockpb.LockMode_Shared {
+				lockNode[target.TableId] = int32(nodeID)
+			}
+		}
+	}
+	require.Contains(t, lockNode, uint64(77911))
+	require.Contains(t, lockNode, uint64(77912))
+	var contains func(int32, int32) bool
+	contains = func(root, target int32) bool {
+		if root == target {
+			return true
+		}
+		for _, childID := range query.Nodes[root].Children {
+			if contains(childID, target) {
+				return true
+			}
+		}
+		return false
+	}
+	assert.True(t, contains(lockNode[77911], lockNode[77912]),
+		"z lock must depend on the lexically earlier a lock regardless of FK declaration order")
 }
 
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {

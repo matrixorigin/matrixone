@@ -4312,6 +4312,9 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 		return true
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
+		if q.Query.GetHasForeignKeyAction() {
+			return false
+		}
 		for _, node := range q.Query.Nodes {
 			if node.NotCacheable {
 				return false

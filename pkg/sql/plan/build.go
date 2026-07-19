@@ -186,6 +186,14 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
+	if len(tblInfo.tableDefs) == 1 &&
+		(len(tblInfo.tableDefs[0].Fkeys) > 0 || len(tblInfo.tableDefs[0].RefChildTbls) > 0) {
+		// The presence or absence of DetectSqls depends on the session's
+		// foreign_key_checks value. Keep the plan FK-sensitive even when the
+		// variable is currently off, otherwise a cached plan built without the
+		// checks could survive after they are enabled.
+		query.HasForeignKeyAction = true
+	}
 	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
 		parentLock, parentChecks, parentActions, err := genParentSideReplaceFKSqls(
 			ctx, tblInfo.objRef[0], tblInfo.tableDefs[0], stmt)
@@ -228,7 +236,6 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		for _, sql := range preCheckSqls {
 			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
 		}
-
 	}
 
 	return &Plan{

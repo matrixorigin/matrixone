@@ -53,6 +53,7 @@ type MockCompilerContext struct {
 	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
 	ResolveAccountIdsFunc func([]string) ([]uint32, error)
 	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -102,6 +103,9 @@ func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if m.ResolveVariableFunc != nil {
+		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
+	}
 	vars := make(map[string]interface{})
 	vars["str_var"] = "str"
 	vars["int_var"] = 20

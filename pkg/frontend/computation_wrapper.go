@@ -544,8 +544,12 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 
-	// rebuild plan when schema changed
-	if change {
+	// FK-sensitive plans also depend on the current foreign_key_checks session
+	// value, which does not invalidate prepared statements. Rebuild them for
+	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
+	// observe the current setting.
+	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
+	if change || fkSensitive {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
@@ -568,7 +572,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	// query); recompiling would fail with ErrCantCompileForPrepare on every
 	// execution, so leave it to the regular compile path (isPrepare=false).
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
-	if change && prepareStmt.compile != nil {
+	if (change || fkSensitive) && prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
@@ -635,6 +639,14 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 		return true
 	}
 	return !query.GetHasForeignKeyAction()
+}
+
+func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
+	if schemaChanged || p == nil {
+		return schemaChanged
+	}
+	query := p.GetQuery()
+	return query != nil && query.GetHasForeignKeyAction()
 }
 
 func createCompile(

@@ -1253,6 +1253,20 @@ func genParentSideReplaceFKSqls(
 		}
 		return nil, false
 	}
+	treatAutoIncrementZeroAsGenerated := true
+	if sqlMode, err := ctx.ResolveVariable("sql_mode", true, false); err != nil {
+		return "", nil, nil, err
+	} else if mode, ok := sqlMode.(string); ok {
+		treatAutoIncrementZeroAsGenerated = !strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
+	}
+	isExplicitNumericZero := func(expr tree.Expr) bool {
+		value, ok := expr.(*tree.NumVal)
+		if !ok || value.ValType == tree.P_null || value.ValType == tree.P_bool {
+			return false
+		}
+		number, err := strconv.ParseFloat(value.String(), 64)
+		return err == nil && number == 0
+	}
 
 	type uniqueKey struct {
 		parts         []string
@@ -1392,6 +1406,102 @@ func genParentSideReplaceFKSqls(
 	castForColumn := func(value string, col *plan.ColDef) string {
 		return fmt.Sprintf("cast(%s as %s)", value, sqlTypeForColumn(col))
 	}
+	formatInputLiteral := func(expr tree.Expr, col *plan.ColDef) (string, error) {
+		switch value := expr.(type) {
+		case *tree.NumVal:
+			if value.ValType == tree.P_char &&
+				(types.T(col.Typ.Id) == types.T_char || types.T(col.Typ.Id) == types.T_varchar) &&
+				col.Typ.Width > 0 && int32(utf8.RuneCountInString(value.String())) > col.Typ.Width {
+				return "", moerr.NewInvalidInputf(ctx.GetContext(),
+					"Src length %d is larger than Dest length %d",
+					utf8.RuneCountInString(value.String()), col.Typ.Width)
+			}
+			expr.Format(literalFmt)
+		case *tree.StrVal:
+			if (types.T(col.Typ.Id) == types.T_char || types.T(col.Typ.Id) == types.T_varchar) &&
+				col.Typ.Width > 0 && int32(utf8.RuneCountInString(value.String())) > col.Typ.Width {
+				return "", moerr.NewInvalidInputf(ctx.GetContext(),
+					"Src length %d is larger than Dest length %d",
+					utf8.RuneCountInString(value.String()), col.Typ.Width)
+			}
+			expr.Format(literalFmt)
+		default:
+			return "", moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
+		}
+		formatted := literalFmt.String()
+		literalFmt.Reset()
+		return formatted, nil
+	}
+	var materializeInputColumn func(tree.Exprs, int, map[int]bool) (string, error)
+	materializeInputColumn = func(row tree.Exprs, colIdx int, visiting map[int]bool) (string, error) {
+		if colIdx < 0 || colIdx >= len(parent.Cols) {
+			return "", moerr.NewInternalErrorf(ctx.GetContext(), "REPLACE conflict column position %d not found", colIdx)
+		}
+		col := parent.Cols[colIdx]
+		if col.GeneratedCol != nil {
+			if visiting[colIdx] {
+				return "", moerr.NewInternalErrorf(ctx.GetContext(),
+					"cyclic generated column dependency at %s", col.Name)
+			}
+			visiting[colIdx] = true
+			defer delete(visiting, colIdx)
+			if strings.TrimSpace(col.GeneratedCol.OriginString) == "" {
+				return "", moerr.NewNotSupportedf(ctx.GetContext(),
+					"REPLACE with generated conflict key %s lacking its source expression", col.Name)
+			}
+			refs := collectRefColPos(col.GeneratedCol.Expr)
+			slices.Sort(refs)
+			refs = slices.Compact(refs)
+			selectParts := make([]string, 0, len(refs))
+			for _, refPos := range refs {
+				refExpr, err := materializeInputColumn(row, int(refPos), visiting)
+				if err != nil {
+					return "", err
+				}
+				selectParts = append(selectParts, fmt.Sprintf("%s as %s", refExpr,
+					quoteIdentifier(parent.Cols[refPos].Name)))
+			}
+			generatedExpr := castForColumn(col.GeneratedCol.OriginString, col)
+			if len(selectParts) == 0 {
+				return "(select " + generatedExpr + ")", nil
+			}
+			return fmt.Sprintf("(select %s from (select %s) as %s)", generatedExpr,
+				strings.Join(selectParts, ", "), quoteIdentifier("__mo_replace_input")), nil
+		}
+
+		pos, supplied := positions[strings.ToLower(col.Name)]
+		if !supplied || pos >= len(row) {
+			if col.Typ.AutoIncr {
+				return "null", nil
+			}
+			value, isNull, err := materializeDefault(col.Name)
+			if err != nil {
+				return "", err
+			}
+			if isNull {
+				return "null", nil
+			}
+			return castForColumn(value, col), nil
+		}
+		if _, ok := row[pos].(*tree.DefaultVal); ok {
+			value, isNull, err := materializeDefault(col.Name)
+			if err != nil {
+				return "", err
+			}
+			if isNull {
+				return "null", nil
+			}
+			return castForColumn(value, col), nil
+		}
+		if col.Typ.AutoIncr && treatAutoIncrementZeroAsGenerated && isExplicitNumericZero(row[pos]) {
+			return "null", nil
+		}
+		value, err := formatInputLiteral(row[pos], col)
+		if err != nil {
+			return "", err
+		}
+		return castForColumn(value, col), nil
+	}
 	conflictPredicates := make([]string, 0, len(values.Rows)*len(uniqueKeys))
 	for _, row := range values.Rows {
 		for _, key := range uniqueKeys {
@@ -1412,7 +1522,18 @@ func genParentSideReplaceFKSqls(
 					}
 					var isNull bool
 					var err error
-					incomingExpr, isNull, err = materializeDefault(colName)
+					if col.GeneratedCol != nil {
+						colIdx := -1
+						for i, candidate := range parent.Cols {
+							if strings.EqualFold(candidate.Name, colName) {
+								colIdx = i
+								break
+							}
+						}
+						incomingExpr, err = materializeInputColumn(row, colIdx, make(map[int]bool))
+					} else {
+						incomingExpr, isNull, err = materializeDefault(colName)
+					}
 					if err != nil {
 						return "", nil, nil, err
 					}
@@ -1421,6 +1542,14 @@ func genParentSideReplaceFKSqls(
 						break
 					}
 				} else {
+					if col.Typ.AutoIncr && treatAutoIncrementZeroAsGenerated && isExplicitNumericZero(row[pos]) {
+						// PRE_INSERT turns an explicit numeric zero into NULL and
+						// allocates a fresh auto-increment value unless
+						// NO_AUTO_VALUE_ON_ZERO is enabled. Such a value cannot
+						// identify an old parent row during this pre-phase.
+						keyCannotConflict = true
+						break
+					}
 					switch value := row[pos].(type) {
 					case *tree.NumVal:
 						if value.ValType == tree.P_char &&

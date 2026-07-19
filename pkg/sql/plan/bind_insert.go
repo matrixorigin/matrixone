@@ -1082,6 +1082,55 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		}
 		return true
 	}
+	validationFks := nonSelfFks
+	type orderedFK struct {
+		fk  *plan.ForeignKeyDef
+		key string
+	}
+	ordered := make([]orderedFK, 0, len(nonSelfFks))
+	for _, fk := range nonSelfFks {
+		_, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
+		if err != nil {
+			return 0, nil, err
+		}
+		if parentTableDef == nil {
+			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+		}
+		referencedNames, err := parentColNames(parentTableDef, fk.ForeignCols)
+		if err != nil {
+			return 0, nil, err
+		}
+		pkeyNames := []string(nil)
+		if parentTableDef.Pkey != nil {
+			pkeyNames = parentTableDef.Pkey.Names
+			if len(pkeyNames) == 0 && parentTableDef.Pkey.PkeyColName != "" {
+				pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
+			}
+		}
+		// Base-table locks sort before hidden-index locks, matching the parent
+		// REPLACE pre-phase. Hidden targets then use the physical index-table
+		// name as the stable order shared by both sides.
+		targetKey := "0:"
+		if !partsEqual(pkeyNames, referencedNames) {
+			for _, idxDef := range parentTableDef.Indexes {
+				if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+					targetKey = "1:" + idxDef.IndexTableName
+					break
+				}
+			}
+		}
+		ordered = append(ordered, orderedFK{
+			fk:  fk,
+			key: fmt.Sprintf("%020d:%s", fk.ForeignTbl, targetKey),
+		})
+	}
+	slices.SortStableFunc(ordered, func(left, right orderedFK) int {
+		return strings.Compare(left.key, right.key)
+	})
+	nonSelfFks = make([]*plan.ForeignKeyDef, len(ordered))
+	for i := range ordered {
+		nonSelfFks[i] = ordered[i].fk
+	}
 
 	for _, fk := range nonSelfFks {
 		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
@@ -1221,7 +1270,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	lastNodeID = builder.appendTaggedSinkScan(bindCtx, lockStep, selectTag)
 	selectNode = builder.qry.Nodes[lastNodeID]
 	oks := make([]*plan.Expr, 0, len(nonSelfFks))
-	for _, fk := range nonSelfFks {
+	for _, fk := range validationFks {
 		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
 		if err != nil {
 			return 0, nil, err
