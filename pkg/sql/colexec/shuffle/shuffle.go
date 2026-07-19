@@ -167,6 +167,8 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 		if err != nil {
 			return result, err
 		}
+		// Child completion is not shuffle completion: buffered batches may remain.
+		result.Status = vm.ExecNext
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true

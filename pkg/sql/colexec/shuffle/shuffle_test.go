@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -311,6 +312,69 @@ func TestShuffleStandaloneDrainsAllBucketsAndPreservesRows(t *testing.T) {
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 	}
+}
+
+func TestShuffleDrainsBufferedRowsAfterChildExecStop(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	valueForBucket := func(target uint64) int64 {
+		for value := int64(0); ; value++ {
+			if plan2.SimpleInt64HashToRange(uint64(value), 2) == target {
+				return value
+			}
+		}
+	}
+	bucket0 := valueForBucket(0)
+	bucket1 := valueForBucket(1)
+	newInput := func(values []int64) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.NewInt64Vector(len(values), types.T_int64.ToType(), mp, false, nil, values)
+		bat.SetRowCount(len(values))
+		return bat
+	}
+
+	source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newInput([]int64{bucket0, bucket1, bucket0, bucket1}),
+		newInput([]int64{bucket0, bucket0, bucket1, bucket1}),
+	})
+	limitArg := limit.NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(6))
+	limitArg.AppendChild(source)
+	arg := NewArgument()
+	arg.BucketNum = 2
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.ShuffleExpr = &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}
+	arg.DrainAllBuckets = true
+	arg.AppendChild(limitArg)
+	defer func() {
+		source.Free(proc, false, nil)
+		limitArg.Reset(proc, false, nil)
+		limitArg.Free(proc, false, nil)
+		limitArg.Release()
+		arg.Reset(proc, false, nil)
+		arg.Free(proc, false, nil)
+		arg.Release()
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	require.NoError(t, vm.Prepare(arg, proc))
+	rows := 0
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch != nil && !result.Batch.IsEmpty() {
+			rows += result.Batch.RowCount()
+		}
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+	}
+	require.Equal(t, 6, rows)
 }
 
 func TestShuffleMetadata(t *testing.T) {
