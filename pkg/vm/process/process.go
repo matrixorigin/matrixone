@@ -151,31 +151,8 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 	return proc.Base.prepareParams
 }
 
-// SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.setPrepareParams(prepareParams, nil, false)
-}
-
-// SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
-func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, false)
-}
-
-// SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
-func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, true)
-}
-
-func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
-	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
-		owned = true
-	}
-	if proc.Base.prepareParamsOwned && proc.Base.prepareParams != nil && proc.Base.prepareParams != prepareParams {
-		proc.Base.prepareParams.Free(proc.Mp())
-	}
 	proc.Base.prepareParams = prepareParams
-	proc.Base.prepareParamsIsBin = isBin
-	proc.Base.prepareParamsOwned = owned && prepareParams != nil
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

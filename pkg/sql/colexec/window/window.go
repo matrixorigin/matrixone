@@ -342,14 +342,10 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
-	if len(vecs) > 1 {
-		for _, vec := range vecs {
-			vec.Free(proc.Mp())
-		}
-		return moerr.NewInternalErrorNoCtx("the Window operator currently does not support sending split result of window function.")
+	ctr.vec, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return err
 	}
-
-	ctr.vec = vecs[0]
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}

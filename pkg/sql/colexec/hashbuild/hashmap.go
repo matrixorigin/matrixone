@@ -35,6 +35,8 @@ import (
 type HashmapBuilder struct {
 	needDupVec         bool
 	InputBatchRowCount int
+	TrackNullKeys      bool
+	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
@@ -89,7 +91,9 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	}
 	sels := hb.Sels
 	hb.Sels = message.GroupSels{}
-	return message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm := message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm.SetHasNullKey(hb.HasNullKey)
+	return jm
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -99,6 +103,21 @@ func (hb *HashmapBuilder) GetGroupCount() uint64 {
 		return hb.StrHashMap.GroupCount()
 	}
 	return 0
+}
+
+// observeNullKeys records the global fact that at least one build key contains
+// NULL. MARK joins need this fact even when the build rows are partitioned and
+// the NULL row lives in a different spill bucket from the current probe row.
+func (hb *HashmapBuilder) observeNullKeys(keyVecs []*vector.Vector) {
+	if !hb.TrackNullKeys || hb.HasNullKey {
+		return
+	}
+	for _, vec := range keyVecs {
+		if vec.HasNull() {
+			hb.HasNullKey = true
+			return
+		}
+	}
 }
 
 func (hb *HashmapBuilder) Prepare(
@@ -154,6 +173,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
+	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -178,6 +198,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.cachedStrIterator = nil
 	hb.FreeTemporaryVectors(proc)
 	hb.needDupVec = false
+	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -404,6 +425,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			if err = hb.evalBatch(vecIdx1, proc); err != nil {
 				return err
 			}
+			hb.observeNullKeys(hb.curVecs)
 			lastBatch = vecIdx1
 		}
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)

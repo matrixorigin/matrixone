@@ -428,6 +428,7 @@ message HashBuild {
   bool dedup_build_keep_last = 16;
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
+  bool track_null_keys = 19;
 }
 
 message Indexbuild {
@@ -549,7 +550,6 @@ message PrepareParamInfo {
   bytes data = 2;
   bytes area = 3;
   repeated bool nulls = 4;
-  repeated bool is_bin = 5;
 }
 
 message ProcessInfo {

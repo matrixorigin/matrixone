@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1193,6 +1194,221 @@ func TestJsonRemoveIgnoreAllRows(t *testing.T) {
 		},
 		types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, selectList)
 
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonMergeCheckFn(t *testing.T) {
+	ctx := context.Background()
+	for _, fn := range []string{"json_merge_patch", "json_merge_preserve"} {
+		_, err := GetFunctionByName(ctx, fn, []types.Type{
+			types.T_json.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.NoError(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{types.T_json.ToType()})
+		require.Error(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.Error(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{
+			types.T_any.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.NoError(t, err, fn)
+	}
+}
+
+func TestJsonMerge(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("patch follows RFC 7396 and preserves MySQL null state", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1,"nested":{"keep":1,"remove":2}}`, ``, `{"a":1}`, `{"a":1}`},
+					[]bool{false, true, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"b":2,"nested":{"remove":null,"add":3}}`, `[1,2]`, ``, ``},
+					[]bool{false, false, true, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{}`, `[1,2]`, `{"b":2}`, `2`},
+					[]bool{false, false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.Equal(t, `{"a": 1, "b": 2, "nested": {"add": 3, "keep": 1}}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `[1, 2]`, jsonVectorRowString(t, vec, 1))
+		require.True(t, vec.IsNull(2))
+		require.Equal(t, `2`, jsonVectorRowString(t, vec, 3))
+	})
+
+	t.Run("preserve merges recursively and SQL null remains null", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"a":{"x":1},"array":[1]}`), mustJsonBinaryString(t, `{"a":1}`)},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":{"y":2},"array":[2],"value":null}`, ``},
+					[]bool{false, true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePreserve, nil)
+
+		require.Equal(t, `{"a": {"x": 1, "y": 2}, "array": [1, 2], "value": null}`, jsonVectorRowString(t, vec, 0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("json literal null is a non-null JSON result", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"foo"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`null`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
+func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	trueJSON := mustJsonBinaryString(t, `true`)
+	falseJSON := mustJsonBinaryString(t, `false`)
+
+	measure := func(rows int) float64 {
+		left := make([]string, rows)
+		right := make([]string, rows)
+		for i := range rows {
+			left[i] = trueJSON
+			right[i] = falseJSON
+		}
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), left, nil),
+				NewFunctionTestInput(types.T_json.ToType(), right, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		var runErr error
+		allocs := testing.AllocsPerRun(3, func() {
+			runErr = testCase.result.PreExtendAndReset(rows)
+			if runErr == nil {
+				runErr = testCase.fn(
+					testCase.parameters,
+					testCase.result,
+					testCase.proc,
+					testCase.fnLength,
+					nil,
+				)
+			}
+		})
+		require.NoError(t, runErr)
+		return allocs
+	}
+
+	oneRow := measure(1)
+	manyRows := measure(8192)
+	require.LessOrEqual(t, manyRows, oneRow+10,
+		"wrapper allocations must not grow with rows: one=%f many=%f", oneRow, manyRows)
+}
+
+func TestJsonMergeDepthValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	overDepthArray := `[` + nestedJSONMergeObject(100, `1`) + `]`
+	overDepthObject := nestedJSONMergeObject(101, `1`)
+
+	t.Run("final non-object replacement is rejected", func(t *testing.T) {
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthArray}, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		err := testCase.fn(
+			testCase.parameters,
+			testCase.result,
+			testCase.proc,
+			testCase.fnLength,
+			nil,
+		)
+		require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+	})
+
+	tests := []struct {
+		name   string
+		fn     fEvalFn
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "patch rejects over-depth target before scalar replacement",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, nil),
+			},
+		},
+		{
+			name: "patch validates object while target is unknown",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+			},
+		},
+		{
+			name: "preserve validates argument before following SQL null",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePreserve,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				tt.inputs,
+				NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+				tt.fn,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			err := testCase.fn(
+				testCase.parameters,
+				testCase.result,
+				testCase.proc,
+				testCase.fnLength,
+				nil,
+			)
+			require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+		})
+	}
+}
+
+func TestJsonMergeIgnoreAllRowsMaterializesLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`, `still not json`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`, `still not json`}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, &FunctionSelectList{AllNull: true})
+
+	require.Equal(t, 2, vec.Length())
 	require.True(t, vec.IsNull(0))
 	require.True(t, vec.IsNull(1))
 }
@@ -2384,6 +2600,18 @@ func mustJsonBinaryString(t *testing.T, raw string) string {
 	data, err := bj.Marshal()
 	require.NoError(t, err)
 	return string(data)
+}
+
+func nestedJSONMergeObject(depth int, leaf string) string {
+	var builder strings.Builder
+	for range depth {
+		builder.WriteString(`{"a":`)
+	}
+	builder.WriteString(leaf)
+	for range depth {
+		builder.WriteByte('}')
+	}
+	return builder.String()
 }
 
 func jsonVectorRowString(t *testing.T, vec *vector.Vector, row uint64) string {
