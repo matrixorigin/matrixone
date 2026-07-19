@@ -102,6 +102,12 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "group by matching expression",
+			sql:        "insert into constraint_test.emp (sal) select ? + ? from nation group by ? + ?",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name:       "scalar subquery",
 			sql:        "insert into constraint_test.emp (sal) select (select ? + ?)",
 			want:       types.T_decimal64,
@@ -159,6 +165,59 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedNumericContextUsesSampleSuffixTarget(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal, deptno, comm) "+
+			"select ? + ?, sample(n_nationkey, 1 rows), ? + ? from nation",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Len(t, paramTypes, 4)
+	for pos, typ := range paramTypes {
+		require.Equal(t, int32(types.T_decimal64), typ.Id)
+		require.Equal(t, int32(7), typ.Width, "parameter %d has the wrong width", pos)
+		require.Equal(t, int32(2), typ.Scale, "parameter %d has the wrong scale", pos)
+	}
+}
+
+func TestGroupNumericTargetRequiresUniqueProjectionMatch(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	parseSelectClause := func(sql string) *tree.SelectClause {
+		stmt, err := mysql.ParseOne(optimizer.CurrentContext().GetContext(), sql, 1)
+		require.NoError(t, err)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		clause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		return clause
+	}
+
+	target := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}
+	matching := parseSelectClause("select ? + ?")
+	binder := &GroupBinder{
+		baseBinder: baseBinder{
+			ctx: &BindContext{numericProjectionTypes: []planpb.Type{target}},
+		},
+		selectList: matching.Exprs,
+	}
+	require.Equal(t, &target, binder.numericTargetForProjectionExpr(matching.Exprs[0].Expr))
+
+	nonMatching := parseSelectClause("select ? * ?")
+	require.Nil(t, binder.numericTargetForProjectionExpr(nonMatching.Exprs[0].Expr))
+
+	ambiguous := parseSelectClause("select ? + ?, ? + ?")
+	binder.selectList = ambiguous.Exprs
+	binder.ctx.numericProjectionTypes = []planpb.Type{target, target}
+	require.Nil(t, binder.numericTargetForProjectionExpr(ambiguous.Exprs[0].Expr))
 }
 
 func collectUniquePlanParamTypes(t *testing.T, queryPlan *Plan) map[int32]planpb.Type {

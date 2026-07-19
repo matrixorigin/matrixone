@@ -34,8 +34,11 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	var numericTarget *plan.Type
+	isOrdinal := false
+	isNumericLiteral := false
 	if isRoot {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
+			isNumericLiteral = true
 			switch numVal.Kind() {
 			case tree.Int:
 				colPos, _ := numVal.Int64()
@@ -44,6 +47,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				}
 
 				astExpr = b.selectList[colPos-1].Expr
+				isOrdinal = true
 				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
 					target := b.ctx.numericProjectionTypes[colPos-1]
 					if target.Id != 0 {
@@ -60,6 +64,9 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
 			}
 		}
+	}
+	if isRoot && !isOrdinal && !isNumericLiteral {
+		numericTarget = b.numericTargetForProjectionExpr(astExpr)
 	}
 
 	var expr *plan.Expr
@@ -89,6 +96,28 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	return expr, err
+}
+
+func (b *GroupBinder) numericTargetForProjectionExpr(astExpr tree.Expr) *plan.Type {
+	astKey := tree.String(astExpr, dialect.MYSQL)
+	matched := -1
+	for i, selectExpr := range b.selectList {
+		if tree.String(selectExpr.Expr, dialect.MYSQL) != astKey {
+			continue
+		}
+		if matched >= 0 {
+			return nil
+		}
+		matched = i
+	}
+	if matched < 0 || matched >= len(b.ctx.numericProjectionTypes) {
+		return nil
+	}
+	target := b.ctx.numericProjectionTypes[matched]
+	if target.Id == 0 {
+		return nil
+	}
+	return &target
 }
 
 func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
