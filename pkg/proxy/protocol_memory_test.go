@@ -16,9 +16,11 @@ package proxy
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +112,73 @@ func TestClientConnProtocolMemoryAdmissionUsesTransferContext(t *testing.T) {
 	require.ErrorIs(t, err, errProxyConnectionLimit)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, int64(1), limiter.used.Load())
+}
+
+func TestClientConnProtocolMemoryTransferCancellationAfterAdmission(t *testing.T) {
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+		headroomBytes: 1,
+		backendBytes:  1,
+	})
+	entered := make(chan struct{})
+	client := &clientConn{
+		ctx:                   context.Background(),
+		log:                   runtime.DefaultRuntime().Logger(),
+		protocolMemoryLimiter: limiter,
+	}
+	client.testHelper.connectToBackendContext = func(ctx context.Context) (ServerConn, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	}
+
+	transferCtx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.BuildConnWithServer(transferCtx, "old-backend")
+		result <- err
+	}()
+	<-entered
+	require.Equal(t, int64(1), limiter.used.Load(), "transfer owns the admitted transient slot")
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("transfer cancellation did not terminate post-admission work")
+	}
+	require.Zero(t, limiter.used.Load(), "canceled transfer must release global headroom")
+	reused, err := limiter.acquire(context.Background(), 1)
+	require.NoError(t, err)
+	reused.release()
+}
+
+func TestClientConnProtocolMemoryCancellationWinsConnectHandoff(t *testing.T) {
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+		headroomBytes: 1,
+		backendBytes:  1,
+	})
+	local, remote := net.Pipe()
+	defer remote.Close()
+	backend := newMockServerConn(local)
+	client := &clientConn{
+		ctx:                   context.Background(),
+		log:                   runtime.DefaultRuntime().Logger(),
+		protocolMemoryLimiter: limiter,
+	}
+	transferCtx, cancel := context.WithCancel(context.Background())
+	client.testHelper.connectToBackendContext = func(context.Context) (ServerConn, error) {
+		cancel()
+		return backend, nil
+	}
+
+	conn, err := client.BuildConnWithServer(transferCtx, "old-backend")
+	require.Nil(t, conn)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, limiter.used.Load(), "canceled handoff must release global headroom")
+	_ = remote.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err = remote.Write([]byte{1})
+	require.Error(t, err, "canceled handoff must close the unowned backend")
 }
 
 func TestProtocolMemoryServerConnLifecycle(t *testing.T) {

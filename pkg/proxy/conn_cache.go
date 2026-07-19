@@ -152,6 +152,14 @@ func (s *serverConnAuth) close() error {
 	return err
 }
 
+func (s *serverConnAuth) ExecStmtContext(
+	ctx context.Context,
+	stmt internalStmt,
+	resp chan<- []byte,
+) (bool, error) {
+	return execStmtWithContext(ctx, s.ServerConn, stmt, resp)
+}
+
 // cacheStore is the storage which stores the cached connections.
 type cacheStore struct {
 	connections []*serverConnAuth
@@ -186,6 +194,10 @@ type ConnCache interface {
 	Count() int
 	// Close closes connection cache instance.
 	Close() error
+}
+
+type contextConnCache interface {
+	PopContext(context.Context, cacheKey, uint32, []byte, []byte) ServerConn
 }
 
 // the main cache struct.
@@ -407,7 +419,23 @@ func (c *connCache) closeCachedConnection(sc *serverConnAuth) {
 
 // Pop implements the ConnCache interface.
 func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byte) ServerConn {
+	return c.PopContext(context.Background(), key, connID, salt, authResp)
+}
+
+func (c *connCache) PopContext(
+	ctx context.Context,
+	key cacheKey,
+	connID uint32,
+	salt []byte,
+	authResp []byte,
+) ServerConn {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
+		if operationContextCause(ctx) != nil {
+			return nil
+		}
 		// Reserve one available connection by removing it from the store. Keep
 		// it in allConns until it is handed to the caller so Close can terminate
 		// an in-flight SET CONNECTION ID that is blocked in backend I/O.
@@ -443,15 +471,22 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 
 		// Check if the connection is expired.
 		if time.Since(sc.CreateTime()) < c.connTimeout {
-			ok, err := sc.ExecStmt(internalStmt{
+			ok, err := execStmtWithContext(ctx, sc, internalStmt{
 				cmdType: cmdQuery,
 				s:       fmt.Sprintf(setConnectionIDSQL, connID),
 			}, nil)
 			if err != nil || !ok {
-				c.logger.Error("failed to set conn id",
-					zap.Uint32("conn ID", sc.ConnID()),
-					zap.Error(err),
-				)
+				if operationContextCause(ctx) != nil {
+					c.logger.Debug("set conn id canceled",
+						zap.Uint32("conn ID", sc.ConnID()),
+						zap.Error(err),
+					)
+				} else {
+					c.logger.Error("failed to set conn id",
+						zap.Uint32("conn ID", sc.ConnID()),
+						zap.Error(err),
+					)
+				}
 				c.closeCachedConnection(sc)
 				continue
 			}

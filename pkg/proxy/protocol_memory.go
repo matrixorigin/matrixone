@@ -304,6 +304,14 @@ func (c *protocolMemoryServerConn) Close() error {
 	return c.ServerConn.Close()
 }
 
+func (c *protocolMemoryServerConn) ExecStmtContext(
+	ctx context.Context,
+	stmt internalStmt,
+	resp chan<- []byte,
+) (bool, error) {
+	return execStmtWithContext(ctx, c.ServerConn, stmt, resp)
+}
+
 func acquireProtocolMemoryBefore(
 	ctx context.Context,
 	limiter *protocolMemoryLimiter,

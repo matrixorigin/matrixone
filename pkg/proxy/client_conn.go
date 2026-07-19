@@ -100,8 +100,8 @@ type ClientConn interface {
 	// prevAddr is empty if it is the first time to build connection with
 	// a cn server; otherwise, it is the address of the previous cn node
 	// when it is transferring connection and the handshake phase is ignored.
-	// ctx bounds phase admission; transfer cancellation must interrupt any wait
-	// for transient protocol-memory headroom.
+	// ctx bounds the complete connection phase: transient-memory admission,
+	// routing, dial, backend authentication, and migration replay.
 	BuildConnWithServer(ctx context.Context, prevAddr string) (ServerConn, error)
 	// HandleEvent handles event that comes from tunnel data flow.
 	HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error
@@ -120,9 +120,9 @@ type migration struct {
 
 type clientConnOption func(*clientConn)
 
-// absoluteReadDeadlineConn prevents a relative timeout set by an upper layer
-// from extending an already established lifecycle deadline. It remains usable
-// after the handshake; disable makes subsequent deadline updates transparent.
+// absoluteReadDeadlineConn prevents a relative timeout set by goetty from
+// extending the client-handshake lifecycle deadline. It remains usable after
+// TLS upgrade; disable makes subsequent deadline updates transparent.
 type absoluteReadDeadlineConn struct {
 	net.Conn
 	deadline time.Time
@@ -226,7 +226,8 @@ type clientConn struct {
 	queryClient qclient.QueryClient
 	// testHelper is used for testing.
 	testHelper struct {
-		connectToBackend func() (ServerConn, error)
+		connectToBackend        func() (ServerConn, error)
+		connectToBackendContext func(context.Context) (ServerConn, error)
 	}
 	migration migration
 	// sc is the server connection bond with the client conn.
@@ -444,6 +445,17 @@ func (c *clientConn) SendErrToClient(err error) {
 
 // BuildConnWithServer implements the ClientConn interface.
 func (c *clientConn) BuildConnWithServer(ctx context.Context, prevAddr string) (ServerConn, error) {
+	if ctx == nil {
+		ctx = c.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+	}
+	if prevAddr != "" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultTransferTimeout)
+		defer cancel()
+	}
 	var transientLease *protocolMemoryLease
 	if prevAddr == "" {
 		// Step 1, proxy write initial handshake to client.
@@ -492,14 +504,18 @@ func (c *clientConn) BuildConnWithServer(ctx context.Context, prevAddr string) (
 		}
 	}()
 	// Step 3, proxy connects to a CN server to build connection.
-	conn, err := c.connectToBackend(prevAddr)
+	conn, err := c.connectToBackendContext(ctx, prevAddr)
 	if err != nil {
-		if isProxyAdmissionError(err) {
-			c.log.Debug("backend connection rejected by proxy admission", zap.Error(err))
+		if isProxyAdmissionError(err) || operationContextCause(ctx) != nil {
+			c.log.Debug("backend connection phase ended", zap.Error(err))
 		} else {
 			c.log.Error("failed to connect to backend", zap.Error(err))
 		}
 		return nil, err
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = conn.Close()
+		return nil, cause
 	}
 	if prevAddr != "" && transientLease != nil {
 		conn = &protocolMemoryServerConn{
@@ -518,7 +534,7 @@ func (c *clientConn) BuildConnWithServer(ctx context.Context, prevAddr string) (
 func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
 	case *killEvent:
-		return c.handleKill(ev, resp)
+		return c.handleKill(ctx, ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *quitEvent:
@@ -535,7 +551,7 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		}()
 		return nil
 	case *upgradeEvent:
-		return c.handleUpgradeEvent(ev, resp)
+		return c.handleUpgradeEvent(ctx, ev, resp)
 	default:
 	}
 	return nil
@@ -553,8 +569,19 @@ func (c *clientConn) sendErr(err error, resp chan<- []byte) {
 	sendResp(packetToBytes(r), resp)
 }
 
-func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) error {
-	lease, err := c.acquireBackendProtocolMemory(c.ctx, defaultTransferTimeout)
+func (c *clientConn) connAndExec(
+	ctx context.Context,
+	cn *CNServer,
+	stmt string,
+	resp chan<- []byte,
+) error {
+	if ctx == nil {
+		ctx = c.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+	}
+	lease, err := c.acquireBackendProtocolMemory(ctx, defaultTransferTimeout)
 	if err != nil {
 		if resp != nil {
 			c.sendErr(err, resp)
@@ -564,7 +591,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 	defer lease.release()
 
 	sc, r, err := c.connectWithHandshakePack(func(pack *frontend.Packet) (ServerConn, []byte, error) {
-		return c.router.Connect(cn, pack, nil)
+		return connectRouterWithContext(ctx, c.router, cn, pack, nil, false)
 	})
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
@@ -584,7 +611,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 		return moerr.NewInternalErrorNoCtx("access error")
 	}
 
-	ok, err := sc.ExecStmt(internalStmt{cmdType: cmdQuery, s: stmt}, resp)
+	ok, err := execStmtWithContext(ctx, sc, internalStmt{cmdType: cmdQuery, s: stmt}, resp)
 	if err != nil {
 		c.log.Error("failed to send query to server",
 			zap.String("query", stmt), zap.Error(err))
@@ -649,11 +676,21 @@ func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
 	}
 	tempCN.connID = cid
 
-	return c.connAndExec(tempCN, fmt.Sprintf("kill connection %d", c.ConnID()), nil)
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	defer cancel()
+	return c.connAndExec(ctx, tempCN, fmt.Sprintf("kill connection %d", c.ConnID()), nil)
 }
 
 // handleKill handles the kill event.
-func (c *clientConn) handleKill(e *killEvent, resp chan<- []byte) error {
+func (c *clientConn) handleKill(
+	ctx context.Context,
+	e *killEvent,
+	resp chan<- []byte,
+) error {
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
 		// If no server found, means that the query has been terminated.
@@ -677,7 +714,12 @@ func (c *clientConn) handleKill(e *killEvent, resp chan<- []byte) error {
 	}
 	cn.connID = cid
 
-	return c.connAndExec(cn, e.stmt, resp)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	defer cancel()
+	return c.connAndExec(ctx, cn, e.stmt, resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -737,7 +779,11 @@ func (c *clientConn) isConnCached() bool {
 	return c.quit.cached
 }
 
-func (c *clientConn) handleUpgradeEvent(e *upgradeEvent, resp chan<- []byte) error {
+func (c *clientConn) handleUpgradeEvent(
+	ctx context.Context,
+	e *upgradeEvent,
+	resp chan<- []byte,
+) error {
 	defer e.notify()
 
 	if !c.clientInfo.isSuperTenant() {
@@ -769,7 +815,7 @@ func (c *clientConn) handleUpgradeEvent(e *upgradeEvent, resp chan<- []byte) err
 
 		// In the loop, do not pass the resp, because it only receives response once.
 		// It everything is ok, send ok response at last out of the loop.
-		if err := c.connAndExec(cn, e.stmt, nil); err != nil {
+		if err := c.connAndExec(ctx, cn, e.stmt, nil); err != nil {
 			c.log.Error("failed to execute upgrade query", zap.Error(err))
 			c.sendErr(err, resp)
 			return err
@@ -822,9 +868,24 @@ func (c *clientConn) connectWithHandshakePack(
 	return connect(c.handshakePack)
 }
 
-// connectToBackend connect to the real CN server.
+// connectToBackend connects to the real CN server using the client lifecycle
+// context. Tests and legacy internal callers retain the old helper, while
+// BuildConnWithServer passes its narrower handshake/transfer context below.
 func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
+	return c.connectToBackendContext(c.ctx, prevAdd)
+}
+
+func (c *clientConn) connectToBackendContext(
+	ctx context.Context,
+	prevAdd string,
+) (ServerConn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Testing path.
+	if c.testHelper.connectToBackendContext != nil {
+		return c.testHelper.connectToBackendContext(ctx)
+	}
 	if c.testHelper.connectToBackend != nil {
 		return c.testHelper.connectToBackend()
 	}
@@ -846,7 +907,24 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		if _, pluginMode := c.router.(*pluginRouter); pluginMode {
 			goto skipConnCache
 		}
-		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
+		if contextual, ok := c.connCache.(contextConnCache); ok {
+			cacheCtx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+			sc = contextual.PopContext(
+				cacheCtx,
+				c.clientInfo.hash,
+				c.connID,
+				c.mysqlProto.GetSalt(),
+				c.mysqlProto.GetAuthResponse(),
+			)
+			cancel()
+		} else {
+			sc = c.connCache.Pop(
+				c.clientInfo.hash,
+				c.connID,
+				c.mysqlProto.GetSalt(),
+				c.mysqlProto.GetAuthResponse(),
+			)
+		}
 		if sc != nil {
 			if err := c.bindAuthenticatedTenant(); err != nil {
 				_ = sc.Close()
@@ -881,18 +959,24 @@ skipConnCache:
 	var cn *CNServer
 	var r []byte
 	for {
+		if err := operationContextCause(ctx); err != nil {
+			return nil, err
+		}
 		// Select the best CN server from backend.
 		//
 		// NB: The selected CNServer must have label hash in it.
 		if prevAdd == "" {
-			cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+			cn, err = c.router.Route(ctx, c.sid, c.clientInfo, filterFn)
 		} else if tr, ok := c.router.(transferRouter); ok {
-			cn, err = tr.RouteForTransfer(c.ctx, c.sid, c.clientInfo, filterFn)
+			cn, err = tr.RouteForTransfer(ctx, c.sid, c.clientInfo, filterFn)
 		} else {
-			cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+			cn, err = c.router.Route(ctx, c.sid, c.clientInfo, filterFn)
 		}
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
+			if cause := operationContextCause(ctx); cause != nil {
+				return nil, cause
+			}
 			// Check if all failed CN servers were due to timeout.
 			// If so, return a more specific error message.
 			if len(timeoutCNServers) > 0 && len(timeoutCNServers) == len(badCNServers) {
@@ -922,10 +1006,7 @@ skipConnCache:
 		if prevAdd == "" {
 			sc, r, err = c.connectWithHandshakePack(
 				func(pack *frontend.Packet) (ServerConn, []byte, error) {
-					if rr, ok := c.router.(routeSelectedConnector); ok {
-						return rr.ConnectRouteSelected(cn, pack, c.tun)
-					}
-					return c.router.Connect(cn, pack, c.tun)
+					return connectRouterWithContext(ctx, c.router, cn, pack, c.tun, true)
 				},
 			)
 		} else {
@@ -934,11 +1015,14 @@ skipConnCache:
 			// Route-selected new-session connect.
 			sc, r, err = c.connectWithHandshakePack(
 				func(pack *frontend.Packet) (ServerConn, []byte, error) {
-					return c.router.Connect(cn, pack, c.tun)
+					return connectRouterWithContext(ctx, c.router, cn, pack, c.tun, false)
 				},
 			)
 		}
 		if err != nil {
+			if cause := operationContextCause(ctx); cause != nil {
+				return nil, cause
+			}
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()
 				badCNServers[cn.addr] = struct{}{}
@@ -998,10 +1082,13 @@ skipConnCache:
 		} else {
 			// The connection has been transferred to a new server, but migration fails,
 			// but we don't return error, which will cause unknown issue.
-			if err := c.migrateConn(prevAdd, sc); err != nil {
+			if err := c.migrateConnContext(ctx, prevAdd, sc); err != nil {
 				closeErr := sc.Close()
 				if closeErr != nil {
 					c.log.Error("failed to close server connection", zap.Error(closeErr))
+				}
+				if cause := operationContextCause(ctx); cause != nil {
+					return nil, cause
 				}
 				c.log.Error("failed to migrate connection to cn, will retry",
 					zap.Uint32("conn ID", c.connID),

@@ -73,6 +73,55 @@ type routeSelectedConnector interface {
 	ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error)
 }
 
+// contextConnector and contextRouteSelectedConnector keep Router source
+// compatibility while allowing connection phases that own transient memory to
+// propagate their lifecycle context through dial and backend authentication.
+type contextConnector interface {
+	ConnectContext(
+		ctx context.Context,
+		c *CNServer,
+		handshakeResp *frontend.Packet,
+		t *tunnel,
+	) (ServerConn, []byte, error)
+}
+
+type contextRouteSelectedConnector interface {
+	ConnectRouteSelectedContext(
+		ctx context.Context,
+		c *CNServer,
+		handshakeResp *frontend.Packet,
+		t *tunnel,
+	) (ServerConn, []byte, error)
+}
+
+func connectRouterWithContext(
+	ctx context.Context,
+	r Router,
+	cn *CNServer,
+	handshakeResp *frontend.Packet,
+	t *tunnel,
+	routeSelected bool,
+) (ServerConn, []byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		return nil, nil, cause
+	}
+	if routeSelected {
+		if rr, ok := r.(contextRouteSelectedConnector); ok {
+			return rr.ConnectRouteSelectedContext(ctx, cn, handshakeResp, t)
+		}
+		if rr, ok := r.(routeSelectedConnector); ok {
+			return rr.ConnectRouteSelected(cn, handshakeResp, t)
+		}
+	}
+	if rr, ok := r.(contextConnector); ok {
+		return rr.ConnectContext(ctx, cn, handshakeResp, t)
+	}
+	return r.Connect(cn, handshakeResp, t)
+}
+
 // transferRouter is implemented by routers that want session transfer /
 // migration traffic to select a target CN without consuming a breaker-managed
 // recovery probe. The transfer path is control-plane traffic, not a new
@@ -365,10 +414,19 @@ func (r *router) CanReuseCachedCN(cn *CNServer) bool {
 }
 
 func (r *router) connect(
-	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel, accountHealth bool,
+	ctx context.Context,
+	cn *CNServer,
+	handshakeResp *frontend.Packet,
+	t *tunnel,
+	accountHealth bool,
 ) (ServerConn, []byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Creates a server connection.
-	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout, r.sessionAllocator)
+	sc, err := newServerConnContext(
+		ctx, cn, t, r.rebalancer, r.connectTimeout, r.sessionAllocator,
+	)
 	if err != nil {
 		// Connection failed, remove the placeholder that was added in selectOne.
 		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)
@@ -405,7 +463,13 @@ func (r *router) connect(
 				WithLabelValues(result).
 				Observe(time.Since(start).Seconds())
 		}()
-		resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
+		var resp *frontend.Packet
+		var err error
+		if contextual, ok := sc.(contextHandshakeHandler); ok {
+			resp, err = contextual.HandleHandshakeContext(ctx, handshakeResp, r.authTimeout)
+		} else {
+			resp, err = sc.HandleHandshake(handshakeResp, r.authTimeout)
+		}
 		if err != nil {
 			result = "error"
 			if isTimeoutErr(err) {
@@ -445,7 +509,13 @@ func (r *router) connect(
 func (r *router) Connect(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
 ) (ServerConn, []byte, error) {
-	return r.connect(cn, handshakeResp, t, false)
+	return r.connect(context.Background(), cn, handshakeResp, t, false)
+}
+
+func (r *router) ConnectContext(
+	ctx context.Context, cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	return r.connect(ctx, cn, handshakeResp, t, false)
 }
 
 // ConnectRouteSelected is used only for Route-selected new-session connects.
@@ -454,7 +524,13 @@ func (r *router) Connect(
 func (r *router) ConnectRouteSelected(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
 ) (ServerConn, []byte, error) {
-	return r.connect(cn, handshakeResp, t, true)
+	return r.connect(context.Background(), cn, handshakeResp, t, true)
+}
+
+func (r *router) ConnectRouteSelectedContext(
+	ctx context.Context, cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	return r.connect(ctx, cn, handshakeResp, t, true)
 }
 
 // Refresh refreshes the router

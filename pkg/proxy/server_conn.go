@@ -19,6 +19,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +97,40 @@ type serverConn struct {
 
 var _ ServerConn = (*serverConn)(nil)
 
+type contextHandshakeHandler interface {
+	HandleHandshakeContext(
+		ctx context.Context,
+		handshakeResp *frontend.Packet,
+		timeout time.Duration,
+	) (*frontend.Packet, error)
+}
+
+type contextStmtExecutor interface {
+	ExecStmtContext(
+		ctx context.Context,
+		stmt internalStmt,
+		resp chan<- []byte,
+	) (bool, error)
+}
+
+func execStmtWithContext(
+	ctx context.Context,
+	sc ServerConn,
+	stmt internalStmt,
+	resp chan<- []byte,
+) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		return false, cause
+	}
+	if contextual, ok := sc.(contextStmtExecutor); ok {
+		return contextual.ExecStmtContext(ctx, stmt, resp)
+	}
+	return sc.ExecStmt(stmt, resp)
+}
+
 // Proxy only needs a small retained buffer for normal MySQL packets. Larger
 // packets use frontend.Conn's dynamic path and are released after use.
 const proxyIOSessionBufferSize = 16 * 1024
@@ -107,11 +143,24 @@ func newServerConn(
 	timeout time.Duration,
 	allocators ...frontend.Allocator,
 ) (ServerConn, error) {
+	return newServerConnContext(
+		context.Background(), cn, tun, r, timeout, allocators...,
+	)
+}
+
+func newServerConnContext(
+	ctx context.Context,
+	cn *CNServer,
+	tun *tunnel,
+	r *rebalancer,
+	timeout time.Duration,
+	allocators ...frontend.Allocator,
+) (ServerConn, error) {
 	var logger *zap.Logger
 	if r != nil && r.logger != nil {
 		logger = r.logger.RawLogger()
 	}
-	c, err := cn.Connect(logger, timeout)
+	c, err := cn.ConnectContext(ctx, logger, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +245,32 @@ func (s *serverConn) RawConn() net.Conn {
 func (s *serverConn) HandleHandshake(
 	handshakeResp *frontend.Packet, timeout time.Duration,
 ) (*frontend.Packet, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseHandleHandshake)
+	return s.HandleHandshakeContext(context.Background(), handshakeResp, timeout)
+}
+
+func (s *serverConn) HandleHandshakeContext(
+	parent context.Context,
+	handshakeResp *frontend.Packet,
+	timeout time.Duration,
+) (*frontend.Packet, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeoutCause(parent, timeout, moerr.CauseHandleHandshake)
 	defer cancel()
+	if s == nil || s.conn == nil {
+		return nil, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	raw := s.conn.RawConn()
+	if raw == nil {
+		return nil, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		return nil, newTimeoutConnectErr(cause)
+	}
+	joinInterrupt := interruptConnectionOnDone(ctx, raw)
+	defer joinInterrupt()
 
 	type result struct {
 		resp *frontend.Packet
@@ -220,6 +293,13 @@ func (s *serverConn) HandleHandshake(
 
 	select {
 	case ret := <-resultC:
+		// Join cancellation before accepting success. If cancellation won the
+		// race, the transport may already be closed and cannot enter the tunnel.
+		joinInterrupt()
+		if cause := operationContextCause(ctx); cause != nil {
+			_ = raw.Close()
+			return nil, newTimeoutConnectErr(errors.Join(ret.err, cause))
+		}
 		return ret.resp, ret.err
 	case <-ctx.Done():
 		// A caller may release or reuse handshakeResp as soon as this method
@@ -227,14 +307,48 @@ func (s *serverConn) HandleHandshake(
 		// returning; calling s.Close here would free mysqlProto buffers while
 		// the worker may still be using them. net.Conn.Close unblocks both the
 		// goetty read and frontend write paths.
-		if conn := s.conn.RawConn(); conn != nil {
-			_ = conn.Close()
-		}
+		_ = raw.Close()
 		<-resultC
+		joinInterrupt()
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
 			s.cnServer.addr, timeout, s.connID, goid.Get())
 		// Return a retryable error with timeout flag set.
-		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
+		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.Cause(ctx)))
+	}
+}
+
+func operationContextCause(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// interruptConnectionOnDone makes cancellation a terminal event for a
+// phase-owned backend transport. These connections are sacrificial until the
+// phase succeeds, so closing is both the strongest I/O interrupt and avoids a
+// wrapper or deadline check in the steady tunnel hot path. The returned join
+// function prevents a late cancellation callback from closing a connection
+// after ownership has been handed off.
+func interruptConnectionOnDone(ctx context.Context, conn net.Conn) func() {
+	if ctx == nil || conn == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(done)
+	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if !stop() {
+				<-done
+			}
+		})
 	}
 }
 
@@ -267,6 +381,35 @@ func (s *serverConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, erro
 		}
 	}
 	return execOK, nil
+}
+
+func (s *serverConn) ExecStmtContext(
+	ctx context.Context,
+	stmt internalStmt,
+	resp chan<- []byte,
+) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.conn == nil {
+		return false, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	raw := s.conn.RawConn()
+	if raw == nil {
+		return false, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		return false, cause
+	}
+	joinInterrupt := interruptConnectionOnDone(ctx, raw)
+	ok, err := s.ExecStmt(stmt, resp)
+	joinInterrupt()
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		return false, errors.Join(err, cause)
+	}
+	return ok, err
 }
 
 // GetCNServer implements the ServerConn interface.
@@ -365,7 +508,42 @@ type CNServer struct {
 
 // Connect connects to backend server and returns IOSession.
 func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
+	return s.ConnectContext(context.Background(), logger, timeout)
+}
+
+func (s *CNServer) ConnectContext(
+	parent context.Context,
+	logger *zap.Logger,
+	timeout time.Duration,
+) (goetty.IOSession, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx := parent
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, timeout)
+	}
+	defer cancel()
+
+	network, address, err := parseBackendAddress(s.addr)
+	if err != nil {
+		return nil, newConnectErr(err)
+	}
+	raw, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
+			timeout, s.connID, s.addr, goid.Get(), err)
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			return nil, newTimeoutConnectErr(err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, newTimeoutConnectErr(err)
+		}
+		return nil, newConnectErr(err)
+	}
 	c := goetty.NewIOSession(
+		goetty.WithSessionConn(0, raw),
 		goetty.WithSessionCodec(frontend.NewSqlCodec()),
 		goetty.WithSessionLogger(logger),
 	)
@@ -375,18 +553,8 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 			_ = c.Close()
 		}
 	}()
-	err := c.Connect(s.addr, timeout)
-	if err != nil {
-		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
-			timeout, s.connID, s.addr, goid.Get(), err)
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return nil, newTimeoutConnectErr(err)
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, newTimeoutConnectErr(err)
-		}
-		return nil, newConnectErr(err)
-	}
+	joinInterrupt := interruptConnectionOnDone(ctx, raw)
+	defer joinInterrupt()
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
@@ -404,8 +572,30 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	// When build connection with backend server, proxy send its salt, request
 	// labels and other information to the backend server.
 	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
+		joinInterrupt()
+		if cause := operationContextCause(ctx); cause != nil {
+			return nil, newTimeoutConnectErr(errors.Join(err, cause))
+		}
 		return nil, err
+	}
+	joinInterrupt()
+	if cause := operationContextCause(ctx); cause != nil {
+		return nil, newTimeoutConnectErr(cause)
 	}
 	owned = false
 	return c, nil
+}
+
+func parseBackendAddress(address string) (string, string, error) {
+	if !strings.Contains(address, "//") {
+		return "tcp4", address, nil
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.EqualFold(u.Scheme, "unix") {
+		return u.Scheme, u.Path, nil
+	}
+	return u.Scheme, u.Host, nil
 }

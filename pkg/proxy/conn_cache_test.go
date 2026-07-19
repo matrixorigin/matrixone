@@ -121,7 +121,7 @@ func simulateScramble(password string, salt []byte) []byte {
 	return scrambled
 }
 
-type blockingCacheServerConn struct {
+type blockingContextServerConn struct {
 	*mockServerConn
 	enteredOnce sync.Once
 	closeOnce   sync.Once
@@ -129,21 +129,35 @@ type blockingCacheServerConn struct {
 	closed      chan struct{}
 }
 
-func newBlockingCacheServerConn(conn net.Conn) *blockingCacheServerConn {
-	return &blockingCacheServerConn{
+func newBlockingContextServerConn(conn net.Conn) *blockingContextServerConn {
+	return &blockingContextServerConn{
 		mockServerConn: newMockServerConn(conn),
 		entered:        make(chan struct{}),
 		closed:         make(chan struct{}),
 	}
 }
 
-func (s *blockingCacheServerConn) ExecStmt(internalStmt, chan<- []byte) (bool, error) {
+func (s *blockingContextServerConn) ExecStmt(internalStmt, chan<- []byte) (bool, error) {
 	s.enteredOnce.Do(func() { close(s.entered) })
 	<-s.closed
 	return false, net.ErrClosed
 }
 
-func (s *blockingCacheServerConn) Close() error {
+func (s *blockingContextServerConn) ExecStmtContext(
+	ctx context.Context,
+	_ internalStmt,
+	_ chan<- []byte,
+) (bool, error) {
+	s.enteredOnce.Do(func() { close(s.entered) })
+	select {
+	case <-ctx.Done():
+		return false, context.Cause(ctx)
+	case <-s.closed:
+		return false, net.ErrClosed
+	}
+}
+
+func (s *blockingContextServerConn) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.closed)
 		_ = s.mockServerConn.Close()
@@ -343,7 +357,7 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 
 	clientSide, serverSide := net.Pipe()
 	defer clientSide.Close()
-	blocked := newBlockingCacheServerConn(serverSide)
+	blocked := newBlockingContextServerConn(serverSide)
 	require.True(t, cache.Push("tenant-a", blocked))
 
 	popDone := make(chan ServerConn, 1)
@@ -386,6 +400,37 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "cache Close did not terminate in-flight Pop")
 	}
+}
+
+func TestConnCachePopContextCancelsBackendValidation(t *testing.T) {
+	cache := newConnCache(context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+	)
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	blocked := newBlockingContextServerConn(serverSide)
+	require.True(t, cache.Push("tenant-a", &protocolMemoryServerConn{ServerConn: blocked}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	popDone := make(chan ServerConn, 1)
+	go func() {
+		popDone <- cache.(*connCache).PopContext(ctx, "tenant-a", 1, nil, nil)
+	}()
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("PopContext did not enter backend validation")
+	}
+	cancel()
+	select {
+	case sc := <-popDone:
+		require.Nil(t, sc)
+	case <-time.After(time.Second):
+		t.Fatal("PopContext ignored lifecycle cancellation")
+	}
+	require.Zero(t, cache.Count())
+	require.NoError(t, cache.Close())
 }
 
 func TestConnCacheCloseDoesNotWaitForPushReset(t *testing.T) {

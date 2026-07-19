@@ -632,6 +632,94 @@ func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
 	require.ErrorIs(t, readErr, io.EOF)
 }
 
+func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	transport := goetty.NewIOSession(
+		goetty.WithSessionConn(1, local),
+		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+	)
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		conn:       transport,
+		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+		require.NoError(t, transport.Close())
+	}()
+
+	requestRead := make(chan error, 1)
+	go func() {
+		header := make([]byte, frontend.PacketHeaderLength)
+		if _, err := io.ReadFull(remote, header); err != nil {
+			requestRead <- err
+			return
+		}
+		length := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+		_, err := io.ReadFull(remote, make([]byte, length))
+		requestRead <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = sc.ExecStmtContext(ctx, internalStmt{cmdType: cmdQuery, s: "set transferred=1"}, nil)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second,
+		"context must override frontend's default 24-hour session read timeout")
+	require.NoError(t, <-requestRead)
+}
+
+func TestInterruptConnectionOnDoneOwnershipHandoff(t *testing.T) {
+	t.Run("cancellation closes phase-owned transport", func(t *testing.T) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		join := interruptConnectionOnDone(ctx, local)
+		cancel()
+		join()
+		_, err := remote.Write([]byte{1})
+		require.Error(t, err)
+	})
+
+	t.Run("successful handoff stops late cancellation", func(t *testing.T) {
+		local, remote := net.Pipe()
+		defer local.Close()
+		defer remote.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		join := interruptConnectionOnDone(ctx, local)
+		join()
+		cancel()
+
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := remote.Write([]byte{1})
+			writeDone <- err
+		}()
+		require.NoError(t, local.SetReadDeadline(time.Now().Add(time.Second)))
+		buf := make([]byte, 1)
+		_, err := io.ReadFull(local, buf)
+		require.NoError(t, err)
+		require.Equal(t, byte(1), buf[0])
+		require.NoError(t, <-writeDone)
+	})
+}
+
 func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	defer leaktest.AfterTest(t)
 	temp := os.TempDir()
