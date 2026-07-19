@@ -775,10 +775,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if !ls.memPKFilter.Valid() {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
+			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
-				ls.memPKFilter.Op(),
-				ls.memPKFilter.Keys())
+				ls.memPKFilter.Specs())
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -1286,6 +1285,14 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	if offsetCnt <= logtailreplay.IndexScaleTiny ||
 		ls.memPKFilter == nil || !ls.memPKFilter.Valid() {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+	}
+	filterSpecs := ls.memPKFilter.Specs()
+	if len(filterSpecs) > 1 {
+		return ls.pState.NewPrimaryKeyDelIterWithFilters(
+			&ls.memPKFilter.TS,
+			bid,
+			filterSpecs,
+		), false
 	}
 
 	inValCnt, ok := ls.memPKFilter.InKind()

@@ -544,6 +544,10 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		exprImpl.To, err = bc.qualifyColumnNames(exprImpl.To, expandAlias)
 
 	case *tree.UnresolvedName:
+		if havingBinder, ok := bc.binder.(*HavingBinder); ok && havingBinder.rollupHaving &&
+			!exprImpl.Star && exprImpl.NumParts > 0 {
+			exprImpl.CStrParts[0] = tree.NewCStr(exprImpl.ColName(), 1)
+		}
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {
