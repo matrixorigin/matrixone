@@ -179,6 +179,50 @@ func TestFillNextLongCrossBatchGap(t *testing.T) {
 	proc.Free()
 }
 
+func TestFillNextLongGapSpillsPendingSuffix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const nullBatches = 64
+	bats := make([]*batch.Batch, 0, nullBatches+2)
+	bats = append(bats, partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}))
+	for i := 0; i < nullBatches; i++ {
+		bats = append(bats, partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}))
+	}
+	bats = append(bats, partitionedBatch(proc.Mp(), []int64{90}, nil, []int64{1}))
+
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_NEXT, PartitionColIdx: []int32{1}, SpillThreshold: 2}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{val: 10}}, readCol(first.Batch, 0))
+	require.Equal(t, 1, child.calls, "resolved prefix must still stream before spill")
+
+	second, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, second.Batch)
+	require.NotNil(t, arg.ctr.spill)
+	require.Equal(t, arg.ctr.spill.inputRecords, arg.ctr.spill.outputRecords)
+	require.Empty(t, arg.ctr.bats)
+	require.Zero(t, arg.ctr.pendingBytes)
+	require.Zero(t, arg.ctr.pendingRows)
+
+	all := append(readCol(second.Batch, 0), drainCol(t, arg, proc, 0)...)
+	require.Len(t, all, nullBatches+1)
+	for _, value := range all {
+		require.Equal(t, cell{val: 90}, value)
+	}
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // Trailing NULLs with no following value in the stream stay NULL at EOF rather
 // than being dropped or hanging the operator.
 func TestFillNextEOFTail(t *testing.T) {
@@ -197,6 +241,29 @@ func TestFillNextEOFTail(t *testing.T) {
 		b.Clean(proc.Mp())
 	}
 	proc.Free()
+}
+
+func TestFillNextSpillKeepsEOFTailNull(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bats := []*batch.Batch{
+		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+	}
+	child := colexec.NewMockOperator().WithBatchs(bats)
+	arg := &Fill{ColLen: 1, FillType: plan.Node_NEXT, PartitionColIdx: []int32{1}, SpillThreshold: 2}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	got := drainCol(t, arg, proc, 0)
+	require.Equal(t, []cell{{val: 10}, {null: true}, {null: true}}, got)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // Two fill columns resolve independently: a row leaves the operator only once
@@ -232,6 +299,50 @@ func TestFillNextMultiColumnGap(t *testing.T) {
 
 	arg.Free(proc, false, nil)
 	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillNextSpillMultiColumnAndPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makeBatch := func(col0, col1 []int64, null0, null1 []uint64, parts []int64) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.SetVector(0, testutil.MakeInt64Vector(col0, null0, proc.Mp()))
+		bat.SetVector(1, testutil.MakeInt64Vector(col1, null1, proc.Mp()))
+		bat.SetVector(2, testutil.MakeInt64Vector(parts, nil, proc.Mp()))
+		bat.SetRowCount(len(parts))
+		return bat
+	}
+	bats := []*batch.Batch{
+		makeBatch([]int64{1}, []int64{0}, nil, []uint64{0}, []int64{1}),
+		makeBatch([]int64{0}, []int64{20}, []uint64{0}, nil, []int64{1}),
+		makeBatch([]int64{3}, []int64{30}, nil, nil, []int64{1}),
+		// Partition 1's candidates must not fill partition 2's leading NULLs.
+		makeBatch([]int64{0}, []int64{0}, []uint64{0}, []uint64{0}, []int64{2}),
+		makeBatch([]int64{8}, []int64{80}, nil, nil, []int64{2}),
+	}
+	child := colexec.NewMockOperator().WithBatchs(bats)
+	arg := &Fill{ColLen: 2, FillType: plan.Node_NEXT, PartitionColIdx: []int32{2}, SpillThreshold: 2}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	var col0, col1 []cell
+	for {
+		res, err := arg.Call(proc)
+		require.NoError(t, err)
+		if res.Batch == nil {
+			break
+		}
+		col0 = append(col0, readCol(res.Batch, 0)...)
+		col1 = append(col1, readCol(res.Batch, 1)...)
+	}
+	require.Equal(t, []cell{{val: 1}, {val: 3}, {val: 3}, {val: 8}, {val: 8}}, col0)
+	require.Equal(t, []cell{{val: 20}, {val: 20}, {val: 30}, {val: 80}, {val: 80}}, col1)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -290,6 +401,102 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 	arg.Free(proc, false, nil)
 	for _, b := range bats {
 		b.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const nullBatches = 64
+	typ := types.New(types.T_decimal128, 38, 0)
+	makeBatch := func(value int64, isNull bool) *batch.Batch {
+		vec := vector.NewVec(typ)
+		require.NoError(t, vector.AppendFixed(vec, types.Decimal128FromInt64(value), isNull, proc.Mp()))
+		bat := batch.NewWithSize(2)
+		bat.SetVector(0, vec)
+		bat.SetVector(1, testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()))
+		bat.SetRowCount(1)
+		return bat
+	}
+	bats := make([]*batch.Batch, 0, nullBatches+2)
+	bats = append(bats, makeBatch(10, false))
+	for i := 0; i < nullBatches; i++ {
+		bats = append(bats, makeBatch(0, true))
+	}
+	bats = append(bats, makeBatch(90, false))
+
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{
+		ColLen:          1,
+		FillType:        plan.Node_LINEAR,
+		PartitionColIdx: []int32{1},
+		SpillThreshold:  2,
+	}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, first.Batch)
+	require.NotNil(t, arg.ctr.spill)
+	require.Empty(t, arg.ctr.bats)
+	require.Zero(t, arg.ctr.pendingBytes)
+	require.Zero(t, arg.ctr.pendingRows)
+
+	readDecimal := func(bat *batch.Batch) []types.Decimal128 {
+		return append([]types.Decimal128(nil), vector.MustFixedColNoTypeCheck[types.Decimal128](bat.Vecs[0])...)
+	}
+	all := readDecimal(first.Batch)
+	for {
+		res, callErr := arg.Call(proc)
+		require.NoError(t, callErr)
+		if res.Batch == nil {
+			break
+		}
+		all = append(all, readDecimal(res.Batch)...)
+	}
+	require.Len(t, all, nullBatches+2)
+	require.Equal(t, types.Decimal128FromInt64(10), all[0])
+	for _, value := range all[1 : len(all)-1] {
+		require.Equal(t, types.Decimal128FromInt64(50), value)
+	}
+	require.Equal(t, types.Decimal128FromInt64(90), all[len(all)-1])
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillSpillResetReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bats := []*batch.Batch{
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{90}, nil, []int64{1}),
+	}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_NEXT, PartitionColIdx: []int32{1}, SpillThreshold: 2}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.NotNil(t, arg.ctr.spill)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.spill)
+	require.Empty(t, arg.ctr.bats)
+	require.Zero(t, arg.ctr.pendingBytes)
+	require.Zero(t, arg.ctr.pendingRows)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
 	}
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())

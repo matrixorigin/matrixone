@@ -17,6 +17,7 @@ package fill
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,6 +48,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &fill.ctr
+	ctr.spillThreshold = colexec.ResolveSpillThreshold(fill.SpillThreshold)
 
 	switch fill.FillType {
 	case plan.Node_VALUE:
@@ -261,23 +263,34 @@ func (ctr *container) pullChild(ap *Fill, proc *process.Process, analyzer proces
 	if err != nil {
 		return 0, false, err
 	}
+	if err = addOriginalNullMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
+		dup.Clean(proc.Mp())
+		return 0, false, err
+	}
 	if analyzer != nil {
 		analyzer.Alloc(int64(dup.Size()))
 	}
 	seq = ctr.baseSeq + len(ctr.bats)
 	ctr.bats = append(ctr.bats, dup)
+	ctr.pendingBytes += int64(dup.Size())
+	ctr.pendingRows += int64(dup.RowCount())
 	return seq, false, nil
 }
 
 // emitResolved pops and returns the resolved prefix of the FIFO one batch at a
 // time. The popped batch is handed to the caller and freed on the next Call
 // (via toFree), because no unresolved coordinate can still reference it.
-func (ctr *container) emitResolved(proc *process.Process) vm.CallResult {
+func (ctr *container) emitResolved(ap *Fill, proc *process.Process) vm.CallResult {
 	b := ctr.bats[0]
 	ctr.bats = ctr.bats[1:]
+	if b != nil {
+		ctr.pendingBytes -= int64(b.Size())
+		ctr.pendingRows -= int64(b.RowCount())
+	}
 	ctr.baseSeq++
 	ctr.flushable--
 	ctr.toFree = b
+	stripOriginalNullMarkers(b, ap.ColLen, proc.Mp())
 	result := vm.NewCallResult()
 	result.Batch = b
 	result.Status = vm.ExecNext
@@ -561,9 +574,32 @@ func (ctr *container) driveFill(
 		ctr.toFree.Clean(proc.Mp())
 		ctr.toFree = nil
 	}
+	if ctr.spill != nil {
+		if !ctr.spill.ready {
+			if err := ctr.collectSpill(ap, proc, analyzer); err != nil {
+				ctr.cleanupSpill(proc)
+				return vm.NewCallResult(), err
+			}
+		}
+		bat, err := ctr.spill.replayNext(ctr, ap, proc)
+		if err == io.EOF {
+			ctr.cleanupSpill(proc)
+			result := vm.NewCallResult()
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		if err != nil {
+			ctr.cleanupSpill(proc)
+			return vm.NewCallResult(), err
+		}
+		result := vm.NewCallResult()
+		result.Batch = bat
+		result.Status = vm.ExecNext
+		return result, nil
+	}
 	for {
 		if ctr.flushable > 0 {
-			return ctr.emitResolved(proc), nil
+			return ctr.emitResolved(ap, proc), nil
 		}
 		if ctr.childDone {
 			if len(ctr.bats) == 0 {
@@ -588,6 +624,12 @@ func (ctr *container) driveFill(
 		}
 		if err = consume(ctr, ap, ctr.batAt(seq), seq, proc); err != nil {
 			return vm.NewCallResult(), err
+		}
+		if ctr.flushable == 0 && ctr.shouldSpillPending() {
+			if err = ctr.beginSpill(ap, proc); err != nil {
+				return vm.NewCallResult(), err
+			}
+			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)
 		}
 	}
 }

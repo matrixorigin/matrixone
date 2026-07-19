@@ -63,6 +63,13 @@ type container struct {
 	toFree    *batch.Batch
 	flushable int
 	childDone bool
+	// pendingBytes accounts for duplicated batches retained in bats. Once it
+	// crosses spillThreshold while no prefix is flushable, spill owns the
+	// unresolved suffix and keeps only one batch resident at a time.
+	pendingBytes   int64
+	pendingRows    int64
+	spillThreshold int64
+	spill          *fillSpill
 	// next: per fill-column list of NULL rows still waiting for a following
 	// value of the same partition.
 	nextRun [][]fillCoord
@@ -86,6 +93,10 @@ type Fill struct {
 	ColLen   int
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
+	// SpillThreshold follows the shared colexec convention: zero selects the
+	// CN-local default, small positive values are row-oriented test thresholds,
+	// and larger values are bytes.
+	SpillThreshold int64
 	// PartitionColIdx locates the time window's partition keys inside the
 	// input batch. fill(prev/next/linear) treats a change in these columns as
 	// a hard boundary: values never cross it in either direction.
@@ -128,6 +139,7 @@ func (fill *Fill) Release() {
 
 func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
+	ctr.cleanupSpill(proc)
 	ctr.resetCtrParma()
 	ctr.resetExes()
 	if ctr.buf != nil {
@@ -155,6 +167,7 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 
 func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
+	ctr.cleanupSpill(proc)
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVectors(proc.Mp())
@@ -217,6 +230,8 @@ func (ctr *container) resetCtrParma() {
 	ctr.baseSeq = 0
 	ctr.flushable = 0
 	ctr.childDone = false
+	ctr.pendingBytes = 0
+	ctr.pendingRows = 0
 	for i := range ctr.prevValid {
 		ctr.prevValid[i] = false
 	}
