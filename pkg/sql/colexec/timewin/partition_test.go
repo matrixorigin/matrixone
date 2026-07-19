@@ -268,6 +268,47 @@ func TestTimeWinPartitionNullKeysGroupTogether(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimeWinAnyNullPartitionKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := []row{
+		{"2023-08-01 00:00:00", 10, 0},
+		{"2023-08-01 00:00:01", 20, 0},
+		{"2023-08-01 00:00:06", 30, 0},
+	}
+	in := makePartInput(t, proc.Mp(), rows)
+	in.Vecs[2].Free(proc.Mp())
+	in.Vecs[2] = vector.NewConstNull(types.T_any.ToType(), len(rows), proc.Mp())
+
+	sliding, err := calcDatetime(5, 2)
+	require.NoError(t, err)
+	arg := newPartArg(t, proc, sliding, true)
+	arg.PartitionBy[0].Typ = plan.Type{Id: int32(types.T_any)}
+
+	_, sums, parts := runPartArg(t, arg, proc, in)
+	require.Equal(t, []int64{30, 30}, sums)
+	require.Equal(t, []int64{nullPart, nullPart}, parts)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAnyPartitionKeyRejectsNonNullValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_any.ToType()
+	src := vector.NewVec(typ)
+	src.SetLength(1)
+	dst := vector.NewVec(typ)
+
+	err := getPartitionSetFunction(typ, mp)(dst, src, 0, 1)
+	require.ErrorContains(t, err, "non-NULL T_any partition key")
+
+	src.Free(mp)
+	dst.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestSamePartition(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctr := &container{}

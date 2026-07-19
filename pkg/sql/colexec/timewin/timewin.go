@@ -80,7 +80,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.partSet[i] = vector.GetConstSetFunction(
+			ctr.partSet[i] = getPartitionSetFunction(
 				types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), proc.Mp())
 		}
 	}
@@ -131,6 +131,25 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 	ctr.colCnt += len(timeWin.PartitionBy)
 	return nil
+}
+
+func getPartitionSetFunction(
+	typ types.Type,
+	mp *mpool.MPool,
+) func(v, w *vector.Vector, sel int64, length int) error {
+	if typ.Oid != types.T_any {
+		return vector.GetConstSetFunction(typ, mp)
+	}
+
+	// T_any is the physical type of an untyped NULL literal. It has no value
+	// representation for GetConstSetFunction to copy, but GROUP BY NULL is a
+	// valid single partition and its key still occupies an output-layout slot.
+	return func(v, w *vector.Vector, sel int64, length int) error {
+		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
+			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
+		}
+		return vector.SetConstNull(v, length, mp)
+	}
 }
 
 func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
