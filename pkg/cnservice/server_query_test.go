@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
@@ -47,10 +46,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -672,7 +671,6 @@ func Test_service_handleGetStatsInfo(t *testing.T) {
 
 func Test_service_handleTraceSpan(t *testing.T) {
 
-	trace.InitMOCtledSpan()
 	ctx := context.Background()
 	type fields struct {
 	}
@@ -708,7 +706,7 @@ func Test_service_handleTraceSpan(t *testing.T) {
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: fmt.Sprintf("%v %sd, %v failed", []string{"s3"}, "enable", []string{"span2"})}},
+			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: ctl.TraceSpanRetiredResponse}},
 		},
 		{
 			name:   "cmd_unknown",
@@ -723,7 +721,7 @@ func Test_service_handleTraceSpan(t *testing.T) {
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: fmt.Sprintf("%v %sd, %v failed", []string{}, "unknown", []string{"span1", "span2"})}},
+			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: ctl.TraceSpanRetiredResponse}},
 		},
 	}
 	for _, tt := range tests {
