@@ -547,6 +547,12 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 			return err
 		}
 		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+		// Sliding execution records boundaries while building groups even when
+		// pruning removed both boundary columns from the output. A flush closes
+		// that generation of groups, so retaining the unused bounds here would
+		// grow these slices for the lifetime of the query.
+		ctr.wStart = nil
+		ctr.wEnd = nil
 		return nil
 	}
 	bat := batch.NewWithSize(1)
