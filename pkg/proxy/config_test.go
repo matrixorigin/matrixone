@@ -48,6 +48,7 @@ func TestFillDefault(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
+	transientBytes := toml.ByteSize(proxyIOSessionBufferSize)
 	tests := []struct {
 		name    string
 		cfg     Config
@@ -100,13 +101,24 @@ func TestValidate(t *testing.T) {
 		},
 		wantErr: true,
 	}, {
-		name: "protocol memory exactly covers retained buffers",
+		name: "protocol memory without transient overlap",
 		cfg: Config{
 			MaxConnections:          10,
 			MaxConnectionsPerTenant: 10,
 			ProtocolMemoryLimit: toml.ByteSize(
 				10 * (2*proxyIOSessionBufferSize + 64),
 			),
+			ClientHandshakePacketLimit: 64,
+		},
+		wantErr: true,
+	}, {
+		name: "protocol memory exactly covers one transient overlap",
+		cfg: Config{
+			MaxConnections:          10,
+			MaxConnectionsPerTenant: 10,
+			ProtocolMemoryLimit: toml.ByteSize(
+				10*(2*proxyIOSessionBufferSize+64),
+			) + transientBytes,
 			ClientHandshakePacketLimit: 64,
 		},
 	}, {
@@ -137,6 +149,9 @@ func TestValidate(t *testing.T) {
 	}, {
 		name: "handshake packet limit at protocol maximum",
 		cfg: Config{
+			MaxConnections:             1,
+			MaxConnectionsPerTenant:    1,
+			ProtocolMemoryLimit:        64 << 20,
 			ClientHandshakePacketLimit: maximumClientHandshakePacketLimit,
 		},
 	}, {
@@ -173,8 +188,8 @@ func TestValidate(t *testing.T) {
 			MaxConnections:          10,
 			MaxConnectionsPerTenant: 10,
 			ProtocolMemoryLimit: toml.ByteSize(
-				10 * (2*proxyIOSessionBufferSize + 64),
-			),
+				10*(2*proxyIOSessionBufferSize+64),
+			) + transientBytes,
 			ClientHandshakePacketLimit: 64,
 			ConnCacheEnabled:           true,
 			Plugin: &PluginConfig{

@@ -70,6 +70,12 @@ func (c *readDeadlineTrackingConn) readDeadline() time.Time {
 	return c.deadline
 }
 
+func handleHandshakeRespForTest(c *clientConn) error {
+	lease, err := c.handleHandshakeResp()
+	lease.release()
+	return err
+}
+
 func newMockNetConn(
 	localIP string, localPort int, remoteIP string, remotePort int, c net.Conn,
 ) *mockNetConn {
@@ -648,7 +654,7 @@ func TestClientConnHandshakePhases(t *testing.T) {
 			_, _ = remote.Write(response)
 		}()
 
-		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, handleHandshakeRespForTest(client))
 		<-writeDone
 		assertLogin(t, client)
 		require.NoError(t, client.Close())
@@ -690,7 +696,7 @@ func TestClientConnHandshakePhases(t *testing.T) {
 			clientDone <- err
 		}()
 
-		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, handleHandshakeRespForTest(client))
 		require.NoError(t, <-clientDone)
 		assertLogin(t, client)
 		require.NoError(t, client.Close())
@@ -740,7 +746,7 @@ func TestClientConnHandshakePhases(t *testing.T) {
 
 		serverDone := make(chan error, 1)
 		go func() {
-			serverDone <- client.handleHandshakeResp()
+			serverDone <- handleHandshakeRespForTest(client)
 		}()
 		select {
 		case err := <-serverDone:
@@ -780,7 +786,7 @@ func TestClientConnHandshakePhases(t *testing.T) {
 			_, _ = remote.Write([]byte{0, 0, 0, 0, 0})
 		}()
 
-		require.ErrorContains(t, client.handleHandshakeResp(), "TLS handshake error")
+		require.ErrorContains(t, handleHandshakeRespForTest(client), "TLS handshake error")
 		<-clientDone
 		require.Nil(t, client.handshakePack)
 		require.NoError(t, client.Close())
@@ -805,7 +811,7 @@ func TestClientConnHandshakePhases(t *testing.T) {
 			_, _ = remote.Write(response)
 		}()
 
-		require.ErrorContains(t, client.handleHandshakeResp(), "get collationName")
+		require.ErrorContains(t, handleHandshakeRespForTest(client), "get collationName")
 		<-writeDone
 		require.NotNil(t, client.handshakePack)
 		require.False(t, allocator.CheckBalance())
@@ -894,7 +900,7 @@ func TestClientConnHandshakeDoesNotTrustClaimedTenant(t *testing.T) {
 			defer close(writeDone)
 			_, _ = remote.Write(makeClientHandshakeResp())
 		}()
-		err := client.handleHandshakeResp()
+		err := handleHandshakeRespForTest(client)
 		<-writeDone
 		return err
 	}
@@ -999,7 +1005,7 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 			_, _ = remote.Write(response)
 		}()
 
-		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, handleHandshakeRespForTest(client))
 		<-writeDone
 		require.Equal(t, response[frontend.PacketHeaderLength:], client.handshakePack.Payload)
 		buffered, ok := session.(goetty.BufferedIOSession)
@@ -1026,7 +1032,7 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 			_, _ = remote.Write(makeClientHandshakeResp())
 		}()
 
-		require.ErrorContains(t, client.handleHandshakeResp(), "injected allocator exhaustion")
+		require.ErrorContains(t, handleHandshakeRespForTest(client), "injected allocator exhaustion")
 		<-writeDone
 		require.Nil(t, client.handshakePack)
 		require.NoError(t, client.Close())
@@ -1097,6 +1103,11 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 		allocator := frontend.NewLeakCheckAllocator()
 		client, session, remote := newClient(t, allocator)
 		defer remote.Close()
+		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+			headroomBytes: 100,
+			initialBytes:  100,
+		})
+		client.protocolMemoryLimiter = limiter
 
 		command := []byte{1, 0, 0, 0, 0x0e}
 		stream := append(append([]byte{}, makeClientHandshakeResp()...), command...)
@@ -1106,14 +1117,17 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 			_, _ = remote.Write(stream)
 		}()
 
-		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, handleHandshakeRespForTest(client))
 		<-writeDone
 		require.IsType(t, &handshakeBufferedConn{}, client.RawConn())
+		require.Equal(t, int64(100), limiter.used.Load(),
+			"read-ahead must retain transient ownership after authentication")
 		require.NoError(t, client.RawConn().SetReadDeadline(time.Now().Add(time.Second)))
 		got := make([]byte, len(command))
 		_, err := io.ReadFull(client.RawConn(), got)
 		require.NoError(t, err)
 		require.Equal(t, command, got)
+		require.Zero(t, limiter.used.Load(), "draining read-ahead must release transient ownership")
 		buffered := session.(goetty.BufferedIOSession)
 		require.Nil(t, buffered.InBuf().RawBuf(), "phase-owned handshake buffer must be released")
 
@@ -1139,11 +1153,28 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 			_, _ = remote.Write(stream)
 		}()
 
-		require.ErrorContains(t, client.handleHandshakeResp(), "injected handoff allocator exhaustion")
+		require.ErrorContains(t, handleHandshakeRespForTest(client), "injected handoff allocator exhaustion")
 		<-writeDone
 		require.NoError(t, client.Close())
 		require.NoError(t, session.Close())
 		require.True(t, leakCheck.CheckBalance())
+	})
+
+	t.Run("oversized read-ahead is rejected before shared allocation", func(t *testing.T) {
+		allocator := frontend.NewLeakCheckAllocator()
+		client, session, remote := newClient(t, allocator)
+		defer remote.Close()
+
+		buffered := session.(goetty.BufferedIOSession)
+		readAhead := make([]byte, client.clientHandshakePacketLimit+1)
+		_, err := buffered.InBuf().Write(readAhead)
+		require.NoError(t, err)
+		require.ErrorIs(t, client.handoffHandshakeBuffer(nil), frontend.ErrPacketTooLarge)
+		require.NotNil(t, buffered.InBuf().RawBuf(), "rejected buffer remains phase-owned until close")
+
+		require.NoError(t, client.Close())
+		require.NoError(t, session.Close())
+		require.True(t, allocator.CheckBalance())
 	})
 
 	t.Run("coalesced TLS login hands off trailing packet", func(t *testing.T) {
@@ -1199,7 +1230,7 @@ func TestClientConnHandshakeMemoryLifecycle(t *testing.T) {
 			_ = tlsClient.Close()
 		}()
 
-		require.NoError(t, client.handleHandshakeResp())
+		require.NoError(t, handleHandshakeRespForTest(client))
 		require.NoError(t, <-clientDone)
 		require.IsType(t, &handshakeBufferedConn{}, client.RawConn())
 		require.NoError(t, client.RawConn().SetReadDeadline(time.Now().Add(time.Second)))
@@ -1269,7 +1300,7 @@ func TestClientConnHandshakeTimeout(t *testing.T) {
 		client.conn.UseConn(local)
 		client.mysqlProto.UseConn(local)
 
-		err := client.handleHandshakeResp()
+		err := handleHandshakeRespForTest(client)
 		require.Error(t, err)
 		var netErr net.Error
 		require.ErrorAs(t, err, &netErr)
@@ -1304,7 +1335,7 @@ func TestClientConnHandshakeTimeout(t *testing.T) {
 		start := time.Now()
 		errC := make(chan error, 1)
 		go func() {
-			errC <- client.handleHandshakeResp()
+			errC <- handleHandshakeRespForTest(client)
 		}()
 		select {
 		case err := <-errC:

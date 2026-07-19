@@ -843,10 +843,15 @@ func TestReplaceServerConn(t *testing.T) {
 	require.NoError(t, scp.pause(ctx))
 
 	newServerProxy, newServer := net.Pipe()
-	newSC := newMockServerConn(newServerProxy)
-	require.NotNil(t, sc)
+	backendSC := newMockServerConn(newServerProxy)
+	require.NotNil(t, backendSC)
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{headroomBytes: 1})
+	lease, err := limiter.acquire(context.Background(), 1)
+	require.NoError(t, err)
+	newSC := &protocolMemoryServerConn{ServerConn: backendSC, lease: lease}
 	newServerC := newMySQLConn("new-server", newSC.RawConn(), 0, nil, nil, false, 0)
 	tu.replaceServerConn(newServerC, newSC, false)
+	require.Zero(t, limiter.used.Load(), "replacement must become steady only after tunnel switch")
 	_, newMysqlSC := tu.getConns()
 	require.Equal(t, newServerC, newMysqlSC)
 	require.NoError(t, tu.kickoff())

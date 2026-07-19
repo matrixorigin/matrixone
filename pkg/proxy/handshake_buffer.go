@@ -36,6 +36,7 @@ type handshakeBufferedConn struct {
 	prefix     []byte
 	allocation []byte
 	allocator  frontend.Allocator
+	lease      *protocolMemoryLease
 	pending    atomic.Bool
 }
 
@@ -43,6 +44,7 @@ func newHandshakeBufferedConn(
 	conn net.Conn,
 	source []byte,
 	allocator frontend.Allocator,
+	leases ...*protocolMemoryLease,
 ) (*handshakeBufferedConn, error) {
 	if conn == nil {
 		return nil, moerr.NewInternalErrorNoCtx("nil connection for handshake buffer handoff")
@@ -68,6 +70,10 @@ func newHandshakeBufferedConn(
 		prefix:     prefix,
 		allocation: allocation,
 		allocator:  allocator,
+	}
+	if len(leases) > 0 && leases[0] != nil {
+		leases[0].retain()
+		c.lease = leases[0]
 	}
 	c.pending.Store(true)
 	return c, nil
@@ -103,8 +109,10 @@ func (c *handshakeBufferedConn) releasePrefixLocked() {
 		return
 	}
 	c.allocator.Free(c.allocation)
+	c.lease.release()
 	c.prefix = nil
 	c.allocation = nil
 	c.allocator = nil
+	c.lease = nil
 	c.pending.Store(false)
 }

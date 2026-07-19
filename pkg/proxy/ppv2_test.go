@@ -30,6 +30,50 @@ func TestProxyProtocolOptions(t *testing.T) {
 }
 
 func TestProxyProtocolCodec_Decode(t *testing.T) {
+	t.Run("oversized body rejected from fixed header", func(t *testing.T) {
+		data := buf.NewByteBuf(ProxyHeaderLength)
+		header := make([]byte, ProxyHeaderLength)
+		copy(header, ProxyProtocolV2Signature)
+		header[12] = 0x21
+		header[13] = unspec
+		binary.BigEndian.PutUint16(header[14:], 65)
+		_, err := data.Write(header)
+		require.NoError(t, err)
+
+		pp := WithProxyProtocolCodec(
+			frontend.NewSqlCodec(),
+			WithProxyProtocolMaxBodySize(64),
+		)
+		res, ok, err := pp.Decode(data)
+		require.ErrorIs(t, err, frontend.ErrPacketTooLarge)
+		require.False(t, ok)
+		require.Nil(t, res)
+		require.Equal(t, ProxyHeaderLength, data.Readable())
+	})
+
+	t.Run("body at configured limit is accepted", func(t *testing.T) {
+		data := buf.NewByteBuf(ProxyHeaderLength + 64)
+		header := make([]byte, ProxyHeaderLength)
+		copy(header, ProxyProtocolV2Signature)
+		header[12] = 0x21
+		header[13] = unspec
+		binary.BigEndian.PutUint16(header[14:], 64)
+		_, err := data.Write(header)
+		require.NoError(t, err)
+		_, err = data.Write(make([]byte, 64))
+		require.NoError(t, err)
+
+		pp := WithProxyProtocolCodec(
+			frontend.NewSqlCodec(),
+			WithProxyProtocolMaxBodySize(64),
+		)
+		res, ok, err := pp.Decode(data)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.IsType(t, &ProxyAddr{}, res)
+		require.Zero(t, data.Readable())
+	})
+
 	t.Run("fragmented header and body", func(t *testing.T) {
 		data := buf.NewByteBuf(100)
 		pp := WithProxyProtocolCodec(frontend.NewSqlCodec(

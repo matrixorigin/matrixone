@@ -387,6 +387,12 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
 	}
+	// The new backend is now the one steady backend reserved for this client.
+	// Release transient overlap only after the old backend has been closed and
+	// every tunnel pointer has been switched.
+	if leased, ok := newSC.(interface{ promoteProtocolMemory() }); ok {
+		leased.promoteProtocolMemory()
+	}
 }
 
 // canStartTransfer checks whether the transfer can be started.

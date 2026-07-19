@@ -120,7 +120,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec(
 				frontend.WithSQLCodecMaxPayloadSize(int(config.ClientHandshakePacketLimit)),
-			))),
+			), WithProxyProtocolMaxBodySize(int(config.ClientHandshakePacketLimit)))),
 			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
 		),
 	)

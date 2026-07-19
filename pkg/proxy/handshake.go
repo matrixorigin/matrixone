@@ -34,7 +34,7 @@ func (c *clientConn) writeInitialHandshake() error {
 
 // handleHandshakeResp receives login information from client and saves it
 // in proxy end.
-func (c *clientConn) handleHandshakeResp() error {
+func (c *clientConn) handleHandshakeResp() (*protocolMemoryLease, error) {
 	deadline := time.Now().Add(c.clientHandshakeTimeout)
 	rawConn := c.conn.RawConn()
 	deadlineConn := newAbsoluteReadDeadlineConn(rawConn, deadline)
@@ -51,18 +51,34 @@ func (c *clientConn) handleHandshakeResp() error {
 			c.mysqlProto.UseConn(rawConn)
 		}
 	}()
-	err := c.handleHandshakeRespBefore(deadline)
-	if err == nil {
-		err = c.handoffHandshakeBuffer()
+	if err := c.handleHandshakeRespBefore(deadline); err != nil {
+		return nil, err
 	}
-	return err
+	transientBytes := uint64(0)
+	if c.protocolMemoryLimiter != nil {
+		transientBytes = c.protocolMemoryLimiter.budget.initialBytes
+	}
+	lease, err := acquireProtocolMemoryBefore(
+		c.ctx,
+		c.protocolMemoryLimiter,
+		transientBytes,
+		deadline,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.handoffHandshakeBuffer(lease); err != nil {
+		lease.release()
+		return nil, err
+	}
+	return lease, nil
 }
 
 // handoffHandshakeBuffer closes the phase-owned goetty input buffer without
 // dropping bytes that were read past the final login packet. This applies to
 // both plaintext and TLS: for TLS, the same ByteBuf is also referenced by the
 // transport's BufferedConn and must be drained and reset before it is freed.
-func (c *clientConn) handoffHandshakeBuffer() error {
+func (c *clientConn) handoffHandshakeBuffer(lease *protocolMemoryLease) error {
 	session, ok := c.conn.(goetty.BufferedIOSession)
 	if !ok {
 		return nil
@@ -78,11 +94,15 @@ func (c *clientConn) handoffHandshakeBuffer() error {
 		input.Close()
 		return nil
 	}
+	if readable > c.clientHandshakePacketLimit {
+		return frontend.ErrPacketTooLarge
+	}
 
 	conn, err := newHandshakeBufferedConn(
 		c.conn.RawConn(),
 		input.PeekN(0, readable),
 		c.sessionAllocator,
+		lease,
 	)
 	if err != nil {
 		return err

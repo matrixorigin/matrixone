@@ -342,35 +342,8 @@ func (c *Config) Validate() error {
 		return moerr.NewInternalError(noReport,
 			"proxy client-handshake-packet-limit exceeds the MySQL packet payload limit")
 	}
-	if c.ProtocolMemoryLimit > 0 && c.MaxConnections > 0 {
-		cachedSessions := uint64(0)
-		// Plugin routing and connection-cache reuse are mutually exclusive in
-		// newProxyHandler, so reserve cached session buffers only when the cache
-		// can actually be instantiated.
-		if c.ConnCacheEnabled && c.Plugin == nil {
-			cachedSessions = defaultMaxNumTotal
-		}
-		maxConnections := uint64(c.MaxConnections)
-		if maxConnections > (^uint64(0)-cachedSessions)/2 {
-			return moerr.NewInternalError(noReport, "proxy max-connections is too large")
-		}
-		fixedSessions := maxConnections*2 + cachedSessions
-		if fixedSessions > ^uint64(0)/proxyIOSessionBufferSize {
-			return moerr.NewInternalError(noReport, "proxy max-connections is too large")
-		}
-		minimum := fixedSessions * proxyIOSessionBufferSize
-		handshakePacketLimit := uint64(c.ClientHandshakePacketLimit)
-		if handshakePacketLimit == 0 {
-			handshakePacketLimit = uint64(defaultClientHandshakePacketLimit)
-		}
-		if maxConnections > (^uint64(0)-minimum)/handshakePacketLimit {
-			return moerr.NewInternalError(noReport, "proxy max-connections is too large")
-		}
-		minimum += maxConnections * handshakePacketLimit
-		if uint64(c.ProtocolMemoryLimit) < minimum {
-			return moerr.NewInternalError(noReport,
-				"proxy protocol-memory-limit is smaller than configured retained protocol buffers")
-		}
+	if _, err := calculateProtocolMemoryBudget(c); err != nil {
+		return err
 	}
 	if c.Plugin != nil {
 		if c.Plugin.Backend == "" {

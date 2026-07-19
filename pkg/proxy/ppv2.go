@@ -49,12 +49,30 @@ const (
 	ipv6AddrLength = 16
 )
 
-func WithProxyProtocolCodec(c codec.Codec) codec.Codec {
-	return &proxyProtocolCodec{Codec: c}
+// ProxyProtocolCodecOption configures the PROXY protocol decoder.
+type ProxyProtocolCodecOption func(*proxyProtocolCodec)
+
+// WithProxyProtocolMaxBodySize rejects a PROXY v2 body larger than size after
+// reading only its fixed header. Non-positive values leave the cap disabled.
+func WithProxyProtocolMaxBodySize(size int) ProxyProtocolCodecOption {
+	return func(c *proxyProtocolCodec) {
+		c.maxBodySize = size
+	}
+}
+
+func WithProxyProtocolCodec(c codec.Codec, options ...ProxyProtocolCodecOption) codec.Codec {
+	pp := &proxyProtocolCodec{Codec: c}
+	for _, option := range options {
+		if option != nil {
+			option(pp)
+		}
+	}
+	return pp
 }
 
 type proxyProtocolCodec struct {
 	codec.Codec
+	maxBodySize int
 }
 
 // mysqlPacketDecodeError retains the header information needed to produce a
@@ -91,7 +109,7 @@ type ProxyAddr struct {
 
 // Decode implements the Codec interface.
 func (c *proxyProtocolCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) {
-	proxyAddr, ok, needMore, err := parseProxyHeaderV2(in)
+	proxyAddr, ok, needMore, err := parseProxyHeaderV2(in, c.maxBodySize)
 	if err != nil {
 		return nil, false, err
 	}
@@ -123,7 +141,7 @@ func (c *proxyProtocolCodec) Encode(data interface{}, out *buf.ByteBuf, writer i
 
 // parseProxyHeader read potential proxy protocol v2 header from the stream
 // ref: https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
-func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, bool, error) {
+func parseProxyHeaderV2(in *buf.ByteBuf, maxBodySize int) (*ProxyAddr, bool, bool, error) {
 	// A stream read may stop anywhere in the signature, fixed header, or
 	// variable-length body. Keep input buffered while every available signature
 	// byte still matches; only a mismatch proves that this is a MySQL packet and
@@ -151,6 +169,11 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, bool, error) {
 	if string(header.Signature[:]) != ProxyProtocolV2Signature {
 		return nil, false, false, nil
 	}
+	if maxBodySize > 0 && int(header.Length) > maxBodySize {
+		// Reject from the fixed header alone. Waiting for an attacker-controlled
+		// uint16 body would retain it in goetty outside the shared allocator.
+		return nil, false, false, frontend.ErrPacketTooLarge
+	}
 
 	// Do not consume the fixed header until the complete declared body is
 	// buffered. Decoders are retried with the same ByteBuf after the next socket
@@ -158,9 +181,6 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, bool, error) {
 	if in.Readable() < ProxyHeaderLength+int(header.Length) {
 		return nil, false, true, nil
 	}
-
-	// valid proxy header, consume the bytes
-	in.Skip(ProxyHeaderLength)
 
 	// According to ppv2:
 	//
@@ -172,11 +192,11 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, bool, error) {
 	// In practice, the proxy may add extra information (AWS NLB do this) in the proxy header
 	// which makes the body length > address length. So here we consume the entire body and
 	// read address from it.
-	body := make([]byte, header.Length)
-	if _, err := io.ReadFull(in, body); err != nil {
-		return nil, false, false, moerr.NewInternalErrorNoCtxf("cannot read proxy address, %s", err.Error())
-	}
-	bodyBuf := bytes.NewBuffer(body)
+	// Parse directly from the ByteBuf. The complete-frame check above keeps the
+	// view valid, and avoiding a second body copy removes the unaccounted peak.
+	body := in.PeekN(ProxyHeaderLength, int(header.Length))
+	bodyBuf := bytes.NewReader(body)
+	in.Skip(ProxyHeaderLength + int(header.Length))
 	addr := &ProxyAddr{}
 	switch header.ProtocolFamily {
 	case tcpOverIPv4, udpOverIPv4:

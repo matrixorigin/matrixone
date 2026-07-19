@@ -159,6 +159,12 @@ func withClientConnAdmission(lease *connectionLease) clientConnOption {
 	}
 }
 
+func withClientConnProtocolMemoryLimiter(limiter *protocolMemoryLimiter) clientConnOption {
+	return func(c *clientConn) {
+		c.protocolMemoryLimiter = limiter
+	}
+}
+
 // clientConn is the connection between proxy and client.
 type clientConn struct {
 	ctx context.Context
@@ -209,6 +215,9 @@ type clientConn struct {
 	// clientHandshakeTimeout bounds only the unauthenticated login read. Its
 	// deadline is cleared before the connection enters the tunnel data path.
 	clientHandshakeTimeout time.Duration
+	// clientHandshakePacketLimit also bounds bytes read ahead after the login;
+	// those bytes move from goetty into the shared allocator at phase handoff.
+	clientHandshakePacketLimit int
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
 	// queryClient is used to send query request to CN servers.
@@ -228,6 +237,9 @@ type clientConn struct {
 	// admission owns this connection's global and, after login parsing,
 	// per-tenant capacity. The handler releases it on every exit path.
 	admission *connectionLease
+	// protocolMemoryLimiter admits short-lived overlap that is not part of one
+	// connection's steady client/backend/login reservation.
+	protocolMemoryLimiter *protocolMemoryLimiter
 	// quit tracks quit/cleanup status. It is shared by quit event path and
 	// EOF/connection-end fallback path.
 	quit struct {
@@ -317,6 +329,7 @@ func newClientConn(
 	if handshakePacketLimit == 0 {
 		handshakePacketLimit = defaultClientHandshakePacketLimit
 	}
+	c.clientHandshakePacketLimit = int(handshakePacketLimit)
 	ios, err := frontend.NewIOSessionWithOptions(
 		c.RawConn(),
 		pu,
@@ -429,6 +442,7 @@ func (c *clientConn) SendErrToClient(err error) {
 
 // BuildConnWithServer implements the ClientConn interface.
 func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
+	var transientLease *protocolMemoryLease
 	if prevAddr == "" {
 		// Step 1, proxy write initial handshake to client.
 		if err := c.writeInitialHandshake(); err != nil {
@@ -440,7 +454,9 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 		}
 		// Step 2, client send handshake response, which is auth request,
 		// to proxy.
-		if err := c.handleHandshakeResp(); err != nil {
+		var err error
+		transientLease, err = c.handleHandshakeResp()
+		if err != nil {
 			// This connection may come from heartbeat of LB, and receive EOF error
 			// from it. Just return error and do not log it.
 			if errors.Is(err, io.EOF) {
@@ -457,9 +473,22 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 		// otherwise survives the handshake and would abort a legitimate long
 		// query later in the raw tunnel.
 		if err := c.RawConn().SetReadDeadline(time.Time{}); err != nil {
+			transientLease.release()
+			return nil, err
+		}
+	} else {
+		var err error
+		transientLease, err = c.acquireBackendProtocolMemory(defaultTransferTimeout)
+		if err != nil {
 			return nil, err
 		}
 	}
+	leaseOwned := transientLease != nil
+	defer func() {
+		if leaseOwned {
+			transientLease.release()
+		}
+	}()
 	// Step 3, proxy connects to a CN server to build connection.
 	conn, err := c.connectToBackend(prevAddr)
 	if err != nil {
@@ -469,6 +498,13 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 			c.log.Error("failed to connect to backend", zap.Error(err))
 		}
 		return nil, err
+	}
+	if prevAddr != "" && transientLease != nil {
+		conn = &protocolMemoryServerConn{
+			ServerConn: conn,
+			lease:      transientLease,
+		}
+		leaseOwned = false
 	}
 	// bind the server connection to the client connection.
 	c.sc = conn
@@ -516,6 +552,15 @@ func (c *clientConn) sendErr(err error, resp chan<- []byte) {
 }
 
 func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) error {
+	lease, err := c.acquireBackendProtocolMemory(defaultTransferTimeout)
+	if err != nil {
+		if resp != nil {
+			c.sendErr(err, resp)
+		}
+		return err
+	}
+	defer lease.release()
+
 	sc, r, err := c.connectWithHandshakePack(func(pack *frontend.Packet) (ServerConn, []byte, error) {
 		return c.router.Connect(cn, pack, nil)
 	})
@@ -547,6 +592,30 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 		return moerr.NewInternalErrorNoCtx("exec error")
 	}
 	return nil
+}
+
+func (c *clientConn) acquireProtocolMemory(
+	timeout time.Duration,
+	bytes uint64,
+) (*protocolMemoryLease, error) {
+	if c.protocolMemoryLimiter == nil {
+		return nil, nil
+	}
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := time.Now().Add(timeout)
+	return acquireProtocolMemoryBefore(ctx, c.protocolMemoryLimiter, bytes, deadline)
+}
+
+func (c *clientConn) acquireBackendProtocolMemory(
+	timeout time.Duration,
+) (*protocolMemoryLease, error) {
+	if c.protocolMemoryLimiter == nil {
+		return nil, nil
+	}
+	return c.acquireProtocolMemory(timeout, c.protocolMemoryLimiter.budget.backendBytes)
 }
 
 // KillCurrentBackendConn implements the ClientConn interface.

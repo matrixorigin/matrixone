@@ -68,6 +68,9 @@ type handler struct {
 	sessionAllocator frontend.Allocator
 	// connectionLimiter bounds aggregate and per-tenant live connections.
 	connectionLimiter *connectionLimiter
+	// protocolMemoryLimiter serializes phase overlap against the headroom left
+	// after steady per-connection protocol memory has been reserved.
+	protocolMemoryLimiter *protocolMemoryLimiter
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -82,6 +85,10 @@ func newProxyHandler(
 	haKeeperClient logservice.ProxyHAKeeperClient,
 	test bool,
 ) (*handler, error) {
+	protocolMemoryLimiter, err := newProtocolMemoryLimiter(&cfg)
+	if err != nil {
+		return nil, err
+	}
 	protocolMemoryLimit := cfg.ProtocolMemoryLimit
 	if protocolMemoryLimit == 0 {
 		protocolMemoryLimit = defaultProtocolMemoryLimit
@@ -191,6 +198,7 @@ func newProxyHandler(
 			maxConnections,
 			maxConnectionsPerTenant,
 		),
+		protocolMemoryLimiter: protocolMemoryLimiter,
 	}
 	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
 		var cacheOpts []connCacheOption
@@ -255,6 +263,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.connCache,
 		withClientConnAllocator(h.sessionAllocator),
 		withClientConnAdmission(admission),
+		withClientConnProtocolMemoryLimiter(h.protocolMemoryLimiter),
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
