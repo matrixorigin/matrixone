@@ -3723,18 +3723,6 @@ func executeStmt(ses *Session,
 	defer ses.ExitFPrint(FPExecStmt)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
-	// record goroutine info when ddl stmt run timeout
-	switch execCtx.stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
-		_, span := trace.Start(execCtx.reqCtx, "executeStmtHung",
-			trace.WithHungThreshold(time.Minute), // be careful with this options
-			trace.WithProfileGoroutine(),
-			trace.WithProfileTraceSecs(10*time.Second),
-		)
-		defer span.End()
-	default:
-	}
-
 	var cmpBegin time.Time
 	var ret interface{}
 
