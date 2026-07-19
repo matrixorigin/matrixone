@@ -84,6 +84,15 @@ func TestSpanID_SetByUUID_IsZero(t *testing.T) {
 	}
 }
 
+func TestMOCtledSpanCompatibilityNoop(t *testing.T) {
+	InitMOCtledSpan()
+	require.False(t, SetMoCtledSpanState("s3", true, 0))
+	exist, enabled, threshold := IsMOCtledSpan(SpanKindRemoteFSVis)
+	require.False(t, exist)
+	require.False(t, enabled)
+	require.Zero(t, threshold)
+}
+
 func TestSpanContext_IsEmpty(t *testing.T) {
 	type fields struct {
 		TraceID TraceID

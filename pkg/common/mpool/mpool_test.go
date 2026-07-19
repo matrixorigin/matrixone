@@ -15,8 +15,10 @@
 package mpool
 
 import (
+	"bytes"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -398,4 +400,135 @@ func TestPtrLenReplace(t *testing.T) {
 	require.Equal(t, int32(0), p.len)
 
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPtrLenAppendUsesRecordedAllocationSize(t *testing.T) {
+	const (
+		initialSize  = 256 << 10
+		shrunkSize   = 64 << 10
+		firstAppend  = 96 << 10
+		secondAppend = 160 << 10
+	)
+
+	mp := MustNewZero()
+	p := &PtrLen{}
+	t.Cleanup(func() {
+		p.Free(mp)
+		DeleteMPool(mp)
+	})
+
+	require.NoError(t, p.Replace(mp, bytes.Repeat([]byte{0x11}, initialSize)))
+	originalPtr := p.Ptr()
+	require.Equal(t, int64(initialSize), mp.CurrNB())
+
+	// PtrLen intentionally retains only the base pointer and logical length.
+	// Shrinking therefore produces a reduced-capacity view on the next append.
+	require.NoError(t, p.Replace(mp, bytes.Repeat([]byte{0x22}, shrunkSize)))
+	require.Equal(t, originalPtr, p.Ptr())
+	require.Equal(t, int64(initialSize), mp.CurrNB())
+
+	require.NoError(t, p.AppendRawBytes(mp, bytes.Repeat([]byte{0x33}, firstAppend)))
+	require.Equal(t, originalPtr, p.Ptr(), "growth within the recorded allocation should reuse it")
+	require.Equal(t, int64(initialSize), mp.CurrNB())
+	require.Equal(t, bytes.Repeat([]byte{0x22}, shrunkSize), p.ToByteSlice()[:shrunkSize])
+	require.Equal(
+		t,
+		bytes.Repeat([]byte{0x33}, firstAppend),
+		p.ToByteSlice()[shrunkSize:shrunkSize+firstAppend],
+	)
+
+	require.NoError(t, p.AppendRawBytes(mp, bytes.Repeat([]byte{0x44}, secondAppend)))
+	require.Equal(t, int64(shrunkSize+firstAppend+secondAppend), mp.CurrNB())
+	require.Equal(
+		t,
+		bytes.Repeat([]byte{0x44}, secondAppend),
+		p.ToByteSlice()[shrunkSize+firstAppend:],
+	)
+
+	p.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMPoolReallocZeroTrackedZeroCapacityView(t *testing.T) {
+	const (
+		allocationSize = 256 << 10
+		newSize        = 64 << 10
+	)
+
+	mp := MustNewZero()
+	t.Cleanup(func() {
+		DeleteMPool(mp)
+	})
+
+	old, err := mp.Alloc(allocationSize, true)
+	require.NoError(t, err)
+	originalPtr := unsafe.Pointer(unsafe.SliceData(old))
+
+	resized, err := mp.ReallocZero(old[:0:0], newSize, true)
+	require.NoError(t, err)
+	require.Equal(t, originalPtr, unsafe.Pointer(unsafe.SliceData(resized)))
+	require.Len(t, resized, newSize)
+	require.Equal(t, allocationSize, cap(resized))
+	require.Equal(t, make([]byte, newSize), resized)
+	require.Equal(t, int64(allocationSize), mp.CurrNB())
+
+	mp.Free(resized)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMPoolReallocZeroUsesRecordedSourceProvenance(t *testing.T) {
+	const (
+		oldSize       = 64 << 10
+		logicalLength = 32 << 10
+		newSize       = 256 << 10
+	)
+
+	testCases := []struct {
+		name          string
+		sourceOffHeap bool
+		targetOffHeap bool
+	}{
+		{
+			name:          "on-heap-to-off-heap",
+			sourceOffHeap: false,
+			targetOffHeap: true,
+		},
+		{
+			name:          "off-heap-to-on-heap",
+			sourceOffHeap: true,
+			targetOffHeap: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mp := MustNewZero()
+			t.Cleanup(func() {
+				DeleteMPool(mp)
+			})
+
+			old, err := mp.Alloc(oldSize, testCase.sourceOffHeap)
+			require.NoError(t, err)
+			for i := 0; i < logicalLength; i++ {
+				old[i] = 0x5a
+			}
+
+			resized, err := mp.ReallocZero(
+				old[:logicalLength:logicalLength],
+				newSize,
+				testCase.targetOffHeap,
+			)
+			require.NoError(t, err)
+			require.Equal(t, bytes.Repeat([]byte{0x5a}, logicalLength), resized[:logicalLength])
+			require.Equal(t, make([]byte, newSize-logicalLength), resized[logicalLength:])
+
+			hdr, ok := mp.getPtrHdr(unsafe.Pointer(unsafe.SliceData(resized)))
+			require.True(t, ok)
+			require.Equal(t, testCase.targetOffHeap, hdr.offHeap)
+			require.Equal(t, int32(newSize), hdr.allocSz)
+
+			mp.Free(resized)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }

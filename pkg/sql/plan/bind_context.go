@@ -32,6 +32,9 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		projectByExpr:  make(map[string]int32),
 		windowByAst:    make(map[string]int32),
 		timeByAst:      make(map[string]int32),
+
+		projectColByAst: make(map[string]int32),
+
 		aliasMap:       make(map[string]*aliasItem),
 		aliasFrequency: make(map[string]int),
 		bindingByTag:   make(map[int32]*Binding),
@@ -541,6 +544,10 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		exprImpl.To, err = bc.qualifyColumnNames(exprImpl.To, expandAlias)
 
 	case *tree.UnresolvedName:
+		if havingBinder, ok := bc.binder.(*HavingBinder); ok && havingBinder.rollupHaving &&
+			!exprImpl.Star && exprImpl.NumParts > 0 {
+			exprImpl.CStrParts[0] = tree.NewCStr(exprImpl.ColName(), 1)
+		}
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {

@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
@@ -1121,9 +1121,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	majordop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
 	if majordop > 1 {
 		fmt.Fprintf(buf, " %v_time=[", majorStr)
-		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMajor, func(i, j int) bool {
-			return a.AnalyzeInfo.TimeConsumedArrayMajor[i] < a.AnalyzeInfo.TimeConsumedArrayMajor[j]
-		})
+		slices.Sort(a.AnalyzeInfo.TimeConsumedArrayMajor)
 		if majordop > 4 {
 			var totalTime int64
 			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
@@ -1157,9 +1155,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 			}
 
 			fmt.Fprintf(buf, " %v_time=[", minorStr)
-			sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
-				return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
-			})
+			slices.Sort(a.AnalyzeInfo.TimeConsumedArrayMinor)
 			if minordop > 4 {
 				var totalTime int64
 				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {

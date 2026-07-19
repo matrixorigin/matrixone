@@ -172,7 +172,8 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SecurityType    string `json:"security_type,omitempty"`
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -354,6 +355,8 @@ type BindContext struct {
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
 
+	projectColByAst map[string]int32
+
 	projectByAst []SelectField
 
 	timeAsts []tree.Expr
@@ -442,11 +445,12 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx           context.Context
+	builder          *QueryBuilder
+	ctx              *BindContext
+	impl             Binder
+	boundCols        []string
+	numericParamType *Type
 }
 
 type DefaultBinder struct {
@@ -484,6 +488,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
@@ -497,7 +502,8 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {
@@ -507,7 +513,8 @@ type ProjectionBinder struct {
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {
