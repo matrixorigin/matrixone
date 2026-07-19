@@ -16,14 +16,17 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -176,6 +179,183 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 		assert.NoError(t, s.onMessage(ctx, newMessage(req), 0, nil))
 		assert.Equal(t, 0, n)
 	})
+}
+
+func TestOnMessageReturnsWhenContextCanceledWhileQueueFull(t *testing.T) {
+	s := newBlockedQueueTestServer(t, nil)
+	s.queue <- executor{}
+	producerAdmitted := notifyProducerAdmitted(s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := &txn.TxnRequest{Method: txn.TxnMethod_Read, RequestID: 42}
+	msg, cancelCalls := newCountingMessage(req)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.onMessage(ctx, msg, 0, nil)
+	}()
+
+	waitForProducerAdmission(t, producerAdmitted)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "onMessage did not return after context cancellation")
+	}
+	require.Zero(t, req.RequestID)
+	require.Equal(t, int32(1), cancelCalls.Load())
+	select {
+	case <-msg.Ctx.Done():
+	default:
+		require.FailNow(t, "message context was not canceled")
+	}
+	<-s.queue
+}
+
+func TestCloseUnblocksProducerAndCleansQueue(t *testing.T) {
+	closeErr := errors.New("close failed")
+	rpc := &testRPCServer{closeErr: closeErr}
+	s := newBlockedQueueTestServer(t, rpc)
+	producerAdmitted := notifyProducerAdmitted(s)
+
+	var queuedCanceled atomic.Int32
+	queuedReq := &txn.TxnRequest{RequestID: 99}
+	s.queue <- executor{
+		req: queuedReq,
+		cancel: func() {
+			queuedCanceled.Add(1)
+		},
+	}
+
+	req := &txn.TxnRequest{Method: txn.TxnMethod_Read, RequestID: 42}
+	msg, cancelCalls := newCountingMessage(req)
+	producerDone := make(chan error, 1)
+	go func() {
+		producerDone <- s.onMessage(context.Background(), msg, 0, nil)
+	}()
+	waitForProducerAdmission(t, producerAdmitted)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+
+	select {
+	case err := <-producerDone:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "producer did not return during server close")
+	}
+	select {
+	case err := <-closeDone:
+		require.ErrorIs(t, err, closeErr)
+	case <-time.After(time.Second):
+		require.FailNow(t, "server close did not return")
+	}
+
+	require.Zero(t, req.RequestID)
+	require.Equal(t, int32(1), cancelCalls.Load())
+	require.Zero(t, queuedReq.RequestID)
+	require.Equal(t, int32(1), queuedCanceled.Load())
+	require.Equal(t, int32(1), rpc.closeCalls.Load())
+	require.Empty(t, s.queue)
+}
+
+func TestCloseConcurrentAndRepeatedReturnsSameError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	rpc := &testRPCServer{closeErr: closeErr}
+	s := newBlockedQueueTestServer(t, rpc)
+
+	const callers = 8
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- s.Close()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.ErrorIs(t, err, closeErr)
+	}
+	require.ErrorIs(t, s.Close(), closeErr)
+	require.Equal(t, int32(1), rpc.closeCalls.Load())
+}
+
+func newBlockedQueueTestServer(t *testing.T, rpcServer morpc.RPCServer) *server {
+	t.Helper()
+	rt := newTestRuntime(newTestClock(), logutil.GetPanicLogger())
+	runtime.SetupServiceBasedRuntime("", rt)
+	s := &server{
+		rt:        rt,
+		rpc:       rpcServer,
+		handlers:  make(map[txn.TxnMethod]TxnRequestHandleFunc),
+		queue:     make(chan executor, 1),
+		stopper:   stopper.NewStopper("txn rpc test"),
+		stoppingC: make(chan struct{}),
+	}
+	s.options.maxChannelBufferSize = 1
+	s.handlers[txn.TxnMethod_Read] = func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error {
+		return nil
+	}
+	return s
+}
+
+func notifyProducerAdmitted(s *server) <-chan struct{} {
+	admitted := make(chan struct{})
+	s.producerAdmitted = func() {
+		close(admitted)
+	}
+	return admitted
+}
+
+func newCountingMessage(req morpc.Message) (morpc.RPCMessage, *atomic.Int32) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var cancelCalls atomic.Int32
+	return morpc.RPCMessage{
+		Ctx: ctx,
+		Cancel: func() {
+			cancelCalls.Add(1)
+			cancel()
+		},
+		Message: req,
+	}, &cancelCalls
+}
+
+func waitForProducerAdmission(t *testing.T, admitted <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-admitted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "producer was not admitted")
+	}
+}
+
+type testRPCServer struct {
+	closeErr   error
+	closeCalls atomic.Int32
+}
+
+func (s *testRPCServer) Start() error {
+	return nil
+}
+
+func (s *testRPCServer) Close() error {
+	s.closeCalls.Add(1)
+	return s.closeErr
+}
+
+func (s *testRPCServer) RegisterRequestHandler(
+	func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error,
+) {
 }
 
 func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts ...ServerOption) {
