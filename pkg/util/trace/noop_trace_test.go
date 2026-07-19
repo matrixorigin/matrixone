@@ -262,10 +262,10 @@ func Test_NoopTracer_Start(t1 *testing.T) {
 func TestNonRecordingTracerPreservesTraceContext(t *testing.T) {
 	tracer := NewNonRecordingTracer(&sequentialIDGenerator{})
 
-	rootCtx, root := tracer.Start(nil, "root", WithKind(SpanKindStatement))
+	rootCtx, root := tracer.Start(nil, "root", WithKind(SpanKindSession))
 	rootSC := root.SpanContext()
 	require.False(t, rootSC.IsEmpty())
-	require.Equal(t, SpanKindStatement, rootSC.Kind)
+	require.Equal(t, SpanKindSession, rootSC.Kind)
 	require.Equal(t, SpanContext{}, root.ParentSpanContext())
 	require.Equal(t, rootSC, SpanFromContext(rootCtx).SpanContext())
 
@@ -286,6 +286,28 @@ func TestNonRecordingTracerPreservesTraceContext(t *testing.T) {
 	child.End()
 	newRoot.End()
 	require.False(t, tracer.IsEnable())
+}
+
+func TestNonRecordingTracerKeepsRetiredControlledKindsDisabled(t *testing.T) {
+	tracer := NewNonRecordingTracer(&sequentialIDGenerator{})
+	rootCtx, root := tracer.Start(context.Background(), "root", WithNewRoot(true))
+	rootSC := root.SpanContext()
+	require.False(t, rootSC.IsEmpty())
+	require.Equal(t, SpanKindInternal, rootSC.Kind)
+
+	for _, kind := range []SpanKind{
+		SpanKindStatement,
+		SpanKindRemoteFSVis,
+		SpanKindLocalFSVis,
+		SpanKindTNRPCHandle,
+	} {
+		t.Run(kind.String(), func(t *testing.T) {
+			gotCtx, gotSpan := tracer.Start(rootCtx, "retired-controlled", WithKind(kind))
+			require.Equal(t, rootCtx, gotCtx)
+			require.IsType(t, NoopSpan{}, gotSpan)
+			require.Equal(t, rootSC, SpanFromContext(gotCtx).SpanContext())
+		})
+	}
 }
 
 func TestGenerateUsesNonRecordingTraceContext(t *testing.T) {

@@ -143,6 +143,14 @@ func TestGeneratedTraceContextSurvivesLogAndErrorExtraction(t *testing.T) {
 	ctx, span := provider.Tracer("test").Start(context.Background(), "root", trace.WithNewRoot(true))
 	spanContext := span.SpanContext()
 	require.False(t, spanContext.IsEmpty())
+	require.Equal(t, trace.SpanKindInternal, spanContext.Kind)
+
+	// LocalFS spans were mo_ctl opt-in and disabled by default. Retiring their
+	// recording/runtime control must preserve the parent correlation context,
+	// rather than introducing localFSOperation into system.rawlog.
+	ctx, retiredSpan := provider.Tracer("test").Start(ctx, "local-fs", trace.WithKind(trace.SpanKindLocalFSVis))
+	require.IsType(t, trace.NoopSpan{}, retiredSpan)
+	require.Equal(t, spanContext, trace.SpanFromContext(ctx).SpanContext())
 
 	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{SkipLineEnding: true})
 	_, err := ReportZap(encoder, zapcore.Entry{Level: zapcore.InfoLevel}, []zapcore.Field{trace.ContextField(ctx)})
@@ -152,6 +160,18 @@ func TestGeneratedTraceContextSurvivesLogAndErrorExtraction(t *testing.T) {
 	require.True(t, ok)
 	defer logItem.Free()
 	require.Equal(t, spanContext, *logItem.SpanContext)
+	logRow := logView.OriginTable.GetRow(ctx)
+	defer logRow.Free()
+	logItem.FillRow(ctx, logRow)
+	logValues := logRow.ToStrings()
+	foundSpanKind := false
+	for idx, column := range logRow.Table.Columns {
+		if column.Name == spanKindCol.Name {
+			foundSpanKind = true
+			require.Equal(t, trace.SpanKindInternal.String(), logValues[idx])
+		}
+	}
+	require.True(t, foundSpanKind)
 
 	previousReporter := errutil.GetReportErrorFunc()
 	errutil.SetErrorReporter(func(context.Context, error, int) {})

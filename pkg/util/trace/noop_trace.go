@@ -115,6 +115,9 @@ func (t *NonRecordingTracer) Start(
 	for _, opt := range opts {
 		opt.ApplySpanStart(&cfg)
 	}
+	if isRetiredControlledSpanKind(cfg.Kind) {
+		return ctx, NoopSpan{}
+	}
 
 	parent := SpanFromContext(ctx).SpanContext()
 	spanContext := SpanContext{Kind: cfg.Kind}
@@ -137,3 +140,20 @@ func (t *NonRecordingTracer) Debug(ctx context.Context, _ string, _ ...SpanStart
 }
 
 func (t *NonRecordingTracer) IsEnable(...SpanStartOption) bool { return false }
+
+// isRetiredControlledSpanKind identifies the diagnostic Span kinds that were
+// opt-in through mo_ctl and disabled by default. Retiring their runtime control
+// must not turn them on implicitly: doing so changes retained log/error
+// correlation from the parent kind to localFSOperation, remoteFSOperation, and
+// other values that were never emitted by the default configuration.
+func isRetiredControlledSpanKind(kind SpanKind) bool {
+	switch kind {
+	case SpanKindStatement,
+		SpanKindRemoteFSVis,
+		SpanKindLocalFSVis,
+		SpanKindTNRPCHandle:
+		return true
+	default:
+		return false
+	}
+}
