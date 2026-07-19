@@ -122,14 +122,15 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 				cancelWaiter()
 				if !waiterDone {
 					select {
-					case err := <-waitResult:
-						if err == nil {
-							_ = waiterService.unlockWithContext(cleanupCtx, activeWaiterTxn, timestamp.Timestamp{})
-						}
+					case <-waitResult:
 					case <-cleanupCtx.Done():
 						t.Errorf("remote waiter did not exit during cleanup: %v", cleanupCtx.Err())
 					}
 				}
+				// A failed remote Lock can still have reached the owner and is recorded
+				// locally for exactly this compensating unlock. It is also safe after a
+				// successful unlock, where the transaction is already absent.
+				_ = waiterService.unlockWithContext(cleanupCtx, activeWaiterTxn, timestamp.Timestamp{})
 			}()
 
 			// This is test admission synchronization, not part of the behavior under
