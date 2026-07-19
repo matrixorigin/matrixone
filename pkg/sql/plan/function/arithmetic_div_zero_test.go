@@ -584,6 +584,7 @@ func TestIntegerDivNullDividendByZeroStrictMode(t *testing.T) {
 // when at least one selected row has two non-NULL operands.
 func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
 	defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
 
@@ -597,6 +598,18 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 	decimal64Type := types.New(types.T_decimal64, 18, 2)
 	decimal128Type := types.New(types.T_decimal128, 38, 2)
 	decimal256Type := types.New(types.T_decimal256, 65, 2)
+	decimal64DivType := resolvedReturnType(t, DIV, []types.Type{decimal64Type, decimal64Type})
+	decimal128DivType := resolvedReturnType(t, DIV, []types.Type{decimal128Type, decimal128Type})
+	decimal256DivType := resolvedReturnType(t, DIV, []types.Type{decimal256Type, decimal256Type})
+	require.Equal(t, types.T_decimal128, decimal64DivType.Oid)
+	require.Equal(t, int32(38), decimal64DivType.Width)
+	require.Equal(t, int32(8), decimal64DivType.Scale)
+	require.Equal(t, types.T_decimal128, decimal128DivType.Oid)
+	require.Equal(t, int32(38), decimal128DivType.Width)
+	require.Equal(t, int32(8), decimal128DivType.Scale)
+	require.Equal(t, types.T_decimal256, decimal256DivType.Oid)
+	require.Equal(t, int32(65), decimal256DivType.Width)
+	require.Equal(t, int32(8), decimal256DivType.Scale)
 	testCases := []testCase{
 		{
 			name: "signed integer divide",
@@ -668,7 +681,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 				NewFunctionTestInput(decimal64Type, []types.Decimal64{0, 0}, []bool{true, true}),
 				NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
 			},
-			resultType: types.T_decimal128.ToType(), fn: divFn,
+			resultType: decimal64DivType, fn: divFn,
 		},
 		{
 			name: "decimal64 integer divide",
@@ -692,7 +705,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 				NewFunctionTestInput(decimal128Type, []types.Decimal128{{}, {}}, []bool{true, true}),
 				NewFunctionTestConstInput(decimal128Type, []types.Decimal128{{}}, []bool{false}),
 			},
-			resultType: decimal128Type, fn: divFn,
+			resultType: decimal128DivType, fn: divFn,
 		},
 		{
 			name: "decimal128 integer divide",
@@ -716,7 +729,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 				NewFunctionTestInput(decimal256Type, []types.Decimal256{{}, {}}, []bool{true, true}),
 				NewFunctionTestConstInput(decimal256Type, []types.Decimal256{{}}, []bool{false}),
 			},
-			resultType: decimal256Type, fn: divFn,
+			resultType: decimal256DivType, fn: divFn,
 		},
 		{
 			name: "decimal256 integer divide",
@@ -742,7 +755,9 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
 			require.NoError(t, tcc.result.PreExtendAndReset(2))
 			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, nil))
-			rsNull := tcc.GetResultVectorDirectly().GetNulls()
+			rsVec := tcc.GetResultVectorDirectly()
+			require.Equal(t, tc.resultType, *rsVec.GetType())
+			rsNull := rsVec.GetNulls()
 			require.True(t, rsNull.Contains(0))
 			require.True(t, rsNull.Contains(1))
 		})

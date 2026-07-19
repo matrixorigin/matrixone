@@ -483,7 +483,7 @@ func opBinaryFixedFixedToFixed[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -606,7 +606,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}

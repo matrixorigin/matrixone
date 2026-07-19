@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -190,6 +191,199 @@ func testDecimalStaleSelectList[T templateDec](t *testing.T, decType types.Type,
 					require.Equal(t, "1.00", got.Format(resultType.Scale))
 				}
 			}
+		})
+	}
+}
+
+type arithmeticMatrixInput interface {
+	int64 | uint64 | float32 | float64 | types.Decimal64 | types.Decimal128 | types.Decimal256
+}
+
+type arithmeticMatrixOperation struct {
+	name string
+	id   int
+	fn   fEvalFn
+}
+
+func TestArithmeticDivisionByZeroMatrix(t *testing.T) {
+	divMod := []arithmeticMatrixOperation{
+		{name: "div", id: INTEGER_DIV, fn: integerDivFn},
+		{name: "mod", id: MOD, fn: modFn},
+	}
+	allOps := []arithmeticMatrixOperation{
+		{name: "slash", id: DIV, fn: divFn},
+		{name: "div", id: INTEGER_DIV, fn: integerDivFn},
+		{name: "mod", id: MOD, fn: modFn},
+	}
+
+	runArithmeticMatrixType(t, types.T_int64.ToType(), int64(1), int64(0), divMod)
+	runArithmeticMatrixType(t, types.T_uint64.ToType(), uint64(1), uint64(0), divMod)
+	runArithmeticMatrixType(t, types.T_float32.ToType(), float32(1), float32(0), allOps)
+	runArithmeticMatrixType(t, types.T_float64.ToType(), float64(1), float64(0), allOps)
+	runArithmeticMatrixType(t, types.New(types.T_decimal64, 18, 2), types.Decimal64(100), types.Decimal64(0), allOps)
+	runArithmeticMatrixType(t, types.New(types.T_decimal128, 38, 2),
+		types.Decimal128{B0_63: 100}, types.Decimal128{}, allOps)
+	runArithmeticMatrixType(t, types.New(types.T_decimal256, 65, 2),
+		types.Decimal256{B0_63: 100}, types.Decimal256{}, allOps)
+}
+
+func runArithmeticMatrixType[T arithmeticMatrixInput](
+	t *testing.T,
+	typ types.Type,
+	one T,
+	zero T,
+	operations []arithmeticMatrixOperation,
+) {
+	t.Helper()
+	type shape struct {
+		name                  string
+		leftConst, rightConst bool
+	}
+	shapes := []shape{
+		{name: "const_const", leftConst: true, rightConst: true},
+		{name: "const_vector", leftConst: true},
+		{name: "vector_const", rightConst: true},
+		{name: "vector_vector"},
+	}
+	type rowState struct {
+		name string
+	}
+	states := []rowState{{name: "all_null"}, {name: "mixed_null"}, {name: "partial_mask"}}
+	modes := []struct {
+		name   string
+		strict bool
+	}{{name: "strict", strict: true}, {name: "non_strict"}}
+
+	for _, op := range operations {
+		for _, shape := range shapes {
+			for _, state := range states {
+				// A const/const pair has no row-varying operand, so mixed NULL is
+				// not a representable execution shape. all-null and partial-mask
+				// still cover its two reachable row-eligibility states.
+				if shape.leftConst && shape.rightConst && state.name == "mixed_null" {
+					continue
+				}
+				for _, mode := range modes {
+					name := typ.Oid.String() + "/" + op.name + "/" + shape.name + "/" + state.name + "/" + mode.name
+					t.Run(name, func(t *testing.T) {
+						leftValues := []T{one, one}
+						rightValues := []T{zero, zero}
+						leftNulls := []bool{false, false}
+						rightNulls := []bool{false, false}
+						var selectList *FunctionSelectList
+
+						switch state.name {
+						case "all_null":
+							leftNulls = []bool{true, true}
+						case "mixed_null":
+							if !shape.leftConst {
+								leftNulls = []bool{true, false}
+							} else {
+								rightNulls = []bool{true, false}
+							}
+						case "partial_mask":
+							selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+							if !shape.rightConst {
+								rightValues[0] = one
+							}
+						}
+
+						if shape.leftConst {
+							leftValues = leftValues[:1]
+							leftNulls = leftNulls[:1]
+						}
+						if shape.rightConst {
+							rightValues = rightValues[:1]
+							rightNulls = rightNulls[:1]
+						}
+
+						makeInput := func(isConst bool, values []T, nullList []bool) FunctionTestInput {
+							if isConst {
+								return NewFunctionTestConstInput(typ, values, nullList)
+							}
+							return NewFunctionTestInput(typ, values, nullList)
+						}
+						inputs := []FunctionTestInput{
+							makeInput(shape.leftConst, leftValues, leftNulls),
+							makeInput(shape.rightConst, rightValues, rightNulls),
+						}
+						resultType := resolvedReturnType(t, op.id, []types.Type{typ, typ})
+						proc := testutil.NewProcess(t)
+						defer proc.Free()
+						if mode.strict {
+							atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+						} else {
+							atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+						}
+						tcc := NewFunctionTestCase(proc, inputs,
+							NewFunctionTestResult(resultType, false, nil, nil), op.fn)
+						require.NoError(t, tcc.result.PreExtendAndReset(2))
+						err := tcc.fn(tcc.parameters, tcc.result, proc, 2, selectList)
+
+						wantError := mode.strict && state.name != "all_null" &&
+							!(state.name == "partial_mask" && !shape.rightConst)
+						if wantError {
+							require.Error(t, err)
+							return
+						}
+						require.NoError(t, err)
+						rsVec := tcc.GetResultVectorDirectly()
+						require.Equal(t, resultType, *rsVec.GetType())
+						require.False(t, rsVec.GetNulls().Contains(2), "must not retain a NULL outside length")
+						if state.name == "partial_mask" && !shape.rightConst {
+							require.False(t, rsVec.GetNulls().Contains(0))
+							require.True(t, rsVec.GetNulls().Contains(1))
+						} else {
+							require.True(t, rsVec.GetNulls().Contains(0))
+							require.True(t, rsVec.GetNulls().Contains(1))
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestIntegerSlashResolverMatrix(t *testing.T) {
+	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()} {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			got, err := GetFunctionByName(context.Background(), "/", []types.Type{typ, typ})
+			require.NoError(t, err)
+			targets, needCast := got.ShouldDoImplicitTypeCast()
+			require.True(t, needCast)
+			require.Len(t, targets, 2)
+			require.Equal(t, got.GetReturnType(), resolvedReturnType(t, DIV, targets))
+		})
+	}
+}
+
+func TestMaskedVectorConstFloatOverflow(t *testing.T) {
+	maskOverflowRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	for _, tc := range []struct {
+		name   string
+		fn     fEvalFn
+		left   []float64
+		right  float64
+		wanted float64
+	}{
+		{name: "multiply", fn: multiFn, left: []float64{1, math.MaxFloat64}, right: 2, wanted: 2},
+		{name: "subtract", fn: minusFn, left: []float64{1, math.MaxFloat64}, right: -math.MaxFloat64, wanted: math.MaxFloat64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), tc.left, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_float64.ToType(), []float64{tc.right}, []bool{false}),
+			}
+			tcc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), tc.fn)
+			require.NoError(t, tcc.result.PreExtendAndReset(2))
+			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskOverflowRow))
+			rsVec := tcc.GetResultVectorDirectly()
+			require.Equal(t, tc.wanted, vector.MustFixedColWithTypeCheck[float64](rsVec)[0])
+			require.False(t, rsVec.GetNulls().Contains(0))
+			require.True(t, rsVec.GetNulls().Contains(1))
 		})
 	}
 }
