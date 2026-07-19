@@ -554,7 +554,7 @@ func maskUnselectedRows(rsNull *nulls.Nulls, selectList *FunctionSelectList, len
 		return true, false
 	}
 	if !selectList.ShouldEvalAllRow() {
-		for i := range selectList.SelectList {
+		for i := 0; i < length; i++ {
 			if selectList.Contains(uint64(i)) {
 				rsNull.Add(uint64(i))
 			}

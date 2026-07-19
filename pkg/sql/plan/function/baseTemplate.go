@@ -417,7 +417,7 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1375,7 +1375,7 @@ func specialTemplateForModFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1606,11 +1606,18 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	return false
 }
 
-// hasEvaluableRows reports whether at least one row may execute the arithmetic
-// kernel. Input NULLs and selectList-masked rows must already be merged into
-// rsNull before calling it.
+// hasEvaluableRows reports whether at least one row in the current batch may
+// execute the arithmetic kernel. Input NULLs and selectList-masked rows must
+// already be merged into rsNull before calling it. The bitmap can retain bits
+// outside [0, length) when an expression executor is reused with a smaller
+// batch, so its total cardinality must not be used here.
 func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
-	return length > 0 && rsNull.Count() < length
+	for i := 0; i < length; i++ {
+		if !rsNull.Contains(uint64(i)) {
+			return true
+		}
+	}
+	return false
 }
 
 func specialTemplateForDivFunction[
@@ -1634,7 +1641,7 @@ func specialTemplateForDivFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}

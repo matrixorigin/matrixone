@@ -514,6 +514,55 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 	}
 }
 
+func TestFunctionExpressionExecutorShrinkingSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	floatType := types.T_float64.ToType()
+	div, err := function.GetFunctionByName(proc.Ctx, "/", []types.Type{floatType, floatType})
+	require.NoError(t, err)
+	resultType := div.GetReturnType()
+
+	column := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_float64), NotNullable: true},
+	}
+	constant := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Dval{Dval: 2},
+		}},
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+	}
+	expr := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "/", Obj: div.GetEncodedOverloadID()},
+			Args: []*plan.Expr{column, constant},
+		}},
+		Typ: plan.Type{Id: int32(resultType.Oid), Width: resultType.Width, Scale: resultType.Scale},
+	}
+
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	largeBatch := testutil.NewBatchWithVectors(
+		[]*vector.Vector{testutil.NewVector(3, floatType, proc.Mp(), false, []float64{5, 5, 5})},
+		make([]int64, 3))
+	defer largeBatch.Clean(proc.Mp())
+	_, err = executor.Eval(proc, []*batch.Batch{largeBatch}, []bool{true, true, false})
+	require.NoError(t, err)
+
+	smallBatch := testutil.NewBatchWithVectors(
+		[]*vector.Vector{testutil.NewVector(2, floatType, proc.Mp(), false, []float64{5, 5})},
+		make([]int64, 2))
+	defer smallBatch.Clean(proc.Mp())
+	result, err := executor.Eval(proc, []*batch.Batch{smallBatch}, []bool{true, false})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Length())
+	require.Equal(t, float64(2.5), vector.MustFixedColWithTypeCheck[float64](result)[0])
+	require.False(t, result.GetNulls().Contains(0))
+	require.True(t, result.GetNulls().Contains(1))
+}
+
 func TestExpressionReset(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
