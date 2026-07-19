@@ -95,6 +95,48 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			want:       types.T_float64,
 			paramCount: 2,
 		},
+		{
+			name:       "group by position",
+			sql:        "insert into constraint_test.emp (sal) select ? + ? from constraint_test.emp group by 1",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "scalar subquery",
+			sql:        "insert into constraint_test.emp (sal) select (select ? + ?)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "derived table passthrough",
+			sql:        "insert into constraint_test.emp (sal) select x from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "nested derived table passthrough",
+			sql:        "insert into constraint_test.emp (sal) select x from (select x from (select ? + ? as x) d1) d2",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "cte passthrough",
+			sql:        "insert into constraint_test.emp (sal) with c as (select ? + ? as x) select x from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "aliased cte passthrough",
+			sql:        "insert into constraint_test.emp (sal) with c(y) as (select ? + ?) select q.y from c q",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "derived column alias passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.y from (select ? + ?) d(y)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
 	}
 
 	for _, test := range tests {
@@ -106,40 +148,51 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 			require.NoError(t, err)
 
-			paramTypes := collectUniquePlanParamTypes(queryPlan)
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
 			require.Len(t, paramTypes, test.paramCount)
 			for _, typ := range paramTypes {
-				require.Equal(t, test.want, typ)
+				require.Equal(t, int32(test.want), typ.Id)
+				if test.want == types.T_decimal64 {
+					require.Equal(t, int32(7), typ.Width)
+					require.Equal(t, int32(2), typ.Scale)
+				}
 			}
 		})
 	}
 }
 
-func collectUniquePlanParamTypes(queryPlan *Plan) map[int32]types.T {
-	result := make(map[int32]types.T)
+func collectUniquePlanParamTypes(t *testing.T, queryPlan *Plan) map[int32]planpb.Type {
+	t.Helper()
+	result := make(map[int32]planpb.Type)
 	query := queryPlan.GetQuery()
 	if query == nil {
 		return result
 	}
 	for _, node := range query.Nodes {
 		for _, expr := range node.ProjectList {
-			collectExprParamTypesByPos(expr, result)
+			collectExprParamTypesByPos(t, expr, result)
 		}
 		for _, expr := range node.FilterList {
-			collectExprParamTypesByPos(expr, result)
+			collectExprParamTypesByPos(t, expr, result)
+		}
+		for _, expr := range node.GroupBy {
+			collectExprParamTypesByPos(t, expr, result)
+		}
+		for _, expr := range node.AggList {
+			collectExprParamTypesByPos(t, expr, result)
 		}
 		for _, expr := range node.OnUpdateExprs {
-			collectExprParamTypesByPos(expr, result)
+			collectExprParamTypesByPos(t, expr, result)
 		}
 		if dedup := node.DedupJoinCtx; dedup != nil {
 			for _, expr := range dedup.UpdateColExprList {
-				collectExprParamTypesByPos(expr, result)
+				collectExprParamTypesByPos(t, expr, result)
 			}
 		}
 		if rowset := node.RowsetData; rowset != nil {
 			for _, col := range rowset.Cols {
 				for _, data := range col.Data {
-					collectExprParamTypesByPos(data.Expr, result)
+					collectExprParamTypesByPos(t, data.Expr, result)
 				}
 			}
 		}
@@ -147,10 +200,44 @@ func collectUniquePlanParamTypes(queryPlan *Plan) map[int32]types.T {
 	return result
 }
 
-func collectExprParamTypesByPos(expr *planpb.Expr, result map[int32]types.T) {
-	collectExprEffectiveParamTypes(expr, types.T_any, func(pos int32, typ types.T) {
+func collectExprParamTypesByPos(t *testing.T, expr *planpb.Expr, result map[int32]planpb.Type) {
+	t.Helper()
+	collectExprEffectiveParamPlanTypesByPos(expr, planpb.Type{}, func(pos int32, typ planpb.Type) {
+		if previous, ok := result[pos]; ok {
+			require.Equal(t, previous.Id, typ.Id, "parameter %d has inconsistent type id", pos)
+			require.Equal(t, previous.Width, typ.Width, "parameter %d has inconsistent width", pos)
+			require.Equal(t, previous.Scale, typ.Scale, "parameter %d has inconsistent scale", pos)
+			return
+		}
 		result[pos] = typ
 	})
+}
+
+func collectExprEffectiveParamPlanTypesByPos(
+	expr *planpb.Expr,
+	inherited planpb.Type,
+	collect func(int32, planpb.Type),
+) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		typ := inherited
+		if typ.Id == 0 {
+			typ = expr.Typ
+		}
+		collect(param.Pos, typ)
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		childType := inherited
+		if fn.Func != nil && fn.Func.ObjName == "cast" {
+			childType = expr.Typ
+		}
+		for _, arg := range fn.Args {
+			collectExprEffectiveParamPlanTypesByPos(arg, childType, collect)
+		}
+	}
 }
 
 func TestPreparedNonNumericAssignmentKeepsTargetType(t *testing.T) {
@@ -191,10 +278,10 @@ func TestPreparedNonNumericAssignmentKeepsTargetType(t *testing.T) {
 			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 			require.NoError(t, err)
 
-			paramTypes := collectUniquePlanParamTypes(queryPlan)
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
 			require.Len(t, paramTypes, 1)
 			for _, typ := range paramTypes {
-				require.Equal(t, test.want, typ)
+				require.Equal(t, int32(test.want), typ.Id)
 			}
 		})
 	}
@@ -282,10 +369,10 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 			require.NoError(t, err)
 
-			paramTypes := collectUniquePlanParamTypes(queryPlan)
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
 			require.Len(t, paramTypes, 2)
 			for _, typ := range paramTypes {
-				require.Equal(t, test.want, typ)
+				require.Equal(t, int32(test.want), typ.Id)
 			}
 		})
 	}

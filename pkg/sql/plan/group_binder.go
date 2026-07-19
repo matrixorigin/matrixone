@@ -33,6 +33,7 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 }
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	var numericTarget *plan.Type
 	if isRoot {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
@@ -43,6 +44,12 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				}
 
 				astExpr = b.selectList[colPos-1].Expr
+				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
+					target := b.ctx.numericProjectionTypes[colPos-1]
+					if target.Id != 0 {
+						numericTarget = &target
+					}
+				}
 
 			case tree.Unknown:
 				if numVal.ValType != tree.P_null {
@@ -55,7 +62,13 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		}
 	}
 
-	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
+	var expr *plan.Expr
+	var err error
+	if numericTarget != nil {
+		expr, err = b.bindNumericExprWithContext(astExpr, depth, numericTarget)
+	} else {
+		expr, err = b.baseBindExpr(astExpr, depth, isRoot)
+	}
 	if err != nil {
 		return nil, err
 	}

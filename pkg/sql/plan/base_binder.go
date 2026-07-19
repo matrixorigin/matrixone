@@ -575,6 +575,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.numericSubqueryTarget != nil && !astExpr.Exists {
+		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
+	}
 
 	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
 	// state. MySQL only locks rows in the outer query; rows reached through

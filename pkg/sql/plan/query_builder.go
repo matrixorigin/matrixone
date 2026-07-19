@@ -3078,6 +3078,9 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	subCtx := NewBindContext(builder, ctx)
 	subCtx.cteName = table
 	subCtx.snapshot = cteRef.snapshot
+	if targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]; len(targets) > 0 {
+		subCtx.numericProjectionTypes = targets
+	}
 	subCtx.recordCteInBinding(table,
 		CteBindState{
 			cteBindType:   CteBindTypeNonRecur,
@@ -3395,6 +3398,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
+	seedNumericTableProjectionTypes(stmt, ctx)
 
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
@@ -3747,6 +3751,153 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	return
+}
+
+// seedNumericTableProjectionTypes pushes numeric assignment targets through a
+// projection that only forwards columns from one derived table or CTE. The
+// mapping is intentionally conservative: ambiguous names, stars, expressions,
+// and multi-source FROM clauses stay on the existing default binding path.
+func seedNumericTableProjectionTypes(stmt *tree.Select, ctx *BindContext) {
+	if len(ctx.numericProjectionTypes) == 0 {
+		return
+	}
+	clause, ok := getSelectTree(stmt).Select.(*tree.SelectClause)
+	if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
+		return
+	}
+
+	source, sourceName, alias, aliasCols := numericProjectionSource(clause.From.Tables[0])
+	if source == nil {
+		var cteCols tree.IdentifierList
+		source, cteCols = numericProjectionCteSource(stmt, sourceName)
+		if source == nil {
+			return
+		}
+		if len(aliasCols) == 0 {
+			aliasCols = cteCols
+		}
+	}
+	outputNames := numericProjectionOutputNames(source)
+	if len(aliasCols) > 0 {
+		clause, ok := getSelectTree(source).Select.(*tree.SelectClause)
+		if !ok || len(aliasCols) != len(clause.Exprs) {
+			return
+		}
+		outputNames = make([]string, len(aliasCols))
+		for i := range aliasCols {
+			outputNames[i] = strings.ToLower(string(aliasCols[i]))
+		}
+	}
+	if len(outputNames) == 0 {
+		return
+	}
+
+	targets := make([]Type, len(outputNames))
+	seeded := false
+	for i, selectExpr := range clause.Exprs {
+		if i >= len(ctx.numericProjectionTypes) || ctx.numericProjectionTypes[i].Id == 0 {
+			continue
+		}
+		name, ok := selectExpr.Expr.(*tree.UnresolvedName)
+		if !ok || name.Star || name.ColName() == "" {
+			continue
+		}
+		if qualifier := name.TblName(); qualifier != "" && !strings.EqualFold(qualifier, alias) {
+			continue
+		}
+		matched := -1
+		for pos, outputName := range outputNames {
+			if strings.EqualFold(outputName, name.ColName()) {
+				if matched >= 0 {
+					matched = -1
+					break
+				}
+				matched = pos
+			}
+		}
+		if matched >= 0 {
+			targets[matched] = ctx.numericProjectionTypes[i]
+			seeded = true
+		}
+	}
+	if seeded {
+		if ctx.numericTableProjectionTypes == nil {
+			ctx.numericTableProjectionTypes = make(map[string][]Type)
+		}
+		ctx.numericTableProjectionTypes[strings.ToLower(alias)] = targets
+		if sourceName != "" {
+			ctx.numericTableProjectionTypes[strings.ToLower(sourceName)] = targets
+		}
+	}
+}
+
+func numericProjectionSource(tableExpr tree.TableExpr) (*tree.Select, string, string, tree.IdentifierList) {
+	var sourceName string
+	var alias string
+	var aliasCols tree.IdentifierList
+	for {
+		switch expr := tableExpr.(type) {
+		case *tree.JoinTableExpr:
+			if expr.Right != nil {
+				return nil, "", "", nil
+			}
+			tableExpr = expr.Left
+		case *tree.AliasedTableExpr:
+			alias = string(expr.As.Alias)
+			aliasCols = expr.As.Cols
+			tableExpr = expr.Expr
+		case *tree.ParenTableExpr:
+			tableExpr = expr.Expr
+		case *tree.Select:
+			return expr, sourceName, alias, aliasCols
+		case *tree.TableName:
+			sourceName = string(expr.ObjectName)
+			if alias == "" {
+				alias = sourceName
+			}
+			return nil, sourceName, alias, aliasCols
+		default:
+			return nil, "", "", nil
+		}
+	}
+}
+
+func numericProjectionOutputNames(source *tree.Select) []string {
+	clause, ok := getSelectTree(source).Select.(*tree.SelectClause)
+	if !ok {
+		return nil
+	}
+	names := make([]string, len(clause.Exprs))
+	for i, expr := range clause.Exprs {
+		if expr.As != nil && !expr.As.Empty() {
+			names[i] = strings.ToLower(expr.As.Origin())
+			continue
+		}
+		name, ok := expr.Expr.(*tree.UnresolvedName)
+		if !ok || name.Star {
+			return nil
+		}
+		names[i] = strings.ToLower(name.ColName())
+	}
+	return names
+}
+
+func numericProjectionCteSource(stmt *tree.Select, table string) (*tree.Select, tree.IdentifierList) {
+	if stmt.With == nil {
+		return nil, nil
+	}
+	for _, cte := range stmt.With.CTEs {
+		if !strings.EqualFold(string(cte.Name.Alias), table) {
+			continue
+		}
+		switch source := cte.Stmt.(type) {
+		case *tree.Select:
+			return source, cte.Name.Cols
+		case *tree.ParenSelect:
+			return source.Select, cte.Name.Cols
+		}
+	}
+	return nil, nil
 }
 
 func rewriteRollupWindowSelect(
@@ -6354,13 +6505,27 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
-		if _, ok := tbl.Expr.(*tree.Select); ok {
-			if tbl.As.Alias == "" {
-				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
-			}
+		derivedSelect := numericProjectionTableSelect(tbl.Expr)
+		if _, directSelect := tbl.Expr.(*tree.Select); directSelect && tbl.As.Alias == "" {
+			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
 		}
-
-		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
+		targets := ctx.numericTableProjectionTypes[strings.ToLower(string(tbl.As.Alias))]
+		if derivedSelect != nil && len(targets) > 0 {
+			subCtx := NewBindContext(builder, ctx)
+			subCtx.numericProjectionTypes = targets
+			savedIsForUpdate := builder.isForUpdate
+			builder.isForUpdate = false
+			nodeID, err = builder.bindSelect(derivedSelect, subCtx, false)
+			builder.isForUpdate = savedIsForUpdate
+			if subCtx.isCorrelated {
+				return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+			}
+			if subCtx.hasSingleRow {
+				ctx.hasSingleRow = true
+			}
+		} else {
+			nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
+		}
 		if err != nil {
 			return
 		}
@@ -6974,6 +7139,19 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 			}
 		}
 		return false
+	}
+}
+
+func numericProjectionTableSelect(tableExpr tree.TableExpr) *tree.Select {
+	for {
+		switch expr := tableExpr.(type) {
+		case *tree.ParenTableExpr:
+			tableExpr = expr.Expr
+		case *tree.Select:
+			return expr
+		default:
+			return nil
+		}
 	}
 }
 

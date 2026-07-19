@@ -359,7 +359,8 @@ type BindContext struct {
 
 	projectByAst []SelectField
 
-	numericProjectionTypes []Type
+	numericProjectionTypes      []Type
+	numericTableProjectionTypes map[string][]Type
 
 	timeAsts []tree.Expr
 
@@ -447,12 +448,13 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx           context.Context
-	builder          *QueryBuilder
-	ctx              *BindContext
-	impl             Binder
-	boundCols        []string
-	numericParamType *Type
+	sysCtx                context.Context
+	builder               *QueryBuilder
+	ctx                   *BindContext
+	impl                  Binder
+	boundCols             []string
+	numericParamType      *Type
+	numericSubqueryTarget *Type
 }
 
 type DefaultBinder struct {
