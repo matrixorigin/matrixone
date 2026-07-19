@@ -183,7 +183,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -193,9 +193,6 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if len(isBin) > 0 {
-			*isBin[0] = false
-		}
 		return v.ColName(), nil
 	}
 
@@ -283,9 +280,6 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		}
 	}
 
-	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
-	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
@@ -1557,16 +1551,21 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql                 string
-	hashedSql           string
-	stmtName            string
-	stmt                tree.Statement
-	parserSQLMode       string
-	useParserSQLMode    bool
-	preparePlan         *plan.Plan // binary protocol execute
-	sqlSourceType       []string
-	isRestore           bool
-	isBinaryProtExecute bool
+	sql              string
+	hashedSql        string
+	stmtName         string
+	stmt             tree.Statement
+	parserSQLMode    string
+	useParserSQLMode bool
+	rewritePolicy    *rewritePolicySnapshot
+	// rewritePolicyMaterialized means sql already carries the frozen policy as
+	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
+	// without injecting the same rules a second time.
+	rewritePolicyMaterialized bool
+	preparePlan               *plan.Plan // binary protocol execute
+	sqlSourceType             []string
+	isRestore                 bool
+	isBinaryProtExecute       bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1576,6 +1575,10 @@ type UserInput struct {
 	isRestoreByTs bool
 	opAccount     uint32
 	toAccount     uint32
+	// remapDb carries the policy captured when a prepared statement was built.
+	// EXECUTE text has no original rewrite hint, so the policy must be restored
+	// explicitly before authorization and planning.
+	remapDb map[string]string
 }
 
 func (ui *UserInput) getSql() string {

@@ -63,6 +63,7 @@ type HashBuild struct {
 	HashOnPK          bool
 	NeedBatches       bool
 	NeedAllocateSels  bool
+	TrackNullKeys     bool
 	IsShuffle         bool
 	Conditions        []*plan.Expr
 	JoinMapTag        int32

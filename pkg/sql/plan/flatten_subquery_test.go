@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +68,125 @@ func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	require.False(t, builder.hasInnerColumnInDeepCorrelatedFilters(subID, []*plan.Expr{
 		newFlattenSubqueryTestColExpr(outerTag),
 	}))
+}
+
+func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		want       plan.Node_JoinType
+		forbidMark bool
+	}{
+		{
+			name:       "where in becomes semi join",
+			sql:        "select n_name from tpch.nation where n_regionkey in (select r_regionkey from tpch.region)",
+			want:       plan.Node_SEMI,
+			forbidMark: true,
+		},
+		{
+			name:       "non-null where not in becomes anti join",
+			sql:        "select n_name from tpch.nation where n_regionkey not in (select r_regionkey from tpch.region)",
+			want:       plan.Node_ANTI,
+			forbidMark: true,
+		},
+		{
+			name: "projected in keeps mark result",
+			sql:  "select n_regionkey in (select r_regionkey from tpch.region) from tpch.nation",
+			want: plan.Node_MARK,
+		},
+		{
+			name: "nullable where not in keeps null-aware mark result",
+			sql:  "select n_name from tpch.nation where n_comment not in (select r_comment from tpch.region)",
+			want: plan.Node_MARK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.Truef(t, hasJoinType(query, tt.want), "expected %s join in plan", tt.want)
+			if tt.forbidMark {
+				require.False(t, hasJoinType(query, plan.Node_MARK))
+			}
+		})
+	}
+}
+
+func TestGenerateRowComparisonBuildsBalancedTree(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	subqueryCtx := NewBindContext(builder, nil)
+	subqueryCtx.projectTag = 2
+	subqueryCtx.results = make([]*plan.Expr, TableColumnCountLimit)
+
+	childItems := make([]*plan.Expr, TableColumnCountLimit)
+	for i := range childItems {
+		childItems[i] = newRowComparisonTestColumn(1, int32(i))
+		subqueryCtx.results[i] = newRowComparisonTestColumn(subqueryCtx.projectTag, int32(i))
+	}
+	child := &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{List: childItems},
+		},
+	}
+
+	for _, tt := range []struct {
+		name      string
+		op        string
+		logicalOp string
+	}{
+		{name: "tuple in equality", op: "=", logicalOp: "and"},
+		{name: "tuple not in inequality", op: "<>", logicalOp: "or"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, err := builder.generateRowComparison(tt.op, child, subqueryCtx, false)
+			require.NoError(t, err)
+			require.Equal(t, tt.logicalOp, expr.GetF().Func.GetObjName())
+
+			depth, leaves := planExprDepthAndLeaves(expr)
+			require.Equal(t, TableColumnCountLimit*2, leaves)
+			require.LessOrEqual(t, depth, 14)
+		})
+	}
+}
+
+func TestGenerateRowComparisonRejectsEmptyTuple(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	subqueryCtx := NewBindContext(builder, nil)
+
+	_, err := builder.generateRowComparison("=", &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{},
+		},
+	}, subqueryCtx, false)
+	require.ErrorContains(t, err, "row comparison requires at least one column")
+}
+
+func newRowComparisonTestColumn(relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+	}
+}
+
+func hasJoinType(query *plan.Query, joinType plan.Node_JoinType) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == joinType {
+			return true
+		}
+	}
+	return false
 }
 
 func newFlattenSubqueryTestColExpr(tag int32) *plan.Expr {

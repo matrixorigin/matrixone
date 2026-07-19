@@ -57,6 +57,16 @@ func TestDupOperator(t *testing.T) {
 	)
 }
 
+func TestDupHashBuildPreservesNullTracking(t *testing.T) {
+	source := hashbuild.NewArgument()
+	defer source.Release()
+	source.TrackNullKeys = true
+
+	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
+	defer duplicated.Release()
+	require.True(t, duplicated.TrackNullKeys)
+}
+
 func TestDupOperatorMergeTop(t *testing.T) {
 	op := mergetop.NewArgument()
 	op.Limit = plan2.MakePlan2Int64ConstExprWithType(10)

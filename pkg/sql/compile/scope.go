@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -290,10 +291,10 @@ func (s *Scope) MergeRun(c *Compile) error {
 		for i := len(s.PreScopes) - 1; i >= 0; i-- {
 			err := s.PreScopes[i].MergeRun(c)
 			if err != nil {
-				return err
+				return s.cancelMergeSiblingsOnError(err)
 			}
 		}
-		return s.ParallelRun(c)
+		return s.cancelMergeSiblingsOnError(s.ParallelRun(c))
 	}
 
 	// Merge Run normally.
@@ -310,24 +311,27 @@ func (s *Scope) MergeRun(c *Compile) error {
 			func() {
 				defer wg.Done()
 
+				var err error
 				switch scope.Magic {
 				case Normal:
-					preScopeResultReceiveChan <- scope.Run(c)
+					err = scope.Run(c)
 				case Merge, MergeInsert:
-					preScopeResultReceiveChan <- scope.MergeRun(c)
+					err = scope.MergeRun(c)
 				case Remote:
-					preScopeResultReceiveChan <- scope.RemoteRun(c)
+					err = scope.RemoteRun(c)
 				default:
-					err := moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
-					preScopeResultReceiveChan <- err
 				}
+				s.cancelMergeSiblingsOnError(err)
+				preScopeResultReceiveChan <- err
 			})
 
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			s.cancelMergeSiblingsOnError(submitPreScope)
 			preScopeResultReceiveChan <- submitPreScope
 		}
 	}
@@ -362,7 +366,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	err := s.ParallelRun(c)
 	if err != nil {
-		return err
+		return s.cancelMergeSiblingsOnError(err)
 	}
 
 	// receive and check error from pre-scopes and remote scopes.
@@ -379,14 +383,14 @@ func (s *Scope) MergeRun(c *Compile) error {
 		select {
 		case err := <-preScopeResultReceiveChan:
 			if err != nil {
-				return err
+				return s.cancelMergeSiblingsOnError(err)
 			}
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
 			result.clean(s.Proc)
 			if result.err != nil {
-				return result.err
+				return s.cancelMergeSiblingsOnError(result.err)
 			}
 			remoteScopeCount--
 		}
@@ -395,6 +399,16 @@ func (s *Scope) MergeRun(c *Compile) error {
 			return nil
 		}
 	}
+}
+
+// cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
+// pipeline, its sibling goroutines, and remote receiver registration. It must
+// run before MergeRun waits for those siblings to exit.
+func (s *Scope) cancelMergeSiblingsOnError(err error) error {
+	if err != nil && s != nil && s.Proc != nil && s.Proc.Cancel != nil {
+		s.Proc.Cancel(err)
+	}
+	return err
 }
 
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
@@ -861,9 +875,10 @@ type notifyMessageResult struct {
 	err    error
 }
 
-const notifyMessageRetryInterval = 200 * time.Millisecond
-
-var notifyMessageWaitRegistrationTimeout = waitRegistrationTimeout
+const (
+	notifyMessageRetryInitialInterval = 100 * time.Millisecond
+	notifyMessageRetryMaxInterval     = time.Second
+)
 
 type notifyMessageSenderFactory func(
 	ctx context.Context,
@@ -897,9 +912,65 @@ func (s *Scope) sendNotifyMessageWithFactory(
 	resultChan chan notifyMessageResult,
 	newSender notifyMessageSenderFactory,
 ) {
+	s.sendNotifyMessageWithFactoryAndWait(
+		wg,
+		resultChan,
+		newSender,
+		waitRemoteDispatchRetry,
+	)
+}
+
+type notifyMessageRetryWait func(context.Context, int, uuid.UUID) error
+
+func waitRemoteDispatchRetry(
+	ctx context.Context,
+	attempt int,
+	uid uuid.UUID,
+) error {
+	delay := notifyMessageRetryDelay(attempt, uid)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return remoteRegistrationContextError(ctx)
+	case <-timer.C:
+		return nil
+	}
+}
+
+func notifyMessageRetryDelay(attempt int, uid uuid.UUID) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := notifyMessageRetryInitialInterval
+	for i := 0; i < attempt && delay < notifyMessageRetryMaxInterval; i++ {
+		delay *= 2
+	}
+	if delay > notifyMessageRetryMaxInterval {
+		delay = notifyMessageRetryMaxInterval
+	}
+
+	// Stable per-receiver jitter avoids synchronizing thousands of legacy-peer
+	// compatibility retries while keeping tests and behavior deterministic.
+	seed := uint32(uid[12])<<24 |
+		uint32(uid[13])<<16 |
+		uint32(uid[14])<<8 |
+		uint32(uid[15])
+	seed ^= uint32(attempt+1) * 0x9e3779b9
+	jitterPercent := int(seed%41) - 20 // [-20%, +20%]
+	return delay + time.Duration(int64(delay)*int64(jitterPercent)/100)
+}
+
+func (s *Scope) sendNotifyMessageWithFactoryAndWait(
+	wg *sync.WaitGroup,
+	resultChan chan notifyMessageResult,
+	newSender notifyMessageSenderFactory,
+	waitRetry notifyMessageRetryWait,
+) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
+		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
@@ -920,9 +991,7 @@ func (s *Scope) sendNotifyMessageWithFactory(
 
 		errSubmit := ants.Submit(
 			func() {
-				deadline := time.NewTimer(notifyMessageWaitRegistrationTimeout)
-				defer deadline.Stop()
-
+				attempt := 0
 				for {
 					sender, err := newSender(
 						s.Proc.Ctx,
@@ -960,18 +1029,12 @@ func (s *Scope) sendNotifyMessageWithFactory(
 					// FIN/ACK after its server cleanup barrier.
 					sender.prepareForLocalCleanup()
 					sender.close()
-
-					select {
-					case <-s.Proc.Ctx.Done():
-						closeWithError(s.Proc.Ctx.Err(), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-						return
-					case <-deadline.C:
-						err = moerr.NewInternalErrorf(s.Proc.Ctx,
-							"dispatch process not registered within %s, remote CN may have failed", notifyMessageWaitRegistrationTimeout)
+					metricv2.PipelineRemoteNotifyRetryCounter.Inc()
+					if err = waitRetry(s.Proc.Ctx, attempt, op.Uuid); err != nil {
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
-					case <-time.After(notifyMessageRetryInterval):
 					}
+					attempt++
 				}
 			},
 		)
