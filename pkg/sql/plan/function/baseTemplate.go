@@ -424,6 +424,9 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 			}
 		}
 	}
+	if !hasEvaluableRows(rsNull, length) {
+		return nil
+	}
 
 	var v1, v2 []TIn
 	if c1 {
@@ -1448,14 +1451,21 @@ func specialTemplateForModFunction[
 		v2, null2 := p2.GetValue(0)
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
-		} else if v2 == 0 {
-			if checkDivisionByZeroBehavior(proc, selectList) {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			if p1.WithAnyNullValue() || rsAnyNull {
+			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
@@ -1596,6 +1606,13 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	return false
 }
 
+// hasEvaluableRows reports whether at least one row may execute the arithmetic
+// kernel. Input NULLs and selectList-masked rows must already be merged into
+// rsNull before calling it.
+func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
+	return length > 0 && rsNull.Count() < length
+}
+
 func specialTemplateForDivFunction[
 	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
@@ -1706,6 +1723,12 @@ func specialTemplateForDivFunction[
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
 			if v2 == 0 {
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
@@ -1715,7 +1738,6 @@ func specialTemplateForDivFunction[
 				return nil
 			}
 			if p1.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
