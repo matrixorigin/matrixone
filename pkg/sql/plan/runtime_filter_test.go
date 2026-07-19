@@ -215,6 +215,48 @@ func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 		require.Equal(t, join.Stats.Outcnt, builder.qry.Nodes[3].Stats.Outcnt)
 	})
 
+	t.Run("right SINGLE cardinality sizes a downstream join build side", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		pkType := builder.qry.Nodes[0].TableDef.Cols[0].Typ
+		downstreamProbe := &planpb.Node{
+			NodeType:    planpb.Node_TABLE_SCAN,
+			NodeId:      3,
+			BindingTags: []int32{3},
+			TableDef: &planpb.TableDef{
+				Name:          "downstream_probe",
+				Cols:          []*planpb.ColDef{{Name: "id", Typ: pkType}},
+				Name2ColIndex: map[string]int32{"id": 0},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			Stats: &planpb.Stats{
+				Cost:        1_000,
+				Outcnt:      1_000,
+				TableCnt:    1_000,
+				BlockNum:    10,
+				Selectivity: 1,
+			},
+		}
+		downstreamJoin := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			NodeId:   4,
+			Children: []int32{3, 2},
+			JoinType: planpb.Node_INNER,
+			OnList: []*planpb.Expr{
+				makeRuntimeFilterTestEq(pkType, 3, 2, 0, 0),
+			},
+			Stats: DefaultStats(),
+		}
+		downstreamJoin.OnList[0].Ndv = 3
+		builder.qry.Nodes = append(builder.qry.Nodes, downstreamProbe, downstreamJoin)
+
+		reCalcNodeStatsAfterSwap(4, builder, true, false, false)
+
+		rightSingle := builder.qry.Nodes[2]
+		require.Equal(t, float64(3), rightSingle.Stats.Outcnt)
+		require.Equal(t, rightSingle.Stats.Outcnt, downstreamJoin.Stats.HashmapStats.HashmapSize)
+		require.Equal(t, float64(1_000), downstreamJoin.Stats.Outcnt)
+	})
+
 	t.Run("right SINGLE applies limit after selecting the preserved side", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
 		builder.qry.Nodes[2].Limit = MakePlan2Uint64ConstExprWithType(1)
