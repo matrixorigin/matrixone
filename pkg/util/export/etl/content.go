@@ -165,18 +165,6 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 	return n, nil
 }
 
-func (c *ContentWriter) Abort() {
-	if c.buf != nil && c.bufCallback != nil {
-		c.bufCallback(c.buf)
-	}
-	c.formatter = nil
-	c.buf = nil
-	c.bufCallback = nil
-	c.sqlFlusher = nil
-	c.csvFlusher = nil
-	c.backoff = nil
-}
-
 var _ table.Flusher = (*SQLFlusher)(nil)
 
 type SQLFlusher struct {

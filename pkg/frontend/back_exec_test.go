@@ -110,16 +110,32 @@ func TestInstallBackExecStatsInfoPreservesRootAndClaimsOnce(t *testing.T) {
 
 func TestLegacyCompositeStatsProjection(t *testing.T) {
 	ctx, _ := installBackExecStatsInfo(context.Background(), time.Unix(0, 0), 7)
-	h := &marshalPlanHandler{query: &plan.Query{Nodes: []*plan.Node{{
+	h := &marshalPlanHandler{isInternalSubStmt: true, query: &plan.Query{Nodes: []*plan.Node{{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    &plan.TableDef{Name: "t"},
 		AnalyzeInfo: &plan.AnalyzeInfo{TimeConsumed: 123, InputRows: 9, InputSize: 77},
 	}}}}
-	stats, details := h.legacyStats(ctx, nil)
+	stats, details := h.Stats(ctx, nil)
 	if stats.GetTimeConsumed() != 130 {
 		t.Fatalf("legacy engine projection time = %v, want 130", stats.GetTimeConsumed())
 	}
 	if details.RowsRead != 9 || details.BytesScan != 77 {
 		t.Fatalf("legacy engine projection scan stats = (%d,%d), want (9,77)", details.RowsRead, details.BytesScan)
+	}
+}
+
+func TestTopLevelStatsDoesNotRunLegacyResourceProjection(t *testing.T) {
+	ctx, _ := installBackExecStatsInfo(context.Background(), time.Unix(0, 0), 7)
+	h := &marshalPlanHandler{query: &plan.Query{Nodes: []*plan.Node{{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    &plan.TableDef{Name: "t"},
+		AnalyzeInfo: &plan.AnalyzeInfo{TimeConsumed: 123, InputRows: 9, InputSize: 77},
+	}}}}
+	stats, details := h.Stats(ctx, nil)
+	if stats.GetTimeConsumed() != 0 {
+		t.Fatalf("top-level shadow resource projection time = %v, want 0", stats.GetTimeConsumed())
+	}
+	if details.RowsRead != 9 || details.BytesScan != 77 {
+		t.Fatalf("top-level scan stats = (%d,%d), want (9,77)", details.RowsRead, details.BytesScan)
 	}
 }

@@ -53,32 +53,6 @@ func FuzzReducer(f *testing.F) {
 	})
 }
 
-func FuzzAttemptLifecycle(f *testing.F) {
-	f.Add([]byte{0, 1, 2, 3})
-	f.Fuzz(func(t *testing.T, operations []byte) {
-		attempt := NewAttempt()
-		for _, operation := range operations {
-			switch operation & 3 {
-			case 0:
-				attempt.AddLocal(Delta{Usage: Usage{ExclusiveActiveNS: uint64(operation)}})
-			case 1:
-				attempt.BeginClosing()
-			case 2:
-				attempt.Seal(uint64(operation), OutcomeError)
-			case 3:
-				_ = attempt.State()
-			}
-		}
-		first := attempt.Seal(100, OutcomeSuccess)
-		if second := attempt.Seal(200, OutcomePanic); second != first {
-			t.Fatalf("seal is not idempotent: first=%+v second=%+v", first, second)
-		}
-		if attempt.State() != AttemptSealed {
-			t.Fatalf("terminal state is %v", attempt.State())
-		}
-	})
-}
-
 func BenchmarkResourceMerge(b *testing.B) {
 	delta := Usage{
 		ExclusiveActiveNS: 10,
@@ -90,15 +64,5 @@ func BenchmarkResourceMerge(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var total Usage
 		MergeUsage(&total, delta)
-	}
-}
-
-func BenchmarkResourceAttemptTerminal(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		attempt := NewAttempt()
-		attempt.AddLocal(Delta{Usage: Usage{ExclusiveActiveNS: 1}})
-		attempt.BeginClosing()
-		attempt.Seal(1, OutcomeSuccess)
 	}
 }

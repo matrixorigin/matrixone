@@ -37,7 +37,8 @@ func NewRoot(conn ConnType) *Root {
 
 // SetMemoryPeakPreview installs the live-safe statement allocator peak used by
 // pre-response consumers such as EXPLAIN ANALYZE. Terminal publication still
-// happens exactly once through AddMemoryDomain or MarkMemoryDomainMissing.
+// happens exactly once through a terminal peak observation or
+// MarkMemoryDomainMissing.
 func (r *Root) SetMemoryPeakPreview(preview func() (uint64, bool)) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -107,18 +108,6 @@ func (r *Root) AddProtocolOutput(bytes, packets uint64) bool {
 	return true
 }
 
-// AddMemoryDomain publishes one terminal allocator domain owned by the
-// statement root.
-func (r *Root) AddMemoryDomain(domain MemoryDomainSummary) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return false
-	}
-	r.summary.Quality |= MergeMemoryDomain(&r.summary.Memory, domain)
-	return true
-}
-
 // AddMemoryPeakObservation records the maximum live-byte occupancy observed
 // in a non-isolated but request-serialized MPool. It intentionally contributes
 // no allocation/free/live-at-seal facts: those require an isolated domain.
@@ -185,13 +174,6 @@ func (r *Root) Seal(statementWallNS uint64) StatementResourceSummary {
 		r.sealed = true
 	}
 	return r.summary
-}
-
-// IsSealed reports whether the terminal summary was captured.
-func (r *Root) IsSealed() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.sealed
 }
 
 type rootContextKey struct{}

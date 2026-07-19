@@ -512,7 +512,7 @@ func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Con
 		}
 	}
 	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
-	statsByte, _ = h.legacyStats(ctx, cwft.ses)
+	statsByte, _ = h.Stats(ctx, cwft.ses)
 	return statsByte
 }
 

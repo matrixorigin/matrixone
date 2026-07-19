@@ -80,7 +80,7 @@ func TestHistoricalStatsArrayLengths(t *testing.T) {
 		{NewStatsArrayV2(), StatsArrayLengthV2},
 		{NewStatsArrayV3(), StatsArrayLengthV3},
 		{NewStatsArrayV4(), StatsArrayLengthV4},
-		{NewStatsArrayV5(), StatsArrayLengthV5},
+		{NewStatsArray().WithVersion(StatsArrayVersion5), StatsArrayLengthV5},
 		{NewStatsArrayV6(), StatsArrayLengthV6},
 	}
 	for _, test := range tests {

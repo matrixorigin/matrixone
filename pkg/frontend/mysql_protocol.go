@@ -581,7 +581,7 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 		return 0, 0
 	}
 	bytes = int64(ses.GetOutputBytes())
-	packets = ses.GetOutputPacketCnt()
+	packets = ses.GetFlushPacketCnt()
 	if reset {
 		ses.ResetPacketCounter()
 	}

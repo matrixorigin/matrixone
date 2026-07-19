@@ -157,17 +157,17 @@ func TestConnCountsCompletedOutputPackets(t *testing.T) {
 		assert.NoError(t, conn.FinishedPacket())
 	}
 	assert.NoError(t, conn.Flush())
-	assert.Equal(t, int64(2), ses.GetOutputPacketCnt())
+	assert.Equal(t, int64(2), ses.GetFlushPacketCnt())
 
 	assert.NoError(t, conn.Write([]byte{defines.OKHeader}))
-	assert.Equal(t, int64(3), ses.GetOutputPacketCnt())
+	assert.Equal(t, int64(3), ses.GetFlushPacketCnt())
 }
 
 func TestLegacyPacketCounterAliases(t *testing.T) {
 	ses := &Session{}
-	ses.CountOutputPackets(2)
+	ses.CountFlushPackage(2)
 	ses.CountFlushPackage(3)
-	assert.Equal(t, int64(5), ses.GetOutputPacketCnt())
+	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
 	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
 }
 
@@ -196,7 +196,7 @@ func TestConnCountsPartialWriteFacts(t *testing.T) {
 	data := append(makePacket([]byte("a"), 0), makePacket([]byte("b"), 1)...)
 	assert.ErrorIs(t, conn.WriteToConn(data), io.ErrUnexpectedEOF)
 	assert.Equal(t, 5, ses.GetOutputBytes())
-	assert.Equal(t, int64(1), ses.GetOutputPacketCnt())
+	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
 }
 
 func TestMySQLProtocolRead(t *testing.T) {

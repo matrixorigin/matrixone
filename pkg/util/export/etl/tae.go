@@ -207,15 +207,6 @@ func (w *TAEWriter) FlushAndClose() (int, error) {
 	return 0, w.flush()
 }
 
-func (w *TAEWriter) Abort() {
-	for idx, row := range w.rows {
-		row.Free()
-		w.rows[idx] = nil
-	}
-	w.rows = nil
-	w.writer = nil
-}
-
 func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnField, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
 
 	for colIdx, typ := range typs {

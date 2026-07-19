@@ -5390,40 +5390,29 @@ func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
-func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	statsByte.Reset()
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		for _, node := range h.query.Nodes {
+			if h.isInternalSubStmt {
+				s := explain.GetStatistic4Trace(ctx, node, options)
+				statsByte.Add(&s)
+			}
 			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
 				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
 				stats.RowsRead += rows
 				stats.BytesScan += bytes
 			}
 		}
-	}
-	return
-}
-
-// legacyStats is the return-only projection historically exposed through
-// BackgroundExec.GetExecStatsArray for engine-backed execution.  It is kept
-// separate from Stats so authoritative statement resource accounting cannot
-// ingest this projection a second time.
-func (h *marshalPlanHandler) legacyStats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
-	if h.query != nil {
-		options := &explain.MarshalPlanOptions
-		statsByte.Reset()
-		for _, node := range h.query.Nodes {
-			s := explain.GetStatistic4Trace(ctx, node, options)
-			statsByte.Add(&s)
-			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
-				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
-				stats.RowsRead += rows
-				stats.BytesScan += bytes
-			}
-		}
-	} else {
+	} else if h.isInternalSubStmt {
 		statsByte = statistic.DefaultStatsArray
+	}
+	// Top-level statements use the sealed ResourceRoot. Only rows/bytes are
+	// projected from the plan; computing the legacy resource formula here would
+	// be a shadow accounting path whose result is discarded by ExecPlan2Stats.
+	if !h.isInternalSubStmt {
+		return
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo == nil {

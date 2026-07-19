@@ -83,11 +83,9 @@ type bufferHolder struct {
 	// trigger handle Reminder strategy
 	trigger *time.Timer
 
-	aggr   table.Aggregator
-	aggrWG sync.WaitGroup
+	aggr table.Aggregator
 
-	mux      sync.Mutex
-	signalMu sync.RWMutex
+	mux sync.Mutex
 	// stopped mark
 	stopped bool
 }
@@ -109,10 +107,6 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 		return b.impl.NewItemBuffer(b.name)
 	}
 	b.buffer = b.getBuffer()
-	if b.buffer == nil {
-		b.bgCancel()
-		return nil
-	}
 	b.reminder = b.buffer.(batchpipe.Reminder)
 	b.mux.Lock()
 	defer b.mux.Unlock()
@@ -128,33 +122,19 @@ func (b *bufferHolder) Start() {
 	b.stopped = false
 	b.trigger.Stop()
 	b.trigger = time.AfterFunc(b.reminder.RemindNextAfter(), func() {
+		if b.mux.TryLock() {
+			b.mux.Unlock()
+		}
 		v2.GetTraceCollectorSignalTotal(b.name, "trigger").Inc()
-		b.emitSignal()
+		b.signal(b)
 	})
 	if b.aggr != nil {
-		b.aggrWG.Add(1)
-		go func() {
-			defer b.aggrWG.Done()
-			b.loopAggr()
-		}()
-	}
-}
-
-func (b *bufferHolder) emitSignal() {
-	b.signalMu.RLock()
-	defer b.signalMu.RUnlock()
-	b.mux.Lock()
-	stopped := b.stopped
-	b.mux.Unlock()
-	if !stopped {
-		b.signal(b)
+		go b.loopAggr()
 	}
 }
 
 func (b *bufferHolder) getBuffer() motrace.Buffer {
-	if !b.c.allocBuffer() {
-		return nil
-	}
+	b.c.allocBuffer()
 	b.bufferCnt.Add(1)
 	buffer := b.bufferPool.Get().(motrace.Buffer)
 	b.logStatus("new buffer")
@@ -206,16 +186,11 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 		}
 	}()
 	if b.stopped {
-		b.c.discardItem(item)
 		return
 	}
 
 	if b.buffer == nil {
 		b.buffer = b.getBuffer()
-		if b.buffer == nil {
-			b.c.discardItem(item)
-			return
-		}
 	}
 
 	if b.aggr != nil && needAggr {
@@ -234,10 +209,10 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 	unlock()
 	if buf.ShouldFlush() {
 		v2.GetTraceCollectorSignalTotal(b.name, "flush").Inc()
-		b.emitSignal()
+		b.signal(b)
 	} else if checker, is := item.(table.NeedSyncWrite); is && checker.NeedSyncWrite() {
 		v2.GetTraceCollectorSignalTotal(b.name, "sync").Inc()
-		b.emitSignal()
+		b.signal(b)
 	}
 }
 
@@ -304,19 +279,13 @@ type bufferGenerateReq struct {
 func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 	batch := r.buffer.GetBatch(r.b.ctx, buf)
 	r.b.putBuffer(r.buffer)
-	r.buffer = nil
 	return &bufferExportReq{
 		batch: batch,
 		b:     r.b,
 	}, nil
 }
 
-func (r *bufferGenerateReq) callback(err error) {
-	if r.buffer != nil {
-		r.b.discardBuffer(r.buffer)
-		r.buffer = nil
-	}
-}
+func (r *bufferGenerateReq) callback(err error) {}
 
 func (r *bufferGenerateReq) typ() string { return r.itemName }
 
@@ -337,12 +306,7 @@ func (r *bufferExportReq) handle() error {
 	return nil
 }
 
-func (r *bufferExportReq) callback(err error) {
-	if abortable, ok := r.batch.(interface{ Abort() }); ok {
-		abortable.Abort()
-	}
-	r.batch = nil
-}
+func (r *bufferExportReq) callback(err error) {}
 
 // getGenerateReq get req to do generate logic
 // return nil, if b.buffer is nil
@@ -387,7 +351,6 @@ func (b *bufferHolder) resetTrigger() {
 // consume all aggr-ed result.
 func (b *bufferHolder) Stop() {
 	b.bgCancel() // stop loopAggr goroutine
-	b.aggrWG.Wait()
 	if b.aggr != nil {
 		aggrResults := b.aggr.GetResults()
 		b.c.logger.Info("handle last aggr stmt",
@@ -397,16 +360,11 @@ func (b *bufferHolder) Stop() {
 			b.Add(result, false)
 		}
 	}
-	// Exclude timer/Add signals first, then reject new Add calls and publish the
-	// final frozen buffer while downstream workers are still alive. An Add that
-	// already placed an item before this barrier is included by the final signal.
-	b.signalMu.Lock()
-	defer b.signalMu.Unlock()
-	b.mux.Lock()
+	b.mux.Lock() // lock against b.Add(...)
+	defer b.mux.Unlock()
+	// mark stop
 	b.stopped = true
 	b.trigger.Stop()
-	b.mux.Unlock()
-	b.signal(b)
 }
 
 var _ motrace.BatchProcessor = (*MOCollector)(nil)
@@ -448,40 +406,9 @@ type MOCollector struct {
 	// flow control
 	started  uint32
 	stopOnce sync.Once
+	stopWait sync.WaitGroup
 	stopCh   chan struct{}
 	stopDrop atomic.Uint64
-
-	collectWG    sync.WaitGroup
-	generateWG   sync.WaitGroup
-	exportWG     sync.WaitGroup
-	statsWG      sync.WaitGroup
-	accepted     atomic.Uint64
-	collected    atomic.Uint64
-	collectMu    sync.Mutex
-	collectCond  *sync.Cond
-	shutdownMode atomic.Uint32
-
-	// admissionMu closes the admission window before Stop waits for the
-	// publishers that already entered it.  A publisher owns its item until
-	// Collect returns nil; publisherWG makes that handoff explicit.
-	admissionMu sync.Mutex
-	state       collectorState
-	publisherWG sync.WaitGroup
-}
-
-type collectorState uint8
-
-const (
-	collectorRunning collectorState = iota
-	collectorStopping
-	collectorStopped
-)
-
-// collectorDropReleaser is implemented by pooled trace items that must return
-// themselves to their pool when an accepted item is abandoned during an
-// immediate shutdown. Ordinary collection never calls this path.
-type collectorDropReleaser interface {
-	FreeOnCollectorDrop()
 }
 
 type MOCollectorOption func(*MOCollector)
@@ -505,12 +432,8 @@ func NewMOCollector(
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  5 * time.Minute,
 		maxBufferCnt:   int32(runtime.NumCPU()),
-		// Keep the historical pre-Start queueing behavior.  Start still
-		// owns worker launch; admission is closed only by Stop.
-		state: collectorRunning,
 	}
 	c.bufferCond = sync.NewCond(&c.bufferMux)
-	c.collectCond = sync.NewCond(&c.collectMu)
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -620,74 +543,27 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 	_ = c.pipeImplHolder.Put(name.GetName(), impl)
 }
 
-func (c *MOCollector) admit(ctx context.Context) error {
-	c.admissionMu.Lock()
-	defer c.admissionMu.Unlock()
-	if c.state != collectorRunning {
-		ctx = errutil.ContextWithNoReport(ctx, true)
-		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	}
-	c.publisherWG.Add(1)
-	return nil
-}
-
-func collectorStoppedError(ctx context.Context) error {
-	ctx = errutil.ContextWithNoReport(ctx, true)
-	return moerr.NewInternalError(ctx, "MOCollector stopped")
-}
-
-func (c *MOCollector) discardAcceptedItems() {
-	for {
-		item, ok, _ := c.awakeQueue.Pop()
-		if !ok {
-			return
-		}
-		c.discardItem(item)
-		c.stopDrop.Add(1)
-	}
-}
-
-func (c *MOCollector) discardItem(item batchpipe.HasName) {
-	if releaser, ok := item.(collectorDropReleaser); ok {
-		releaser.FreeOnCollectorDrop()
-		return
-	}
-	if releaser, ok := item.(interface{ Free() }); ok {
-		releaser.Free()
-	}
-}
-
 // Collect item in chan, if collector is stopped then return error
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
-	if err := c.admit(ctx); err != nil {
-		c.stopDrop.Add(1)
-		return err
-	}
-	defer c.publisherWG.Done()
 	start := time.Now()
-	var ticker *time.Ticker
 	for {
-		ok, err := c.awakeQueue.Offer(item)
-		if ok {
-			c.accepted.Add(1)
-			v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
-			return nil
-		}
-		if err != nil {
-			v2.GetTraceCollectorCollectHungCounter(item.GetName(), err.Error()).Inc()
-			c.stopDrop.Add(1)
-			return collectorStoppedError(ctx)
-		}
-		if ticker == nil {
-			v2.GetTraceCollectorCollectHungCounter(item.GetName(), "backpressure").Inc()
-			ticker = time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-		}
 		select {
 		case <-c.stopCh:
 			c.stopDrop.Add(1)
-			return collectorStoppedError(ctx)
-		case <-ticker.C:
+			ctx = errutil.ContextWithNoReport(ctx, true)
+			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		default:
+			ok, err := c.awakeQueue.Offer(item)
+			if ok {
+				v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
+				return nil
+			}
+			if err != nil {
+				v2.GetTraceCollectorCollectHungCounter(item.GetName(), err.Error()).Inc()
+			} else {
+				v2.GetTraceCollectorCollectHungCounter(item.GetName(), "retry").Inc()
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 }
@@ -695,25 +571,19 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 // DiscardableCollect implements motrace.DiscardableCollector
 // cooperate with logutil.Discardable() field
 func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
-	if err := c.admit(ctx); err != nil {
-		c.stopDrop.Add(1)
-		return err
-	}
-	defer c.publisherWG.Done()
 	now := time.Now()
 	for {
 		select {
 		case <-c.stopCh:
 			c.stopDrop.Add(1)
-			return collectorStoppedError(ctx)
+			ctx = errutil.ContextWithNoReport(ctx, true)
+			return moerr.NewInternalError(ctx, "MOCollector stopped")
 		default:
 			ok, _ := c.awakeQueue.Offer(item)
 			if ok {
-				c.accepted.Add(1)
 				return nil
 			} else if time.Since(now) > discardCollectTimeout {
 				v2.GetTraceCollectorDiscardItemCounter(item.GetName()).Inc()
-				c.discardItem(item)
 				return nil
 			}
 			time.Sleep(discardCollectRetry)
@@ -724,11 +594,6 @@ func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.Has
 // Start all goroutine worker, including collector, generator, and exporter
 func (c *MOCollector) Start() bool {
 	if atomic.LoadUint32(&c.started) != 0 {
-		return false
-	}
-	c.admissionMu.Lock()
-	defer c.admissionMu.Unlock()
-	if c.state != collectorRunning {
 		return false
 	}
 	c.mux.Lock()
@@ -742,51 +607,29 @@ func (c *MOCollector) Start() bool {
 
 	c.logger.Info("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
-		c.collectWG.Add(1)
+		c.stopWait.Add(1)
 		go c.doCollect(i)
 	}
 	for i := 0; i < c.generatorCnt; i++ {
-		c.generateWG.Add(1)
+		c.stopWait.Add(1)
 		go c.doGenerate(i)
 	}
 	for i := 0; i < c.exporterCnt; i++ {
-		c.exportWG.Add(1)
+		c.stopWait.Add(1)
 		go c.doExport(i)
 	}
-	c.statsWG.Add(1)
+	c.stopWait.Add(1)
 	go c.showStats()
 	return true
 }
 
-const (
-	collectorNotStopping uint32 = iota
-	collectorGracefulStop
-	collectorImmediateStop
-)
-
-func (c *MOCollector) allocBuffer() bool {
+func (c *MOCollector) allocBuffer() {
 	c.bufferCond.L.Lock()
-	if c.shutdownMode.Load() == collectorImmediateStop {
-		c.bufferCond.L.Unlock()
-		return false
-	}
 	for c.bufferTotal.Load() == c.maxBufferCnt {
-		switch c.shutdownMode.Load() {
-		case collectorGracefulStop:
-			// Admission is already closed, so temporarily exceeding the cap is
-			// bounded by the finite accepted drain and breaks cross-type stalls.
-			c.bufferTotal.Add(1)
-			c.bufferCond.L.Unlock()
-			return true
-		case collectorImmediateStop:
-			c.bufferCond.L.Unlock()
-			return false
-		}
 		c.bufferCond.Wait()
 	}
 	c.bufferTotal.Add(1)
 	c.bufferCond.L.Unlock()
-	return true
 }
 
 func (c *MOCollector) releaseBuffer() {
@@ -800,7 +643,7 @@ func (c *MOCollector) releaseBuffer() {
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
 	var startWait = time.Now()
-	defer c.collectWG.Done()
+	defer c.stopWait.Done()
 	ctx, span := trace.Start(c.ctx, "MOCollector.doCollect")
 	defer span.End()
 	c.logger.Debug("doCollect %dth: start", zap.Int("idx", idx))
@@ -813,7 +656,6 @@ loop:
 			if !got {
 				if errors.Is(err, ring.ErrDisposed) {
 					v2.TraceCollectorDisposedCounter.Inc()
-					break loop
 				}
 				if errors.Is(err, ring.ErrTimeout) {
 					v2.TraceCollectorTimeoutCounter.Inc()
@@ -832,25 +674,16 @@ loop:
 				c.logger.Debug("doCollect: init buffer", zap.Int("idx", idx), zap.String("item", i.GetName()))
 				c.mux.RUnlock()
 				c.mux.Lock()
-				if buf, has := c.buffers[i.GetName()]; !has {
+				if _, has := c.buffers[i.GetName()]; !has {
 					c.logger.Debug("doCollect: init buffer done.", zap.Int("idx", idx))
 					if impl, has := c.pipeImplHolder.Get(i.GetName()); !has {
 						c.logger.Panic("unknown item type", zap.String("item", i.GetName()))
 					} else {
 						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c), c)
-						if buf == nil {
-							c.discardItem(i)
-							c.stopDrop.Add(1)
-						} else {
-							c.buffers[i.GetName()] = buf
-							buf.Add(i, true)
-							buf.Start()
-						}
+						c.buffers[i.GetName()] = buf
+						buf.Add(i, true)
+						buf.Start()
 					}
-				} else {
-					// Another collector initialized the holder after our first
-					// read lock. Ownership still has to reach that holder.
-					buf.Add(i, true)
 				}
 				c.mux.Unlock()
 			} else {
@@ -858,12 +691,6 @@ loop:
 				c.mux.RUnlock()
 			}
 			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
-			c.collected.Add(1)
-			if c.shutdownMode.Load() == collectorGracefulStop {
-				c.collectMu.Lock()
-				c.collectCond.Broadcast()
-				c.collectMu.Unlock()
-			}
 			startWait = time.Now() // next Round
 		case <-c.stopCh:
 			break loop
@@ -898,7 +725,8 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		if holder.name != motrace.RawLogTbl {
 			select {
 			case c.awakeGenerate <- req:
-			case <-c.stopCh:
+			case <-time.After(time.Second * 3):
+				c.logger.Warn("awakeBufferFactory: timeout after 3 seconds")
 				goto discardL
 			}
 		} else {
@@ -911,7 +739,9 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		}
 		return
 	discardL:
-		req.callback(collectorStoppedError(c.ctx))
+		if r, ok := req.(*bufferGenerateReq); ok {
+			r.b.discardBuffer(r.buffer)
+		}
 		v2.TraceCollectorGenerateAwareDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 	}
 }
@@ -919,16 +749,13 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 // doGenerate handle buffer gen BatchRequest, which could be anything
 // goroutine worker
 func (c *MOCollector) doGenerate(idx int) {
-	defer c.generateWG.Done()
+	defer c.stopWait.Done()
 	var buf = new(bytes.Buffer)
 	c.logger.Debug("doGenerate start", zap.Int("idx", idx))
 loop:
 	for {
 		select {
-		case req, ok := <-c.awakeGenerate:
-			if !ok {
-				break loop
-			}
+		case req := <-c.awakeGenerate:
 			v2.TraceCollectorExportQueueLength.Inc()
 			start := time.Now()
 			if req == nil {
@@ -943,7 +770,12 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
-					exportReq.callback(collectorStoppedError(c.ctx))
+				case <-time.After(time.Second * 10):
+					c.logger.Info("awakeBatch: timeout after 10 seconds")
+					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
+					// fixme: do csv output, should NO discard case
+					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
+					v2.TraceCollectorExportQueueLength.Dec()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
@@ -958,15 +790,12 @@ loop:
 
 // doExport handle BatchRequest
 func (c *MOCollector) doExport(idx int) {
-	defer c.exportWG.Done()
+	defer c.stopWait.Done()
 	c.logger.Debug("doExport %dth: start", zap.Int("idx", idx))
 loop:
 	for {
 		select {
-		case req, ok := <-c.awakeBatch:
-			if !ok {
-				break loop
-			}
+		case req := <-c.awakeBatch:
 			v2.TraceCollectorExportQueueLength.Dec()
 			start := time.Now()
 			if req == nil {
@@ -976,6 +805,11 @@ loop:
 			}
 			v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
+			c.mux.Lock()
+			for len(c.awakeBatch) > 0 {
+				<-c.awakeBatch
+			}
+			c.mux.Unlock()
 			break loop
 		}
 	}
@@ -983,7 +817,7 @@ loop:
 }
 
 func (c *MOCollector) showStats() {
-	defer c.statsWG.Done()
+	defer c.stopWait.Done()
 	c.logger.Debug("start showStats")
 
 loop:
@@ -1007,88 +841,52 @@ loop:
 }
 
 func (c *MOCollector) Stop(graceful bool) error {
+	var err error
+	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
-		c.admissionMu.Lock()
-		if c.state == collectorStopped {
-			c.admissionMu.Unlock()
-			return
+		for c.awakeQueue.Len() > 0 && graceful {
+			c.logger.Debug(fmt.Sprintf("doCollect left %d job", c.awakeQueue.Len()))
+			time.Sleep(250 * time.Millisecond)
 		}
-		c.state = collectorStopping
-		c.admissionMu.Unlock()
-		if atomic.LoadUint32(&c.started) == 0 {
-			// No worker can drain a queue populated before Start. Reject any
-			// publisher that has not transferred ownership, then release every
-			// item whose ownership was already accepted.
-			close(c.stopCh)
-			c.publisherWG.Wait()
-			c.discardAcceptedItems()
-			c.awakeQueue.Dispose()
-			c.admissionMu.Lock()
-			c.state = collectorStopped
-			c.admissionMu.Unlock()
-			return
-		}
-
-		if !graceful {
-			close(c.stopCh)
-		}
-		if graceful {
-			c.shutdownMode.Store(collectorGracefulStop)
-		} else {
-			c.shutdownMode.Store(collectorImmediateStop)
-		}
-		c.bufferCond.L.Lock()
-		c.bufferCond.Broadcast()
-		c.bufferCond.L.Unlock()
-		// No publisher can enter after state=stopping. Once admitted publishers
-		// finish, accepted is the immutable ownership-transfer target.
-		c.publisherWG.Wait()
-
-		if graceful {
-			// Queue length alone is not a barrier: a collector may already own a
-			// popped item. collected advances only after buffer.Add returns.
-			c.collectMu.Lock()
-			for c.collected.Load() != c.accepted.Load() {
-				c.collectCond.Wait()
-			}
-			c.collectMu.Unlock()
-			c.awakeQueue.Dispose()
-			c.collectWG.Wait()
-		} else {
-			c.collectWG.Wait()
-			c.discardAcceptedItems()
-			c.awakeQueue.Dispose()
-		}
-
 		c.mux.Lock()
 		for _, buffer := range c.buffers {
 			buffer.Stop()
 		}
 		c.mux.Unlock()
-
-		// buffer.Stop joins every timer/aggregation callback, so no producer can
-		// send after awakeGenerate is closed. Generators then drain completely
-		// before exporters receive their own close signal.
+		close(c.stopCh)
+		c.stopWait.Wait()
 		close(c.awakeGenerate)
-		c.generateWG.Wait()
+		close(c.awakeBatch)
 		if !graceful {
-			for req := range c.awakeGenerate {
-				if req != nil {
-					req.callback(collectorStoppedError(c.ctx))
-				}
+			// shutdown directly
+			return
+		}
+		// handle remain data
+		handleExport := func(req exportReq) {
+			if err = req.handle(); err != nil {
+				req.callback(err)
 			}
 		}
-		close(c.awakeBatch)
-		c.exportWG.Wait()
-		if graceful {
-			close(c.stopCh)
+		handleGen := func(req generateReq) {
+			if export, err := req.handle(buf); err != nil {
+				req.callback(err)
+			} else {
+				handleExport(export)
+			}
 		}
-		c.statsWG.Wait()
-		c.admissionMu.Lock()
-		c.state = collectorStopped
-		c.admissionMu.Unlock()
+		for req := range c.awakeBatch {
+			handleExport(req)
+		}
+		for req := range c.awakeGenerate {
+			handleGen(req)
+		}
+		for _, buffer := range c.buffers {
+			if generate := buffer.getGenerateReq(); generate != nil {
+				handleGen(generate)
+			}
+		}
 	})
-	return nil
+	return err
 }
 
 type PipeImplHolder struct {

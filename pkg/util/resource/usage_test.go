@@ -90,15 +90,10 @@ func TestLocalRecorder(t *testing.T) {
 	recorder.AddActiveInterval(100, 10, 20)
 	recorder.AddWait(WaitLock, 10)
 	recorder.AddS3Request(S3Get, 2)
-	recorder.AddS3ReadBytes(1024)
-	recorder.AddClientEgressBytes(128)
-	recorder.AddSpillBytes(256)
 
 	delta := recorder.Snapshot()
 	if delta.Quality != 0 || delta.Usage.ExclusiveActiveNS != 70 ||
-		delta.Usage.WaitNS[WaitLock] != 10 || delta.Usage.S3Requests[S3Get] != 2 ||
-		delta.Usage.S3ReadBytes != 1024 || delta.Usage.ClientEgressBytes != 128 ||
-		delta.Usage.SpillBytes != 256 {
+		delta.Usage.WaitNS[WaitLock] != 10 || delta.Usage.S3Requests[S3Get] != 2 {
 		t.Fatalf("unexpected snapshot: %+v", delta)
 	}
 }

@@ -15,7 +15,7 @@ This change replaces that behavior with one typed accounting model:
 
 ```text
 producer-local facts
-  -> attempt summary
+  -> synchronous attempt summary
   -> execution summary
   -> statement root summary
   -> statement_info.stats / CU / physical-plan diagnostics
@@ -170,7 +170,7 @@ An Execution is one logical `Compile.Run` lifecycle. The top-level execution
 claims attempt ownership; nested internal executions merge their resource facts
 without inflating the client statement's retry count.
 
-An Attempt is one actual Run generation:
+An attempt summary is built synchronously for one actual Run generation:
 
 ```text
 attempt 0: first Run
@@ -186,12 +186,12 @@ On retry:
 1. finish the current run or error path;
 2. include cancellation, rollback, remote wait, and transition work in the
    failed attempt;
-3. seal and merge that attempt;
+3. construct and merge that attempt summary;
 4. start the next attempt before retry rebuild;
 5. record a retry rebuild failure as the new attempt's terminal result.
 
-Execution summaries contain fixed-size totals. Sealed attempts are merged and
-discarded, so retained accounting memory is O(1) in retry count.
+Execution summaries contain fixed-size totals. Attempt summaries are merged and
+discarded immediately, so retained accounting memory is O(1) in retry count.
 
 ### 5.3 Producer ownership
 
@@ -287,10 +287,9 @@ There are two useful statement snapshots:
 2. The final root summary is sealed after protocol completion. It includes
    accepted client egress and is projected into statement trace and CU.
 
-Statement completion publishes through the reliable collector path after
-releasing statement-local locks. Queue saturation applies backpressure until
-the collector accepts ownership or stops; completed statement rows are not
-silently discarded.
+Statement completion and collector/export behavior are unchanged and are out of
+scope for this accounting work. Resource facts are sealed before the existing
+statement publication path consumes them.
 
 ## 8. Persistence contract
 

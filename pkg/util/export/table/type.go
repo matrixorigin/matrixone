@@ -340,12 +340,6 @@ type RowWriter interface {
 	FlushAndClose() (int, error)
 }
 
-// AbortableRowWriter releases buffered rows without exporting them or firing
-// successful-write acknowledgements.
-type AbortableRowWriter interface {
-	Abort()
-}
-
 type BackOff interface {
 	// Count do the event count
 	// return true, means not in backoff cycle. You can run your code.
@@ -400,22 +394,7 @@ type WriteRequest interface {
 	Handle() (int, error)
 }
 
-// AbortableWriteRequest releases a generated request that will never be
-// handed to its writer, for example during an immediate collector shutdown.
-// Abort must not run successful-write acknowledgement hooks.
-type AbortableWriteRequest interface {
-	Abort()
-}
-
 type ExportRequests []WriteRequest
-
-func (r ExportRequests) Abort() {
-	for _, request := range r {
-		if abortable, ok := request.(AbortableWriteRequest); ok {
-			abortable.Abort()
-		}
-	}
-}
 
 type RowRequest struct {
 	writer RowWriter
@@ -440,17 +419,6 @@ func (r *RowRequest) Handle() (n int, err error) {
 	n, err = r.writer.FlushAndClose()
 	r.writer = nil
 	return
-}
-
-func (r *RowRequest) Abort() {
-	if abortable, ok := r.writer.(AbortableRowWriter); ok {
-		abortable.Abort()
-	} else if r.writer != nil {
-		// Third-party RowWriter implementations predate the abort contract.
-		// FlushAndClose is the only available ownership-release operation.
-		_, _ = r.writer.FlushAndClose()
-	}
-	r.writer = nil
 }
 
 // GetContent for test

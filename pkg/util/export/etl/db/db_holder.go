@@ -338,8 +338,6 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 	return w.GetContentLength(), nil
 }
 
-func (w *CSVWriter) Abort() { w.Release() }
-
 func (w *CSVWriter) ResetBuffer(buf *bytes.Buffer) {
 	w.buf = buf
 	w.formatter = csv.NewWriter(buf)

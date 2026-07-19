@@ -377,6 +377,10 @@ func TestCrossPoolFreeOffHeap(t *testing.T) {
 
 	// Verify cross-pool free count was recorded (NumCrossPoolFree counts occurrences, not bytes)
 	require.Equal(t, int64(1), mp2.Stats().NumCrossPoolFree.Load())
+	summary, flags := mp1.ResourceSnapshot()
+	require.Equal(t, uint64(1), summary.CrossPoolFreeCount)
+	require.NotZero(t, flags&resource.QualityCrossPoolFree)
+	require.NotZero(t, flags&resource.QualityInvariantFailure)
 
 	// Verify global stats decreased (memory was actually freed)
 	globalAfter := GlobalStats().NumCurrBytes.Load()

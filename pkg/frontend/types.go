@@ -254,9 +254,8 @@ type ComputationWrapper interface {
 	// RecordCompoundStmt calculates the CU resources of composite statements, and stores them into statementinfo
 	RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error
 
-	// StatsCompositeSubStmtResource returns the legacy return-only projection
-	// for composite child statements.
-	StatsCompositeSubStmtResource(ctx context.Context) statistic.StatsArray
+	// StatsCompositeSubStmtResource Statistics on CU resources of sub statements in composite statements
+	StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray)
 
 	SetExplainBuffer(buf *bytes.Buffer)
 

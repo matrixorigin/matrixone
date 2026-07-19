@@ -943,7 +943,7 @@ func (c *Conn) countCompletedOutputPackets(written []byte) {
 			c.outputPayloadLeft -= n
 			written = written[n:]
 			if c.outputPayloadLeft == 0 {
-				c.CountOutputPackets(1)
+				c.CountFlushPackage(1)
 			}
 			continue
 		}
@@ -957,7 +957,7 @@ func (c *Conn) countCompletedOutputPackets(written []byte) {
 				int(c.outputHeader[2])<<16
 			c.outputHeaderBytes = 0
 			if c.outputPayloadLeft == 0 {
-				c.CountOutputPackets(1)
+				c.CountFlushPackage(1)
 			}
 		}
 	}
@@ -998,20 +998,14 @@ func (c *Conn) Reset() {
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
 
-func (c *Conn) CountOutputPackets(n int64) {
+func (c *Conn) CountFlushPackage(n int64) {
 	hld := c.ses.Load()
 	if hld != nil {
 		val := hld.value
 		if val != nil {
-			val.CountOutputPackets(n)
+			val.CountFlushPackage(n)
 		}
 	}
-}
-
-// CountFlushPackage is retained as a source-compatible forwarding alias for
-// integrations that used the pre-egress-accounting name.
-func (c *Conn) CountFlushPackage(n int64) {
-	c.CountOutputPackets(n)
 }
 
 func (c *Conn) CountOutputBytes(n int) {

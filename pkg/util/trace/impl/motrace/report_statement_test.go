@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -37,69 +36,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
-
-type failingStatementCollector struct{}
-
-func (failingStatementCollector) Collect(context.Context, batchpipe.HasName) error {
-	return moerr.NewInternalErrorNoCtx("collector stopped")
-}
-func (failingStatementCollector) Start() bool                          { return true }
-func (failingStatementCollector) Stop(bool) error                      { return nil }
-func (failingStatementCollector) Register(batchpipe.HasName, PipeImpl) {}
-
-type capturingFailingStatementCollector struct {
-	item *StatementInfo
-}
-
-func (c *capturingFailingStatementCollector) Collect(_ context.Context, item batchpipe.HasName) error {
-	c.item = item.(*StatementInfo)
-	return moerr.NewInternalErrorNoCtx("collector stopped")
-}
-func (*capturingFailingStatementCollector) Start() bool                          { return true }
-func (*capturingFailingStatementCollector) Stop(bool) error                      { return nil }
-func (*capturingFailingStatementCollector) Register(batchpipe.HasName, PipeImpl) {}
-
-func TestReportStatementReleasesItemWhenCollectorRejectsOwnership(t *testing.T) {
-	provider := GetTracerProvider()
-	old := provider.batchProcessor
-	oldEnable := provider.IsEnable()
-	provider.SetEnable(true)
-	provider.batchProcessor = failingStatementCollector{}
-	defer func() {
-		provider.batchProcessor = old
-		provider.SetEnable(oldEnable)
-	}()
-
-	stmt := NewStatementInfo()
-	stmt.Statement = append(stmt.Statement, "select 1"...)
-	stmt.Status = StatementStatusSuccess
-	stmt.end = true
-	require.Error(t, ReportStatement(context.Background(), stmt))
-	require.Empty(t, stmt.Statement)
-}
-
-func TestReportStatementReleasesDetachedRunningCloneOnReject(t *testing.T) {
-	provider := GetTracerProvider()
-	old := provider.batchProcessor
-	oldEnable := provider.IsEnable()
-	provider.SetEnable(true)
-	collector := new(capturingFailingStatementCollector)
-	provider.batchProcessor = collector
-	defer func() {
-		provider.batchProcessor = old
-		provider.SetEnable(oldEnable)
-	}()
-
-	stmt := NewStatementInfo()
-	stmt.Statement = append(stmt.Statement, "select sleep(1)"...)
-	stmt.Status = StatementStatusRunning
-	require.Error(t, ReportStatement(context.Background(), stmt))
-	require.NotNil(t, collector.item)
-	require.Empty(t, collector.item.Statement)
-	require.Equal(t, "select sleep(1)", string(stmt.Statement), "live statement must remain owned by its session")
-	stmt.end = true
-	stmt.freeNoLocked()
-}
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {
 	type fields struct {
@@ -440,6 +376,45 @@ func TestMergeStatsUsesTypedResourceSummary(t *testing.T) {
 	require.Equal(t, float64(7), e.statsArray.GetCU())
 	require.Equal(t, int64(4), e.RowsRead)
 	require.Equal(t, int64(6), e.BytesScan)
+}
+
+func TestMergeStatsMixedProducerKeepsAllContributions(t *testing.T) {
+	firstSummary := resource.StatementResourceSummary{
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 10,
+			S3ReadBytes:       11,
+		},
+		OutputPacketCount: 1,
+	}
+	e := &StatementInfo{}
+	e.SetResourceSummary(firstSummary)
+	e.statsArray = statistic.FromResourceSummary(firstSummary, 1)
+
+	untyped := &StatementInfo{}
+	untyped.statsArray.Init().
+		WithTimeConsumed(20).
+		WithS3ReadBytes(22).
+		WithOutPacketCount(2).
+		WithCU(2)
+	require.NoError(t, mergeStats(e, untyped))
+	require.False(t, e.resourceStated)
+
+	lastSummary := resource.StatementResourceSummary{
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 30,
+			S3ReadBytes:       33,
+		},
+		OutputPacketCount: 3,
+	}
+	last := &StatementInfo{}
+	last.SetResourceSummary(lastSummary)
+	last.statsArray = statistic.FromResourceSummary(lastSummary, 3)
+	require.NoError(t, mergeStats(e, last))
+
+	require.Equal(t, float64(60), e.statsArray.GetTimeConsumed())
+	require.Equal(t, float64(66), e.statsArray.GetS3ReadBytes())
+	require.Equal(t, float64(6), e.statsArray.GetOutPacketCount())
+	require.Equal(t, float64(6), e.statsArray.GetCU())
 }
 
 func TestCalculateAggrMemoryBytes(t *testing.T) {

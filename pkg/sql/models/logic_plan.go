@@ -248,6 +248,8 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		goutputRows := NewStatisticValue(OutputRows, "count")
 		ginputSize := NewStatisticValue(InputSize, "byte")
 		goutputSize := NewStatisticValue(OutputSize, "byte")
+
+		// memory
 		gMemorySize := NewStatisticValue(MemorySize, "byte")
 
 		//io

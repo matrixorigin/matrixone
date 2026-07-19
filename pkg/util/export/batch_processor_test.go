@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/ring"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
@@ -75,67 +73,6 @@ func newDummy(v int64) *Num {
 }
 
 func (n Num) GetName() string { return NumType }
-
-type releasableNum struct {
-	Num
-	released *atomic.Int64
-}
-
-func (n *releasableNum) FreeOnCollectorDrop() { n.released.Add(1) }
-
-type ownedNamedItem struct {
-	name     string
-	released *atomic.Int64
-}
-
-func (i *ownedNamedItem) GetName() string      { return i.name }
-func (i *ownedNamedItem) Free()                { i.released.Add(1) }
-func (i *ownedNamedItem) FreeOnCollectorDrop() { i.released.Add(1) }
-
-type ownedItemBuffer struct {
-	batchpipe.Reminder
-	items []batchpipe.HasName
-}
-
-func (b *ownedItemBuffer) Add(item batchpipe.HasName) { b.items = append(b.items, item) }
-func (b *ownedItemBuffer) Reset() {
-	for _, item := range b.items {
-		item.(*ownedNamedItem).Free()
-	}
-	b.items = b.items[:0]
-}
-func (b *ownedItemBuffer) IsEmpty() bool     { return len(b.items) == 0 }
-func (b *ownedItemBuffer) ShouldFlush() bool { return false }
-func (b *ownedItemBuffer) Size() int64       { return int64(len(b.items)) }
-func (b *ownedItemBuffer) GetBatch(context.Context, *bytes.Buffer) any {
-	return len(b.items)
-}
-
-type ownedItemPipe struct{ exported atomic.Int64 }
-
-func (*ownedItemPipe) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	return &ownedItemBuffer{Reminder: batchpipe.NewConstantClock(time.Hour)}
-}
-func (p *ownedItemPipe) NewItemBatchHandler(context.Context) func(any) {
-	return func(batch any) { p.exported.Add(int64(batch.(int))) }
-}
-func (*ownedItemPipe) NewAggregator(context.Context, string) table.Aggregator { return nil }
-
-type abortableBatch struct{ aborted atomic.Int64 }
-
-func (b *abortableBatch) Abort() { b.aborted.Add(1) }
-
-type controlledGenerateReq struct {
-	ready chan<- struct{}
-	batch *abortableBatch
-}
-
-func (r *controlledGenerateReq) handle(*bytes.Buffer) (exportReq, error) {
-	close(r.ready)
-	return &bufferExportReq{batch: r.batch}, nil
-}
-func (*controlledGenerateReq) callback(error) {}
-func (*controlledGenerateReq) typ() string    { return "controlled" }
 
 var signalFunc = func() {}
 
@@ -295,98 +232,6 @@ func TestNewMOCollector_Stop(t *testing.T) {
 	dropCnt := collector.stopDrop.Load()
 	t.Logf("channal len: %d, dropCnt: %d, totalElem: %d", length, dropCnt, N)
 	require.Equal(t, N, int(dropCnt)+int(length))
-}
-
-func TestMOCollectorGracefulStopAdmitsFullQueuePublisher(t *testing.T) {
-	collector := NewMOCollector(context.Background(), "",
-		WithCollectorCnt(1), WithGeneratorCnt(1), WithExporterCnt(1))
-	collector.awakeQueue = ring.NewRingBuffer[batchpipe.HasName](2)
-	exported := make(chan string, 8)
-	collector.Register(newDummy(0), &dummyPipeImpl{ch: exported, duration: time.Hour})
-	require.NoError(t, collector.Collect(context.Background(), newDummy(1)))
-	require.NoError(t, collector.Collect(context.Background(), newDummy(2)))
-
-	accepted := make(chan error, 1)
-	go func() { accepted <- collector.Collect(context.Background(), newDummy(3)) }()
-	// Start drains the already full queue; the publisher admitted above must
-	// eventually transfer ownership instead of being silently dropped.
-	require.True(t, collector.Start())
-	require.NoError(t, <-accepted)
-	require.NoError(t, collector.Stop(true))
-	require.Equal(t, `(1),(2),(3)`, <-exported)
-	require.Empty(t, exported)
-}
-
-func TestMOCollectorNonGracefulStopAbortsPublisher(t *testing.T) {
-	collector := NewMOCollector(context.Background(), "")
-	collector.awakeQueue = ring.NewRingBuffer[batchpipe.HasName](2)
-	var released atomic.Int64
-	require.NoError(t, collector.Collect(context.Background(), &releasableNum{Num: 1, released: &released}))
-	require.NoError(t, collector.Collect(context.Background(), &releasableNum{Num: 2, released: &released}))
-
-	result := make(chan error, 1)
-	go func() { result <- collector.Collect(context.Background(), newDummy(3)) }()
-	// There are no workers, so Stop rejects the blocked publisher and releases
-	// the two items whose ownership the collector had already accepted.
-	require.NoError(t, collector.Stop(false))
-	require.Error(t, <-result)
-	require.Equal(t, int64(2), released.Load())
-	require.Error(t, collector.Collect(context.Background(), newDummy(4)))
-}
-
-func TestMOCollectorStopBreaksCrossTypeBufferCapacityWait(t *testing.T) {
-	for _, graceful := range []bool{true, false} {
-		t.Run(fmt.Sprintf("graceful=%v", graceful), func(t *testing.T) {
-			collector := NewMOCollector(context.Background(), "",
-				WithCollectorCnt(1), WithGeneratorCnt(1), WithExporterCnt(1))
-			collector.maxBufferCnt = 1
-			pipe := new(ownedItemPipe)
-			var released atomic.Int64
-			itemA := &ownedNamedItem{name: "owned-a", released: &released}
-			itemB := &ownedNamedItem{name: "owned-b", released: &released}
-			collector.Register(itemA, pipe)
-			collector.Register(itemB, pipe)
-			require.True(t, collector.Start())
-			require.NoError(t, collector.Collect(context.Background(), itemA))
-			require.Eventually(t, func() bool { return collector.collected.Load() == 1 }, time.Second, time.Millisecond)
-			require.NoError(t, collector.Collect(context.Background(), itemB))
-			// B has left the queue and is blocked waiting for the only buffer
-			// slot held by A.
-			require.Eventually(t, func() bool {
-				return collector.awakeQueue.Len() == 0 && collector.collected.Load() == 1
-			}, time.Second, time.Millisecond)
-
-			done := make(chan error, 1)
-			go func() { done <- collector.Stop(graceful) }()
-			select {
-			case err := <-done:
-				require.NoError(t, err)
-			case <-time.After(3 * time.Second):
-				t.Fatal("collector Stop deadlocked on buffer capacity")
-			}
-			require.Equal(t, int64(2), released.Load())
-			if graceful {
-				require.Equal(t, int64(2), pipe.exported.Load())
-			} else {
-				require.Zero(t, pipe.exported.Load())
-			}
-		})
-	}
-}
-
-func TestMOCollectorImmediateStopAbortsGeneratedBatch(t *testing.T) {
-	collector := NewMOCollector(context.Background(), "")
-	batch := new(abortableBatch)
-	ready := make(chan struct{})
-	collector.generateWG.Add(1)
-	go collector.doGenerate(0)
-	collector.awakeGenerate <- &controlledGenerateReq{ready: ready, batch: batch}
-	<-ready
-	// No exporter receives from the unbuffered awakeBatch, so the generator is
-	// now the sole owner of the generated batch.
-	close(collector.stopCh)
-	collector.generateWG.Wait()
-	require.Equal(t, int64(1), batch.aborted.Load())
 }
 
 func TestNewMOCollector_BufferCnt(t *testing.T) {

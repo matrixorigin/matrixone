@@ -96,12 +96,3 @@ func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
 	sw.csvWriter = nil
 	return cnt, err
 }
-
-func (sw *DefaultSqlWriter) Abort() {
-	sw.buffer = nil
-	sw.tbl = nil
-	if sw.csvWriter != nil {
-		sw.csvWriter.Abort()
-	}
-	sw.csvWriter = nil
-}

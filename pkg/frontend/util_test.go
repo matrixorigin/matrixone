@@ -103,7 +103,7 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	retained, allocErr := memoryPool.Alloc(32, true)
 	require.NoError(t, allocErr)
 	defer memoryPool.Free(retained)
-	stmt.SetResourceMemoryPool(memoryPool)
+	stmt.SetResourceMemoryPoolEpoch(memoryPool, memoryPool.StartResourcePeakEpoch())
 	allocation, allocErr := memoryPool.Alloc(64, true)
 	require.NoError(t, allocErr)
 	memoryPool.Free(allocation)

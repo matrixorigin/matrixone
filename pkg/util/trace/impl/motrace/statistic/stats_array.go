@@ -111,10 +111,6 @@ func NewStatsArrayV4() *StatsArray {
 	return NewStatsArray().WithVersion(StatsArrayVersion4)
 }
 
-func NewStatsArrayV5() *StatsArray {
-	return NewStatsArray().WithVersion(StatsArrayVersion5)
-}
-
 func NewStatsArrayV6() *StatsArray {
 	return NewStatsArray().WithVersion(StatsArrayVersion6)
 }

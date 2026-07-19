@@ -45,33 +45,7 @@ func (r *LocalRecorder) AddS3Request(op S3Op, count uint64) {
 	r.usage.S3Requests[op], r.flags = addChecked(r.usage.S3Requests[op], count, r.flags)
 }
 
-// AddS3ReadBytes records physical bytes returned by object storage.
-func (r *LocalRecorder) AddS3ReadBytes(bytes uint64) {
-	r.usage.S3ReadBytes, r.flags = addChecked(r.usage.S3ReadBytes, bytes, r.flags)
-}
-
-// AddS3WriteBytes records physical bytes accepted by object storage.
-func (r *LocalRecorder) AddS3WriteBytes(bytes uint64) {
-	r.usage.S3WriteBytes, r.flags = addChecked(r.usage.S3WriteBytes, bytes, r.flags)
-}
-
-// AddClientEgressBytes records application-protocol bytes accepted for write.
-func (r *LocalRecorder) AddClientEgressBytes(bytes uint64) {
-	r.usage.ClientEgressBytes, r.flags = addChecked(r.usage.ClientEgressBytes, bytes, r.flags)
-}
-
-// AddSpillBytes records bytes accepted at an operator spill boundary.
-func (r *LocalRecorder) AddSpillBytes(bytes uint64) {
-	r.usage.SpillBytes, r.flags = addChecked(r.usage.SpillBytes, bytes, r.flags)
-}
-
 // Snapshot returns an immutable copy. The owner must quiesce before calling it.
 func (r *LocalRecorder) Snapshot() Delta {
 	return Delta{Usage: r.usage, Quality: r.flags}
-}
-
-// Reset starts a new recorder epoch. Callers must prove that no writer from the
-// previous epoch can still reach the recorder.
-func (r *LocalRecorder) Reset() {
-	*r = LocalRecorder{}
 }

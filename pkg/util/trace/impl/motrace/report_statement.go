@@ -367,16 +367,6 @@ func (s *StatementInfo) Free() {
 	}
 }
 
-// FreeOnCollectorDrop releases a statement record that the collector had
-// accepted but cannot export because it is stopping immediately. The item may
-// be either the terminal record or the independent clone used for a running
-// record, so collector ownership itself is the release precondition.
-func (s *StatementInfo) FreeOnCollectorDrop() {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	s.free()
-}
-
 // freeNoLocked will free StatementInfo if StatementInfo.end is true.
 // Please make sure it called after EndStatement.
 func (s *StatementInfo) freeNoLocked() {
@@ -585,6 +575,13 @@ func mergeStats(e, n *StatementInfo) error {
 		e.BytesScan += n.BytesScan
 		return nil
 	}
+	if e.resourceStated != n.resourceStated {
+		// Once typed and untyped producers are mixed, StatsArray is the only
+		// complete aggregate. Do not let a later typed merge rebuild it from a
+		// resourceSummary that never contained the untyped contribution.
+		e.resourceStated = false
+		e.resourceSummary = resource.StatementResourceSummary{}
+	}
 	e.statsArray.Add(&n.statsArray)
 	if e.statsArray.GetVersion() >= statistic.StatsArrayVersion6 {
 		e.statsArray.WithQualityFlags(e.statsArray.GetQualityFlags() | resource.QualityAggregated)
@@ -661,16 +658,6 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 // SetResourceRoot installs the single request accounting owner.
 func (s *StatementInfo) SetResourceRoot(root *resource.Root) {
 	s.resourceRoot = root
-}
-
-// SetResourceMemoryPool establishes one statement-scoped peak observation.
-// Nested work and retained state in the serialized session MPool are included.
-func (s *StatementInfo) SetResourceMemoryPool(pool *mpool.MPool) {
-	var token *mpool.ResourcePeakEpoch
-	if pool != nil {
-		token = pool.StartResourcePeakEpoch()
-	}
-	s.SetResourceMemoryPoolEpoch(pool, token)
 }
 
 // SetResourceMemoryPoolEpoch adopts a peak observation token established at
@@ -787,13 +774,9 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		return
 	}
 
-	shouldReport := false
-	func() {
-		s.mux.Lock()
-		defer s.mux.Unlock()
-		if s.end { // cooperate with s.mux
-			return
-		}
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if !s.end { // cooperate with s.mux
 		// do report
 		s.end = true
 		s.ResultCount = sentRows
@@ -807,8 +790,10 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		if s.resourceRoot == nil {
 			s.resourceRoot = resource.NewRoot(resource.ConnType(s.ConnType))
 		}
-		if phases, ok := statistic.StatsInfoFromContext(ctx).ClaimRootPhaseResource(); ok {
-			s.resourceRoot.AddLocal(phases)
+		if statsInfo := statistic.StatsInfoFromContext(ctx); statsInfo != nil {
+			if phases, ok := statsInfo.ClaimRootPhaseResource(); ok {
+				s.resourceRoot.AddLocal(phases)
+			}
 		}
 		if outBytes < 0 || outPacket < 0 {
 			s.resourceRoot.AddLocal(resource.Delta{Quality: resource.QualityInvariantFailure})
@@ -848,11 +833,8 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		}
 		if !s.reported || s.exported { // cooperate with s.mux
 			s.exported = false
-			shouldReport = true
+			s.Report(ctx)
 		}
-	}()
-	if shouldReport {
-		s.Report(ctx)
 	}
 }
 
@@ -915,19 +897,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
-	collector := GetGlobalBatchProcessor()
-	runningSnapshot := false
 	// Filter out the Running record.
 	if s.Status == StatementStatusRunning {
 		if GetTracerProvider().skipRunningStmt {
 			return nil
 		} else {
 			s = s.CloneWithoutExecPlan()
-			// This clone is a detached export snapshot. Mark it releasable so
-			// normal export, collector rejection, and shutdown all return it to
-			// the pool independently of the live statement.
-			s.end = true
-			runningSnapshot = true
 		}
 	}
 	// Filter out the MO_LOGGER SQL statements
@@ -964,20 +939,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	s.reported = true
-	if runningSnapshot {
-		if discardable, ok := collector.(DiscardableCollector); ok {
-			if err := discardable.DiscardableCollect(ctx, s); err != nil {
-				s.freeNoLocked()
-				return err
-			}
-			return nil
-		}
-	}
-	if err := collector.Collect(ctx, s); err != nil {
-		s.freeNoLocked()
-		return err
-	}
-	return nil
+	return GetGlobalBatchProcessor().Collect(ctx, s)
 DiscardAndFreeL:
 	s.freeNoLocked()
 	return nil

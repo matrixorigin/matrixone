@@ -224,11 +224,11 @@ func TestDecodeStatsArray(t *testing.T) {
 }
 
 func TestStatsArrayAddMixedV5V6IsCommutativeAndAssociative(t *testing.T) {
-	v5a := NewStatsArrayV5().WithTimeConsumed(3).WithMemorySize(100).
+	v5a := NewStatsArray().WithVersion(StatsArrayVersion5).WithTimeConsumed(3).WithMemorySize(100).
 		WithS3IOInputCount(4).WithS3IOOutputCount(5).WithOutTrafficBytes(6).
 		WithConnType(ConnTypeExternal).WithOutPacketCount(7).WithCU(8).
 		WithS3IOListCount(9).WithS3IODeleteCount(10)
-	v5b := NewStatsArrayV5().WithTimeConsumed(11).WithMemorySize(200).
+	v5b := NewStatsArray().WithVersion(StatsArrayVersion5).WithTimeConsumed(11).WithMemorySize(200).
 		WithS3IOInputCount(12).WithS3IOOutputCount(13).WithOutTrafficBytes(14).
 		WithConnType(ConnTypeExternal).WithOutPacketCount(15).WithCU(16).
 		WithS3IOListCount(17).WithS3IODeleteCount(18)

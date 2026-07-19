@@ -66,6 +66,34 @@ type ResourcePeakEpoch struct {
 	ended atomic.Bool
 }
 
+// resourceMemoryStats observes successful off-heap allocation ownership only.
+// It is deliberately separate from MPoolStats: the latter preserves legacy
+// admission behavior and may temporarily record a reservation that is later
+// compensated when an allocation exceeds a cap.
+type resourceMemoryStats struct {
+	allocated     atomic.Int64
+	freed         atomic.Int64
+	live          atomic.Int64
+	peak          atomic.Int64
+	crossPoolFree atomic.Int64
+}
+
+func (s *resourceMemoryStats) recordAlloc(sz int64) int64 {
+	s.allocated.Add(sz)
+	curr := s.live.Add(sz)
+	for {
+		peak := s.peak.Load()
+		if curr <= peak || s.peak.CompareAndSwap(peak, curr) {
+			return curr
+		}
+	}
+}
+
+func (s *resourceMemoryStats) recordFree(sz int64) {
+	s.freed.Add(sz)
+	s.live.Add(-sz)
+}
+
 func (e *ResourcePeakEpoch) recordPeak(curr int64) {
 	if e == nil || curr < 0 || e.ended.Load() {
 		return
@@ -144,32 +172,6 @@ func (s *MPoolStats) recordHighWater(tag string, curr int64) {
 			return
 		}
 	}
-}
-
-// reserve adds sz to the live-byte reservation without declaring a successful
-// allocation. The caller must commitReservedAlloc or cancelReserve exactly
-// once. A quiescent resource snapshot therefore never includes failed
-// allocations in allocated bytes or the high-water mark.
-func (s *MPoolStats) reserve(sz, limit int64) (int64, bool) {
-	for {
-		curr := s.NumCurrBytes.Load()
-		if sz < 0 || curr > limit || sz > limit-curr {
-			return curr, false
-		}
-		if s.NumCurrBytes.CompareAndSwap(curr, curr+sz) {
-			return curr + sz, true
-		}
-	}
-}
-
-func (s *MPoolStats) cancelReserve(sz int64) {
-	s.NumCurrBytes.Add(-sz)
-}
-
-func (s *MPoolStats) commitReservedAlloc(tag string, sz, curr int64) {
-	s.NumAlloc.Add(1)
-	s.NumAllocBytes.Add(sz)
-	s.recordHighWater(tag, curr)
 }
 
 // Update free stats, return curr bytes.
@@ -318,12 +320,13 @@ func (d *mpoolDetails) reportJson() string {
 
 // The memory pool.
 type MPool struct {
-	id      int64      // mpool generated, used to look up the MPool
-	tag     string     // user supplied, for debug/inspect
-	cap     int64      // pool capacity
-	stats   MPoolStats // stats
-	epoch   atomic.Pointer[ResourcePeakEpoch]
-	details *mpoolDetails
+	id       int64      // mpool generated, used to look up the MPool
+	tag      string     // user supplied, for debug/inspect
+	cap      int64      // pool capacity
+	stats    MPoolStats // stats
+	resource resourceMemoryStats
+	epoch    atomic.Pointer[ResourcePeakEpoch]
+	details  *mpoolDetails
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -533,11 +536,11 @@ func (mp *MPool) ResourcePeakLiveBytes(token *ResourcePeakEpoch) (uint64, bool) 
 // ResourceSnapshot returns exact allocator-domain facts for a quiescent MPool
 // epoch. Negative counters are flagged instead of being converted to uint64.
 func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.QualityFlags) {
-	allocated := mp.stats.NumAllocBytes.Load()
-	freed := mp.stats.NumFreeBytes.Load()
-	peak := mp.stats.HighWaterMark.Load()
-	live := mp.stats.NumCurrBytes.Load()
-	cross := mp.stats.NumCrossPoolFree.Load()
+	allocated := mp.resource.allocated.Load()
+	freed := mp.resource.freed.Load()
+	peak := mp.resource.peak.Load()
+	live := mp.resource.live.Load()
+	cross := mp.resource.crossPoolFree.Load()
 	if allocated < 0 || freed < 0 || peak < 0 || live < 0 || cross < 0 {
 		return resource.MemoryDomainSummary{}, resource.QualityInvariantFailure
 	}
@@ -558,7 +561,7 @@ func (mp *MPool) StartResourcePeakEpoch() *ResourcePeakEpoch {
 	if mp == nil {
 		return nil
 	}
-	if mp.stats.NumCurrBytes.Load() < 0 {
+	if mp.resource.live.Load() < 0 {
 		return nil
 	}
 	token := &ResourcePeakEpoch{owner: mp}
@@ -567,7 +570,7 @@ func (mp *MPool) StartResourcePeakEpoch() *ResourcePeakEpoch {
 	}
 	// Publish the baseline after claiming ownership. Allocations racing the
 	// claim update the token and recordPeak keeps the larger value.
-	token.recordPeak(mp.stats.NumCurrBytes.Load())
+	token.recordPeak(mp.resource.live.Load())
 	return token
 }
 
@@ -699,30 +702,24 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	hdr.SetGuard()
 
 	if offHeap {
-		gcurr, ok := globalStats.reserve(sz, GlobalCap())
-		if !ok {
+		gcurr := globalStats.RecordAlloc("global", sz)
+		if gcurr > GlobalCap() {
+			// compensate global
+			globalStats.RecordFree("global", sz)
 			return nil, moerr.NewOOMNoCtx()
 		}
-		mycurr, ok := mp.stats.reserve(sz, mp.Cap())
-		if !ok {
-			globalStats.cancelReserve(sz)
+		mycurr := mp.stats.RecordAlloc(mp.tag, sz)
+		if mycurr > mp.Cap() {
+			// compensate both global and my
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
 			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 		}
-		reserved := true
-		defer func() {
-			if reserved {
-				mp.stats.cancelReserve(sz)
-				globalStats.cancelReserve(sz)
-			}
-		}()
 		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
 			panic(err)
 		}
-		globalStats.commitReservedAlloc("global", sz, gcurr)
-		mp.stats.commitReservedAlloc(mp.tag, sz, mycurr)
-		mp.recordResourcePeak(mycurr)
-		reserved = false
+		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
 		}
@@ -777,7 +774,9 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 			}
 		} else {
-			(otherPool.(*MPool)).freePtrInternal(detailk, ptr, hdr)
+			owner := otherPool.(*MPool)
+			owner.resource.crossPoolFree.Add(1)
+			owner.freePtrInternal(detailk, ptr, hdr)
 		}
 		return
 	}
@@ -799,6 +798,7 @@ func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr)
 	profileRecordFree(uintptr(ptr), sz)
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
+	mp.resource.recordFree(sz)
 	if mp.details != nil {
 		mp.details.recordFree(detailk, sz)
 	}
@@ -956,7 +956,9 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	globalStats.RecordAlloc("global", int64(sz))
-	mp.recordResourcePeak(mp.stats.RecordAlloc(mp.tag, int64(sz)))
+	mp.stats.RecordAlloc(mp.tag, int64(sz))
+	mp.resource.recordFree(int64(oldSize))
+	mp.recordResourcePeak(mp.resource.recordAlloc(int64(sz)))
 	return newbs, nil
 }
 

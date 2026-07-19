@@ -296,7 +296,6 @@ type Buffer interface {
 }
 
 type BatchProcessor interface {
-	// Collect transfers ownership of the item only when it returns nil.
 	Collect(context.Context, batchpipe.HasName) error
 	Start() bool
 	Stop(graceful bool) error

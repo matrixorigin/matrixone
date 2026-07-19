@@ -107,7 +107,6 @@ func (r *executionResourceRecorder) finishAttempt(
 	if r == nil {
 		return
 	}
-	attempt := resource.NewAttempt()
 	delta := collectScopeResourceDelta(scopes, localAddress)
 	remote := remoteResourceSnapshot{}
 	if anal != nil {
@@ -167,11 +166,13 @@ func (r *executionResourceRecorder) finishAttempt(
 	coordinatorDelta := coordinator.Snapshot()
 	delta.Quality |= coordinatorDelta.Quality | resource.MergeUsage(&delta.Usage, coordinatorDelta.Usage)
 
-	attempt.AddLocal(delta)
-	attempt.BeginClosing()
 	wallNS := durationNS(time.Since(attemptStart), &delta.Quality)
-	summary := attempt.Seal(wallNS, outcome)
-	summary.Quality |= delta.Quality | resource.MergeMemoryTotals(&summary.Memory, remoteAggregate.Memory)
+	summary := resource.AttemptSummary{
+		WallNS:  wallNS,
+		Outcome: outcome,
+	}
+	summary.Quality |= delta.Quality | resource.MergeUsage(&summary.Usage, delta.Usage)
+	summary.Quality |= resource.MergeMemoryTotals(&summary.Memory, remoteAggregate.Memory)
 	var quality resource.QualityFlags
 	summary.MissingFragmentCount, quality = addCheckedRemoteCounter(
 		summary.MissingFragmentCount, remoteAggregate.MissingFragmentCount, summary.Quality)
