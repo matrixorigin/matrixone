@@ -171,6 +171,15 @@ func validateRightSingleRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs [
 		}
 
 		producer := producers[0]
+		// Physical scan scopes are expanded into NodeInfo.Mcpu copies immediately
+		// before execution, and HashBuild (including its runtime-filter tag) is
+		// duplicated with them. Count that pending expansion as multiple producers
+		// instead of accepting the pre-expansion scope graph.
+		if producer.NodeInfo.Mcpu > 1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid local runtime-filter topology: tag %d producer %s has DOP %d; expected exactly one producer",
+				tag, runtimeFilterScopeAddress(producer), producer.NodeInfo.Mcpu)
+		}
 		for _, consumer := range consumers {
 			if !sameRuntimeFilterExecutionNode(consumer.NodeInfo, producer.NodeInfo) {
 				return moerr.NewInternalErrorNoCtxf(

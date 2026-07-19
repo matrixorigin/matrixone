@@ -132,6 +132,13 @@ func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bo
 	if upperLimit <= 0 || build == nil || build.NodeType != plan.Node_TABLE_SCAN || build.Stats == nil {
 		return false
 	}
+	// DefaultStats is a sentinel for missing/unavailable table statistics, not
+	// evidence that the table contains exactly 1,000 rows.  Treating it as a
+	// hard size bound can move an arbitrarily large build scan onto one CN only
+	// for hashbuild to discover the real cardinality and send PASS.
+	if IsDefaultStats(build.Stats) {
+		return false
+	}
 	// LOCAL_COLOCATED applies to the whole preserved/build subtree. Phase 1
 	// accepts only a direct scan whose full table cardinality and filtered
 	// output both fit exact IN. Looking only at Outcnt would incorrectly force a
@@ -139,6 +146,52 @@ func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bo
 	// was estimated to be small.
 	limit := float64(upperLimit)
 	return build.Stats.Outcnt <= limit && build.Stats.TableCnt <= limit
+}
+
+// enforceRightSingleRuntimeFilterProducerDOP preserves the phase-1 message
+// protocol invariant: one exact-IN runtime-filter tag has exactly one producer.
+//
+// ForceOneCN controls placement, but a table scan on that CN may still be split
+// into Stats.Dop parallel scopes. Each split duplicates HashBuild and would send
+// an independent IN/PASS/DROP message for the same tag. Until the protocol can
+// merge partitioned filters with an explicit completion barrier, serialize only
+// the direct build scan selected by the right-SINGLE optimization. Probe scans
+// and unrelated ForceOneCN plans retain their normal intra-CN parallelism.
+func enforceRightSingleRuntimeFilterProducerDOP(qry *plan.Query) {
+	if qry == nil {
+		return
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.NodeType != plan.Node_JOIN ||
+			node.JoinType != plan.Node_SINGLE || !node.IsRightJoin ||
+			len(node.Children) != 2 || len(node.RuntimeFilterBuildList) == 0 {
+			continue
+		}
+		if node.Stats != nil && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+			continue
+		}
+
+		hasExactFilter := false
+		for _, spec := range node.RuntimeFilterBuildList {
+			if spec != nil && spec.Tag > 0 && spec.Expr != nil {
+				hasExactFilter = true
+				break
+			}
+		}
+		if !hasExactFilter {
+			continue
+		}
+
+		buildID := node.Children[1]
+		if buildID < 0 || int(buildID) >= len(qry.Nodes) {
+			continue
+		}
+		build := qry.Nodes[buildID]
+		if build == nil || build.NodeType != plan.Node_TABLE_SCAN || build.Stats == nil {
+			continue
+		}
+		build.Stats.Dop = 1
+	}
 }
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {

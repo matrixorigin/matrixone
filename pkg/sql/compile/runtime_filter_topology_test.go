@@ -129,6 +129,19 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		require.ErrorContains(t, err, "expected exactly one colocated producer")
 	})
 
+	t.Run("parallel hashbuild copies in one scope are rejected", func(t *testing.T) {
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
+		defer build.Release()
+		producer.NodeInfo.Mcpu = 4
+		consumer.PreScopes = []*Scope{producer}
+
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
+		require.ErrorContains(t, err, "tag 7")
+		require.ErrorContains(t, err, "DOP 4")
+		require.ErrorContains(t, err, "expected exactly one producer")
+	})
+
 	t.Run("one producer on each CN is not a colocated phase-1 topology", func(t *testing.T) {
 		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
 		producer1, build1 := makeRuntimeFilterProducerScope(tag, cn1)

@@ -324,6 +324,12 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			},
 		},
 		{
+			name: "missing build statistics are not a cardinality bound",
+			mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[1].Stats = DefaultStats()
+			},
+		},
+		{
 			name: "local placement override is active",
 			mutate: func(builder *QueryBuilder) {
 				builder.optimizerHints = &OptimizerHints{forceOneCN: 1}
@@ -517,6 +523,37 @@ func TestForceJoinOnOneCNRuntimeFilterPolicy(t *testing.T) {
 			require.Equal(t, test.force, builder.qry.Nodes[1].Stats.ForceOneCN)
 		})
 	}
+}
+
+func TestCalcQueryDOPEnforcesOneRightSingleRuntimeFilterProducer(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(true)
+	builder.generateRuntimeFilters(2)
+	require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+
+	// Both scans would normally use all eight CPUs. Only the scan that owns the
+	// HashBuild producer must become serial; the large probe remains parallel.
+	builder.qry.Nodes[0].Stats.BlockNum = 128
+	builder.qry.Nodes[1].Stats.BlockNum = 128
+	builder.qry.Steps = []int32{2}
+	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: builder.qry}}
+
+	CalcQueryDOP(p, 8, 1, ExecTypeAP_ONECN)
+
+	require.Equal(t, int32(8), builder.qry.Nodes[0].Stats.Dop)
+	require.Equal(t, int32(1), builder.qry.Nodes[1].Stats.Dop)
+}
+
+func TestCalcQueryDOPDoesNotSerializeUnrelatedRightSingleBuild(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(true)
+	builder.qry.Nodes[0].Stats.BlockNum = 128
+	builder.qry.Nodes[1].Stats.BlockNum = 128
+	builder.qry.Steps = []int32{2}
+	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: builder.qry}}
+
+	CalcQueryDOP(p, 8, 1, ExecTypeAP_ONECN)
+
+	require.Equal(t, int32(8), builder.qry.Nodes[0].Stats.Dop)
+	require.Equal(t, int32(8), builder.qry.Nodes[1].Stats.Dop)
 }
 
 func TestDisableRightSingleRuntimeFilterHint(t *testing.T) {

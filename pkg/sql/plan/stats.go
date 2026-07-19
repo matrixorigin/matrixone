@@ -2117,6 +2117,10 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	for i := range qry.Steps {
 		CalcNodeDOP(p, qry.Steps[i], ncpu, lencn)
 	}
+	// DOP is calculated after runtime-filter generation. Apply protocol-specific
+	// producer constraints last so recursive DOP estimation cannot overwrite
+	// them, while leaving every unrelated scan parallel.
+	enforceRightSingleRuntimeFilterProducerDOP(qry)
 }
 
 func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
