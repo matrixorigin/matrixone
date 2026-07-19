@@ -91,6 +91,27 @@ func TestProtocolMemoryLimiterLifecycle(t *testing.T) {
 	require.Zero(t, limiter.used.Load())
 }
 
+func TestClientConnProtocolMemoryAdmissionUsesTransferContext(t *testing.T) {
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+		headroomBytes: 1,
+		backendBytes:  1,
+	})
+	occupied, err := limiter.acquire(context.Background(), 1)
+	require.NoError(t, err)
+	defer occupied.release()
+
+	client := &clientConn{
+		ctx:                   context.Background(),
+		protocolMemoryLimiter: limiter,
+	}
+	transferCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.BuildConnWithServer(transferCtx, "old-backend")
+	require.ErrorIs(t, err, errProxyConnectionLimit)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int64(1), limiter.used.Load())
+}
+
 func TestProtocolMemoryServerConnLifecycle(t *testing.T) {
 	t.Run("failed connection closes lease", func(t *testing.T) {
 		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{headroomBytes: 1})

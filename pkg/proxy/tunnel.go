@@ -582,7 +582,7 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (ServerConn, *MySQLConn, 
 	}
 	prevAddr := t.mu.serverConn.RemoteAddr().String()
 	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
-	newConn, err := t.cc.BuildConnWithServer(prevAddr)
+	newConn, err := t.cc.BuildConnWithServer(ctx, prevAddr)
 	if err != nil {
 		t.logger.Error("failed to build connection with new server",
 			zap.String("prev addr", prevAddr),

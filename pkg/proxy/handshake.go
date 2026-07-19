@@ -34,7 +34,7 @@ func (c *clientConn) writeInitialHandshake() error {
 
 // handleHandshakeResp receives login information from client and saves it
 // in proxy end.
-func (c *clientConn) handleHandshakeResp() (*protocolMemoryLease, error) {
+func (c *clientConn) handleHandshakeResp(ctx context.Context) (*protocolMemoryLease, error) {
 	deadline := time.Now().Add(c.clientHandshakeTimeout)
 	rawConn := c.conn.RawConn()
 	deadlineConn := newAbsoluteReadDeadlineConn(rawConn, deadline)
@@ -59,7 +59,7 @@ func (c *clientConn) handleHandshakeResp() (*protocolMemoryLease, error) {
 		transientBytes = c.protocolMemoryLimiter.budget.initialBytes
 	}
 	lease, err := acquireProtocolMemoryBefore(
-		c.ctx,
+		ctx,
 		c.protocolMemoryLimiter,
 		transientBytes,
 		deadline,

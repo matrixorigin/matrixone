@@ -100,7 +100,9 @@ type ClientConn interface {
 	// prevAddr is empty if it is the first time to build connection with
 	// a cn server; otherwise, it is the address of the previous cn node
 	// when it is transferring connection and the handshake phase is ignored.
-	BuildConnWithServer(prevAddr string) (ServerConn, error)
+	// ctx bounds phase admission; transfer cancellation must interrupt any wait
+	// for transient protocol-memory headroom.
+	BuildConnWithServer(ctx context.Context, prevAddr string) (ServerConn, error)
 	// HandleEvent handles event that comes from tunnel data flow.
 	HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error
 	// KillCurrentBackendConn kills the backend connection that is currently
@@ -441,7 +443,7 @@ func (c *clientConn) SendErrToClient(err error) {
 }
 
 // BuildConnWithServer implements the ClientConn interface.
-func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
+func (c *clientConn) BuildConnWithServer(ctx context.Context, prevAddr string) (ServerConn, error) {
 	var transientLease *protocolMemoryLease
 	if prevAddr == "" {
 		// Step 1, proxy write initial handshake to client.
@@ -455,7 +457,7 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 		// Step 2, client send handshake response, which is auth request,
 		// to proxy.
 		var err error
-		transientLease, err = c.handleHandshakeResp()
+		transientLease, err = c.handleHandshakeResp(ctx)
 		if err != nil {
 			// This connection may come from heartbeat of LB, and receive EOF error
 			// from it. Just return error and do not log it.
@@ -478,7 +480,7 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 		}
 	} else {
 		var err error
-		transientLease, err = c.acquireBackendProtocolMemory(defaultTransferTimeout)
+		transientLease, err = c.acquireBackendProtocolMemory(ctx, defaultTransferTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -552,7 +554,7 @@ func (c *clientConn) sendErr(err error, resp chan<- []byte) {
 }
 
 func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) error {
-	lease, err := c.acquireBackendProtocolMemory(defaultTransferTimeout)
+	lease, err := c.acquireBackendProtocolMemory(c.ctx, defaultTransferTimeout)
 	if err != nil {
 		if resp != nil {
 			c.sendErr(err, resp)
@@ -595,27 +597,31 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 }
 
 func (c *clientConn) acquireProtocolMemory(
+	ctx context.Context,
 	timeout time.Duration,
 	bytes uint64,
 ) (*protocolMemoryLease, error) {
 	if c.protocolMemoryLimiter == nil {
 		return nil, nil
 	}
-	ctx := c.ctx
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = c.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 	}
 	deadline := time.Now().Add(timeout)
 	return acquireProtocolMemoryBefore(ctx, c.protocolMemoryLimiter, bytes, deadline)
 }
 
 func (c *clientConn) acquireBackendProtocolMemory(
+	ctx context.Context,
 	timeout time.Duration,
 ) (*protocolMemoryLease, error) {
 	if c.protocolMemoryLimiter == nil {
 		return nil, nil
 	}
-	return c.acquireProtocolMemory(timeout, c.protocolMemoryLimiter.budget.backendBytes)
+	return c.acquireProtocolMemory(ctx, timeout, c.protocolMemoryLimiter.budget.backendBytes)
 }
 
 // KillCurrentBackendConn implements the ClientConn interface.

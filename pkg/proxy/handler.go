@@ -274,7 +274,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 
 	// client builds connections with a best CN server and returns
 	// the server connection.
-	sc, err := cc.BuildConnWithServer("")
+	sc, err := cc.BuildConnWithServer(h.ctx, "")
 	if err != nil {
 		if isConnEndErr(err) {
 			return nil
