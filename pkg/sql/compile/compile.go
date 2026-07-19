@@ -858,6 +858,10 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
+	c.compiledRightSingleNodes = nil
+	defer func() {
+		c.compiledRightSingleNodes = nil
+	}()
 
 	start := time.Now()
 	defer func() {
@@ -909,7 +913,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		steps = append(steps, scopes...)
 	}
-	if err = validateRightSingleRuntimeFilterTopology(qry, steps); err != nil {
+	if err = validateRightSingleRuntimeFilterTopology(qry, c.compiledRightSingleNodes, steps); err != nil {
 		return nil, err
 	}
 
@@ -1015,6 +1019,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 				}
 			}
 		}
+	}
+
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
+		// This is deliberately after the literal LIMIT 0 shortcut. The flat
+		// logical plan retains pruned descendants, while topology validation must
+		// cover only right-SINGLE nodes whose physical subtree was constructed.
+		c.compiledRightSingleNodes = append(c.compiledRightSingleNodes, curNodeIdx)
 	}
 
 	switch node.NodeType {

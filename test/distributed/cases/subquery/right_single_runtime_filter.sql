@@ -99,5 +99,18 @@ delete from delete_target t
 where (select b.flag from big_pk b where b.id = t.lookup_id) = 1;
 select * from delete_target order by id;
 
+-- @case
+-- @desc: a branch-level LIMIT 0 prunes the complete RF topology without invalidating UNION ALL
+-- @label:bvt
+select *
+from (
+    (select s.id, (select b.v from big_pk b where b.id = s.lookup_id) as scalar_v
+     from small_lookup s
+     limit 0)
+    union all
+    (select 99, 990)
+) u
+order by id;
+
 -- @teardown
 drop database right_single_rf;

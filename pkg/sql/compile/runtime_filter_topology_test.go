@@ -65,6 +65,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 	cn1 := engine.Node{Id: "cn1", Addr: "cn1:6001"}
 	cn2 := engine.Node{Id: "cn2", Addr: "cn2:6001"}
 	qry := makeRightSingleTopologyPlan(tag)
+	compiled := []int32{1}
 
 	t.Run("one local producer is reachable", func(t *testing.T) {
 		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
@@ -72,7 +73,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		defer build.Release()
 		consumer.PreScopes = []*Scope{producer}
 
-		require.NoError(t, validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer}))
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer}))
 	})
 
 	t.Run("standalone scopes without CN metadata are colocated", func(t *testing.T) {
@@ -81,7 +82,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		defer build.Release()
 		consumer.PreScopes = []*Scope{producer}
 
-		require.NoError(t, validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer}))
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer}))
 	})
 
 	t.Run("partial CN metadata is rejected as ambiguous", func(t *testing.T) {
@@ -90,7 +91,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		defer build.Release()
 		consumer.PreScopes = []*Scope{producer}
 
-		err := validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer})
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
 		require.ErrorContains(t, err, "consumer <local> cannot reach colocated producer")
 		require.ErrorContains(t, err, "cn1:6001")
 	})
@@ -101,7 +102,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		defer build.Release()
 		consumer.PreScopes = []*Scope{producer}
 
-		err := validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer})
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
 		require.ErrorContains(t, err, "tag 7")
 		require.ErrorContains(t, err, "cn2:6001")
 		require.ErrorContains(t, err, "cannot reach colocated producer")
@@ -111,7 +112,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 	t.Run("missing producer is rejected", func(t *testing.T) {
 		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
 
-		err := validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer})
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
 		require.ErrorContains(t, err, "tag 7 has no producer")
 	})
 
@@ -123,7 +124,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		defer build2.Release()
 		consumer.PreScopes = []*Scope{producer1, producer2}
 
-		err := validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer})
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
 		require.ErrorContains(t, err, "2 producers")
 		require.ErrorContains(t, err, "expected exactly one colocated producer")
 	})
@@ -136,7 +137,7 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		defer build2.Release()
 		consumer.PreScopes = []*Scope{producer1, producer2}
 
-		err := validateRightSingleRuntimeFilterTopology(qry, []*Scope{consumer})
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{consumer})
 		require.ErrorContains(t, err, "2 producers")
 		require.ErrorContains(t, err, "cn1:6001")
 		require.ErrorContains(t, err, "cn2:6001")
@@ -146,8 +147,41 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
 		defer build.Release()
 
-		err := validateRightSingleRuntimeFilterTopology(qry, []*Scope{producer})
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, []*Scope{producer})
 		require.ErrorContains(t, err, "tag 7 has no scan consumer")
+	})
+
+	t.Run("fully unmaterialized tag from a pruned subtree is ignored", func(t *testing.T) {
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(qry, nil, nil))
+	})
+
+	t.Run("fully missing topology for a compiled subtree is rejected", func(t *testing.T) {
+		err := validateRightSingleRuntimeFilterTopology(qry, compiled, nil)
+		require.ErrorContains(t, err, "tag 7 has no scan consumer")
+	})
+
+	t.Run("pruned tag does not hide a partial executed topology", func(t *testing.T) {
+		const prunedTag int32 = 8
+		mixedQry := makeRightSingleTopologyPlan(tag)
+		prunedJoin := makeRightSingleTopologyPlan(prunedTag).Nodes[1]
+		mixedQry.Nodes = append(mixedQry.Nodes, prunedJoin)
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+
+		err := validateRightSingleRuntimeFilterTopology(mixedQry, compiled, []*Scope{consumer})
+		require.ErrorContains(t, err, "tag 7 has no producer")
+	})
+
+	t.Run("pruned tag does not invalidate a complete executed topology", func(t *testing.T) {
+		const prunedTag int32 = 8
+		mixedQry := makeRightSingleTopologyPlan(tag)
+		prunedJoin := makeRightSingleTopologyPlan(prunedTag).Nodes[1]
+		mixedQry.Nodes = append(mixedQry.Nodes, prunedJoin)
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+		producer, build := makeRuntimeFilterProducerScope(tag, cn1)
+		defer build.Release()
+		consumer.PreScopes = []*Scope{producer}
+
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(mixedQry, compiled, []*Scope{consumer}))
 	})
 
 	t.Run("unrelated and shuffle runtime filters are ignored", func(t *testing.T) {
@@ -155,11 +189,11 @@ func TestValidateRightSingleRuntimeFilterTopology(t *testing.T) {
 			NodeType:               plan.Node_TABLE_SCAN,
 			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Tag: tag}},
 		}}}
-		require.NoError(t, validateRightSingleRuntimeFilterTopology(noRightSingle, nil))
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(noRightSingle, nil, nil))
 
 		shuffle := makeRightSingleTopologyPlan(tag)
 		shuffle.Nodes[1].Stats.HashmapStats.Shuffle = true
-		require.NoError(t, validateRightSingleRuntimeFilterTopology(shuffle, nil))
+		require.NoError(t, validateRightSingleRuntimeFilterTopology(shuffle, compiled, nil))
 	})
 }
 
@@ -185,7 +219,7 @@ func BenchmarkValidateRightSingleRuntimeFilterTopologyNoFilter(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if err := validateRightSingleRuntimeFilterTopology(qry, nil); err != nil {
+		if err := validateRightSingleRuntimeFilterTopology(qry, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

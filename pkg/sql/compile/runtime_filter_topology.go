@@ -35,13 +35,17 @@ type runtimeFilterTopology struct {
 	consumers map[int32][]*Scope
 }
 
-func rightSingleLocalRuntimeFilterTags(qry *plan.Query) []int32 {
-	if qry == nil {
+func rightSingleLocalRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32) []int32 {
+	if qry == nil || len(compiledNodeIDs) == 0 {
 		return nil
 	}
 
 	var tags []int32
-	for _, node := range qry.Nodes {
+	for _, nodeID := range compiledNodeIDs {
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			continue
+		}
+		node := qry.Nodes[nodeID]
 		if node == nil || node.NodeType != plan.Node_JOIN ||
 			node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
 			continue
@@ -142,8 +146,8 @@ func collectRuntimeFilterTopology(roots []*Scope, tags []int32) runtimeFilterTop
 	return topology
 }
 
-func validateRightSingleRuntimeFilterTopology(qry *plan.Query, roots []*Scope) error {
-	tags := rightSingleLocalRuntimeFilterTags(qry)
+func validateRightSingleRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs []int32, roots []*Scope) error {
+	tags := rightSingleLocalRuntimeFilterTags(qry, compiledNodeIDs)
 	if len(tags) == 0 {
 		return nil
 	}
