@@ -125,12 +125,14 @@ func CompileFilterExprs(
 	ops3 := make([]ObjectFilterOp, 0, len(exprs))
 	ops4 := make([]BlockFilterOp, 0, len(exprs))
 	ops5 := make([]SeekFirstBlockOp, 0, len(exprs))
+	compiled := 0
 
 	for _, expr := range exprs {
 		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := CompileFilterExpr(expr, tableDef, fs)
 		if !can {
-			return nil, nil, nil, nil, nil, false, false
+			continue
 		}
+		compiled++
 		if expr_op1 != nil {
 			ops1 = append(ops1, expr_op1)
 		}
@@ -147,6 +149,9 @@ func CompileFilterExprs(
 			ops5 = append(ops5, expr_op5)
 		}
 		highSelectivityHint = highSelectivityHint || hsh
+	}
+	if compiled == 0 {
+		return nil, nil, nil, nil, nil, false, false
 	}
 	fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 		for _, op := range ops1 {
@@ -335,12 +340,14 @@ func CompileFilterExpr(
 			objectOps := make([]ObjectFilterOp, 0, len(exprImpl.F.Args))
 			blockOps := make([]BlockFilterOp, 0, len(exprImpl.F.Args))
 			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
+			compiled := 0
 
 			for idx := range exprImpl.F.Args {
 				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
 				if !can {
-					return nil, nil, nil, nil, nil, false, false
+					continue
 				}
+				compiled++
 
 				fastOps = append(fastOps, op1)
 				loadOps = append(loadOps, op2)
@@ -349,6 +356,9 @@ func CompileFilterExpr(
 				seekOps = append(seekOps, op5)
 
 				highSelectivityHint = highSelectivityHint || hsh
+			}
+			if compiled == 0 {
+				return nil, nil, nil, nil, nil, false, false
 			}
 
 			fastFilterOp = func(stats *objectio.ObjectStats) (bool, error) {
