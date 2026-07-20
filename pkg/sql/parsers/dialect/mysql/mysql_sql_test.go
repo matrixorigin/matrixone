@@ -4077,6 +4077,18 @@ func TestInvalidQuotedUnicodeIdentifiers(t *testing.T) {
 	}
 }
 
+func TestQuotedUnicodeUserVariables(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT @`😀`",
+		"SELECT @`😀``name`",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)

@@ -143,7 +143,11 @@ func (s *Scanner) Scan() (int, string) {
 		var tBytes string
 		if s.cur() == '`' {
 			s.inc()
-			tID, tBytes = s.scanLiteralIdentifier()
+			if tokenID == AT_ID {
+				tID, tBytes = s.scanQuotedUserVariable()
+			} else {
+				tID, tBytes = s.scanLiteralIdentifier()
+			}
 		} else if s.cur() == eofChar {
 			return LEX_ERROR, ""
 		} else {
@@ -567,6 +571,14 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 }
 
 func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
+	return s.scanLiteralIdentifierWithValidator(delim, validIdentifier)
+}
+
+func (s *Scanner) scanQuotedUserVariable() (int, string) {
+	return s.scanLiteralIdentifierWithValidator('`', validQuotedUserVariable)
+}
+
+func (s *Scanner) scanLiteralIdentifierWithValidator(delim uint16, valid func(string) bool) (int, string) {
 	start := s.Pos
 	for {
 		switch s.cur() {
@@ -577,7 +589,7 @@ func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 				}
 				s.inc()
 				identifier := s.buf[start : s.Pos-1]
-				if !validIdentifier(identifier) {
+				if !valid(identifier) {
 					return LEX_ERROR, identifier
 				}
 				return QUOTE_ID, identifier
@@ -586,7 +598,7 @@ func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 			var buf strings.Builder
 			buf.WriteString(s.buf[start:s.Pos])
 			s.inc()
-			return s.scanLiteralIdentifierSlow(&buf, delim)
+			return s.scanLiteralIdentifierSlow(&buf, delim, valid)
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, s.buf[start:s.Pos]
@@ -601,7 +613,7 @@ func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 // scanLiteralIdentifier once the first escape sequence is found in the identifier.
 // The provided `buf` contains the contents of the identifier that have been scanned
 // so far.
-func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) (int, string) {
+func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16, valid func(string) bool) (int, string) {
 	delimSeen := true
 	for {
 		if delimSeen {
@@ -627,7 +639,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) 
 		s.inc()
 	}
 	identifier := buf.String()
-	if !validIdentifier(identifier) {
+	if !valid(identifier) {
 		return LEX_ERROR, identifier
 	}
 	return QUOTE_ID, identifier
@@ -949,9 +961,17 @@ func (s *Scanner) peek(dist int) uint16 {
 }
 
 func validIdentifier(s string) bool {
+	return validQuotedName(s, false)
+}
+
+func validQuotedUserVariable(s string) bool {
+	return validQuotedName(s, true)
+}
+
+func validQuotedName(s string, allowSupplementary bool) bool {
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
-		if r == 0 || r > '\uFFFF' || r == utf8.RuneError && size == 1 {
+		if r == 0 || (!allowSupplementary && r > '\uFFFF') || (r == utf8.RuneError && size == 1) {
 			return false
 		}
 		s = s[size:]

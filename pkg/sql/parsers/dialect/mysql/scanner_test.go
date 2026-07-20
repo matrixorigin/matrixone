@@ -98,6 +98,32 @@ func TestQuotedUnicodeIdentifier(t *testing.T) {
 	}
 }
 
+func TestQuotedUnicodeUserVariable(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+		value string
+	}{
+		{name: "supplementary character", input: "@`😀`", want: AT_ID, value: "😀"},
+		{name: "escaped delimiter", input: "@`😀``name`", want: AT_ID, value: "😀`name"},
+		{name: "invalid UTF-8", input: "@`\xff`", want: LEX_ERROR},
+		{name: "NUL", input: "@`a\x00b`", want: LEX_ERROR},
+		{name: "system variable remains BMP restricted", input: "@@`😀`", want: LEX_ERROR},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			got, value := scanner.Scan()
+			if got != test.want || value != test.value {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(got), value, tokenName(test.want), test.value)
+			}
+		})
+	}
+}
+
 func TestScannerSQLModePipeConcat(t *testing.T) {
 	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
 	id, _ := s.Scan()
