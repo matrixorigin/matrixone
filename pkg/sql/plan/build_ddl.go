@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
@@ -83,6 +84,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
@@ -122,6 +124,39 @@ func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	}
 	// Default to DEFINER to match SQL SECURITY behavior.
 	return "DEFINER"
+}
+
+func parserSQLModeFromContext(ctx CompilerContext) *string {
+	sqlMode := ""
+	val, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err == nil {
+		if s, ok := val.(string); ok {
+			sqlMode = mysql.SessionSQLModeForParser(s)
+		}
+	}
+	return &sqlMode
+}
+
+func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+	fmtCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	stmt.Format(fmtCtx)
+	// CreateTable.Format does not include ClusterByOption, but rel_createsql is
+	// also consumed when a table is recreated on another node.
+	if stmt.ClusterByOption != nil {
+		fmtCtx.WriteString(" cluster by (")
+		for i, col := range stmt.ClusterByOption.ColumnList {
+			if i > 0 {
+				fmtCtx.WriteString(", ")
+			}
+			col.Format(fmtCtx)
+		}
+		fmtCtx.WriteByte(')')
+	}
+	return fmtCtx.String()
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -175,6 +210,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
@@ -859,12 +895,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = tree.StringWithOpts(
-			stmt,
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithSingleQuoteString(),
-		)
+		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -1032,8 +1063,10 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		stmt.Format(fmtCtx)
+		createSQL := ctx.GetRootSql()
+		if stmt.PartitionOption != nil {
+			createSQL = canonicalPartitionedCreateTableSQL(stmt)
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -1041,7 +1074,7 @@ func buildCreateTable(
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: ctx.GetRootSql(),
+				Value: createSQL,
 			},
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
@@ -4630,15 +4663,17 @@ func constructAddedPartitionDefs(
 	tableDef *plan.TableDef,
 	clause *tree.AlterPartitionAddPartitionClause,
 ) ([]*plan.PartitionDef, error) {
-	originTableStmt, err := parsers.ParseOne(
+	originTableStmt, err := parsers.ParseOneWithSQLMode(
 		ctx.GetContext(),
 		dialect.MYSQL,
 		tableDef.Createsql,
 		ctx.GetLowerCaseTableNames(),
+		"PIPES_AS_CONCAT",
 	)
 	if err != nil {
 		return nil, err
 	}
+	defer originTableStmt.Free()
 
 	ct, ok := originTableStmt.(*tree.CreateTable)
 	if !ok {

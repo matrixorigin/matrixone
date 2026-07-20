@@ -44,10 +44,11 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu      int
-	Id        string             `json:"id"`
-	Addr      string             `json:"address"`
-	WorkState metadata.WorkState `json:"-"`
+	Mcpu           int
+	Id             string             `json:"id"`
+	Addr           string             `json:"address"`
+	WorkState      metadata.WorkState `json:"-"`
+	HasMixedCommit bool               `json:"-"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
@@ -58,8 +59,9 @@ type Node struct {
 // Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
 // the legacy execution-capacity value until a real resource model replaces it.
 type QueryCandidate struct {
-	Service metadata.CNService
-	Mcpu    int
+	Service        metadata.CNService
+	Mcpu           int
+	HasMixedCommit bool
 }
 
 type QueryCandidates []QueryCandidate
@@ -1006,10 +1008,13 @@ type ChangesHandle interface {
 
 type RangesShuffleParam struct {
 	// these are for shuffle objects
-	Node               *plan.Node
-	CNCNT              int32 // number of all cns
-	CNIDX              int32 // cn index , starts from 0
-	IsLocalCN          bool
+	Node      *plan.Node
+	CNCNT     int32 // number of all cns
+	CNIDX     int32 // cn index , starts from 0
+	IsLocalCN bool
+	// ShuffleByObjectID assigns IVF persisted and appendable objects to the
+	// same physical CN owner.
+	ShuffleByObjectID  bool
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	Init               bool

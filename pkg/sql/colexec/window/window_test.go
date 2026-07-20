@@ -134,6 +134,14 @@ func makeFullFrame() *plan.FrameClause {
 	}
 }
 
+func makeCurrentRowFrame() *plan.FrameClause {
+	return &plan.FrameClause{
+		Type:  plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
 func makeWindowSpec() *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
@@ -180,9 +188,26 @@ func newColExprWithType(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newAggExpr() aggexec.AggFuncExecExpression {
+	return newAggExprAt(0)
+}
+
+func newAggExprAt(pos int32) aggexec.AggFuncExecExpression {
 	e, _ := function.GetFunctionByName(context.Background(), "sum", []types.Type{types.T_int32.ToType()})
 	id := e.GetEncodedOverloadID()
-	return aggexec.MakeAggFunctionExpression(id, false, []*plan.Expr{newColExpr(0)}, nil)
+	return aggexec.MakeAggFunctionExpression(id, false, []*plan.Expr{newColExpr(pos)}, nil)
+}
+
+func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "sum", []types.Type{typ})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
+func newRowNumberAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "row_number", nil)
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, nil, nil)
 }
 
 // newJsonObjectAggExpr builds a two-argument aggregate expression:
@@ -279,6 +304,179 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	op.Free(proc, true, err)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
+}
+
+// TestWindowAggResultAcrossChunks verifies that the aggregate executor's
+// physical result chunks are invisible to the Window operator. CURRENT ROW is
+// deliberately used to keep the test O(n) while crossing AggBatchSize.
+func TestWindowAggResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	split := aggexec.AggBatchSize / 2
+	first := batch.NewWithSize(1)
+	first.Vecs[0] = testutil.MakeInt32Vector(values[:split], nil, proc.Mp())
+	first.SetRowCount(split)
+	second := batch.NewWithSize(1)
+	second.Vecs[0] = testutil.MakeInt32Vector(values[split:], nil, proc.Mp())
+	second.SetRowCount(rows - split)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestWindowPartitionedAggResultAcrossChunks covers the receive-per-partition
+// path. The upstream Partition operator guarantees one logical partition per
+// input batch; the constant first column models that contract here.
+func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	w := spec.Expr.(*plan.Expr_W).W
+	w.PartitionBy = []*plan.Expr{newColExpr(0)}
+	w.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(1)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestWindowDecimalAggResultAcrossChunks matches the DECIMAL(20,2) SUM shape
+// from issue #25813 and exercises the decimal aggregate implementation.
+func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize + 17
+	typ := types.New(types.T_decimal128, 20, 2)
+	values := make([]types.Decimal128, rows)
+	for i := range values {
+		values[i] = types.Decimal128{B0_63: uint64(i + 1)}
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewDecimal128Vector(rows, typ, proc.Mp(), false, nil, values)
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultValues := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[1])
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		require.Equal(t, values[idx], resultValues[idx], "row %d", idx)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestWindowOrderResultAcrossChunks covers the dedicated window-function
+// executor, whose physical result is split independently of ordinary SUM.
+func TestWindowOrderResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize + 17
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:       "row_number",
+				WindowFunc: newFunExpr("row_number"),
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		require.Equal(t, int64(idx+1), resultValues[idx], "row %d", idx)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func newFunExpr(name string) *plan.Expr {

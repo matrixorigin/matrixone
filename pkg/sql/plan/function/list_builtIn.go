@@ -2080,6 +2080,46 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_merge_patch`
+	{
+		functionId: JSON_MERGE_PATCH,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonMergeCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonMerge().buildJsonMergePatch
+				},
+			},
+		},
+	},
+
+	// function `json_merge_preserve`
+	{
+		functionId: JSON_MERGE_PRESERVE,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonMergeCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonMerge().buildJsonMergePreserve
+				},
+			},
+		},
+	},
+
 	// function `json_length`
 	{
 		functionId: JSON_LENGTH,
@@ -13095,10 +13135,12 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				volatile:        true,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return RowCount

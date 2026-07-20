@@ -22,7 +22,7 @@ package operator
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -232,7 +232,7 @@ func (b *Builder) buildToRemoveSteps() *Builder {
 		for target := range b.targetPeers {
 			targets = append(targets, target)
 		}
-		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+		slices.Sort(targets)
 
 		uuid, replicaID := b.toRemove.Get()
 		b.steps = append(b.steps, RemoveLogService{
@@ -250,7 +250,7 @@ func (b *Builder) buildToRemoveNonVotingSteps() *Builder {
 		for target := range b.targetPeers {
 			targets = append(targets, target)
 		}
-		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+		slices.Sort(targets)
 
 		uuid, replicaID := b.toRemoveNonVoting.Get()
 		b.steps = append(b.steps, RemoveNonVotingLogService{
@@ -268,7 +268,7 @@ func (b *Builder) buildToAddSteps() *Builder {
 		for target := range b.originPeers {
 			targets = append(targets, target)
 		}
-		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+		slices.Sort(targets)
 
 		uuid, replicaID := b.toAdd.Get()
 		b.steps = append(b.steps, AddLogService{
@@ -291,7 +291,7 @@ func (b *Builder) buildToAddNonVotingSteps() *Builder {
 		for target := range b.originPeers {
 			targets = append(targets, target)
 		}
-		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+		slices.Sort(targets)
 
 		uuid, replicaID := b.toAddNonVoting.Get()
 		b.steps = append(b.steps, AddNonVotingLogService{

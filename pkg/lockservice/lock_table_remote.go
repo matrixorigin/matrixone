@@ -152,7 +152,7 @@ func (l *remoteLockTable) lock(
 		defer releaseResponse(resp)
 		if resp.NewBind != nil {
 			txn.Unlock()
-			err = l.maybeHandleBindChanged(resp)
+			err = l.maybeHandleBindChanged(ctx, resp)
 			txn.Lock()
 			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
 				cb(pb.Result{}, ErrTxnNotFound)
@@ -220,6 +220,15 @@ func (l *remoteLockTable) unlock(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) {
+	_ = l.unlockWithContext(context.Background(), txn, ls, commitTS, mutations...)
+}
+
+func (l *remoteLockTable) unlockWithContext(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	logUnlockTableOnRemote(
 		l.logger,
 		txn,
@@ -228,9 +237,12 @@ func (l *remoteLockTable) unlock(
 	retryCount := 0
 	backoff := remoteRetryInitialBackoff
 	for {
-		err := l.doUnlock(txn, commitTS, mutations...)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := l.doUnlock(ctx, txn, commitTS, mutations...)
 		if err == nil {
-			return
+			return nil
 		}
 
 		retryCount++
@@ -250,10 +262,12 @@ func (l *remoteLockTable) unlock(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleError(err, false); err == nil {
-			return
+		if err := l.handleErrorWithContext(ctx, err, false); err == nil {
+			return nil
 		}
-		waitRemoteRetryBackoff(backoff)
+		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
+			return err
+		}
 		backoff = nextRemoteRetryBackoff(backoff)
 	}
 }
@@ -340,10 +354,11 @@ func nextRemoteRetryBackoff(backoff time.Duration) time.Duration {
 }
 
 func (l *remoteLockTable) doUnlock(
+	parent context.Context,
 	txn *activeTxn,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoUnlock)
+	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseDoUnlock)
 	defer cancel()
 
 	req := acquireRequest()
@@ -358,7 +373,7 @@ func (l *remoteLockTable) doUnlock(
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		return l.maybeHandleBindChanged(resp)
+		return l.maybeHandleBindChanged(ctx, resp)
 	}
 	return moerr.AttachCause(ctx, err)
 }
@@ -378,7 +393,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if err := l.maybeHandleBindChanged(ctx, resp); err != nil {
 			return Lock{}, false, err
 		}
 
@@ -420,7 +435,7 @@ func (l *remoteLockTable) doGetLockHolder(ctx context.Context, key []byte) (pb.W
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if err := l.maybeHandleBindChanged(ctx, resp); err != nil {
 			return pb.WaitTxn{}, false, err
 		}
 		if len(resp.GetLockHolder.Holder.TxnID) == 0 {
@@ -443,6 +458,21 @@ func (l *remoteLockTable) handleError(
 	err error,
 	mustHandleLockBindChangedErr bool,
 ) error {
+	return l.handleErrorWithContext(
+		context.Background(),
+		err,
+		mustHandleLockBindChangedErr,
+	)
+}
+
+func (l *remoteLockTable) handleErrorWithContext(
+	ctx context.Context,
+	err error,
+	mustHandleLockBindChangedErr bool,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if retryRemoteLockError(err) {
 		err = moerr.NewBackendCannotConnectNoCtx(err.Error())
 	}
@@ -460,7 +490,8 @@ func (l *remoteLockTable) handleError(
 	if l.allocatorStateProvider != nil {
 		requestAllocator = l.allocatorStateProvider()
 	}
-	new, allocator, err := getLockTableBind(
+	new, allocator, err := getLockTableBindWithContext(
+		ctx,
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
@@ -502,28 +533,32 @@ func retryRemoteLockError(err error) bool {
 	return false
 }
 
-func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
+func (l *remoteLockTable) maybeHandleBindChanged(
+	ctx context.Context,
+	resp *pb.Response,
+) error {
 	if resp.NewBind == nil {
 		return nil
 	}
 	newBind := *resp.NewBind
 	if l.allocatorBindChangedHandler != nil &&
 		l.allocatorStateProvider != nil &&
-		l.client != nil &&
-		l.bind.AllocatorID != "" &&
-		newBind.AllocatorID != "" &&
-		l.bind.AllocatorID != newBind.AllocatorID {
+		l.client != nil {
+		// NewBind belongs to the owner response's point in time. The local
+		// service may have observed a newer allocator while the RPC was in
+		// flight, so only publish a bind refreshed from the current allocator.
 		requestAllocator := l.allocatorStateProvider()
-		refreshedBind, allocator, err := getLockTableBind(
+		refreshedBind, allocator, err := getLockTableBindWithContext(
+			ctx,
 			l.client,
-			newBind.Group,
-			newBind.Table,
-			newBind.OriginTable,
+			l.bind.Group,
+			l.bind.Table,
+			l.bind.OriginTable,
 			l.serviceID,
-			newBind.Sharding,
+			l.bind.Sharding,
 		)
 		if err != nil {
-			logGetRemoteBindFailed(l.logger, newBind.Table, err)
+			logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 			return ErrLockTableBindChanged
 		}
 		if !refreshedBind.Changed(l.bind) {

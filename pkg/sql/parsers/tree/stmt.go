@@ -567,7 +567,7 @@ func (node *DropIndex) StmtKind() StmtKind {
 }
 
 func (node *AnalyzeStmt) StmtKind() StmtKind {
-	return frontendStatusTyp
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, EXEC_IN_FRONTEND)
 }
 
 func (node *SetRole) StmtKind() StmtKind {

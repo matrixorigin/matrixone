@@ -101,12 +101,49 @@ type uuidProcMapItem struct {
 	proc    *process.Process
 	ch      process.RemotePipelineInformationChannel
 	ownerCh process.RemotePipelineInformationChannel
+	state   remoteReceiverRegistryState
 }
+
+type remoteReceiverRegistryState uint8
+
+const (
+	remoteReceiverReady remoteReceiverRegistryState = iota
+	remoteReceiverAttached
+	remoteReceiverClosed
+	remoteReceiverTombstone
+)
+
+// RemoteReceiverAttachState is the result of an atomic receiver attach lookup.
+// It keeps protocol callers from treating an already-attached or closed UUID as
+// a successful new attachment.
+type RemoteReceiverAttachState uint8
+
+const (
+	RemoteReceiverMissing RemoteReceiverAttachState = iota
+	RemoteReceiverAttachedNow
+	RemoteReceiverAlreadyAttached
+	RemoteReceiverAlreadyClosed
+)
 
 type UuidProcMap struct {
 	sync.Mutex
 	mp      map[uuid.UUID]uuidProcMapItem
+	waiters map[uuid.UUID]*remoteReceiverWaitState
+}
+
+type remoteReceiverWaitState struct {
 	changed chan struct{}
+	refs    int
+	ownerCh process.RemotePipelineInformationChannel
+}
+
+// RemoteReceiverWaiter owns one reference to a missing receiver wait
+// generation. Close is idempotent and must be called on every terminal path.
+type RemoteReceiverWaiter struct {
+	server *Server
+	uid    uuid.UUID
+	state  *remoteReceiverWaitState
+	once   sync.Once
 }
 
 const (

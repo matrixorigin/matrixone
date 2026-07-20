@@ -35,6 +35,8 @@ import (
 type HashmapBuilder struct {
 	needDupVec         bool
 	InputBatchRowCount int
+	TrackNullKeys      bool
+	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
@@ -87,7 +89,11 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	return message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	sels := hb.Sels
+	hb.Sels = message.GroupSels{}
+	jm := message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm.SetHasNullKey(hb.HasNullKey)
+	return jm
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -99,6 +105,21 @@ func (hb *HashmapBuilder) GetGroupCount() uint64 {
 	return 0
 }
 
+// observeNullKeys records the global fact that at least one build key contains
+// NULL. MARK joins need this fact even when the build rows are partitioned and
+// the NULL row lives in a different spill bucket from the current probe row.
+func (hb *HashmapBuilder) observeNullKeys(keyVecs []*vector.Vector) {
+	if !hb.TrackNullKeys || hb.HasNullKey {
+		return
+	}
+	for _, vec := range keyVecs {
+		if vec.HasNull() {
+			hb.HasNullKey = true
+			return
+		}
+	}
+}
+
 func (hb *HashmapBuilder) Prepare(
 	keyCols []*plan.Expr,
 	delColIdx int32,
@@ -106,15 +127,12 @@ func (hb *HashmapBuilder) Prepare(
 	dedupDeleteKeepColIdxList []int32,
 	proc *process.Process,
 ) error {
-	var err error
 	if len(hb.executors) == 0 {
-		hb.needDupVec = false
-		hb.executors = make([]colexec.ExpressionExecutor, len(keyCols))
-		hb.keyWidth = 0
-		hb.InputBatchRowCount = 0
+		needDupVec := false
+		keyWidth := 0
 		for i, expr := range keyCols {
 			if _, ok := keyCols[i].Expr.(*plan.Expr_Col); !ok {
-				hb.needDupVec = true
+				needDupVec = true
 			}
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
@@ -122,12 +140,16 @@ func (hb *HashmapBuilder) Prepare(
 			if types.T(typ.Id).FixedLength() < 0 {
 				width = 128
 			}
-			hb.keyWidth += width
-			hb.executors[i], err = colexec.NewExpressionExecutor(proc, keyCols[i])
-			if err != nil {
-				return err
-			}
+			keyWidth += width
 		}
+		executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, keyCols)
+		if err != nil {
+			return err
+		}
+		hb.needDupVec = needDupVec
+		hb.executors = executors
+		hb.keyWidth = keyWidth
+		hb.InputBatchRowCount = 0
 	}
 
 	if hb.IsDedup {
@@ -149,18 +171,9 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 		hb.FreeHashMapAndBatches(proc)
 	}
 
-	if hb.needDupVec {
-		for i := range hb.curVecs {
-			if hb.curVecs[i] != nil {
-				hb.curVecs[i].Free(proc.Mp())
-			}
-		}
-	}
-	for i := range hb.curVecs {
-		hb.curVecs[i] = nil
-	}
-	hb.curVecs = nil
+	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
+	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -183,12 +196,13 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.detachAndPruneCachedIterators()
 	hb.cachedIntIterator = nil
 	hb.cachedStrIterator = nil
+	hb.FreeTemporaryVectors(proc)
 	hb.needDupVec = false
+	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
-	hb.curVecs = nil
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
 			hb.UniqueJoinKeys[i].Free(proc.Mp())
@@ -206,6 +220,17 @@ func (hb *HashmapBuilder) FreeExecutors() {
 	hb.executors = nil
 }
 
+func (hb *HashmapBuilder) FreeTemporaryVectors(proc *process.Process) {
+	if hb.needDupVec {
+		for i := range hb.curVecs {
+			if hb.curVecs[i] != nil {
+				hb.curVecs[i].Free(proc.Mp())
+			}
+		}
+	}
+	hb.curVecs = nil
+}
+
 func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
@@ -215,6 +240,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 		hb.StrHashMap.Free()
 		hb.StrHashMap = nil
 	}
+	hb.Sels.Free(proc.Mp())
 	hb.Batches.Clean(proc.Mp())
 }
 
@@ -238,7 +264,7 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 			return err
 		}
 		if hb.needDupVec {
-			hb.curVecs[idx2], err = vec.Dup(proc.Mp())
+			hb.curVecs[idx2], err = vec.DupOffHeap(proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -399,6 +425,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			if err = hb.evalBatch(vecIdx1, proc); err != nil {
 				return err
 			}
+			hb.observeNullKeys(hb.curVecs)
 			lastBatch = vecIdx1
 		}
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)
@@ -658,17 +685,7 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 		}
 	}
 	hb.UniqueJoinKeys = nil
-	if hb.needDupVec {
-		for i := range hb.curVecs {
-			if hb.curVecs[i] != nil {
-				hb.curVecs[i].Free(proc.Mp())
-			}
-		}
-	}
-	for i := range hb.curVecs {
-		hb.curVecs[i] = nil
-	}
-	hb.curVecs = nil
+	hb.FreeTemporaryVectors(proc)
 	for i := range hb.executors {
 		if hb.executors[i] != nil {
 			hb.executors[i].ResetForNextQuery()

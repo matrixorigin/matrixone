@@ -210,13 +210,11 @@ func statementCanBeExecutedInUncommittedTransaction(
 		if err != nil {
 			v = int64(1)
 		}
-		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64))
-		defer func() {
-			preStmt.Free()
-		}()
+		preStmt, err := mysql.ParseOneWithSQLMode(ctx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 		if err != nil {
 			return false, err
 		}
+		defer preStmt.Free()
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 	case *tree.Execute:
 		preName := string(st.Name)
@@ -248,15 +246,21 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteTable,
-		*tree.DataBranchDeleteDatabase,
-		*tree.DataBranchDiff,
-		*tree.DataBranchMerge:
+		*tree.DataBranchDeleteDatabase:
 		return true, nil
 	case *tree.DataBranchPick:
 		return false, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.
+		return true, nil
+	case *tree.AnalyzeStmt:
+		// ANALYZE TABLE rewrites to a derived SELECT, so it follows the same
+		// transaction policy as SELECT.
+		return true, nil
+	case *tree.CheckTableStmt, *tree.ShowProfileStmt:
+		// These are not supported, but we let them reach the NotSupported handler
+		// instead of the generic unclassified-transaction error.
 		return true, nil
 	}
 

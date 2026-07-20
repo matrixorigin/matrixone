@@ -16,10 +16,11 @@ package plan
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1069,10 +1071,18 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
-			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
-				return cost1 <= cost2
+			// Use a STABLE sort with a strict comparator, deliberately not a plain
+			// (unstable) sort. Filter evaluation order is semantically significant
+			// here: it decides which predicate a vector/IVF index probes with (see
+			// #25639) and which value a runtime bool error reports. A stable sort
+			// keeps equal-cost filters in their original, as-written relative order,
+			// which is a deterministic and well-defined tie order; an unstable sort
+			// would reorder equal-cost filters arbitrarily and make those results
+			// depend on the sort implementation's internals.
+			slices.SortStableFunc(node.FilterList, func(a, b *plan.Expr) int {
+				cost1 := estimateFilterWeight(a, 0) * a.Selectivity
+				cost2 := estimateFilterWeight(b, 0) * b.Selectivity
+				return cmp.Compare(cost1, cost2)
 			})
 		}
 	}
@@ -1400,6 +1410,32 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if node.IndexReaderParam.Limit != nil {
 			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
 		}
+	}
+}
+
+// reCalcNodeStatsAfterSwap mirrors ReCalcNodeStats recursion after
+// swapJoinChildren has changed the physical child order. IsRightJoin is set
+// before that swap, so putting this rule in the general stats pass would select
+// the wrong preserved side during earlier optimizer phases.
+func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		for _, childID := range node.Children {
+			reCalcNodeStatsAfterSwap(childID, builder, true, leafNode, needResetHashMapStats)
+		}
+	}
+
+	ReCalcNodeStats(nodeID, builder, false, leafNode, needResetHashMapStats)
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
+		return
+	}
+
+	preservedStats := builder.qry.Nodes[node.Children[1]].Stats
+	node.Stats.Outcnt = preservedStats.Outcnt
+	node.Stats.BlockNum = preservedStats.BlockNum
+	node.Stats.Selectivity = preservedStats.Selectivity
+	if node.Limit != nil {
+		applyLimitToStats(node.Stats, node.Limit, builder)
 	}
 }
 
@@ -1905,15 +1941,23 @@ func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
 	return false
 }
 
-func compareStats(stats1, stats2 *Stats) bool {
-	// selectivity is first considered to reduce data
-	// when selectivity very close, we first join smaller table
-	if math.Abs(stats1.Selectivity-stats2.Selectivity) > 0.01 {
-		return stats1.Selectivity < stats2.Selectivity
-	} else {
-		// todo we need to calculate ndv of outcnt here
-		return stats1.Outcnt < stats2.Outcnt
+// compareStats orders join candidates: smaller selectivity first (to reduce
+// data), and when the selectivity is very close, smaller outcnt first (join the
+// smaller table first). It returns a three-way result (negative when stats1
+// sorts before stats2).
+//
+// "Very close" is defined by bucketing selectivity onto a fixed 0.01 grid rather
+// than a sliding |s1-s2| < 0.01 window. The window version is NOT transitive
+// (a~b and b~c does not imply a~c), which makes it an invalid comparator for
+// slices.SortFunc; the grid is a genuine strict weak ordering. See issue #25702.
+func compareStats(stats1, stats2 *Stats) int {
+	b1 := int64(math.Floor(stats1.Selectivity / 0.01))
+	b2 := int64(math.Floor(stats2.Selectivity / 0.01))
+	if b1 != b2 {
+		return cmp.Compare(b1, b2)
 	}
+	// todo we need to calculate ndv of outcnt here
+	return cmp.Compare(stats1.Outcnt, stats2.Outcnt)
 }
 
 func andSelectivity(s1, s2 float64) float64 {
@@ -2084,9 +2128,13 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// We detect this by inspecting the actual join condition expression: if either side of
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
+	hasForceOneCN := false
 	for _, node := range qry.GetNodes() {
 		if node == nil {
 			continue
+		}
+		if node.GetStats().GetForceOneCN() {
+			hasForceOneCN = true
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -2113,7 +2161,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
-	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
+	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		if node == nil {
@@ -2125,33 +2173,31 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
-			if txnHaveDDL {
-				return ExecTypeAP_ONECN
-			} else if stats != nil && hasExprBasedShuffle {
+			if !canUseMultiCN {
 				return ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}
 		if isPrepare {
-			if stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4 {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4) {
 				ret = ExecTypeAP_ONECN
 			}
 		} else {
-			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery) {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
-			if IsIvfSearchEntriesInternalScan(node) {
-				execType := ExecTypeAP_MULTICN
-				if !canUseMultiCN {
-					execType = ExecTypeAP_ONECN
-				}
-				if execType > ret {
-					ret = execType
-				}
+		if IsIvfSearchEntriesInternalScan(node) {
+			execType := ExecTypeAP_MULTICN
+			if stats.GetForceOneCN() || !canUseMultiCN {
+				execType = ExecTypeAP_ONECN
 			}
+			if execType > ret {
+				ret = execType
+			}
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
 			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
 				stats.Rowsize > RowSizeThreshold &&
@@ -2165,7 +2211,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				}
 			}
 		}
-		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle && ret != ExecTypeAP_MULTICN {
 			ret = ExecTypeAP_ONECN
 		}
 	}
@@ -2178,17 +2224,30 @@ func isIvfSearchEntriesTableScan(node *plan.Node) bool {
 		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
 }
 
+func isIvfSearchFunctionScan(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
+		return false
+	}
+	tblDef := node.GetTableDef()
+	if tblDef == nil || tblDef.GetTblFunc() == nil {
+		return false
+	}
+	return tblDef.GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
+}
+
 // IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
+// It recognizes both the FUNCTION_SCAN form produced by the production ivf_search planner
+// path and the legacy TABLE_SCAN form used by unit tests.
 func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
+	if isIvfSearchFunctionScan(node) {
+		return isIvfEntriesIndexReaderScan(node)
+	}
 	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
 }
 
 func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
 	param := node.GetIndexReaderParam()
-	if param.GetLimit() == nil {
-		return false
-	}
-	return param.GetOrigFuncName() != "" || len(param.GetOrderBy()) > 0
+	return param.GetOrigFuncName() != ""
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
