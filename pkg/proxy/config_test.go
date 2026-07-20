@@ -53,7 +53,8 @@ func TestValidate(t *testing.T) {
 	steadyBytes := toml.ByteSize(10 * (2*proxyIOSessionBufferSize +
 		frontend.PacketHeaderLength + 64 +
 		ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
-		proxyBackendRetainedResponseLimit + proxyTunnelBufferSize))
+		proxyBackendRetainedResponseLimit +
+		proxyApplicationSessionPersistentBytes + proxyTunnelBufferSize))
 	transientBytes := toml.ByteSize(2 * (proxyIOSessionBufferSize +
 		2*proxyBackendPacketLimit))
 	tests := []struct {

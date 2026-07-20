@@ -1490,16 +1490,44 @@ func TestClientConnHandshakeContextLifecycle(t *testing.T) {
 			initialBytes:  1,
 		})
 		clients := make([]*clientConn, 2)
+		sessions := make([]goetty.IOSession, 2)
+		remotes := make([]net.Conn, 2)
 		cancels := make([]context.CancelFunc, 2)
 		for i := range clients {
-			cc, cleanup := createNewClientConn(t)
-			defer cleanup()
-			clients[i] = cc.(*clientConn)
-			clients[i].protocolMemoryLimiter = limiter
-			input := clients[i].conn.(goetty.BufferedIOSession).InBuf()
-			_, err := input.Write(makeClientHandshakeResp())
+			local, remote := net.Pipe()
+			allocator := frontend.NewLeakCheckAllocator()
+			session := goetty.NewIOSession(
+				goetty.WithSessionConn(uint64(i+1), local),
+				goetty.WithSessionCodec(newProxySessionCodec(Config{
+					ClientHandshakePacketLimit: defaultClientHandshakePacketLimit,
+					ProxyProtocolBodyLimit:     defaultProxyProtocolBodyLimit,
+				})),
+				goetty.WithSessionAllocator(newProxyApplicationAllocator(allocator)),
+				goetty.WithSessionRWBUfferSize(
+					proxyApplicationReadBufferSize,
+					proxyApplicationWriteBufferSize,
+				),
+			)
+			cc, err := newClientConn(
+				context.Background(),
+				&Config{ClientHandshakePacketLimit: defaultClientHandshakePacketLimit},
+				runtime.DefaultRuntime().Logger(), newCounterSet(), session,
+				nil, nil, nil, nil, nil, nil, nil,
+				withClientConnAllocator(allocator),
+				withClientConnProtocolMemoryLimiter(limiter),
+			)
 			require.NoError(t, err)
+			clients[i] = cc.(*clientConn)
+			sessions[i] = session
+			remotes[i] = remote
 		}
+		defer func() {
+			for i := range clients {
+				_ = clients[i].Close()
+				_ = sessions[i].Close()
+				_ = remotes[i].Close()
+			}
+		}()
 
 		type handshakeResult struct {
 			index int
@@ -1508,9 +1536,16 @@ func TestClientConnHandshakeContextLifecycle(t *testing.T) {
 		}
 		start := make(chan struct{})
 		results := make(chan handshakeResult, len(clients))
+		writeResults := make([]chan error, len(clients))
 		for i, client := range clients {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancels[i] = cancel
+			writeResults[i] = make(chan error, 1)
+			go func(index int) {
+				<-start
+				_, err := remotes[index].Write(makeClientHandshakeResp())
+				writeResults[index] <- err
+			}(i)
 			go func(index int, client *clientConn) {
 				<-start
 				lease, err := client.handleHandshakeResp(ctx)
@@ -1532,12 +1567,15 @@ func TestClientConnHandshakeContextLifecycle(t *testing.T) {
 			t.Fatal("first admitted login did not complete")
 		}
 		loser := 1 - first.index
+		require.NoError(t, <-writeResults[first.index])
 		require.NotNil(t, clients[first.index].handshakePack)
 		require.Nil(t, clients[loser].handshakePack,
 			"the waiter must not decode a login before transient admission")
-		require.Positive(t,
-			clients[loser].conn.(goetty.BufferedIOSession).InBuf().Readable(),
-			"the waiter's input backing must remain untouched")
+		loserInput := clients[loser].conn.(goetty.BufferedIOSession).InBuf()
+		require.Zero(t, loserInput.Readable(),
+			"the waiter must not read from its socket before transient admission")
+		require.Len(t, loserInput.RawBuf(), proxyApplicationReadBufferSize,
+			"the waiter must retain only its bounded bootstrap input")
 		require.Equal(t, int64(1), limiter.used.Load())
 
 		first.lease.release()
@@ -1545,6 +1583,7 @@ func TestClientConnHandshakeContextLifecycle(t *testing.T) {
 		case second := <-results:
 			require.NoError(t, second.err)
 			require.Equal(t, loser, second.index)
+			require.NoError(t, <-writeResults[loser])
 			second.lease.release()
 		case <-time.After(time.Second):
 			t.Fatal("waiting login did not proceed after admission release")

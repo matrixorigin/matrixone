@@ -34,6 +34,21 @@ import (
 
 var statsFamilyName = "proxy counter"
 
+const (
+	// These values pin the application-facing Goetty session contract used by
+	// calculateProtocolMemoryBudget. Goetty allocates the two copy buffers when
+	// the session is created; the read input is phase-owned and released after
+	// authentication, while the other three buffers live until session close.
+	proxyApplicationReadBufferSize         = 256
+	proxyApplicationWriteBufferSize        = 256
+	proxyApplicationReadCopyBufferSize     = 1024
+	proxyApplicationWriteCopyBufferSize    = 1024
+	proxyApplicationReadChunkSize          = 4 << 10
+	proxyApplicationSessionPersistentBytes = proxyApplicationWriteBufferSize +
+		proxyApplicationReadCopyBufferSize +
+		proxyApplicationWriteCopyBufferSize
+)
+
 type Server struct {
 	runtime runtime.Runtime
 	stopper *stopper.Stopper
@@ -121,6 +136,15 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(newProxySessionCodec(config)),
 			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
+			goetty.WithSessionAllocator(newProxyApplicationAllocator(
+				s.handler.sessionAllocator,
+			)),
+			// Keep the dependency defaults explicit because their concrete
+			// allocations are part of the configured protocol-memory budget.
+			goetty.WithSessionRWBUfferSize(
+				int(proxyApplicationReadBufferSize),
+				int(proxyApplicationWriteBufferSize),
+			),
 		),
 	)
 	if err != nil {
@@ -134,6 +158,49 @@ func newProxySessionCodec(config Config) codec.Codec {
 	return WithProxyProtocolCodec(frontend.NewSqlCodec(
 		frontend.WithSQLCodecMaxPayloadSize(int(config.ClientHandshakePacketLimit)),
 	), WithProxyProtocolMaxBodySize(int(config.ProxyProtocolBodyLimit)))
+}
+
+// proxyApplicationAllocator keeps Goetty's small bootstrap buffers infallible
+// before connection admission, then routes every grown protocol buffer through
+// the Proxy's shared bounded allocator. Goetty constructs an application
+// session before the handler can acquire admission and panics if that initial
+// allocation returns an error, so putting the bootstrap allocation itself
+// behind the bounded allocator would turn overload into a process crash.
+//
+// The first socket read always requests a 4 KiB writable region, which moves the
+// input above the inline threshold after the handshake lease has been acquired.
+// From then on growth and handoff Close have deterministic allocate/free edges.
+type proxyApplicationAllocator struct {
+	managed frontend.Allocator
+}
+
+func newProxyApplicationAllocator(managed frontend.Allocator) *proxyApplicationAllocator {
+	return &proxyApplicationAllocator{managed: managed}
+}
+
+func (a *proxyApplicationAllocator) Alloc(capacity int) ([]byte, error) {
+	if capacity < 0 {
+		return nil, moerr.NewInternalErrorNoCtx("negative proxy application buffer capacity")
+	}
+	if capacity <= proxyApplicationReadBufferSize {
+		return make([]byte, capacity), nil
+	}
+	if a == nil || a.managed == nil {
+		return nil, moerr.NewInternalErrorNoCtx("proxy application allocator is unavailable")
+	}
+	return a.managed.Alloc(capacity)
+}
+
+func (a *proxyApplicationAllocator) Free(data []byte) {
+	if len(data) <= proxyApplicationReadBufferSize {
+		return
+	}
+	if a == nil || a.managed == nil {
+		// A large buffer cannot be produced by Alloc without a managed owner.
+		// Keep cleanup non-panicking if a future caller violates that invariant.
+		return
+	}
+	a.managed.Free(data)
 }
 
 func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) error {

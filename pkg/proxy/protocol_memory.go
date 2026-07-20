@@ -32,14 +32,17 @@ import (
 // both shared-allocator sessions and Go-heap tunnel buffers. The minimum
 // transient headroom is deliberately sized for the larger of:
 //
-//   - initial login forwarding: pipelined client prefix + dynamic backend write
+//   - initial login parsing/forwarding: the outer Goetty read capacity, decoded
+//     and retained login copies, pipelined client prefix, and dynamic backend
+//     write
 //   - migration/control: one additional backend session + dynamic login or
 //     captured control-statement write
 //
-// The shared allocator remains the byte-level hard limit. Weighted transient
-// leases prevent individually valid phase transitions from racing for the same
-// unreserved headroom. One backend operation is reserved for the background
-// lane so a long-running UPGRADE cannot consume login and migration capacity.
+// The shared allocator caps the buffers it owns. Weighted transient leases also
+// cover the Go-heap copies and capacity slack outside that allocator, preventing
+// individually valid phase transitions from racing for the same unreserved
+// headroom. One backend operation is reserved for the background lane so a
+// long-running UPGRADE cannot consume login and migration capacity.
 type protocolMemoryBudget struct {
 	steadyBytes       uint64
 	managedBytes      uint64
@@ -111,7 +114,11 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	retainedLoginBytes, ok := checkedMulUint64(connections, preAuthBytes)
+	// The outer input exists as soon as Goetty accepts a socket, before the
+	// handshake phase lease is acquired. Keep its explicit initial capacity in
+	// steady admission even when unusually small wire limits are configured.
+	steadyHandshakeBytes := max(preAuthBytes, proxyApplicationReadBufferSize)
+	steadyHandshakeTotalBytes, ok := checkedMulUint64(connections, steadyHandshakeBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
@@ -126,7 +133,7 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	steadyBytes, ok := checkedAddUint64(fixedBytes, retainedLoginBytes)
+	steadyBytes, ok := checkedAddUint64(fixedBytes, steadyHandshakeTotalBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
@@ -134,10 +141,29 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
+	// The application-facing Goetty session keeps only its small bootstrap and
+	// copy buffers on the Go heap. Grown input is routed through the shared
+	// allocator after phase admission and is accounted below; the fixed output
+	// and I/O-copy buffers remain until session close and belong to steady state.
+	applicationSessionBytes, ok := checkedMulUint64(
+		connections,
+		proxyApplicationSessionPersistentBytes,
+	)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	steadyBytes, ok = checkedAddUint64(steadyBytes, applicationSessionBytes)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
 	// MySQLConn and bufio buffers live on the Go heap rather than in the shared
 	// session allocator, but connection admission makes their count equally
 	// deterministic. Keep them in the same end-to-end protocol memory budget.
 	tunnelBytes, ok := checkedMulUint64(connections, proxyTunnelBufferSize)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	externalSteadyBytes, ok := checkedAddUint64(tunnelBytes, applicationSessionBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
@@ -157,13 +183,52 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	// SQLCodec copies the login payload out of Goetty's input and clientConn then
-	// creates the lifetime-retained copy used for migration. That parsing peak
-	// owns two extra payloads beyond the input backing reserved as steady state.
-	initialReadBytes, ok := checkedMulUint64(2, handshakeLimit)
+	// One terminal read can include bytes after the login. They remain in the
+	// outer input until handoff, so include the largest read-ahead allowed by one
+	// Goetty socket read when deriving the backing capacity. The capacity bound
+	// is intentionally based on the allocator's growth contract rather than the
+	// logical packet length; see proxyApplicationReadCapacityUpperBound.
+	maxApplicationReadBytes, ok := checkedAddUint64(
+		preAuthBytes,
+		proxyApplicationReadChunkSize-1,
+	)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
+	applicationReadCapacity, ok := proxyApplicationReadCapacityUpperBound(
+		maxApplicationReadBytes,
+	)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	// Goetty allocates a grown input before freeing its previous backing. Cover
+	// that allocator peak independently from the later parse peak.
+	applicationReadGrowthBytes, ok := checkedMulUint64(2, applicationReadCapacity)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	// SQLCodec copies the decoded login out of Goetty's input and clientConn
+	// creates the lifetime-retained allocator copy used for migration. At the
+	// parsing peak both copies coexist with the still-live outer input backing.
+	applicationReadParseBytes, ok := checkedMulUint64(2, handshakeLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	applicationReadParseBytes, ok = checkedAddUint64(
+		applicationReadParseBytes,
+		applicationReadCapacity,
+	)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	initialReadBytes := max(applicationReadGrowthBytes, applicationReadParseBytes)
+	// steadyHandshakeBytes is already reserved for every admitted connection.
+	// Subtract that logical input/retained-login state so the transient lease
+	// charges only the simultaneously live capacity and copies beyond steady.
+	if initialReadBytes < steadyHandshakeBytes {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	initialReadBytes -= steadyHandshakeBytes
 	// During backend authentication, a pipelined client prefix can remain live
 	// alongside the dynamic login write and backend response. These two phases
 	// do not overlap, so reserve their maximum rather than summing lifetimes.
@@ -228,10 +293,10 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	}
 	return protocolMemoryBudget{
 		steadyBytes: steadyBytes,
-		// The shared allocator does not own tunnel buffers. Subtract their
-		// steady reservation from its emergency ceiling so raising the overall
-		// budget does not also grant the allocator the same bytes a second time.
-		managedBytes:      memoryLimit - tunnelBytes,
+		// The shared allocator does not own tunnel or application-session inline
+		// buffers. Subtract their steady reservation from its emergency ceiling
+		// so raising the overall budget does not grant those bytes twice.
+		managedBytes:      memoryLimit - externalSteadyBytes,
 		headroomBytes:     memoryLimit - steadyBytes,
 		transientBytes:    transientBytes,
 		backgroundBytes:   backendBytes,
@@ -239,6 +304,24 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 		backendBytes:      backendBytes,
 		loginDynamicBytes: loginDynamicBytes,
 	}, nil
+}
+
+// proxyApplicationReadCapacityUpperBound bounds Goetty's application-session
+// input ByteBuf without allocating it. Before each socket read Goetty requests
+// proxyApplicationReadChunkSize writable bytes. On growth, the current pinned
+// dependency advances capacity in max(current/2, 256) steps and stops at the
+// first value above the requested size. Therefore the new capacity is strictly
+// below twice (maximum buffered bytes + one read chunk). The real-ByteBuf
+// contract test intentionally fails if a future dependency changes that rule.
+func proxyApplicationReadCapacityUpperBound(maxBufferedBytes uint64) (uint64, bool) {
+	withReadChunk, ok := checkedAddUint64(
+		maxBufferedBytes,
+		proxyApplicationReadChunkSize,
+	)
+	if !ok {
+		return 0, false
+	}
+	return checkedMulUint64(2, withReadChunk)
 }
 
 // dynamicProtocolWriteBytes mirrors frontend.Conn.AppendPart: WritePacket adds

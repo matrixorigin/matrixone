@@ -16,10 +16,15 @@ package proxy
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
+	goettybuf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -35,7 +40,7 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		steady := uint64(connections * (2*proxyIOSessionBufferSize +
 			frontend.PacketHeaderLength + 64 + ProxyHeaderLength +
 			int(defaultProxyProtocolBodyLimit) + proxyBackendRetainedResponseLimit +
-			proxyTunnelBufferSize))
+			proxyApplicationSessionPersistentBytes + proxyTunnelBufferSize))
 		cfg := Config{
 			MaxConnections:             connections,
 			ProtocolMemoryLimit:        toml.ByteSize(steady + transient - 1),
@@ -48,7 +53,7 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		budget, err := calculateProtocolMemoryBudget(&cfg)
 		require.NoError(t, err)
 		require.Equal(t, steady, budget.steadyBytes)
-		require.Equal(t, uint64(cfg.ProtocolMemoryLimit)-uint64(connections*proxyTunnelBufferSize),
+		require.Equal(t, uint64(cfg.ProtocolMemoryLimit)-uint64(connections)*(proxyTunnelBufferSize+proxyApplicationSessionPersistentBytes),
 			budget.managedBytes)
 		require.Equal(t, transient, budget.transientBytes)
 		require.Equal(t, transient, budget.headroomBytes)
@@ -61,10 +66,17 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		const handshakeLimit = 64 << 10
 		steady := uint64(2*proxyIOSessionBufferSize + frontend.PacketHeaderLength + handshakeLimit +
 			ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
-			proxyBackendRetainedResponseLimit + proxyTunnelBufferSize)
-		initial := uint64(3 * handshakeLimit)
+			proxyBackendRetainedResponseLimit + proxyApplicationSessionPersistentBytes +
+			proxyTunnelBufferSize)
+		preAuth := uint64(frontend.PacketHeaderLength + handshakeLimit +
+			ProxyHeaderLength + int(defaultProxyProtocolBodyLimit))
+		applicationReadCapacity := uint64(2) * (preAuth +
+			proxyApplicationReadChunkSize - 1 + proxyApplicationReadChunkSize)
+		readGrowth := 2 * applicationReadCapacity
+		readParse := uint64(2*handshakeLimit) + applicationReadCapacity
+		initial := max(readGrowth, readParse) - preAuth
 		backend := uint64(proxyIOSessionBufferSize + 3*handshakeLimit)
-		transient := backend + backend
+		transient := max(initial, backend) + backend
 		cfg := Config{
 			MaxConnections:             1,
 			ProtocolMemoryLimit:        toml.ByteSize(steady + transient),
@@ -79,6 +91,177 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		require.Equal(t, initial, budget.initialBytes)
 		require.Equal(t, backend, budget.backendBytes)
 	})
+
+	t.Run("small wire limits still reserve the accepted session input", func(t *testing.T) {
+		handshakeLimit := int(minimumClientHandshakePacketLimit)
+		proxyBodyLimit := int(minimumProxyProtocolBodyLimit)
+		steadyHandshake := max(
+			frontend.PacketHeaderLength+handshakeLimit+ProxyHeaderLength+proxyBodyLimit,
+			proxyApplicationReadBufferSize,
+		)
+		expectedSteady := uint64(2*proxyIOSessionBufferSize + steadyHandshake +
+			proxyBackendRetainedResponseLimit +
+			proxyApplicationSessionPersistentBytes + proxyTunnelBufferSize)
+		cfg := Config{
+			MaxConnections:             1,
+			ProtocolMemoryLimit:        16 << 20,
+			ClientHandshakePacketLimit: toml.ByteSize(handshakeLimit),
+			ProxyProtocolBodyLimit:     toml.ByteSize(proxyBodyLimit),
+		}
+		budget, err := calculateProtocolMemoryBudget(&cfg)
+		require.NoError(t, err)
+		require.Equal(t, expectedSteady, budget.steadyBytes)
+	})
+}
+
+func TestProxyApplicationReadCapacityUpperBound(t *testing.T) {
+	type testCase struct {
+		buffered uint64
+		fragment int
+	}
+	cases := []testCase{
+		{buffered: 1, fragment: 1},
+		{buffered: 4 << 10, fragment: 1},
+		{buffered: 72 << 10, fragment: 17},
+		{buffered: 72 << 10, fragment: int(proxyApplicationReadChunkSize)},
+		{buffered: 520 << 10, fragment: int(proxyApplicationReadChunkSize)},
+	}
+	for _, test := range cases {
+		t.Run(fmt.Sprintf("bytes-%d-fragment-%d", test.buffered, test.fragment), func(t *testing.T) {
+			managed := frontend.NewLeakCheckAllocator()
+			input := goettybuf.NewByteBuf(
+				int(proxyApplicationReadBufferSize),
+				goettybuf.WithMemAllocator(newProxyApplicationAllocator(managed)),
+			)
+			require.True(t, managed.CheckBalance(),
+				"bootstrap input must not consume bounded capacity before admission")
+			reader := &fragmentReader{
+				remaining: int(test.buffered),
+				fragment:  test.fragment,
+			}
+			for reader.remaining > 0 {
+				_, err := input.ReadFrom(reader)
+				require.NoError(t, err)
+			}
+
+			capacity, ok := proxyApplicationReadCapacityUpperBound(test.buffered)
+			require.True(t, ok)
+			require.LessOrEqual(t, uint64(len(input.RawBuf())), capacity,
+				"the budget must dominate the pinned Goetty ByteBuf growth contract")
+			require.False(t, managed.CheckBalance(),
+				"grown input must be owned by the shared allocator")
+			input.Close()
+			require.True(t, managed.CheckBalance(),
+				"handshake handoff must release grown input immediately")
+			input.Close()
+			require.True(t, managed.CheckBalance(), "repeated Goetty close must be harmless")
+		})
+	}
+}
+
+func TestProxyApplicationSessionBufferContract(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	managed := frontend.NewLeakCheckAllocator()
+	session := goetty.NewIOSession(
+		goetty.WithSessionConn(1, local),
+		goetty.WithSessionAllocator(newProxyApplicationAllocator(managed)),
+		goetty.WithSessionRWBUfferSize(
+			proxyApplicationReadBufferSize,
+			proxyApplicationWriteBufferSize,
+		),
+	)
+	require.Len(t, session.(goetty.BufferedIOSession).InBuf().RawBuf(),
+		proxyApplicationReadBufferSize)
+	require.Len(t, session.OutBuf().RawBuf(), proxyApplicationWriteBufferSize)
+
+	// Goetty does not expose options for its per-session I/O-copy buffers. Pin
+	// their concrete dependency contract here so an upgrade cannot silently
+	// invalidate the steady-memory formula.
+	implementation := reflect.ValueOf(session).Elem()
+	require.Equal(t, proxyApplicationReadCopyBufferSize,
+		implementation.FieldByName("readCopyBuf").Len())
+	require.Equal(t, proxyApplicationWriteCopyBufferSize,
+		implementation.FieldByName("writeCopyBuf").Len())
+	require.True(t, managed.CheckBalance(),
+		"all application-session bootstrap buffers must remain inline")
+	require.NoError(t, session.Close())
+	require.True(t, managed.CheckBalance())
+}
+
+func TestProxyApplicationAllocatorRejectsInvalidGrowth(t *testing.T) {
+	allocator := newProxyApplicationAllocator(nil)
+	bootstrap, err := allocator.Alloc(proxyApplicationReadBufferSize)
+	require.NoError(t, err)
+	require.Len(t, bootstrap, proxyApplicationReadBufferSize)
+	allocator.Free(bootstrap)
+
+	_, err = allocator.Alloc(proxyApplicationReadBufferSize + 1)
+	require.Error(t, err)
+	_, err = allocator.Alloc(-1)
+	require.Error(t, err)
+	require.NotPanics(t, func() {
+		allocator.Free(make([]byte, proxyApplicationReadBufferSize+1))
+	})
+
+	input := goettybuf.NewByteBuf(
+		proxyApplicationReadBufferSize,
+		goettybuf.WithMemAllocator(allocator),
+	)
+	defer input.Close()
+	_, err = input.ReadFrom(&fragmentReader{remaining: 1, fragment: 1})
+	require.Error(t, err, "post-admission growth must fail normally instead of panicking")
+	require.Len(t, input.RawBuf(), proxyApplicationReadBufferSize)
+}
+
+func TestProtocolMemoryBudgetCoversObservedOuterReadCapacity(t *testing.T) {
+	const handshakeLimit = 512 << 10
+	preAuth := uint64(ProxyHeaderLength) + uint64(defaultProxyProtocolBodyLimit) +
+		frontend.PacketHeaderLength + handshakeLimit
+	maxBuffered := preAuth + proxyApplicationReadChunkSize - 1
+	input := goettybuf.NewByteBuf(int(proxyApplicationReadBufferSize))
+	defer input.Close()
+	reader := &fragmentReader{
+		remaining: int(maxBuffered),
+		fragment:  int(proxyApplicationReadChunkSize),
+	}
+	for reader.remaining > 0 {
+		_, err := input.ReadFrom(reader)
+		require.NoError(t, err)
+	}
+	require.Greater(t, uint64(len(input.RawBuf())), preAuth,
+		"the regression requires real capacity to exceed logical wire bytes")
+
+	cfg := Config{
+		MaxConnections:             1,
+		ProtocolMemoryLimit:        64 << 20,
+		ClientHandshakePacketLimit: handshakeLimit,
+	}
+	budget, err := calculateProtocolMemoryBudget(&cfg)
+	require.NoError(t, err)
+	observedCapacity := uint64(len(input.RawBuf()))
+	observedReadOverlap := max(
+		2*observedCapacity,
+		observedCapacity+2*handshakeLimit,
+	) - max(preAuth, proxyApplicationReadBufferSize)
+	require.GreaterOrEqual(t, budget.initialBytes, observedReadOverlap)
+}
+
+type fragmentReader struct {
+	remaining int
+	fragment  int
+}
+
+func (r *fragmentReader) Read(dst []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := min(len(dst), r.fragment, r.remaining)
+	for i := range n {
+		dst[i] = byte(i)
+	}
+	r.remaining -= n
+	return n, nil
 }
 
 func TestProtocolMemoryLimiterSeparatesBackgroundAdmission(t *testing.T) {
