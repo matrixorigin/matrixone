@@ -443,7 +443,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(tempCtx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
 	return obj, tableDef, nil
 }
 
@@ -468,7 +468,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(pubContext)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
 	return obj, tableDef, nil
 }
 
@@ -514,7 +514,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if table == nil {
 		return nil, nil, nil
 	}
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	tableDef.IsTemporary = isTmpTable
 
 	// convert
@@ -585,7 +585,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		PubInfo:          ref.PubInfo,
 	}
 
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
 	}
@@ -765,8 +765,14 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
-		return val, nil
+	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
+		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+		for i := len(*tmpScope) - 1; i >= 0; i-- {
+			curScope := (*tmpScope)[i]
+			if val, ok := curScope[strings.ToLower(varName)]; ok {
+				return val, nil
+			}
+		}
 	}
 
 	if isSystemVar {
@@ -789,38 +795,6 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 
 	return
-}
-
-func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
-	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
-		return false, nil
-	}
-	if isSystemVar {
-		return false, nil
-	}
-	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
-	if err != nil {
-		return false, err
-	}
-	return udVar.IsBin, nil
-}
-
-func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {
-	inSp, _ := ctx.Value(defines.InSp{}).(bool)
-	if !inSp {
-		return nil, false
-	}
-	tmpScope, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
-	if !ok {
-		return nil, false
-	}
-	name := strings.ToLower(varName)
-	for i := len(*tmpScope) - 1; i >= 0; i-- {
-		if val, ok := (*tmpScope)[i][name]; ok {
-			return val, true
-		}
-	}
-	return nil, false
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {

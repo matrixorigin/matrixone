@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -590,6 +591,45 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	err = sc.Close()
 	require.NoError(t, err)
+}
+
+func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+
+	cn := &CNServer{
+		addr: listener.Addr().String(),
+		salt: []byte("invalid"),
+	}
+	session, err := cn.Connect(nil, time.Second)
+	require.Nil(t, session)
+	require.ErrorContains(t, err, "salt is empty")
+
+	var backend net.Conn
+	select {
+	case backend = <-accepted:
+	case err := <-acceptErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "backend did not accept proxy connection")
+	}
+	defer backend.Close()
+	require.NoError(t, backend.SetReadDeadline(time.Now().Add(time.Second)))
+	n, readErr := backend.Read(make([]byte, 1))
+	require.Zero(t, n)
+	require.ErrorIs(t, readErr, io.EOF)
 }
 
 func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {

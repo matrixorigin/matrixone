@@ -16,11 +16,11 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/golang/mock/gomock"
@@ -40,22 +40,83 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_shard"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_task"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
+
+func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL, ":::", "echo", 1, "", false))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL)
+	}()
+
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime("runner-cn", exec)
+	defer iscp.UnregisterExecutorRuntime("runner-cn", exec)
+
+	s := &service{cfg: &Config{UUID: "runner-cn"}}
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+
+	resp := &query.Response{}
+	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+	require.Nil(t, resp.ISCPDrainConsumerResponse)
+	require.False(t, exec.IsJobFenced(key))
+
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
+	time.Sleep(700 * time.Millisecond)
+
+	resp = &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil))
+	time.Sleep(700 * time.Millisecond)
+	require.True(t, exec.IsJobFenced(key))
+
+	time.Sleep(1100 * time.Millisecond)
+	require.False(t, exec.IsJobFenced(key))
+	resp = &query.Response{}
+	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+}
 
 func Test_service_handleGoMaxProcs(t *testing.T) {
 	ctx := context.Background()
@@ -672,7 +733,6 @@ func Test_service_handleGetStatsInfo(t *testing.T) {
 
 func Test_service_handleTraceSpan(t *testing.T) {
 
-	trace.InitMOCtledSpan()
 	ctx := context.Background()
 	type fields struct {
 	}
@@ -708,7 +768,7 @@ func Test_service_handleTraceSpan(t *testing.T) {
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: fmt.Sprintf("%v %sd, %v failed", []string{"s3"}, "enable", []string{"span2"})}},
+			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: ctl.TraceSpanRetiredResponse}},
 		},
 		{
 			name:   "cmd_unknown",
@@ -723,7 +783,7 @@ func Test_service_handleTraceSpan(t *testing.T) {
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: fmt.Sprintf("%v %sd, %v failed", []string{}, "unknown", []string{"span1", "span2"})}},
+			want:    &query.Response{TraceSpanResponse: &query.TraceSpanResponse{Resp: ctl.TraceSpanRetiredResponse}},
 		},
 	}
 	for _, tt := range tests {

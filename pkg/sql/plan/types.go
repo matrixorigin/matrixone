@@ -270,6 +270,7 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }
@@ -445,11 +446,12 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx           context.Context
+	builder          *QueryBuilder
+	ctx              *BindContext
+	impl             Binder
+	boundCols        []string
+	numericParamType *Type
 }
 
 type DefaultBinder struct {
@@ -501,7 +503,8 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {

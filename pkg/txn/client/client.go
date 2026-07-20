@@ -756,8 +756,28 @@ func (client *txnClient) abortCreatedTxn(
 }
 
 func (client *txnClient) NewWithSnapshot(
+	ctx context.Context,
 	snapshot txn.CNTxnSnapshot,
 ) (TxnOperator, error) {
+	if client.isClosed() {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+	// A snapshot transferred from a coordinator can be ahead of this CN's
+	// locally applied logtail. Rebuilding the operator without this barrier can
+	// expose a partially updated catalog or partition state to remote execution.
+	// SnapshotTS itself is exclusive, so all logtails through SnapshotTS.Prev()
+	// must be applied locally before the mirror transaction can execute.
+	if !snapshot.Txn.SnapshotTS.IsEmpty() {
+		if _, err := client.WaitLogTailAppliedAt(ctx, snapshot.Txn.SnapshotTS.Prev()); err != nil {
+			return nil, err
+		}
+	}
+	// The timestamp waiter may select a successful notification concurrently
+	// with client shutdown and return that success after Close has completed.
+	// Linearize final mirror admission against Close only after the wait; holding
+	// the gate during the wait would prevent shutdown from canceling it.
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
 	if client.isClosed() {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
