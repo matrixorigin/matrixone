@@ -68,6 +68,42 @@ func TestAlterIndexVisibleEscaping(t *testing.T) {
 	}
 }
 
+// TestDropIndexNameEscaping is a regression for the DROP INDEX / ALTER TABLE
+// DROP INDEX catalog write (ddl.go, deleteMoIndexesWithTableIdAndIndexNameFormat).
+// It is the sibling of updateMoIndexesVisibleFormat / updateMoIndexesAlgoParams:
+// the same `where table_id = %v and name = '%s'` clause filled with a
+// user-supplied index name. Without escaping, an embedded quote or backslash
+// can break out of name = '...' (the same flaw TestAlterIndexVisibleEscaping
+// guards for the update branches); the fix routes the name through
+// sqlquote.EscapeString.
+func TestDropIndexNameEscaping(t *testing.T) {
+	names := []string{
+		"idx`weird",
+		`idx\name`,
+		`idx'; drop table mo_indexes; --`,
+		`trailing\`,
+		`both'and\slash`,
+	}
+	for _, name := range names {
+		// Build the SQL exactly as the fixed delete branches do.
+		sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, uint64(42),
+			sqlquote.EscapeString(name))
+
+		// '%s' + EscapeString == sqlquote.String: the name must be fully quoted.
+		require.Contains(t, sql, "name = "+sqlquote.String(name),
+			"name %q not properly escaped in %q", name, sql)
+
+		// It must parse to exactly ONE statement — a break-out would yield
+		// multiple statements (e.g. the injected DROP) or a parse error.
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err, "name %q produced unparseable SQL: %q", name, sql)
+		require.Len(t, stmts, 1, "name %q broke out into %d statements: %q", name, len(stmts), sql)
+		for _, s := range stmts {
+			s.Free()
+		}
+	}
+}
+
 func TestCoverage_hasSpecialChars(t *testing.T) {
 	tests := []struct {
 		name     string
