@@ -153,11 +153,39 @@ func (txn *activeTxn) lockAdded(
 	return nil
 }
 
-func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) {
+func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) bool {
 	h := txn.getHoldLocksLocked(bind.Group)
-	if _, ok := h.tableBindIntents[bind.Table]; !ok {
-		h.tableBindIntents[bind.Table] = bind
+	if _, ok := h.tableBindIntents[bind.Table]; ok {
+		return false
 	}
+	h.tableBindIntents[bind.Table] = bind
+	return true
+}
+
+// iterLockTableBindsLocked visits every table touched by the transaction once.
+// Acquired binds take precedence over intents because they are authoritative.
+// The caller must hold txn's mutex.
+func (txn *activeTxn) iterLockTableBindsLocked(
+	fn func(group uint32, table uint64, bind pb.LockTable),
+) {
+	for group, h := range txn.lockHolders {
+		for table, bind := range h.tableBinds {
+			fn(group, table, bind)
+		}
+		for table, bind := range h.tableBindIntents {
+			if _, ok := h.tableBinds[table]; !ok {
+				fn(group, table, bind)
+			}
+		}
+	}
+}
+
+func (txn *activeTxn) lockTableBindsLocked() []pb.LockTable {
+	binds := make([]pb.LockTable, 0, len(txn.lockHolders))
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, bind pb.LockTable) {
+		binds = append(binds, bind)
+	})
+	return binds
 }
 
 func (txn *activeTxn) close(
@@ -336,7 +364,9 @@ func (txn *activeTxn) removeClosedLockTable(
 	}
 	delete(h.tableKeys, table)
 	delete(h.tableBinds, table)
-	delete(h.tableBindIntents, table)
+	// Keep the intent until the whole transaction closes. It owns the service
+	// drain reference even after this table was successfully released during a
+	// retryable, multi-table cleanup.
 	cs.close()
 	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
 		len(h.tableBindIntents) == 0 {
@@ -463,16 +493,14 @@ func (txn *activeTxn) isRemoteLocked() bool {
 func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
 	txn.RLock()
 	defer txn.RUnlock()
-	for _, h := range txn.lockHolders {
-		for _, l := range h.tableBinds {
-			if serviceID == l.ServiceID {
-				if _, ok := m[l.Group]; !ok {
-					m[l.Group] = make(map[uint64]uint64, 1024)
-				}
-				m[l.Group][l.Table]++
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, l pb.LockTable) {
+		if serviceID == l.ServiceID {
+			if _, ok := m[l.Group]; !ok {
+				m[l.Group] = make(map[uint64]uint64, 1024)
 			}
+			m[l.Group][l.Table]++
 		}
-	}
+	})
 }
 
 // ============================================================================================================================

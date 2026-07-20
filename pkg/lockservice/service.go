@@ -77,12 +77,16 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		restartTime    timestamp.Timestamp
-		status         pb.Status
-		lockAdmissions uint64
-		groupTables    [][]pb.LockTable
-		lockTableRef   map[uint32]map[uint64]uint64
-		allocating     map[uint32]map[uint64]chan struct{}
+		restartTime        timestamp.Timestamp
+		status             pb.Status
+		lockAdmissions     uint64
+		preDrainAdmissions uint64
+		txnClosures        uint64
+		drainSnapshotReady bool
+		groupTables        [][]pb.LockTable
+		lockTableRef       map[uint32]map[uint64]uint64
+		pendingRefReleases []pb.LockTable
+		allocating         map[uint32]map[uint64]chan struct{}
 	}
 
 	option struct {
@@ -162,10 +166,11 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 
-	if !s.beginLockAdmission(txnID, options, tableID, rows) {
+	admitted, preDrain := s.beginLockAdmission(txnID, options, tableID, rows)
+	if !admitted {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
 	}
-	defer s.endLockAdmission()
+	defer s.endLockAdmission(preDrain)
 
 	v2.TxnLockTotalCounter.Inc()
 	options.Validate(rows)
@@ -233,19 +238,11 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	h := txn.getHoldLocksLocked(bind.Group)
-	_, hasBind := h.tableBinds[bind.Table]
-	txn.lockTableBindTouched(bind)
+	if txn.lockTableBindTouched(bind) && bind.ServiceID == s.serviceID {
+		s.incRef(bind.Group, bind.Table)
+	}
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
-	defer func() {
-		if s.isStatus(pb.Status_ServiceLockEnable) ||
-			err != nil ||
-			hasBind {
-			return
-		}
-		s.incRef(bind.Group, bind.Table)
-	}()
 
 	var result pb.Result
 	l.lock(
@@ -316,6 +313,7 @@ func (s *service) unlockUnknownCommit(
 	}
 
 	defer logUnlockTxn(s.logger, txn)()
+	binds := txn.lockTableBindsLocked()
 	if err := txn.closeWithoutFreeWithContext(
 		ctx,
 		txnID,
@@ -332,10 +330,8 @@ func (s *service) unlockUnknownCommit(
 	if s.activeTxnHolder.deleteActiveTxn(txnID) != txn {
 		return nil
 	}
-	if !s.isStatus(pb.Status_ServiceLockEnable) {
-		s.reduceCanMoveGroupTables(txn)
-		s.tryCompleteDrain()
-	}
+	s.reduceCanMoveGroupTables(binds)
+	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	reuse.Free(txn, nil)
 	return nil
@@ -361,6 +357,9 @@ func (s *service) unlockWithContext(
 		return err
 	}
 
+	s.beginTxnClosure()
+	defer s.endTxnClosure()
+
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
 		return nil
@@ -372,21 +371,21 @@ func (s *service) unlockWithContext(
 		return nil
 	}
 
-	if !s.isStatus(pb.Status_ServiceLockEnable) {
-		s.reduceCanMoveGroupTables(txn)
-		s.tryCompleteDrain()
-	}
-
 	defer logUnlockTxn(s.logger, txn)()
+	binds := txn.lockTableBindsLocked()
 	err := txn.closeWithContext(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
 		return s.getLockTable(ctx, group, table)
 	}, s.logger, mutations...)
+	if err != nil {
+		return err
+	}
+	s.reduceCanMoveGroupTables(binds)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
-	return err
+	return nil
 }
 
 func (s *service) IsOrphanTxn(
@@ -428,41 +427,82 @@ func (s *service) Resume() error {
 	return err
 }
 
-func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
+func (s *service) reduceCanMoveGroupTables(binds []pb.LockTable) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.mu.lockTableRef) == 0 {
 		return
 	}
 
-	var res []pb.LockTable
-
-	for group, h := range txn.lockHolders {
-		for table, bind := range h.tableBinds {
-			if bind.ServiceID == s.serviceID {
-				if _, ok := s.mu.lockTableRef[group][table]; ok {
-					s.mu.lockTableRef[group][table]--
-					if s.mu.lockTableRef[group][table] == 0 {
-						delete(s.mu.lockTableRef[group], table)
-						res = append(res, bind)
-					}
-				}
-			}
+	for _, bind := range binds {
+		if bind.ServiceID != s.serviceID {
+			continue
 		}
+		if s.mu.lockAdmissions != 0 {
+			s.mu.pendingRefReleases = append(s.mu.pendingRefReleases, bind)
+			continue
+		}
+		s.releaseBindRefLocked(bind.Group, bind.Table, bind, s.mu.drainSnapshotReady)
 	}
-	if len(res) > 0 {
-		s.mu.groupTables = append(s.mu.groupTables, res)
+}
+
+func (s *service) releaseBindRefLocked(
+	group uint32,
+	table uint64,
+	bind pb.LockTable,
+	addMovable bool,
+) {
+	if _, ok := s.mu.lockTableRef[group][table]; !ok {
+		return
 	}
+	s.mu.lockTableRef[group][table]--
+	if s.mu.lockTableRef[group][table] != 0 {
+		return
+	}
+	delete(s.mu.lockTableRef[group], table)
+	if addMovable {
+		s.mu.groupTables = append(s.mu.groupTables, []pb.LockTable{bind})
+	}
+}
+
+func (s *service) applyPendingRefReleasesLocked() {
+	if s.mu.lockAdmissions != 0 || len(s.mu.pendingRefReleases) == 0 {
+		return
+	}
+	for _, bind := range s.mu.pendingRefReleases {
+		s.releaseBindRefLocked(
+			bind.Group,
+			bind.Table,
+			bind,
+			s.mu.drainSnapshotReady,
+		)
+	}
+	s.mu.pendingRefReleases = s.mu.pendingRefReleases[:0]
 }
 
 func (s *service) checkCanMoveGroupTables() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.mu.status != pb.Status_ServiceLockEnable || s.mu.lockAdmissions > 0 {
+	if s.mu.status != pb.Status_ServiceLockEnable {
 		return
 	}
 
-	s.activeTxnHolder.incLockTableRef(s.mu.lockTableRef, s.serviceID)
+	oldStatus := s.mu.status
+	s.mu.restartTime, _ = s.clock.Now()
+	s.mu.status = pb.Status_ServiceLockWaiting
+	s.mu.preDrainAdmissions = s.mu.lockAdmissions
+	s.mu.drainSnapshotReady = false
+	logStatusChange(s.logger, oldStatus, s.mu.status)
+	s.prepareDrainSnapshotLocked()
+}
+
+func (s *service) prepareDrainSnapshotLocked() {
+	if s.mu.status != pb.Status_ServiceLockWaiting ||
+		s.mu.drainSnapshotReady ||
+		s.mu.preDrainAdmissions != 0 {
+		return
+	}
+
 	var res []pb.LockTable
 	s.tableGroups.iter(func(_ uint64, v lockTable) bool {
 		bind := v.getBind()
@@ -476,9 +516,7 @@ func (s *service) checkCanMoveGroupTables() {
 	if len(res) > 0 {
 		s.mu.groupTables = append(s.mu.groupTables, res)
 	}
-	s.mu.restartTime, _ = s.clock.Now()
-	s.mu.status = pb.Status_ServiceLockWaiting
-	logStatusChange(s.logger, s.mu.status, pb.Status_ServiceLockWaiting)
+	s.mu.drainSnapshotReady = true
 }
 
 func (s *service) incRef(group uint32, table uint64) {
@@ -502,12 +540,12 @@ func (s *service) canLockOnServiceStatusLocked(
 	if opts.Sharding == pb.Sharding_ByRow {
 		tableID = ShardingByRow(rows[0])
 	}
-	if s.activeTxnHolder.hasActiveTxn(txnID) {
-		return true
-	}
 	if _, ok := s.mu.lockTableRef[opts.Group][tableID]; !ok {
 		logCanLockOnService(s.logger, s.serviceID)
 		return false
+	}
+	if s.activeTxnHolder.hasActiveTxn(txnID) {
+		return true
 	}
 	if s.activeTxnHolder.empty() {
 		return false
@@ -523,40 +561,79 @@ func (s *service) beginLockAdmission(
 	opts pb.LockOptions,
 	tableID uint64,
 	rows [][]byte,
-) bool {
+) (bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.canLockOnServiceStatusLocked(txnID, opts, tableID, rows) {
-		return false
+		return false, false
 	}
+	preDrain := s.mu.status == pb.Status_ServiceLockEnable
 	s.mu.lockAdmissions++
-	return true
+	return true, preDrain
 }
 
-func (s *service) endLockAdmission() {
+func (s *service) endLockAdmission(preDrain bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.lockAdmissions == 0 {
 		panic("lock admission underflow")
 	}
 	s.mu.lockAdmissions--
+	if preDrain && s.mu.status == pb.Status_ServiceLockWaiting {
+		if s.mu.preDrainAdmissions == 0 {
+			panic("pre-drain lock admission underflow")
+		}
+		s.mu.preDrainAdmissions--
+	}
+	s.applyPendingRefReleasesLocked()
+	s.prepareDrainSnapshotLocked()
 	s.tryCompleteDrainLocked()
 }
 
 func (s *service) tryCompleteDrain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.applyPendingRefReleasesLocked()
+	s.prepareDrainSnapshotLocked()
 	s.tryCompleteDrainLocked()
 }
 
 func (s *service) tryCompleteDrainLocked() {
 	if s.mu.status != pb.Status_ServiceLockWaiting ||
+		!s.mu.drainSnapshotReady ||
 		s.mu.lockAdmissions != 0 ||
+		s.mu.txnClosures != 0 ||
+		s.hasLockTableRefsLocked() ||
 		!s.activeTxnHolder.empty() {
 		return
 	}
 	logStatusChange(s.logger, s.mu.status, pb.Status_ServiceUnLockSucc)
 	s.mu.status = pb.Status_ServiceUnLockSucc
+}
+
+func (s *service) hasLockTableRefsLocked() bool {
+	for _, refs := range s.mu.lockTableRef {
+		if len(refs) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *service) beginTxnClosure() {
+	s.mu.Lock()
+	s.mu.txnClosures++
+	s.mu.Unlock()
+}
+
+func (s *service) endTxnClosure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.txnClosures == 0 {
+		panic("transaction closure underflow")
+	}
+	s.mu.txnClosures--
+	s.tryCompleteDrainLocked()
 }
 
 func (s *service) validGroupTable(group uint32, tableID uint64) bool {
