@@ -146,9 +146,54 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "outer parameter follows scalar derived star double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (select * from (select cast(1 as double) as x) s) d) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar qualified star double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (select s.* from (select cast(1 as double) as x) s) d) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
 			name: "outer parameter follows scalar cte column double domain",
 			sql: "insert into constraint_test.emp (sal) select " +
 				"(select x from (with c as (select cast(1 as double) as x) select x from c)) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar cte star double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (with c as (select cast(1 as double) as x), " +
+				"d as (select * from c) select x from d)) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar qualified cte star double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(with c as (select cast(1 as double) as x) select c.* from c) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar merged join star double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (select * from (select 1 as a) l join " +
+				"(select 1 as a, cast(1 as double) as x) r using (a)) d) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar natural join star double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (select * from (select 1 as a) l natural join " +
+				"(select 1 as a, cast(1 as double) as x) r) d) + ?",
 			want:       types.T_float64,
 			paramCount: 1,
 		},
@@ -728,6 +773,14 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "update parameter follows scalar derived star double domain",
+			sql: "update constraint_test.emp set sal = " +
+				"(select x from (select * from (select cast(1 as double) as x) s) d) + ? " +
+				"where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_float64)},
+			paramCount: 1,
+		},
+		{
 			name: "on duplicate key update decimal assignment",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = ? + ?",
@@ -774,6 +827,15 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = " +
 				"(select x from (select cast(1 as double) as x) d) + ?",
+			want:         planpb.Type{Id: int32(types.T_float64)},
+			checkFlatten: true,
+			paramCount:   1,
+		},
+		{
+			name: "on duplicate key update parameter follows scalar derived star double domain",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = " +
+				"(select x from (select * from (select cast(1 as double) as x) s) d) + ?",
 			want:         planpb.Type{Id: int32(types.T_float64)},
 			checkFlatten: true,
 			paramCount:   1,

@@ -966,7 +966,7 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	default:
 		return numericAstTypeScan{}, nil
 	}
-	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool))
+	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
 }
 
 func (b *baseBinder) numericScalarSelectAstTypes(
@@ -974,38 +974,16 @@ func (b *baseBinder) numericScalarSelectAstTypes(
 	stmt tree.SelectStatement,
 	depth int32,
 	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
 ) (numericAstTypeScan, error) {
-	switch selectStmt := stmt.(type) {
-	case *tree.SelectClause:
-		if len(selectStmt.Exprs) != 1 {
-			return numericAstTypeScan{}, nil
-		}
-		sources, ok := b.numericScalarSources(owner, selectStmt, depth, visiting)
-		if !ok {
-			sources = nil
-		}
-		return b.numericAstTypesInternal(
-			selectStmt.Exprs[0].Expr,
-			depth,
-			func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
-				return resolveNumericScalarColumn(sources, name)
-			},
-		)
-	case *tree.UnionClause:
-		left, err := b.numericScalarSelectAstTypes(owner, selectStmt.Left, depth, visiting)
-		if err != nil {
-			return numericAstTypeScan{}, err
-		}
-		right, err := b.numericScalarSelectAstTypes(owner, selectStmt.Right, depth, visiting)
-		if err != nil {
-			return numericAstTypeScan{}, err
-		}
-		return left.merge(right), nil
-	case *tree.ParenSelect:
-		return b.numericScalarSelectAstTypes(selectStmt.Select, selectStmt.Select.Select, depth, visiting)
-	default:
+	_, scans, ok, err := b.numericScalarStatementOutputs(owner, stmt, depth, visiting, ctes)
+	if err != nil {
+		return numericAstTypeScan{}, err
+	}
+	if !ok || len(scans) != 1 {
 		return numericAstTypeScan{}, nil
 	}
+	return scans[0], nil
 }
 
 type numericScalarSource struct {
@@ -1016,11 +994,40 @@ type numericScalarSource struct {
 	known bool
 }
 
+func numericScalarVisibleCtes(owner *tree.Select, inherited map[string]*tree.CTE) map[string]*tree.CTE {
+	if owner == nil || owner.With == nil || len(owner.With.CTEs) == 0 {
+		return inherited
+	}
+	visible := make(map[string]*tree.CTE, len(inherited)+len(owner.With.CTEs))
+	for name, cte := range inherited {
+		visible[name] = cte
+	}
+	for _, cte := range owner.With.CTEs {
+		visible[strings.ToLower(string(cte.Name.Alias))] = cte
+	}
+	return visible
+}
+
+func numericScalarCteSource(cte *tree.CTE, existingCols tree.IdentifierList) (*tree.Select, tree.IdentifierList) {
+	if len(existingCols) == 0 {
+		existingCols = cte.Name.Cols
+	}
+	switch source := cte.Stmt.(type) {
+	case *tree.Select:
+		return source, existingCols
+	case *tree.ParenSelect:
+		return source.Select, existingCols
+	default:
+		return nil, existingCols
+	}
+}
+
 func (b *baseBinder) numericScalarSources(
 	owner *tree.Select,
 	clause *tree.SelectClause,
 	depth int32,
 	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
 ) ([]numericScalarSource, bool) {
 	if clause.From == nil {
 		return nil, true
@@ -1030,16 +1037,21 @@ func (b *baseBinder) numericScalarSources(
 	}
 	infos := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
 	sources := make([]numericScalarSource, len(infos))
+	ctes = numericScalarVisibleCtes(owner, ctes)
 	for i := range infos {
 		sources[i].alias = strings.ToLower(infos[i].alias)
 		sources[i].name = strings.ToLower(infos[i].sourceName)
 		if infos[i].source == nil {
-			infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
-				owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
-			)
+			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
+				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
+			} else {
+				infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
+					owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
+				)
+			}
 		}
 		if infos[i].source != nil {
-			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting)
+			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
 			if err != nil {
 				return nil, false
 			}
@@ -1085,13 +1097,14 @@ func (b *baseBinder) numericScalarSelectOutputs(
 	owner *tree.Select,
 	depth int32,
 	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
 ) ([]string, []numericAstTypeScan, bool, error) {
 	if visiting[owner] {
 		return nil, nil, false, nil
 	}
 	visiting[owner] = true
 	defer delete(visiting, owner)
-	return b.numericScalarStatementOutputs(owner, owner.Select, depth, visiting)
+	return b.numericScalarStatementOutputs(owner, owner.Select, depth, visiting, ctes)
 }
 
 func (b *baseBinder) numericScalarStatementOutputs(
@@ -1099,29 +1112,50 @@ func (b *baseBinder) numericScalarStatementOutputs(
 	stmt tree.SelectStatement,
 	depth int32,
 	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
 ) ([]string, []numericAstTypeScan, bool, error) {
 	switch selectStmt := stmt.(type) {
 	case *tree.SelectClause:
-		sources, ok := b.numericScalarSources(owner, selectStmt, depth, visiting)
-		if !ok {
-			return nil, nil, false, nil
+		sources, sourcesKnown := b.numericScalarSources(owner, selectStmt, depth, visiting, ctes)
+		if !sourcesKnown {
+			sources = nil
 		}
-		cols := make([]string, len(selectStmt.Exprs))
-		scans := make([]numericAstTypeScan, len(selectStmt.Exprs))
-		for i, selectExpr := range selectStmt.Exprs {
-			if _, star := selectExpr.Expr.(tree.UnqualifiedStar); star {
-				return nil, nil, false, nil
+		cols := make([]string, 0, len(selectStmt.Exprs))
+		scans := make([]numericAstTypeScan, 0, len(selectStmt.Exprs))
+		for _, selectExpr := range selectStmt.Exprs {
+			switch expr := selectExpr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				if !sourcesKnown {
+					return nil, nil, false, nil
+				}
+				starCols, starScans, ok := numericScalarUnqualifiedStarOutputs(selectStmt, sources)
+				if !ok {
+					return nil, nil, false, nil
+				}
+				cols = append(cols, starCols...)
+				scans = append(scans, starScans...)
+				continue
+			case *tree.UnresolvedName:
+				if expr.Star {
+					if !sourcesKnown {
+						return nil, nil, false, nil
+					}
+					starCols, starScans, ok := numericScalarQualifiedStarOutputs(sources, expr.ColName())
+					if !ok {
+						return nil, nil, false, nil
+					}
+					cols = append(cols, starCols...)
+					scans = append(scans, starScans...)
+					continue
+				}
 			}
-			if name, ok := selectExpr.Expr.(*tree.UnresolvedName); ok && name.Star {
-				return nil, nil, false, nil
-			}
+			col := ""
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				cols[i] = strings.ToLower(selectExpr.As.Origin())
+				col = strings.ToLower(selectExpr.As.Origin())
 			} else if name, ok := selectExpr.Expr.(*tree.UnresolvedName); ok {
-				cols[i] = strings.ToLower(name.ColName())
+				col = strings.ToLower(name.ColName())
 			}
-			var err error
-			scans[i], err = b.numericAstTypesInternal(
+			scan, err := b.numericAstTypesInternal(
 				selectExpr.Expr,
 				depth,
 				func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
@@ -1131,14 +1165,16 @@ func (b *baseBinder) numericScalarStatementOutputs(
 			if err != nil {
 				return nil, nil, false, err
 			}
+			cols = append(cols, col)
+			scans = append(scans, scan)
 		}
 		return cols, scans, true, nil
 	case *tree.UnionClause:
-		leftCols, left, leftOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Left, depth, visiting)
+		leftCols, left, leftOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Left, depth, visiting, ctes)
 		if err != nil || !leftOK {
 			return nil, nil, false, err
 		}
-		_, right, rightOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Right, depth, visiting)
+		_, right, rightOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Right, depth, visiting, ctes)
 		if err != nil || !rightOK || len(left) != len(right) {
 			return nil, nil, false, err
 		}
@@ -1147,10 +1183,73 @@ func (b *baseBinder) numericScalarStatementOutputs(
 		}
 		return leftCols, left, true, nil
 	case *tree.ParenSelect:
-		return b.numericScalarStatementOutputs(selectStmt.Select, selectStmt.Select.Select, depth, visiting)
+		return b.numericScalarStatementOutputs(selectStmt.Select, selectStmt.Select.Select, depth, visiting, ctes)
 	default:
 		return nil, nil, false, nil
 	}
+}
+
+func numericScalarProjectionSources(sources []numericScalarSource) []numericProjectionSourceInfo {
+	projectionSources := make([]numericProjectionSourceInfo, len(sources))
+	for i := range sources {
+		projectionSources[i] = numericProjectionSourceInfo{
+			sourceName:  sources[i].name,
+			alias:       sources[i].alias,
+			outputNames: sources[i].cols,
+			outputKnown: sources[i].known,
+		}
+	}
+	return projectionSources
+}
+
+func numericScalarUnqualifiedStarOutputs(
+	clause *tree.SelectClause,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return nil, nil, false
+	}
+	projectionSources := numericScalarProjectionSources(sources)
+	cursor := 0
+	outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], projectionSources, &cursor)
+	if !ok || cursor != len(sources) {
+		return nil, nil, false
+	}
+	return numericScalarScansFromStarOutputs(outputs, sources)
+}
+
+func numericScalarQualifiedStarOutputs(
+	sources []numericScalarSource,
+	qualifier string,
+) ([]string, []numericAstTypeScan, bool) {
+	source := uniqueNumericStarSource(numericScalarProjectionSources(sources), qualifier)
+	if source < 0 || source >= len(sources) || len(sources[source].cols) != len(sources[source].types) {
+		return nil, nil, false
+	}
+	return append([]string(nil), sources[source].cols...),
+		append([]numericAstTypeScan(nil), sources[source].types...), true
+}
+
+func numericScalarScansFromStarOutputs(
+	outputs []numericProjectionStarOutput,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	cols := make([]string, len(outputs))
+	scans := make([]numericAstTypeScan, len(outputs))
+	for i, output := range outputs {
+		if len(output.refs) == 0 {
+			return nil, nil, false
+		}
+		cols[i] = output.name
+		for _, ref := range output.refs {
+			if ref.source < 0 || ref.source >= len(sources) ||
+				ref.pos < 0 || ref.pos >= len(sources[ref.source].types) {
+				return nil, nil, false
+			}
+			scans[i] = scans[i].merge(sources[ref.source].types[ref.pos])
+		}
+	}
+	return cols, scans, true
 }
 
 func resolveNumericScalarColumn(
