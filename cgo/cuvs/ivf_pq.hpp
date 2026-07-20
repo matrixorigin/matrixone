@@ -191,7 +191,6 @@ public:
 
     // Internal index storage
     std::unique_ptr<ivf_pq_index> index_;
-    std::string data_filename_;    // raw feature-vector file → load_host_matrix in build()
     std::string index_filename_;   // serialized index file → load() in build()
 
     // cuVS dynamic_batching wrappers, keyed by (device_id, k=limit, n_probes).
@@ -261,26 +260,6 @@ public:
         }
     }
 
-    // Constructor for loading metadata from file (used for tests and data-file builds)
-    gpu_ivf_pq_t(const std::string& filename, distance_type_t m,
-                    const ivf_pq_build_params_t& bp, const std::vector<int>& devices,
-                    uint32_t nthread, distribution_mode_t mode) {
-
-        this->metric = m;
-        this->build_params = bp;
-        this->dist_mode = mode;
-        this->devices_ = devices;
-        this->data_filename_ = filename;
-
-        std::vector<int> worker_devices = this->devices_;
-        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
-            worker_devices = {worker_devices[0]};
-        }
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
-
-        this->current_offset_ = 0;
-    }
-
     // Constructor for loading a serialized IVF-PQ index from file
     gpu_ivf_pq_t(const std::string& filename, uint32_t dimension, distance_type_t m,
                     const ivf_pq_build_params_t& bp, const std::vector<int>& devices,
@@ -322,7 +301,6 @@ public:
                   << " dim=" << this->dimension
                   << " is_loaded_=" << (this->is_loaded_ ? "true" : "false")
                   << " index_filename_=" << (this->index_filename_.empty() ? "(none)" : this->index_filename_)
-                  << " data_filename_=" << (this->data_filename_.empty() ? "(none)" : this->data_filename_)
                   << " flattened_host_dataset.size()=" << this->flattened_host_dataset.size()
                   << " devices.size()=" << this->devices_.size()
                   << " n_lists=" << this->build_params.n_lists
@@ -342,15 +320,7 @@ public:
         }
         try {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
-                uint64_t rows, cols;
-                load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
-                this->count = rows;
-                this->dimension = static_cast<uint32_t>(cols);
-                this->current_offset_ = this->count;
-            } else {
-                this->count = this->current_offset_;
-            }
+            this->count = this->current_offset_;
             if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         } catch (const std::exception& e) {

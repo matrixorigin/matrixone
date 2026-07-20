@@ -33,6 +33,70 @@ func TestArrayElementCompareLength(t *testing.T) {
 	require.Equal(t, -1, ArrayElementCompare(f16a, f16b))
 }
 
+// TestArrayElementCompareZeroAlloc guards that comparing two 768-dimensional
+// narrow vectors performs no heap allocation. ArrayElementCompare is called once
+// per comparison in the sort / merge-top / scalar-compare / vector min-max hot
+// paths, so a per-call []float32 bridge (the previous implementation) added
+// ~6KB and 2 allocs per comparison — turning a 100k-row ORDER BY (~N·log2 N
+// comparisons) into roughly 10GB of transient garbage. This is the regression
+// guard against that bridge returning.
+func TestArrayElementCompareZeroAlloc(t *testing.T) {
+	const dim = 768
+	f32a := make([]float32, dim)
+	f32b := make([]float32, dim)
+	for i := range f32a {
+		f32a[i] = float32(i)
+		f32b[i] = float32(i)
+	}
+	// Differ only in the last element: the worst case that forces the comparator
+	// to scan every element instead of short-circuiting early.
+	f32b[dim-1] = float32(dim)
+
+	f16a := Float32ToFloat16Slice(f32a)
+	f16b := Float32ToFloat16Slice(f32b)
+	bf16a := Float32ToBF16Slice(f32a)
+	bf16b := Float32ToBF16Slice(f32b)
+	i8a := make([]int8, dim)
+	i8b := make([]int8, dim)
+	i8b[dim-1] = 1
+	u8a := make([]uint8, dim)
+	u8b := make([]uint8, dim)
+	u8b[dim-1] = 1
+
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"float32", func() { ArrayElementCompare(f32a, f32b) }},
+		{"float16", func() { ArrayElementCompare(f16a, f16b) }},
+		{"bf16", func() { ArrayElementCompare(bf16a, bf16b) }},
+		{"int8", func() { ArrayElementCompare(i8a, i8b) }},
+		{"uint8", func() { ArrayElementCompare(u8a, u8b) }},
+	}
+	for _, c := range cases {
+		allocs := testing.AllocsPerRun(100, c.fn)
+		require.Zerof(t, allocs, "%s: ArrayElementCompare must be allocation-free, got %v allocs/op", c.name, allocs)
+	}
+}
+
+// BenchmarkArrayElementCompare reports B/op and allocs/op for a 768-dim compare
+// so the allocation cost of this hot-path comparator stays visible in CI output.
+func BenchmarkArrayElementCompare(b *testing.B) {
+	const dim = 768
+	src := make([]float32, dim)
+	for i := range src {
+		src[i] = float32(i)
+	}
+	x := Float32ToFloat16Slice(src)
+	y := Float32ToFloat16Slice(src)
+	y[dim-1] = Float16FromFloat32(float32(dim))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ArrayElementCompare(x, y)
+	}
+}
+
 // TestCompareArrayElementFromBytes covers the bytes-level narrow-vector comparator
 // (bf16/f16/int8/uint8), including the desc (descending) flip.
 func TestCompareArrayElementFromBytes(t *testing.T) {
