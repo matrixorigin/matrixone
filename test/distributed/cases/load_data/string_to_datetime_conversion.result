@@ -1,6 +1,8 @@
 drop database if exists test_string_to_datetime;
 create database test_string_to_datetime;
 use test_string_to_datetime;
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
 create table test_string_to_date(
 date_col date not null
 );
@@ -41,17 +43,23 @@ timestamp_col timestamp not null
 );
 load data infile {'filepath'='$resources/load_data/string_to_timestamp.parq', 'format'='parquet'}
 into table test_string_to_timestamp;
-truncated type datetime value 62135568001000000 for column value, 3
 select * from test_string_to_timestamp order by timestamp_col;
-➤ timestamp_col[93,64,0]
+➤ timestamp_col[93,64,0]  𝄀
+1970-01-01 00:00:01  𝄀
+2000-06-15 10:20:30  𝄀
+2024-01-01 12:30:45  𝄀
+2024-12-31 23:59:59
 create table test_string_to_timestamp_scale(
 timestamp_col timestamp(6) not null
 );
 load data infile {'filepath'='$resources/load_data/string_to_timestamp_scale.parq', 'format'='parquet'}
 into table test_string_to_timestamp_scale;
-truncated type datetime value 62135568001000001 for column value, 3
 select * from test_string_to_timestamp_scale order by timestamp_col;
-➤ timestamp_col[93,64,0]
+➤ timestamp_col[93,64,0]  𝄀
+1970-01-01 00:00:01.000001000  𝄀
+2000-06-15 10:20:30.500000000  𝄀
+2024-01-01 12:30:45.123456000  𝄀
+2024-12-31 23:59:59.999999000
 create table test_datetime_nulls(
 id int not null,
 date_val date,
@@ -96,4 +104,5 @@ date_val date
 load data infile {'filepath'='$resources/load_data/string_to_datetime_invalid.parq', 'format'='parquet'}
 into table test_datetime_invalid;
 invalid argument parsedate, bad value 2024-13-45
+set time_zone = @old_time_zone;
 drop database test_string_to_datetime;
