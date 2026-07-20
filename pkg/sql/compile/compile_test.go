@@ -70,23 +70,49 @@ type compileTestCase struct {
 	txnClient client.TxnClient // Store txnClient for truncating table with real transaction
 }
 
-func TestReleaseRetryCompilePreservesPrepareParams(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
+	tc := newTestCaseWithPrepare("select ?", true, t)
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	tc.proc.Base.TxnClient = txnCli
+	tc.proc.Base.TxnOperator = txnOp
+	tc.proc.Ctx = ctx
+	tc.proc.ReplaceTopCtx(ctx)
 
-	for range 2 {
-		retryCompile := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Time{})
-		releaseRetryCompile(retryCompile)
-		require.Same(t, params, proc.GetPrepareParams())
-		require.True(t, proc.GetPrepareParamIsBin(0))
-		require.Equal(t, 1, params.Length())
+	want := []byte{'A', 'B', 0, 0}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, want, false, tc.proc.Mp()))
+	tc.proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+
+	evaluations := 0
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat == nil {
+			return nil
+		}
+		require.Len(t, bat.Vecs, 1)
+		require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+		require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
+		evaluations++
+		if evaluations <= 2 {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		return nil
 	}
 
-	proc.Free()
+	c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, tc.pn, fill))
+	_, err := c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, 3, evaluations)
+	require.Equal(t, 2, c.retryTimes)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
+	require.Nil(t, params.GetArea())
+
+	c.Release()
+	tc.proc.Free()
+	tc.proc.GetSessionInfo().Buf.Free()
 }
 
 func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
@@ -406,11 +432,18 @@ func TestCompileWithFaults(t *testing.T) {
 }
 
 func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+}
+
+func newTestTxnClientAndOpWithIsolation(
+	ctrl *gomock.Controller,
+	isolation txn.TxnIsolation,
+) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -484,6 +517,10 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 }
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
+	return newTestCaseWithPrepare(sql, false, t)
+}
+
+func newTestCaseWithPrepare(sql string, isPrepare bool, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -493,7 +530,17 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	e, txnClient, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
+	var pn *plan.Plan
+	if isPrepare {
+		query, optimizeErr := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true)
+		err = optimizeErr
+		pn = &plan.Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
+		if err == nil {
+			_, _, err = plan2.ResetPreparePlan(compilerCtx, pn)
+		}
+	} else {
+		pn, err = plan2.BuildPlan(compilerCtx, stmts[0], false)
+	}
 	if err != nil {
 		panic(err)
 	}

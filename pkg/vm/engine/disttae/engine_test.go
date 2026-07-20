@@ -370,6 +370,40 @@ func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *tes
 	require.True(t, nodes[0].HasMixedCommit)
 }
 
+func TestPreparedBinarySchedulingExcludesMixedVersionCN(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		peerCommit string
+	}{
+		{name: "peer is older", peerCommit: "older-than-" + version.CommitID},
+		{name: "peer is newer", peerCommit: "newer-than-" + version.CommitID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("compatible-cn", "compatible:6001", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("mixed-version-cn", "mixed-version:6001", nil, metadata.WorkState_Working, tc.peerCommit),
+			}})
+
+			// Prepared parameters are encoded only after scheduling has selected a
+			// query worker. Keep this boundary ahead of ProcessInfo serialization so
+			// a peer that does not understand PrepareParamInfo.is_bin cannot silently
+			// reinterpret a binary parameter.
+			candidates, err := e.DiscoverQueryCandidates(context.Background())
+			require.NoError(t, err)
+			require.Len(t, candidates, 1)
+			require.Equal(t, "compatible-cn", candidates[0].Service.ServiceID)
+			require.Equal(t, version.CommitID, candidates[0].Service.CommitID)
+			require.True(t, candidates[0].HasMixedCommit)
+
+			nodes, err := e.ResolveQueryCandidatePool(
+				context.Background(), candidates, engine.QueryCandidatePoolRequest{})
+			require.NoError(t, err)
+			require.Equal(t, []string{"compatible:6001"}, nodeAddresses(nodes))
+			require.True(t, nodes[0].HasMixedCommit)
+		})
+	}
+}
+
 func TestEngineCandidateDiscoveryMarksOldCommitOutsideWorkingSet(t *testing.T) {
 	for _, state := range []metadata.WorkState{
 		metadata.WorkState_Draining,

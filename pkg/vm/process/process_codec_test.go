@@ -231,6 +231,28 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Same(t, svc, GetCodecService(rtSvc))
 }
 
+func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	info.PrepareParams.IsBin = nil
+
+	payload, err := info.Marshal()
+	require.NoError(t, err)
+	legacyInfo := pipeline.ProcessInfo{}
+	require.NoError(t, legacyInfo.Unmarshal(payload))
+	require.Empty(t, legacyInfo.PrepareParams.IsBin)
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decodedProc, err := svc.Decode(context.Background(), legacyInfo)
+	require.NoError(t, err)
+	require.NotNil(t, decodedProc.GetPrepareParams())
+	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
+	require.False(t, decodedProc.GetPrepareParamIsBin(0))
+	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	decodedProc.Free()
+}
+
 func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 	rtSvc := "codec-missing-svc"
 	runtime := rt.NewRuntime(metadata.ServiceType_CN, rtSvc, nil)
