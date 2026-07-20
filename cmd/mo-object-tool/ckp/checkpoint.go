@@ -886,7 +886,7 @@ func writeRestoreScript(
 		if omitForeignKeys {
 			deferredFKs = append(deferredFKs, deferredForeignKeyDDLsForTable(table, dumpData)...)
 		}
-		if isExternalRelation(table) {
+		if isLocalInfileExternalTableDDL(ddl) {
 			ddl, err = packageExternalTableSource(ctx, dumpOut, csvRoot, table, ddl)
 			if err != nil {
 				return "", err
@@ -1484,6 +1484,11 @@ func isViewRelation(table checkpointtool.TableCatalogEntry) bool {
 func isCreateViewSQL(ddl string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(ddl))
 	return strings.HasPrefix(upper, "CREATE VIEW ") || strings.HasPrefix(upper, "CREATE OR REPLACE VIEW ")
+}
+
+func isLocalInfileExternalTableDDL(ddl string) bool {
+	upper := strings.ToUpper(ddl)
+	return strings.Contains(upper, "CREATE EXTERNAL TABLE") && strings.Contains(upper, "INFILE")
 }
 
 func packageExternalTableSource(

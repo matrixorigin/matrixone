@@ -440,53 +440,68 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		})
 	}
 
-	jobCh := make(chan partJob, options.Concurrency*2)
-
-	startWorker := func() {
+	uploadSlots := make(chan struct{}, options.Concurrency)
+	startPartUpload := func(job partJob) bool {
+		select {
+		case uploadSlots <- struct{}{}:
+		case <-ctx.Done():
+			if job.bufPtr != nil {
+				bufPool.Put(job.bufPtr)
+			}
+			setErr(ctx.Err())
+			return false
+		}
+		select {
+		case getParallelUploadSemaphore() <- struct{}{}:
+		case <-ctx.Done():
+			<-uploadSlots
+			if job.bufPtr != nil {
+				bufPool.Put(job.bufPtr)
+			}
+			setErr(ctx.Err())
+			return false
+		}
 		wg.Add(1)
-		// Use per-upload goroutines so concurrent multipart uploads do not starve
-		// each other on the small global parallelUploadPool.
 		go func() {
 			defer wg.Done()
-			for job := range jobCh {
-				if ctx.Err() != nil {
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				uploadOpt := &cos.ObjectUploadPartOptions{
-					ContentLength: int64(job.n),
-				}
-				resp, uploadErr := DoWithRetry("cos upload part", func() (*cos.Response, error) {
-					return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.buf[:job.n]), uploadOpt)
-				}, maxRetryAttemps, IsRetryableError)
-				if uploadErr != nil {
-					setErr(uploadErr)
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				etag := ""
-				if resp != nil && resp.Header != nil {
-					etag = resp.Header.Get("ETag")
-				}
+			defer func() {
+				<-getParallelUploadSemaphore()
+				<-uploadSlots
+			}()
+			if ctx.Err() != nil {
 				if job.bufPtr != nil {
 					bufPool.Put(job.bufPtr)
 				}
-				partsLock.Lock()
-				parts = append(parts, cos.Object{
-					PartNumber: int(job.num),
-					ETag:       etag,
-				})
-				partsLock.Unlock()
+				return
 			}
+			uploadOpt := &cos.ObjectUploadPartOptions{
+				ContentLength: int64(job.n),
+			}
+			resp, uploadErr := DoWithRetry("cos upload part", func() (*cos.Response, error) {
+				return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.buf[:job.n]), uploadOpt)
+			}, maxRetryAttemps, IsRetryableError)
+			if uploadErr != nil {
+				setErr(uploadErr)
+				if job.bufPtr != nil {
+					bufPool.Put(job.bufPtr)
+				}
+				return
+			}
+			etag := ""
+			if resp != nil && resp.Header != nil {
+				etag = resp.Header.Get("ETag")
+			}
+			if job.bufPtr != nil {
+				bufPool.Put(job.bufPtr)
+			}
+			partsLock.Lock()
+			parts = append(parts, cos.Object{
+				PartNumber: int(job.num),
+				ETag:       etag,
+			})
+			partsLock.Unlock()
 		}()
-	}
-
-	for i := 0; i < options.Concurrency; i++ {
-		startWorker()
+		return true
 	}
 
 	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
@@ -504,16 +519,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			bufPtr: bufPtr,
 			n:      n,
 		}
-		select {
-		case jobCh <- job:
-			return true
-		case <-ctx.Done():
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
-			setErr(ctx.Err())
-			return false
-		}
+		return startPartUpload(job)
 	}
 
 	pendingBufPtr := firstBufPtr
@@ -591,7 +597,6 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		_ = sendJob(pendingBufPtr, pendingBuf, pendingN)
 	}
 
-	close(jobCh)
 	wg.Wait()
 
 	if firstErr != nil {

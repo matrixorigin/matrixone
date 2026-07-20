@@ -40,6 +40,9 @@ const (
 var (
 	parallelUploadPoolOnce sync.Once
 	parallelUploadPool     *ants.Pool
+
+	parallelUploadSemaphoreOnce sync.Once
+	parallelUploadSemaphore     chan struct{}
 )
 
 func getParallelUploadPool() *ants.Pool {
@@ -51,6 +54,13 @@ func getParallelUploadPool() *ants.Pool {
 		parallelUploadPool = pool
 	})
 	return parallelUploadPool
+}
+
+func getParallelUploadSemaphore() chan struct{} {
+	parallelUploadSemaphoreOnce.Do(func() {
+		parallelUploadSemaphore = make(chan struct{}, runtime.NumCPU())
+	})
+	return parallelUploadSemaphore
 }
 
 func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOption {

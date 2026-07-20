@@ -87,13 +87,16 @@ func newLazyCacheFS(ctx context.Context, remote fileservice.FileService) (filese
 func (l *lazyCacheFS) Name() string { return l.name }
 
 func (l *lazyCacheFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	normalized, localPath, err := l.cacheLocalPath(vector.FilePath)
+	if err != nil {
+		return err
+	}
 	if err := l.remote.Write(ctx, vector); err != nil {
 		return err
 	}
-	normalized := stripServiceName(vector.FilePath, l.name)
 	l.mu.Lock()
 	delete(l.caching, normalized)
-	_ = os.Remove(filepath.Join(l.root, filepath.FromSlash(normalized)))
+	_ = os.Remove(localPath)
 	l.removeCacheEntryLocked(normalized)
 	l.mu.Unlock()
 	return nil
@@ -118,15 +121,29 @@ func (l *lazyCacheFS) List(ctx context.Context, dirPath string) iter.Seq2[*files
 }
 
 func (l *lazyCacheFS) Delete(ctx context.Context, filePaths ...string) error {
+	type cachePath struct {
+		normalized string
+		localPath  string
+	}
+	cachePaths := make([]cachePath, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		normalized, localPath, err := l.cacheLocalPath(filePath)
+		if err != nil {
+			return err
+		}
+		cachePaths = append(cachePaths, cachePath{
+			normalized: normalized,
+			localPath:  localPath,
+		})
+	}
 	if err := l.remote.Delete(ctx, filePaths...); err != nil {
 		return err
 	}
 	l.mu.Lock()
-	for _, filePath := range filePaths {
-		normalized := stripServiceName(filePath, l.name)
-		delete(l.caching, normalized)
-		_ = os.Remove(filepath.Join(l.root, filepath.FromSlash(normalized)))
-		l.removeCacheEntryLocked(normalized)
+	for _, cachePath := range cachePaths {
+		delete(l.caching, cachePath.normalized)
+		_ = os.Remove(cachePath.localPath)
+		l.removeCacheEntryLocked(cachePath.normalized)
 	}
 	l.mu.Unlock()
 	return nil
@@ -154,6 +171,9 @@ func (l *lazyCacheFS) ensureCached(ctx context.Context, filePath string) error {
 	for {
 		err := l.ensureCachedOnce(ctx, filePath)
 		if errors.Is(err, errLazyCacheFillInvalidated) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			continue
 		}
 		return err
@@ -161,8 +181,10 @@ func (l *lazyCacheFS) ensureCached(ctx context.Context, filePath string) error {
 }
 
 func (l *lazyCacheFS) ensureCachedOnce(ctx context.Context, filePath string) error {
-	normalized := stripServiceName(filePath, l.name)
-	localPath := filepath.Join(l.root, filepath.FromSlash(normalized))
+	normalized, localPath, err := l.cacheLocalPath(filePath)
+	if err != nil {
+		return err
+	}
 	if stat, err := os.Stat(localPath); err == nil {
 		l.touchCacheEntry(normalized, localPath, stat.Size())
 		return nil
@@ -173,11 +195,15 @@ func (l *lazyCacheFS) ensureCachedOnce(ctx context.Context, filePath string) err
 		if l.waitForCacheFillForTest != nil {
 			l.waitForCacheFillForTest()
 		}
-		<-fill.done
-		return fill.err
+		select {
+		case <-fill.done:
+			return fill.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
-	err := l.cacheFile(ctx, normalized, localPath, fill)
+	err = l.cacheFile(ctx, normalized, localPath, fill)
 	l.mu.Lock()
 	fill.err = err
 	if err != nil && l.caching[normalized] == fill {
@@ -260,8 +286,10 @@ func (l *lazyCacheFS) cacheFile(
 }
 
 func (l *lazyCacheFS) readCachedFile(ctx context.Context, vector *fileservice.IOVector) error {
-	normalized := stripServiceName(vector.FilePath, l.name)
-	localPath := filepath.Join(l.root, filepath.FromSlash(normalized))
+	normalized, localPath, err := l.cacheLocalPath(vector.FilePath)
+	if err != nil {
+		return err
+	}
 
 	file, err := os.Open(localPath)
 	if os.IsNotExist(err) {
@@ -310,6 +338,15 @@ func (l *lazyCacheFS) readCachedFile(ctx context.Context, vector *fileservice.IO
 		vector.Entries[i] = entry
 	}
 	return nil
+}
+
+func (l *lazyCacheFS) cacheLocalPath(filePath string) (string, string, error) {
+	normalized := stripServiceName(filePath, l.name)
+	clean := filepath.Clean(filepath.FromSlash(normalized))
+	if normalized == "" || clean == "." || !filepath.IsLocal(clean) {
+		return "", "", moerr.NewInternalErrorNoCtxf("lazy cache path escapes cache root: %s", normalized)
+	}
+	return normalized, filepath.Join(l.root, clean), nil
 }
 
 func (l *lazyCacheFS) touchCacheEntry(normalized string, localPath string, size int64) {

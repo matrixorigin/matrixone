@@ -3632,20 +3632,7 @@ func displayTableName(databaseName, tableName string) string {
 }
 
 func validCatalogName(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '_' || r == '-' || r == '$':
-		default:
-			return false
-		}
-	}
-	return true
+	return s != ""
 }
 
 func validRelKind(s string) bool {

@@ -757,6 +757,72 @@ func TestWriteRestoreScriptForExternalTablePackagesSource(t *testing.T) {
 	require.Empty(t, scriptPath)
 }
 
+func TestWriteRestoreScriptForS3ExternalTableKeepsURLSource(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	paramJSON, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Option: []string{
+				"endpoint", "https://s3.example",
+				"region", "us-west-2",
+				"bucket", "bucket-a",
+				"filepath", "objects/ext.csv",
+				"format", "csv",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseID:   2,
+		TableID:      3,
+		DatabaseName: "db",
+		TableName:    "ext_s3",
+		RelKind:      "e",
+	}
+	reader := &checkpointtool.CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *checkpointtool.CheckpointReader, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+		require.Equal(t, uint64(catalog.MO_TABLES_ID), tableID)
+		return &checkpointtool.LogicalTableView{
+			Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		}, nil
+	})
+
+	scriptPath, err := writeRestoreScript(
+		ctx,
+		reader,
+		&dumpOutput{},
+		[]checkpointtool.TableCatalogEntry{table},
+		map[uint64]*checkpointtool.TableDumpData{
+			table.TableID: {
+				TableID: table.TableID,
+				Schema: &checkpointtool.TableSchema{
+					TableName: "old_ext",
+					CreateSQL: string(paramJSON),
+					Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+				},
+			},
+		},
+		types.BuildTS(1, 0),
+		filepath.Join(tmpDir, "scripts"),
+		filepath.Join(tmpDir, "csv"),
+		loadDataPathResolver{},
+		false,
+		true,
+	)
+	require.NoError(t, err)
+	script, err := os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	got := string(script)
+	require.Contains(t, got, "CREATE EXTERNAL TABLE `db`.`ext_s3`")
+	require.Contains(t, got, "URL s3option")
+	require.Contains(t, got, "'filepath'='objects/ext.csv'")
+	require.NotContains(t, got, "external_sources")
+	require.NotContains(t, got, "LOAD DATA")
+}
+
 func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()

@@ -585,55 +585,67 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		})
 	}
 
-	jobCh := make(chan partJob, options.Concurrency*2)
-
-	startWorker := func() {
+	uploadSlots := make(chan struct{}, options.Concurrency)
+	startPartUpload := func(job partJob) bool {
+		select {
+		case uploadSlots <- struct{}{}:
+		case <-ctx.Done():
+			if job.bufPtr != nil {
+				bufPool.Put(job.bufPtr)
+			}
+			setErr(ctx.Err())
+			return false
+		}
+		select {
+		case getParallelUploadSemaphore() <- struct{}{}:
+		case <-ctx.Done():
+			<-uploadSlots
+			if job.bufPtr != nil {
+				bufPool.Put(job.bufPtr)
+			}
+			setErr(ctx.Err())
+			return false
+		}
 		wg.Add(1)
-		// Use plain goroutines instead of the global parallelUploadPool to avoid
-		// pool-starvation deadlock: when many concurrent WriteMultipartParallel calls
-		// (e.g. LOAD DATA with 15+ parallel scopes) all compete for a tiny global pool
-		// (capacity = NumCPU), every caller blocks on pool.Submit() waiting for workers
-		// that are themselves held by other callers — classic circular wait.
 		go func() {
 			defer wg.Done()
-			for job := range jobCh {
-				if ctx.Err() != nil {
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
-					return a.client.UploadPart(ctx, &s3.UploadPartInput{
-						Bucket:     ptrTo(a.bucket),
-						Key:        ptrTo(key),
-						PartNumber: &job.num,
-						UploadId:   output.UploadId,
-						Body:       bytes.NewReader(job.buf[:job.n]),
-					})
-				}, maxRetryAttemps, IsRetryableError)
-				if uploadErr != nil {
-					setErr(uploadErr)
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
+			defer func() {
+				<-getParallelUploadSemaphore()
+				<-uploadSlots
+			}()
+			if ctx.Err() != nil {
 				if job.bufPtr != nil {
 					bufPool.Put(job.bufPtr)
 				}
-				partsLock.Lock()
-				parts = append(parts, types.CompletedPart{
-					ETag:       uploadOutput.ETag,
-					PartNumber: ptrTo(job.num),
-				})
-				partsLock.Unlock()
+				return
 			}
+			uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+				return a.client.UploadPart(ctx, &s3.UploadPartInput{
+					Bucket:     ptrTo(a.bucket),
+					Key:        ptrTo(key),
+					PartNumber: &job.num,
+					UploadId:   output.UploadId,
+					Body:       bytes.NewReader(job.buf[:job.n]),
+				})
+			}, maxRetryAttemps, IsRetryableError)
+			if uploadErr != nil {
+				setErr(uploadErr)
+				if job.bufPtr != nil {
+					bufPool.Put(job.bufPtr)
+				}
+				return
+			}
+			if job.bufPtr != nil {
+				bufPool.Put(job.bufPtr)
+			}
+			partsLock.Lock()
+			parts = append(parts, types.CompletedPart{
+				ETag:       uploadOutput.ETag,
+				PartNumber: ptrTo(job.num),
+			})
+			partsLock.Unlock()
 		}()
-	}
-
-	for i := 0; i < options.Concurrency; i++ {
-		startWorker()
+		return true
 	}
 
 	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
@@ -651,16 +663,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 			bufPtr: bufPtr,
 			n:      n,
 		}
-		select {
-		case jobCh <- job:
-			return true
-		case <-ctx.Done():
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
-			setErr(ctx.Err())
-			return false
-		}
+		return startPartUpload(job)
 	}
 
 	pendingBufPtr := firstBufPtr
@@ -738,7 +741,6 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		_ = sendJob(pendingBufPtr, pendingBuf, pendingN)
 	}
 
-	close(jobCh)
 	wg.Wait()
 
 	if firstErr != nil {

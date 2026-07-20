@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,62 @@ func TestLazyCacheFSConcurrentFailureIsSharedAndRetryable(t *testing.T) {
 	lazy.waitForCacheFillForTest = nil
 	require.NoError(t, fs.PrefetchFile(ctx, "dir/file"))
 	require.Equal(t, int32(2), reads.Load())
+}
+
+func TestLazyCacheFSWaiterCancellationDoesNotWaitForOwner(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}},
+	}))
+
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var reads atomic.Int32
+	remote := &readHookFileService{FileService: memory}
+	remote.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+		if reads.Add(1) == 1 {
+			close(readStarted)
+			<-releaseRead
+		}
+		return memory.Read(ctx, vector)
+	}
+
+	fs, _, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	lazy := fs.(*lazyCacheFS)
+	waiterReached := make(chan struct{})
+	lazy.waitForCacheFillForTest = func() { close(waiterReached) }
+
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- fs.PrefetchFile(ctx, "dir/file") }()
+	<-readStarted
+
+	waiterCtx, cancelWaiter := context.WithCancel(ctx)
+	cancelWaiter()
+	waiterDone := make(chan error, 1)
+	go func() { waiterDone <- fs.PrefetchFile(waiterCtx, "dir/file") }()
+	<-waiterReached
+
+	select {
+	case err := <-waiterDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("canceled lazy-cache waiter remained blocked behind owner fill")
+	}
+
+	select {
+	case err := <-ownerDone:
+		t.Fatalf("owner fill completed before release: %v", err)
+	default:
+	}
+
+	close(releaseRead)
+	require.NoError(t, <-ownerDone)
+	require.Equal(t, int32(1), reads.Load())
 }
 
 func TestLazyCacheFSInvalidatedFillCannotPublishStaleData(t *testing.T) {
@@ -322,6 +379,24 @@ func TestLazyCacheFSDelegatesMetadataAndInvalidatesCachedWrites(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(root, "dir/file"))
 	_, err = fs.StatFile(ctx, "dir/file")
 	require.Error(t, err)
+}
+
+func TestLazyCacheFSRejectsCachePathEscape(t *testing.T) {
+	ctx := context.Background()
+	remote, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ctx, fileservice.IOVector{
+		FilePath: "../../target",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}},
+	}))
+
+	fs, root, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	err = fs.PrefetchFile(ctx, "SHARED:../../target")
+	require.ErrorContains(t, err, "escapes cache root")
+	require.NoFileExists(t, filepath.Join(filepath.Dir(root), "target"))
 }
 
 func TestLazyCacheFSReadErrors(t *testing.T) {

@@ -808,7 +808,7 @@ func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
 			{"13", "tbl2", "db2", "bad", "invalid", "bad"},
 		},
 	)
-	require.Len(t, tableRecords, 1)
+	require.Len(t, tableRecords, 2)
 	assert.Equal(t, TableCatalogEntry{
 		TableID:      11,
 		AccountID:    3,
@@ -817,6 +817,14 @@ func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
 		TableName:    "tbl",
 		RelKind:      "r",
 	}, tableRecords[0])
+	assert.Equal(t, TableCatalogEntry{
+		TableID:      12,
+		AccountID:    3,
+		DatabaseID:   22,
+		DatabaseName: "db",
+		TableName:    "bad name",
+		RelKind:      "r",
+	}, tableRecords[1])
 
 	dbView := &LogicalTableView{
 		Headers: []string{"dat_id", "datname", "account_id"},
@@ -829,9 +837,10 @@ func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
 		},
 	}
 	dbRecords := buildCatalogDatabasesFromMoDatabaseRows(dbView)
-	require.Len(t, dbRecords, 2)
+	require.Len(t, dbRecords, 3)
 	assert.Equal(t, TableCatalogEntry{AccountID: 4, DatabaseID: 31, DatabaseName: "db"}, dbRecords[0])
-	assert.Equal(t, TableCatalogEntry{AccountID: 0, DatabaseID: 33, DatabaseName: "db2"}, dbRecords[1])
+	assert.Equal(t, TableCatalogEntry{AccountID: 4, DatabaseID: 32, DatabaseName: "bad name"}, dbRecords[1])
+	assert.Equal(t, TableCatalogEntry{AccountID: 0, DatabaseID: 33, DatabaseName: "db2"}, dbRecords[2])
 
 	view := &LogicalTableView{
 		Headers:    []string{"object", "block", "row", "col_0", "col_1"},
@@ -2286,6 +2295,23 @@ func TestBuildCatalogTablesFromMoTablesRows_UsesTemporaryDisplayName(t *testing.
 	tables := buildCatalogTablesFromMoTablesRows(view)
 	require.Len(t, tables, 1)
 	assert.Equal(t, "t_session_only", tables[0].TableName)
+}
+
+func TestBuildCatalogTablesFromMoTablesRowsKeepsQuotedIdentifierNames(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		Rows: [][]string{
+			moTablesCatalogTestRow(t, "1004", "order items", "sales-db", "9003", "r", "7", ""),
+			moTablesCatalogTestRow(t, "1005", "tick`table", "quoted db", "9003", "r", "7", ""),
+		},
+	}
+
+	tables := buildCatalogTablesFromMoTablesRows(view)
+	require.Len(t, tables, 2)
+	assert.Equal(t, "order items", tables[0].TableName)
+	assert.Equal(t, "sales-db", tables[0].DatabaseName)
+	assert.Equal(t, "tick`table", tables[1].TableName)
+	assert.Equal(t, "quoted db", tables[1].DatabaseName)
 }
 
 func TestDisplayTableName(t *testing.T) {
