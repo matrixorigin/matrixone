@@ -710,6 +710,9 @@ var (
 			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
 			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
 		}, {
+			input:  "UPDATE IGNORE t SET a = 1 WHERE id = 2",
+			output: "update ignore t set a = 1 where id = 2",
+		}, {
 			input:  "UPDATE t SET remark = c.province FROM company c WHERE c.id = t.company_id",
 			output: "update t set remark = c.province from company as c where c.id = t.company_id",
 		}, {
