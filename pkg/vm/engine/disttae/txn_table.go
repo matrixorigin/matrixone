@@ -2946,39 +2946,51 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 		tbl.db.databaseId,
 		tbl.tableId,
 	)
-	if subscribed {
-		canServe, _ := eng.PushClient().canServeTableSnapshotNoWait(
-			tbl.db.databaseId,
-			tbl.tableId,
-			ps,
-			to.ToTimestamp(),
-		)
-		return ps, canServe, nil
+	if !subscribed {
+		createdInTxn, err := tbl.isCreatedInTxn(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		if createdInTxn {
+			// A table created by this transaction has no committed remote history.
+			// Preserve the existing empty latest-state behavior without requiring a
+			// logtail subscription for a table that TN cannot expose yet.
+			part, err := eng.LazyLoadLatestCkp(
+				ctx,
+				uint64(tbl.accountId),
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			return part.Snapshot(), true, nil
+		}
+
+		// A first write can race the table's initial subscription, and reconnect
+		// rebuilds use the same states. Wait for the existing subscription state
+		// machine instead of retrying the whole statement: statement retries may
+		// have non-transactional side effects such as consuming auto-increment
+		// values.
+		ps, err = tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 
-	createdInTxn, err := tbl.isCreatedInTxn(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	if !createdInTxn {
-		return nil, false, nil
-	}
-
-	// A table created by this transaction has no committed remote history.
-	// Preserve the existing empty latest-state behavior without requiring a
-	// logtail subscription for a table that TN cannot expose yet.
-	part, err := eng.LazyLoadLatestCkp(
+	// The global logtail waterline can advance before this table's queued
+	// update is applied. Wait only in that exceptional window; subscribed
+	// tables with no pending update return immediately.
+	return eng.PushClient().waitCanServeTableSnapshot(
 		ctx,
 		uint64(tbl.accountId),
-		tbl.tableId,
-		tbl.tableName,
 		tbl.db.databaseId,
-		tbl.db.databaseName,
+		tbl.tableId,
+		ps,
+		to.ToTimestamp(),
 	)
-	if err != nil {
-		return nil, false, err
-	}
-	return part.Snapshot(), true, nil
 }
 
 func (tbl *txnTable) primaryKeysMayBeChanged(
