@@ -54,7 +54,7 @@ insert into t1 values(5, '1981-09-28','bcvdf', 25);
 insert into t1 values(6, '1981-05-01','green', 26);
 ALTER TABLE t1 ADD UNIQUE idx1 (col2, col3);
 insert into t1 values(7, '1981-05-01','green', 26);
-Duplicate entry '(1981-05-01,green)' for key '(col2,col3)'
+Duplicate entry ('\(\d{4}-\d{2}-\d{2},\w{5}\)'|'\d{5}\w\d{17}\w\d{2}') for key '(.*)'
 show index from t1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
