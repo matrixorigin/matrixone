@@ -105,6 +105,12 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	if err != nil {
 		return nil, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = c.Close()
+		}
+	}()
 	s := &serverConn{
 		cnServer:   cn,
 		conn:       c,
@@ -123,6 +129,7 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 		return nil, err
 	}
 	s.mysqlProto = frontend.NewMysqlClientProtocol(cn.uuid, s.connID, ios, 0, &fp)
+	owned = false
 	return s, nil
 }
 
@@ -331,6 +338,12 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 		goetty.WithSessionCodec(frontend.NewSqlCodec()),
 		goetty.WithSessionLogger(logger),
 	)
+	owned := true
+	defer func() {
+		if owned {
+			_ = c.Close()
+		}
+	}()
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
 		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
@@ -362,5 +375,6 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
 		return nil, err
 	}
+	owned = false
 	return c, nil
 }

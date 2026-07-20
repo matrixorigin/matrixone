@@ -3845,6 +3845,10 @@ var (
 			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 		},
 		{
+			input:  "prepare st from 'select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)'",
+			output: "prepare st from select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)",
+		},
+		{
 			input:  "alter user user1 unlock",
 			output: "alter user user1 unlock",
 		},
@@ -3980,7 +3984,57 @@ var (
 			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
 			output: "create index idx using ivfpq on a (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price) ",
 		},
-	}
+		// Issue #23122: ANALYZE TABLE multi-table
+		{
+			input:  "analyze table t1 (a, b), t2 (c, d)",
+			output: "analyze table t1(a, b), t2(c, d)",
+		},
+		{
+			input:  "analyze table company, company_patent",
+			output: "analyze table company, company_patent",
+		},
+		{
+			input:  "analyze table t1",
+			output: "analyze table t1",
+		},
+		// Issue #23122: CHECK TABLE
+		{
+			input:  "check table t1",
+			output: "check table t1",
+		},
+		{
+			input:  "check table t1 extended",
+			output: "check table t1 extended",
+		},
+		{
+			input:  "check table t1, t2",
+			output: "check table t1, t2",
+		},
+		{
+			input:  "check table t1 for upgrade",
+			output: "check table t1 for upgrade",
+		},
+		// Issue #23122: SHOW PROFILE
+		{
+			input:  "show profile",
+			output: "show profile",
+		},
+		{
+			input:  "show profile for query 2",
+			output: "show profile for query 2",
+		},
+		{
+			input:  "show profile limit 10",
+			output: "show profile limit 10",
+		},
+		{
+			input:  "show profile for query 2 limit 10",
+			output: "show profile for query 2 limit 10",
+		},
+		{
+			input:  "show profile for query 2 limit 10 offset 5",
+			output: "show profile for query 2 limit 10 offset 5",
+		}}
 )
 
 func TestValid(t *testing.T) {

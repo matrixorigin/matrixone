@@ -435,4 +435,11 @@ string  𝄀
 123  𝄀
 mixed
 DROP TABLE t1;
+SET SESSION sql_mode = '';
+SELECT IF(0, CAST('bad' AS SIGNED), 7) AS if_skip_true_branch,
+CASE WHEN 0 THEN CAST('bad' AS SIGNED) ELSE 7 END AS case_skip_then,
+COALESCE(5, CAST('bad' AS SIGNED)) AS coalesce_skip_later,
+IFNULL(5, CAST('bad' AS SIGNED)) AS ifnull_skip_later;
+➤ if_skip_true_branch[-5,64,0]  ¦  case_skip_then[-5,64,0]  ¦  coalesce_skip_later[-5,64,0]  ¦  ifnull_skip_later[-5,64,0]  𝄀
+7  ¦  7  ¦  5  ¦  5
 SET TIME_ZONE = "SYSTEM";

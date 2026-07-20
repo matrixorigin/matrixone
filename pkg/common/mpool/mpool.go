@@ -282,6 +282,15 @@ func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 		return nil
 	}
 }
+
+func (mp *MPool) getPtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
+	if !mp.noLock {
+		return gGetPtr(ptr)
+	}
+	hdr, ok := mp.ptrs[ptr]
+	return hdr, ok
+}
+
 func (mp *MPool) removePtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
 	if !mp.noLock {
 		return gRemovePtr(ptr)
@@ -675,39 +684,112 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 // ReallocZero is like Realloc, but it clears the memory.
 func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	if cap(old) == 0 {
+	if sz < 0 || sz > CapLimit-kMemHdrSz {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"mpool memory allocation exceed limit with requested size %d",
+			sz,
+		)
+	}
+
+	// Resizing within the caller-visible capacity cannot change allocator
+	// provenance or ownership, so keep this common path lock-free.
+	if cap(old) > 0 {
+		oldLength := len(old)
+		if sz <= oldLength {
+			return old[:sz], nil
+		}
+		if sz <= cap(old) {
+			resized := old[:sz]
+			clear(resized[oldLength:])
+			return resized, nil
+		}
+	}
+
+	oldptr := unsafe.Pointer(unsafe.SliceData(old))
+	var hdr memHdr
+	var ok bool
+	if oldptr != nil {
+		hdr, ok = mp.getPtrHdr(oldptr)
+	}
+	if !ok {
+		if len(old) != 0 || cap(old) != 0 {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"invalid realloc pointer: allocation metadata not found",
+			)
+		}
 		return mp.allocWithDetailK(detailk, int64(sz), offHeap)
 	}
 
-	if !offHeap {
-		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, false)
+	if !hdr.CheckGuard() || hdr.allocSz <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"invalid realloc pointer: corrupt allocation metadata",
+		)
 	}
 
-	oldsz := len(old)
-	oldcap := cap(old)
-	if sz <= oldsz {
-		return old[:sz], nil
-	} else if sz <= oldcap {
-		old = old[:sz]
-		clear(old[oldsz:])
-		return old, nil
+	oldSize := int(hdr.allocSz)
+	if len(old) > oldSize || cap(old) > oldSize {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"realloc view exceeds recorded allocation size, len %d, cap %d, recorded %d",
+			len(old),
+			cap(old),
+			oldSize,
+		)
 	}
 
-	oldptr := unsafe.Pointer(&old[0])
-	newbs, err := simpleCAllocator().ReallocZero(old, uint64(sz))
+	// Reconstruct the full allocation from stable mpool metadata. Callers such
+	// as PtrLen intentionally retain only a pointer and logical length, so their
+	// slice capacity is not allocator provenance and may be smaller than the
+	// backing allocation.
+	fullAllocation := unsafe.Slice((*byte)(oldptr), oldSize)
+	oldLength := len(old)
+	if sz <= oldSize {
+		resized := fullAllocation[:sz]
+		if sz > oldLength {
+			clear(resized[oldLength:])
+		}
+		return resized, nil
+	}
+
+	// Only resize in place when the source and destination are off-heap and
+	// owned by this pool. Other provenance/ownership transitions use the normal
+	// allocate-copy-free path so accounting and cross-pool cleanup stay correct.
+	if !hdr.offHeap || !offHeap || hdr.poolId != mp.id {
+		return mp.reAllocWithDetailK(
+			detailk,
+			fullAllocation[:oldLength],
+			int64(sz),
+			offHeap,
+			false,
+		)
+	}
+
+	newbs, err := simpleCAllocator().ReallocZero(
+		fullAllocation[:oldLength],
+		uint64(oldSize),
+		uint64(sz),
+	)
 	if err != nil {
 		return nil, err
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	mp.removePtrHdr(oldptr)
-	mp.recordPtrHdr(newptr, memHdr{
-		poolId:  mp.id,
+	removedHdr, removed := mp.removePtrHdr(oldptr)
+	if !removed || removedHdr != hdr {
+		panic(moerr.NewInternalErrorNoCtx(
+			"allocation metadata changed during realloc",
+		))
+	}
+	newHdr := memHdr{
+		poolId:  hdr.poolId,
 		allocSz: int32(sz),
-		offHeap: offHeap,
-	})
-	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldcap), int64(sz))
-	globalStats.RecordFree("global", int64(oldcap))
-	mp.stats.RecordFree(mp.tag, int64(oldcap))
+		offHeap: true,
+	}
+	newHdr.SetGuard()
+	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
+		panic(err)
+	}
+	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	globalStats.RecordFree("global", int64(oldSize))
+	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	globalStats.RecordAlloc("global", int64(sz))
 	mp.stats.RecordAlloc(mp.tag, int64(sz))
 	return newbs, nil
@@ -823,6 +905,14 @@ func gRecordPtr(ptr unsafe.Pointer, hdr memHdr) error {
 	}
 	shard.m[ptr] = hdr
 	return nil
+}
+
+func gGetPtr(ptr unsafe.Pointer) (memHdr, bool) {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	hdr, ok := shard.m[ptr]
+	return hdr, ok
 }
 
 func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {

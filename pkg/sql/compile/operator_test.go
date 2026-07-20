@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -52,6 +53,16 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestDupHashBuildPreservesNullTracking(t *testing.T) {
+	source := hashbuild.NewArgument()
+	defer source.Release()
+	source.TrackNullKeys = true
+
+	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
+	defer duplicated.Release()
+	require.True(t, duplicated.TrackNullKeys)
 }
 
 func TestDupOperatorMergeTop(t *testing.T) {

@@ -75,6 +75,62 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 	proc.Free()
 }
 
+func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument()
+	arg.JoinType = plan.Node_MARK
+	arg.NonEqCond = newExpr(0, types.T_int32.ToType())
+
+	require.ErrorContains(t, arg.Prepare(proc), "hash MARK join does not support residual conditions")
+
+	arg.Release()
+	proc.Free()
+}
+
+func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	key := newExpr(0, types.T_int32.ToType())
+
+	tests := []struct {
+		name string
+		arg  *HashJoin
+	}{
+		{
+			name: "missing keys",
+			arg:  &HashJoin{JoinType: plan.Node_MARK},
+		},
+		{
+			name: "mismatched key counts",
+			arg: &HashJoin{
+				JoinType: plan.Node_MARK,
+				EqConds:  [][]*plan.Expr{{key}, {key, key}},
+			},
+		},
+		{
+			name: "nullable composite keys",
+			arg: &HashJoin{
+				JoinType: plan.Node_MARK,
+				EqConds:  [][]*plan.Expr{{key, key}, {key, key}},
+			},
+		},
+		{
+			name: "build-side result column",
+			arg: &HashJoin{
+				JoinType:   plan.Node_MARK,
+				EqConds:    [][]*plan.Expr{{key}, {key}},
+				ResultCols: []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.arg.Prepare(proc))
+		})
+	}
+}
+
 var (
 	tag int32
 )
@@ -275,6 +331,307 @@ func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
 	require.NotNil(t, res.Batch)
 	require.True(t, res.Batch.Vecs[1].IsConstNull())
 	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinThreeValuedSemantics(t *testing.T) {
+	type expectedMark struct {
+		value  bool
+		isNull bool
+	}
+
+	tests := []struct {
+		name        string
+		buildValues []int32
+		buildNulls  []uint64
+		expected    []expectedMark
+	}{
+		{
+			name:        "matching value wins over build null",
+			buildValues: []int32{2, 4, 0},
+			buildNulls:  []uint64{2},
+			expected: []expectedMark{
+				{isNull: true},
+				{value: true},
+				{isNull: true},
+				{isNull: true},
+			},
+		},
+		{
+			name:        "non-null build returns false for misses",
+			buildValues: []int32{2, 4},
+			expected: []expectedMark{
+				{value: false},
+				{value: true},
+				{value: false},
+				{isNull: true},
+			},
+		},
+		{
+			name: "empty build is false even for null probe",
+			expected: []expectedMark{
+				{value: false},
+				{value: false},
+				{value: false},
+				{value: false},
+			},
+		},
+		{
+			name:        "all-null build returns unknown",
+			buildValues: []int32{0},
+			buildNulls:  []uint64{0},
+			expected: []expectedMark{
+				{isNull: true},
+				{isNull: true},
+				{isNull: true},
+				{isNull: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTestCase(t,
+				[]bool{true},
+				[]types.Type{types.T_int32.ToType()},
+				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+				[][]*plan.Expr{
+					{newExpr(0, types.T_int32.ToType())},
+					{newExpr(0, types.T_int32.ToType())},
+				})
+			tc.arg.JoinType = plan.Node_MARK
+			tc.arg.NonEqCond = nil
+			tc.arg.ResultCols = []colexec.ResultPos{
+				colexec.NewResultPos(0, 0),
+				colexec.NewResultPos(-1, 0),
+			}
+			tc.barg.NeedAllocateSels = false
+			tc.barg.NeedBatches = false
+			tc.barg.TrackNullKeys = true
+
+			probe := batch.NewWithSize(1)
+			probe.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 0}, []uint64{3}, tc.proc.Mp())
+			probe.SetRowCount(4)
+			resetChildrenWithBatch(tc.arg, probe)
+
+			build := batch.EmptyBatch
+			if len(tt.buildValues) > 0 {
+				build = batch.NewWithSize(1)
+				build.Vecs[0] = testutil.MakeInt32Vector(tt.buildValues, tt.buildNulls, tc.proc.Mp())
+				build.SetRowCount(len(tt.buildValues))
+			}
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+
+			res, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.NotNil(t, res.Batch)
+			require.Equal(t, len(tt.expected), res.Batch.RowCount())
+			require.Len(t, res.Batch.Vecs, 2)
+
+			marks := vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1])
+			for i, expected := range tt.expected {
+				value, isNull := marks.GetValue(uint64(i))
+				require.Equal(t, expected.isNull, isNull, "row %d null state", i)
+				if !isNull {
+					require.Equal(t, expected.value, value, "row %d value", i)
+				}
+			}
+
+			tc.arg.Reset(tc.proc, false, nil)
+			tc.barg.Reset(tc.proc, false, nil)
+			tc.arg.Free(tc.proc, false, nil)
+			tc.barg.Free(tc.proc, false, nil)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
+	probeKey0 := newExpr(0, types.T_int32.ToType())
+	probeKey1 := newExpr(1, types.T_int32.ToType())
+	buildKey0 := newExpr(0, types.T_int32.ToType())
+	buildKey1 := newExpr(1, types.T_int32.ToType())
+	for _, expr := range []*plan.Expr{probeKey0, probeKey1, buildKey0, buildKey1} {
+		expr.Typ.NotNullable = true
+	}
+
+	tc := newTestCase(t,
+		[]bool{false, false},
+		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{{probeKey0, probeKey1}, {buildKey0, buildKey1}},
+	)
+	tc.arg.JoinType = plan.Node_MARK
+	tc.arg.NonEqCond = nil
+	tc.arg.ResultCols = []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(-1, 0),
+	}
+	tc.barg.NeedAllocateSels = false
+	tc.barg.NeedBatches = false
+	tc.barg.TrackNullKeys = true
+
+	probe := batch.NewWithSize(2)
+	probe.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 3}, nil, tc.proc.Mp())
+	probe.Vecs[1] = testutil.MakeInt32Vector([]int32{2, 4, 4}, nil, tc.proc.Mp())
+	probe.SetRowCount(3)
+	resetChildrenWithBatch(tc.arg, probe)
+
+	build := batch.NewWithSize(2)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 3}, nil, tc.proc.Mp())
+	build.Vecs[1] = testutil.MakeInt32Vector([]int32{2, 4}, nil, tc.proc.Mp())
+	build.SetRowCount(2)
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	res, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Equal(t, 3, res.Batch.RowCount())
+	marks := vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1])
+	for row, expected := range []bool{true, false, true} {
+		value, isNull := marks.GetValue(uint64(row))
+		require.False(t, isNull, "row %d", row)
+		require.Equal(t, expected, value, "row %d", row)
+	}
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
+	tc := newTestCase(t,
+		[]bool{true},
+		[]types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{
+			{newExpr(0, types.T_int32.ToType())},
+			{newExpr(0, types.T_int32.ToType())},
+		})
+	tc.arg.JoinType = plan.Node_MARK
+	tc.arg.NonEqCond = nil
+	tc.arg.ResultCols = []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(-1, 0),
+	}
+	tc.barg.NeedAllocateSels = false
+	tc.barg.NeedBatches = false
+	tc.barg.TrackNullKeys = true
+
+	run := func(probeValue, buildValue int32, buildNull bool) (bool, bool) {
+		probe := batch.NewWithSize(1)
+		probe.Vecs[0] = testutil.MakeInt32Vector([]int32{probeValue}, nil, tc.proc.Mp())
+		probe.SetRowCount(1)
+		resetChildrenWithBatch(tc.arg, probe)
+
+		var buildNulls []uint64
+		if buildNull {
+			buildNulls = []uint64{0}
+		}
+		build := batch.NewWithSize(1)
+		build.Vecs[0] = testutil.MakeInt32Vector([]int32{buildValue}, buildNulls, tc.proc.Mp())
+		build.SetRowCount(1)
+		resetHashBuildChildrenWithBatch(tc.barg, build)
+
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		require.NoError(t, tc.barg.Prepare(tc.proc))
+		_, err := vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		res, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+
+		return vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1]).GetValue(0)
+	}
+
+	_, isNull := run(1, 0, true)
+	require.True(t, isNull)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	require.False(t, tc.arg.ctr.buildHasNullKey)
+	require.Zero(t, tc.arg.ctr.globalBuildRowCnt)
+	tc.proc.GetMessageBoard().Reset()
+
+	value, isNull := run(1, 2, false)
+	require.False(t, isNull)
+	require.False(t, value)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinBatchBoundary(t *testing.T) {
+	tc := newTestCase(t,
+		[]bool{true},
+		[]types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{
+			{newExpr(0, types.T_int32.ToType())},
+			{newExpr(0, types.T_int32.ToType())},
+		})
+	tc.arg.JoinType = plan.Node_MARK
+	tc.arg.NonEqCond = nil
+	tc.arg.ResultCols = []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(-1, 0),
+	}
+	tc.barg.NeedAllocateSels = false
+	tc.barg.NeedBatches = false
+	tc.barg.TrackNullKeys = true
+
+	probeValues := make([]int32, colexec.DefaultBatchSize+1)
+	probeValues[len(probeValues)-1] = 2
+	probe := batch.NewWithSize(1)
+	probe.Vecs[0] = testutil.MakeInt32Vector(probeValues, nil, tc.proc.Mp())
+	probe.SetRowCount(len(probeValues))
+	resetChildrenWithBatch(tc.arg, probe)
+
+	build := batch.NewWithSize(1)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{2}, nil, tc.proc.Mp())
+	build.SetRowCount(1)
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	first, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, first.Batch)
+	require.Equal(t, colexec.DefaultBatchSize, first.Batch.RowCount())
+
+	second, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, second.Batch)
+	require.Equal(t, 1, second.Batch.RowCount())
+	value, isNull := vector.GenerateFunctionFixedTypeParameter[bool](second.Batch.Vecs[1]).GetValue(0)
+	require.False(t, isNull)
+	require.True(t, value)
 
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)

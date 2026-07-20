@@ -106,6 +106,8 @@ const (
 	FPShowVariables
 	FPShowErrors
 	FPAnalyzeStmt
+	FPCheckTableStmt
+	FPShowProfileStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
@@ -200,6 +202,8 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPHandleCheckTableStmt
+	FPHandleShowProfileStmt
 	FPShowPublications
 	FPCreateCDC
 	FPPauseCDC
@@ -301,6 +305,7 @@ type PrepareStmt struct {
 	ColDefData     [][]byte
 	IsCloudNonuser bool
 	proc           *process.Process
+	remapDb        map[string]string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -666,6 +671,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.remapDb = nil
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {
@@ -902,6 +908,11 @@ type ExecCtx struct {
 	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
 	// no remapdb is configured.
 	remapDb map[string]string
+	// rewriteEnabled is captured once when the request is parsed. It keeps
+	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
+	// snapshot even if an earlier statement in the request changes the session
+	// switch before the nested SQL is planned.
+	rewriteEnabled bool
 }
 
 func (execCtx *ExecCtx) Close() {
@@ -923,6 +934,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.rewriteEnabled = false
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.

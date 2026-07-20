@@ -312,6 +312,11 @@ type Compile struct {
 
 	filterExprExes []colexec.ExpressionExecutor
 
+	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
+	// visited by compilePlanScope. It is statement-local and remains empty for
+	// queries without right-SINGLE joins.
+	compiledRightSingleNodes []int32
+
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
