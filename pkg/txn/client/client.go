@@ -271,6 +271,8 @@ type txnClient struct {
 	enableSacrificingFreshness  bool
 	enableRefreshExpression     bool
 	txnOpenedCallbacks          []func(TxnOperator)
+	defaultEventCallbacks       defaultTxnEventCallbacks
+	sharedEventCallbacks        txnEventCallbacks
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -483,6 +485,11 @@ func NewTxnClient(
 		sender: sender,
 		abortC: make(chan struct{}, 1),
 	}
+	c.defaultEventCallbacks.closed = [2]TxnEventCallback{
+		{Func: c.updateLastCommitTS},
+		{Func: c.closeTxn},
+	}
+	c.sharedEventCallbacks.defaults = &c.defaultEventCallbacks
 	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
 	c.closeCtx, c.closeCancel = context.WithCancel(context.Background())
 	c.mu.state = paused
@@ -634,15 +641,7 @@ func (client *txnClient) doCreateTxn(
 		op.reset.tryAcquireUnknownCommit = client.tryAcquireUnknownCommit
 		op.reset.unknownCommitResolved = client.releaseInternalUnknownCommit
 	}
-	op.AppendEventCallback(
-		ClosedEvent,
-		TxnEventCallback{
-			Func: client.updateLastCommitTS,
-		},
-		TxnEventCallback{
-			Func: client.closeTxn,
-		},
-	)
+	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
 	if err = client.openTxn(ctx, op); err != nil {
 		op.closeUnadmitted(err)
@@ -757,8 +756,28 @@ func (client *txnClient) abortCreatedTxn(
 }
 
 func (client *txnClient) NewWithSnapshot(
+	ctx context.Context,
 	snapshot txn.CNTxnSnapshot,
 ) (TxnOperator, error) {
+	if client.isClosed() {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+	// A snapshot transferred from a coordinator can be ahead of this CN's
+	// locally applied logtail. Rebuilding the operator without this barrier can
+	// expose a partially updated catalog or partition state to remote execution.
+	// SnapshotTS itself is exclusive, so all logtails through SnapshotTS.Prev()
+	// must be applied locally before the mirror transaction can execute.
+	if !snapshot.Txn.SnapshotTS.IsEmpty() {
+		if _, err := client.WaitLogTailAppliedAt(ctx, snapshot.Txn.SnapshotTS.Prev()); err != nil {
+			return nil, err
+		}
+	}
+	// The timestamp waiter may select a successful notification concurrently
+	// with client shutdown and return that success after Close has completed.
+	// Linearize final mirror admission against Close only after the wait; holding
+	// the gate during the wait would prevent shutdown from canceling it.
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
 	if client.isClosed() {
 		return nil, moerr.NewClientClosedNoCtx()
 	}

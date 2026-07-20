@@ -24,7 +24,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -208,34 +206,6 @@ func (rt *Routine) cancelRequestCtx() {
 	}
 }
 
-func (rt *Routine) reportSystemStatus() (r bool) {
-	ss := rt.ses
-	if ss == nil {
-		return
-	}
-	rm := ss.getRoutineManager()
-	if rm == nil {
-		return
-	}
-
-	now := time.Now()
-	defer func() {
-		if r {
-			rm.reportSystemStatusTime.Store(&now)
-		}
-	}()
-	last := rm.reportSystemStatusTime.Load()
-	if last == nil {
-		r = true
-		return
-	}
-	if now.Sub(*last) > time.Minute {
-		r = true
-		return
-	}
-	return
-}
-
 func (rt *Routine) getCleanupContext() context.Context {
 	if ses := rt.getSession(); ses != nil {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
@@ -265,24 +235,15 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}()
 
 	reqBegin := time.Now()
-	var span trace.Span
-	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
-		trace.WithHungThreshold(30*time.Minute),
-		trace.WithProfileGoroutine(),
-		trace.WithConstBackOff(5*time.Minute),
-		trace.WithProfileSystemStatus(func() ([]byte, error) {
-			ss, ok := runtime.ServiceRuntime(ses.GetService()).GetGlobalVariables(runtime.StatusServer)
-			if !ok {
-				return nil, nil
-			}
-			if !rt.reportSystemStatus() {
-				return nil, nil
-			}
-			data, err := ss.(*status.Server).Dump()
-			return data, err
-		}),
+	// WithHungThreshold used to add this deadline as a side effect of starting
+	// a Span. Preserve the request cleanup guard independently of the retired
+	// Span recording and profiling runtime.
+	routineCtx, cancelHungRequest := context.WithTimeoutCause(
+		rt.getCancelRoutineCtx(),
+		30*time.Minute,
+		moerr.CauseNewMOHungSpan,
 	)
-	defer span.End()
+	defer cancelHungRequest()
 
 	parameters := rt.getParameters()
 	//all offspring related to the request inherit the txnCtx

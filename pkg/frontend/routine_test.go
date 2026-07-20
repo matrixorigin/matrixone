@@ -43,9 +43,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	util "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type routineTraceIDGenerator struct{}
+
+func (routineTraceIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
+	var traceID trace.TraceID
+	traceID[len(traceID)-1] = 1
+	var spanID trace.SpanID
+	spanID[len(spanID)-1] = 1
+	return traceID, spanID
+}
+
+func (routineTraceIDGenerator) NewSpanID() trace.SpanID {
+	var spanID trace.SpanID
+	spanID[len(spanID)-1] = 2
+	return spanID
+}
+
+func TestNewRoutineGeneratesTraceContext(t *testing.T) {
+	previous := trace.DefaultTracer()
+	trace.SetDefaultTracer(trace.NewNonRecordingTracer(routineTraceIDGenerator{}))
+	t.Cleanup(func() { trace.SetDefaultTracer(previous) })
+
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	spanContext := trace.SpanFromContext(routine.getCancelRoutineCtx()).SpanContext()
+	require.False(t, spanContext.IsEmpty())
+}
 
 func Test_inc_dec(t *testing.T) {
 	rt := &Routine{}

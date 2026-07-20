@@ -191,7 +191,7 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
-	txnOp, err := c.txnClient.NewWithSnapshot(value.Snapshot)
+	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
 	}
