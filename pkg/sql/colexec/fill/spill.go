@@ -37,6 +37,7 @@ const fillSpillMagic = uint64(0x46494c4c5350494c)
 type fillSpill struct {
 	input  *os.File
 	output *os.File
+	next   *os.File
 	buf    bytes.Buffer
 
 	outputReversePos int64
@@ -44,9 +45,13 @@ type fillSpill struct {
 	inputRecords     int
 	outputRecords    int
 	replay           *batch.Batch
-	carry            *batch.Batch
-	segmentWait      []bool
+	segmentPending   []int64
 	segmentLeftValid []bool
+	segmentStart     int64
+	segmentRows      int64
+	safeWatermark    int64
+	safeRows         int64
+	hasSuffix        bool
 	linearLeft       []*vector.Vector
 	linearLeftValid  []bool
 	forwardPart      spillPartitionSnapshot
@@ -118,6 +123,18 @@ func (s *fillSpill) ensureOutput(proc *process.Process) error {
 		return err
 	}
 	s.output, err = fs.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("fill_%s_out", uuid.NewString()))
+	return err
+}
+
+func (s *fillSpill) ensureNext(proc *process.Process) error {
+	if s.next != nil {
+		return nil
+	}
+	fs, err := proc.GetSpillFileService()
+	if err != nil {
+		return err
+	}
+	s.next, err = fs.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("fill_%s_next", uuid.NewString()))
 	return err
 }
 
@@ -219,13 +236,13 @@ func (s *fillSpill) close(proc *process.Process) {
 		_ = s.output.Close()
 		s.output = nil
 	}
+	if s.next != nil {
+		_ = s.next.Close()
+		s.next = nil
+	}
 	if s.replay != nil {
 		s.replay.Clean(proc.Mp())
 		s.replay = nil
-	}
-	if s.carry != nil {
-		s.carry.Clean(proc.Mp())
-		s.carry = nil
 	}
 	for _, vec := range s.linearLeft {
 		if vec != nil {
@@ -285,15 +302,6 @@ func clearEndpoints(valid []bool) {
 	for i := range valid {
 		valid[i] = false
 	}
-}
-
-func allResolved(wait []bool) bool {
-	for _, pending := range wait {
-		if pending {
-			return false
-		}
-	}
-	return true
 }
 
 func cloneBatchWindow(bat *batch.Batch, start, end int, mp *mpool.MPool) (*batch.Batch, error) {
@@ -385,37 +393,59 @@ func (ctr *container) shouldSpillPending() bool {
 	return colexec.ShouldSpill(ctr.pendingBytes, ctr.pendingRows, ctr.spillThreshold)
 }
 
-// scanSegment returns the exclusive end row that closes the current spill
-// segment. A partition boundary closes the old segment before its first row;
-// otherwise the segment closes after a row once no fill column has a pending
-// dependency on unseen input.
-func (s *fillSpill) scanSegment(ctr *container, ap *Fill, bat *batch.Batch) int {
+func (s *fillSpill) updateSafeWatermark() {
+	watermark := s.segmentRows
+	for _, pending := range s.segmentPending {
+		if pending >= 0 && pending < watermark {
+			watermark = pending
+		}
+	}
+	if watermark > s.safeWatermark {
+		s.safeWatermark = watermark
+	}
+}
+
+// scanSegment advances the earliest unresolved logical row for every fill
+// column. The minimum of those positions is a safe output watermark: later
+// rows may still be pending, but they cannot change anything before it.
+func (s *fillSpill) scanSegment(ctr *container, ap *Fill, bat *batch.Batch) {
 	for row := 0; row < bat.RowCount(); row++ {
+		logicalRow := s.segmentRows
 		if ctr.isNewSegment(ap, bat, row) {
-			return row
+			for col := range s.segmentPending {
+				s.segmentPending[col] = -1
+				s.segmentLeftValid[col] = false
+			}
 		}
 		for col := 0; col < ap.ColLen; col++ {
 			isNull := originalNullAt(bat, ap.ColLen, col, row)
 			switch ap.FillType {
 			case plan.Node_NEXT:
-				s.segmentWait[col] = isNull
+				if isNull {
+					if s.segmentPending[col] < 0 {
+						s.segmentPending[col] = logicalRow
+					}
+				} else {
+					s.segmentPending[col] = -1
+				}
 			case plan.Node_LINEAR:
 				if isNull {
-					s.segmentWait[col] = s.segmentLeftValid[col]
+					if s.segmentLeftValid[col] && s.segmentPending[col] < 0 {
+						s.segmentPending[col] = logicalRow
+					}
 				} else {
-					s.segmentWait[col] = false
+					s.segmentPending[col] = -1
 					s.segmentLeftValid[col] = true
 				}
 			}
 		}
-		if allResolved(s.segmentWait) {
-			return row + 1
-		}
+		s.segmentRows++
+		s.updateSafeWatermark()
 	}
-	return -1
 }
 
 func (s *fillSpill) finalizeSegment(ctr *container, ap *Fill, proc *process.Process) error {
+	s.safeRows = s.safeWatermark - s.segmentStart
 	if err := s.transformReverse(ap, proc); err != nil {
 		return err
 	}
@@ -431,16 +461,34 @@ func (ctr *container) beginSpill(ap *Fill, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	spill.segmentWait = make([]bool, ap.ColLen)
+	spill.segmentPending = make([]int64, ap.ColLen)
 	spill.segmentLeftValid = make([]bool, ap.ColLen)
+	for _, bat := range ctr.bats {
+		spill.segmentRows += int64(bat.RowCount())
+	}
+	coordOffset := func(coord fillCoord) int64 {
+		var offset int64
+		for seq := ctr.baseSeq; seq < coord.seq; seq++ {
+			offset += int64(ctr.batAt(seq).RowCount())
+		}
+		return offset + int64(coord.row)
+	}
 	for col := 0; col < ap.ColLen; col++ {
+		spill.segmentPending[col] = -1
 		if ap.FillType == plan.Node_NEXT {
-			spill.segmentWait[col] = len(ctr.nextRun[col]) > 0
+			if len(ctr.nextRun[col]) > 0 {
+				coord := ctr.nextRun[col][0]
+				spill.segmentPending[col] = coordOffset(coord)
+			}
 		} else {
-			spill.segmentWait[col] = len(ctr.linRun[col]) > 0
+			if len(ctr.linRun[col]) > 0 {
+				coord := ctr.linRun[col][0]
+				spill.segmentPending[col] = coordOffset(coord)
+			}
 			spill.segmentLeftValid[col] = ctr.linPre[col].seq >= 0 || ctr.linSeedValid[col]
 		}
 	}
+	spill.updateSafeWatermark()
 	if ap.FillType == plan.Node_LINEAR && len(ctr.linSeed) > 0 {
 		spill.linearLeft = ctr.linSeed
 		spill.linearLeftValid = ctr.linSeedValid
@@ -467,7 +515,7 @@ func (ctr *container) beginSpill(ap *Fill, proc *process.Process) error {
 		ctr.flushPendingRunsLinear(ap)
 	}
 	ctr.spill = spill
-	if allResolved(spill.segmentWait) {
+	if spill.safeWatermark > spill.segmentStart {
 		if err = spill.finalizeSegment(ctr, ap, proc); err != nil {
 			ctr.cleanupSpill(proc)
 			return err
@@ -484,6 +532,7 @@ func (ctr *container) collectSpill(ap *Fill, proc *process.Process, analyzer pro
 		}
 		if result.Batch == nil {
 			ctr.childDone = true
+			ctr.spill.safeWatermark = ctr.spill.segmentRows
 			return ctr.spill.finalizeSegment(ctr, ap, proc)
 		}
 		dup, err := result.Batch.Dup(proc.Mp())
@@ -494,47 +543,21 @@ func (ctr *container) collectSpill(ap *Fill, proc *process.Process, analyzer pro
 			dup.Clean(proc.Mp())
 			return err
 		}
-		end := ctr.spill.scanSegment(ctr, ap, dup)
-		toSpill := dup
-		if end >= 0 && end < dup.RowCount() {
-			if end == 0 {
-				ctr.spill.carry = dup
-				toSpill = nil
-			} else {
-				prefix, cloneErr := cloneBatchWindow(dup, 0, end, proc.Mp())
-				if cloneErr != nil {
-					dup.Clean(proc.Mp())
-					return cloneErr
-				}
-				carry, cloneErr := cloneBatchWindow(dup, end, dup.RowCount(), proc.Mp())
-				if cloneErr != nil {
-					prefix.Clean(proc.Mp())
-					dup.Clean(proc.Mp())
-					return cloneErr
-				}
-				dup.Clean(proc.Mp())
-				toSpill = prefix
-				ctr.spill.carry = carry
-			}
+		ctr.spill.scanSegment(ctr, ap, dup)
+		if err = ctr.spill.writeRecord(ctr.spill.input, dup); err != nil {
+			dup.Clean(proc.Mp())
+			return err
 		}
-		if toSpill != nil {
-			if err = ctr.spill.writeRecord(ctr.spill.input, toSpill); err != nil {
-				toSpill.Clean(proc.Mp())
-				return err
-			}
-			ctr.spill.inputRecords++
-			if toSpill.RowCount() > 0 && len(ap.PartitionColIdx) > 0 {
-				ctr.snapshotPartKey(ap.PartitionColIdx, toSpill, toSpill.RowCount()-1)
-			}
+		ctr.spill.inputRecords++
+		if dup.RowCount() > 0 && len(ap.PartitionColIdx) > 0 {
+			ctr.snapshotPartKey(ap.PartitionColIdx, dup, dup.RowCount()-1)
 		}
-		if analyzer != nil && toSpill != nil {
+		if analyzer != nil {
 			analyzer.Spill(int64(ctr.spill.buf.Len()))
-			analyzer.SpillRows(int64(toSpill.RowCount()))
+			analyzer.SpillRows(int64(dup.RowCount()))
 		}
-		if toSpill != nil {
-			toSpill.Clean(proc.Mp())
-		}
-		if end >= 0 {
+		dup.Clean(proc.Mp())
+		if ctr.spill.safeWatermark > ctr.spill.segmentStart {
 			return ctr.spill.finalizeSegment(ctr, ap, proc)
 		}
 	}
@@ -550,28 +573,99 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		s.replay.Clean(proc.Mp())
 		s.replay = nil
 	}
-	bat, err := readRecordReverse(s.output, &s.outputReversePos, proc.Mp(), s.replay)
-	if err != nil {
-		return nil, err
-	}
-	s.replay = bat
-	if ap.FillType == plan.Node_LINEAR {
-		if err = s.finishLinearBatch(ctr, ap, proc, bat); err != nil {
+	for {
+		bat, err := readRecordReverse(s.output, &s.outputReversePos, proc.Mp(), nil)
+		if err != nil {
 			return nil, err
 		}
+		rows := int64(bat.RowCount())
+		if s.safeRows <= 0 {
+			if err = s.writeSuffix(proc, bat); err != nil {
+				bat.Clean(proc.Mp())
+				return nil, err
+			}
+			bat.Clean(proc.Mp())
+			continue
+		}
+		if s.safeRows >= rows {
+			s.safeRows -= rows
+			s.replay = bat
+			if ap.FillType == plan.Node_LINEAR {
+				if err = s.finishLinearBatch(ctr, ap, proc, bat); err != nil {
+					return nil, err
+				}
+			}
+			stripOriginalNullMarkers(bat, ap.ColLen, proc.Mp())
+			return bat, nil
+		}
+
+		end := int(s.safeRows)
+		prefix, err := cloneBatchWindow(bat, 0, end, proc.Mp())
+		if err != nil {
+			bat.Clean(proc.Mp())
+			return nil, err
+		}
+		suffix, err := cloneBatchWindow(bat, end, bat.RowCount(), proc.Mp())
+		if err != nil {
+			prefix.Clean(proc.Mp())
+			bat.Clean(proc.Mp())
+			return nil, err
+		}
+		bat.Clean(proc.Mp())
+		if err = s.writeSuffix(proc, suffix); err != nil {
+			prefix.Clean(proc.Mp())
+			suffix.Clean(proc.Mp())
+			return nil, err
+		}
+		suffix.Clean(proc.Mp())
+		s.safeRows = 0
+		s.replay = prefix
+		if ap.FillType == plan.Node_LINEAR {
+			if err = s.finishLinearBatch(ctr, ap, proc, prefix); err != nil {
+				return nil, err
+			}
+		}
+		stripOriginalNullMarkers(prefix, ap.ColLen, proc.Mp())
+		return prefix, nil
 	}
-	stripOriginalNullMarkers(bat, ap.ColLen, proc.Mp())
-	return bat, nil
+}
+
+func (s *fillSpill) writeSuffix(proc *process.Process, bat *batch.Batch) error {
+	if err := s.ensureNext(proc); err != nil {
+		return err
+	}
+	if err := s.writeRecord(s.next, bat); err != nil {
+		return err
+	}
+	s.hasSuffix = true
+	return nil
+}
+
+func (s *fillSpill) rotateSuffix() {
+	if s.output != nil {
+		_ = s.output.Close()
+		s.output = nil
+	}
+	s.input = s.next
+	s.next = nil
+	s.outputReversePos = -1
+	s.ready = false
+	s.hasSuffix = false
+	s.segmentStart = s.safeWatermark
+	s.safeRows = 0
+	s.inputRecords = 0
+	s.outputRecords = 0
 }
 
 func (ctr *container) finishSpillReplay(
 	ap *Fill,
 	proc *process.Process,
-	consume func(*container, *Fill, *batch.Batch, int, *process.Process) error,
 ) error {
 	spill := ctr.spill
-	carry := spill.carry
-	spill.carry = nil
+	if spill.hasSuffix {
+		spill.rotateSuffix()
+		return nil
+	}
 	if ap.FillType == plan.Node_LINEAR {
 		ctr.clearLinearSeeds(proc.Mp())
 		ctr.linSeed = spill.linearLeft
@@ -580,16 +674,6 @@ func (ctr *container) finishSpillReplay(
 		spill.linearLeftValid = nil
 	}
 	ctr.cleanupSpill(proc)
-	if carry == nil {
-		return nil
-	}
-	seq := ctr.baseSeq + len(ctr.bats)
-	ctr.bats = append(ctr.bats, carry)
-	ctr.pendingBytes += int64(carry.Size())
-	ctr.pendingRows += int64(carry.RowCount())
-	if err := consume(ctr, ap, carry, seq, proc); err != nil {
-		return err
-	}
 	return nil
 }
 

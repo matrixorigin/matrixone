@@ -604,7 +604,7 @@ func (ctr *container) driveFill(
 		}
 		bat, err := ctr.spill.replayNext(ctr, ap, proc)
 		if err == io.EOF {
-			if err = ctr.finishSpillReplay(ap, proc, consume); err != nil {
+			if err = ctr.finishSpillReplay(ap, proc); err != nil {
 				return vm.NewCallResult(), err
 			}
 			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)

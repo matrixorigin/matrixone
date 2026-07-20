@@ -394,7 +394,7 @@ func TestFillNextSpillMultiColumnAndPartitionBoundary(t *testing.T) {
 
 	first, err := arg.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, 3, child.calls, "both fill columns must close before the first segment replays")
+	require.Equal(t, 2, child.calls, "safe watermark must advance before both columns close simultaneously")
 	col0 := readCol(first.Batch, 0)
 	col1 := readCol(first.Batch, 1)
 	for {
@@ -415,6 +415,185 @@ func TestFillNextSpillMultiColumnAndPartitionBoundary(t *testing.T) {
 	}
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillNextSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makeBatch := func(col0, col1 int64, null0, null1 bool) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		var nulls0, nulls1 []uint64
+		if null0 {
+			nulls0 = []uint64{0}
+		}
+		if null1 {
+			nulls1 = []uint64{0}
+		}
+		bat.SetVector(0, testutil.MakeInt64Vector([]int64{col0}, nulls0, proc.Mp()))
+		bat.SetVector(1, testutil.MakeInt64Vector([]int64{col1}, nulls1, proc.Mp()))
+		bat.SetVector(2, testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()))
+		bat.SetRowCount(1)
+		return bat
+	}
+	bats := []*batch.Batch{
+		makeBatch(1, 0, false, true),
+		makeBatch(0, 20, true, false),
+		makeBatch(3, 0, false, true),
+		makeBatch(0, 40, true, false),
+		makeBatch(5, 50, false, false),
+	}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 2, FillType: plan.Node_NEXT, PartitionColIdx: []int32{2}, SpillThreshold: 1}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 2, child.calls, "alternating pending columns must not force an EOF drain")
+	col0 := readCol(first.Batch, 0)
+	col1 := readCol(first.Batch, 1)
+	for {
+		result, callErr := arg.Call(proc)
+		require.NoError(t, callErr)
+		if result.Batch == nil {
+			break
+		}
+		col0 = append(col0, readCol(result.Batch, 0)...)
+		col1 = append(col1, readCol(result.Batch, 1)...)
+	}
+	require.Equal(t, []cell{{val: 1}, {val: 3}, {val: 3}, {val: 5}, {val: 5}}, col0)
+	require.Equal(t, []cell{{val: 20}, {val: 20}, {val: 40}, {val: 40}, {val: 50}}, col1)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillLinearSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makeBatch := func(col0, col1 int64, null0, null1 bool) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		var nulls0, nulls1 []uint64
+		if null0 {
+			nulls0 = []uint64{0}
+		}
+		if null1 {
+			nulls1 = []uint64{0}
+		}
+		bat.SetVector(0, testutil.MakeInt64Vector([]int64{col0}, nulls0, proc.Mp()))
+		bat.SetVector(1, testutil.MakeInt64Vector([]int64{col1}, nulls1, proc.Mp()))
+		bat.SetVector(2, testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()))
+		bat.SetRowCount(1)
+		return bat
+	}
+	bats := []*batch.Batch{
+		makeBatch(10, 0, false, true),
+		makeBatch(0, 20, true, false),
+		makeBatch(30, 0, false, true),
+		makeBatch(0, 40, true, false),
+		makeBatch(50, 60, false, false),
+	}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 2, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{2}, SpillThreshold: 1}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	midpoint := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(midpoint, int64(99), false, proc.Mp()))
+	stub := &fillStubExpressionExecutor{result: midpoint}
+	arg.ctr.exes = []colexec.ExpressionExecutor{stub, stub}
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, child.calls)
+	col0 := readCol(first.Batch, 0)
+	col1 := readCol(first.Batch, 1)
+	second, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 3, child.calls, "alternating LINEAR gaps must advance before child EOF")
+	col0 = append(col0, readCol(second.Batch, 0)...)
+	col1 = append(col1, readCol(second.Batch, 1)...)
+	for {
+		result, callErr := arg.Call(proc)
+		require.NoError(t, callErr)
+		if result.Batch == nil {
+			break
+		}
+		col0 = append(col0, readCol(result.Batch, 0)...)
+		col1 = append(col1, readCol(result.Batch, 1)...)
+	}
+	require.Equal(t, []cell{{val: 10}, {val: 99}, {val: 30}, {val: 99}, {val: 50}}, col0)
+	require.Equal(t, []cell{{null: true}, {val: 20}, {val: 99}, {val: 40}, {val: 60}}, col1)
+
+	arg.Free(proc, false, nil)
+	midpoint.Free(proc.Mp())
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillSpillWatermarkSplitsBatch(t *testing.T) {
+	for _, fillType := range []plan.Node_FillType{plan.Node_NEXT, plan.Node_LINEAR} {
+		t.Run(fillType.String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			firstInput := batch.NewWithSize(3)
+			firstInput.SetVector(0, testutil.MakeInt64Vector([]int64{10, 0}, []uint64{1}, proc.Mp()))
+			firstInput.SetVector(1, testutil.MakeInt64Vector([]int64{0, 20}, []uint64{0}, proc.Mp()))
+			firstInput.SetVector(2, testutil.MakeInt64Vector([]int64{1, 1}, nil, proc.Mp()))
+			firstInput.SetRowCount(2)
+			secondInput := batch.NewWithSize(3)
+			secondInput.SetVector(0, testutil.MakeInt64Vector([]int64{30}, nil, proc.Mp()))
+			secondInput.SetVector(1, testutil.MakeInt64Vector([]int64{40}, nil, proc.Mp()))
+			secondInput.SetVector(2, testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()))
+			secondInput.SetRowCount(1)
+			bats := []*batch.Batch{firstInput, secondInput}
+			child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+			arg := &Fill{ColLen: 2, FillType: fillType, PartitionColIdx: []int32{2}, SpillThreshold: 2}
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+			midpoint := vector.NewVec(types.T_int64.ToType())
+			if fillType == plan.Node_LINEAR {
+				require.NoError(t, vector.AppendFixed(midpoint, int64(99), false, proc.Mp()))
+				stub := &fillStubExpressionExecutor{result: midpoint}
+				arg.ctr.exes = []colexec.ExpressionExecutor{stub, stub}
+			}
+
+			first, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, 1, child.calls, "batch-local watermark must replay before the next child batch")
+			col0 := readCol(first.Batch, 0)
+			col1 := readCol(first.Batch, 1)
+			for {
+				result, callErr := arg.Call(proc)
+				require.NoError(t, callErr)
+				if result.Batch == nil {
+					break
+				}
+				col0 = append(col0, readCol(result.Batch, 0)...)
+				col1 = append(col1, readCol(result.Batch, 1)...)
+			}
+			if fillType == plan.Node_NEXT {
+				require.Equal(t, []cell{{val: 10}, {val: 30}, {val: 30}}, col0)
+				require.Equal(t, []cell{{val: 20}, {val: 20}, {val: 40}}, col1)
+			} else {
+				require.Equal(t, []cell{{val: 10}, {val: 99}, {val: 30}}, col0)
+				require.Equal(t, []cell{{null: true}, {val: 20}, {val: 40}}, col1)
+			}
+
+			arg.Free(proc, false, nil)
+			if fillType == plan.Node_LINEAR {
+				midpoint.Free(proc.Mp())
+			}
+			for _, bat := range bats {
+				bat.Clean(proc.Mp())
+			}
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
 }
 
 // LINEAR interpolates across a batch boundary: the midpoint uses the non-NULL
@@ -566,7 +745,7 @@ func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
 	first, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, []cell{{val: 10}}, readCol(first.Batch, 0))
-	require.Equal(t, 4, child.calls, "right endpoint must close the segment before carry tail or EOF")
+	require.Equal(t, 2, child.calls, "safe left endpoint must replay before the right endpoint or EOF")
 
 	all := append(readCol(first.Batch, 0), drainCol(t, arg, proc, 0)...)
 	require.Equal(t, []cell{{val: 10}, {val: 25}, {val: 25}, {val: 40}, {val: 50}, {val: 60}}, all)
@@ -638,6 +817,32 @@ func TestFillSpillResetReleasesState(t *testing.T) {
 	for _, bat := range bats {
 		bat.Clean(proc.Mp())
 	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillSpillResetReleasesWatermarkSuffix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(3)
+	input.SetVector(0, testutil.MakeInt64Vector([]int64{10, 0}, []uint64{1}, proc.Mp()))
+	input.SetVector(1, testutil.MakeInt64Vector([]int64{0, 20}, []uint64{0}, proc.Mp()))
+	input.SetVector(2, testutil.MakeInt64Vector([]int64{1, 1}, nil, proc.Mp()))
+	input.SetRowCount(2)
+	arg := &Fill{ColLen: 2, FillType: plan.Node_NEXT, PartitionColIdx: []int32{2}, SpillThreshold: 2}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.NotNil(t, arg.ctr.spill)
+	require.NotNil(t, arg.ctr.spill.next)
+	require.True(t, arg.ctr.spill.hasSuffix)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.spill)
+	arg.Free(proc, false, nil)
+	input.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
