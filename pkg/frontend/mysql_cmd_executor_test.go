@@ -3558,7 +3558,7 @@ func Test_StatementClassify(t *testing.T) {
 	}
 }
 
-func TestDataBranchDiffAndMergeRejectExplicitTransaction(t *testing.T) {
+func TestDataBranchDiffAndMergeAllowExplicitTransaction(t *testing.T) {
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			txnHandler: &TxnHandler{optionBits: OPTION_BEGIN},
@@ -3571,7 +3571,7 @@ func TestDataBranchDiffAndMergeRejectExplicitTransaction(t *testing.T) {
 	} {
 		allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), ses, stmt)
 		require.NoError(t, err)
-		require.False(t, allowed)
+		require.True(t, allowed)
 	}
 }
 
