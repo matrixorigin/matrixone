@@ -742,7 +742,7 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 				return nil, err
 			}
 			fraction, _ := frac.Float64()
-			values[y] = float64(lo) + (float64(hi)-float64(lo))*fraction
+			values[y] = interpolateFloat64(float64(lo), float64(hi), fraction)
 		}
 	}
 	return results, nil
@@ -902,6 +902,26 @@ func PercentileNumeric[T numeric](vs *Vectors[T], p float64) (float64, error) {
 	return percentileNumericVals(collectMedianValues(vs), p), nil
 }
 
+func interpolateFloat64(lo, hi, fraction float64) float64 {
+	// Preserve the existing IEEE-754 propagation for non-finite input values.
+	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) {
+		return lo + (hi-lo)*fraction
+	}
+	if fraction == 0 {
+		return lo
+	}
+	if fraction == 1 {
+		return hi
+	}
+	// For opposite signs, hi-lo can overflow even though the interpolated value
+	// is finite. Both weighted terms are bounded by their finite endpoints, and
+	// their opposite signs keep the final addition from overflowing.
+	if math.Signbit(lo) != math.Signbit(hi) {
+		return math.FMA(lo, 1-fraction, hi*fraction)
+	}
+	return lo + (hi-lo)*fraction
+}
+
 func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	if len(values) == 0 || p < 0 || p > 1 {
 		return math.NaN()
@@ -914,7 +934,7 @@ func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	lo := selectKthNumeric(values, int(loRank))
 	hi := selectKthNumeric(values, int(hiRank))
 	fraction, _ := frac.Float64()
-	return float64(lo) + (float64(hi)-float64(lo))*fraction
+	return interpolateFloat64(float64(lo), float64(hi), fraction)
 }
 
 func PercentileDecimal64(vs *Vectors[types.Decimal64], p float64, argScale int32) (types.Decimal128, error) {

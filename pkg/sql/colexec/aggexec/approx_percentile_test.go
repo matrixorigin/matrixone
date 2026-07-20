@@ -115,6 +115,44 @@ func TestPercentileNumericVals_Int64Overflow(t *testing.T) {
 	require.Equal(t, float64(math.MaxInt64), percentileNumericVals(vals, 0.5))
 }
 
+func TestPercentileNumericVals_Float64ExtremeInterpolation(t *testing.T) {
+	vals := []float64{-math.MaxFloat64, math.MaxFloat64}
+	require.Equal(t, 0.0, percentileNumericVals(vals, 0.5))
+	require.Equal(t, -math.MaxFloat64, percentileNumericVals(vals, 0))
+	require.Equal(t, math.MaxFloat64, percentileNumericVals(vals, 1))
+}
+
+func TestInterpolateFloat64(t *testing.T) {
+	tests := []struct {
+		name         string
+		lo, hi, frac float64
+		want         float64
+	}{
+		{name: "opposite extreme midpoint", lo: -math.MaxFloat64, hi: math.MaxFloat64, frac: 0.5, want: 0},
+		{name: "opposite extreme quarter", lo: -math.MaxFloat64, hi: math.MaxFloat64, frac: 0.25, want: -math.MaxFloat64 / 2},
+		{name: "positive same sign", lo: math.MaxFloat64 / 2, hi: math.MaxFloat64, frac: 0.5, want: math.MaxFloat64 * 0.75},
+		{name: "negative same sign", lo: -math.MaxFloat64, hi: -math.MaxFloat64 / 2, frac: 0.5, want: -math.MaxFloat64 * 0.75},
+		{name: "subnormal midpoint", lo: -math.SmallestNonzeroFloat64, hi: math.SmallestNonzeroFloat64, frac: 0.5, want: 0},
+		{name: "left endpoint", lo: -math.MaxFloat64, hi: math.MaxFloat64, frac: 0, want: -math.MaxFloat64},
+		{name: "right endpoint", lo: -math.MaxFloat64, hi: math.MaxFloat64, frac: 1, want: math.MaxFloat64},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := interpolateFloat64(test.lo, test.hi, test.frac)
+			if test.want == 0 || test.frac == 0 || test.frac == 1 {
+				require.Equal(t, test.want, got)
+			} else {
+				require.InEpsilon(t, test.want, got, 1e-15)
+			}
+		})
+	}
+
+	// Keep the prior IEEE-754 behavior for non-finite data values.
+	require.True(t, math.IsNaN(interpolateFloat64(math.NaN(), 1, 0.5)))
+	require.True(t, math.IsNaN(interpolateFloat64(math.Inf(-1), math.Inf(1), 0.5)))
+	require.True(t, math.IsNaN(interpolateFloat64(math.Inf(1), math.Inf(1), 0)))
+}
+
 func TestPercentileDecimal64Vals(t *testing.T) {
 	vals := mustDecimal64s(t, "1.00", "2.00", "3.00", "4.00", "5.00", "6.00", "7.00", "8.00", "9.00", "10.00")
 
@@ -305,6 +343,34 @@ func TestApproxPercentileExec_DifferentPercentiles(t *testing.T) {
 			e.Free()
 		})
 	}
+}
+
+func TestApproxPercentileExec_Float64ExtremeInterpolation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec, err := makeApproxPercentile(mp, 1, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+
+	vec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{-math.MaxFloat64, math.MaxFloat64})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+	for _, test := range []struct {
+		percentile string
+		want       float64
+	}{
+		{percentile: "0", want: -math.MaxFloat64},
+		{percentile: "0.5", want: 0},
+		{percentile: "1", want: math.MaxFloat64},
+	} {
+		require.NoError(t, exec.SetExtraInformation([]byte(test.percentile), 0))
+		ret, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, test.want, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+		ret[0].Free(mp)
+	}
+
+	vec.Free(mp)
+	exec.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestApproxPercentileExec_DistinctNotSupported(t *testing.T) {
