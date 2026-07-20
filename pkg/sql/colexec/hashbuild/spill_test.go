@@ -15,7 +15,9 @@
 package hashbuild
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"os"
 	"testing"
 
@@ -667,6 +669,98 @@ func TestBufferReuse(t *testing.T) {
 
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat2, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
+}
+
+func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	generation, err := budget.OpenGeneration(8 << 20)
+	require.NoError(t, err)
+	defer generation.Close()
+	files := make([]*os.File, spillNumBuckets)
+	defer func() {
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
+		}
+	}()
+	conditions := []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+	ctr := &container{spillUUID: t.Name()}
+	ctr.hashmapBuilder.setBudget(generation)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	bat.SetRowCount(3)
+	defer bat.Clean(proc.Mp())
+	for i := 0; i < 2; i++ {
+		require.NoError(t, ctr.appendBuildBatchToSpillFiles(proc, bat, files, nil, ctr.spillExprExecs, analyzer))
+	}
+	var pending int
+	for i := range ctr.spillBucketWriteBufs {
+		pending += ctr.spillBucketWriteBufs[i].Len()
+	}
+	require.Positive(t, pending)
+	var file *os.File
+	for _, f := range files {
+		if f != nil {
+			file = f
+			break
+		}
+	}
+	require.NotNil(t, file)
+	stat, err := file.Stat()
+	require.NoError(t, err)
+	require.Zero(t, stat.Size(), "records stay pending until the handoff flush")
+	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
+	stat, err = file.Stat()
+	require.NoError(t, err)
+	require.Positive(t, stat.Size())
+	for i := range ctr.spillBucketWriteBufs {
+		require.Zero(t, ctr.spillBucketWriteBufs[i].Len())
+	}
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	reader := bufio.NewReader(file)
+	var totalRows int64
+	for {
+		var header [16]byte
+		_, err = io.ReadFull(reader, header[:])
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		cnt := types.DecodeInt64(header[:8])
+		payload := types.DecodeInt64(header[8:])
+		require.GreaterOrEqual(t, cnt, int64(0))
+		require.GreaterOrEqual(t, payload, int64(0))
+		_, err = io.CopyN(io.Discard, reader, payload)
+		require.NoError(t, err)
+		var magic [8]byte
+		_, err = io.ReadFull(reader, magic[:])
+		require.NoError(t, err)
+		require.Equal(t, uint64(spillMagic), types.DecodeUint64(magic[:]))
+		totalRows += cnt
+	}
+	require.Equal(t, int64(6), totalRows)
+	for _, f := range files {
+		if f != nil {
+			_ = f.Close()
+		}
+	}
+	if ctr.spillBundle != nil {
+		ctr.spillBundle.release()
+		ctr.spillBundle = nil
+	}
+	ctr.dropSpillScratchBuffers()
+	ctr.releaseSpillScratchReservation()
+	require.Zero(t, generation.Used())
 }
 
 func TestEnsureSpillFile(t *testing.T) {

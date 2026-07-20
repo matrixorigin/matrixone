@@ -43,6 +43,9 @@ const (
 	SpillMagic      = 0x12345678DEADBEEF
 	SpillNumBuckets = 32
 	SpillMaxPass    = 3
+	// Coalesce serialized records across source batches without retaining
+	// selected vectors. bytes.Buffer growth is charged at 2x this target.
+	spillWriteCoalesceSize = 64 << 10
 )
 
 // SpillBucket holds file descriptors for one spilled bucket.
@@ -425,19 +428,39 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 	// exact disk extent before CreateAndRemoveFile/write, so a rejected write
 	// leaves both the writer and source batch intact.
 	cnt := int64(bat.RowCount())
-	bucketBuf.Reset()
-	bucketBuf.Write(types.EncodeInt64(&cnt))
-	batchSizePos := bucketBuf.Len()
-	var zero int64
-	bucketBuf.Write(types.EncodeInt64(&zero))
-	batchStart := bucketBuf.Len()
-	if _, err := bat.MarshalBinaryWithBuffer(bucketBuf, false); err != nil {
+	if err := marshalSpillRecord(bat, bucketBuf); err != nil {
 		return err
 	}
-	batchSize := int64(bucketBuf.Len() - batchStart)
-	copy(bucketBuf.Bytes()[batchSizePos:batchSizePos+8], types.EncodeInt64(&batchSize))
+	return writeBucketPayload(proc, bucketBuf.Bytes(), cnt, w, analyzer)
+}
+
+func marshalSpillRecord(bat *batch.Batch, buf *bytes.Buffer) error {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	cnt := int64(bat.RowCount())
+	buf.Reset()
+	buf.Write(types.EncodeInt64(&cnt))
+	batchSizePos := buf.Len()
+	var zero int64
+	buf.Write(types.EncodeInt64(&zero))
+	batchStart := buf.Len()
+	if _, err := bat.MarshalBinaryWithBuffer(buf, false); err != nil {
+		return err
+	}
+	batchSize := int64(buf.Len() - batchStart)
+	copy(buf.Bytes()[batchSizePos:batchSizePos+8], types.EncodeInt64(&batchSize))
 	magic := uint64(SpillMagic)
-	bucketBuf.Write(types.EncodeUint64(&magic))
+	buf.Write(types.EncodeUint64(&magic))
+	return nil
+}
+
+// writeBucketPayload performs disk/FD admission and one physical write for a
+// complete sequence of framed records.
+func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *BucketWriter, analyzer process.Analyzer) error {
+	if w == nil || len(payload) == 0 {
+		return process.ErrHashBuildBudgetInvalid
+	}
 	oldDiskSize := uint64(0)
 	newDiskToken := false
 	rollbackDisk := func() {
@@ -452,11 +475,10 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 		_, _ = w.diskReservation.ReconcileDown(oldDiskSize)
 	}
 	if w.Budget != nil {
-		// The caller reserves the transient marshal scratch in scatterBatch.
 		// Keep one growable disk token per file so bookkeeping remains bounded
 		// even when the input arrives as millions of tiny batches.
 		if w.diskReservation == nil {
-			diskToken, err := w.Budget.ReserveSpillDisk(uint64(bucketBuf.Len()))
+			diskToken, err := w.Budget.ReserveSpillDisk(uint64(len(payload)))
 			if err != nil {
 				return err
 			}
@@ -464,7 +486,7 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 			newDiskToken = true
 		} else {
 			oldDiskSize = w.diskReservation.Size()
-			if err := w.diskReservation.Grow(uint64(bucketBuf.Len())); err != nil {
+			if err := w.diskReservation.Grow(uint64(len(payload))); err != nil {
 				return err
 			}
 		}
@@ -498,18 +520,18 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 		w.Fd = f
 		w.fdReservation = fdToken
 	}
-	written, err := w.Fd.Write(bucketBuf.Bytes())
+	written, err := w.Fd.Write(payload)
 	if err != nil {
 		return err
 	}
-	if written != bucketBuf.Len() {
+	if written != len(payload) {
 		return io.ErrShortWrite
 	}
 	if analyzer != nil {
 		analyzer.Spill(int64(written))
-		analyzer.SpillRows(cnt)
+		analyzer.SpillRows(rows)
 	}
-	w.Rows += cnt
+	w.Rows += rows
 	w.Bytes += uint64(written)
 	return nil
 }
@@ -567,6 +589,49 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	}
 }
 
+// classifyRows computes bucket counts, prefix offsets, and one contiguous row
+// id array in two linear passes. This replaces the historical bucket-by-bucket
+// scan of hashValues (which revisited every row once for each bucket).
+func classifyRows(hashValues []uint64, bucketCount int, shift uint64, rowIDs []int32, counts []int32, offsets []int32) error {
+	if bucketCount <= 0 || bucketCount&(bucketCount-1) != 0 || shift >= 64 || len(rowIDs) < len(hashValues) || len(counts) < bucketCount || len(offsets) < bucketCount+1 {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	for i := 0; i < bucketCount; i++ {
+		counts[i] = 0
+	}
+	mask := uint64(bucketCount - 1)
+	for _, hash := range hashValues {
+		counts[int((hash>>shift)&mask)]++
+	}
+	offsets[0] = 0
+	for i := 0; i < bucketCount; i++ {
+		offsets[i+1] = offsets[i] + counts[i]
+	}
+	var writePos [SpillNumBuckets]int32
+	if bucketCount <= len(writePos) {
+		copy(writePos[:bucketCount], offsets[:bucketCount])
+		for row, hash := range hashValues {
+			bucket := int((hash >> shift) & mask)
+			pos := writePos[bucket]
+			rowIDs[pos] = int32(row)
+			writePos[bucket] = pos + 1
+		}
+		return nil
+	}
+	// SpillNumBuckets is the production fanout. Keep the helper correct for
+	// callers using another power-of-two fanout without allocating a second
+	// row-id structure.
+	positions := make([]int32, bucketCount)
+	copy(positions, offsets[:bucketCount])
+	for row, hash := range hashValues {
+		bucket := int((hash >> shift) & mask)
+		pos := positions[bucket]
+		rowIDs[pos] = int32(row)
+		positions[bucket] = pos + 1
+	}
+	return nil
+}
+
 // scatterImpl is the internal implementation that accepts reusable buffers.
 func scatterImpl(
 	proc *process.Process,
@@ -596,7 +661,11 @@ func scatterImpl(
 	}
 	ComputeXXHash(keyVecs, hashValues, seed)
 
-	// Collect row indices per bucket.
+	if len(writers) == 0 || len(writers)&(len(writers)-1) != 0 {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	// Build one contiguous row-id array, then expose each bucket as a slice of
+	// that array for compatibility with the buffered path.
 	var bucketRowIds [][]int32
 	if reuseBucketRowIds != nil {
 		bucketRowIds = *reuseBucketRowIds
@@ -609,17 +678,25 @@ func scatterImpl(
 	} else {
 		bucketRowIds = make([][]int32, len(writers))
 	}
-	estPerBucket := rowCount/len(writers) + rowCount/len(writers)/4 + 1
-	for i := range bucketRowIds {
-		if cap(bucketRowIds[i]) < estPerBucket {
-			bucketRowIds[i] = make([]int32, 0, estPerBucket)
-		} else {
-			bucketRowIds[i] = bucketRowIds[i][:0]
-		}
+	var rowIDs []int32
+	if len(bucketRowIds) > 0 && cap(bucketRowIds[0]) >= rowCount {
+		rowIDs = bucketRowIds[0][:rowCount]
+	} else {
+		rowIDs = make([]int32, rowCount)
 	}
-	for row := 0; row < rowCount; row++ {
-		b := int(hashValues[row] & (uint64(len(writers)) - 1))
-		bucketRowIds[b] = append(bucketRowIds[b], int32(row))
+	var countsFixed [SpillNumBuckets]int32
+	var offsetsFixed [SpillNumBuckets + 1]int32
+	counts := countsFixed[:len(writers)]
+	offsets := offsetsFixed[:len(writers)+1]
+	if len(writers) > SpillNumBuckets {
+		counts = make([]int32, len(writers))
+		offsets = make([]int32, len(writers)+1)
+	}
+	if err := classifyRows(hashValues, len(writers), 0, rowIDs, counts, offsets); err != nil {
+		return err
+	}
+	for i := range bucketRowIds {
+		bucketRowIds[i] = rowIDs[offsets[i]:offsets[i+1]]
 	}
 
 	// Only iterate non-empty buckets.
@@ -681,27 +758,26 @@ func (e *SpillEngine) scatterBatchBounded(
 	writers []BucketWriter,
 	partitionLevel uint64,
 	analyzer process.Analyzer,
-) error {
+) (retErr error) {
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
-	if len(writers) == 0 {
+	if len(writers) == 0 || len(writers) > SpillNumBuckets {
 		return process.ErrHashBuildBudgetInvalid
 	}
 	rows := bat.RowCount()
 	var selected *batch.Batch
-	var scratchToken *process.HashBuildReservation
 	defer func() {
 		if selected != nil {
 			selected.Clean(proc.Mp())
 			selected = nil
 		}
-		// Drop Go backing arrays before releasing their admission charge.
-		e.scatterHashValues = nil
-		e.scatterBucketRowIds = nil
-		e.keyVecs = nil
-		if scratchToken != nil {
-			scratchToken.Release()
+		reconcileErr := e.reconcileScatterScratch()
+		if reconcileErr != nil && retErr == nil {
+			retErr = reconcileErr
+		}
+		if retErr != nil {
+			e.discardScatterBuffers()
 		}
 	}()
 	if e.cfg.Budget != nil {
@@ -726,7 +802,15 @@ func (e *SpillEngine) scatterBatchBounded(
 		// growth and varlen area remain admitted before Union/Marshal.
 		need := allocated*3 + rowScratch + marshalSlack
 		var err error
-		scratchToken, err = e.cfg.Budget.Reserve(need)
+		if e.scatterScratchReservation == nil {
+			e.scatterScratchReservation, err = e.cfg.Budget.Reserve(need)
+		} else {
+			// The live token already charges retained hash/row-id/coalesce
+			// capacities. A new source batch and its selected/marshal peak must
+			// be admitted on top of that retained charge, even when the token's
+			// current size is larger than this batch's standalone estimate.
+			err = e.scatterScratchReservation.Grow(need)
+		}
 		if err != nil {
 			return err
 		}
@@ -745,29 +829,21 @@ func (e *SpillEngine) scatterBatchBounded(
 	if shift >= 64 {
 		return process.ErrHashBuildBudgetInvalid
 	}
-	if cap(e.scatterBucketRowIds) < 1 {
-		e.scatterBucketRowIds = make([][]int32, 1)
+	if cap(e.scatterBucketRowIds) < rows {
+		e.scatterBucketRowIds = make([]int32, rows)
 	}
 	if cap(e.keyVecs) < len(keyVecs) {
 		e.keyVecs = make([]*vector.Vector, len(keyVecs))
 	}
-	var bucketBuf bytes.Buffer
+	if err := classifyRows(hashValues, len(writers), shift, e.scatterBucketRowIds, e.scatterBucketCounts[:], e.scatterBucketOffsets[:]); err != nil {
+		return err
+	}
 	for bucketID := range writers {
-		if writers[bucketID].Name == "" {
+		start, end := e.scatterBucketOffsets[bucketID], e.scatterBucketOffsets[bucketID+1]
+		if start == end || writers[bucketID].Name == "" {
 			continue
 		}
-		// Collect this bucket's rows with bounded capacity. A bucket can be
-		// skewed, so cap is only a hint; the scratch admission covers growth.
-		sels := e.scatterBucketRowIds[0]
-		sels = sels[:0]
-		for row, hash := range hashValues {
-			if int((hash>>shift)&uint64(len(writers)-1)) == bucketID {
-				sels = append(sels, int32(row))
-			}
-		}
-		if len(sels) == 0 {
-			continue
-		}
+		sels := e.scatterBucketRowIds[start:end]
 		if selected == nil {
 			selected = batch.NewOffHeapWithSize(len(bat.Vecs))
 			for j, vec := range bat.Vecs {
@@ -782,8 +858,168 @@ func (e *SpillEngine) scatterBatchBounded(
 			}
 		}
 		selected.SetRowCount(len(sels))
-		if err := FlushBucketBatch(proc, selected, &writers[bucketID], &bucketBuf, analyzer); err != nil {
+		if err := e.appendScatterRecord(proc, selected, &writers[bucketID], bucketID, analyzer); err != nil {
 			selected.CleanOnlyData()
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *SpillEngine) appendScatterRecord(proc *process.Process, bat *batch.Batch, writer *BucketWriter, bucket int, analyzer process.Analyzer) error {
+	if bucket < 0 || bucket >= SpillNumBuckets || writer == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	cnt := int64(bat.RowCount())
+	if err := marshalSpillRecord(bat, &e.scatterWriteBuf); err != nil {
+		return err
+	}
+	payload := e.scatterWriteBuf.Bytes()
+	buf := &e.scatterWriteBuffers[bucket]
+	if buf.Len() > 0 && buf.Len()+len(payload) > spillWriteCoalesceSize {
+		if err := e.flushPendingScatterBucket(proc, writer, bucket, analyzer); err != nil {
+			return err
+		}
+	}
+	if len(payload) > spillWriteCoalesceSize {
+		return writeBucketPayload(proc, payload, cnt, writer, analyzer)
+	}
+	if buf.Len() == 0 {
+		if !e.ensureScatterCoalesceCapacity(buf) {
+			return writeBucketPayload(proc, payload, cnt, writer, analyzer)
+		}
+		buf.Grow(spillWriteCoalesceSize)
+	}
+	_, _ = buf.Write(payload)
+	e.scatterWriteRows[bucket] += cnt
+	if buf.Len() >= spillWriteCoalesceSize {
+		return e.flushPendingScatterBucket(proc, writer, bucket, analyzer)
+	}
+	return nil
+}
+
+func (e *SpillEngine) ensureScatterCoalesceCapacity(buf *bytes.Buffer) bool {
+	if buf == nil || buf.Cap() >= spillWriteCoalesceSize {
+		return true
+	}
+	if e.cfg.Budget == nil || e.scatterScratchReservation == nil {
+		return e.cfg.Budget == nil
+	}
+	additional := uint64(spillWriteCoalesceSize-buf.Cap()) * 2
+	if err := e.scatterScratchReservation.Grow(additional); err != nil {
+		return false
+	}
+	return true
+}
+
+func (e *SpillEngine) flushPendingScatterBucket(proc *process.Process, writer *BucketWriter, bucket int, analyzer process.Analyzer) error {
+	if bucket < 0 || bucket >= SpillNumBuckets || writer == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	buf := &e.scatterWriteBuffers[bucket]
+	if buf.Len() == 0 {
+		return nil
+	}
+	err := writeBucketPayload(proc, buf.Bytes(), e.scatterWriteRows[bucket], writer, analyzer)
+	buf.Reset()
+	e.scatterWriteRows[bucket] = 0
+	return err
+}
+
+// flushScatterBuffers is required before writers are handed off or rewound.
+// It continues across buckets after an error so no pending buffer remains
+// live on a terminal handoff path.
+func (e *SpillEngine) flushScatterBuffers(proc *process.Process, writers []BucketWriter, analyzer process.Analyzer) error {
+	var firstErr error
+	for bucket := 0; bucket < SpillNumBuckets; bucket++ {
+		if e.scatterWriteBuffers[bucket].Len() == 0 {
+			continue
+		}
+		var writer *BucketWriter
+		if bucket < len(writers) {
+			writer = &writers[bucket]
+		}
+		if err := e.flushPendingScatterBucket(proc, writer, bucket, analyzer); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (e *SpillEngine) discardScatterBuffers() {
+	for bucket := range e.scatterWriteBuffers {
+		e.scatterWriteBuffers[bucket].Reset()
+		e.scatterWriteRows[bucket] = 0
+	}
+}
+
+// releaseScatterScratch terminates one scatter phase. Scatter capacities are
+// reusable while a phase consumes multiple source batches, but must not stay
+// charged while the next child hashmap is rebuilt. Cleanup calls this method
+// as an idempotent fallback for cancellation paths.
+func (e *SpillEngine) releaseScatterScratch() {
+	e.scatterHashValues = nil
+	e.scatterBucketRowIds = nil
+	e.keyVecs = nil
+	e.scatterWriteBuf = bytes.Buffer{}
+	for i := range e.scatterBucketCounts {
+		e.scatterBucketCounts[i] = 0
+	}
+	for i := range e.scatterBucketOffsets {
+		e.scatterBucketOffsets[i] = 0
+	}
+	for i := range e.scatterWriteBuffers {
+		e.scatterWriteBuffers[i] = bytes.Buffer{}
+		e.scatterWriteRows[i] = 0
+	}
+	if e.scatterScratchReservation != nil {
+		e.scatterScratchReservation.Release()
+		e.scatterScratchReservation = nil
+	}
+}
+
+// reconcileScatterScratch leaves only the capacities retained by the engine
+// charged after a batch completes. The source batch, selected vectors, and
+// marshal buffer are transient and must not pin budget across the queue.
+func (e *SpillEngine) reconcileScatterScratch() error {
+	if e.scatterScratchReservation == nil {
+		return nil
+	}
+	actual := uint64(0)
+	add := func(v uint64) bool {
+		if actual > math.MaxUint64-v {
+			return false
+		}
+		actual += v
+		return true
+	}
+	mul := func(v, n uint64) (uint64, bool) {
+		if n != 0 && v > math.MaxUint64/n {
+			return 0, false
+		}
+		return v * n, true
+	}
+	hashBytes, hashOK := mul(uint64(cap(e.scatterHashValues)), 8)
+	rowIDBytes, rowIDOK := mul(uint64(cap(e.scatterBucketRowIds)), 4)
+	keyBytes, keyOK := mul(uint64(cap(e.keyVecs)), 8)
+	countBytes, countOK := mul(uint64(len(e.scatterBucketCounts)), 4)
+	offsetBytes, offsetOK := mul(uint64(len(e.scatterBucketOffsets)), 4)
+	if !hashOK || !rowIDOK || !keyOK || !countOK || !offsetOK ||
+		!add(hashBytes) || !add(rowIDBytes) || !add(keyBytes) || !add(countBytes) || !add(offsetBytes) ||
+		!add(uint64(e.scatterWriteBuf.Cap())) {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	for i := range e.scatterWriteBuffers {
+		if !add(uint64(e.scatterWriteBuffers[i].Cap())) {
+			return process.ErrHashBuildBudgetInvalid
+		}
+	}
+	reserved := e.scatterScratchReservation.Size()
+	if actual > reserved {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if actual < reserved {
+		if _, err := e.scatterScratchReservation.ReconcileDown(actual); err != nil {
 			return err
 		}
 	}
@@ -883,8 +1119,17 @@ type SpillEngine struct {
 	keyVecs  []*vector.Vector
 
 	// Reusable scatter buffers to avoid per-batch allocations.
-	scatterHashValues   []uint64
-	scatterBucketRowIds [][]int32
+	scatterHashValues    []uint64
+	scatterBucketRowIds  []int32
+	scatterBucketCounts  [SpillNumBuckets]int32
+	scatterBucketOffsets [SpillNumBuckets + 1]int32
+	scatterWriteBuf      bytes.Buffer
+	scatterWriteBuffers  [SpillNumBuckets]bytes.Buffer
+	scatterWriteRows     [SpillNumBuckets]int64
+	// The lease follows the reusable scratch capacities for the engine
+	// lifetime. It is released only by Cleanup, after all backing arrays have
+	// been dropped.
+	scatterScratchReservation *process.HashBuildReservation
 
 	// probeKeyEval evaluates probe-side key expressions for probe re-scatter.
 	// Stored from ScatterProbeTable. Must use probe-side conditions
@@ -958,10 +1203,12 @@ func (e *SpillEngine) ScatterProbeTable(
 	}
 
 	defer func() {
+		e.discardScatterBuffers()
 		for i := range writers {
 			writers[i].Close()
 		}
 	}()
+	defer e.releaseScatterScratch()
 
 	// Consume all probe batches.
 	for {
@@ -989,6 +1236,9 @@ func (e *SpillEngine) ScatterProbeTable(
 
 	// Flush remaining buffers and hand off FDs transactionally. A failed rewind
 	// must not publish an EOF-positioned file or orphan earlier handoffs.
+	if err := e.flushScatterBuffers(proc, writers, analyzer); err != nil {
+		return err
+	}
 	probeFiles := make([]*message.SpillFile, len(e.buckets))
 	for i := range e.buckets {
 		file, err := writers[i].handOffSpillFile()
@@ -1223,6 +1473,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	committed := false
 	var subBuckets []SpillBucket
 	defer func() {
+		if !committed {
+			e.discardScatterBuffers()
+		}
 		for i := range buildWriters {
 			buildWriters[i].Close()
 		}
@@ -1243,6 +1496,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			}
 		}
 	}()
+	defer e.releaseScatterScratch()
 
 	// Cache key executors.
 	if len(e.keyExecs) != len(e.cfg.BuildKeyExprs) {
@@ -1260,6 +1514,11 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			e.keyVecs = make([]*vector.Vector, len(execs))
 		}
 		keyVecs := e.keyVecs[:len(execs)]
+		defer func() {
+			for i := range keyVecs {
+				keyVecs[i] = nil
+			}
+		}()
 		for i, exec := range execs {
 			vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
 			if err != nil {
@@ -1315,6 +1574,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			return nil, err
 		}
 	}
+	if err := e.flushScatterBuffers(proc, buildWriters, analyzer); err != nil {
+		return nil, err
+	}
 
 	if e.probeReadBatch == nil {
 		e.probeReadBatch = batch.NewOffHeapWithSize(0)
@@ -1346,6 +1608,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			if err := scatterProbe(proc, e, bat, probeWriters, nil, partitionLevel, analyzer); err != nil {
 				return nil, err
 			}
+		}
+		if err := e.flushScatterBuffers(proc, probeWriters, analyzer); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1558,4 +1823,5 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.buildPool.Release(proc)
 	e.probePool.Release(proc)
 	e.freeKeyExecs()
+	e.releaseScatterScratch()
 }

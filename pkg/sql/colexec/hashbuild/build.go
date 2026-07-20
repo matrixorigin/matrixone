@@ -332,9 +332,13 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	}
 
 	// spillBatchBounded flushes each selected bucket immediately; no persistent
-	// 32-bucket buffers remain here. Rewind every file before publishing the
+	// 32-bucket vectors remain here. Flush serialized records accumulated across
+	// source batches before rewinding every file and publishing the
 	// complete set, including a spill entered after hard map-budget rejection.
 	if spillMode {
+		if err := ctr.flushSpillBuffers(spillFiles, analyzer); err != nil {
+			return err
+		}
 		for _, f := range spillFiles {
 			if f != nil {
 				if _, err := f.Seek(0, io.SeekStart); err != nil {

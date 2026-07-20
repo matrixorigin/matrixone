@@ -63,15 +63,34 @@ type container struct {
 	spillThreshold int64
 
 	// reusable buffers for spill operations
-	spillHashValues   []uint64
-	spillBucketRowIds [][]int32
-	spillSelection    []int32
-	spillWriteBuf     bytes.Buffer
-	spillKeyVecs      []*vector.Vector
+	spillHashValues []uint64
+	// spillBucketRowIds stores one contiguous row-id array for the current
+	// input batch.  spillBucketOffsets identifies each bucket's sub-slice;
+	// keeping one array avoids the 32 independent append/growth paths used by
+	// the old scatter implementation.
+	spillBucketRowIds  []int32
+	spillBucketCounts  [spillNumBuckets]int32
+	spillBucketOffsets [spillNumBuckets + 1]int32
+	spillSelection     []int32
+	spillWriteBuf      bytes.Buffer
+	// spillBucketWriteBufs coalesce serialized records across source batches.
+	// Each buffer is bounded by spillWriteCoalesceSize (plus bytes.Buffer's
+	// bounded growth slack), so fanout does not imply fanout-sized vectors.
+	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
+	spillBucketWriteRows [spillNumBuckets]int64
+	spillKeyVecs         []*vector.Vector
 	// spillScratchReservation is a query/CN-charged emergency lease retained
 	// while Shuffle build batches accumulate. It prevents retained copies from
 	// consuming the scratch required to recover from hard-budget rejection.
 	spillScratchReservation *process.HashBuildReservation
+	// spillScratchEmergency marks a lease pre-admitted by
+	// ensureSpillScratchReservation. During retained-batch draining, a batch
+	// larger than that lease must preserve the historical hard-admission reject
+	// rather than growing into memory occupied by retained copies.
+	spillScratchEmergency bool
+	// spillScratchBase is the transient emergency floor. Coalesce-buffer
+	// growth is charged on top and must never be mistaken for this floor.
+	spillScratchBase uint64
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
