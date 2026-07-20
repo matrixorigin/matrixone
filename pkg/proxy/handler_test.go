@@ -29,12 +29,15 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/lni/goutils/leaktest"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -44,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type testProxyHandler struct {
@@ -257,8 +261,50 @@ func TestHandler_Handle(t *testing.T) {
 	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
+func TestHandlerCurrentConnections(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		const connectionCount = 3
+		before := testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge)
+		closedBefore := testutil.ToFloat64(metricv2.ProxyConnectClosedCounter)
+		dbs := make([]*sql.DB, 0, connectionCount)
+		defer func() {
+			for _, db := range dbs {
+				_ = db.Close()
+			}
+		}()
+
+		for i := 0; i < connectionCount; i++ {
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+			require.NoError(t, err)
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+			dbs = append(dbs, db)
+			_, err = db.Exec("select 1")
+			require.NoError(t, err)
+		}
+
+		require.Eventually(t, func() bool {
+			return s.counterSet.connTotal.Load() == connectionCount &&
+				testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge) == before+connectionCount &&
+				testutil.ToFloat64(metricv2.ProxyConnectClosedCounter) == closedBefore
+		}, 5*time.Second, 10*time.Millisecond)
+
+		for i, db := range dbs {
+			require.NoError(t, db.Close())
+			expected := connectionCount - i - 1
+			require.Eventually(t, func() bool {
+				return s.counterSet.connTotal.Load() == int64(expected) &&
+					testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge) == before+float64(expected) &&
+					testutil.ToFloat64(metricv2.ProxyConnectClosedCounter) == closedBefore+float64(i+1)
+			}, 5*time.Second, 10*time.Millisecond)
+		}
+	})
+}
+
 func TestHandler_HandleErr(t *testing.T) {
 	defer leaktest.AfterTest(t)()
+	currentBefore := testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge)
+	closedBefore := testutil.ToFloat64(metricv2.ProxyConnectClosedCounter)
 
 	temp := os.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -317,6 +363,11 @@ func TestHandler_HandleErr(t *testing.T) {
 	}()
 	_, err = db.Exec("anystmt")
 	require.Error(t, err)
+	require.Eventually(t, func() bool {
+		return s.counterSet.connTotal.Load() == 0 &&
+			testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge) == currentBefore &&
+			testutil.ToFloat64(metricv2.ProxyConnectClosedCounter) == closedBefore+1
+	}, 5*time.Second, 10*time.Millisecond)
 
 	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 }
@@ -337,6 +388,7 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 	}
 	tun := &tunnel{}
 	tun.mu.sc = expectedSC
+	markTunnelInFlight(tun)
 	cc := &mockClientConn{
 		killFn: func(sc ServerConn) error {
 			require.Same(t, expectedSC, sc)
@@ -346,17 +398,17 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 	}
 
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
-	require.Equal(t, 0, killCalled)
+	require.Equal(t, 1, killCalled)
 	require.Equal(t, 1, closeCalled)
 
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, tun)
 	h.cleanupBackendOnClientDisconnect(io.EOF, cc, tun)
-	require.Equal(t, 0, killCalled)
+	require.Equal(t, 1, killCalled)
 	require.Equal(t, 1, closeCalled)
 
 	h.cleanupBackendOnClientDisconnect(withCode(moerr.NewInternalErrorNoCtx("send message error: connection reset by peer"), codeClientDisconnect), cc, tun)
-	require.Equal(t, 1, killCalled)
-	require.Equal(t, 1, closeCalled)
+	require.Equal(t, 2, killCalled)
+	require.Equal(t, 2, closeCalled)
 }
 
 func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
@@ -368,7 +420,14 @@ func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
 	}
 
 	called := 0
-	expectedSC := &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn-new"}}
+	closeCalled := 0
+	expectedSC := &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
 	tun := &tunnel{}
 	tun.mu.sc = expectedSC
 	cc := &mockClientConn{
@@ -383,10 +442,11 @@ func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
 	ret := h.handleTunnelErr(err, cc, tun, 733923, 100)
 	require.Same(t, err, ret)
 	require.Equal(t, 1, called)
+	require.Equal(t, 1, closeCalled)
 	require.Equal(t, int64(1), h.counterSet.clientDisconnect.Load())
 }
 
-func TestHandler_handleTunnelErrClosesBackendForEOFClientDisconnect(t *testing.T) {
+func TestHandler_handleTunnelErrClosesBackendForIdleEOFClientDisconnect(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
 	h := &handler{
@@ -418,7 +478,40 @@ func TestHandler_handleTunnelErrClosesBackendForEOFClientDisconnect(t *testing.T
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
 
-func TestHandler_handleTunnelErrClosesBackendForWrappedConnEndClientDisconnect(t *testing.T) {
+func TestHandler_handleTunnelErrKillsBackendForInFlightEOFClientDisconnect(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	killCalled := 0
+	closeCalled := 0
+	tun := &tunnel{}
+	markTunnelInFlight(tun)
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			killCalled++
+			return nil
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 1, killCalled)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrClosesBackendForWrappedConnEndClientDisconnectWithoutInFlight(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
 	h := &handler{
@@ -519,6 +612,229 @@ func TestHandler_handleTunnelErrSkipsBackendCleanupForExpectedCacheQuit(t *testi
 	require.Equal(t, 0, killCalled)
 	require.Equal(t, 0, closeCalled)
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrSkipsKillForForwardedClientQuit(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	killCalled := 0
+	closeCalled := 0
+	tun := &tunnel{}
+	tun.markExpectedClientQuit()
+	markTunnelInFlight(tun)
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			killCalled++
+			return nil
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 0, killCalled)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrDiscardsBackendWhenKillFails(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	killCalled := 0
+	closeCalled := 0
+	tun := &tunnel{}
+	markTunnelInFlight(tun)
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			killCalled++
+			return moerr.NewInternalErrorNoCtx("kill failed")
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 1, killCalled)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrDoesNotKillConcurrentIdleEOFs(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	const n = 64
+	var wg sync.WaitGroup
+	var killCalled atomic.Int32
+	var closeCalled atomic.Int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tun := &tunnel{}
+			tun.mu.sc = &killCurrentServerConn{
+				cn: &CNServer{connID: 11, uuid: "cn-new"},
+				closeFn: func() error {
+					closeCalled.Add(1)
+					return nil
+				},
+			}
+			cc := &mockClientConn{
+				killFn: func(sc ServerConn) error {
+					killCalled.Add(1)
+					return nil
+				},
+			}
+
+			ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+			require.NoError(t, ret)
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(0), killCalled.Load())
+	require.Equal(t, int32(n), closeCalled.Load())
+}
+
+func TestHandler_handleTunnelErrSkipsConnCacheCleanupAfterAbortKill(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+		connCache:  &mockConnCache{},
+	}
+
+	closeCalled := 0
+	currentCN := &CNServer{
+		connID: 10,
+		uuid:   "cn1",
+		addr:   "127.0.0.1:6001",
+		salt:   testSlat,
+	}
+	currentSC := &killCurrentServerConn{
+		cn: currentCN,
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	execSC := &killExecServerConn{}
+	tun := &tunnel{}
+	markTunnelInFlight(tun)
+	tun.mu.sc = currentSC
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+	cc := &clientConn{
+		connID: 42,
+		log:    rt.Logger(),
+		router: &killTestRouter{
+			connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
+				require.Equal(t, currentCN.uuid, c.uuid)
+				require.Equal(t, currentCN.addr, c.addr)
+				return execSC, makeOKPacket(8), nil
+			},
+		},
+		tun: tun,
+		sc:  currentSC,
+		connCache: &mockConnCache{
+			pushFn: func(key cacheKey, sc ServerConn) bool {
+				t.Fatalf("killed backend connection must not be returned to conn cache")
+				return false
+			},
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
+	require.Equal(t, "kill connection 42", execSC.stmt.s)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrSkipsConnCacheCleanupAfterAbortKillFailure(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+		connCache:  &mockConnCache{},
+	}
+
+	closeCalled := 0
+	currentSC := &killCurrentServerConn{
+		cn: &CNServer{
+			connID: 10,
+			uuid:   "cn1",
+			addr:   "127.0.0.1:6001",
+			salt:   testSlat,
+		},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	tun := &tunnel{}
+	markTunnelInFlight(tun)
+	tun.mu.sc = currentSC
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+	cc := &clientConn{
+		connID: 42,
+		log:    rt.Logger(),
+		router: &killTestRouter{
+			connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
+				return nil, nil, moerr.NewInternalErrorNoCtx("kill connect failed")
+			},
+		},
+		tun: tun,
+		sc:  currentSC,
+		connCache: &mockConnCache{
+			pushFn: func(key cacheKey, sc ServerConn) bool {
+				t.Fatalf("backend connection must not be returned to conn cache after kill failure")
+				return false
+			},
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func markTunnelInFlight(tun *tunnel) {
+	now := time.Now()
+	tun.mu.csp = &pipe{}
+	tun.mu.scp = &pipe{}
+	tun.mu.csp.mu.lastCmdTime = now
+	tun.mu.scp.mu.lastCmdTime = now.Add(-time.Second)
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {

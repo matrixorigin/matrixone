@@ -332,6 +332,7 @@ func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Fu
 func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
 	f := rb.getFuture(ctx, request, internal)
 	if err := rb.doSend(f); err != nil {
+		f.messageSent(err)
 		f.Close()
 		return nil, err
 	}
@@ -615,6 +616,7 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 			zap.String("request", f.send.Message.DebugString()))...)
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
+		rb.metrics.observeBackendError(rb.remote, "write", err)
 		rb.rateLimitLogger.Error("write-conn",
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
@@ -670,6 +672,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					// Per specification: io.EOF is a normal connection closure signal,
 					// do not log it to avoid unnecessary noise
 				} else {
+					rb.metrics.observeBackendError(rb.remote, "read", err)
 					rb.rateLimitLogger.Error("read-loop",
 						"read from backend failed",
 						append(rb.logFields(), zap.Error(err))...)
@@ -805,6 +808,7 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
 	}()
 
 	for i, f := range waitings {
+		rb.metrics.observeBackendError(rb.remote, "wait_response", err)
 		f.error(ids[i], err, nil)
 	}
 }
@@ -999,20 +1003,25 @@ func (rb *remoteBackend) resetConn() error {
 		canRetry := false
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			canRetry = true
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
 		}
 		rb.rateLimitLogger.Error("connect-retry",
 			"init remote connection failed, retry later",
 			append(rb.logFields(), zap.Bool("can-retry", canRetry), zap.Error(err))...)
 
 		if !canRetry {
-			return moerr.NewBackendCannotConnectNoCtx(err)
+			err = moerr.NewBackendCannotConnectNoCtx(err)
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
 		}
 		duration := time.Duration(0)
 		for {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewRPCTimeoutNoCtx()
+				err := moerr.NewRPCTimeoutNoCtx()
+				rb.metrics.observeBackendError(rb.remote, "connect", err)
+				return err
 			}
 			select {
 			case <-rb.ctx.Done():
@@ -1026,7 +1035,8 @@ func (rb *remoteBackend) resetConn() error {
 		wait += wait / 2
 
 		// reconnect failed, notify all future failed
-		rb.notifyAllWaitWritesFailed(moerr.NewBackendCannotConnectNoCtx())
+		backendErr := moerr.NewBackendCannotConnectNoCtx()
+		rb.notifyAllWaitWritesFailed(backendErr)
 	}
 }
 

@@ -323,7 +323,12 @@ type BaseProcess struct {
 	PartitionService partitionservice.PartitionService
 	IncrService      incrservice.AutoIncrementService
 
-	LastInsertID        *uint64
+	LastInsertID *uint64
+	// AffectedRows carries the number of rows affected by the previous
+	// statement in the same session, used by the ROW_COUNT() builtin.
+	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
+	// 0 after DDL, and the affected row count after DML.
+	AffectedRows        *int64
 	LoadLocalReader     *io.PipeReader
 	Aicm                *defines.AutoIncrCacheManager
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
@@ -336,6 +341,13 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+	// incrStatementDisabled marks a process that executes internal SQL on a
+	// caller-owned transaction without opening a statement of its own
+	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// must not advance the workspace snapshot write offset: that is a
+	// statement-boundary action, and moving the boundary mid-statement breaks
+	// the positional visibility of the caller's workspace entries.
+	incrStatementDisabled bool
 
 	// post dml sqls run right after all pipelines finished.
 	PostDmlSqlList *threadsafe.Slice[string]
@@ -455,6 +467,19 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	}
 }
 
+// SetIncrStatementDisabled marks this process (and every child process
+// sharing its BaseProcess) as running internal SQL that must not advance the
+// workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
+func (proc *Process) SetIncrStatementDisabled(disabled bool) {
+	proc.Base.incrStatementDisabled = disabled
+}
+
+// IncrStatementDisabled reports whether compiles on this process must skip
+// advancing the workspace snapshot write offset.
+func (proc *Process) IncrStatementDisabled() bool {
+	return proc.Base.incrStatementDisabled
+}
+
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
 	proc.Base.resolveVariableFunc = f
 }
@@ -477,6 +502,19 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) SetAffectedRows(num int64) {
+	if proc.Base.AffectedRows != nil {
+		atomic.StoreInt64(proc.Base.AffectedRows, num)
+	}
+}
+
+func (proc *Process) GetAffectedRows() int64 {
+	if proc.Base.AffectedRows != nil {
+		return atomic.LoadInt64(proc.Base.AffectedRows)
 	}
 	return 0
 }

@@ -108,6 +108,10 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 }
 
 func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
+	itr.ensureCapacity(count)
+	if count == 0 {
+		return itr.values, itr.zValues
+	}
 	for i := 0; i < count; i++ {
 		itr.keys[i] = 0
 	}
@@ -126,6 +130,10 @@ func (itr *intHashMapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, 
 
 func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
+	itr.ensureCapacity(count)
+	if count == 0 {
+		return itr.values, itr.zValues, nil
+	}
 
 	defer func() {
 		for i := 0; i < count; i++ {
@@ -145,6 +153,33 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	vs, zvs := itr.values[:count], itr.zValues[:count]
 	updateHashTableRows(itr.mp, vs, zvs)
 	return vs, zvs, err
+}
+
+func (itr *intHashMapIterator) ensureCapacity(count int) {
+	if count > UnitLimit {
+		panic("int hashmap iterator count exceeds UnitLimit")
+	}
+	keyCount := count
+	if count > 0 && itr.mp != nil && itr.mp.hasNull {
+		// A nullable 8-byte key stores a null marker followed by the value. The
+		// last key can therefore use one byte in a guard slot past the logical
+		// key slice, including when count is UnitLimit.
+		keyCount++
+	}
+	if count <= cap(itr.keyOffs) && keyCount <= cap(itr.keys) {
+		itr.keys = itr.keys[:count]
+		itr.keyOffs = itr.keyOffs[:count]
+		itr.values = itr.values[:count]
+		itr.zValues = itr.zValues[:count]
+		itr.hashes = itr.hashes[:count]
+		return
+	}
+
+	itr.keys = make([]uint64, keyCount)[:count]
+	itr.keyOffs = make([]uint32, count)
+	itr.values = make([]uint64, count)
+	itr.zValues = make([]int64, count)
+	itr.hashes = make([]uint64, count)
 }
 
 func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {

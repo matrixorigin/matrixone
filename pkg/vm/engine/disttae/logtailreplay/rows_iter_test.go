@@ -569,6 +569,94 @@ func TestPrefixIn(t *testing.T) {
 	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
 }
 
+func TestPrimaryKeyUnionIter(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	segmentID := objectio.NewSegmentid()
+	blockIDs := make([]*types.Blockid, 0, 6)
+	for idx := 0; idx < 6; idx++ {
+		blockID := objectio.NewBlockid(segmentID, uint16(idx), 0)
+		blockIDs = append(blockIDs, blockID)
+		vector.AppendFixed(rowIDVec, objectio.NewRowid(blockID, 0), false, pool)
+		vector.AppendFixed(tsVec, types.BuildTS(1, 0), false, pool)
+		vector.AppendFixed(pkVec, int64(idx), false, pool)
+	}
+	state.HandleRowsInsert(context.Background(), &api.Batch{
+		Attrs: []string{"rowid", "time", "pk"},
+		Vecs: []api.Vector{
+			mustVectorToProto(rowIDVec),
+			mustVectorToProto(tsVec),
+			mustVectorToProto(pkVec),
+		},
+	}, 0, packer, pool)
+
+	iter := state.NewPrimaryKeyIterWithFilters(types.BuildTS(2, 0), []readutil.MemPKFilterSpec{
+		{Op: function.EQUAL, Keys: [][]byte{readutil.EncodePrimaryKey(int64(1), packer)}},
+		{Op: function.BETWEEN, Keys: [][]byte{
+			readutil.EncodePrimaryKey(int64(1), packer),
+			readutil.EncodePrimaryKey(int64(3), packer),
+		}},
+	})
+	union, ok := iter.(*primaryKeyUnionIter)
+	require.True(t, ok)
+	require.Len(t, union.heap.children, 2)
+
+	var got []int64
+	for iter.Next() {
+		values, err := types.Unpack(iter.Entry().PrimaryIndexBytes)
+		require.NoError(t, err)
+		got = append(got, values[0].(int64))
+	}
+	require.Equal(t, []int64{1, 2, 3}, got)
+	require.NoError(t, iter.Close())
+	require.NoError(t, iter.Close())
+	require.False(t, iter.Next())
+
+	empty := state.NewPrimaryKeyIterWithFilters(types.BuildTS(2, 0), nil)
+	require.False(t, empty.Next())
+	require.NoError(t, empty.Close())
+
+	deletedRowIDs := vector.NewVec(types.T_Rowid.ToType())
+	deleteTS := vector.NewVec(types.T_TS.ToType())
+	deletedPKs := vector.NewVec(types.T_int64.ToType())
+	tombstoneRowIDs := vector.NewVec(types.T_Rowid.ToType())
+	vector.AppendFixed(deletedRowIDs, objectio.NewRowid(blockIDs[1], 0), false, pool)
+	vector.AppendFixed(deleteTS, types.BuildTS(3, 0), false, pool)
+	vector.AppendFixed(deletedPKs, int64(1), false, pool)
+	vector.AppendFixed(tombstoneRowIDs, types.RandomRowid(), false, pool)
+	state.HandleRowsDelete(context.Background(), &api.Batch{
+		Attrs: []string{"rowid", "time"},
+		Vecs: []api.Vector{
+			mustVectorToProto(deletedRowIDs),
+			mustVectorToProto(deleteTS),
+			mustVectorToProto(deletedPKs),
+			mustVectorToProto(tombstoneRowIDs),
+		},
+	}, packer, pool)
+
+	deleteSnapshot := types.BuildTS(4, 0)
+	deleteIter := state.NewPrimaryKeyDelIterWithFilters(
+		&deleteSnapshot,
+		blockIDs[1],
+		[]readutil.MemPKFilterSpec{
+			{Op: function.EQUAL, Keys: [][]byte{readutil.EncodePrimaryKey(int64(1), packer)}},
+			{Op: function.BETWEEN, Keys: [][]byte{
+				readutil.EncodePrimaryKey(int64(1), packer),
+				readutil.EncodePrimaryKey(int64(3), packer),
+			}},
+		},
+	)
+	require.True(t, deleteIter.Next())
+	require.False(t, deleteIter.Next())
+	require.NoError(t, deleteIter.Close())
+}
+
 func TestPrefixBetweenOpenBounds(t *testing.T) {
 	pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{Degree: 64})
 	for _, key := range []string{"aa1", "aa2", "ab1", "ab2", "ac1"} {

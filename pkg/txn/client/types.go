@@ -72,9 +72,10 @@ type TxnClient interface {
 		options ...TxnOption,
 	) (TxnOperator, error)
 
-	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
-	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)
+	// NewWithSnapshot creates a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator. Before returning, it waits until
+	// the local CN has applied every logtail visible to the snapshot.
+	NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -198,6 +199,11 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
+	// EnterRunSqlWithTokenAndSQL registers one SQL execution. The returned token
+	// is opaque, including zero, and must be passed to ExitRunSqlWithToken. Use
+	// TryEnterRunSqlWithTokenAndSQL when rejection reasons are required. This
+	// legacy signature is retained for source and behavioral compatibility with
+	// external TxnOperator implementations.
 	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64
 	ExitRunSqlWithToken(token uint64)
 	EnterIncrStmt()
@@ -210,6 +216,32 @@ type TxnOperator interface {
 	Set(key string, value any)
 	Get(key string) (any, bool)
 	Delete(key string)
+}
+
+// RunSQLAdmissionOperator is an additive capability implemented by operators
+// that can report why a SQL execution was rejected. Keeping it separate from
+// TxnOperator preserves source compatibility for external implementations.
+type RunSQLAdmissionOperator interface {
+	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+}
+
+// TryEnterRunSqlWithTokenAndSQL admits one SQL execution using the richer
+// capability when available and preserves the legacy contract otherwise.
+// A legacy TxnOperator has no error channel and therefore cannot reject SQL
+// admission after close; implementations that require the sealed lifecycle
+// guarantee must implement RunSQLAdmissionOperator.
+func TryEnterRunSqlWithTokenAndSQL(
+	op TxnOperator,
+	cancel context.CancelFunc,
+	sql string,
+) (uint64, error) {
+	if admission, ok := op.(RunSQLAdmissionOperator); ok {
+		return admission.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
+	}
+	// The legacy API has no error channel and never defined zero as rejection.
+	// Preserve its token verbatim; only RunSQLAdmissionOperator may reject an
+	// admission explicitly.
+	return op.EnterRunSqlWithTokenAndSQL(cancel, sql), nil
 }
 
 // TxnIDGenerator txn id generator
@@ -259,11 +291,24 @@ type Workspace interface {
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
 	IncrStatementID(ctx context.Context, commit bool) error
+	// AdvanceSnapshot advances an RC transaction's snapshot and transfers its
+	// tombstones to the newly visible objects before returning.
+	AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	// UpdateSnapshotWriteOffset advances the statement boundary of the
+	// workspace to its current end. Only statement-boundary callers may use
+	// it (compiling a new user statement); internal sub-sql executions must
+	// not move the caller's boundary.
 	UpdateSnapshotWriteOffset()
+	// GetSnapshotWriteOffset returns the current statement boundary.
 	GetSnapshotWriteOffset() int
+	// WriteOffset returns the current end of the workspace write list. An
+	// internal sub-sql (DisableIncrStatement) compiles against this value to
+	// see everything its caller has written so far without touching the
+	// shared statement boundary.
+	WriteOffset() uint64
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error

@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"runtime/debug"
@@ -36,6 +37,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failOpenFS struct {
+	vfs.FS
+	path string
+	err  error
+}
+
+func (f *failOpenFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
+	if name == f.path {
+		return nil, f.err
+	}
+	return f.FS.Open(name, opts...)
+}
 
 func runServiceTest(t *testing.T,
 	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
@@ -103,6 +117,65 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+}
+
+func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	fs := cfg.FS
+	defer vfs.ReportLeakedFD(fs, t)
+
+	md := metadata.LogStore{UUID: cfg.UUID}
+	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, fs))
+
+	injectedErr := errors.New("injected metadata open failure")
+	cfg.FS = &failOpenFS{
+		FS:   fs,
+		path: fs.PathJoin(cfg.DataDir, logMetadataFilename),
+		err:  injectedErr,
+	}
+	service, err := NewService(cfg, newFS(), nil)
+	require.Nil(t, service)
+	require.ErrorIs(t, err, injectedErr)
+
+	// Reopening the same NodeHost proves that constructor failure released its
+	// directory lock, network listeners, and background workers.
+	cfg.FS = fs
+	service, err = NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	require.NoError(t, service.Close())
+}
+
+func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+
+	service, err := NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	members := map[uint64]dragonboat.Target{1: service.ID()}
+	require.NoError(t, service.store.startReplica(1, 1, members, false))
+	require.NoError(t, service.Close())
+
+	record := metadata.LogShard{
+		LogShardRecord: metadata.LogShardRecord{ShardID: 1},
+		ReplicaID:      1,
+	}
+	md := metadata.LogStore{
+		UUID:   cfg.UUID,
+		Shards: []metadata.LogShard{record, record},
+	}
+	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
+
+	service, err = NewService(cfg, newFS(), nil)
+	require.Nil(t, service)
+	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
+
+	md.Shards = md.Shards[:1]
+	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
+	service, err = NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	require.NoError(t, service.Close())
 }
 
 func TestNewServiceRetry(t *testing.T) {

@@ -128,6 +128,10 @@ type tunnel struct {
 	// for connection caching, so the follow-up client EOF should not tear down
 	// the backend session that is being cached.
 	expectedCacheQuit atomic.Bool
+	// expectedClientQuit indicates the client sent COM_QUIT. It covers both
+	// the conn-cache path above and the non-cache path where COM_QUIT is
+	// forwarded to CN.
+	expectedClientQuit atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -256,11 +260,39 @@ func (t *tunnel) getServerConn() ServerConn {
 func (t *tunnel) markExpectedCacheQuit() {
 	if t != nil {
 		t.expectedCacheQuit.Store(true)
+		t.markExpectedClientQuit()
 	}
 }
 
 func (t *tunnel) hasExpectedCacheQuit() bool {
 	return t != nil && t.expectedCacheQuit.Load()
+}
+
+func (t *tunnel) markExpectedClientQuit() {
+	if t != nil {
+		t.expectedClientQuit.Store(true)
+	}
+}
+
+func (t *tunnel) hasExpectedClientQuit() bool {
+	return t != nil && t.expectedClientQuit.Load()
+}
+
+func (t *tunnel) hasInFlightClientRequest() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	csp, scp := t.mu.csp, t.mu.scp
+	t.mu.Unlock()
+	if csp == nil || scp == nil {
+		return false
+	}
+	csp.mu.Lock()
+	defer csp.mu.Unlock()
+	scp.mu.Lock()
+	defer scp.mu.Unlock()
+	return scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime)
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -789,6 +821,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		} else {
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
+			}
+			if isCmdQuit(tempBuf) {
+				p.tun.markExpectedClientQuit()
 			}
 			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
 				p.mu.lastCmdTime = time.Now()

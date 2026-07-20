@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1197,6 +1198,221 @@ func TestJsonRemoveIgnoreAllRows(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 }
 
+func TestJsonMergeCheckFn(t *testing.T) {
+	ctx := context.Background()
+	for _, fn := range []string{"json_merge_patch", "json_merge_preserve"} {
+		_, err := GetFunctionByName(ctx, fn, []types.Type{
+			types.T_json.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.NoError(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{types.T_json.ToType()})
+		require.Error(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.Error(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{
+			types.T_any.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.NoError(t, err, fn)
+	}
+}
+
+func TestJsonMerge(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("patch follows RFC 7396 and preserves MySQL null state", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1,"nested":{"keep":1,"remove":2}}`, ``, `{"a":1}`, `{"a":1}`},
+					[]bool{false, true, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"b":2,"nested":{"remove":null,"add":3}}`, `[1,2]`, ``, ``},
+					[]bool{false, false, true, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{}`, `[1,2]`, `{"b":2}`, `2`},
+					[]bool{false, false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.Equal(t, `{"a": 1, "b": 2, "nested": {"add": 3, "keep": 1}}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `[1, 2]`, jsonVectorRowString(t, vec, 1))
+		require.True(t, vec.IsNull(2))
+		require.Equal(t, `2`, jsonVectorRowString(t, vec, 3))
+	})
+
+	t.Run("preserve merges recursively and SQL null remains null", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"a":{"x":1},"array":[1]}`), mustJsonBinaryString(t, `{"a":1}`)},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":{"y":2},"array":[2],"value":null}`, ``},
+					[]bool{false, true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePreserve, nil)
+
+		require.Equal(t, `{"a": {"x": 1, "y": 2}, "array": [1, 2], "value": null}`, jsonVectorRowString(t, vec, 0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("json literal null is a non-null JSON result", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"foo"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`null`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
+func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	trueJSON := mustJsonBinaryString(t, `true`)
+	falseJSON := mustJsonBinaryString(t, `false`)
+
+	measure := func(rows int) float64 {
+		left := make([]string, rows)
+		right := make([]string, rows)
+		for i := range rows {
+			left[i] = trueJSON
+			right[i] = falseJSON
+		}
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), left, nil),
+				NewFunctionTestInput(types.T_json.ToType(), right, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		var runErr error
+		allocs := testing.AllocsPerRun(3, func() {
+			runErr = testCase.result.PreExtendAndReset(rows)
+			if runErr == nil {
+				runErr = testCase.fn(
+					testCase.parameters,
+					testCase.result,
+					testCase.proc,
+					testCase.fnLength,
+					nil,
+				)
+			}
+		})
+		require.NoError(t, runErr)
+		return allocs
+	}
+
+	oneRow := measure(1)
+	manyRows := measure(8192)
+	require.LessOrEqual(t, manyRows, oneRow+10,
+		"wrapper allocations must not grow with rows: one=%f many=%f", oneRow, manyRows)
+}
+
+func TestJsonMergeDepthValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	overDepthArray := `[` + nestedJSONMergeObject(100, `1`) + `]`
+	overDepthObject := nestedJSONMergeObject(101, `1`)
+
+	t.Run("final non-object replacement is rejected", func(t *testing.T) {
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthArray}, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		err := testCase.fn(
+			testCase.parameters,
+			testCase.result,
+			testCase.proc,
+			testCase.fnLength,
+			nil,
+		)
+		require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+	})
+
+	tests := []struct {
+		name   string
+		fn     fEvalFn
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "patch rejects over-depth target before scalar replacement",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, nil),
+			},
+		},
+		{
+			name: "patch validates object while target is unknown",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+			},
+		},
+		{
+			name: "preserve validates argument before following SQL null",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePreserve,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				tt.inputs,
+				NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+				tt.fn,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			err := testCase.fn(
+				testCase.parameters,
+				testCase.result,
+				testCase.proc,
+				testCase.fnLength,
+				nil,
+			)
+			require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+		})
+	}
+}
+
+func TestJsonMergeIgnoreAllRowsMaterializesLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`, `still not json`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`, `still not json`}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, &FunctionSelectList{AllNull: true})
+
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
 func TestJsonSetCheckFn(t *testing.T) {
 	ctx := context.Background()
 	_, err := GetFunctionByName(ctx, "json_set", []types.Type{
@@ -1247,6 +1463,38 @@ func TestJsonContainsCheckFn(t *testing.T) {
 		types.T_json.ToType(),
 		types.T_json.ToType(),
 		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+}
+
+func TestJsonContainsPathCheckFn(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
 	})
 	require.Error(t, err)
 }
@@ -1534,6 +1782,169 @@ func TestJsonContainsErrors(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+}
+
+func TestJsonContainsPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "json_contains_path matches json null and short circuits later null paths",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"a":null}`, `{}`, `{"a":1}`, `{"a":1}`, `{"a":1}`, `{"a":1}`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`all`, `all`, `one`, `all`, `one`, `all`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.a`, `$.a`, `$.a`, `$.missing`, `$.missing`, `$.a`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$`, `$.missing`, ``, ``, ``, ``},
+				[]bool{false, false, true, true, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{1, 0, 1, 0, 0, 0},
+			[]bool{false, false, false, false, true, true}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonContainsPathMySQLRegressionSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	complexDoc := `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`
+	tc := tcTemp{
+		info: "json_contains_path supports MySQL all one wildcard and recursive path cases",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{complexDoc, complexDoc, `{"a":true,"b":[1,2]}`, `{"a":1,"b":2}`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`all`, `one`, `ALL`, `oNe`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$**[1]`, `$.c`, `$.b[0]`, `$.*`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.b[0]`, `$**[1]`, `$.b[1]`, `$.missing`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.c`, `$.b[0]`, `$`, `$.b`},
+				[]bool{false, false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0, 1, 1, 1},
+			[]bool{false, false, false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+
+	typedJSON := tcTemp{
+		info: "json_contains_path accepts typed json documents",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{mustJsonBinaryString(t, `{"a":null,"b":[1,2]}`)}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`all`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.b[1]`}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, typedJSON.inputs, typedJSON.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info = fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonContainsPathEvaluationOrder(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "one skips a later invalid path after a hit",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`one`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+		},
+		{
+			name: "all skips a later invalid path after a miss",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`all`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.missing`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			name: "invalid document is evaluated before a later null path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`one`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+		{
+			name: "invalid mode is evaluated before a later null path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`invalid`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tt.inputs, tt.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestJsonContainsPathConstantCacheInvalidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInJsonContainsPath()
+
+	modeOne, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("one"), 1, proc.Mp())
+	require.NoError(t, err)
+	mode, isNull, err := op.getMode(modeOne, vector.GenerateFunctionStrParameter(modeOne), 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, jsonContainsPathOne, mode)
+
+	modeAll, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("all"), 1, proc.Mp())
+	require.NoError(t, err)
+	mode, isNull, err = op.getMode(modeAll, vector.GenerateFunctionStrParameter(modeAll), 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, jsonContainsPathAll, mode)
+
+	op.pathCache = make([]jsonContainsPathPathCache, 1)
+	pathA, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("$.a"), 1, proc.Mp())
+	require.NoError(t, err)
+	parsedA, isNull, err := op.getPath(pathA, vector.GenerateFunctionStrParameter(pathA), 0, 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+
+	pathB, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("$.b"), 1, proc.Mp())
+	require.NoError(t, err)
+	parsedB, isNull, err := op.getPath(pathB, vector.GenerateFunctionStrParameter(pathB), 0, 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.NotSame(t, parsedA, parsedB)
+	require.Equal(t, `$.b`, op.pathCache[0].text)
 }
 
 func TestJsonContainsSelectList(t *testing.T) {
@@ -2189,6 +2600,18 @@ func mustJsonBinaryString(t *testing.T, raw string) string {
 	data, err := bj.Marshal()
 	require.NoError(t, err)
 	return string(data)
+}
+
+func nestedJSONMergeObject(depth int, leaf string) string {
+	var builder strings.Builder
+	for range depth {
+		builder.WriteString(`{"a":`)
+	}
+	builder.WriteString(leaf)
+	for range depth {
+		builder.WriteByte('}')
+	}
+	return builder.String()
 }
 
 func jsonVectorRowString(t *testing.T, vec *vector.Vector, row uint64) string {
