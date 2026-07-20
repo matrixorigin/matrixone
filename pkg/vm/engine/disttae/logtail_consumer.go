@@ -1313,8 +1313,9 @@ func (c *PushClient) isSubscribed(
 	return ps, true, Subscribed
 }
 
-// getSubscribedSnapshotForPKCheck captures the pending marker before the
-// immutable partition snapshot while holding the subscription generation.
+// getSubscribedSnapshotForPKCheck requires an open push-client admission gate
+// and captures the pending marker before the immutable partition snapshot while
+// holding the subscription generation.
 // If there is no pending update, the later snapshot includes every table
 // update known when the global logtail waterline reached the lock timestamp.
 func (c *PushClient) getSubscribedSnapshotForPKCheck(

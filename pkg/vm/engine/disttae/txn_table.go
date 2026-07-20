@@ -3061,9 +3061,9 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 			return false, err
 		}
 		if !ready {
-			// Absence in an unsubscribed, rebuilding, or not-yet-applied state is
-			// unknown, not proof that the primary keys were unchanged. Returning
-			// true makes LockOp retry the statement on a fresh table snapshot.
+			// A subscribed state that cannot cover the upper timestamp is unknown,
+			// not proof that the primary keys were unchanged. Returning true makes
+			// LockOp retry the statement on a fresh table snapshot.
 			return true, nil
 		}
 	} else {
