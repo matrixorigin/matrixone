@@ -1,0 +1,70 @@
+set experimental_fulltext_index = 1;
+drop database if exists ft_query_shapes;
+create database ft_query_shapes;
+use ft_query_shapes;
+create table articles (
+id int primary key,
+title varchar(255),
+content text,
+author_id int,
+fulltext index ft_articles(title, content)
+);
+insert into articles values
+(1, 'Database Guide', 'database search engine', 1),
+(2, 'Vector Guide', 'vector search engine', 2),
+(3, 'Transaction Guide', 'database transaction engine', 1),
+(4, 'Mixed Guide', 'database vector integration', 2);
+select distinct author_id
+from articles
+where match(title, content) against('+database' in boolean mode);
+➤ author_id[4,32,0]  𝄀
+1  𝄀
+2
+select author_id, count(*) as matched_count
+from articles
+where match(title, content) against('+database' in boolean mode)
+group by author_id;
+➤ author_id[4,32,0]  ¦  matched_count[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select author_id, count(*) as matched_count
+from articles
+where match(title, content) against('+database' in boolean mode)
+group by author_id
+having count(*) > 1;
+➤ author_id[4,32,0]  ¦  matched_count[-5,64,0]  𝄀
+1  ¦  2
+with matched as (
+select id from articles
+where match(title, content) against('+database' in boolean mode)
+)
+select count(*) from matched;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*)
+from (
+select id from articles
+where match(title, content) against('+database' in boolean mode)
+) as matched;
+➤ count(*)[-5,64,0]  𝄀
+3
+select id from articles
+where id > 1
+and match(title, content) against('+database' in boolean mode)
+order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+select distinct author_id
+from articles
+where match(title, content) against('+database' in boolean mode)
+order by author_id;
+[unknown result because it is related to issue#25890]
+select id from articles
+where id in (
+select id from articles
+where match(title, content) against('+database' in boolean mode)
+)
+order by id;
+[unknown result because it is related to issue#25891]
+drop database ft_query_shapes;
