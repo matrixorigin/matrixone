@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
@@ -1541,10 +1542,28 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
 }
 
+func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, error) {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
+	defer mysql.PutScanner(scanner)
+
+	if token, _ := scanner.Scan(); token != mysql.PREPARE {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement")
+	}
+	if token, _ := scanner.Scan(); token == mysql.EofChar() || token == mysql.LEX_ERROR {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement name")
+	}
+	if token, _ := scanner.Scan(); token != mysql.FROM {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement delimiter")
+	}
+
+	return strings.TrimLeftFunc(sql[scanner.Pos:], unicode.IsSpace), nil
+}
+
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
-	originSql := strings.TrimLeft(sql[idx:], " ")
-	// fmt.Print(originSql)
+	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
+	if err != nil {
+		return nil, err
+	}
 	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
