@@ -79,4 +79,8 @@ func TestApproxPercentileIsRegistered(t *testing.T) {
 	require.Equal(t, 1, len(fn.Overloads))
 	require.True(t, fn.Overloads[0].isAgg)
 	require.Equal(t, "approx_percentile", fn.Overloads[0].aggFramework.str)
+	require.Equal(t, types.New(types.T_decimal128, 38, 0),
+		fn.Overloads[0].retType([]types.Type{types.New(types.T_decimal128, 38, 0)}))
+	require.Equal(t, types.New(types.T_decimal128, 38, 38),
+		fn.Overloads[0].retType([]types.Type{types.New(types.T_decimal128, 38, 38)}))
 }

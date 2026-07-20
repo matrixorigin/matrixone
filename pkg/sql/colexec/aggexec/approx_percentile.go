@@ -32,7 +32,19 @@ const (
 	approxPercentileSketchCapacity = 200
 	approxPercentileMaxLevels      = 64
 	approxPercentileSketchVersion  = byte(1)
+	approxPercentileDecimalWidth   = int32(38)
 )
+
+func ApproxPercentileReturnType(args []types.Type) types.Type {
+	if !args[0].IsDecimal() {
+		return types.T_float64.ToType()
+	}
+	scale := args[0].Scale
+	if args[0].Width < approxPercentileDecimalWidth {
+		scale++
+	}
+	return types.New(types.T_decimal128, approxPercentileDecimalWidth, scale)
+}
 
 type quantileValue interface {
 	numeric | types.Decimal64 | types.Decimal128
@@ -790,7 +802,9 @@ func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr 
 			if err != nil {
 				return nil, err
 			}
-			values[y], err = interpolateDecimal(toDecimal128(lo), toDecimal128(hi), frac)
+			values[y], err = interpolateDecimal(
+				toDecimal128(lo), toDecimal128(hi), frac, exec.retType.Scale-exec.argTypes[0].Scale,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -835,17 +849,22 @@ func decimal128FromBigInt(value *big.Int) (types.Decimal128, error) {
 	return types.Decimal128{B0_63: low, B64_127: high}, nil
 }
 
-// interpolateDecimal returns a Decimal128 whose scale is one greater than the
-// input scale. All arithmetic stays integral/rational, so values above 2^53 do
-// not pass through float64.
-func interpolateDecimal(lo, hi types.Decimal128, frac *big.Rat) (types.Decimal128, error) {
+// interpolateDecimal converts from the input scale to the declared result
+// scale. All arithmetic stays integral/rational, so values above 2^53 do not
+// pass through float64.
+func interpolateDecimal(lo, hi types.Decimal128, frac *big.Rat, scaleDelta int32) (types.Decimal128, error) {
+	if scaleDelta < 0 || scaleDelta > 1 {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtx("approx_percentile: invalid decimal result scale")
+	}
 	den := new(big.Int).Set(frac.Denom())
 	rem := new(big.Int).Set(frac.Num())
 	loInt := decimal128ToBigInt(lo)
 	diff := new(big.Int).Sub(decimal128ToBigInt(hi), loInt)
 	numerator := new(big.Int).Mul(loInt, den)
 	numerator.Add(numerator, new(big.Int).Mul(diff, rem))
-	numerator.Mul(numerator, big.NewInt(10))
+	if scaleDelta == 1 {
+		numerator.Mul(numerator, big.NewInt(10))
+	}
 	quotient, remainder := new(big.Int), new(big.Int)
 	quotient.QuoRem(numerator, den, remainder)
 	if new(big.Int).Lsh(new(big.Int).Abs(remainder), 1).Cmp(den) >= 0 {
@@ -993,7 +1012,7 @@ func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32
 	compare := func(a, b types.Decimal64) int { return a.Compare(b) }
 	lo := FromD64ToD128(selectKthFunc(values, int(loRank), compare))
 	hi := FromD64ToD128(selectKthFunc(values, int(hiRank), compare))
-	return interpolateDecimal(lo, hi, frac)
+	return interpolateDecimal(lo, hi, frac, 1)
 }
 
 func PercentileDecimal128(vs *Vectors[types.Decimal128], p float64, argScale int32) (types.Decimal128, error) {
@@ -1012,5 +1031,5 @@ func percentileDecimal128Vals(values []types.Decimal128, p float64, argScale int
 	compare := func(a, b types.Decimal128) int { return a.Compare(b) }
 	lo := selectKthFunc(values, int(loRank), compare)
 	hi := selectKthFunc(values, int(hiRank), compare)
-	return interpolateDecimal(lo, hi, frac)
+	return interpolateDecimal(lo, hi, frac, 1)
 }

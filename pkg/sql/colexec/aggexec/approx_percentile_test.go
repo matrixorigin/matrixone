@@ -259,6 +259,17 @@ func formatFloatConfig(p float64) string {
 	return strconv.FormatFloat(p, 'f', -1, 64)
 }
 
+func TestApproxPercentileReturnType(t *testing.T) {
+	require.Equal(t, types.New(types.T_decimal128, 38, 3),
+		ApproxPercentileReturnType([]types.Type{types.New(types.T_decimal128, 37, 2)}))
+	require.Equal(t, types.New(types.T_decimal128, 38, 0),
+		ApproxPercentileReturnType([]types.Type{types.New(types.T_decimal128, 38, 0)}))
+	require.Equal(t, types.New(types.T_decimal128, 38, 38),
+		ApproxPercentileReturnType([]types.Type{types.New(types.T_decimal128, 38, 38)}))
+	require.Equal(t, types.T_float64.ToType(),
+		ApproxPercentileReturnType([]types.Type{types.T_int64.ToType()}))
+}
+
 func TestApproxPercentileExecAcrossSupportedTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -309,6 +320,88 @@ func TestApproxPercentileExecAcrossSupportedTypes(t *testing.T) {
 			case string:
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal128](ret[0], 0).Format(ret[0].GetType().Scale))
 			}
+
+			vec.Free(mp)
+			ret[0].Free(mp)
+			exec.Free()
+		})
+	}
+}
+
+func TestApproxPercentileExec_MaxPrecisionDecimal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		values []string
+		p      string
+		want   string
+	}{
+		{
+			name:   "decimal38 scale0 minimum endpoint",
+			typ:    types.New(types.T_decimal128, 38, 0),
+			values: []string{"-99999999999999999999999999999999999999", "99999999999999999999999999999999999999"},
+			p:      "0",
+			want:   "-99999999999999999999999999999999999999",
+		},
+		{
+			name:   "decimal38 scale0 maximum endpoint",
+			typ:    types.New(types.T_decimal128, 38, 0),
+			values: []string{"-99999999999999999999999999999999999999", "99999999999999999999999999999999999999"},
+			p:      "1",
+			want:   "99999999999999999999999999999999999999",
+		},
+		{
+			name:   "decimal38 scale38 endpoint",
+			typ:    types.New(types.T_decimal128, 38, 38),
+			values: []string{"0.1", "0.2"},
+			p:      "1",
+			want:   "0.20000000000000000000000000000000000000",
+		},
+		{
+			name:   "decimal38 scale0 midpoint rounds at retained scale",
+			typ:    types.New(types.T_decimal128, 38, 0),
+			values: []string{"0", "1"},
+			p:      "0.5",
+			want:   "1",
+		},
+		{
+			name:   "decimal38 scale0 negative midpoint rounds away from zero",
+			typ:    types.New(types.T_decimal128, 38, 0),
+			values: []string{"-1", "0"},
+			p:      "0.5",
+			want:   "-1",
+		},
+		{
+			name:   "decimal37 gains interpolation scale",
+			typ:    types.New(types.T_decimal128, 37, 0),
+			values: []string{"0", "1"},
+			p:      "0.5",
+			want:   "0.5",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, test.typ)
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation([]byte(test.p), 0))
+
+			values := make([]types.Decimal128, len(test.values))
+			for i, value := range test.values {
+				values[i], err = types.ParseDecimal128(value, test.typ.Width, test.typ.Scale)
+				require.NoError(t, err)
+			}
+			vec := medianTestVector(t, mp, test.typ, values)
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+			ret, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, test.want,
+				vector.GetFixedAtNoTypeCheck[types.Decimal128](ret[0], 0).Format(ret[0].GetType().Scale))
 
 			vec.Free(mp)
 			ret[0].Free(mp)

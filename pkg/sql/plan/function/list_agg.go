@@ -626,7 +626,7 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    aggexec.MedianReturnType,
+				retType:    aggexec.ApproxPercentileReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "approx_percentile",
 					aggRegister: aggexec.RegisterApproxPercentile,
