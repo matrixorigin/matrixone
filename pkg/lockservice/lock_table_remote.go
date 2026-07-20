@@ -339,12 +339,6 @@ func (l *remoteLockTable) getLockHolder(ctx context.Context, key []byte) (pb.Wai
 	}
 }
 
-func waitRemoteRetryBackoff(backoff time.Duration) {
-	if backoff > 0 {
-		time.Sleep(backoff)
-	}
-}
-
 func waitRemoteRetryBackoffWithContext(ctx context.Context, backoff time.Duration) error {
 	if backoff <= 0 {
 		return ctx.Err()
