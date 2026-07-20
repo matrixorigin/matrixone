@@ -10195,6 +10195,55 @@ func TestCollectDeletesInRange1(t *testing.T) {
 	tae.CheckCollectTombstoneInRange()
 }
 
+func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	dataObj := testutil.GetOneObject(rel)
+	dataObjectID := *dataObj.GetID()
+	filter := handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0))
+	require.NoError(t, rel.DeleteByFilter(ctx, filter))
+	require.NoError(t, txn.Commit(ctx))
+
+	dropTxn, dropRel := tae.GetRelation()
+	defer dropTxn.Rollback(ctx)
+	tombstone := testutil.GetOneTombstoneMeta(dropRel)
+	// Model a concurrent tombstone flush after it installs the D entry but
+	// before the flush transaction starts committing.
+	require.NoError(t, dropTxn.GetStore().SoftDeleteObject(true, tombstone.AsCommonID()))
+	dropped := tombstone.GetLatestNode()
+	require.True(t, dropped.IsDEntry())
+	require.False(t, dropped.HasDropCommitted())
+	require.Equal(t, txnif.UncommitTS, dropped.GetDeletedAt())
+
+	tableEntry := dropRel.GetMeta().(*catalog.TableEntry)
+	deletes, err := tables.TombstoneRangeScanByObject(
+		ctx,
+		tableEntry,
+		dataObjectID,
+		types.TS{},
+		dropTxn.GetStartTS(),
+		common.DefaultAllocator,
+		tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, deletes)
+	defer deletes.Close()
+	require.Equal(t, 1, deletes.Length())
+}
+
 func TestCollectDeletesInRange2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
