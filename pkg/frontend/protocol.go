@@ -260,7 +260,7 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 			}
 			errMsg := err.Error()
 			if attachAbort != "" {
-				errMsg = fmt.Sprintf("%s\n%s", errMsg, attachAbort)
+				errMsg = fmt.Sprintf("%s\n%s", myerr.Error(), attachAbort)
 			}
 			return mp.sendErrPacket(code, myerr.SqlState(), errMsg)
 		}

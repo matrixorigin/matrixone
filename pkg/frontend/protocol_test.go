@@ -106,6 +106,18 @@ func Test_SendResponse(t *testing.T) {
 			"invalid input: bad numeric parameter\ncleanup")
 
 		rawConn.data = nil
+		resp.SetData(errors.Join(errors.New("rollback failed"),
+			moerr.NewInvalidInput(ctx, "bad numeric parameter")))
+		err = mp.SendResponse(ctx, resp)
+		convey.So(err, convey.ShouldBeNil)
+		packets = splitProtocolPackets(t, rawConn.data)
+		convey.So(len(packets), convey.ShouldEqual, 1)
+		convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, moerr.ErrInvalidInput)
+		convey.So(string(packets[0][4:9]), convey.ShouldEqual, moerr.MySQLDefaultSqlState)
+		convey.So(string(packets[0][9:]), convey.ShouldEqual,
+			"rollback failed\ninvalid input: bad numeric parameter")
+
+		rawConn.data = nil
 		resp.SetData(fmt.Errorf("execute context: %w", moerr.NewInvalidInput(ctx, "bad numeric parameter")))
 		err = mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldBeNil)
