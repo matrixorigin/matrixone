@@ -18,7 +18,9 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestHashBuildBudgetExactLimitAndOverflow(t *testing.T) {
@@ -228,14 +230,18 @@ func TestHashBuildReservationGrowRejectsWithoutChangingCharge(t *testing.T) {
 
 func TestHashBuildReservationGrowHonorsInactiveClosedAndLiveCap(t *testing.T) {
 	b := MustNewHashBuildBudget(20, 20)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
 	g, _ := b.OpenGeneration(1)
 	cap := uint64(20)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
 	b.SetAggregateCapProvider(func() (uint64, error) { return cap, nil })
 	tok, err := g.Reserve(8)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cap = 8
+	now = now.Add(hashBuildBudgetCapRefreshTTL + time.Nanosecond)
 	if err = tok.Grow(1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
 		t.Fatalf("live-cap grow=%v", err)
 	}
@@ -342,14 +348,18 @@ func TestDefaultSpillFDCapAdmitsNormalShuffleRepartitionPeak(t *testing.T) {
 
 func TestHashBuildBudgetLiveCapProviderShrinksOpenGeneration(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 10)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
 	g, _ := b.OpenGenerationWithCap(1, 10)
 	cap := uint64(10)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
 	b.SetAggregateCapProvider(func() (uint64, error) { return cap, nil })
 	owned, err := g.Reserve(6)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cap = 5
+	now = now.Add(hashBuildBudgetCapRefreshTTL + time.Nanosecond)
 	if _, err = g.Reserve(1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
 		t.Fatalf("open generation ignored live cap shrink: %v", err)
 	}
@@ -359,6 +369,356 @@ func TestHashBuildBudgetLiveCapProviderShrinksOpenGeneration(t *testing.T) {
 		t.Fatalf("reservation at refreshed cap failed: %v", err)
 	}
 	token.Release()
+}
+
+func TestHashBuildBudgetCapProviderCachesWithinTTLAndRefreshes(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var calls atomic.Int32
+	cap := uint64(10)
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return cap, nil
+	})
+	first, err := g.Reserve(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("first reservation provider calls=%d, want 1", got)
+	}
+	now = now.Add(hashBuildBudgetCapRefreshTTL - time.Nanosecond)
+	second, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("TTL reservation provider calls=%d, want 1", got)
+	}
+	cap = 3
+	now = now.Add(2 * time.Nanosecond)
+	if _, err = g.Reserve(1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("expired shrink reservation=%v, want admission rejection", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("expired reservation provider calls=%d, want 2", got)
+	}
+	first.Release()
+	second.Release()
+}
+
+func TestHashBuildBudgetCapProviderGrowthOnAggregateReject(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	g2, _ := b.OpenGeneration(2)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var calls atomic.Int32
+	cap := uint64(10)
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return cap, nil
+	})
+	owned, err := g.Reserve(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap = 20
+	// The cached cap is still 10, so this failed aggregate admission forces a
+	// refresh even though the TTL has not elapsed and then succeeds at 20.
+	grown, err := g2.Reserve(1)
+	if err != nil {
+		t.Fatalf("growth refresh reservation=%v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("growth refresh provider calls=%d, want 2", got)
+	}
+	grown.Release()
+	owned.Release()
+}
+
+func TestHashBuildBudgetCapProviderConcurrentSingleFlight(t *testing.T) {
+	b := MustNewHashBuildBudget(128, 128)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return 128, nil
+	})
+	const workers = 16
+	tokens := make(chan *HashBuildReservation, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tok, err := g.Reserve(1)
+			if err != nil {
+				t.Errorf("concurrent reserve: %v", err)
+				return
+			}
+			tokens <- tok
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent provider calls=%d, want 1", got)
+	}
+	for i := 0; i < workers; i++ {
+		(<-tokens).Release()
+	}
+}
+
+func TestHashBuildBudgetCapProviderErrorCachedFailClosed(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var calls atomic.Int32
+	want := errors.New("cgroup unavailable")
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return 0, want
+	})
+	if _, err := g.Reserve(1); !errors.Is(err, want) {
+		t.Fatalf("provider error=%v, want %v", err, want)
+	}
+	if _, err := g.Reserve(1); !errors.Is(err, want) {
+		t.Fatalf("cached provider error=%v, want %v", err, want)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("cached error provider calls=%d, want 1", got)
+	}
+	now = now.Add(hashBuildBudgetCapRefreshTTL + time.Nanosecond)
+	if _, err := g.Reserve(1); !errors.Is(err, want) {
+		t.Fatalf("expired provider error=%v, want %v", err, want)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("expired error provider calls=%d, want 2", got)
+	}
+}
+
+func TestHashBuildBudgetCapProviderSharedByReserveAndGrow(t *testing.T) {
+	b := MustNewHashBuildBudget(20, 20)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var calls atomic.Int32
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return 20, nil
+	})
+	tok, err := g.Reserve(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tok.Grow(3); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("Reserve+Grow provider calls=%d, want 1", got)
+	}
+	tok.Release()
+}
+
+func TestHashBuildBudgetCapProviderZeroTTLRefreshesEveryReservation(t *testing.T) {
+	b := MustNewHashBuildBudget(16, 16)
+	g, _ := b.OpenGeneration(1)
+	b.capRefreshTTL = 0
+	var calls atomic.Int32
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return 16, nil
+	})
+	for i := 0; i < 2; i++ {
+		tok, err := g.Reserve(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok.Release()
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("zero-TTL provider calls=%d, want 2", got)
+	}
+}
+
+func TestHashBuildBudgetUpdateAndProviderReinstallReuseCache(t *testing.T) {
+	b := MustNewHashBuildBudget(16, 16)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var calls atomic.Int32
+	provider := func() (uint64, error) {
+		calls.Add(1)
+		return 16, nil
+	}
+	b.SetAggregateCapProvider(provider)
+	first, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.UpdateAggregateCap(16); err != nil {
+		t.Fatal(err)
+	}
+	// GetHashBuildBudget re-installs an equivalent closure before updating the
+	// freshly resolved cap. The update seeds the cache for this query.
+	b.SetAggregateCapProvider(provider)
+	if err = b.UpdateAggregateCap(16); err != nil {
+		t.Fatal(err)
+	}
+	second, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("Update+Set provider calls=%d, want 1", got)
+	}
+	first.Release()
+	second.Release()
+}
+
+func TestHashBuildBudgetProviderReplacementInvalidatesCache(t *testing.T) {
+	b := MustNewHashBuildBudget(16, 16)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var oldCalls, newCalls atomic.Int32
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		oldCalls.Add(1)
+		return 16, nil
+	})
+	owned, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		newCalls.Add(1)
+		return 2, nil
+	})
+	second, err := g.Reserve(1)
+	if err != nil {
+		t.Fatalf("replacement reserve=%v", err)
+	}
+	if oldCalls.Load() != 1 || newCalls.Load() != 1 {
+		t.Fatalf("provider calls old=%d new=%d, want 1,1", oldCalls.Load(), newCalls.Load())
+	}
+	owned.Release()
+	second.Release()
+}
+
+func TestHashBuildBudgetCNSourceTurnoverRetainsRestrictiveFallback(t *testing.T) {
+	const gib = uint64(1 << 30)
+	oldInputs := HashBuildCeilingInputs{HostMemTotal: 10 * gib, CgroupMemoryMax: 20 * gib}
+	newInputs := HashBuildCeilingInputs{HostMemTotal: 20 * gib, CgroupMemoryMax: 10 * gib}
+	oldCeiling, err := ResolveHashBuildCeiling(oldInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCeiling, err := ResolveHashBuildCeiling(newInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldCeiling.CNHashCap != newCeiling.CNHashCap {
+		t.Fatalf("test setup caps old=%d new=%d, want equal", oldCeiling.CNHashCap, newCeiling.CNHashCap)
+	}
+	b := MustNewHashBuildBudget(oldCeiling.CNHashCap, oldCeiling.CNHashCap)
+	b.installCNCapProvider(oldInputs)
+	b.mergeObservedCNCap(newInputs, newCeiling.CNHashCap)
+
+	// A zero source sample models transient read failures before the installed
+	// provider gets a complete view of the turnover. The merged shared snapshot
+	// must retain both restrictive observations and cannot reopen the cap.
+	b.refreshMu.Lock()
+	got, err := b.resolveCNCapSample(HashBuildCeilingInputs{})
+	b.refreshMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got > newCeiling.CNHashCap {
+		t.Fatalf("fallback cap=%d, exceeds restrictive cap %d", got, newCeiling.CNHashCap)
+	}
+}
+
+func TestHashBuildBudgetSlowProviderTTLStartsAfterSample(t *testing.T) {
+	b := MustNewHashBuildBudget(20, 20)
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	g, _ := b.OpenGeneration(1)
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	var calls atomic.Int32
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		now = now.Add(2 * hashBuildBudgetCapRefreshTTL)
+		return 20, nil
+	})
+	first, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("slow provider calls=%d, want freshly completed sample reused", got)
+	}
+	first.Release()
+	second.Release()
+}
+
+func TestHashBuildBudgetClosedSkipsCapProvider(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	g, _ := b.OpenGeneration(1)
+	var calls atomic.Int32
+	b.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return 10, nil
+	})
+	b.Close()
+	if _, err := g.Reserve(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed reserve=%v", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("closed provider calls=%d, want 0", got)
+	}
+}
+
+func BenchmarkHashBuildBudgetReserveCachedProvider(b *testing.B) {
+	budget := MustNewHashBuildBudget(uint64(b.N)+1, uint64(b.N)+1)
+	budget.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	gen, _ := budget.OpenGeneration(1)
+	var calls atomic.Int64
+	budget.SetAggregateCapProvider(func() (uint64, error) {
+		calls.Add(1)
+		return uint64(b.N) + 1, nil
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tok, err := gen.Reserve(1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		tok.Release()
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(calls.Load()), "provider-calls")
 }
 
 func TestResolveHashBuildCeiling(t *testing.T) {

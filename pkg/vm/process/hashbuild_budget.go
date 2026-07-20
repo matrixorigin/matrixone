@@ -19,6 +19,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +29,16 @@ import (
 )
 
 const hashBuildMinimumReserve = uint64(4 << 30)
+
+// hashBuildBudgetCapRefreshTTL bounds how long a sampled configuration ceiling
+// may be reused. The inputs are limits/reservations (cgroup max, host total,
+// mpool cap, and file-cache hint), not current memory usage. The hard admission
+// bound therefore applies to the last published ceiling; an external live
+// reduction becomes effective within this window. Deployments that require an
+// instantaneous lower cgroup limit must restart/reconfigure the CN before
+// relying on that new limit. A rejection below a cached cap bypasses the window
+// so legitimate cap growth does not cause avoidable spilling.
+const hashBuildBudgetCapRefreshTTL = 100 * time.Millisecond
 
 var (
 	hashBuildGenerationSequence atomic.Uint64
@@ -147,6 +158,18 @@ type HashBuildBudget struct {
 	aggregateUsed uint64
 	queryCap      uint64
 	capProvider   func() (uint64, error)
+	// cap cache fields are protected by refreshMu (and b.mu while reading or
+	// updating the budget state). refreshEpoch lets a failed admission avoid a
+	// second provider call when another goroutine has already refreshed.
+	capCached       bool
+	capRefreshAt    time.Time
+	capRefreshErr   error
+	capRefreshEpoch uint64
+	capRefreshTTL   time.Duration
+	capNow          func() time.Time
+	// liveCapInputs belongs to the production CN provider and is protected by
+	// refreshMu. Direct budgets using SetAggregateCapProvider do not use it.
+	liveCapInputs HashBuildCeilingInputs
 	closed        bool
 	spillDiskCap  uint64
 	spillDiskUsed uint64
@@ -169,6 +192,10 @@ func NewHashBuildBudget(aggregateCap, queryCap uint64) (*HashBuildBudget, error)
 	return &HashBuildBudget{
 		aggregateCap: aggregateCap, queryCap: queryCap,
 		spillDiskCap: defaultSpillCap(aggregateCap), spillFDCap: defaultSpillFDCap(aggregateCap),
+		// Keep direct callers' historical provider semantics (sample before
+		// every reservation). CN budgets obtained through GetHashBuildBudget
+		// opt into the short shared cache below.
+		capRefreshTTL: 0, capNow: time.Now,
 	}, nil
 }
 
@@ -352,6 +379,80 @@ func (b *HashBuildBudget) Close() {
 	b.mu.Unlock()
 }
 
+// refreshAggregateCap samples the live physical ceiling at most once per
+// refresh TTL. refreshMu is a single-flight gate: callers arriving while a
+// provider is running observe that result rather than issuing another OS
+// sample. expectedEpoch is used by an admission retry: if another goroutine
+// already refreshed after the failed attempt, the retry reuses that result.
+// Provider errors are cached for the same short window and returned to every
+// caller, keeping a failing source fail-closed without creating a syscall
+// storm.
+func (b *HashBuildBudget) refreshAggregateCap(force bool, expectedEpoch uint64) (epoch uint64, hasProvider bool, refreshed bool, err error) {
+	if b == nil {
+		return 0, false, false, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid}
+	}
+	b.refreshMu.Lock()
+	defer b.refreshMu.Unlock()
+
+	b.mu.Lock()
+	provider := b.capProvider
+	if provider == nil {
+		epoch = b.capRefreshEpoch
+		b.mu.Unlock()
+		return epoch, false, false, nil
+	}
+	epoch = b.capRefreshEpoch
+	now := b.capNow
+	if now == nil {
+		now = time.Now
+	}
+	nowValue := now()
+	ttl := b.capRefreshTTL
+	// A zero TTL is useful for tests and explicit callers that want every
+	// reservation to sample; the production default is a positive 100ms TTL.
+	valid := b.capCached && ttl > 0 && nowValue.Sub(b.capRefreshAt) < ttl
+	if !force && valid {
+		err = b.capRefreshErr
+		b.mu.Unlock()
+		return epoch, true, false, err
+	}
+	if force && expectedEpoch != 0 && expectedEpoch != epoch && valid {
+		// A concurrent admission already performed the forced refresh. Reuse
+		// its result, including a cached provider error (fail closed).
+		err = b.capRefreshErr
+		b.mu.Unlock()
+		return epoch, true, false, err
+	}
+	b.mu.Unlock()
+
+	cap, providerErr := provider()
+	if providerErr == nil && cap == 0 {
+		providerErr = &HashBuildBudgetError{Kind: HashBuildBudgetErrorCeilingMissing, Message: "live hash build budget ceiling is zero"}
+	}
+
+	b.mu.Lock()
+	// SetAggregateCapProvider and UpdateAggregateCap both take refreshMu, so
+	// the provider cannot be replaced while this result is in flight. Keeping
+	// the assignment under b.mu also makes cap and epoch one atomic snapshot to
+	// admission callers.
+	// Start the TTL when the sample completes. A slow filesystem read must not
+	// make the freshly published result immediately stale and cause queued
+	// callers to repeat the same read.
+	b.capRefreshAt = now()
+	b.capCached = true
+	b.capRefreshErr = providerErr
+	b.capRefreshEpoch++
+	epoch = b.capRefreshEpoch
+	if providerErr == nil {
+		b.aggregateCap = cap
+		if b.queryCap > cap {
+			b.queryCap = cap
+		}
+	}
+	b.mu.Unlock()
+	return epoch, true, true, providerErr
+}
+
 // UpdateAggregateCap applies a refreshed physical ceiling. If current usage
 // is above a reduced cap, all new reservations fail until releases bring it
 // back under the new limit.
@@ -366,14 +467,26 @@ func (b *HashBuildBudget) UpdateAggregateCap(cap uint64) error {
 	if b.queryCap > cap {
 		b.queryCap = cap
 	}
+	// GetHashBuildBudget installs its provider first, then calls this method
+	// with the ceiling it just resolved. That explicit value is a fresh sample
+	// and can seed the shared cache instead of forcing another cgroup read on
+	// the first reservation of every new query.
+	now := b.capNow
+	if now == nil {
+		now = time.Now
+	}
+	b.capRefreshAt = now()
+	b.capCached = b.capProvider != nil
+	b.capRefreshErr = nil
+	b.capRefreshEpoch++
 	b.mu.Unlock()
 	return nil
 }
 
-// SetAggregateCapProvider installs the live physical-ceiling source consulted
-// before every reservation. The provider must not call back into this budget.
-// It lets an already-open generation observe cgroup/cache ceiling changes
-// without waiting for another statement to create a generation.
+// SetAggregateCapProvider installs the live physical-ceiling source. The
+// provider must not call back into this budget. An already-open generation
+// observes cgroup/cache ceiling changes on the first reservation, after the
+// refresh TTL, or immediately when a cached aggregate cap rejects a request.
 func (b *HashBuildBudget) SetAggregateCapProvider(provider func() (uint64, error)) {
 	if b == nil {
 		return
@@ -382,7 +495,104 @@ func (b *HashBuildBudget) SetAggregateCapProvider(provider func() (uint64, error
 	defer b.refreshMu.Unlock()
 	b.mu.Lock()
 	b.capProvider = provider
+	// Installing or replacing a provider starts a fresh epoch. Callers that
+	// already sampled a ceiling can seed the cache with UpdateAggregateCap
+	// immediately afterward (as GetHashBuildBudget does).
+	b.capCached = false
+	b.capRefreshErr = nil
+	b.capRefreshEpoch++
 	b.mu.Unlock()
+}
+
+// installCNCapProvider publishes a new CN aggregate with its initial source
+// snapshot already attached. The candidate is not placed in the service map
+// until this method returns.
+func (b *HashBuildBudget) installCNCapProvider(inputs HashBuildCeilingInputs) {
+	b.refreshMu.Lock()
+	defer b.refreshMu.Unlock()
+	b.liveCapInputs = inputs
+	b.mu.Lock()
+	b.capProvider = b.sampleCNCap
+	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
+	now := b.capNow
+	if now == nil {
+		now = time.Now
+	}
+	b.capRefreshAt = now()
+	b.capCached = true
+	b.capRefreshErr = nil
+	b.capRefreshEpoch++
+	b.mu.Unlock()
+}
+
+// mergeObservedCNCap records finite sources observed by another process before
+// it uses an existing shared aggregate. External samples can only become more
+// conservative here: ceilings take the lower value and the file-cache reserve
+// takes the higher value. Legitimate growth is published later by sampleCNCap,
+// which runs serially under refreshMu and therefore has a total order.
+func (b *HashBuildBudget) mergeObservedCNCap(inputs HashBuildCeilingInputs, cap uint64) {
+	b.refreshMu.Lock()
+	defer b.refreshMu.Unlock()
+	mergeLower := func(current *uint64, observed uint64) {
+		if observed > 0 && observed < math.MaxUint64 && (*current == 0 || *current == math.MaxUint64 || observed < *current) {
+			*current = observed
+		}
+	}
+	mergeLower(&b.liveCapInputs.CgroupMemoryMax, inputs.CgroupMemoryMax)
+	mergeLower(&b.liveCapInputs.HostMemTotal, inputs.HostMemTotal)
+	mergeLower(&b.liveCapInputs.GlobalMpoolCap, inputs.GlobalMpoolCap)
+	if inputs.FileCacheHint > b.liveCapInputs.FileCacheHint {
+		b.liveCapInputs.FileCacheHint = inputs.FileCacheHint
+	}
+	b.mu.Lock()
+	if cap > 0 && cap < b.aggregateCap {
+		b.aggregateCap = cap
+		if b.queryCap > cap {
+			b.queryCap = cap
+		}
+	}
+	b.mu.Unlock()
+}
+
+// sampleCNCap is invoked only while refreshMu is held. A source helper reports
+// unavailable/read-failed as zero, so retain the last finite value rather than
+// interpreting a transient disappearance as extra memory.
+func (b *HashBuildBudget) sampleCNCap() (uint64, error) {
+	current := HashBuildCeilingInputs{
+		CgroupMemoryMax: system.CgroupMemoryLimit(),
+		HostMemTotal:    system.MemoryTotal(),
+	}
+	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
+		current.GlobalMpoolCap = uint64(cap)
+	}
+	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
+		current.FileCacheHint = uint64(hint)
+	}
+	return b.resolveCNCapSample(current)
+}
+
+// resolveCNCapSample applies fail-closed fallback to one serialized source
+// sample. It is split from OS probing so source-turnover behavior is directly
+// testable without depending on the host's cgroup layout.
+func (b *HashBuildBudget) resolveCNCapSample(current HashBuildCeilingInputs) (uint64, error) {
+	if current.CgroupMemoryMax == 0 {
+		current.CgroupMemoryMax = b.liveCapInputs.CgroupMemoryMax
+	}
+	if current.HostMemTotal == 0 {
+		current.HostMemTotal = b.liveCapInputs.HostMemTotal
+	}
+	if current.GlobalMpoolCap == 0 {
+		current.GlobalMpoolCap = b.liveCapInputs.GlobalMpoolCap
+	}
+	if current.FileCacheHint == 0 {
+		current.FileCacheHint = b.liveCapInputs.FileCacheHint
+	}
+	ceiling, err := ResolveHashBuildCeiling(current)
+	if err != nil {
+		return 0, err
+	}
+	b.liveCapInputs = current
+	return ceiling.CNHashCap, nil
 }
 
 // HashBuildBudgetGeneration is a statement execution generation on one CN.
@@ -615,52 +825,77 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "nil hash build generation"}
 	}
 	b := g.budget
-	// Serialize live-ceiling sampling through admission. Otherwise an older
-	// concurrent provider result can overwrite a newer shrink immediately
-	// before reserving and temporarily reopen unsafe headroom.
-	b.refreshMu.Lock()
-	defer b.refreshMu.Unlock()
+	// A closed budget/generation has a deterministic lifecycle result and does
+	// not need to touch the live provider (especially important when the source
+	// is a cgroup filesystem read).
 	b.mu.Lock()
-	provider := b.capProvider
-	b.mu.Unlock()
-	if provider != nil {
-		cap, err := provider()
-		if err != nil {
-			return nil, err
-		}
-		if cap == 0 {
-			return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorCeilingMissing, Message: "live hash build budget ceiling is zero"}
-		}
-		b.mu.Lock()
-		b.aggregateCap = cap
-		if b.queryCap > cap {
-			b.queryCap = cap
-		}
-		b.mu.Unlock()
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed || g.closed {
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", size)
-		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
+		err := &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
+		b.mu.Unlock()
+		return nil, err
+	}
+	b.mu.Unlock()
+	// The provider is sampled once on first use and then shared by all
+	// reservations until the TTL expires. refreshAggregateCap serializes only
+	// the sampling itself; ordinary reservations do not contend on refreshMu.
+	epoch, hasProvider, refreshed, err := b.refreshAggregateCap(false, 0)
+	if err != nil {
+		return nil, err
 	}
 
+	// A stale cached cap can reject a request even though the physical ceiling
+	// has grown (or can leave a shrink undiscovered until the old cap is met).
+	// Before returning an aggregate rejection, force one refresh. The epoch
+	// check turns concurrent retries into a single-flight operation.
+	b.mu.Lock()
+	token, firstErr, aggregateRejected := g.reserveLocked(size, false)
+	b.mu.Unlock()
+	if !aggregateRejected {
+		return token, firstErr
+	}
+	if hasProvider && !refreshed {
+		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
+			return nil, err
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	token, err, aggregateRejected = g.reserveLocked(size, true)
+	if aggregateRejected {
+		return nil, err
+	}
+	return token, err
+}
+
+// reserveLocked attempts one memory reservation. b.mu must be held. The bool
+// result identifies an aggregate-cap failure so Reserve can trigger a forced
+// live-ceiling refresh without counting a transient failure as a rejection.
+func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateReject bool) (*HashBuildReservation, error, bool) {
+	b := g.budget
+	if b.closed || g.closed {
+		g.rejectCount++
+		observeHashBuildBudget("memory", "reject", "query", size)
+		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
+	}
 	// Check by subtraction rather than used+size: this is safe for
 	// math.MaxUint64 and rejects every overflow-sized request.
 	if b.aggregateUsed > b.aggregateCap || size > b.aggregateCap-b.aggregateUsed {
-		g.rejectCount++
-		observeHashBuildBudget("memory", "reject", "cn", size)
-		return nil, newAdmissionError(size, b.aggregateUsed, b.aggregateCap)
+		if recordAggregateReject {
+			g.rejectCount++
+			observeHashBuildBudget("memory", "reject", "cn", size)
+		}
+		return nil, newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
 	}
 	b.aggregateUsed += size
-
 	if g.used > g.cap || size > g.cap-g.used {
 		// Roll back the complete CN charge before returning the rejection.
 		b.aggregateUsed -= size
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", size)
-		return nil, newAdmissionError(size, g.used, g.cap)
+		return nil, newAdmissionError(size, g.used, g.cap), false
 	}
 	g.used += size
 	observeHashBuildBudget("memory", "reserve", "query", size)
@@ -669,7 +904,7 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 	if g.used > g.peakUsed {
 		g.peakUsed = g.used
 	}
-	return &HashBuildReservation{budget: b, generation: g, core: &hashBuildReservationCore{size: size}}, nil
+	return &HashBuildReservation{budget: b, generation: g, core: &hashBuildReservationCore{size: size}}, nil, false
 }
 
 // TryReserve is a boolean convenience for admission-only call sites.
@@ -695,48 +930,71 @@ func (r *HashBuildReservation) Grow(additional uint64) error {
 		return nil
 	}
 	b := r.budget
-	g := r.generation
-	b.refreshMu.Lock()
-	defer b.refreshMu.Unlock()
 	b.mu.Lock()
-	provider := b.capProvider
+	if r.core.state.Load() != hashBuildReservationActive {
+		b.mu.Unlock()
+		return ErrHashBuildReservationInactive
+	}
+	if b.closed || r.generation.closed {
+		r.generation.rejectCount++
+		err := &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: r.generation.used, Cap: r.generation.cap}
+		b.mu.Unlock()
+		return err
+	}
 	b.mu.Unlock()
-	if provider != nil {
-		cap, err := provider()
-		if err != nil {
+	epoch, hasProvider, refreshed, err := b.refreshAggregateCap(false, 0)
+	if err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	firstErr, aggregateRejected := r.growLocked(additional, false)
+	b.mu.Unlock()
+	if !aggregateRejected {
+		return firstErr
+	}
+	if hasProvider && !refreshed {
+		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
 			return err
 		}
-		if cap == 0 {
-			return &HashBuildBudgetError{Kind: HashBuildBudgetErrorCeilingMissing, Message: "live hash build budget ceiling is zero"}
-		}
-		b.mu.Lock()
-		b.aggregateCap = cap
-		if b.queryCap > cap {
-			b.queryCap = cap
-		}
-		b.mu.Unlock()
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	err, aggregateRejected = r.growLocked(additional, true)
+	if aggregateRejected {
+		return err
+	}
+	return err
+}
+
+// growLocked attempts one memory reservation growth. b.mu must be held.
+func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReject bool) (error, bool) {
+	b := r.budget
+	g := r.generation
 	if r.core.state.Load() != hashBuildReservationActive {
-		return ErrHashBuildReservationInactive
+		return ErrHashBuildReservationInactive, false
 	}
 	if b.closed || g.closed {
 		g.rejectCount++
-		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: g.used, Cap: g.cap}
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: g.used, Cap: g.cap}, false
 	}
 	if b.aggregateUsed > b.aggregateCap || additional > b.aggregateCap-b.aggregateUsed {
-		g.rejectCount++
-		observeHashBuildBudget("memory", "reject", "cn", additional)
-		return newAdmissionError(additional, b.aggregateUsed, b.aggregateCap)
+		// Defer the counter/metric until the caller knows whether a forced
+		// refresh can make this transient failure admissible.
+		if recordAggregateReject {
+			g.rejectCount++
+			observeHashBuildBudget("memory", "reject", "cn", additional)
+		}
+		return newAdmissionError(additional, b.aggregateUsed, b.aggregateCap), true
 	}
 	if g.used > g.cap || additional > g.cap-g.used {
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", additional)
-		return newAdmissionError(additional, g.used, g.cap)
+		return newAdmissionError(additional, g.used, g.cap), false
 	}
 	if r.core.size > math.MaxUint64-additional {
-		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "hash build reservation size overflow"}
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "hash build reservation size overflow"}, false
 	}
 	b.aggregateUsed += additional
 	g.used += additional
@@ -747,7 +1005,7 @@ func (r *HashBuildReservation) Grow(additional uint64) error {
 	g.reserveCount++
 	observeHashBuildBudget("memory", "reserve", "query", additional)
 	observeHashBuildBudget("memory", "reserve", "cn", additional)
-	return nil
+	return nil, false
 }
 
 func newAdmissionError(requested, used, cap uint64) error {
@@ -1308,36 +1566,16 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
 		fileCacheHint = uint64(hint)
 	}
-	ceiling, err := ResolveHashBuildCeiling(HashBuildCeilingInputs{
+	initialInputs := HashBuildCeilingInputs{
 		CgroupMemoryMax:       system.CgroupMemoryLimit(),
 		HostMemTotal:          system.MemoryTotal(),
 		GlobalMpoolCap:        globalCap,
 		FileCacheHint:         fileCacheHint,
 		ProcessLimitationSize: queryLimit,
-	})
+	}
+	ceiling, err := ResolveHashBuildCeiling(initialInputs)
 	if err != nil {
 		return nil, err
-	}
-
-	liveCNCap := func() (uint64, error) {
-		globalCap := uint64(0)
-		if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
-			globalCap = uint64(cap)
-		}
-		fileCacheHint := uint64(0)
-		if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
-			fileCacheHint = uint64(hint)
-		}
-		current, resolveErr := ResolveHashBuildCeiling(HashBuildCeilingInputs{
-			CgroupMemoryMax: system.CgroupMemoryLimit(),
-			HostMemTotal:    system.MemoryTotal(),
-			GlobalMpoolCap:  globalCap,
-			FileCacheHint:   fileCacheHint,
-		})
-		if resolveErr != nil {
-			return 0, resolveErr
-		}
-		return current.CNHashCap, nil
 	}
 
 	var aggregate *HashBuildBudget
@@ -1345,13 +1583,17 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	if service == "" {
 		service = "__process_local_cn__"
 	}
-	value, _ := hashBuildCNBudgets.LoadOrStore(service, func() *HashBuildBudget {
+	candidate := func() *HashBuildBudget {
 		b, createErr := NewHashBuildBudget(ceiling.CNHashCap, ceiling.CNHashCap)
 		if createErr != nil {
 			return nil
 		}
+		// Attach the source snapshot before publishing the candidate so another
+		// process never observes an aggregate without its stable provider.
+		b.installCNCapProvider(initialInputs)
 		return b
-	}())
+	}()
+	value, loaded := hashBuildCNBudgets.LoadOrStore(service, candidate)
 	aggregate, _ = value.(*HashBuildBudget)
 	if aggregate == nil {
 		err = &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "failed to initialize CN hash build budget"}
@@ -1359,10 +1601,15 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = aggregate.UpdateAggregateCap(ceiling.CNHashCap); err != nil {
-		return nil, err
+	if loaded {
+		aggregate.mergeObservedCNCap(initialInputs, ceiling.CNHashCap)
+		// The provider installed by the winning aggregate owns its evolving
+		// source snapshot. Refreshing it under refreshMu avoids applying ceiling
+		// samples completed out of order by concurrent statements.
+		if _, _, _, err = aggregate.refreshAggregateCap(false, 0); err != nil {
+			return nil, err
+		}
 	}
-	aggregate.SetAggregateCapProvider(liveCNCap)
 	queryCap := ceiling.QueryCap
 	if aggregate.AggregateCap() < queryCap {
 		queryCap = aggregate.AggregateCap()
