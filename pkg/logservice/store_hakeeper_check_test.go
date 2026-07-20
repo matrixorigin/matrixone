@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -812,6 +813,94 @@ func TestBootstrap(t *testing.T) {
 
 func TestBootstrapWaitsForRemoteWALRecovery(t *testing.T) {
 	testBootstrap(t, false, true)
+}
+
+func TestRecoveryBootstrapDefersTNUntilCompletion(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		const nextID = hakeeper.K8SIDRangeEnd + 10
+		nextIDByKey := map[string]uint64{"restored": 20}
+		applied, err := store.setInitialClusterInfoWithRecoveryResult(
+			1,
+			1,
+			1,
+			nextID,
+			nextIDByKey,
+			nil,
+			true,
+		)
+		require.NoError(t, err)
+		require.True(t, applied)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		require.NoError(t, store.restoreIDWatermarks(ctx, nextID, nextIDByKey, true))
+		_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+		require.NoError(t, err)
+
+		tnMsg := pb.TNStoreHeartbeat{
+			UUID:   uuid.New().String(),
+			Shards: make([]pb.TNShardInfo, 0),
+		}
+		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
+		require.NoError(t, err)
+
+		_, term, err := store.isLeaderHAKeeper()
+		require.NoError(t, err)
+		state, err := store.getCheckerState()
+		require.NoError(t, err)
+		require.True(t, state.LogServiceRecoveryPending)
+		require.True(t, state.LogServiceRecoveryPrepared)
+		store.bootstrap(term, state)
+
+		cb, err := store.getCommandBatch(ctx, tnMsg.UUID)
+		require.NoError(t, err)
+		require.Empty(t, cb.Commands, "TN must not start before recovered WAL is durable")
+
+		cb, err = store.getCommandBatch(ctx, store.id())
+		require.NoError(t, err)
+		require.Len(t, cb.Commands, 1)
+		require.Equal(t, pb.LogService, cb.Commands[0].ServiceType)
+		require.True(t, cb.Commands[0].Bootstrapping)
+		(&Service{store: store}).handleStartReplica(cb.Commands[0])
+
+		require.Eventually(t, func() bool {
+			_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+			if err != nil {
+				return false
+			}
+			state, err = store.getCheckerState()
+			return err == nil && store.bootstrapMgr.CheckBootstrap(state.LogState)
+		}, 10*time.Second, 20*time.Millisecond)
+
+		store.checkBootstrap(state)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+
+		require.NoError(t, store.completeLogServiceRecovery(ctx))
+		require.Eventually(t, func() bool {
+			state, err = store.getCheckerState()
+			if err != nil {
+				return false
+			}
+			store.checkBootstrap(state)
+			state, err = store.getCheckerState()
+			return err == nil && state.State == pb.HAKeeperRunning
+		}, 10*time.Second, 20*time.Millisecond)
+
+		_, term, err = store.isLeaderHAKeeper()
+		require.NoError(t, err)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		tnservice.InitCheckState(store.cfg.UUID)
+		store.healthCheck(term, state)
+		cb, err = store.getCommandBatch(ctx, tnMsg.UUID)
+		require.NoError(t, err)
+		require.Len(t, cb.Commands, 1)
+		require.Equal(t, pb.TNService, cb.Commands[0].ServiceType)
+		require.False(t, cb.Commands[0].Bootstrapping)
+	}
+	runHAKeeperStoreTest(t, false, fn)
 }
 
 func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {

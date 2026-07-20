@@ -602,6 +602,11 @@ func validateWALLogEntry(
 			"WAL recovery entry %d has invalid LogEntry DSN/count %d/%d",
 			index, startDSN, entryCount)
 	}
+	if startDSN > math.MaxUint64-(uint64(entryCount)-1) {
+		return moerr.NewInternalErrorf(ctx,
+			"WAL recovery entry %d DSN range overflows uint64: start %d, count %d",
+			index, startDSN, entryCount)
+	}
 
 	footerOffset := binary.LittleEndian.Uint32(data[logEntryFooterOffset:])
 	if footerOffset < logEntryHeaderSize || uint64(footerOffset) > uint64(len(data)) {
@@ -628,7 +633,7 @@ func validateWALLogEntry(
 		}
 		entryData := data[offset : offset+length]
 		if command == logEntryCommandNormal {
-			if err := validateWALTNEntry(ctx, index, i, entryData); err != nil {
+			if err := validateWALTNEntry(ctx, index, i, startDSN+uint64(i), entryData); err != nil {
 				return err
 			}
 		} else if entryCount != 1 || len(entryData) == 0 || len(entryData)%16 != 0 {
@@ -648,12 +653,19 @@ func validateWALTNEntry(
 	ctx context.Context,
 	walIndex int,
 	entryIndex uint32,
+	expectedDSN uint64,
 	data []byte,
 ) error {
 	if len(data) < tnEntryMinSize {
 		return moerr.NewInternalErrorf(ctx,
 			"WAL recovery entry %d TN entry %d is too small: %d bytes",
 			walIndex, entryIndex, len(data))
+	}
+	embeddedDSN := binary.LittleEndian.Uint64(data[:tnEntryDSNSize])
+	if embeddedDSN != expectedDSN {
+		return moerr.NewInternalErrorf(ctx,
+			"WAL recovery entry %d TN entry %d embedded DSN %d does not match expected DSN %d",
+			walIndex, entryIndex, embeddedDSN, expectedDSN)
 	}
 	typ := binary.LittleEndian.Uint16(data[tnEntryTypeOffset:])
 	version := binary.LittleEndian.Uint16(data[tnEntryVersionOffset:])
@@ -771,6 +783,21 @@ func normalizeWALEntrySafeDSN(entries []WALEntry) {
 	pending := make(dsnIntervalHeap, 0)
 	for i := range entries {
 		entry := &entries[i]
+		// SafeDSN describes entries known durable before this LogEntry. Including
+		// the current batch causes TN replay to skip a multi-entry batch because
+		// the replayer indexes the batch only by its starting DSN.
+		safeDSN := entry.SafeDSN
+		if safeDSN == 0 || safeDSN > contiguousDSN {
+			safeDSN = contiguousDSN
+		}
+		if safeDSN < baseSafeDSN {
+			safeDSN = baseSafeDSN
+		}
+		entry.SafeDSN = safeDSN
+		if len(entry.RawData) >= logEntrySafeDSNOffset+8 {
+			binary.LittleEndian.PutUint64(entry.RawData[logEntrySafeDSNOffset:], safeDSN)
+		}
+
 		if entry.DSN != 0 && entry.EntryCount != 0 {
 			start := entry.DSN
 			end := entry.DSN + uint64(entry.EntryCount) - 1
@@ -782,18 +809,6 @@ func normalizeWALEntrySafeDSN(entries []WALEntry) {
 			} else {
 				heap.Push(&pending, dsnInterval{start: start, end: end})
 			}
-		}
-
-		safeDSN := entry.SafeDSN
-		if safeDSN == 0 || safeDSN > contiguousDSN {
-			safeDSN = contiguousDSN
-		}
-		if safeDSN < baseSafeDSN {
-			safeDSN = baseSafeDSN
-		}
-		entry.SafeDSN = safeDSN
-		if len(entry.RawData) >= logEntrySafeDSNOffset+8 {
-			binary.LittleEndian.PutUint64(entry.RawData[logEntrySafeDSNOffset:], safeDSN)
 		}
 	}
 }

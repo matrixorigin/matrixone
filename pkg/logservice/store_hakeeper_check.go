@@ -506,7 +506,14 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc, *state, l.cfg.BootstrapConfig.StandbyEnabled), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
-	return m.Bootstrap(l.cfg.UUID, l.alloc, state.TNState, state.LogState)
+	tnState := state.TNState
+	if state.LogServiceRecoveryPending {
+		// A rebuilt TN replays the new Log shard only once during startup. Keep
+		// TN bootstrap behind the replicated recovery barrier so that it cannot
+		// observe the empty shard before restored WAL is durable.
+		tnState = pb.TNState{}
+	}
+	return m.Bootstrap(l.cfg.UUID, l.alloc, tnState, state.LogState)
 }
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {

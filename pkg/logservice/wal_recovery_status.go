@@ -70,6 +70,11 @@ func walRecoveryPending(state *pb.CheckerState) bool {
 	if state == nil {
 		return false
 	}
+	// Replicated completion is authoritative. A coordinator can crash after
+	// committing it but before its next heartbeat clears the local status.
+	if state.LogServiceRecoveryCompleted {
+		return false
+	}
 	if state.LogServiceRecoveryPending {
 		return true
 	}

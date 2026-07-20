@@ -184,10 +184,10 @@ func TestReadWALDataFileNormalizesSafeDSN(t *testing.T) {
 		)
 	}
 
-	if want := []uint64{20, 20, 60}; !reflect.DeepEqual(gotSafeDSNs, want) {
+	if want := []uint64{9, 20, 20}; !reflect.DeepEqual(gotSafeDSNs, want) {
 		t.Fatalf("unexpected safe DSNs: got %v, want %v", gotSafeDSNs, want)
 	}
-	if want := []uint64{20, 20, 60}; !reflect.DeepEqual(gotPayloadSafeDSNs, want) {
+	if want := []uint64{9, 20, 20}; !reflect.DeepEqual(gotPayloadSafeDSNs, want) {
 		t.Fatalf("unexpected payload safe DSNs: got %v, want %v", gotPayloadSafeDSNs, want)
 	}
 }
@@ -289,6 +289,18 @@ func TestValidateWALLogEntry(t *testing.T) {
 				binary.LittleEndian.PutUint32(data[footer+4:], 0)
 			},
 			want: "invalid footer record",
+		},
+		{
+			name:  "embedded TN DSN mismatch",
+			outer: outer,
+			mutate: func(data []byte) {
+				footer := binary.LittleEndian.Uint32(data[logEntryFooterOffset:])
+				secondEntryOffset := binary.LittleEndian.Uint32(
+					data[footer+logEntryFooterRecordSize:],
+				)
+				binary.LittleEndian.PutUint64(data[secondEntryOffset:], outer.DSN+99)
+			},
+			want: "embedded DSN",
 		},
 		{
 			name:  "invalid TN entry type",
@@ -901,6 +913,11 @@ func TestWALRecoveryPendingUsesReplicatedStoreState(t *testing.T) {
 	if !walRecoveryPending(state) {
 		t.Fatal("expected remote LogStore recovery status to block bootstrap")
 	}
+	state.LogServiceRecoveryCompleted = true
+	if walRecoveryPending(state) {
+		t.Fatal("durable recovery completion must override a stale LogStore heartbeat")
+	}
+	state.LogServiceRecoveryCompleted = false
 	state.LogState.Stores["remote-log-store"].ConfigData.
 		Content[walRecoveryStatusConfigKey].CurrentValue = walRecoveryStatusComplete
 	if walRecoveryPending(state) {
