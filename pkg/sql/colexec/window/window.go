@@ -404,12 +404,12 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				start, _ = buildPartitionInterval(ctr.ps, j, n)
 			}
-			srcRow := j - int(offset)
-			if srcRow < start {
+			if offset > int64(j-start) {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				srcRow := j - int(offset)
 				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -444,12 +444,12 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				_, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			srcRow := j + int(offset)
-			if srcRow >= end {
+			if offset >= int64(end-j) {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				srcRow := j + int(offset)
 				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -545,12 +545,12 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if right > end {
 				right = end
 			}
-			targetRow := left + int(nthVal) - 1
-			if left >= right || targetRow >= right {
+			if left >= right || nthVal > int64(right-left) {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				targetRow := left + int(nthVal) - 1
 				if err := localResult.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
 					return nil, err
 				}
