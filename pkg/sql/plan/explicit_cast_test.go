@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -42,4 +44,27 @@ func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
 	_, explicitOverload := function.DecodeOverloadID(explicitFunction.GetObj())
 	require.Equal(t, int32(0), ordinaryOverload)
 	require.Equal(t, int32(1), explicitOverload)
+}
+
+func TestUseExplicitCastOverload(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  tree.InternalType
+		want bool
+	}{
+		{name: "signed", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "signed"}, want: true},
+		{name: "signed integer", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "integer"}, want: true},
+		{name: "unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), Unsigned: true}, want: true},
+		{name: "decimal", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL), FamilyString: "decimal"}, want: true},
+		{name: "tinyint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_TINY), FamilyString: "tinyint"}},
+		{name: "smallint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_SHORT), FamilyString: "smallint"}},
+		{name: "int", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONG), FamilyString: "int"}},
+		{name: "bigint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint"}},
+		{name: "bigint unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint", Unsigned: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, useExplicitCastOverload(&tree.T{InternalType: test.typ}))
+		})
+	}
 }

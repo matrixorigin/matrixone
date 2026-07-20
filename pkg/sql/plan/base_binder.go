@@ -155,7 +155,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		if useExplicitCastOverload(exprImpl.Type) {
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		} else {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -279,6 +283,24 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	}
 
 	return
+}
+
+func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
+	t, ok := typ.(*tree.T)
+	if !ok {
+		return false
+	}
+	internal := t.InternalType
+	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return true
+	case defines.MYSQL_TYPE_LONGLONG:
+		family := strings.ToLower(internal.FamilyString)
+		return family == "signed" || family == "integer" ||
+			(internal.Unsigned && (family == "" || family == "unsigned"))
+	default:
+		return false
+	}
 }
 
 func unwrapParenExpr(astExpr tree.Expr) tree.Expr {

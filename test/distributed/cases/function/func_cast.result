@@ -36,6 +36,18 @@ select cast('9999999.99' as decimal(6,2));
 select cast(-1 as unsigned);
 ➤ cast(-1 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
+select cast('-1' as unsigned);
+➤ cast(-1 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast(-1.0 as unsigned);
+➤ cast(-1.0 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast(cast(-1 as decimal(10,2)) as unsigned);
+➤ cast(cast(-1 as decimal(10, 2)) as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast('999999999999999999999999999999999999999999999999999999999999999999999' as decimal(65,2));
+➤ cast(999999999999999999999999999999999999999999999999999999999999999999999 as decimal(65, 2))[3,65,2]  𝄀
+999999999999999999999999999999999999999999999999999999999999999.99
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
@@ -64,7 +76,8 @@ select cast('-000' as unsigned);
 ➤ cast(-000 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-123' as unsigned);
-invalid argument cast to uint64, bad value -123
+➤ cast(-123 as unsigned)[-5,64,0]  𝄀
+18446744073709551493
 select cast('+000' as decimal(6,2));
 ➤ cast(+000 as decimal(6, 2))[3,6,2]  𝄀
 0.00
@@ -96,7 +109,8 @@ select cast('-0b0' as unsigned);
 ➤ cast(-0b0 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-0b1010' as unsigned);
-invalid argument cast to uint64, bad value -0b1010
+➤ cast(-0b1010 as unsigned)[-5,64,0]  𝄀
+18446744073709551606
 select cast('+0b1010' as decimal(6,2));
 ➤ cast(+0b1010 as decimal(6, 2))[3,6,2]  𝄀
 10.00
@@ -122,7 +136,8 @@ select cast('-0o0' as unsigned);
 ➤ cast(-0o0 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-0o17' as unsigned);
-invalid argument cast to uint64, bad value -0o17
+➤ cast(-0o17 as unsigned)[-5,64,0]  𝄀
+18446744073709551601
 select cast('+0o17' as decimal(6,2));
 ➤ cast(+0o17 as decimal(6, 2))[3,6,2]  𝄀
 15.00
@@ -148,7 +163,8 @@ select cast('-0x0' as unsigned);
 ➤ cast(-0x0 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-0x123' as unsigned);
-invalid argument cast to uint64, bad value -0x123
+➤ cast(-0x123 as unsigned)[-5,64,0]  𝄀
+18446744073709551325
 select cast('+0x123' as decimal(6,2));
 ➤ cast(+0x123 as decimal(6, 2))[3,6,2]  𝄀
 291.00
@@ -340,7 +356,8 @@ select cast('9223372036854775809' as signed);
 ➤ cast(9223372036854775809 as signed)[-5,64,0]  𝄀
 -9223372036854775807
 select cast('-1' as unsigned);
-invalid argument cast to uint64, bad value -1
+➤ cast(-1 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
 select cast('abc' as signed);
 invalid argument cast to int, bad value abc
 select cast('1a' as signed);

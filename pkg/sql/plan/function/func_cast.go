@@ -69,6 +69,147 @@ func unsignedToInt64Explicit[T constraints.Unsigned](
 	return nil
 }
 
+func explicitUint64FromIntegerString(value string) (uint64, error) {
+	var integer big.Int
+	if _, ok := integer.SetString(value, 10); !ok {
+		return 0, strconv.ErrSyntax
+	}
+	if integer.Sign() >= 0 {
+		if integer.BitLen() > 64 {
+			return math.MaxUint64, nil
+		}
+		return integer.Uint64(), nil
+	}
+	modulus := new(big.Int).Lsh(big.NewInt(1), 64)
+	integer.Mod(&integer, modulus)
+	return integer.Uint64(), nil
+}
+
+func explicitInt64FromIntegerString(value string) (int64, error) {
+	var integer big.Int
+	if _, ok := integer.SetString(value, 10); !ok {
+		return 0, strconv.ErrSyntax
+	}
+	if integer.Sign() < 0 {
+		minimum := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
+		if integer.Cmp(minimum) < 0 {
+			return math.MinInt64, nil
+		}
+		return integer.Int64(), nil
+	}
+	maximumUnsigned := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
+	if integer.Cmp(maximumUnsigned) > 0 {
+		integer.Set(maximumUnsigned)
+	}
+	return int64(integer.Uint64()), nil
+}
+
+func floatToUint64Explicit[T constraints.Float](
+	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
+	length int, _ *FunctionSelectList,
+) error {
+	to := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		floatValue := float64(value)
+		if math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
+			return moerr.NewOutOfRangeNoCtx("uint64", "")
+		}
+		converted, err := explicitUint64FromIntegerString(strconv.FormatFloat(math.Round(floatValue), 'f', 0, 64))
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%v'", value)
+		}
+		if err = to.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func floatToInt64Explicit[T constraints.Float](
+	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
+	length int, _ *FunctionSelectList,
+) error {
+	to := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		floatValue := float64(value)
+		if math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
+			return moerr.NewOutOfRangeNoCtx("int64", "")
+		}
+		converted, err := explicitInt64FromIntegerString(strconv.FormatFloat(math.Round(floatValue), 'f', 0, 64))
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("int64", "value '%v'", value)
+		}
+		if err = to.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
+	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
+	length int, _ *FunctionSelectList, format func(T) string,
+) error {
+	to := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		integerPart := strings.SplitN(format(value), ".", 2)[0]
+		converted, err := explicitUint64FromIntegerString(integerPart)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", integerPart)
+		}
+		if err = to.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimalToInt64Explicit[T types.FixedSizeTExceptStrType](
+	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
+	length int, _ *FunctionSelectList, format func(T) string,
+) error {
+	to := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		integerPart := strings.SplitN(format(value), ".", 2)[0]
+		converted, err := explicitInt64FromIntegerString(integerPart)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", integerPart)
+		}
+		if err = to.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // XXX need this one to make a pretty function register.
 var supportedTypeCast = map[types.T][]types.T{
 	types.T_any: {
@@ -517,6 +658,19 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return signedToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[int32](from), result, length, selectList)
 		case types.T_int64:
 			return signedToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[int64](from), result, length, selectList)
+		case types.T_float32:
+			return floatToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[float32](from), result, length, selectList)
+		case types.T_float64:
+			return floatToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[float64](from), result, length, selectList)
+		case types.T_decimal64:
+			return decimalToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,
+				func(v types.Decimal64) string { return v.Format(fromType.Scale) })
+		case types.T_decimal128:
+			return decimalToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), result, length, selectList,
+				func(v types.Decimal128) string { return v.Format(fromType.Scale) })
+		case types.T_decimal256:
+			return decimalToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), result, length, selectList,
+				func(v types.Decimal256) string { return v.Format(fromType.Scale) })
 		}
 	}
 	if mode == castModeExplicit && toType.Oid == types.T_int64 {
@@ -529,11 +683,24 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return unsignedToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[uint32](from), result, length, selectList)
 		case types.T_uint64:
 			return unsignedToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[uint64](from), result, length, selectList)
+		case types.T_float32:
+			return floatToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[float32](from), result, length, selectList)
+		case types.T_float64:
+			return floatToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[float64](from), result, length, selectList)
+		case types.T_decimal64:
+			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,
+				func(v types.Decimal64) string { return v.Format(fromType.Scale) })
+		case types.T_decimal128:
+			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), result, length, selectList,
+				func(v types.Decimal128) string { return v.Format(fromType.Scale) })
+		case types.T_decimal256:
+			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), result, length, selectList,
+				func(v types.Decimal256) string { return v.Format(fromType.Scale) })
 		}
 	}
 	strictStringWidth := mode.strictStringWidth()
 	if toType.Oid == types.T_decimal256 {
-		return castToDecimal256(proc, from, *toType, result, length, selectList)
+		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
 	}
 	switch fromType.Oid {
 	case types.T_any: // scalar null
@@ -632,7 +799,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	return err
 }
 
-func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, mode castMode) error {
 	rs := vector.MustFunctionResult[types.Decimal256](result)
 	switch from.GetType().Oid {
 	case types.T_any:
@@ -689,7 +856,7 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal256ToDecimal256(s, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
-		return strToDecimal256(s, rs, length, selectList)
+		return strToDecimal256(s, rs, length, selectList, mode == castModeExplicit)
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -5467,14 +5634,16 @@ func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
 	if tokenErr != nil {
 		return 0, tokenErr
 	}
-	if token.negative {
-		return 0, err
-	}
 	var magnitude big.Int
 	if _, ok := magnitude.SetString(token.digits, token.base); !ok {
 		return 0, strconv.ErrSyntax
 	}
 	modulus := new(big.Int).Lsh(big.NewInt(1), uint(bitSize))
+	if token.negative {
+		magnitude.Neg(&magnitude)
+		magnitude.Mod(&magnitude, modulus)
+		return magnitude.Uint64(), nil
+	}
 	if magnitude.BitLen() > bitSize {
 		return new(big.Int).Sub(modulus, big.NewInt(1)).Uint64(), nil
 	}
@@ -5801,6 +5970,7 @@ func clampDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 func strToDecimal256(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList,
+	explicit ...bool,
 ) error {
 	var i uint64
 	var l = uint64(length)
@@ -5817,6 +5987,11 @@ func strToDecimal256(
 			s := convertByteSliceToString(v)
 			if !isb {
 				result, err := parseDecimal256CastString(s, totype.Width, totype.Scale)
+				if err != nil && len(explicit) > 0 && explicit[0] {
+					if clamped, clampErr := clampDecimal256CastString(s, totype.Width, totype.Scale); clampErr == nil {
+						result, err = clamped, nil
+					}
+				}
 				if err != nil {
 					return err
 				}
@@ -5835,6 +6010,33 @@ func strToDecimal256(
 		}
 	}
 	return nil
+}
+
+func clampDecimal256CastString(s string, width, scale int32) (types.Decimal256, error) {
+	negative, err := decimalCastStringSign(s)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if width <= 0 || scale < 0 || scale > width || width > 65 {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("invalid Decimal256(%d,%d)", width, scale)
+	}
+	digits := strings.Repeat("9", int(width))
+	if scale > 0 {
+		point := int(width - scale)
+		if point == 0 {
+			digits = "0." + digits
+		} else {
+			digits = digits[:point] + "." + digits[point:]
+		}
+	}
+	result, err := types.ParseDecimal256(digits, width, scale)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if negative {
+		result = result.Minus()
+	}
+	return result, nil
 }
 
 func strToBool(
