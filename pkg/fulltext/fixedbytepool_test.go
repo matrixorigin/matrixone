@@ -265,60 +265,6 @@ func TestPoolUnspillBounded(t *testing.T) {
 // budget on a small/loaded CN. Here mem_limit is loose but the heap budget is tight during the
 // scoring phase (the CN grew near its budget from other work), so GetItem must evict against the
 // heap budget and keep resident pool memory well below mem_limit.
-func TestPoolUnspillHeapBudgetBinds(t *testing.T) {
-	origHeap := memGolang
-	origTotal := memTotal
-	defer func() { memGolang = origHeap; memTotal = origTotal }()
-
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	require.NoError(t, err)
-	m := mpool.MustNewZeroNoFixed()
-	proc := &process.Process{Base: &process.BaseProcess{FileService: localFS}, Ctx: context.Background()}
-	proc.SetMPool(m)
-
-	// dsize=2, partition_cap=6 (3 items/partition), mem_limit=30 -> spills during build.
-	const nitem = 30
-	mp := NewFixedBytePool(proc, 2, 6, 30)
-
-	// Build with the heap gate OUT of the way (huge budget) so all 30 items build; mem_limit
-	// keeps resident <= 30 by spilling.
-	memTotal = func() uint64 { return 1 << 40 }
-	memGolang = func() int { return 0 }
-	addrs := make([]uint64, nitem)
-	for i := 0; i < nitem; i++ {
-		addr, data, err := mp.NewItem()
-		require.NoError(t, err)
-		addrs[i] = addr
-		for j := range data {
-			data[j] = byte(i)
-		}
-	}
-
-	// Scoring phase: the CN is now near its heap budget from OTHER work (non-pool ~30 bytes),
-	// and the node is small (budget=40) — TIGHTER than mem_limit=30. memGolang models the real
-	// heap = non-pool + resident pool. GetItem must evict against the heap budget so the
-	// resident pool stays <= budget-nonPool = 10, i.e. below the looser mem_limit.
-	memTotal = func() uint64 { return 50 } // 80% -> budget 40
-	memGolang = func() int { return 30 + int(mp.mem_in_use) }
-	const heapBound = uint64(10) // budget(40) - nonPool(30)
-	for i, addr := range addrs {
-		data, err := mp.GetItem(addr)
-		require.NoError(t, err)
-		for j := range data {
-			require.Equal(t, byte(i), data[j])
-		}
-		require.LessOrEqual(t, mp.mem_in_use, heapBound,
-			"unspill must evict against the HEAP budget (%d), not the looser mem_limit (%d)", heapBound, mp.mem_limit)
-	}
-
-	mp.Close()
-}
 
 // TestPoolFreeItemSpilled covers the FreeItem/spill interaction the scoring pass now exercises:
 // after the pool has spilled partitions, freeing every item (as sort_topk/evaluate cleanup does)

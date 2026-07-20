@@ -427,7 +427,7 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 	//     and cannot spill, so a query matching far more docs than its LIMIT would otherwise
 	//     exhaust the CN heap; refuse cleanly before that happens (#25638).
 	var est uint64
-	if len(pool.partitions) > 0 {
+	if pool.dsize > 0 && len(pool.partitions) > 0 {
 		est = pool.partition_cap + (pool.partition_cap/pool.dsize)*MapMemPerItem
 	}
 	if err := pool.checkHeapBudget(est); err != nil {
@@ -465,38 +465,16 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 		// scoring pass (fulltext TVF evaluate/sort_topk) GetItems every matched doc, so
 		// without a bound it would re-materialize ALL spilled partitions at once and blow
 		// past mem_limit — the same OOM this fix targets, just moved to the scoring phase
-		// (#25638). Evict LRU resident partitions first so the resident pool stays within
-		// BOTH the spill budget (mem_limit) AND the heap budget (the same node-memory fraction
-		// NewItem enforces — mem_limit is a fixed default that can EXCEED the heap budget on a
-		// small CN, so the top-K unspill must respect the tighter of the two). Spill() skips
-		// already-spilled partitions and the still-spilled target p, so p is never the eviction
-		// victim; the []byte returned below stays resident until the next GetItem may evict it.
-		limit := pool.mem_limit
-		if used, budget, ok := pool.heapBudget(); ok {
-			// Non-pool live heap (side maps + other CN work) that eviction cannot reclaim; the
-			// resident pool may hold at most budget-nonPool, so clamp mem_limit down to that.
-			nonPool := uint64(0)
-			if used > pool.mem_in_use {
-				nonPool = used - pool.mem_in_use
-			}
-			heapRoom := uint64(0)
-			if budget > nonPool {
-				heapRoom = budget - nonPool
-			}
-			if heapRoom < limit {
-				limit = heapRoom
-			}
-		}
-		// Evict LRU until the incoming unspill fits, or nothing more can be evicted (Spill is a
-		// no-op — mem_in_use unchanged — when only the target and already-spilled partitions
-		// remain; unspill anyway since a read cannot be refused).
-		for pool.mem_in_use+pool.partition_cap > limit {
-			before := pool.mem_in_use
+		// (#25638). Partition data is allocated OFF the Go heap (Mp().Alloc(..., offHeap=true),
+		// C allocator), so the resident pool is bounded by mem_limit (the spill budget), NOT by
+		// the Go-heap budget — the heap budget bounds the NON-spillable side maps, which are
+		// built during NewItem (and gated there) and are never grown by GetItem. So the top-K
+		// unspill needs only a bounded resident working set: evict LRU to keep the resident pool
+		// within mem_limit, then unspill. Spill() skips already-spilled partitions (incl. the
+		// still-spilled target p) and the active append partition, so neither is evicted here.
+		if pool.mem_in_use+pool.partition_cap > pool.mem_limit {
 			if err := pool.Spill(); err != nil {
 				return nil, err
-			}
-			if pool.mem_in_use >= before {
-				break
 			}
 		}
 		err := p.Unspill()
