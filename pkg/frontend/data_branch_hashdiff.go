@@ -2593,6 +2593,17 @@ func projectBaseBatchToTargetIfNeeded(
 		dataBranchBatchHasTargetLayout(dataBat, tblStuff) {
 		return dataBat
 	}
+	// Legacy table metadata without a source-to-target mapping has no evidence
+	// of a physical layout difference. Preserve the prior path.
+	if len(tblStuff.def.baseColToTarIdx) == 0 {
+		return dataBat
+	}
+	if !dataBranchNeedsHistoricalProjection(
+		tblStuff.def.baseColToTarIdx,
+		len(tblStuff.def.colNames),
+	) {
+		return dataBat
+	}
 	return projectBaseBatchToTarget(dataBat, tblStuff, mp)
 }
 
