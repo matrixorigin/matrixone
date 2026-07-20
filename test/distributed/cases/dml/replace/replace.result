@@ -687,3 +687,30 @@ null    1    null-a-2
 1    1    one-replaced
 2    2    two
 drop table t_replace_fakepk_comp_null;
+drop table if exists t_replace_self_cascade;
+create table t_replace_self_cascade (
+id int primary key,
+parent_id int,
+foreign key (parent_id) references t_replace_self_cascade(id) on delete cascade
+);
+insert into t_replace_self_cascade values (1, null), (2, 1), (3, 2), (4, 1);
+replace into t_replace_self_cascade values (1, null);
+select * from t_replace_self_cascade order by id;
+id    parent_id
+1    null
+insert into t_replace_self_cascade values (2, 1), (3, 2);
+replace into t_replace_self_cascade values (10, null);
+select * from t_replace_self_cascade order by id;
+id    parent_id
+1    null
+2    1
+3    2
+10    null
+delete from t_replace_self_cascade;
+insert into t_replace_self_cascade values (1, null), (2, 1);
+update t_replace_self_cascade set parent_id = 2 where id = 1;
+replace into t_replace_self_cascade values (1, null);
+select * from t_replace_self_cascade order by id;
+id    parent_id
+1    null
+drop table t_replace_self_cascade;

@@ -3589,6 +3589,10 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
 			"CASCADE self-ref FK should NOT generate parent-child pre-check, got: %s", sql)
 	}
+	assert.True(t, queryDeletesTable(query, "self_ref_cascade"),
+		"CASCADE self-ref FK must build a descendant delete branch")
+	assert.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE),
+		"CASCADE self-ref FK must recursively collect the full descendant chain")
 }
 
 func TestReplaceDetectSqls(t *testing.T) {

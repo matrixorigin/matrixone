@@ -1043,7 +1043,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				OnUpdate:    plan.ForeignKeyDef_CASCADE,
 			},
 		},
-		outcnt: 10,
+		refChildTbls: []uint64{0},
+		outcnt:       10,
 	}
 
 	/*
