@@ -19,17 +19,22 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -175,6 +180,46 @@ func TestParseTablePathWithAccount(t *testing.T) {
 			errorContains:    "invalid account_id",
 		},
 		{
+			name:             "three parts - account_id trailing junk",
+			path:             "mydb.mytable.1junk",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id empty",
+			path:             "mydb.mytable.",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id whitespace",
+			path:             "mydb.mytable. 1",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id negative",
+			path:             "mydb.mytable.-1",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id overflow",
+			path:             "mydb.mytable.4294967296",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
 			name:             "four parts - too many",
 			path:             "mydb.mytable.1.extra",
 			currentDatabase:  "otherdb",
@@ -203,6 +248,105 @@ func TestParseTablePathWithAccount(t *testing.T) {
 				require.Equal(t, tt.expectedTable, table)
 				require.Equal(t, tt.expectedAccountId, accountId)
 			}
+		})
+	}
+}
+
+func TestResolveTableStatsKeyUsesRequestedAccountContext(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentAccount uint32
+		path           string
+		targetAccount  uint32
+		expectError    bool
+	}{
+		{
+			name:           "sys queries tenant",
+			currentAccount: 0,
+			path:           "tenant_db.tenant_table.42",
+			targetAccount:  42,
+		},
+		{
+			name:           "tenant queries own account",
+			currentAccount: 42,
+			path:           "tenant_db.tenant_table.42",
+			targetAccount:  42,
+		},
+		{
+			name:           "tenant cannot query another account",
+			currentAccount: 42,
+			path:           "tenant_db.tenant_table.7",
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			proc := testutil.NewProc(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, tt.currentAccount)
+			originalCtx := proc.Ctx
+
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			if tt.expectError {
+				// A non-system cross-account request must fail before any engine lookup.
+				key, targetCtx, err := resolveTableStatsKey(eng, proc, tt.path)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "only sys account can query stats for other accounts")
+				require.Equal(t, pb.StatsInfoKey{}, key)
+				require.Nil(t, targetCtx)
+				return
+			}
+
+			eng.EXPECT().Database(gomock.Any(), "tenant_db", proc.GetTxnOperator()).
+				DoAndReturn(func(ctx context.Context, _ string, _ client.TxnOperator) (engine.Database, error) {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return db, nil
+				})
+			db.EXPECT().Relation(gomock.Any(), "tenant_table", nil).
+				DoAndReturn(func(ctx context.Context, _ string, _ any) (engine.Relation, error) {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return rel, nil
+				})
+			rel.EXPECT().GetDBID(gomock.Any()).
+				DoAndReturn(func(ctx context.Context) uint64 {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return 1001
+				})
+			rel.EXPECT().GetTableID(gomock.Any()).
+				DoAndReturn(func(ctx context.Context) uint64 {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return 2002
+				})
+
+			key, targetCtx, err := resolveTableStatsKey(eng, proc, tt.path)
+			require.NoError(t, err)
+			require.Equal(t, pb.StatsInfoKey{
+				AccId:      tt.targetAccount,
+				DatabaseID: 1001,
+				TableID:    2002,
+				TableName:  "tenant_table",
+				DbName:     "tenant_db",
+			}, key)
+			accountID, err := defines.GetAccountId(targetCtx)
+			require.NoError(t, err)
+			require.Equal(t, tt.targetAccount, accountID)
+			procAccountID, err := defines.GetAccountId(proc.Ctx)
+			require.NoError(t, err)
+			require.Equal(t, tt.currentAccount, procAccountID)
+			require.Same(t, originalCtx, proc.Ctx)
 		})
 	}
 }
