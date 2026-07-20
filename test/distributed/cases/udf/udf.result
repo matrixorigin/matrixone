@@ -27,3 +27,22 @@ create function sql_nl() returns varchar language sql as $$select '\n'$$;
 select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_db1';
 body_hex
 73656C65637420275C6E27
+drop table if exists udf_sql_mode_t;
+create table udf_sql_mode_t(v varchar(10));
+insert into udf_sql_mode_t values ('ok');
+set sql_mode = 'PIPES_AS_CONCAT';
+create function sql_mode_pipe() returns varchar language sql as $$select 'a'||'b'$$;
+set sql_mode = '';
+select sql_mode_pipe();
+sql_mode_pipe()
+ab
+set sql_mode = 'ANSI_QUOTES';
+create function sql_mode_ansi() returns varchar language sql as $$select "v" from "udf_sql_mode_t" limit 1$$;
+set sql_mode = '';
+select sql_mode_ansi();
+sql_mode_ansi()
+ok
+drop function sql_mode_pipe();
+drop function sql_mode_ansi();
+drop table udf_sql_mode_t;
+set sql_mode = default;

@@ -156,6 +156,44 @@ func TestSplitSqlBySemicolon(t *testing.T) {
 	require.Equal(t, "", ret[0])
 }
 
+func TestSplitSqlByStatementCompoundBody(t *testing.T) {
+	ctx := context.Background()
+	compound := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+		"  insert into gate_sink select 'gate-ok';\n" +
+		"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+		"end"
+
+	got, err := SplitSqlByStatement(ctx, compound+";")
+	require.NoError(t, err)
+	require.Equal(t, []string{compound}, got)
+
+	got, err = SplitSqlByStatement(ctx, compound+"; select 2")
+	require.NoError(t, err)
+	require.Equal(t, []string{compound, "select 2"}, got)
+}
+
+func TestSplitSqlByStatementPreservesFragmentContract(t *testing.T) {
+	ctx := context.Background()
+	got, err := SplitSqlByStatement(ctx,
+		"select ';' as semi /* block ; */;; -- comment ;\nselect 2; /* tail ; comment */")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select ';' as semi /* block ; */",
+		"",
+		"-- comment ;\nselect 2",
+		"/* tail ; comment */",
+	}, got)
+}
+
+func TestSplitSqlByStatementUsesSQLMode(t *testing.T) {
+	ctx := context.Background()
+	sql := `select 'a\'; select 1`
+
+	got, err := SplitSqlByStatementWithSQLMode(ctx, sql, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Equal(t, []string{`select 'a\'`, "select 1"}, got)
+}
+
 func TestHandleSqlForRecord(t *testing.T) {
 	// Test remove /* cloud_user */ prefix
 	var ret []string
@@ -285,6 +323,7 @@ func TestHandleSqlForRecord(t *testing.T) {
 }
 
 func TestExtractLeadingHints(t *testing.T) {
+	ctx := context.Background()
 	// Case 1: Provided multi-line optimizer hint with smart quotes (not JSON-parseable)
 	sql1 := `/*+ { “rewrites” : {
 “t1”: “select a, b, c from t1 where a = 100”,
@@ -294,7 +333,8 @@ func TestExtractLeadingHints(t *testing.T) {
 
 Select * from t1, t2 where t1.a = t2.x`
 
-	got := extractLeadingHints(sql1)
+	got, err := extractLeadingHints(ctx, sql1)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(got))
 	expected1 := ` { “rewrites” : {
 “t1”: “select a, b, c from t1 where a = 100”,
@@ -305,7 +345,8 @@ Select * from t1, t2 where t1.a = t2.x`
 
 	// Case 2: Valid JSON hint, verify JSON parsability
 	sql2 := `/*+ {"rewrites": {"t1": "select 1", "T2": "select 2"}} */ select 1;`
-	got = extractLeadingHints(sql2)
+	got, err = extractLeadingHints(ctx, sql2)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(got))
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(got[0]), &payload))
@@ -316,27 +357,30 @@ Select * from t1, t2 where t1.a = t2.x`
 
 	// Case 3: Consecutive hints and multi-statements alignment
 	sql3 := `/*+ session=on */ /*++trace=on*/ /*+ use_nl(t1) */ select 1; /*+ h2 */ select 2; select 3;`
-	got = extractLeadingHints(sql3)
+	got, err = extractLeadingHints(ctx, sql3)
+	require.NoError(t, err)
 	require.Equal(t, 3, len(got))
 	require.Equal(t, ` session=on `, got[0])
 	require.Equal(t, ` h2 `, got[1])
 	require.Equal(t, "", got[2])
 
 	// Case 4: Empty input returns one empty hint
-	got = extractLeadingHints("")
+	got, err = extractLeadingHints(ctx, "")
+	require.NoError(t, err)
 	require.Equal(t, 1, len(got))
 	require.Equal(t, "", got[0])
 
 	// Case 5: Multi statements without hints
-	got = extractLeadingHints("select 1; select 2;")
+	got, err = extractLeadingHints(ctx, "select 1; select 2;")
+	require.NoError(t, err)
 	require.Equal(t, 2, len(got))
 	require.Equal(t, "", got[0])
 	require.Equal(t, "", got[1])
 
-	// Case 6: Unterminated hint collects inner content till EOF
-	got = extractLeadingHints("/*+ abc")
-	require.Equal(t, 1, len(got))
-	require.Equal(t, " abc", got[0])
+	// Case 6: Unterminated hints surface the parser error.
+	got, err = extractLeadingHints(ctx, "/*+ abc")
+	require.Error(t, err)
+	require.Nil(t, got)
 }
 
 // helper to parse and then apply AddRewriteHints

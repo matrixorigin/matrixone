@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -337,29 +336,37 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
+	// compareInit orders uninitialized zone maps before initialized ones and
+	// treats two uninitialized zone maps as equal, so the comparator is a valid
+	// strict weak ordering (unlike a bare min/max compare, which is undefined for
+	// uninitialized zone maps). It returns (result, done): done is false only when
+	// both zone maps are initialized and the caller must compare values.
+	compareInit := func(a, b *blockSortHelper) (int, bool) {
+		ai, bi := a.zm.IsInited(), b.zm.IsInited()
+		if ai && bi {
+			return 0, false
+		}
+		if ai == bi {
+			return 0, true // both uninitialized: equal
+		}
+		if !ai {
+			return -1, true // uninitialized sorts first
+		}
+		return 1, true
+	}
 	if ls.desc {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMax(zm2) > 0
+			return b.zm.CompareMax(a.zm) // descending by max
 		})
 	} else {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMin(zm2) < 0
+			return a.zm.CompareMin(b.zm) // ascending by min
 		})
 	}
 
@@ -768,10 +775,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if !ls.memPKFilter.Valid() {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
+			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
-				ls.memPKFilter.Op(),
-				ls.memPKFilter.Keys())
+				ls.memPKFilter.Specs())
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -1279,6 +1285,14 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	if offsetCnt <= logtailreplay.IndexScaleTiny ||
 		ls.memPKFilter == nil || !ls.memPKFilter.Valid() {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+	}
+	filterSpecs := ls.memPKFilter.Specs()
+	if len(filterSpecs) > 1 {
+		return ls.pState.NewPrimaryKeyDelIterWithFilters(
+			&ls.memPKFilter.TS,
+			bid,
+			filterSpecs,
+		), false
 	}
 
 	inValCnt, ok := ls.memPKFilter.InKind()

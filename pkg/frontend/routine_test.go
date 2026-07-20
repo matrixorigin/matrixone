@@ -37,14 +37,42 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	util "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type routineTraceIDGenerator struct{}
+
+func (routineTraceIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
+	var traceID trace.TraceID
+	traceID[len(traceID)-1] = 1
+	var spanID trace.SpanID
+	spanID[len(spanID)-1] = 1
+	return traceID, spanID
+}
+
+func (routineTraceIDGenerator) NewSpanID() trace.SpanID {
+	var spanID trace.SpanID
+	spanID[len(spanID)-1] = 2
+	return spanID
+}
+
+func TestNewRoutineGeneratesTraceContext(t *testing.T) {
+	previous := trace.DefaultTracer()
+	trace.SetDefaultTracer(trace.NewNonRecordingTracer(routineTraceIDGenerator{}))
+	t.Cleanup(func() { trace.SetDefaultTracer(previous) })
+
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	spanContext := trace.SpanFromContext(routine.getCancelRoutineCtx()).SpanContext()
+	require.False(t, spanContext.IsEmpty())
+}
 
 func Test_inc_dec(t *testing.T) {
 	rt := &Routine{}
@@ -91,6 +119,19 @@ func TestRoutineCleanupWithoutSession(t *testing.T) {
 		t.Fatal("cleanup did not cancel routine context")
 	}
 	assert.Nil(t, rt.getProtocol())
+}
+
+func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetLastAffectedRows(7)
+	rt := &Routine{}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Equal(t, int64(7), resp.LastAffectedRows)
 }
 
 const (

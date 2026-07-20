@@ -62,6 +62,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
+	hashBuild.ctr.hashmapBuilder.TrackNullKeys = hashBuild.TrackNullKeys
 
 	return hashBuild.ctr.hashmapBuilder.Prepare(
 		hashBuild.Conditions,
@@ -113,6 +114,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
+				jm.SetHasNullKey(ctr.hashmapBuilder.HasNullKey)
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 
@@ -202,7 +204,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
 
 			spillFiles = make([]*os.File, spillNumBuckets)
-			spillBuffers = ctr.acquireSpillBuffers(proc)
+			spillBuffers = make([]*batch.Batch, spillNumBuckets)
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {

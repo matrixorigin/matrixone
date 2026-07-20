@@ -240,7 +240,14 @@ func wrapForGPUExecution(sql string) string {
 //   - Parenthesized table expressions
 //   - Subqueries are left unchanged (only real table names are rewritten)
 func rewriteTablesForGPU(ctx context.Context, ses *Session, sql string, manifestBaseURL string) (string, error) {
-	stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
+	stmts, err := parsers.ParseWithSQLMode(
+		ctx,
+		dialect.MYSQL,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sessionSQLModeForParser(ses),
+	)
+	defer freeStatements(stmts)
 	if err != nil {
 		return "", moerr.NewInternalErrorf(ctx, "GPU offload: failed to parse SQL: %v", err)
 	}
