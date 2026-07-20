@@ -1385,7 +1385,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		if e != nil {
 			aggregationExpressions = append(
 				aggregationExpressions,
-				aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+				constructAggFunctionExpression(functionID, isDistinct, f.F, proc))
 
 			typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 		}
@@ -1407,6 +1407,47 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	return arg
 }
 
+// constructAggFunctionExpression removes executor configuration arguments from
+// special aggregate inputs and evaluates them once while constructing the
+// operator. Keep GROUP, WINDOW, and TIME_WINDOW on the same path so a special
+// aggregate cannot be configured in only some execution modes.
+func constructAggFunctionExpression(
+	functionID int64,
+	isDistinct bool,
+	f *plan.Function,
+	proc *process.Process,
+) aggexec.AggFuncExecExpression {
+	args := f.Args
+	var cfg []byte
+	if len(args) <= 1 || (f.Func.ObjName != plan2.NameGroupConcat &&
+		f.Func.ObjName != plan2.NameClusterCenters &&
+		f.Func.ObjName != plan2.NameApproxPercentile) {
+		return aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, nil)
+	}
+
+	configExpr := args[len(args)-1]
+	if f.Func.ObjName == plan2.NameApproxPercentile {
+		if err := validateApproxPercentileExpr(configExpr); err != nil {
+			panic(err)
+		}
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		panic(err)
+	}
+	defer free()
+
+	if f.Func.ObjName == plan2.NameApproxPercentile {
+		cfg, err = getPercentileConfig(vec)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		cfg = []byte(vec.GetStringAt(0))
+	}
+	return aggexec.MakeAggFunctionExpression(functionID, isDistinct, args[:len(args)-1], cfg)
+}
+
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {
 	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(node.WinSpecList))
 
@@ -1415,42 +1456,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var cfg []byte = nil
-		var args = f.F.Args
-		if len(f.F.Args) > 0 {
-
-			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is kmeans_args string
-			//for approx_percentile, the last arg is the percentile value
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters ||
-				f.F.Func.ObjName == plan2.NameApproxPercentile) && len(f.F.Args) > 1 {
-				argExpr := f.F.Args[len(f.F.Args)-1]
-				if f.F.Func.ObjName == plan2.NameApproxPercentile {
-					if err := validateApproxPercentileExpr(argExpr); err != nil {
-						panic(err)
-					}
-				}
-				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-				if err != nil {
-					panic(err)
-				}
-				if f.F.Func.ObjName == plan2.NameApproxPercentile {
-					cfg, err = getPercentileConfig(vec)
-					if err != nil {
-						free()
-						panic(err)
-					}
-				} else {
-					cfg = []byte(vec.GetStringAt(0))
-				}
-				free()
-
-				args = f.F.Args[:len(f.F.Args)-1]
-			}
-		}
-		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-			functionID, isDistinct, args, cfg)
+		aggregationExpressions[i] = constructAggFunctionExpression(functionID, isDistinct, f.F, proc)
 	}
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
@@ -1485,42 +1491,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-			var cfg []byte = nil
-			var args = f.F.Args
-			if len(f.F.Args) > 0 {
-				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is kmeans_args string
-				//for approx_percentile, the last arg is the percentile value
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters ||
-					f.F.Func.ObjName == plan2.NameApproxPercentile) && len(f.F.Args) > 1 {
-					argExpr := f.F.Args[len(f.F.Args)-1]
-					if f.F.Func.ObjName == plan2.NameApproxPercentile {
-						if err := validateApproxPercentileExpr(argExpr); err != nil {
-							panic(err)
-						}
-					}
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-					if err != nil {
-						panic(err)
-					}
-					if f.F.Func.ObjName == plan2.NameApproxPercentile {
-						cfg, err = getPercentileConfig(vec)
-						if err != nil {
-							free()
-							panic(err)
-						}
-					} else {
-						cfg = []byte(vec.GetStringAt(0))
-					}
-					free()
-
-					args = f.F.Args[:len(f.F.Args)-1]
-				}
-			}
-
-			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-				functionID, isDistinct, args, cfg)
+			aggregationExpressions[i] = constructAggFunctionExpression(functionID, isDistinct, f.F, proc)
 		}
 	}
 

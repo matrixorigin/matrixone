@@ -16,3 +16,9 @@ insert into t1 values (1, 1.1), (2, 2.2), (3, 3.3);
 select approx_percentile(b, 0.5) from t1;
 select approx_percentile(b, 0.95) from t1;
 drop table t1;
+
+drop table if exists t_time_window;
+create table t_time_window (ts timestamp primary key, v int);
+insert into t_time_window values ('2026-01-01 00:00:00', 1), ('2026-01-01 00:00:30', 3), ('2026-01-01 00:01:00', 5), ('2026-01-01 00:01:30', 7);
+select _wstart, _wend, approx_percentile(v, 0), approx_percentile(v, 1) from t_time_window interval(ts, 1, minute);
+drop table t_time_window;

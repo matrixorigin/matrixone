@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -221,6 +222,126 @@ func TestConstructTimeWindowUsesRegularSumForPartialSum(t *testing.T) {
 	require.Len(t, timeWin.Aggs, 1)
 	require.Equal(t, int64(function.AggSumOverloadID), timeWin.Aggs[0].GetAggID())
 	require.Equal(t, types.T_decimal128, timeWin.Types[0].Oid)
+}
+
+func TestConstructTimeWindowApproxPercentileConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name       string
+		percentile *plan.Expr
+		want       string
+	}{
+		{name: "lower endpoint", percentile: plan2.MakePlan2Float64ConstExprWithType(0), want: "0"},
+		{name: "upper endpoint", percentile: plan2.MakePlan2Float64ConstExprWithType(1), want: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := makeTimeWindowAggNode(fn.GetEncodedOverloadID(), plan2.NameApproxPercentile, tc.percentile)
+			arg := constructTimeWindow(context.Background(), node, proc)
+			require.Len(t, arg.Aggs, 1)
+			require.Len(t, arg.Aggs[0].GetArgExpressions(), 1)
+			require.Equal(t, tc.want, string(arg.Aggs[0].GetExtraConfig()))
+		})
+	}
+}
+
+func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	nonConstant := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		percentile *plan.Expr
+		want       string
+	}{
+		{
+			name:       "below range",
+			percentile: plan2.MakePlan2Float64ConstExprWithType(-0.01),
+			want:       "invalid input: percentile argument of approx_percentile must be finite and in [0,1], got -0.01",
+		},
+		{
+			name:       "above range",
+			percentile: plan2.MakePlan2Float64ConstExprWithType(1.01),
+			want:       "invalid input: percentile argument of approx_percentile must be finite and in [0,1], got 1.01",
+		},
+		{
+			name:       "non constant",
+			percentile: nonConstant,
+			want:       "invalid input: percentile argument of approx_percentile must be a constant",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := makeTimeWindowAggNode(fn.GetEncodedOverloadID(), plan2.NameApproxPercentile, tc.percentile)
+			require.PanicsWithError(t, tc.want, func() {
+				constructTimeWindow(context.Background(), node, proc)
+			})
+		})
+	}
+}
+
+func TestConstructAggFunctionExpressionPreservesOtherSpecialConfigs(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		config string
+	}{
+		{name: plan2.NameGroupConcat, config: "|"},
+		{name: plan2.NameClusterCenters, config: "k=3,init=random"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &plan.Function{
+				Func: &plan.ObjectRef{ObjName: tc.name},
+				Args: []*plan.Expr{value, plan2.MakePlan2StringConstExprWithType(tc.config)},
+			}
+			expr := constructAggFunctionExpression(1, false, f, proc)
+			require.Len(t, expr.GetArgExpressions(), 1)
+			require.Equal(t, tc.config, string(expr.GetExtraConfig()))
+		})
+	}
+}
+
+func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *plan.Node {
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	ts := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	return &plan.Node{
+		AggList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: functionID, ObjName: name},
+				Args: []*plan.Expr{value, config},
+			}},
+		}},
+		GroupBy:   []*plan.Expr{ts},
+		Timestamp: ts,
+		Interval:  makeTimeWindowIntervalExpr(1, "second"),
+	}
 }
 
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
