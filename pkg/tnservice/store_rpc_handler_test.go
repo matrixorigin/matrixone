@@ -36,6 +36,7 @@ type leaseCancelReadTxnService struct {
 	service.TxnService
 	shard   metadata.TNShard
 	entered chan struct{}
+	readErr error
 }
 
 func (s *leaseCancelReadTxnService) Shard() metadata.TNShard {
@@ -51,7 +52,12 @@ func (s *leaseCancelReadTxnService) Close(bool) error {
 }
 
 func (s *leaseCancelReadTxnService) Read(ctx context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {
-	close(s.entered)
+	if s.entered != nil {
+		close(s.entered)
+	}
+	if s.readErr != nil {
+		return s.readErr
+	}
 	<-ctx.Done()
 	return context.Cause(ctx)
 }
@@ -324,6 +330,26 @@ func TestDoReadMapsLeaseCancellationToTNShardNotFound(t *testing.T) {
 	}
 	require.NotNil(t, resp.TxnError)
 	require.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.TxnErrCode)
+}
+
+func TestDoReadReturnsReadError(t *testing.T) {
+	s := &store{cfg: &Config{UUID: "test"}, replicas: &sync.Map{}}
+	shard := newTestTNShard(1, 2, 3)
+	readErr := errors.New("read failed")
+	r := newReplica(shard, runtime.DefaultRuntime())
+	require.NoError(t, r.start(&leaseCancelReadTxnService{
+		shard:   shard,
+		readErr: readErr,
+	}))
+	t.Cleanup(func() { require.NoError(t, r.close(false)) })
+	s.replicas.Store(uint64(1), r)
+
+	req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
+	req.CNRequest.Target.ReplicaID = 2
+	resp := &txn.TxnResponse{}
+
+	require.ErrorIs(t, s.doRead(context.Background(), &req, resp), readErr)
+	require.Nil(t, resp.TxnError)
 }
 
 func TestHandleReadWithRetry(t *testing.T) {
