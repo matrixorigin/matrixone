@@ -511,6 +511,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			break
 		}
 
+		if len(node.BindingTags) == 0 {
+			node.BindingTags = []int32{0}
+		}
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {

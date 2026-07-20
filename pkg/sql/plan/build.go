@@ -195,19 +195,10 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		query.HasForeignKeyAction = true
 	}
 	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
-		parentLock, parentChecks, parentActions, err := genParentSideReplaceFKSqls(
-			ctx, tblInfo.objRef[0], tblInfo.tableDefs[0], stmt)
-		if err != nil {
-			return nil, err
-		}
-		if parentLock != "" {
-			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_LOCK:"+parentLock)
-		}
-		for _, sql := range parentChecks {
-			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
-		}
-		for _, sql := range parentActions {
-			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_ACTION:"+sql)
+		if len(tblInfo.tableDefs[0].RefChildTbls) > 0 {
+			// Parent-side actions are part of the modern REPLACE plan. Keep a
+			// marker solely for the optimistic-transaction fail-closed guard.
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
 		}
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),

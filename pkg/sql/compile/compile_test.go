@@ -241,6 +241,10 @@ func TestValidateReplaceParentTxnMode(t *testing.T) {
 	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
 	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
+	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
+	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+		"optimistic transaction mode")
 	require.NoError(t, validateReplaceParentTxnMode(ctx,
 		&plan.Query{DetectSqls: []string{"select true"}}, false))
 	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))

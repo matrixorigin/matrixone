@@ -175,4 +175,30 @@ select * from parent_lock_order;
 1  ¦  11  ¦  21
 select * from child_lock_order;
 ➤ id[4,32,0]  ¦  parent_b[4,32,0]  ¦  parent_a[4,32,0]
+create table parent_dynamic(id int primary key, u int unique);
+create table child_dynamic(id int primary key, parent_id int,
+foreign key(parent_id) references parent_dynamic(id) on delete cascade);
+create table replace_source(id int, u int);
+insert into parent_dynamic values (1, 10), (2, 20);
+insert into child_dynamic values (1, 1), (2, 2);
+prepare replace_dynamic from 'replace into parent_dynamic values (?, ?)';
+set @replace_id = 1;
+set @replace_u = 11;
+execute replace_dynamic using @replace_id, @replace_u;
+select * from parent_dynamic order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  20
+select * from child_dynamic order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+2  ¦  2
+deallocate prepare replace_dynamic;
+insert into replace_source values (2, 22);
+replace into parent_dynamic select id, u from replace_source;
+select * from parent_dynamic order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  22
+select * from child_dynamic order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]
 drop database replace_fk_unique_lock;

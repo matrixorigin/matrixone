@@ -533,7 +533,9 @@ func (c *Compile) runOnce() (err error) {
 			return err
 		}
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+				continue
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
 					return err
 				}
@@ -650,6 +652,7 @@ func (c *Compile) runOnce() (err error) {
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				continue
@@ -673,7 +676,8 @@ func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessim
 		return nil
 	}
 	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 			return moerr.NewNotSupported(ctx,
 				"REPLACE on a referenced parent table in optimistic transaction mode")
 		}

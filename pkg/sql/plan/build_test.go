@@ -3884,6 +3884,74 @@ func TestReplaceDetectSqlsMultipleRows(t *testing.T) {
 	assert.Contains(t, preCheck, "3", "pre-check IN list should contain row 3's PK")
 }
 
+func assertReplaceParentPlanMarker(t *testing.T, query *plan.Query) {
+	t.Helper()
+	require.Contains(t, query.DetectSqls, "REPLACE_PARENT_PLAN:")
+}
+
+func queryHasNodeType(query *plan.Query, typ plan.Node_NodeType) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func queryHasFKAssert(query *plan.Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && node.IsEnd {
+			return true
+		}
+		for _, expr := range node.ProjectList {
+			if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "assert" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func queryDeletesTable(query *plan.Query, table string) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_DELETE && node.DeleteCtx != nil &&
+			node.DeleteCtx.TableDef != nil && node.DeleteCtx.TableDef.Name == table {
+			return true
+		}
+	}
+	return false
+}
+
+func queryUpdatesTable(query *plan.Query, table string) bool {
+	for _, node := range query.Nodes {
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef != nil && updateCtx.TableDef.Name == table {
+				return true
+			}
+		}
+		if node.NodeType == plan.Node_INSERT && node.InsertCtx != nil &&
+			node.InsertCtx.TableDef != nil && node.InsertCtx.TableDef.Name == table {
+			return true
+		}
+	}
+	return false
+}
+
+func assertLockTargetTypesMatchInput(t *testing.T, query *plan.Query) {
+	t.Helper()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+		require.Len(t, node.Children, 1)
+		input := query.Nodes[node.Children[0]]
+		for _, target := range node.LockTargets {
+			require.Less(t, int(target.PrimaryColIdxInBat), len(input.ProjectList))
+			assert.Equal(t, target.PrimaryColTyp.Id, input.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
+		}
+	}
+}
+
 func TestReplaceParentSideFKRestrict(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -3897,29 +3965,10 @@ func TestReplaceParentSideFKRestrict(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
-	require.NotEmpty(t, query.DetectSqls)
-	assert.True(t, strings.HasPrefix(query.DetectSqls[0], "REPLACE_PARENT_LOCK:"),
-		"parent row lock must run before the RESTRICT check")
-
-	var preCheck string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
-			break
-		}
-	}
-	assert.NotEmpty(t, preCheck,
-		"RESTRICT parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
-	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
-	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
-	assert.Contains(t, preCheck, "`id` = cast(1 as INT)", "pre-check SQL should assignment-cast the supplied PK value")
-	assert.Contains(t, preCheck, "exists (select 1", "pre-check should resolve the actual conflicting parent row")
-
-	// No CASCADE/SET NULL action SQL should be produced for RESTRICT.
-	for _, sql := range query.DetectSqls {
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
-			"RESTRICT parent-side FK must NOT generate an action SQL, got: %s", sql)
-	}
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryHasNodeType(query, plan.Node_LOCK_OP))
+	assertLockTargetTypesMatchInput(t, query)
+	assert.True(t, queryHasFKAssert(query), "RESTRICT must assert that no child row references the locked old parent")
 }
 
 func TestReplaceParentSideFKCascade(t *testing.T) {
@@ -3935,30 +3984,9 @@ func TestReplaceParentSideFKCascade(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
-	require.NotEmpty(t, query.DetectSqls)
-	assert.True(t, strings.HasPrefix(query.DetectSqls[0], "REPLACE_PARENT_LOCK:"),
-		"parent row lock must run before the CASCADE action")
-
-	var action string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
-			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
-			break
-		}
-	}
-	assert.NotEmpty(t, action,
-		"CASCADE parent-side FK REPLACE should generate a REPLACE_PARENT_ACTION: SQL")
-	assert.Contains(t, action, "delete from", "CASCADE action should be a DELETE on the child")
-	assert.Contains(t, action, "replace_fk_cc", "CASCADE action should target the child table")
-	assert.Contains(t, action, "`pid`", "CASCADE action should filter on the child FK column")
-	assert.Contains(t, action, "`id` = cast(1 as INT)", "CASCADE action should assignment-cast the supplied PK value")
-	assert.Contains(t, action, "exists (select 1", "CASCADE should resolve the actual conflicting parent row")
-
-	// CASCADE must NOT generate a parent-child RESTRICT pre-check.
-	for _, sql := range query.DetectSqls {
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
-			"CASCADE parent-side FK must NOT generate a pre-check SQL, got: %s", sql)
-	}
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryHasNodeType(query, plan.Node_LOCK_OP))
+	assert.True(t, queryDeletesTable(query, "replace_fk_cc"), "CASCADE must build a child delete branch")
 }
 
 func TestReplaceParentSideFKExplicitColumns(t *testing.T) {
@@ -3975,18 +4003,8 @@ func TestReplaceParentSideFKExplicitColumns(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 
-	var preCheck string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
-			break
-		}
-	}
-	assert.NotEmpty(t, preCheck,
-		"parent-side pre-check should be generated with an explicit, mixed-case column list")
-	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
-	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
-	assert.Contains(t, preCheck, "`id` = cast(1 as INT)", "pre-check SQL should assignment-cast the supplied PK value")
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryHasFKAssert(query))
 }
 
 func TestReplaceParentSideFKNoAction(t *testing.T) {
@@ -4002,20 +4020,8 @@ func TestReplaceParentSideFKNoAction(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 
-	var preCheck string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
-			break
-		}
-	}
-	assert.NotEmpty(t, preCheck,
-		"NO ACTION parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
-	assert.Contains(t, preCheck, "replace_fk_nc", "pre-check SQL should target the child table")
-	for _, sql := range query.DetectSqls {
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
-			"NO ACTION parent-side FK must NOT generate an action SQL, got: %s", sql)
-	}
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryHasFKAssert(query))
 }
 
 func TestReplaceParentSideFKSetDefault(t *testing.T) {
@@ -4029,20 +4035,8 @@ func TestReplaceParentSideFKSetDefault(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 
-	var preCheck string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
-			break
-		}
-	}
-	assert.NotEmpty(t, preCheck,
-		"SET DEFAULT parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
-	assert.Contains(t, preCheck, "replace_fk_dc", "pre-check SQL should target the child table")
-	for _, sql := range query.DetectSqls {
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
-			"SET DEFAULT parent-side FK must NOT generate an action SQL, got: %s", sql)
-	}
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryHasFKAssert(query))
 }
 
 func TestReplaceParentSideFKMultiRow(t *testing.T) {
@@ -4059,28 +4053,18 @@ func TestReplaceParentSideFKMultiRow(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 
-	var action string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
-			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
-			break
-		}
-	}
-	assert.NotEmpty(t, action,
-		"multi-row CASCADE parent-side REPLACE should generate an action SQL")
-	assert.Contains(t, action, "1", "action IN list should contain row 1's PK")
-	assert.Contains(t, action, "2", "action IN list should contain row 2's PK")
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryDeletesTable(query, "replace_fk_cc"))
 }
 
 func TestReplaceParentSideFKMixedLiteralRows(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
-	// A mixed VALUES list cannot partially apply parent-side actions because that
-	// would leave the non-literal rows unchecked.
+	// Mixed literal/function input is evaluated once by the main row-image plan.
 	logicPlan, err := runOneStmt(mock, t,
 		"REPLACE INTO replace_fk_cp VALUES (1, 'a'), (rand(), 'b')")
-	assert.Error(t, err)
-	assert.Nil(t, logicPlan)
+	require.NoError(t, err)
+	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
 }
 
 func TestReplaceParentSideFKSetNull(t *testing.T) {
@@ -4097,47 +4081,32 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 
-	var action string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
-			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
-			break
-		}
-	}
-	assert.NotEmpty(t, action,
-		"SET NULL parent-side FK REPLACE should generate a REPLACE_PARENT_ACTION: SQL")
-	assert.Contains(t, action, "update", "SET NULL action should be an UPDATE on the child")
-	assert.Contains(t, action, "replace_fk_sc", "SET NULL action should target the child table")
-	assert.Contains(t, action, "null", "SET NULL action should set the child FK column to null")
-	assert.Contains(t, action, "`id` = cast(1 as INT)", "SET NULL action should assignment-cast the supplied PK value")
-
-	// SET NULL must NOT generate a parent-child RESTRICT pre-check.
-	for _, sql := range query.DetectSqls {
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
-			"SET NULL parent-side FK must NOT generate a pre-check SQL, got: %s", sql)
-	}
+	assertReplaceParentPlanMarker(t, query)
+	assert.True(t, queryUpdatesTable(query, "replace_fk_sc"), "SET NULL must build a child update branch")
 }
 
 func TestReplaceParentSideFKNonLiteralSkip(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
-	// Non-literal PK expressions cannot be safely embedded into the background
-	// parent-side SQL, so the statement must fail closed.
+	// Non-literal expressions are evaluated by the main REPLACE row image.
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (rand(), 'x')")
-	assert.Error(t, err)
-	assert.Nil(t, logicPlan)
+	require.NoError(t, err)
+	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
 }
 
 func TestReplaceParentSideFKUnsupportedSources(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	for _, sql := range []string{
-		"REPLACE INTO replace_fk_p VALUES (?, 'x')",
-		"REPLACE INTO replace_fk_p SELECT deptno, dname FROM dept",
-	} {
-		logicPlan, err := runOneStmt(mock, t, sql)
-		assert.Error(t, err, sql)
-		assert.Nil(t, logicPlan, sql)
-	}
+	preparedSQL := "REPLACE INTO replace_fk_p VALUES (?, 'x')"
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), preparedSQL, 1)
+	require.NoError(t, err)
+	logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
+
+	selectSQL := "REPLACE INTO replace_fk_p SELECT deptno, dname FROM dept"
+	logicPlan, err = runOneStmt(mock, t, selectSQL)
+	require.NoError(t, err)
+	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
 }
 
 func TestReplaceParentSideFKUniquePrefixConflict(t *testing.T) {
@@ -4204,6 +4173,9 @@ func TestReplaceParentSideFKLocksReferencedUniqueIndexKey(t *testing.T) {
 		Obj: int64(indexTable.TblId), SchemaName: mock.ctxt.objects["replace_fk_p"].SchemaName,
 		ObjName: indexTable.Name,
 	}
+	modernPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (1, 'new')")
+	require.NoError(t, err)
+	assertLockTargetTypesMatchInput(t, modernPlan.GetQuery())
 	stmt, err := mysql.ParseOne(context.Background(),
 		"REPLACE INTO replace_fk_p VALUES (1, 'new')", 1)
 	require.NoError(t, err)

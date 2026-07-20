@@ -487,6 +487,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	buildParentFKActions := len(tableDef.RefChildTbls) > 0
+	if buildParentFKActions {
+		enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+		buildParentFKActions = enabled
+	}
 	replaceDedupOldColList := func(first [2]int32) []plan.ColRef {
 		oldCols := make([]plan.ColRef, 0, 3+len(tableDef.Indexes))
 		seen := make(map[[2]int32]struct{}, 3+len(tableDef.Indexes))
@@ -503,6 +511,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		appendOldCol(first)
 		appendOldCol(oldMainRowIDPos)
 		appendOldCol(oldMainPKPos)
+		if buildParentFKActions {
+			// Parent-side FK actions consume the actual old row selected by the
+			// REPLACE conflict joins. Preserve every base column so FKs that
+			// reference any UNIQUE key can reuse the delete action planner.
+			for _, col := range tableDef.Cols {
+				if pos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]; ok {
+					appendOldCol(pos)
+				}
+			}
+		}
 		for i, idxDef := range tableDef.Indexes {
 			if idxTableDefs[i] == nil {
 				continue
@@ -592,6 +610,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 			captureList := make([]plan.OldColCapture, 0, len(requiredOldCols))
 			for i, col := range tableDef.Cols {
+				if buildParentFKActions {
+					requiredOldCols[col.Name] = struct{}{}
+				}
 				if _, needed := requiredOldCols[col.Name]; !needed {
 					continue
 				}
@@ -786,6 +807,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// unique key, so the deleted row's PK can differ from the inserted row's PK.
 	var replaceOldPkPos int32
 	var replaceOldPkTyp plan.Type
+	var replaceOldParentPos []int32
+	oldParentColFinalPos := make(map[string]int32)
 
 	{
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
@@ -845,6 +868,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
+		oldParentColFinalPos[catalog.Row_ID] = deleteCols[0].ColPos
 
 		oldPkPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 		deleteCols[1].RelPos = finalProjTag
@@ -878,6 +902,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
+		oldParentColFinalPos[tableDef.Pkey.PkeyColName] = replaceOldPkPos
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:                objRef,
 			TableDef:              tableDef,
@@ -956,6 +981,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			},
 		}
 		finalProjList = append(finalProjList, idxExpr)
+		if len(idxDef.Parts) == 1 && !indexTableStoresSerializedKey(idxDef) && prefixLengths[partName] == 0 {
+			oldParentColFinalPos[catalog.ResolveAlias(idxDef.Parts[0])] = oldIdxPos
+		}
 
 		insertCols[0].RelPos = finalProjTag
 		insertCols[0].ColPos = int32(newIdxPos)
@@ -991,6 +1019,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 	}
 
+	if buildParentFKActions {
+		// Append the auxiliary old-parent image after every existing DML/index
+		// column. Native index keys rely on the legacy prefix positions above.
+		replaceOldParentPos = make([]int32, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			if finalPos, ok := oldParentColFinalPos[col.Name]; ok {
+				replaceOldParentPos[i] = finalPos
+				continue
+			}
+			oldPos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(),
+					"bind replace err, can not find old parent column %s", col.Name)
+			}
+			replaceOldParentPos[i] = int32(len(finalProjList))
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: fullProjList[oldPos[1]].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: fullProjTag,
+					ColPos: oldPos[1],
+				}},
+			})
+		}
+	}
+
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
@@ -1008,15 +1061,88 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			irregularIndexes, tableDef, objRef)
 	}
 
-	if len(lockTargets) > 0 {
+	if len(lockTargets) > 0 && !buildParentFKActions {
 		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewBindTag()},
+			NodeType: plan.Node_LOCK_OP,
+			Children: []int32{lastNodeID},
+			TableDef: tableDef,
+			// LOCK_OP is a pass-through node. Keep the projection tag so a
+			// following shared SINK can remap every requested column correctly.
+			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
 		reCheckifNeedLockWholeTable(builder)
+	}
+
+	if len(replaceOldParentPos) > 0 {
+		// Execute parent-side FK actions from the same evaluated and locked old-row
+		// set consumed by MULTI_UPDATE. This supports VALUES parameters/functions
+		// and REPLACE SELECT/TABLE without serializing their AST into background SQL.
+		evaluatedSinkID := appendSinkNode(builder, bindCtx, lastNodeID)
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[evaluatedSinkID] = struct{}{}
+		evaluatedStep := builder.appendStep(evaluatedSinkID)
+
+		lockedSourceID := appendSinkScanNode(builder, bindCtx, evaluatedStep)
+		builder.qry.Nodes[lockedSourceID].BindingTags = []int32{finalProjTag}
+		lockedSourceID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lockedSourceID},
+			TableDef:    tableDef,
+			BindingTags: []int32{finalProjTag},
+			LockTargets: lockTargets,
+		}, bindCtx)
+		if builder.preserveLockProjection == nil {
+			builder.preserveLockProjection = make(map[int32]struct{})
+		}
+		builder.preserveLockProjection[lockedSourceID] = struct{}{}
+		reCheckifNeedLockWholeTable(builder)
+
+		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
+		builder.preserveSinkProjection[sharedSinkID] = struct{}{}
+		sharedStep := builder.appendStep(sharedSinkID)
+
+		actionSourceID := appendSinkScanNode(builder, bindCtx, sharedStep)
+		actionInputTag := builder.genNewBindTag()
+		builder.qry.Nodes[actionSourceID].BindingTags = []int32{actionInputTag}
+		actionTag := builder.genNewBindTag()
+		actionProjection := make([]*plan.Expr, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			actionProjection[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: actionInputTag,
+					ColPos: replaceOldParentPos[i],
+				}},
+			}
+		}
+		actionSourceID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{actionSourceID},
+			ProjectList: actionProjection,
+			BindingTags: []int32{actionTag},
+		}, bindCtx)
+		actionSinkID := appendSinkNode(builder, bindCtx, actionSourceID)
+		builder.preserveSinkProjection[actionSinkID] = struct{}{}
+		actionStep := builder.appendStep(actionSinkID)
+
+		delCtx := getDmlPlanCtx()
+		delCtx.objRef = objRef
+		delCtx.tableDef = tableDef
+		delCtx.sourceStep = actionStep
+		delCtx.rowIdPos = int(tableDef.Name2ColIndex[catalog.Row_ID])
+		delCtx.allDelTableIDs = map[uint64]struct{}{tableDef.TblId: {}}
+		delCtx.skipTargetDelete = true
+		err := buildDeletePlans(builder.compCtx, builder, bindCtx, delCtx)
+		putDmlPlanCtx(delCtx)
+		if err != nil {
+			return 0, err
+		}
+
+		lastNodeID = appendSinkScanNode(builder, bindCtx, sharedStep)
+		builder.qry.Nodes[lastNodeID].BindingTags = []int32{finalProjTag}
 	}
 
 	// Self-referencing FK constraint checks are handled by DetectSqls (generated in
