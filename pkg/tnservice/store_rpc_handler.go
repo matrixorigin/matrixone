@@ -69,30 +69,46 @@ func (s *store) handleDebug(ctx context.Context, request *txn.TxnRequest, respon
 }
 
 func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.Read(ctx, request, response)
+	if err := lease.service.Read(lease.ctx, request, response); err != nil {
+		if ctxErr := context.Cause(ctx); ctxErr != nil {
+			return ctxErr
+		}
+		if context.Cause(lease.ctx) != nil {
+			response.TxnError = txn.WrapError(
+				moerr.NewTNShardNotFound(ctx, s.cfg.UUID, request.GetTargetTN().ShardID),
+				0,
+			)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.Write(ctx, request, response)
+	return lease.service.Write(lease.ctx, request, response)
 }
 
 func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.Debug(ctx, request, response)
+	return lease.service.Debug(lease.ctx, request, response)
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -100,57 +116,63 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.Commit(ctx, request, response)
+	return lease.service.Commit(lease.ctx, request, response)
 }
 
 func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.Rollback(ctx, request, response)
+	return lease.service.Rollback(lease.ctx, request, response)
 }
 
 func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.Prepare(ctx, request, response)
+	return lease.service.Prepare(lease.ctx, request, response)
 }
 
 func (s *store) handleCommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.CommitTNShard(ctx, request, response)
+	return lease.service.CommitTNShard(lease.ctx, request, response)
 }
 
 func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.RollbackTNShard(ctx, request, response)
+	return lease.service.RollbackTNShard(lease.ctx, request, response)
 }
 
 func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r, err := s.startedTNReplica(ctx, request, response)
-	if err != nil || r == nil {
+	lease, err := s.acquireTNReplica(ctx, request, response)
+	if err != nil || lease == nil {
 		return err
 	}
+	defer lease.release()
 	prepareResponse(request, response)
-	return r.service.GetStatus(ctx, request, response)
+	return lease.service.GetStatus(lease.ctx, request, response)
 }
 
 func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) *replica {
@@ -164,18 +186,19 @@ func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, respo
 	return r
 }
 
-func (s *store) startedTNReplica(
+func (s *store) acquireTNReplica(
 	ctx context.Context,
 	request *txn.TxnRequest,
 	response *txn.TxnResponse,
-) (*replica, error) {
+) (*txnServiceLease, error) {
 	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil, nil
 	}
-	if err := r.waitStarted(ctx); err != nil {
+	lease, err := r.acquireService(ctx)
+	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, context.Cause(ctx)
 		}
 		response.TxnError = txn.WrapError(
 			moerr.NewTNShardNotFound(ctx, s.cfg.UUID, r.shard.ShardID),
@@ -183,7 +206,7 @@ func (s *store) startedTNReplica(
 		)
 		return nil, nil
 	}
-	return r, nil
+	return lease, nil
 }
 
 func prepareResponse(request *txn.TxnRequest, response *txn.TxnResponse) {
@@ -230,8 +253,14 @@ func (s *store) maybeRetry(ctx context.Context, request *txn.TxnRequest, respons
 				if wait == 0 {
 					wait = defaultRetryInterval
 				}
-				time.Sleep(wait)
-				return true
+				timer := time.NewTimer(wait)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+					return false
+				case <-timer.C:
+					return context.Cause(ctx) == nil
+				}
 			}
 		}
 		return false

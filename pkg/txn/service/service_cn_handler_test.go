@@ -16,8 +16,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,12 +35,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+type committingErrorTxnStorage struct {
+	storage.TxnStorage
+	entered chan struct{}
+	calls   atomic.Int32
+}
+
+func (s *committingErrorTxnStorage) Committing(ctx context.Context, _ txn.TxnMeta) error {
+	s.calls.Add(1)
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return errors.New("committing failed")
+}
+
+const cancellationTestTimeout = 30 * time.Second
 
 func TestReadBasic(t *testing.T) {
 	sender := NewTestSender()
@@ -127,6 +148,144 @@ func TestReadBlockWithClock(t *testing.T) {
 	}()
 	<-c
 	assert.Equal(t, int64(3), ts)
+}
+
+func TestReadFutureSnapshotStopsOnContextCancel(t *testing.T) {
+	sender := NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+
+	s := NewTestTxnService(t, 1, sender, NewTestSpecClock(time.Now().UnixNano)).(*service)
+	require.NoError(t, s.Start())
+	t.Cleanup(func() { require.NoError(t, s.Close(false)) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := NewTestReadRequest(1, NewTestTxn(1, time.Now().Add(300*time.Millisecond).UnixNano()), 1)
+	resp := txn.TxnResponse{}
+	start := time.Now()
+	require.ErrorIs(t, s.Read(ctx, &req, &resp), context.Canceled)
+	require.Less(t, time.Since(start), 50*time.Millisecond,
+		"Read ignored context cancellation while waiting for future SnapshotTS")
+	require.Nil(t, resp.TxnError)
+}
+
+func TestReadFutureSnapshotStopsOnContextCancelDuringWait(t *testing.T) {
+	sender := NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+
+	clockEntered := make(chan struct{})
+	var signalClock sync.Once
+	s := NewTestTxnService(t, 1, sender, NewTestSpecClock(func() int64 {
+		signalClock.Do(func() { close(clockEntered) })
+		return time.Now().UnixNano()
+	})).(*service)
+	require.NoError(t, s.Start())
+	t.Cleanup(func() { require.NoError(t, s.Close(false)) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := NewTestReadRequest(1, NewTestTxn(1, time.Now().Add(300*time.Millisecond).UnixNano()), 1)
+	resp := txn.TxnResponse{}
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		done <- s.Read(ctx, &req, &resp)
+	}()
+
+	select {
+	case <-clockEntered:
+	case <-time.After(cancellationTestTimeout):
+		t.Fatal("Read did not enter the clock wait")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Read did not stop after context cancellation while waiting for future SnapshotTS")
+	}
+	require.Less(t, time.Since(start), 100*time.Millisecond,
+		"Read ignored context cancellation while waiting for future SnapshotTS")
+	require.Nil(t, resp.TxnError)
+}
+
+func TestWaitClockToHonorsContext(t *testing.T) {
+	sender := NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	clockEntered := make(chan struct{})
+	releaseClock := make(chan struct{})
+	var observeClock atomic.Bool
+	var signalClock sync.Once
+	var releaseClockOnce sync.Once
+	releaseClockWait := func() {
+		releaseClockOnce.Do(func() { close(releaseClock) })
+	}
+	defer releaseClockWait()
+	clock := NewTestSpecClock(func() int64 {
+		if observeClock.Load() {
+			signalClock.Do(func() { close(clockEntered) })
+			<-releaseClock
+		}
+		return 1
+	})
+	s := NewTestTxnService(t, 1, sender, clock).(*service)
+	require.NoError(t, s.Start())
+	t.Cleanup(func() { require.NoError(t, s.Close(false)) })
+
+	cause := errors.New("clock wait canceled")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(cause)
+	done := make(chan error, 1)
+	observeClock.Store(true)
+	go func() {
+		done <- s.waitClockTo(ctx, NewTestTimestamp(math.MaxInt64))
+	}()
+	select {
+	case <-clockEntered:
+	case <-time.After(cancellationTestTimeout):
+		t.Fatal("clock wait did not read the current timestamp")
+	}
+	cancel(cause)
+	releaseClockWait()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, cause)
+	case <-time.After(cancellationTestTimeout):
+		t.Fatal("clock wait did not stop after context cancellation")
+	}
+}
+
+func TestAsyncCommitRetryStopsOnClose(t *testing.T) {
+	sender := NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0)).(*service)
+	storage := &committingErrorTxnStorage{
+		TxnStorage: s.storage,
+		entered:    make(chan struct{}, 1),
+	}
+	s.storage = storage
+	require.NoError(t, s.Start())
+
+	txnCtx, _ := s.maybeAddTxn(NewTestTxn(1, 1, 1))
+	require.NoError(t, s.startAsyncCommitTask(txnCtx))
+	select {
+	case <-storage.entered:
+	case <-time.After(cancellationTestTimeout):
+		t.Fatal("async commit did not call storage.Committing")
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		closed <- s.Close(false)
+	}()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(cancellationTestTimeout):
+		t.Fatal("service close was blocked by committing retry")
+	}
+	require.Equal(t, int32(1), storage.calls.Load())
 }
 
 func TestReadCannotBlockByUncommitted(t *testing.T) {
