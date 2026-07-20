@@ -741,8 +741,7 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 			if err != nil {
 				return nil, err
 			}
-			fraction, _ := frac.Float64()
-			values[y] = interpolateFloat64(float64(lo), float64(hi), fraction)
+			values[y] = interpolateNumeric(lo, hi, frac)
 		}
 	}
 	return results, nil
@@ -922,6 +921,48 @@ func interpolateFloat64(lo, hi, fraction float64) float64 {
 	return lo + (hi-lo)*fraction
 }
 
+func numericIntegerToBigInt[T numeric](value T) (*big.Int, bool) {
+	switch value := any(value).(type) {
+	case int8:
+		return big.NewInt(int64(value)), true
+	case int16:
+		return big.NewInt(int64(value)), true
+	case int32:
+		return big.NewInt(int64(value)), true
+	case int64:
+		return big.NewInt(value), true
+	case uint8:
+		return new(big.Int).SetUint64(uint64(value)), true
+	case uint16:
+		return new(big.Int).SetUint64(uint64(value)), true
+	case uint32:
+		return new(big.Int).SetUint64(uint64(value)), true
+	case uint64:
+		return new(big.Int).SetUint64(value), true
+	default:
+		return nil, false
+	}
+}
+
+func interpolateNumeric[T numeric](lo, hi T, fraction *big.Rat) float64 {
+	loInt, integer := numericIntegerToBigInt(lo)
+	if !integer {
+		fractionFloat64, _ := fraction.Float64()
+		return interpolateFloat64(float64(lo), float64(hi), fractionFloat64)
+	}
+	if fraction.Sign() == 0 {
+		return float64(lo)
+	}
+
+	hiInt, _ := numericIntegerToBigInt(hi)
+	denominator := new(big.Int).Set(fraction.Denom())
+	numerator := new(big.Int).Mul(loInt, denominator)
+	difference := new(big.Int).Sub(hiInt, loInt)
+	numerator.Add(numerator, new(big.Int).Mul(difference, fraction.Num()))
+	result, _ := new(big.Rat).SetFrac(numerator, denominator).Float64()
+	return result
+}
+
 func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	if len(values) == 0 || p < 0 || p > 1 {
 		return math.NaN()
@@ -933,8 +974,7 @@ func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	loRank, hiRank, frac := percentileRanks(uint64(len(values)), rat)
 	lo := selectKthNumeric(values, int(loRank))
 	hi := selectKthNumeric(values, int(hiRank))
-	fraction, _ := frac.Float64()
-	return interpolateFloat64(float64(lo), float64(hi), fraction)
+	return interpolateNumeric(lo, hi, frac)
 }
 
 func PercentileDecimal64(vs *Vectors[types.Decimal64], p float64, argScale int32) (types.Decimal128, error) {

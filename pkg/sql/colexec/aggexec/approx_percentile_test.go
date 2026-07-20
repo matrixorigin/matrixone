@@ -115,6 +115,12 @@ func TestPercentileNumericVals_Int64Overflow(t *testing.T) {
 	require.Equal(t, float64(math.MaxInt64), percentileNumericVals(vals, 0.5))
 }
 
+func TestPercentileNumericVals_Int64Precision(t *testing.T) {
+	require.Equal(t, -0.5, percentileNumericVals([]int64{-9007199254740993, 9007199254740992}, 0.5))
+	require.Equal(t, -0.5, percentileNumericVals([]int64{math.MinInt64, math.MaxInt64}, 0.5))
+	require.Equal(t, float64(9007199254740994), percentileNumericVals([]uint64{9007199254740993, 9007199254740994}, 0.5))
+}
+
 func TestPercentileNumericVals_Float64ExtremeInterpolation(t *testing.T) {
 	vals := []float64{-math.MaxFloat64, math.MaxFloat64}
 	require.Equal(t, 0.0, percentileNumericVals(vals, 0.5))
@@ -268,6 +274,7 @@ func TestApproxPercentileExecAcrossSupportedTypes(t *testing.T) {
 		{name: "int16", typ: types.T_int16.ToType(), values: []int16{1, 3, 2}, p: 0.5, want: 2.0},
 		{name: "int32", typ: types.T_int32.ToType(), values: []int32{1, 3, 2}, p: 0.5, want: 2.0},
 		{name: "int64", typ: types.T_int64.ToType(), values: []int64{1, 3, 2}, p: 0.5, want: 2.0},
+		{name: "int64_large_opposite", typ: types.T_int64.ToType(), values: []int64{-9007199254740993, 9007199254740992}, p: 0.5, want: -0.5},
 		{name: "uint8", typ: types.T_uint8.ToType(), values: []uint8{1, 3, 2}, p: 0.5, want: 2.0},
 		{name: "uint16", typ: types.T_uint16.ToType(), values: []uint16{1, 3, 2}, p: 0.5, want: 2.0},
 		{name: "uint32", typ: types.T_uint32.ToType(), values: []uint32{1, 3, 2}, p: 0.5, want: 2.0},
