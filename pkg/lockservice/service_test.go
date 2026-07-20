@@ -1606,6 +1606,53 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("user-lock-cleanup")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l1.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
+			require.NoError(t, err)
+
+			localTable := l1.tableGroups.get(0, 0)
+			bind := localTable.getBind()
+			client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = &remoteLockTable{
+				bind:   bind,
+				client: client,
+				logger: l1.logger,
+			}
+			l1.tableGroups.Unlock()
+
+			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			defer unlockCancel()
+			err = l1.Unlock(unlockCtx, txnID, timestamp.Timestamp{})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = localTable
+			l1.tableGroups.Unlock()
+			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+		},
+		nil,
+	)
+}
+
 func TestIssue4007(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,

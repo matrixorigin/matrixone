@@ -253,9 +253,10 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
-	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
-	// completion even when the caller's request context has ended.
-	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.unlockWithContext(ctx, txnID, commitTS, mutations...)
 }
 
 // unlockUnknownCommit is used only after Commit returned an unknown outcome.
@@ -284,7 +285,7 @@ func (s *service) unlockUnknownCommit(
 	// holder before its ReplaceTo mutation reaches the remote owner. Retaining
 	// the active transaction on a bounded-attempt failure makes orphan cleanup
 	// fail closed; the resolver retries it later.
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
 		return nil
 	}
@@ -296,6 +297,7 @@ func (s *service) unlockUnknownCommit(
 	}
 
 	defer logUnlockTxn(s.logger, txn)()
+	canMoveGroupTables := s.collectCanMoveGroupTables(txn)
 	if err := txn.closeWithoutFreeWithContext(
 		ctx,
 		txnID,
@@ -304,14 +306,12 @@ func (s *service) unlockUnknownCommit(
 		s.logger,
 		mutations...,
 	); err != nil {
+		s.activeTxnHolder.restoreActiveTxn(txn)
 		return err
 	}
 
-	if s.activeTxnHolder.deleteActiveTxn(txnID) != txn {
-		return nil
-	}
 	if !s.isStatus(pb.Status_ServiceLockEnable) {
-		s.reduceCanMoveGroupTables(txn)
+		s.reduceCanMoveGroupTables(canMoveGroupTables)
 		if s.isStatus(pb.Status_ServiceLockWaiting) && s.activeTxnHolder.empty() {
 			s.setStatus(pb.Status_ServiceUnLockSucc)
 		}
@@ -350,22 +350,27 @@ func (s *service) unlockWithContext(
 		return nil
 	}
 
+	defer logUnlockTxn(s.logger, txn)()
+	canMoveGroupTables := s.collectCanMoveGroupTables(txn)
+	err := txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, s.getLockTable, s.logger, mutations...)
+	if err != nil {
+		s.activeTxnHolder.restoreActiveTxn(txn)
+		return err
+	}
 	if !s.isStatus(pb.Status_ServiceLockEnable) {
-		s.reduceCanMoveGroupTables(txn)
+		s.reduceCanMoveGroupTables(canMoveGroupTables)
 		if s.isStatus(pb.Status_ServiceLockWaiting) &&
 			s.activeTxnHolder.empty() {
 			s.setStatus(pb.Status_ServiceUnLockSucc)
 		}
 	}
-
-	defer logUnlockTxn(s.logger, txn)()
-	err := txn.closeWithContext(ctx, txnID, commitTS, s.getLockTable, s.logger, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
-	return err
+	reuse.Free(txn, nil)
+	return nil
 }
 
 func (s *service) IsOrphanTxn(
@@ -407,7 +412,21 @@ func (s *service) Resume() error {
 	return err
 }
 
-func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
+func (s *service) collectCanMoveGroupTables(txn *activeTxn) []pb.LockTable {
+	var res []pb.LockTable
+	for group, h := range txn.lockHolders {
+		for table, bind := range h.tableBinds {
+			if bind.ServiceID == s.serviceID {
+				bind.Group = group
+				bind.Table = table
+				res = append(res, bind)
+			}
+		}
+	}
+	return res
+}
+
+func (s *service) reduceCanMoveGroupTables(canMoveGroupTables []pb.LockTable) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.mu.lockTableRef) == 0 {
@@ -415,17 +434,12 @@ func (s *service) reduceCanMoveGroupTables(txn *activeTxn) {
 	}
 
 	var res []pb.LockTable
-
-	for group, h := range txn.lockHolders {
-		for table, bind := range h.tableBinds {
-			if bind.ServiceID == s.serviceID {
-				if _, ok := s.mu.lockTableRef[group][table]; ok {
-					s.mu.lockTableRef[group][table]--
-					if s.mu.lockTableRef[group][table] == 0 {
-						delete(s.mu.lockTableRef[group], table)
-						res = append(res, bind)
-					}
-				}
+	for _, bind := range canMoveGroupTables {
+		if _, ok := s.mu.lockTableRef[bind.Group][bind.Table]; ok {
+			s.mu.lockTableRef[bind.Group][bind.Table]--
+			if s.mu.lockTableRef[bind.Group][bind.Table] == 0 {
+				delete(s.mu.lockTableRef[bind.Group], bind.Table)
+				res = append(res, bind)
 			}
 		}
 	}
@@ -1135,6 +1149,7 @@ type activeTxnHolder interface {
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
+	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
@@ -1279,6 +1294,28 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 		delete(h.mu.activeTxnServices, txnKey)
 	}
 	return v
+}
+
+func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
+	if txn == nil || txn.txnKey == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v := h.mu.activeTxns[txn.txnKey]; v != nil && v != txn {
+		return false
+	}
+	h.mu.activeTxns[txn.txnKey] = txn
+	h.mu.activeTxnServices[txn.txnKey] = txn.remoteService
+	if txn.remoteService != "" {
+		if _, ok := h.mu.remoteServices[txn.remoteService]; !ok {
+			h.mu.remoteServices[txn.remoteService] = h.mu.dequeue.PushBack(remote{
+				id:   txn.remoteService,
+				time: time.Now(),
+			})
+		}
+	}
+	return true
 }
 
 func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {

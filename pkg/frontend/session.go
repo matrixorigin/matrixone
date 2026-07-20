@@ -807,7 +807,7 @@ func (ses *Session) Close() {
 		if ses.userLevelLocksMigrated {
 			function.DiscardMigratedUserLevelLocks(ses.proc)
 		} else {
-			function.ReleaseUserLevelLocks(ses.proc)
+			function.ReleaseUserLevelLocksOnSessionClose(ses.proc)
 		}
 	}
 

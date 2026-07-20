@@ -6977,6 +6977,8 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 
 const userLevelLockTableID uint64 = 1 << 62
 
+const userLevelLockCloseTimeout = 5 * time.Second
+
 type userLevelLockKey struct {
 	owner string
 	name  string
@@ -7477,8 +7479,18 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 }
 
 func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
+	if proc == nil {
+		return 0, nil
+	}
+	return releaseAllUserLevelLocksWithContext(proc.Ctx, proc)
+}
+
+func releaseAllUserLevelLocksWithContext(ctx context.Context, proc *process.Process) (int64, error) {
 	if proc == nil || proc.GetLockService() == nil {
 		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
@@ -7487,7 +7499,7 @@ func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 		if userLevelLockRefCount(owner, name) == 0 {
 			continue
 		}
-		if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
+		if err := unlockUserLevelLockTxnIDs(ctx, proc.GetLockService(), owner, connID, name); err != nil {
 			logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
 			return released, err
 		}
@@ -7500,6 +7512,12 @@ func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 
 func ReleaseUserLevelLocks(proc *process.Process) {
 	_, _ = releaseAllUserLevelLocks(proc)
+}
+
+func ReleaseUserLevelLocksOnSessionClose(proc *process.Process) {
+	ctx, cancel := context.WithTimeout(context.Background(), userLevelLockCloseTimeout)
+	defer cancel()
+	_, _ = releaseAllUserLevelLocksWithContext(ctx, proc)
 }
 
 func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

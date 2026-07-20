@@ -7196,6 +7196,8 @@ type userLevelLockTestService struct {
 	state            *userLevelLockTestState
 	unlockErr        error
 	unlockErrByTxnID map[string]error
+	blockUnlock      bool
+	unlockStarted    chan struct{}
 }
 
 type userLevelLockNotSupportedService struct {
@@ -7242,6 +7244,16 @@ func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, row
 }
 
 func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error {
+	if s.blockUnlock {
+		if s.unlockStarted != nil {
+			select {
+			case s.unlockStarted <- struct{}{}:
+			default:
+			}
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if s.unlockErr != nil {
 		return s.unlockErr
 	}
@@ -8063,6 +8075,39 @@ func TestReleaseAllUserLevelLocksStopsAtFirstUnlockFailure(t *testing.T) {
 		require.Equal(t, int64(1), released)
 
 		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksWithContextKeepsStateAfterRemoteTimeout(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock = true
+		service.unlockStarted = make(chan struct{}, 1)
+
+		v, err := getUserLevelLock("close_timeout_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+		defer cancel()
+		released, err := releaseAllUserLevelLocksWithContext(ctx, proc1)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, int64(0), released)
+		require.NotEmpty(t, UserLevelLocksForMigration(proc1))
+
+		v, err = getUserLevelLock("close_timeout_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		service.blockUnlock = false
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), released)
+		v, err = getUserLevelLock("close_timeout_lock", 0, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 	})
