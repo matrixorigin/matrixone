@@ -2942,8 +2942,12 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 	eng := tbl.eng.(*Engine)
 	var checkedCreatedInTxn bool
 	var createdInTxn bool
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -2966,6 +2970,9 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 				return ps, canServe, nil
 			}
 
+			if ticker == nil {
+				ticker = time.NewTicker(time.Millisecond)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, false, ctx.Err()
@@ -3001,13 +3008,10 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 		if state == InvalidSubState {
 			// Reconnect closes the push-client admission gate before clearing the
 			// old subscription map. Do not let getPartitionState reuse an entry
-			// from that old generation, and do not spin while reconnect is active.
-			select {
-			case <-ctx.Done():
-				return nil, false, ctx.Err()
-			case <-ticker.C:
-			}
-			continue
+			// from that old generation. The caller already holds the row lock, so
+			// waiting for an unbounded reconnect would retain locks and active-txn
+			// admission. This error is handled as a whole-txn rollback by frontend.
+			return nil, false, moerr.NewRetryForCNRollingRestart()
 		}
 
 		// Drive the existing subscription state machine to completion, then

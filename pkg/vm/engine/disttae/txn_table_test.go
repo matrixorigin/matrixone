@@ -468,7 +468,7 @@ func TestPrimaryKeysMayBeModifiedStopsWaitingWhenSubscriptionContextEnds(t *test
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
-func TestPrimaryKeysMayBeModifiedStopsWaitingWhenPushClientIsNotReady(t *testing.T) {
+func TestPrimaryKeysMayBeModifiedFailsFastWhenPushClientIsNotReady(t *testing.T) {
 	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	mp := tbl.proc.Load().Mp()
 	bat := makeBatchForTest(mp, 7)
@@ -476,7 +476,7 @@ func TestPrimaryKeysMayBeModifiedStopsWaitingWhenPushClientIsNotReady(t *testing
 
 	eng.pClient.SetSubscribeState(10, 42, Subscribed)
 	eng.pClient.receivedLogTailTime.ready.Store(false)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	_, err := tbl.PrimaryKeysMayBeModified(
@@ -487,7 +487,8 @@ func TestPrimaryKeysMayBeModifiedStopsWaitingWhenPushClientIsNotReady(t *testing
 		0,
 		-1,
 	)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
 }
 
 func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
