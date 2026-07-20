@@ -123,6 +123,8 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	tableFunction.cleanForPrepare(proc)
+
 	if tableFunction.OpAnalyzer == nil {
 		tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
 	} else {
@@ -210,6 +212,19 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	}
 
 	return err
+}
+
+// cleanForPrepare releases resources that Prepare rebuilds. Optimized
+// generate_series state is injected by the compiler and must survive Prepare.
+func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
+	tableFunction.ctr.cleanExecutors()
+	if tableFunction.FuncName == "generate_series" && tableFunction.CanOpt {
+		return
+	}
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, false, nil)
+		tableFunction.ctr.state = nil
+	}
 }
 
 func (tableFunction *TableFunction) createResultBatch() *batch.Batch {

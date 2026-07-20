@@ -23,7 +23,6 @@ package plan
 
 import (
 	"encoding/json"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,14 +32,14 @@ import (
 
 const fulltext2_search_func_name = "fulltext2_search"
 
-// buildFulltext2SearchTableFunc builds the fulltext2_search TVF AST for a MATCH
-// resolved to a fulltext2 index. Args: [param="", cfg{db,index,metadata} JSON,
-// pattern, mode]. The TVF loads the index segments, runs the WAND positional
-// query (NL phrase or boolean per mode), and emits (doc_id, score).
-func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, idxdef *plan.IndexDef, pattern string, mode int64, aliasName string) (*tree.AliasedTableExpr, error) {
+// buildFulltext2SearchCfg validates a MATCH against a fulltext2 index and returns
+// the fulltext2_search config JSON ({db,index,metadata[,parser]}). It resolves the
+// storage/metadata hidden tables and rejects NL/BOOLEAN modes on a POSITION_FREE
+// index (which has no positions — only IN BM25 MODE bag-of-words is valid).
+func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef *plan.IndexDef, mode int64) (string, error) {
 	storeTbl, metaTbl, ok := builder.findFulltext2IndexTables(scanNode, idxdef)
 	if !ok {
-		return nil, moerr.NewInternalErrorf(builder.GetContext(),
+		return "", moerr.NewInternalErrorf(builder.GetContext(),
 			"fulltext2 index %q: storage/metadata tables not found (index may be partially materialized); reindex required",
 			idxdef.IndexName)
 	}
@@ -50,7 +49,7 @@ func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, 
 	// is valid. Reject the others up front with a clear message instead of silently
 	// returning wrong/empty results.
 	if mode != int64(tree.FULLTEXT_BM25) && fulltext2PositionFreeFromParams(idxdef.IndexAlgoParams) {
-		return nil, moerr.NewInvalidInputf(builder.GetContext(),
+		return "", moerr.NewInvalidInputf(builder.GetContext(),
 			"fulltext2 index %q is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching",
 			idxdef.IndexName)
 	}
@@ -65,29 +64,33 @@ func (builder *QueryBuilder) buildFulltext2SearchTableFunc(scanNode *plan.Node, 
 	}
 	cfgBytes, err := json.Marshal(cfgMap)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	cfg := string(cfgBytes)
+	return string(cfgBytes), nil
+}
 
-	ftFunc := tree.NewCStr(fulltext2_search_func_name, 1)
-	var exprs tree.Exprs
-	exprs = append(exprs, tree.NewNumVal[string]("", "", false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](cfg, cfg, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
-	name := tree.NewUnresolvedName(ftFunc)
-
-	return &tree.AliasedTableExpr{
-		Expr: &tree.TableFunction{
-			Func: &tree.FuncExpr{
-				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: ftFunc,
-				Exprs:    exprs,
-				Type:     tree.FUNC_TYPE_TABLE,
+// buildFulltext2SearchNode builds the fulltext2_search FUNCTION_SCAN node for a MATCH
+// resolved to a fulltext2 index. exprs are the TVF args [cfg(const), pattern, mode];
+// pattern is passed as an expression, so a prepared-statement '?' parameter is bound
+// and evaluated at execution time (the TVF reads it per row). The node emits the same
+// (doc_id, score) shape as fulltext_index_scan, so the downstream join/sort is shared.
+func (builder *QueryBuilder) buildFulltext2SearchNode(ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	colDefs := DeepCopyColDefList(ftIndexColdefs)
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc: &plan.TableFunction{
+				Name: fulltext2_search_func_name,
 			},
+			Cols: colDefs,
 		},
-		As: tree.AliasClause{Alias: tree.Identifier(aliasName)},
-	}, nil
+		BindingTags:     []int32{builder.genNewBindTag()},
+		TblFuncExprList: exprs,
+		Children:        children,
+	}
+	return builder.appendNode(node, ctx), nil
 }
 
 // fulltext2ParserFromParams extracts the "parser" field from an index's
