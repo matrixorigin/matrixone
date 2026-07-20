@@ -316,12 +316,14 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 		salt:   testSlat,
 	}
 	execSC := &killExecServerConn{}
+	activeTunnel := &tunnel{}
 	router := &killTestRouter{
 		connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
 			require.Equal(t, currentCN.uuid, c.uuid)
 			require.Equal(t, currentCN.addr, c.addr)
 			require.Equal(t, currentCN.salt, c.salt)
 			require.NotZero(t, c.connID)
+			require.Nil(t, tun, "temporary admin connections must not borrow the active session tunnel")
 			return execSC, makeOKPacket(8), nil
 		},
 	}
@@ -329,6 +331,7 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 	c := &clientConn{
 		connID: 42,
 		router: router,
+		tun:    activeTunnel,
 	}
 	err := c.KillCurrentBackendConn(&killCurrentServerConn{cn: currentCN})
 	require.NoError(t, err)
