@@ -3399,8 +3399,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.remapOption = stmt.RewriteOption
 	}
 	registerNumericCteDefinitions(stmt, ctx)
-	seedNumericTableProjectionTypes(stmt, ctx)
-	seedNumericCteProjectionTypes(ctx)
+	seedNumericTableProjectionTypes(builder, stmt, ctx)
+	seedNumericCteProjectionTypes(builder, ctx)
 
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
@@ -3757,9 +3757,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 // seedNumericTableProjectionTypes pushes numeric assignment targets through a
 // projection that only forwards columns from one derived table or CTE. The
-// mapping is intentionally conservative: ambiguous names, stars, expressions,
-// and multi-source FROM clauses stay on the existing default binding path.
-func seedNumericTableProjectionTypes(stmt *tree.Select, ctx *BindContext) {
+// mapping is intentionally conservative: ambiguous names and expressions stay
+// on the existing default binding path, while stars advance across every source
+// whose output width can be established.
+func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, ctx *BindContext) {
 	if len(ctx.numericProjectionTypes) == 0 {
 		return
 	}
@@ -3778,12 +3779,18 @@ func seedNumericTableProjectionTypes(stmt *tree.Select, ctx *BindContext) {
 			)
 		}
 		if sources[i].source == nil {
+			if sources[i].sourceName != "" {
+				sources[i].outputNames = numericPhysicalTableOutputNames(builder, sources[i])
+				sources[i].outputKnown = sources[i].outputNames != nil
+			}
 			continue
 		}
 		sources[i].outputNames = numericProjectionOutputNames(sources[i].source)
+		sources[i].outputKnown = sources[i].outputNames != nil
 		if len(sources[i].aliasCols) > 0 {
 			if len(sources[i].aliasCols) != numericProjectionOutputCount(sources[i].source) {
 				sources[i].outputNames = nil
+				sources[i].outputKnown = false
 				continue
 			}
 			sources[i].outputNames = make([]string, len(sources[i].aliasCols))
@@ -3798,11 +3805,12 @@ func seedNumericTableProjectionTypes(stmt *tree.Select, ctx *BindContext) {
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			sourceIdx := uniqueNumericStarSource(sources, "")
-			if sourceIdx < 0 {
-				return
+			for i := range sources {
+				if !sources[i].outputKnown {
+					return
+				}
+				targetPos = seedNumericStarTargets(&sources[i], ctx.numericProjectionTypes, targetPos)
 			}
-			targetPos = seedNumericStarTargets(&sources[sourceIdx], ctx.numericProjectionTypes, targetPos)
 		case *tree.UnresolvedName:
 			if expr.Star {
 				sourceIdx := uniqueNumericStarSource(sources, expr.ColName())
@@ -3861,12 +3869,36 @@ func storeNumericTableProjectionTargets(targetsByTable map[string][]Type, table 
 }
 
 type numericProjectionSourceInfo struct {
-	source      *tree.Select
-	sourceName  string
-	alias       string
-	aliasCols   tree.IdentifierList
-	outputNames []string
-	targets     []Type
+	source       *tree.Select
+	sourceName   string
+	sourceSchema string
+	alias        string
+	aliasCols    tree.IdentifierList
+	outputNames  []string
+	outputKnown  bool
+	targets      []Type
+}
+
+func numericPhysicalTableOutputNames(builder *QueryBuilder, source numericProjectionSourceInfo) []string {
+	if builder == nil {
+		return nil
+	}
+	schema := source.sourceSchema
+	if schema == "" {
+		schema = builder.compCtx.DefaultDatabase()
+	}
+	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, nil)
+	if err != nil || tableDef == nil {
+		return nil
+	}
+	names := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		names = append(names, strings.ToLower(col.Name))
+	}
+	return names
 }
 
 func collectNumericProjectionSources(
@@ -3892,7 +3924,9 @@ func collectNumericProjectionSources(
 		if alias == "" {
 			alias = sourceName
 		}
-		return []numericProjectionSourceInfo{{sourceName: sourceName, alias: alias, aliasCols: aliasCols}}
+		return []numericProjectionSourceInfo{{
+			sourceName: sourceName, sourceSchema: string(expr.SchemaName), alias: alias, aliasCols: aliasCols,
+		}}
 	default:
 		return nil
 	}
@@ -3911,7 +3945,7 @@ func numericProjectionOutputNames(source *tree.Select) []string {
 		}
 		name, ok := expr.Expr.(*tree.UnresolvedName)
 		if !ok || name.Star {
-			return nil
+			continue
 		}
 		names[i] = strings.ToLower(name.ColName())
 	}
@@ -3992,7 +4026,7 @@ func registerNumericCteDefinitions(stmt *tree.Select, ctx *BindContext) {
 	ctx.numericCteByName = definitions
 }
 
-func seedNumericCteProjectionTypes(ctx *BindContext) {
+func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 	if len(ctx.numericCteByName) == 0 || len(ctx.numericTableProjectionTypes) == 0 {
 		return
 	}
@@ -4019,7 +4053,7 @@ func seedNumericCteProjectionTypes(ctx *BindContext) {
 				numericTableProjectionTypes: ctx.numericTableProjectionTypes,
 				numericCteByName:            ctx.numericCteByName,
 			}
-			seedNumericTableProjectionTypes(source, subCtx)
+			seedNumericTableProjectionTypes(builder, source, subCtx)
 		}
 	}
 }
@@ -4027,7 +4061,7 @@ func seedNumericCteProjectionTypes(ctx *BindContext) {
 func uniqueNumericStarSource(sources []numericProjectionSourceInfo, qualifier string) int {
 	matched := -1
 	for i := range sources {
-		if len(sources[i].outputNames) == 0 {
+		if !sources[i].outputKnown {
 			continue
 		}
 		if qualifier != "" && !strings.EqualFold(qualifier, sources[i].alias) {
@@ -4046,7 +4080,9 @@ func seedNumericStarTargets(source *numericProjectionSourceInfo, targets []Type,
 		if targetPos >= len(targets) {
 			return targetPos
 		}
-		source.targets[pos] = targets[targetPos]
+		if pos < len(source.targets) {
+			source.targets[pos] = targets[targetPos]
+		}
 		targetPos++
 	}
 	return targetPos
@@ -4071,7 +4107,7 @@ func seedNumericColumnTarget(sources []numericProjectionSourceInfo, name *tree.U
 			matchedSource, matchedPos = i, pos
 		}
 	}
-	if matchedSource >= 0 {
+	if matchedSource >= 0 && matchedPos < len(sources[matchedSource].targets) {
 		sources[matchedSource].targets[matchedPos] = target
 	}
 }

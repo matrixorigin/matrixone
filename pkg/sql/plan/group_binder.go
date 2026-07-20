@@ -34,10 +34,12 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	var numericTarget *plan.Type
+	isOrdinal := false
 	if isRoot {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
 			case tree.Int:
+				isOrdinal = true
 				colPos, _ := numVal.Int64()
 				if colPos < 1 || int(colPos) > len(b.selectList) {
 					return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
@@ -75,11 +77,20 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 
 	if isRoot && !b.ctx.isGroupingSet {
 		astStr := tree.String(astExpr, dialect.MYSQL)
-		if _, ok := b.ctx.groupByAst[astStr]; ok {
+		// Independently written prepared expressions have different parameter
+		// identities even when their formatted SQL is identical. Only an ordinal
+		// GROUP BY is guaranteed to refer to the SELECT expression itself.
+		registerAst := isOrdinal || !containsDynamicParam(expr)
+		if registerAst {
+			if _, ok := b.ctx.groupByAst[astStr]; ok {
+				return nil, nil
+			}
+			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
+		}
+		if !registerAst {
+			b.ctx.groups = append(b.ctx.groups, expr)
 			return nil, nil
 		}
-
-		b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
 		b.ctx.groups = append(b.ctx.groups, expr)
 	}
 

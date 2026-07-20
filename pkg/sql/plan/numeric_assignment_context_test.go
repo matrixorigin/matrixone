@@ -29,22 +29,22 @@ func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
-		want types.T
+		want planpb.Type
 	}{
 		{
 			name: "binary arithmetic",
 			sql:  "insert into constraint_test.emp (sal) values (? + ?)",
-			want: types.T_decimal64,
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
 			name: "mod function",
 			sql:  "insert into constraint_test.emp (sal) values (mod(?, ?))",
-			want: types.T_decimal64,
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
 			name: "double sibling overrides decimal target",
 			sql:  "insert into constraint_test.emp (sal) values ((? + ?) + cast(1 as double))",
-			want: types.T_float64,
+			want: planpb.Type{Id: int32(types.T_float64)},
 		},
 	}
 
@@ -59,8 +59,13 @@ func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 
 			paramTypes := collectPlanParamTypes(queryPlan)
 			require.Len(t, paramTypes, 2)
-			require.Equal(t, test.want, paramTypes[0])
-			require.Equal(t, test.want, paramTypes[1])
+			require.Equal(t, test.want.Id, int32(paramTypes[0]))
+			require.Equal(t, test.want.Id, int32(paramTypes[1]))
+			if test.want.Id == int32(types.T_decimal64) {
+				planTypes := collectUniquePlanParamTypes(t, queryPlan)
+				require.Equal(t, test.want, planTypes[1])
+				require.Equal(t, test.want, planTypes[2])
+			}
 		})
 	}
 }
@@ -103,12 +108,6 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
-			name:       "independent group by parameters keep default type",
-			sql:        "insert into constraint_test.emp (sal) select ? + ? from nation group by ? + ?",
-			want:       types.T_float64,
-			paramCount: 2,
-		},
-		{
 			name:       "scalar subquery",
 			sql:        "insert into constraint_test.emp (sal) select (select ? + ?)",
 			want:       types.T_decimal64,
@@ -117,6 +116,19 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 		{
 			name:       "derived table passthrough",
 			sql:        "insert into constraint_test.emp (sal) select x from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "unnamed sibling does not block derived passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.x from (select ? + ? as x, 1) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "physical source advances unqualified star target",
+			sql: "insert into constraint_test.emp (empno, ename, job, mgr, sal) " +
+				"select * from nation cross join (select ? + ? as v) d",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -185,6 +197,28 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) select ? + ? from nation group by ? + ?",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Len(t, paramTypes, 4)
+	for _, pos := range []int32{1, 2} {
+		require.Equal(t, planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}, paramTypes[pos])
+	}
+	for _, pos := range []int32{3, 4} {
+		require.Equal(t, int32(types.T_float64), paramTypes[pos].Id)
 	}
 }
 
@@ -319,6 +353,10 @@ func collectExprEffectiveParamPlanTypesByPos(
 		childType := inherited
 		if fn.Func != nil && fn.Func.ObjName == "cast" {
 			childType = expr.Typ
+		} else if childType.Id == 0 && types.T(expr.Typ.Id).ToType().IsNumeric() {
+			// Numeric operators carry the resolved width and scale on their result;
+			// prepared children inherit that effective operation type.
+			childType = expr.Typ
 		}
 		for _, arg := range fn.Args {
 			collectExprEffectiveParamPlanTypesByPos(arg, childType, collect)
@@ -426,35 +464,35 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
-		want types.T
+		want planpb.Type
 	}{
 		{
 			name: "update decimal assignment",
 			sql:  "update constraint_test.emp set sal = ? + ? where empno = 1",
-			want: types.T_decimal64,
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
 			name: "update double sibling overrides target",
 			sql:  "update constraint_test.emp set sal = (? + ?) + cast(1 as double) where empno = 1",
-			want: types.T_float64,
+			want: planpb.Type{Id: int32(types.T_float64)},
 		},
 		{
 			name: "on duplicate key update decimal assignment",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = ? + ?",
-			want: types.T_decimal64,
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
 			name: "on duplicate key update scalar subquery",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = (select ? + ?)",
-			want: types.T_decimal64,
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
 			name: "update from derived source",
 			sql: "update constraint_test.emp set sal = d.x " +
 				"from (select ? + ? as x) d where emp.empno = 1",
-			want: types.T_decimal64,
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 	}
 
@@ -470,17 +508,27 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
 			require.Len(t, paramTypes, 2)
 			for _, typ := range paramTypes {
-				require.Equal(t, int32(test.want), typ.Id)
+				require.Equal(t, test.want.Id, typ.Id)
+				if test.want.Id == int32(types.T_decimal64) {
+					require.Equal(t, test.want.Width, typ.Width)
+					require.Equal(t, test.want.Scale, typ.Scale)
+				}
 			}
 			if test.name == "on duplicate key update scalar subquery" {
+				dedupCount := 0
+				updateExprCount := 0
 				for _, node := range queryPlan.GetQuery().Nodes {
 					if node.DedupJoinCtx == nil {
 						continue
 					}
+					dedupCount++
 					for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+						updateExprCount++
 						require.False(t, exprContainsSubqueryRef(expr))
 					}
 				}
+				require.Positive(t, dedupCount)
+				require.Positive(t, updateExprCount)
 			}
 		})
 	}
