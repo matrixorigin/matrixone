@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -57,6 +58,12 @@ type IndexConsumer struct {
 
 var _ Consumer = new(IndexConsumer)
 
+var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+
+type errorAwareDataRetriever interface {
+	SetError(error)
+}
+
 // SqlWriter returns the writer this consumer is paired with. Used by
 // plugin Hooks.Run impls that need to dispatch on the writer's
 // concrete type (e.g. HNSW picking RunHnsw[float32] vs [float64]).
@@ -82,7 +89,7 @@ func (c *IndexConsumer) RunTxn(
 	timeout time.Duration,
 	cb func(sqlproc *sqlexec.SqlProcess) error,
 ) error {
-	return sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), timeout, nil, nil,
+	return runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), timeout, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			return cb(sqlproc)
 		})
@@ -152,11 +159,16 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	if datatype == ISCPDataType_Snapshot {
 		// SNAPSHOT
 		for {
+			if err := ctx.Err(); err != nil {
+				reportIndexConsumerErr(errch, err)
+				return
+			}
 			select {
 			case <-ctx.Done():
+				reportIndexConsumerErr(errch, ctx.Err())
 				return
 			case e2 := <-errch:
-				errch <- e2
+				reportIndexConsumerErr(errch, e2)
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
@@ -164,10 +176,13 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				}
 
 				// no transaction required and commit every time.
-				err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+				err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
+						if objectio.ISCPIndexExecErrorInjected() {
+							return injectedISCPIndexErr("exec")
+						}
 						res, err := ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
 						if err != nil {
 							logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
@@ -180,7 +195,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 					})
 
 				if err != nil {
-					errch <- err
+					reportIndexConsumerErr(errch, err)
 					return
 				}
 			}
@@ -189,26 +204,35 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	} else {
 
 		// all updates under same transaction and transaction can last very long so set timeout to 24 hours
-		err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
+		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 				sqlctx := sqlproc.SqlCtx
 
 				// TAIL
 				for {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					select {
 					case <-ctx.Done():
-						return
+						return ctx.Err()
 					case e2 := <-errch:
-						errch <- e2
-						return
+						reportIndexConsumerErr(errch, e2)
+						return e2
 					case sql, ok := <-c.sqlBufSendCh:
 						if !ok {
 							// channel closed
+							if objectio.ISCPIndexWatermarkErrInjected() {
+								return injectedISCPIndexErr("watermark")
+							}
 							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 						}
 
 						// update SQL
 						var res executor.Result
+						if objectio.ISCPIndexExecErrorInjected() {
+							return injectedISCPIndexErr("exec")
+						}
 						res, err = ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
 						if err != nil {
 							return err
@@ -219,7 +243,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 			})
 
 		if err != nil {
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 			return
 		}
 	}
@@ -249,7 +273,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	var sync *hnsw.HnswSync[T]
 
 	// read-only sql so no need transaction here.  All models are loaded at startup.
-	err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+	err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
@@ -264,12 +288,12 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 		if sync != nil {
 			sync.Destroy()
 		}
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return
 	}
 
 	if sync == nil {
-		errch <- moerr.NewInternalErrorNoCtx("failed create HnswSync")
+		reportIndexConsumerErr(errch, moerr.NewInternalErrorNoCtx("failed create HnswSync"))
 		return
 	}
 
@@ -280,22 +304,30 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	}()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
 		select {
 		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e2 := <-errch:
-			errch <- e2
+			reportIndexConsumerErr(errch, e2)
 			return
 		case sql, ok := <-c.sqlBufSendCh:
 			if !ok {
 				// channel closed
 
 				// we need a transaction here to save model files and update watermark
-				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
+				err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
 						// save model to db
+						if objectio.ISCPIndexHnswSaveErrInjected() {
+							return injectedISCPIndexErr("hnsw save")
+						}
 						err = sync.Save(sqlproc)
 						if err != nil {
 							return
@@ -303,6 +335,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 
 						// update watermark
 						if datatype == ISCPDataType_Tail {
+							if objectio.ISCPIndexWatermarkErrInjected() {
+								return injectedISCPIndexErr("watermark")
+							}
 							err = r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 							if err != nil {
 								return
@@ -313,7 +348,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 					})
 
 				if err != nil {
-					errch <- err
+					reportIndexConsumerErr(errch, err)
 					return
 				}
 				return
@@ -323,18 +358,21 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			var cdc vectorindex.VectorIndexCdc[T]
 			err = sonic.Unmarshal(sql, &cdc)
 			if err != nil {
-				errch <- err
+				reportIndexConsumerErr(errch, err)
 				return
 			}
 
 			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
-			err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+			err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
 				func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+					if objectio.ISCPIndexHnswUpdateErrInjected() {
+						return injectedISCPIndexErr("hnsw update")
+					}
 					return sync.Update(sqlproc, &cdc)
 				})
 
 			if err != nil {
-				errch <- err
+				reportIndexConsumerErr(errch, err)
 				return
 			}
 
@@ -350,20 +388,36 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 	// Replaces the hardcoded switch that previously lived here.
 	h, ok := GetHooks(c.algo)
 	if !ok {
-		errch <- moerr.NewInternalError(ctx, "iscp: no Hooks registered for algo "+c.algo)
+		reportIndexConsumerErr(errch, moerr.NewInternalError(ctx, "iscp: no Hooks registered for algo "+c.algo))
 		return
 	}
 	h.Run(c, ctx, errch, r)
+}
+
+func reportIndexConsumerErr(errch chan error, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case errch <- err:
+	default:
+	}
+}
+
+func injectedISCPIndexErr(point string) error {
+	return moerr.NewInternalErrorNoCtx("injected ISCP index " + point + " failure")
 }
 
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {
 	// release the data
 
 	if data == nil {
-		err := c.flushCdc()
+		err := c.flushCdc(ctx, errch)
 		if err != nil {
-			errch <- err
+			reportIndexConsumerErr(errch, err)
+			return true
 		}
+		objectio.ISCPIndexCloseBlockInjected()
 		close(c.sqlBufSendCh)
 		return true
 	}
@@ -375,15 +429,17 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 	noMoreData := data.noMoreData
 	err := data.err
 	if err != nil {
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return true
 	}
 
 	if noMoreData {
-		err := c.flushCdc()
+		err := c.flushCdc(ctx, errch)
 		if err != nil {
-			errch <- err
+			reportIndexConsumerErr(errch, err)
+			return true
 		}
+		objectio.ISCPIndexCloseBlockInjected()
 		close(c.sqlBufSendCh)
 		return noMoreData
 	}
@@ -392,19 +448,19 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 
 	if datatype == ISCPDataType_Snapshot {
 		// SNAPSHOT
-		err := c.sinkSnapshot(ctx, insertBatch)
+		err := c.sinkSnapshot(ctx, errch, insertBatch)
 		if err != nil {
 			// error out
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 			noMoreData = true
 		}
 
 	} else {
 		// sinkTail will save sql to the slice
-		err := c.sinkTail(ctx, insertBatch, deleteBatch)
+		err := c.sinkTail(ctx, errch, insertBatch, deleteBatch)
 		if err != nil {
 			// error out
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 			noMoreData = true
 		}
 	}
@@ -430,6 +486,14 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	go func() {
 		defer wg.Done()
 		c.run(ctx, errch, r)
+		select {
+		case err := <-errch:
+			if errSetter, ok := r.(errorAwareDataRetriever); ok {
+				errSetter.SetError(err)
+			}
+			reportIndexConsumerErr(errch, err)
+		default:
+		}
 	}()
 
 	// read data
@@ -447,12 +511,12 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	return nil
 }
 
-// valueRepr picks the value representation the paired writer needs: the WAND
-// retrieval and fulltext2 writers binary-encode the pk (encodePk), so they need
-// native Go values (a datetime/time/timestamp/decimal/uuid pk delivered as its
-// SQL-display string would make encodePk's native type assertion panic and crash the
-// consumer goroutine, permanently stalling index maintenance); every other writer
-// builds SQL text and needs the SQL-display string (the historical default).
+// valueRepr picks the value representation the paired writer needs: the fulltext2
+// writer binary-encodes the pk (encodePk), so it needs native Go values (a datetime/
+// time/timestamp/decimal/uuid pk delivered as its SQL-display string would make
+// encodePk's native type assertion panic and crash the consumer goroutine, permanently
+// stalling index maintenance); every other writer builds SQL text and needs the
+// SQL-display string (the historical default).
 func (c *IndexConsumer) valueRepr() ValueRepr {
 	switch c.sqlWriter.(type) {
 	case *Fulltext2SqlWriter:
@@ -461,7 +525,7 @@ func (c *IndexConsumer) valueRepr() ValueRepr {
 	return ReprSQLString
 }
 
-func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBatch) error {
+func (c *IndexConsumer) sinkSnapshot(ctx context.Context, errch chan error, upsertBatch *AtomicBatch) error {
 	var err error
 
 	for _, bat := range upsertBatch.Batches {
@@ -476,7 +540,7 @@ func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBat
 			}
 
 			if c.sqlWriter.Full() {
-				err = c.sendSql(c.sqlWriter)
+				err = c.sendSql(ctx, errch, c.sqlWriter)
 				if err != nil {
 					return err
 				}
@@ -489,7 +553,7 @@ func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBat
 
 // upsertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then upsert
-func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) error {
+func (c *IndexConsumer) sinkTail(ctx context.Context, errch chan error, upsertBatch, deleteBatch *AtomicBatch) error {
 	var err error
 
 	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
@@ -505,13 +569,13 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 		upsertItem, deleteItem := upsertIter.Item(), deleteIter.Item()
 		// compare ts, ignore pk
 		if upsertItem.Ts.LT(&deleteItem.Ts) {
-			if err = c.sinkInsert(ctx, upsertIter); err != nil {
+			if err = c.sinkInsert(ctx, errch, upsertIter); err != nil {
 				return err
 			}
 			// get next item
 			upsertIterHasNext = upsertIter.Next()
 		} else {
-			if err = c.sinkDelete(ctx, deleteIter); err != nil {
+			if err = c.sinkDelete(ctx, errch, deleteIter); err != nil {
 				return err
 			}
 			// get next item
@@ -521,7 +585,7 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 
 	// output the rest of upsert iterator
 	for upsertIterHasNext {
-		if err = c.sinkInsert(ctx, upsertIter); err != nil {
+		if err = c.sinkInsert(ctx, errch, upsertIter); err != nil {
 			return err
 		}
 		// get next item
@@ -530,17 +594,16 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 
 	// output the rest of delete iterator
 	for deleteIterHasNext {
-		if err = c.sinkDelete(ctx, deleteIter); err != nil {
+		if err = c.sinkDelete(ctx, errch, deleteIter); err != nil {
 			return err
 		}
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
-	c.flushCdc()
-	return nil
+	return c.flushCdc(ctx, errch)
 }
 
-func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = upsertIter.Row(ctx, c.rowdata, c.valueRepr()); err != nil {
@@ -550,7 +613,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {
 		// last op is not INSERT, sendSql first
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -564,7 +627,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 
 	if c.sqlWriter.Full() {
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -573,7 +636,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 	return nil
 }
 
-func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+func (c *IndexConsumer) sinkDelete(ctx context.Context, errch chan error, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = deleteIter.Row(ctx, c.rowdelete, c.valueRepr()); err != nil {
@@ -583,7 +646,7 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_DELETE) {
 		// last op is not DELETE, sendSql first
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -597,7 +660,7 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 
 	if c.sqlWriter.Full() {
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -606,7 +669,7 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 	return nil
 }
 
-func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
+func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer IndexSqlWriter) error {
 	if writer.Empty() {
 		return nil
 	}
@@ -617,7 +680,18 @@ func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
 		return err
 	}
 
-	c.sqlBufSendCh <- sql
+	objectio.ISCPIndexSendBlockInjected()
+	if objectio.ISCPIndexSendErrorInjected() {
+		return injectedISCPIndexErr("send")
+	}
+
+	select {
+	case c.sqlBufSendCh <- sql:
+	case err := <-errch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	//os.Stderr.WriteString(string(sql))
 	//os.Stderr.WriteString("\n")
 
@@ -627,6 +701,6 @@ func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
 	return nil
 }
 
-func (c *IndexConsumer) flushCdc() error {
-	return c.sendSql(c.sqlWriter)
+func (c *IndexConsumer) flushCdc(ctx context.Context, errch chan error) error {
+	return c.sendSql(ctx, errch, c.sqlWriter)
 }

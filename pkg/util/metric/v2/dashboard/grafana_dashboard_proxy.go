@@ -31,6 +31,8 @@ func (c *DashboardCreator) initProxyDashboard() error {
 		"Proxy Metrics",
 		c.withRowOptions(
 			c.initProxyConnectionRow(),
+			c.initProxyHealthRow(),
+			c.initProxyHandshakeRow(),
 			c.initProxyTransferDurationRow(),
 			c.initProxyTransferCounterRow(),
 			c.initProxyOthersRow(),
@@ -48,10 +50,11 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 		"Proxy Connection",
 		c.withMultiGraph(
 			"Connect Counter",
-			6,
+			4,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="accepted"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="current"`) + `[$interval]))`,
+				// Older proxies reported close events with the "current" label.
+				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type=~"current|closed"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="success"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="route-fail"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_connect_counter", `type="common-fail"`) + `[$interval]))`,
@@ -61,7 +64,7 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 			},
 			[]string{
 				"accepted",
-				"current",
+				"closed",
 				"success",
 				"route-fail",
 				"common-fail",
@@ -70,9 +73,15 @@ func (c *DashboardCreator) initProxyConnectionRow() dashboard.Option {
 				"reject",
 			},
 		),
+		c.withGraph(
+			"Current Connections",
+			4,
+			`sum(`+c.getMetricWithFilter("mo_proxy_connections_current", "")+`)`,
+			"current",
+			axis.Min(0)),
 		c.withMultiGraph(
 			"Disconnect Counter",
-			6,
+			4,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_disconnect_counter", `type="server"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_proxy_disconnect_counter", `type="client"`) + `[$interval]))`,
@@ -94,6 +103,43 @@ func (c *DashboardCreator) initProxyTransferDurationRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			12,
 			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initProxyHealthRow() dashboard.Option {
+	return dashboard.Row(
+		"Proxy CN Health",
+		c.withGraph(
+			"CN Health Events",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_proxy_cn_health_total", "")+`[$interval])) by (event)`,
+			"{{ event }}",
+			axis.Min(0)),
+		c.withGraph(
+			"All CN Busy",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_proxy_connect_counter", `type="cn-all-busy"`)+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}",
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initProxyHandshakeRow() dashboard.Option {
+	return dashboard.Row(
+		"Proxy Backend Handshake",
+		c.withGraph(
+			"P95 Handshake Duration",
+			6,
+			`histogram_quantile(0.95, sum(rate(`+c.getMetricWithFilter("mo_proxy_backend_handshake_duration_seconds_bucket", "")+`[$interval])) by (le, result))`,
+			"{{ result }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.withGraph(
+			"In-flight Handshakes",
+			6,
+			`sum(`+c.getMetricWithFilter("mo_proxy_backend_handshake_inflight", "")+`)`,
+			"in-flight",
 			axis.Min(0)),
 	)
 }

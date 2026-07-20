@@ -975,6 +975,15 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
+	return v.dup(mp, false, v.offHeap)
+}
+
+// DupOffHeap copies a vector with all owned backing data allocated off-heap.
+func (v *Vector) DupOffHeap(mp *mpool.MPool) (*Vector, error) {
+	return v.dup(mp, true, true)
+}
+
+func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error) {
 	if v.IsConstNull() {
 		return NewConstNull(v.typ, v.Length(), mp), nil
 	}
@@ -982,6 +991,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	var err error
 
 	w := NewVecFromReuse()
+	w.offHeap = offHeap
 	w.class = v.class
 	w.typ = v.typ
 	w.length = v.length
@@ -991,10 +1001,12 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
 		if err := extend(w, 1, mp); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 	} else {
 		if err := extend(w, v.length, mp); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 		dataLen *= v.length
@@ -1002,12 +1014,96 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area), v.offHeap); err != nil {
+		if w.area, err = mp.Alloc(len(v.area), areaOffHeap); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 		copy(w.area, v.area)
 	}
 	return w, nil
+}
+
+// CloneToFlatCompact returns a deep, flat copy of v. Unlike Dup, the clone only
+// retains varlen payload referenced by the vector's logical rows, so stale or
+// unreferenced bytes in area are not propagated into batch memory accounting.
+func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
+	w := NewVec(v.typ)
+	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
+		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+		return w, nil
+	}
+
+	if v.length == 0 {
+		return w, nil
+	}
+	if err := extend(w, v.length, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
+	w.length = v.length
+	copyBitmapWithinLength(&w.nsp, &v.nsp, v.length)
+	copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+
+	if v.typ.IsFixedLen() {
+		dataLen := v.length * v.typ.TypeSize()
+		copy(w.data[:dataLen], v.data[:dataLen])
+		return w, nil
+	}
+
+	var src, dst []types.Varlena
+	ToSliceNoTypeCheck(v, &src)
+	ToSliceNoTypeCheck(w, &dst)
+	totalArea := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) || src[i].IsSmall() {
+			continue
+		}
+		_, n := src[i].OffsetLen()
+		totalArea += int(n)
+	}
+	if totalArea > 0 {
+		var err error
+		w.area, err = mp.Alloc(totalArea, w.offHeap)
+		if err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
+
+	offset := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) {
+			dst[i] = types.Varlena{}
+			continue
+		}
+		if src[i].IsSmall() {
+			dst[i] = src[i]
+			continue
+		}
+		value := src[i].GetByteSlice(v.area)
+		copy(w.area[offset:], value)
+		dst[i].SetOffsetLen(uint32(offset), uint32(len(value)))
+		offset += len(value)
+	}
+	return w, nil
+}
+
+func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
+	if src.EmptyByFlag() {
+		return
+	}
+	limit := uint64(length)
+	src.Foreach(func(row uint64) bool {
+		if row >= limit {
+			return false
+		}
+		nulls.Add(dst, row)
+		return true
+	})
 }
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
@@ -3409,6 +3505,28 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 	return nil
 }
 
+func SetConstByteJsonEncoded(
+	vec *Vector,
+	enc bytejson.ByteJsonDataEncoder,
+	length int,
+	mp *mpool.MPool,
+) error {
+	oldAreaLen := len(vec.area)
+	var value types.Varlena
+	if err := BuildVarlenaFromByteJsonEncoded(vec, &value, enc, mp); err != nil {
+		return err
+	}
+	if err := extend(vec, 1, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	col[0] = value
+	vec.length = length
+	return nil
+}
+
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.ArrayElement](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
@@ -3531,6 +3649,41 @@ func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MP
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
 	return appendOneByteJson(vec, bj, isNull, mp)
+}
+
+func AppendByteJsonEncoded(
+	vec *Vector,
+	enc bytejson.ByteJsonDataEncoder,
+	mp *mpool.MPool,
+) error {
+	if vec.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
+	}
+	if mp == nil {
+		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
+	}
+
+	if err := extend(vec, 1, mp); err != nil {
+		return err
+	}
+	index := vec.length
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, index+1)
+	oldValue := values[index]
+	oldAreaLen := len(vec.area)
+	wasNull := vec.nsp.Contains(uint64(index))
+	if err := BuildVarlenaFromByteJsonEncoded(vec, &values[index], enc, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		values[index] = oldValue
+		if wasNull {
+			vec.nsp.Add(uint64(index))
+		} else {
+			vec.nsp.Del(uint64(index))
+		}
+		return err
+	}
+	vec.nsp.Del(uint64(index))
+	vec.length++
+	return nil
 }
 
 // AppendArray mainly used in tests
@@ -5194,6 +5347,71 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 		return nil
 	}
 	return BuildVarlenaNoInlineFromByteJson(vec, v, bj, m)
+}
+
+func BuildVarlenaFromByteJsonEncoded(
+	vec *Vector,
+	v *types.Varlena,
+	enc bytejson.ByteJsonDataEncoder,
+	m *mpool.MPool,
+) error {
+	dataSize := uint64(enc.DataSize())
+	storageSize := dataSize + 1
+	maxInt := uint64(^uint(0) >> 1)
+	if storageSize > uint64(^uint32(0)) || storageSize > maxInt {
+		return moerr.NewInvalidInputNoCtx("json value is too large")
+	}
+
+	if storageSize <= types.VarlenaInlineSize {
+		clear(v[:])
+		v[0] = byte(storageSize)
+		v[1] = enc.TypeCode()
+		dst := v[2 : 2+int(dataSize)]
+		n, err := enc.EncodeDataInto(dst)
+		if err != nil {
+			return err
+		}
+		if n != len(dst) {
+			return moerr.NewInternalErrorNoCtxf(
+				"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
+			)
+		}
+		return nil
+	}
+
+	oldAreaLen := len(vec.area)
+	newAreaLen := uint64(oldAreaLen) + storageSize
+	if newAreaLen > uint64(^uint32(0)) || newAreaLen > maxInt {
+		return moerr.NewInvalidInputNoCtx("json vector area is too large")
+	}
+
+	if int(newAreaLen) > cap(vec.area) {
+		newArea, err := m.Grow2(vec.area, nil, int(newAreaLen), vec.offHeap)
+		if err != nil {
+			return err
+		}
+		// Grow2 may have freed the old area. Install the replacement before
+		// invoking an encoder that can fail.
+		vec.area = newArea
+	} else {
+		vec.area = vec.area[:int(newAreaLen)]
+	}
+
+	vec.area[oldAreaLen] = enc.TypeCode()
+	dst := vec.area[oldAreaLen+1 : int(newAreaLen)]
+	n, err := enc.EncodeDataInto(dst)
+	if err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	if n != len(dst) {
+		vec.area = vec.area[:oldAreaLen]
+		return moerr.NewInternalErrorNoCtxf(
+			"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
+		)
+	}
+	v.SetOffsetLen(uint32(oldAreaLen), uint32(storageSize))
+	return nil
 }
 
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector

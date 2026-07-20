@@ -106,6 +106,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	c.setAffectedRows(0)
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -145,32 +146,21 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// After acquiring the exclusive lock on mo_database, temporarily advance
+	// After acquiring the exclusive lock on mo_database, advance
 	// the transaction's snapshot so that Relations() can see all tables
 	// committed by other CNs (e.g. concurrent CLONE) before the lock was
 	// granted.
 	//
-	// We MUST restore the original SnapshotTS before returning, because
-	// UpdateSnapshot changes txn.SnapshotTS which would affect the
-	// tombstone transfer range in subsequent IncrStatementID calls.
-	// In restore-cluster scenarios (multiple DDLs in one transaction),
-	// a permanently advanced SnapshotTS causes duplicate-key errors.
-	//
-	// Within DropDatabase, all internal SQL uses WithDisableIncrStatement(),
-	// so no tombstone transfer is triggered while SnapshotTS is advanced.
+	// AdvanceSnapshot also transfers workspace tombstones to objects visible at
+	// the new snapshot. SnapshotTS must remain advanced afterwards because
+	// rewinding it alone cannot undo an in-memory tombstone transfer.
 	txnOp := c.proc.GetTxnOperator()
-	origSnapshotTS := txnOp.SnapshotTS()
 	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
 		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-		if err = txnOp.UpdateSnapshot(c.proc.Ctx, now); err != nil {
+		if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
 			return err
 		}
 	}
-	defer func() {
-		// Restore SnapshotTS so that tombstone transfer in subsequent
-		// statements is not affected by the temporary advancement.
-		txnOp.SetSnapshotTS(origSnapshotTS)
-	}()
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -179,10 +169,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	// whether foreign_key_checks = 0 or 1
-	err = s.removeFkeysRelationships(c, dbName)
-	if err != nil {
-		return err
+	// Internal callers such as DROP ACCOUNT remove every database in the
+	// account. In that case, rewriting cross-database FK metadata is both
+	// unnecessary and unsafe: a later DROP can observe both catalog versions
+	// produced by the rewrite in this transaction.
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	if !ignoreForeignKey {
+		err = s.removeFkeysRelationships(c, dbName)
+		if err != nil {
+			return err
+		}
 	}
 
 	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -308,7 +304,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	return err
+	c.setAffectedRows(uint64(len(deleteTables)))
+	return nil
 }
 
 func logAndSkipMissingRelationByNameForDropDatabase(c *Compile, dbName, rel, msg string, err error) bool {

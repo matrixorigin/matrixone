@@ -266,6 +266,9 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 }
 
 func (bf *CBloomFilter) testAndAddFixedVector(v *vector.Vector, callBack func(bool, bool, int)) {
+	if v.Length() == 0 {
+		return
+	}
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()
@@ -323,6 +326,9 @@ func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(
 }
 
 func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
+	if v.Length() == 0 {
+		return []uint8{}
+	}
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()
@@ -385,6 +391,9 @@ func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, 
 }
 
 func (bf *CBloomFilter) addFixedVector(v *vector.Vector) {
+	if v.Length() == 0 {
+		return
+	}
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()

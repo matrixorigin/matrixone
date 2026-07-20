@@ -34,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
+const defaultLockWaitTimeoutSeconds int64 = 60
+
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
 	errorConvertToIntFailed                    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
@@ -2169,7 +2171,9 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("lock_wait_timeout", 1, 31536000, false),
-		Default:           int64(31536000),
+		// Keep the default bounded so a single abandoned or slow transaction
+		// cannot stall every waiter behind the same row lock for hours.
+		Default: defaultLockWaitTimeoutSeconds,
 	},
 	"locked_in_memory": {
 		Name:              "locked_in_memory",

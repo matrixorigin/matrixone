@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -26,12 +27,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -139,6 +143,7 @@ func TestWorkspaceNotDuplicated(t *testing.T) {
 // 4. Realistic: Tests defensive programming against invalid message types
 func TestHandlePipelineMessage_UnknownType(t *testing.T) {
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		messageCtx:    context.Background(),
 		connectionCtx: context.Background(),
 		messageId:     1,
@@ -186,7 +191,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
@@ -194,6 +199,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		messageCtx:    ctx,
 		connectionCtx: ctx,
 		cnInformation: cnInformation{
@@ -239,6 +245,7 @@ func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: testTxnID}).AnyTimes()
 
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		messageCtx:    ctx,
 		connectionCtx: ctx,
 		messageTyp:    pipeline.Method_PipelineMessage,
@@ -280,7 +287,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 
 	// Setup txnClient to return txnOperator when NewWithSnapshot is called
-	txnClient.EXPECT().NewWithSnapshot(gomock.Any()).Return(txnOperator, nil).Times(1)
+	txnClient.EXPECT().NewWithSnapshot(gomock.Any(), gomock.Any()).Return(txnOperator, nil).Times(1)
 
 	// Create a valid ProcessInfo
 	procInfo := &pipeline.ProcessInfo{
@@ -297,13 +304,106 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	data, err := procInfo.Marshal()
 	require.NoError(t, err)
 
-	helper, err := generateProcessHelper(data, txnClient)
+	helper, err := generateProcessHelper(context.Background(), data, txnClient)
 	require.NoError(t, err)
 	require.Equal(t, "test-proc-id", helper.id)
 	require.Equal(t, catalog.System_Account, helper.accountId)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
+}
+
+func TestNewMessageReceiverReturnsSnapshotRestoreError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	clientSession := mock_morpc.NewMockClientSession(ctrl)
+	clientSession.EXPECT().SessionCtx().Return(context.Background())
+
+	wantErr := errors.New("wait remote snapshot logtail")
+	txnClient.EXPECT().NewWithSnapshot(gomock.Any(), gomock.Any()).Return(nil, wantErr)
+	procInfo := &pipeline.ProcessInfo{
+		Snapshot: txn.CNTxnSnapshot{
+			Txn: txn.TxnMeta{
+				ID: []byte("test-txn-id"),
+			},
+		},
+	}
+	data, err := procInfo.Marshal()
+	require.NoError(t, err)
+
+	_, err = newMessageReceiverOnServer(
+		context.Background(),
+		"cn-address",
+		&pipeline.Message{Cmd: pipeline.Method_PipelineMessage, ProcInfoData: data},
+		clientSession,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		txnClient,
+		nil,
+		nil,
+	)
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestNewMessageReceiverSnapshotWaitObservesConnectionClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	clientSession := mock_morpc.NewMockClientSession(ctrl)
+	connectionCtx, closeConnection := context.WithCancel(context.Background())
+	clientSession.EXPECT().SessionCtx().Return(connectionCtx)
+
+	waitStarted := make(chan struct{})
+	txnClient.EXPECT().NewWithSnapshot(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ txn.CNTxnSnapshot) (client.TxnOperator, error) {
+			close(waitStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	)
+	procInfo := &pipeline.ProcessInfo{
+		Snapshot: txn.CNTxnSnapshot{Txn: txn.TxnMeta{ID: []byte("test-txn-id")}},
+	}
+	data, err := procInfo.Marshal()
+	require.NoError(t, err)
+
+	errC := make(chan error, 1)
+	go func() {
+		_, err := newMessageReceiverOnServer(
+			context.Background(),
+			"cn-address",
+			&pipeline.Message{Cmd: pipeline.Method_PipelineMessage, ProcInfoData: data},
+			clientSession,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			txnClient,
+			nil,
+			nil,
+		)
+		errC <- err
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("snapshot wait did not start")
+	}
+	closeConnection()
+	select {
+	case err := <-errC:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("connection close did not release snapshot wait")
+	}
 }
 
 // TestCnServerMessageHandlerWaitObservesMessageCtxCancellation verifies that the
@@ -314,6 +414,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 func TestCnServerMessageHandlerWaitObservesMessageCtxCancellation(t *testing.T) {
 	messageCtx, cancelMessage := context.WithCancel(context.Background())
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(), // never closed
 		messageCtx:    messageCtx,
 	}
@@ -346,6 +447,7 @@ func TestCnServerMessageHandlerWaitObservesMessageCtxCancellation(t *testing.T) 
 func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	connectionCtx, closeConnection := context.WithCancel(context.Background())
 	receiver := &messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: connectionCtx,
 		messageCtx:    context.Background(), // never cancelled
 	}

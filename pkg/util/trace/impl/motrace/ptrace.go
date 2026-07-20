@@ -34,7 +34,7 @@ func defaultMOTracerProvider() *MOTracerProvider {
 		tracerProviderConfig{
 			enable:         false,
 			resource:       trace.NewResource(),
-			idGenerator:    &moIDGenerator{},
+			idGenerator:    moIDGenerator{},
 			batchProcessor: NoopBatchProcessor{},
 			// default: 10K
 			MaxStatementSize: 10240,
@@ -53,19 +53,9 @@ func newMOTracerProvider(opts ...TracerProviderOption) *MOTracerProvider {
 	return pTracer
 }
 
-func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...trace.TracerOption) trace.Tracer {
+func (p *MOTracerProvider) Tracer(_ string, _ ...trace.TracerOption) trace.Tracer {
 	if !p.IsEnable() {
 		return trace.NoopTracer{}
 	}
-
-	tracer := &MOTracer{
-		TracerConfig: trace.TracerConfig{Name: instrumentationName},
-		provider:     p,
-		// init mapper
-		profileBackOff: make(map[string]BackOff, 8),
-	}
-	for _, opt := range opts {
-		opt.Apply(&tracer.TracerConfig)
-	}
-	return tracer
+	return trace.NewNonRecordingTracer(p.idGenerator)
 }

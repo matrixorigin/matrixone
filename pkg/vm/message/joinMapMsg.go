@@ -150,6 +150,7 @@ func (sels *GroupSels) Get(k int32) []int32 {
 type JoinMap struct {
 	runtimeFilter_In bool
 	valid            bool
+	hasNullKey       bool
 	rowCnt           int64 // for debug purpose
 	refCnt           int64
 	mpool            *mpool.MPool
@@ -201,6 +202,19 @@ func (jm *JoinMap) GetRowCount() int64 {
 		return 0
 	}
 	return jm.rowCnt
+}
+
+// SetHasNullKey records whether at least one build row had NULL in any hash
+// key column. Hash tables intentionally exclude NULL keys, but null-aware MARK
+// joins still need this global fact to distinguish FALSE from UNKNOWN.
+func (jm *JoinMap) SetHasNullKey(hasNull bool) {
+	if jm != nil {
+		jm.hasNullKey = hasNull
+	}
+}
+
+func (jm *JoinMap) HasNullKey() bool {
+	return jm != nil && jm.hasNullKey
 }
 
 func (jm *JoinMap) GetGroupCount() uint64 {

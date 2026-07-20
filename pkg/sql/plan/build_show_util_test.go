@@ -145,6 +145,11 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 			)`,
 			want: "CREATE TABLE `vec_json_case` (\n  `doc_id` bigint NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `payload` json DEFAULT NULL,\n  `tags` array(varchar(20)) DEFAULT NULL,\n  PRIMARY KEY (`doc_id`)\n)",
 		},
+		{
+			name: "expression default preserves string literals",
+			sql:  `CREATE TABLE t_expr_default (id INT, c VARCHAR(10) DEFAULT (concat('x','y')), s VARCHAR(10) DEFAULT 'plain')`,
+			want: "CREATE TABLE `t_expr_default` (\n  `id` int DEFAULT NULL,\n  `c` varchar(10) DEFAULT (concat('x', 'y')),\n  `s` varchar(10) DEFAULT 'plain'\n)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

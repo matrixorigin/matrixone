@@ -139,7 +139,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
-		op.CanSpill = t.CanSpill
 		op.Conditions = t.Conditions
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
@@ -158,6 +157,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.TrackNullKeys = t.TrackNullKeys
 		return op
 
 	case vm.Group:
@@ -588,6 +588,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.SpillThreshold = t.SpillThreshold
 		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
@@ -611,6 +612,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.PostDml:
@@ -1225,7 +1227,10 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// OldColList identifies the row being updated.  Both FAIL and IGNORE
+		// must exclude that row from duplicate detection: an UPDATE that keeps
+		// a primary/unique key unchanged is not a duplicate of itself.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 			if len(node.DedupJoinCtx.OldColList) > 1 {
 				arg.DedupDeleteMarkerColIdx = node.DedupJoinCtx.OldColList[1].ColPos
@@ -1241,6 +1246,7 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 			}
 		}
 	}
+	arg.SpillThreshold = node.SpillMem
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1292,10 +1298,13 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	if node.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
+		// See constructDedupJoin: UPDATE IGNORE also needs to exclude the
+		// target row's old key from duplicate detection.
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
 	}
+	arg.SpillThreshold = node.SpillMem
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1875,23 +1884,11 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 
-		// to find if hashmap need to keep build batches for probe
-		var needMergedBatch bool
-		if arg.NonEqCond != nil {
-			needMergedBatch = true
-		} else {
-			for _, rp := range arg.ResultCols {
-				if rp.Rel == 1 {
-					needMergedBatch = true
-					break
-				}
-			}
-		}
-		ret.NeedBatches = needMergedBatch
+		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = !arg.HashOnPK
-		ret.CanSpill = true
+		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -1921,7 +1918,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
@@ -1971,23 +1968,11 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
-		// to find if hashmap need to keep build batches for probe
-		var needMergedBatch bool
-		if arg.NonEqCond != nil {
-			needMergedBatch = true
-		} else {
-			for _, rp := range arg.ResultCols {
-				if rp.Rel == 1 {
-					needMergedBatch = true
-					break
-				}
-			}
-		}
-		ret.NeedBatches = needMergedBatch
+		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = !arg.HashOnPK
-		ret.CanSpill = true
+		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
@@ -1998,7 +1983,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction

@@ -460,7 +460,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
 	if err := c.runSqlWithOptions(
 		dropSql,
-		executor.StatementOption{}.WithIgnoreForeignKey(),
+		// ALTER TABLE COPY replaces the source table internally. It is not a
+		// user-visible DROP TABLE, so keep table-level publications unchanged.
+		executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
 	); err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", dbName),

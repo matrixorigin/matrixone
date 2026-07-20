@@ -34,7 +34,7 @@ func init() {
 		metadata: versions.Version{
 			Version:           "4.0.1",
 			MinUpgradeVersion: "4.0.0",
-			UpgradeCluster:    versions.No,
+			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
 		},

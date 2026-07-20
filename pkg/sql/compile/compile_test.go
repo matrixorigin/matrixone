@@ -75,6 +75,7 @@ func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 }
 
 type Ws struct {
+	advanceSnapshot func(context.Context, timestamp.Timestamp) error
 }
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
@@ -103,6 +104,13 @@ func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
 
+func (w *Ws) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	if w.advanceSnapshot != nil {
+		return w.advanceSnapshot(ctx, ts)
+	}
+	return nil
+}
+
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
@@ -125,6 +133,10 @@ func (w *Ws) UpdateSnapshotWriteOffset() {
 }
 
 func (w *Ws) GetSnapshotWriteOffset() int {
+	return 0
+}
+
+func (w *Ws) WriteOffset() uint64 {
 	return 0
 }
 
@@ -382,7 +394,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
@@ -390,6 +402,46 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	return txnClient, txnOperator
+}
+
+var (
+	_ func(*Compile, client.TxnOperator)       = MarkQueryRunning
+	_ func(*Compile, client.TxnOperator) error = TryMarkQueryRunning
+)
+
+func TestMarkQueryRunningPreservesLegacyContract(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), "select 1").Return(uint64(0))
+	txnOperator.EXPECT().ExitRunSqlWithToken(uint64(0))
+
+	c := &Compile{
+		proc:      testutil.NewProcess(t),
+		originSQL: "select 1",
+	}
+	MarkQueryRunning(c, txnOperator)
+	require.True(t, c.proc.GetBaseProcessRunningStatus())
+	require.Zero(t, c.runSqlToken)
+
+	MarkQueryDone(c, txnOperator)
+	require.False(t, c.proc.GetBaseProcessRunningStatus())
+}
+
+func TestTryMarkQueryRunningRejectsSealedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	expectedErr := moerr.NewTxnClosedNoCtx([]byte("sealed"))
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), "select 1").
+		Return(uint64(0), expectedErr)
+
+	c := &Compile{
+		proc:      testutil.NewProcess(t),
+		originSQL: "select 1",
+	}
+	err := TryMarkQueryRunning(c, txnOperator)
+	require.ErrorIs(t, err, expectedErr)
+	require.Zero(t, c.runSqlToken)
+	require.False(t, c.proc.GetBaseProcessRunningStatus())
 }
 
 func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
@@ -402,7 +454,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
@@ -656,4 +708,48 @@ func hasOperatorType(op vm.Operator, opType vm.OpType) bool {
 		}
 	}
 	return false
+}
+
+// TestNewCompileTxnOffsetForInternalSql verifies the statement-boundary
+// contract of NewCompile and Compile.Reset (issue #25557): a compile of a
+// user statement advances the workspace snapshot write offset, while an
+// internal sub-sql compile (DisableIncrStatement, marked on the process)
+// must not touch the shared boundary — it captures the current end of the
+// workspace as its own TxnOffset instead.
+func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
+	t.Run("user statement advances the boundary", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		ws.EXPECT().UpdateSnapshotWriteOffset().Times(1)
+		ws.EXPECT().GetSnapshotWriteOffset().Return(3).Times(1)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.TxnOperator = txnOp
+
+		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
+		require.Equal(t, 3, c.TxnOffset)
+	})
+
+	t.Run("internal sub-sql must not advance the boundary", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		// no UpdateSnapshotWriteOffset expectation: the mock controller
+		// fails the test if the internal compile advances the boundary
+		ws.EXPECT().WriteOffset().Return(uint64(7)).Times(1)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.TxnOperator = txnOp
+		proc.SetIncrStatementDisabled(true)
+
+		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
+		require.Equal(t, 7, c.TxnOffset)
+	})
 }

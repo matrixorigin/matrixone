@@ -2531,7 +2531,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		assert.Error(t, err)
 
 		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
-		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
@@ -2540,7 +2540,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		assert.Error(t, err)
 
 		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
-		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
