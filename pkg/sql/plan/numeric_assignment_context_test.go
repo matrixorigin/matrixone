@@ -126,6 +126,18 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "outer parameter follows scalar subquery double domain",
+			sql:        "insert into constraint_test.emp (sal) select (select cast(1 as double)) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name:       "outer parameter keeps decimal target with scalar integer subquery",
+			sql:        "insert into constraint_test.emp (sal) select (select 1) + ?",
+			want:       types.T_decimal64,
+			paramCount: 1,
+		},
+		{
 			name:       "scalar subquery inside unary arithmetic",
 			sql:        "insert into constraint_test.emp (sal) select -(select ? + ?)",
 			want:       types.T_decimal64,
@@ -659,6 +671,12 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			want: planpb.Type{Id: int32(types.T_float64)},
 		},
 		{
+			name:       "update parameter follows scalar subquery double domain",
+			sql:        "update constraint_test.emp set sal = (select cast(1 as double)) + ? where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_float64)},
+			paramCount: 1,
+		},
+		{
 			name: "on duplicate key update decimal assignment",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = ? + ?",
@@ -691,6 +709,14 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 				"on duplicate key update sal = (select ? + ?) + cast(1 as double)",
 			want:         planpb.Type{Id: int32(types.T_float64)},
 			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update parameter follows scalar subquery double domain",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = (select cast(1 as double)) + ?",
+			want:         planpb.Type{Id: int32(types.T_float64)},
+			checkFlatten: true,
+			paramCount:   1,
 		},
 		{
 			name: "on duplicate key update scalar subquery inside unary arithmetic",

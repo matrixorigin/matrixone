@@ -866,32 +866,46 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 }
 
 func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternal(astExpr, depth, true)
+}
+
+func (b *baseBinder) numericAstTypesInternal(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumns bool,
+) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		return numericAstTypeScan{hasParam: true}, nil
 	case *tree.Subquery:
-		if !expr.Exists {
-			return numericAstTypeScan{hasParam: true}, nil
+		if expr.Exists {
+			return numericAstTypeScan{}, nil
 		}
-		return numericAstTypeScan{}, nil
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		// Keep scalar subqueries as deferred parameter-bearing operands even
+		// when their projection type cannot be determined statically. This
+		// preserves assignment-target propagation for expressions whose
+		// parameters are hidden behind unsupported projection shapes.
+		scan.hasParam = true
+		return scan, err
 	case *tree.ParenExpr:
-		return b.numericAstTypes(expr.Expr, depth)
+		return b.numericAstTypesInternal(expr.Expr, depth, resolveColumns)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypes(expr.Left, depth)
+		left, err := b.numericAstTypesInternal(expr.Left, depth, resolveColumns)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		right, err := b.numericAstTypes(expr.Right, depth)
+		right, err := b.numericAstTypesInternal(expr.Right, depth, resolveColumns)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
 		return left.merge(right), nil
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
-			return b.numericAstTypes(expr.Expr, depth)
+			return b.numericAstTypesInternal(expr.Expr, depth, resolveColumns)
 		}
 		return numericAstTypeScan{}, nil
 	case *tree.CastExpr:
@@ -913,20 +927,67 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypes(expr.Exprs[0], depth)
+		left, err := b.numericAstTypesInternal(expr.Exprs[0], depth, resolveColumns)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		right, err := b.numericAstTypes(expr.Exprs[1], depth)
+		right, err := b.numericAstTypesInternal(expr.Exprs[1], depth, resolveColumns)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
 		return left.merge(right), nil
 	case *tree.UnresolvedName:
-		if typ, ok := b.numericColumnType(expr); ok {
-			return numericAstTypedOperand(typ), nil
+		if resolveColumns {
+			if typ, ok := b.numericColumnType(expr); ok {
+				return numericAstTypedOperand(typ), nil
+			}
 		}
 		return numericAstTypeScan{}, nil
+	default:
+		return numericAstTypeScan{}, nil
+	}
+}
+
+func (b *baseBinder) numericScalarSubqueryAstTypes(
+	subquery *tree.Subquery,
+	depth int32,
+) (numericAstTypeScan, error) {
+	var stmt tree.SelectStatement
+	switch selectStmt := subquery.Select.(type) {
+	case *tree.Select:
+		stmt = selectStmt.Select
+	case *tree.ParenSelect:
+		stmt = selectStmt.Select.Select
+	default:
+		return numericAstTypeScan{}, nil
+	}
+	return b.numericScalarSelectAstTypes(stmt, depth)
+}
+
+func (b *baseBinder) numericScalarSelectAstTypes(
+	stmt tree.SelectStatement,
+	depth int32,
+) (numericAstTypeScan, error) {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		if len(selectStmt.Exprs) != 1 {
+			return numericAstTypeScan{}, nil
+		}
+		// Subquery-local names cannot be resolved from the outer bind context.
+		// Only types that are explicit in the projection AST are propagated.
+		return b.numericAstTypesInternal(selectStmt.Exprs[0].Expr, depth, false)
+	case *tree.UnionClause:
+		left, err := b.numericScalarSelectAstTypes(selectStmt.Left, depth)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		right, err := b.numericScalarSelectAstTypes(selectStmt.Right, depth)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		return left.merge(right), nil
+	case *tree.ParenSelect:
+		return b.numericScalarSelectAstTypes(selectStmt.Select.Select, depth)
 	default:
 		return numericAstTypeScan{}, nil
 	}
