@@ -328,24 +328,32 @@ func TestTunnelReplaceConn(t *testing.T) {
 	c, s := tu.getConns()
 	require.Equal(t, clientProxy, c.Conn)
 	require.Equal(t, serverProxy, s.Conn)
+	require.NotNil(t, s.msgBuf.bufDst)
+	require.Equal(t, proxyTunnelBufferSize,
+		cap(c.msgBuf.buf)+cap(s.msgBuf.buf)+s.msgBuf.bufDst.Size(),
+		"the budget constant must match concrete tunnel buffer capacities")
+	oldWriter := s.msgBuf.bufDst
 
 	csp, scp := tu.getPipes()
 	require.NoError(t, csp.pause(ctx))
 	require.NoError(t, scp.pause(ctx))
 
 	newServerProxy, newServer := net.Pipe()
+	newServerConn := newMySQLConn(
+		"server",
+		newServerProxy,
+		0,
+		nil,
+		nil,
+		false, 0,
+	)
 	tu.replaceServerConn(
-		newMySQLConn(
-			"server",
-			newServerProxy,
-			0,
-			nil,
-			nil,
-			false, 0,
-		),
+		newServerConn,
 		nil,
 		false,
 	)
+	require.Same(t, oldWriter, newServerConn.msgBuf.bufDst,
+		"non-sync migration must reuse the writer whose client destination is unchanged")
 	require.NoError(t, tu.kickoff())
 
 	go func() {

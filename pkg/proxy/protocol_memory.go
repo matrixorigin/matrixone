@@ -28,8 +28,9 @@ import (
 )
 
 // protocolMemoryBudget separates long-lived memory, which is reserved by
-// connection admission, from short-lived phase overlap. The minimum transient
-// headroom is deliberately sized for the larger of:
+// connection admission, from short-lived phase overlap. Steady memory includes
+// both shared-allocator sessions and Go-heap tunnel buffers. The minimum
+// transient headroom is deliberately sized for the larger of:
 //
 //   - initial login forwarding: pipelined client prefix + dynamic backend write
 //   - migration/control: one additional backend session + dynamic login or
@@ -41,6 +42,7 @@ import (
 // lane so a long-running UPGRADE cannot consume login and migration capacity.
 type protocolMemoryBudget struct {
 	steadyBytes       uint64
+	managedBytes      uint64
 	headroomBytes     uint64
 	transientBytes    uint64
 	backgroundBytes   uint64
@@ -93,15 +95,19 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
 	// Before authentication, one Goetty read may contain both a complete PROXY
-	// frame and the following MySQL login. After authentication, the retained
-	// login copy replaces that input. Reserve the larger pre-auth state per
-	// admitted connection so the independent wire limits still compose into a
-	// global memory bound.
+	// frame and the following header-bearing MySQL login. After authentication,
+	// the retained login payload replaces that input. Reserve the larger
+	// pre-auth state per admitted connection so the independent wire limits
+	// still compose into a global memory bound.
 	proxyFrameBytes, ok := checkedAddUint64(ProxyHeaderLength, proxyBodyLimit)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	preAuthBytes, ok := checkedAddUint64(proxyFrameBytes, handshakeLimit)
+	loginPacketBytes, ok := checkedAddUint64(frontend.PacketHeaderLength, handshakeLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	preAuthBytes, ok := checkedAddUint64(proxyFrameBytes, loginPacketBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
@@ -128,6 +134,17 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
+	// MySQLConn and bufio buffers live on the Go heap rather than in the shared
+	// session allocator, but connection admission makes their count equally
+	// deterministic. Keep them in the same end-to-end protocol memory budget.
+	tunnelBytes, ok := checkedMulUint64(connections, proxyTunnelBufferSize)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	steadyBytes, ok = checkedAddUint64(steadyBytes, tunnelBytes)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
 
 	loginDynamicBytes, ok := dynamicProtocolWriteBytes(handshakeLimit)
 	if !ok {
@@ -140,15 +157,26 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	initialBytes, ok := checkedAddUint64(handshakeLimit, loginDynamicBytes)
+	// SQLCodec copies the login payload out of Goetty's input and clientConn then
+	// creates the lifetime-retained copy used for migration. That parsing peak
+	// owns two extra payloads beyond the input backing reserved as steady state.
+	initialReadBytes, ok := checkedMulUint64(2, handshakeLimit)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	initialBytes, ok = checkedAddUint64(initialBytes, proxyBackendPacketLimit)
+	// During backend authentication, a pipelined client prefix can remain live
+	// alongside the dynamic login write and backend response. These two phases
+	// do not overlap, so reserve their maximum rather than summing lifetimes.
+	initialBackendBytes, ok := checkedAddUint64(handshakeLimit, loginDynamicBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	backendBytes, ok := checkedAddUint64(
+	initialBackendBytes, ok = checkedAddUint64(initialBackendBytes, proxyBackendPacketLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	initialBytes := max(initialReadBytes, initialBackendBytes)
+	backendWorkBytes, ok := checkedAddUint64(
 		proxyIOSessionBufferSize,
 		max(loginDynamicBytes, controlDynamicBytes),
 	)
@@ -163,10 +191,25 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	backendBytes, ok = checkedAddUint64(backendBytes, backendReadBytes)
+	backendWorkBytes, ok = checkedAddUint64(backendWorkBytes, backendReadBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
+	backendHandoffBytes, ok := checkedAddUint64(
+		proxyIOSessionBufferSize,
+		proxyMigrationTunnelBufferSize,
+	)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	backendHandoffBytes, ok = checkedAddUint64(
+		backendHandoffBytes,
+		proxyBackendRetainedResponseLimit,
+	)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	backendBytes := max(backendWorkBytes, backendHandoffBytes)
 	criticalBytes := max(initialBytes, backendBytes)
 	// UPGRADE may legitimately run for the client lifetime. Reserve it a
 	// separate single-operation lane instead of imposing an arbitrary SQL
@@ -184,7 +227,11 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 			"proxy protocol-memory-limit is smaller than steady protocol buffers plus one transient operation")
 	}
 	return protocolMemoryBudget{
-		steadyBytes:       steadyBytes,
+		steadyBytes: steadyBytes,
+		// The shared allocator does not own tunnel buffers. Subtract their
+		// steady reservation from its emergency ceiling so raising the overall
+		// budget does not also grant the allocator the same bytes a second time.
+		managedBytes:      memoryLimit - tunnelBytes,
 		headroomBytes:     memoryLimit - steadyBytes,
 		transientBytes:    transientBytes,
 		backgroundBytes:   backendBytes,

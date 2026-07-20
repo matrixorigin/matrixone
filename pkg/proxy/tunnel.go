@@ -375,14 +375,16 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	// set the new ones.
 	t.mu.serverConn = newServerConn
 	t.mu.sc = newSC
+	// The writer targets the unchanged client connection, so it is safe to move
+	// for both transfer modes. Reusing it avoids a 64 KiB allocation and leaves
+	// no detached writer for the GC after every non-sync migration.
+	if savedBufDst != nil {
+		t.mu.serverConn.msgBuf.bufDst = savedBufDst
+	}
 
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
 		t.mu.scp.src = t.mu.serverConn
-		// Transfer the write buffer to the new server conn's msgBuf.
-		if savedBufDst != nil {
-			t.mu.serverConn.msgBuf.bufDst = savedBufDst
-		}
 	} else {
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
@@ -697,7 +699,7 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 	// Enable write batching for the server-to-client direction.
 	// Result sets flow s2c and generate many small write syscalls;
 	// bufDst accumulates them and flushes when the read buffer drains.
-	if name == pipeServerToClient {
+	if name == pipeServerToClient && src.msgBuf.bufDst == nil {
 		src.msgBuf.bufDst = bufio.NewWriterSize(dst.Conn, writeBufLen)
 	}
 	return p

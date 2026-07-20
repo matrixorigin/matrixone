@@ -1454,6 +1454,238 @@ func TestClientConnHandshakeTimeout(t *testing.T) {
 	})
 }
 
+func TestClientConnHandshakeContextLifecycle(t *testing.T) {
+	t.Run("admission precedes the first login read", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+			headroomBytes: 1,
+			initialBytes:  1,
+		})
+		occupied, err := limiter.acquire(context.Background(), 1)
+		require.NoError(t, err)
+		defer occupied.release()
+		client.protocolMemoryLimiter = limiter
+
+		buffered := client.conn.(goetty.BufferedIOSession)
+		login := makeClientHandshakeResp()
+		_, err = buffered.InBuf().Write(login)
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		lease, err := client.handleHandshakeResp(ctx)
+		lease.release()
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, client.handshakePack,
+			"no decoded or retained login may exist before admission")
+		require.Equal(t, len(login), buffered.InBuf().Readable(),
+			"login input must remain untouched until transient memory is admitted")
+		require.Equal(t, int64(1), limiter.used.Load())
+	})
+
+	t.Run("near-limit concurrent logins materialize only after admission", func(t *testing.T) {
+		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+			headroomBytes: 1,
+			initialBytes:  1,
+		})
+		clients := make([]*clientConn, 2)
+		cancels := make([]context.CancelFunc, 2)
+		for i := range clients {
+			cc, cleanup := createNewClientConn(t)
+			defer cleanup()
+			clients[i] = cc.(*clientConn)
+			clients[i].protocolMemoryLimiter = limiter
+			input := clients[i].conn.(goetty.BufferedIOSession).InBuf()
+			_, err := input.Write(makeClientHandshakeResp())
+			require.NoError(t, err)
+		}
+
+		type handshakeResult struct {
+			index int
+			lease *protocolMemoryLease
+			err   error
+		}
+		start := make(chan struct{})
+		results := make(chan handshakeResult, len(clients))
+		for i, client := range clients {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancels[i] = cancel
+			go func(index int, client *clientConn) {
+				<-start
+				lease, err := client.handleHandshakeResp(ctx)
+				results <- handshakeResult{index: index, lease: lease, err: err}
+			}(i, client)
+		}
+		defer func() {
+			for _, cancel := range cancels {
+				cancel()
+			}
+		}()
+		close(start)
+
+		var first handshakeResult
+		select {
+		case first = <-results:
+			require.NoError(t, first.err)
+		case <-time.After(time.Second):
+			t.Fatal("first admitted login did not complete")
+		}
+		loser := 1 - first.index
+		require.NotNil(t, clients[first.index].handshakePack)
+		require.Nil(t, clients[loser].handshakePack,
+			"the waiter must not decode a login before transient admission")
+		require.Positive(t,
+			clients[loser].conn.(goetty.BufferedIOSession).InBuf().Readable(),
+			"the waiter's input backing must remain untouched")
+		require.Equal(t, int64(1), limiter.used.Load())
+
+		first.lease.release()
+		select {
+		case second := <-results:
+			require.NoError(t, second.err)
+			require.Equal(t, loser, second.index)
+			second.lease.release()
+		case <-time.After(time.Second):
+			t.Fatal("waiting login did not proceed after admission release")
+		}
+		require.Zero(t, limiter.used.Load())
+	})
+
+	t.Run("cancel interrupts a silent client and releases admission", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+			headroomBytes: 1,
+			initialBytes:  1,
+		})
+		client.protocolMemoryLimiter = limiter
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		client.conn.UseConn(local)
+		client.mysqlProto.UseConn(local)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			lease, err := client.handleHandshakeResp(ctx)
+			lease.release()
+			result <- err
+		}()
+		require.Eventually(t, func() bool {
+			return limiter.used.Load() == 1
+		}, time.Second, time.Millisecond, "handshake did not acquire transient admission")
+		cancel()
+
+		select {
+		case err := <-result:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("caller cancellation did not interrupt the client read")
+		}
+		require.Zero(t, limiter.used.Load())
+	})
+
+	t.Run("cancel interrupts TLS negotiation and releases admission", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+			headroomBytes: 1,
+			initialBytes:  1,
+		})
+		client.protocolMemoryLimiter = limiter
+		cert, err := certGen(t.TempDir())
+		require.NoError(t, err)
+		client.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.Background(), cert.caFile, cert.certFile, cert.keyFile)
+		require.NoError(t, err)
+		client.tlsConnectTimeout = time.Second
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		client.conn.UseConn(local)
+		client.mysqlProto.UseConn(local)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			lease, err := client.handleHandshakeResp(ctx)
+			lease.release()
+			result <- err
+		}()
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := remote.Write(makeClientSSLRequest(
+				1,
+				frontend.CLIENT_PROTOCOL_41|
+					frontend.CLIENT_SECURE_CONNECTION|
+					frontend.CLIENT_SSL,
+			))
+			if err == nil {
+				// net.Pipe completes this write only after tls.Conn has started
+				// reading its record header, making the cancellation boundary exact.
+				_, err = remote.Write([]byte{0x16})
+			}
+			writeDone <- err
+		}()
+		require.NoError(t, <-writeDone)
+		cancel()
+
+		select {
+		case err := <-result:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("caller cancellation did not interrupt TLS negotiation")
+		}
+		require.Zero(t, limiter.used.Load())
+	})
+
+	t.Run("cancel after handoff cannot close the tunnel transport", func(t *testing.T) {
+		cc, cleanup := createNewClientConn(t)
+		defer cleanup()
+		client := cc.(*clientConn)
+		limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+			headroomBytes: 1,
+			initialBytes:  1,
+		})
+		client.protocolMemoryLimiter = limiter
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		client.conn.UseConn(local)
+		client.mysqlProto.UseConn(local)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := remote.Write(makeClientHandshakeResp())
+			writeDone <- err
+		}()
+		lease, err := client.handleHandshakeResp(ctx)
+		require.NoError(t, err)
+		require.NoError(t, <-writeDone)
+		cancel()
+
+		payload := []byte("tunnel-still-open")
+		writeDone = make(chan error, 1)
+		go func() {
+			_, err := remote.Write(payload)
+			writeDone <- err
+		}()
+		require.NoError(t, client.RawConn().SetReadDeadline(time.Now().Add(time.Second)))
+		got := make([]byte, len(payload))
+		_, err = io.ReadFull(client.RawConn(), got)
+		require.NoError(t, err)
+		require.Equal(t, payload, got)
+		require.NoError(t, <-writeDone)
+		lease.release()
+		require.Zero(t, limiter.used.Load())
+	})
+}
+
 func TestOversizedHandshakeErrorPreservesPacketSequence(t *testing.T) {
 	for _, sequenceID := range []uint8{1, 2} {
 		t.Run(fmt.Sprintf("sequence-%d", sequenceID), func(t *testing.T) {

@@ -340,11 +340,11 @@ func operationContextCause(ctx context.Context) error {
 }
 
 // interruptConnectionOnDone makes cancellation a terminal event for a
-// phase-owned backend transport. These connections are sacrificial until the
-// phase succeeds, so closing is both the strongest I/O interrupt and avoids a
-// wrapper or deadline check in the steady tunnel hot path. The returned join
-// function prevents a late cancellation callback from closing a connection
-// after ownership has been handed off.
+// phase-owned transport. Client and backend handshake connections are
+// sacrificial until their phase succeeds, so closing is both the strongest I/O
+// interrupt and avoids a wrapper or deadline check in the steady tunnel hot
+// path. The returned join function prevents a late cancellation callback from
+// closing a connection after ownership has been handed off.
 func interruptConnectionOnDone(ctx context.Context, conn net.Conn) func() {
 	if ctx == nil || conn == nil {
 		return func() {}

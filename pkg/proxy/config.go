@@ -60,10 +60,10 @@ var (
 	// all capacity while still allowing large connection pools.
 	defaultMaxConnections          = 10000
 	defaultMaxConnectionsPerTenant = 8000
-	// Protocol memory covers the shared allocator used by client and backend
-	// MySQL protocol sessions. Login packets are retained for migration, so
-	// their independent per-connection bound is intentionally small.
-	defaultProtocolMemoryLimit        = toml.ByteSize(1 << 30)
+	// Protocol memory covers both the shared allocator used by client/backend
+	// protocol sessions and the Go-heap buffers retained by established tunnels.
+	// The default preserves the 10K connection budget after accounting for both.
+	defaultProtocolMemoryLimit        = toml.ByteSize(2 << 30)
 	defaultClientHandshakePacketLimit = toml.ByteSize(64 << 10)
 	// Proxy only consumes the address block; leave bounded room for common TLVs
 	// without coupling this unauthenticated framing limit to the MySQL login.
@@ -148,8 +148,8 @@ type Config struct {
 	// It must not exceed MaxConnections.
 	MaxConnectionsPerTenant int `toml:"max-connections-per-tenant" user_setting:"advanced"`
 	// ProtocolMemoryLimit bounds retained and phase-overlap MySQL protocol
-	// memory, including shared session buffers, pre-auth framing and login
-	// packets retained for connection migration.
+	// memory, including shared session buffers, tunnel message/write buffers,
+	// pre-auth framing and login packets retained for connection migration.
 	ProtocolMemoryLimit toml.ByteSize `toml:"protocol-memory-limit" user_setting:"advanced"`
 	// ClientHandshakePacketLimit bounds the login packet retained for routing
 	// and migration for the lifetime of a client connection.

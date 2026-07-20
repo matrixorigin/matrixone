@@ -89,12 +89,8 @@ func newProxyHandler(
 	if err != nil {
 		return nil, err
 	}
-	protocolMemoryLimit := cfg.ProtocolMemoryLimit
-	if protocolMemoryLimit == 0 {
-		protocolMemoryLimit = defaultProtocolMemoryLimit
-	}
 	frontendParameters := &moconfig.FrontendParameters{
-		GuestMmuLimitation: int64(protocolMemoryLimit),
+		GuestMmuLimitation: int64(protocolMemoryLimiter.budget.managedBytes),
 	}
 	sessionAllocator := frontend.NewSessionAllocator(
 		moconfig.NewParameterUnit(frontendParameters, nil, nil, nil),

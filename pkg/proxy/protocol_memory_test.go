@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
@@ -32,8 +33,9 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		backend := uint64(proxyIOSessionBufferSize + 2*proxyBackendPacketLimit)
 		transient := backend + backend
 		steady := uint64(connections * (2*proxyIOSessionBufferSize +
-			64 + ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
-			proxyBackendRetainedResponseLimit))
+			frontend.PacketHeaderLength + 64 + ProxyHeaderLength +
+			int(defaultProxyProtocolBodyLimit) + proxyBackendRetainedResponseLimit +
+			proxyTunnelBufferSize))
 		cfg := Config{
 			MaxConnections:             connections,
 			ProtocolMemoryLimit:        toml.ByteSize(steady + transient - 1),
@@ -46,6 +48,8 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		budget, err := calculateProtocolMemoryBudget(&cfg)
 		require.NoError(t, err)
 		require.Equal(t, steady, budget.steadyBytes)
+		require.Equal(t, uint64(cfg.ProtocolMemoryLimit)-uint64(connections*proxyTunnelBufferSize),
+			budget.managedBytes)
 		require.Equal(t, transient, budget.transientBytes)
 		require.Equal(t, transient, budget.headroomBytes)
 		require.Equal(t, backend, budget.backgroundBytes)
@@ -55,9 +59,9 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 
 	t.Run("large login includes rounded backend dynamic write", func(t *testing.T) {
 		const handshakeLimit = 64 << 10
-		steady := uint64(2*proxyIOSessionBufferSize + handshakeLimit +
+		steady := uint64(2*proxyIOSessionBufferSize + frontend.PacketHeaderLength + handshakeLimit +
 			ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
-			proxyBackendRetainedResponseLimit)
+			proxyBackendRetainedResponseLimit + proxyTunnelBufferSize)
 		initial := uint64(3 * handshakeLimit)
 		backend := uint64(proxyIOSessionBufferSize + 3*handshakeLimit)
 		transient := backend + backend

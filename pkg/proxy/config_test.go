@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
@@ -49,10 +50,12 @@ func TestFillDefault(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	steadyBytes := toml.ByteSize(10 * (2*proxyIOSessionBufferSize + 64 +
+	steadyBytes := toml.ByteSize(10 * (2*proxyIOSessionBufferSize +
+		frontend.PacketHeaderLength + 64 +
 		ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
-		proxyBackendRetainedResponseLimit))
-	transientBytes := toml.ByteSize(2 * (proxyIOSessionBufferSize + 2*proxyBackendPacketLimit))
+		proxyBackendRetainedResponseLimit + proxyTunnelBufferSize))
+	transientBytes := toml.ByteSize(2 * (proxyIOSessionBufferSize +
+		2*proxyBackendPacketLimit))
 	tests := []struct {
 		name    string
 		cfg     Config
@@ -151,7 +154,7 @@ func TestValidate(t *testing.T) {
 		cfg: Config{
 			MaxConnections:             1,
 			MaxConnectionsPerTenant:    1,
-			ProtocolMemoryLimit:        80 << 20,
+			ProtocolMemoryLimit:        96 << 20,
 			ClientHandshakePacketLimit: maximumClientHandshakePacketLimit,
 		},
 	}, {
