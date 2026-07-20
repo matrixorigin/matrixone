@@ -595,9 +595,11 @@ func TestBindProjectionListWithSampleFunc(t *testing.T) {
 
 func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
-		want planpb.Type
+		name         string
+		sql          string
+		want         planpb.Type
+		checkFlatten bool
+		paramCount   int
 	}{
 		{
 			name: "update decimal assignment",
@@ -619,13 +621,44 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			name: "on duplicate key update scalar subquery",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = (select ? + ?)",
-			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
 		},
 		{
 			name: "on duplicate key update scalar subquery with from",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = (select ? + ? from nation limit 1)",
-			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update scalar subquery inside arithmetic",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = (select ? + ?) + 0",
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update scalar subquery inside unary arithmetic",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = -(select ? + ?)",
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update scalar subquery inside mod",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = mod((select ? + ?), 1)",
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update multiple numeric assignments",
+			sql: "insert into constraint_test.emp (empno, sal, comm) values (1, 1, 1) " +
+				"on duplicate key update sal = (select ? + ?) + 0, comm = ? + ?",
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+			paramCount:   4,
 		},
 		{
 			name: "update from derived source",
@@ -645,7 +678,11 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			require.NoError(t, err)
 
 			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
-			require.Len(t, paramTypes, 2)
+			paramCount := test.paramCount
+			if paramCount == 0 {
+				paramCount = 2
+			}
+			require.Len(t, paramTypes, paramCount)
 			for _, typ := range paramTypes {
 				require.Equal(t, test.want.Id, typ.Id)
 				if test.want.Id == int32(types.T_decimal64) {
@@ -653,8 +690,7 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 					require.Equal(t, test.want.Scale, typ.Scale)
 				}
 			}
-			if test.name == "on duplicate key update scalar subquery" ||
-				test.name == "on duplicate key update scalar subquery with from" {
+			if test.checkFlatten {
 				dedupCount := 0
 				updateExprCount := 0
 				for _, node := range queryPlan.GetQuery().Nodes {
