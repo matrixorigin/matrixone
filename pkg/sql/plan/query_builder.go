@@ -3142,8 +3142,12 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
+	targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]
 	initCtx := NewBindContext(builder, ctx)
 	initCtx.cteName = table
+	if len(targets) > 0 {
+		initCtx.numericProjectionTypes = targets
+	}
 	initCtx.recordCteInBinding(table,
 		CteBindState{
 			cteBindType:   CteBindTypeInitStmt,
@@ -3172,6 +3176,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		subCtx := NewBindContext(builder, ctx)
 		subCtx.cteName = table
 		subCtx.sinkTag = initCtx.sinkTag
+		if len(targets) > 0 {
+			subCtx.numericProjectionTypes = targets
+		}
 		//3.0 add initial statement as table binding into the subCtx of recursive part
 		err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
 		if err != nil {

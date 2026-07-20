@@ -114,6 +114,24 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "scalar subquery inside arithmetic",
+			sql:        "insert into constraint_test.emp (sal) select (select ? + ?) + 0",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "scalar subquery inside unary arithmetic",
+			sql:        "insert into constraint_test.emp (sal) select -(select ? + ?)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "scalar subquery inside mod",
+			sql:        "insert into constraint_test.emp (sal) select mod((select ? + ?), 1)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name:       "derived table passthrough",
 			sql:        "insert into constraint_test.emp (sal) select x from (select ? + ? as x) d",
 			want:       types.T_decimal64,
@@ -176,6 +194,20 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
+		{
+			name: "recursive cte seed target",
+			sql: "insert into constraint_test.emp (sal) with recursive c(x) as " +
+				"(select ? + ? union all select x from c where x < 1) select x from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "recursive cte member target",
+			sql: "insert into constraint_test.emp (sal) with recursive c(x) as " +
+				"(select 0 union all select ? + ? from c where x < 1) select x from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
 	}
 
 	for _, test := range tests {
@@ -197,6 +229,28 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPreparedNumericContextDoesNotPropagateThroughExistsSubquery(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) select (select ? + ? where exists(select ? + ?))",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Len(t, paramTypes, 4)
+	for _, pos := range []int32{1, 2} {
+		require.Equal(t, planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}, paramTypes[pos])
+	}
+	for _, pos := range []int32{3, 4} {
+		require.Equal(t, int32(types.T_float64), paramTypes[pos].Id)
 	}
 }
 
