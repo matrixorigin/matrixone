@@ -388,6 +388,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
 				return nil, nil
 			}
+			trimmed := strings.TrimSpace(def.OriginString)
+			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+				return functionUtil.QuickStrToBytes(trimmed), nil
+			}
 
 			fStr := formatStr(def.OriginString)
 			if len(fStr) == 0 {
@@ -583,8 +587,12 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsMySQLString() {
@@ -607,8 +615,12 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsMySQLString() {
@@ -631,8 +643,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsDecimal() {
@@ -655,8 +671,12 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsDecimal() {
@@ -679,8 +699,12 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid == types.T_datetime {
@@ -703,8 +727,12 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||

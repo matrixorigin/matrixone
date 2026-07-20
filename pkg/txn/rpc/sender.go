@@ -136,6 +136,8 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 	}
 
 	sr.reset(requests)
+	commitResponsesPending := 0
+	var commitTxnID []byte
 	for idx := range requests {
 		tn := requests[idx].GetTargetTN()
 		st := sr.getStream(tn.ShardID)
@@ -152,7 +154,17 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		requests[idx].RequestID = st.ID()
 		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
+			if requests[idx].Method == txn.TxnMethod_Commit {
+				// Stream.Send waits for the backend write/flush completion. A
+				// failure here can therefore be reported after part or all of the
+				// Commit reached TN; it is not proof that Commit was not sent.
+				return nil, newTxnUnknownError(ctx, requests[idx].Txn.ID)
+			}
 			return nil, err
+		}
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending++
+			commitTxnID = requests[idx].Txn.ID
 		}
 	}
 
@@ -161,17 +173,35 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		c, err := st.Receive()
 		if err != nil {
 			sr.Release()
+			if commitResponsesPending > 0 {
+				// Commit was accepted by the stream, so a response-path error
+				// cannot prove whether TN applied it.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, err
 		}
 		v, ok := <-c
-		if !ok {
+		if !ok || v == nil {
+			sr.Release()
+			if commitResponsesPending > 0 {
+				// A closed stream after Commit was sent has the same unknown
+				// outcome as a Receive error.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, moerr.NewStreamClosedNoCtx()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
 		s.releaseResponse(resp)
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending--
+		}
 	}
 	return sr, nil
+}
+
+func newTxnUnknownError(ctx context.Context, txnID []byte) error {
+	return moerr.NewTxnUnknown(ctx, hex.EncodeToString(txnID))
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
@@ -235,17 +265,19 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	defer f.Close()
 	v, err := f.Get()
 	if err != nil {
+		// Once morpc accepted a Commit and returned a Future, a transport or
+		// response-wait error cannot prove whether TN applied it. This includes a
+		// context deadline after the request was written, not only EOF/reset.
+		if request.Method == txn.TxnMethod_Commit {
+			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
+		}
 		// if the error is io.EOF or "connection is reset by peer",
 		// means the connection to TN node is ended, but no response
 		// is returned from TN txn service. In this case, the result
 		// of the txn status is unknown.
 		if errors.Is(err, io.EOF) ||
 			strings.Contains(err.Error(), "connection reset by peer") {
-			return txn.TxnResponse{},
-				moerr.NewTxnUnknown(
-					ctx,
-					hex.EncodeToString(request.Txn.ID),
-				)
+			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
 		}
 		return txn.TxnResponse{}, err
 	}

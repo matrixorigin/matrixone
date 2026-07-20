@@ -16,11 +16,12 @@ package client
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -271,47 +272,54 @@ type txnOperator struct {
 	clock           clock.Clock
 	lockService     lockservice.LockService
 	timestampWaiter TimestampWaiter
+	terminalCall    atomic.Uint32
 
 	mu struct {
 		sync.RWMutex
 		waitActive             bool
 		closed                 bool
+		restarting             bool
+		terminalAction         txnTerminalAction
+		terminalOutcome        txnTerminalOutcome
 		txn                    txn.TxnMeta
 		cachedWrites           map[uint64][]txn.TxnRequest
 		lockTables             []lock.LockTable
-		callbacks              map[EventType][]TxnEventCallback
+		callbacks              *txnEventCallbacks
 		retry                  bool
 		lockSeq                uint64
 		waitLocks              map[uint64]Lock
 		lastLockTableBindCheck time.Time
 		lockTableBindChanged   bool
-		//read-only txn operators for supporting snapshot read feature.
-		children []*txnOperator
-		flag     uint32
+		flag                   uint32
 	}
 
 	reset struct {
-		txnID                []byte
-		parent               atomic.Pointer[txnOperator]
-		waiter               *waiter
-		waitActiveCost       time.Duration
-		sequence             atomic.Uint64
-		commitSeq            uint64
-		createAt             time.Time
-		commitAt             time.Time
-		createTs             timestamp.Timestamp
-		cannotCleanWorkspace bool
-		workspace            Workspace
-		commitCounter        counter
-		rollbackCounter      counter
-		runSqlCounter        counter
-		runSQLTracker        runSQLTracker
-		incrStmtCounter      counter
-		rollbackStmtCounter  counter
-		fprints              *footPrints
-		runningSQL           atomic.Bool
-		commitErr            error
-		cache                sync.Map
+		txnID                              []byte
+		parent                             atomic.Pointer[txnOperator]
+		waiter                             *activeTxnWaiter
+		waitActiveCost                     time.Duration
+		sequence                           atomic.Uint64
+		commitSeq                          uint64
+		createAt                           time.Time
+		commitAt                           time.Time
+		createTs                           timestamp.Timestamp
+		cannotCleanWorkspace               atomic.Bool
+		workspace                          Workspace
+		commitCounter                      counter
+		rollbackCounter                    counter
+		runSQLTracker                      runSQLTracker
+		incrStmtCounter                    counter
+		rollbackStmtCounter                counter
+		fprints                            *footPrints
+		commitErr                          error
+		commitNeedsResolution              bool
+		commitDeadline                     time.Time
+		commitSequence                     uint64
+		unknownCommitResolutionTransferred bool
+		internalUnknownCommitAdmissionHeld bool
+		tryAcquireUnknownCommit            func() bool
+		unknownCommitResolved              func()
+		cache                              sync.Map
 	}
 
 	opts struct {
@@ -322,6 +330,12 @@ type txnOperator struct {
 	}
 }
 
+// commitDeadlineFallback bounds only TN admission for callers that do not
+// provide a context deadline. It does not alter the caller context or cancel a
+// normal Commit. The finite value lets unknown-commit fencing be collected
+// without keeping one permanent tombstone per transaction.
+const commitDeadlineFallback = 24 * time.Hour
+
 type runSQLTracker struct {
 	// Tracks running SQL by token so callers can cancel and wait during retry/rollback/commit.
 	// Usage: EnterRunSqlWithTokenAndSQL registers a token+cancel; ExitRunSqlWithToken unregisters it;
@@ -329,8 +343,46 @@ type runSQLTracker struct {
 	mu           sync.Mutex
 	activeTokens map[uint64]runSQLInfo
 	nextID       uint64
+	enterCount   uint64
+	exitCount    uint64
 	cond         *sync.Cond
+	sealed       atomic.Bool
+	onDrained    func()
 }
+
+// closeAwareTimestampWaiter is an optional fast path for waiters that can
+// observe txn-client shutdown without allocating a derived context per New.
+type closeAwareTimestampWaiter interface {
+	GetTimestampWithClose(context.Context, timestamp.Timestamp, <-chan struct{}) (timestamp.Timestamp, error)
+}
+
+type txnTerminalAction uint8
+
+const (
+	txnTerminalActionNone txnTerminalAction = iota
+	txnTerminalActionRollbackAfterRunningSQL
+)
+
+// txnTerminalOutcome records whether the previous generation reached a state
+// that is safe to reuse. Completion of a terminal function or callback alone
+// is not sufficient: an unresolved workspace, TN, or lock responsibility must
+// keep RestartTxn sealed.
+type txnTerminalOutcome uint8
+
+const (
+	txnTerminalOutcomeNone txnTerminalOutcome = iota
+	txnTerminalOutcomePending
+	txnTerminalOutcomeSucceeded
+	txnTerminalOutcomeFailed
+)
+
+type txnTerminalCallState uint32
+
+const (
+	txnTerminalCallIdle txnTerminalCallState = iota
+	txnTerminalCallActive
+	txnTerminalCallSealed
+)
 
 type runSQLInfo struct {
 	cancel context.CancelFunc
@@ -347,14 +399,27 @@ func (t *runSQLTracker) ensureInitLocked() {
 	}
 }
 
-func (t *runSQLTracker) reset() {
+func (t *runSQLTracker) reset(sealed bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.activeTokens != nil {
 		for k := range t.activeTokens {
 			delete(t.activeTokens, k)
 		}
 	}
-	t.nextID = 0
+	// Token IDs span the operator lifetime. Reusing them across RestartTxn
+	// would let a stale old-generation Exit alias a current token.
+	t.enterCount = 0
+	t.exitCount = 0
+	t.sealed.Store(sealed)
+	t.onDrained = nil
 	// Keep cond, no need to recreate
+}
+
+func (t *runSQLTracker) open() {
+	t.mu.Lock()
+	t.sealed.Store(false)
+	t.mu.Unlock()
 }
 
 func (t *runSQLTracker) notifyLocked() {
@@ -362,9 +427,31 @@ func (t *runSQLTracker) notifyLocked() {
 }
 
 func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string) uint64 {
+	if t.sealed.Load() {
+		if cancel != nil {
+			cancel()
+		}
+		return 0
+	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.ensureInitLocked()
+	if t.sealed.Load() {
+		t.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return 0
+	}
+	if t.nextID == ^uint64(0) {
+		// Never wrap and reuse an operator-lifetime identity. Exhaustion is
+		// practically unreachable, but failing closed preserves generation
+		// isolation for stale tokens.
+		t.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return 0
+	}
 	t.nextID++
 	token := t.nextID
 	t.activeTokens[token] = runSQLInfo{
@@ -372,16 +459,119 @@ func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string)
 		sql:    trimSQLForTracker(sql),
 		start:  time.Now(),
 	}
+	t.enterCount++
 	t.notifyLocked()
+	t.mu.Unlock()
 	return token
 }
 
 func (t *runSQLTracker) exitToken(token uint64) {
+	if token == 0 {
+		return
+	}
+	t.mu.Lock()
+	t.ensureInitLocked()
+	if _, ok := t.activeTokens[token]; !ok {
+		t.mu.Unlock()
+		return
+	}
+	t.exitCount++
+	delete(t.activeTokens, token)
+	var callback func()
+	if t.sealed.Load() && len(t.activeTokens) == 0 {
+		callback = t.onDrained
+		t.onDrained = nil
+	}
+	t.notifyLocked()
+	t.mu.Unlock()
+
+	if callback != nil {
+		go callback()
+	}
+}
+
+func (t *runSQLTracker) active() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.ensureInitLocked()
-	delete(t.activeTokens, token)
-	t.notifyLocked()
+	return len(t.activeTokens) != 0
+}
+
+func (t *runSQLTracker) counterString() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return fmt.Sprintf("enter:%d, exit:%d", t.enterCount, t.exitCount)
+}
+
+// sealAndRunWhenDrained permanently rejects new SQL tokens and runs fn once
+// every previously registered token has exited. Sealing and registration share
+// one lock, so cleanup cannot race a new SQL statement into the workspace.
+func (t *runSQLTracker) sealAndRunWhenDrained(fn func()) {
+	if fn == nil {
+		return
+	}
+
+	t.mu.Lock()
+	if t.sealed.Load() && t.onDrained != nil {
+		t.mu.Unlock()
+		return
+	}
+	t.sealed.Store(true)
+	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
+	for _, info := range t.activeTokens {
+		if info.cancel != nil {
+			cancels = append(cancels, info.cancel)
+		}
+	}
+	if len(t.activeTokens) == 0 {
+		t.mu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
+		go fn()
+		return
+	}
+	t.onDrained = fn
+	t.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (t *runSQLTracker) sealAndCancelAllExcept(skipToken uint64) {
+	t.mu.Lock()
+	t.sealed.Store(true)
+	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
+	for token, info := range t.activeTokens {
+		if token == skipToken {
+			continue
+		}
+		if info.cancel != nil {
+			cancels = append(cancels, info.cancel)
+		}
+	}
+	t.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (t *runSQLTracker) seal() {
+	t.mu.Lock()
+	t.sealed.Store(true)
+	t.mu.Unlock()
+}
+
+// sealForRestart prevents a restarted operator from accepting an old SQL
+// registration after its tracker has been checked. Restart is only safe after
+// every SQL token from the previous transaction has exited.
+func (t *runSQLTracker) sealForRestart() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.activeTokens) != 0 {
+		return false
+	}
+	t.sealed.Store(true)
+	return true
 }
 
 func (t *runSQLTracker) cancelAllExcept(keepToken uint64, skipToken uint64) {
@@ -469,8 +659,8 @@ func (t *runSQLTracker) waitingInfo(keepToken uint64, skipToken uint64) []string
 			infos = append(infos, waitInfo{token: token, sql: info.sql, start: info.start})
 		}
 	}
-	sort.Slice(infos, func(i, j int) bool {
-		return infos[i].token < infos[j].token
+	slices.SortFunc(infos, func(a, b waitInfo) int {
+		return cmp.Compare(a.token, b.token)
 	})
 	sqls := make([]string, 0, len(infos))
 	for _, info := range infos {
@@ -505,11 +695,26 @@ func (tc *txnOperator) init(
 	txnMeta txn.TxnMeta,
 	options ...TxnOption,
 ) {
+	tc.initWithRunSQLGate(txnMeta, false, options...)
+}
+
+func (tc *txnOperator) initForRestart(
+	txnMeta txn.TxnMeta,
+	options ...TxnOption,
+) {
+	tc.initWithRunSQLGate(txnMeta, true, options...)
+}
+
+func (tc *txnOperator) initWithRunSQLGate(
+	txnMeta txn.TxnMeta,
+	sealRunSQL bool,
+	options ...TxnOption,
+) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	tc.initReset()
-	tc.initProtectedFields()
+	tc.initReset(sealRunSQL)
+	tc.initProtectedFields(sealRunSQL)
 
 	tc.mu.txn = txnMeta
 	tc.reset.txnID = txnMeta.ID
@@ -528,7 +733,7 @@ func (tc *txnOperator) init(
 	}
 }
 
-func (tc *txnOperator) initReset() {
+func (tc *txnOperator) initReset(sealRunSQL bool) {
 	tc.reset.txnID = nil
 	tc.reset.parent.Store(nil)
 	tc.reset.waiter = nil
@@ -538,40 +743,49 @@ func (tc *txnOperator) initReset() {
 	tc.reset.createAt = time.Time{}
 	tc.reset.commitAt = time.Time{}
 	tc.reset.createTs = timestamp.Timestamp{}
-	tc.reset.cannotCleanWorkspace = false
+	tc.reset.cannotCleanWorkspace.Store(false)
 	tc.reset.workspace = nil
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
-	tc.reset.runSqlCounter = counter{}
-	tc.reset.runSQLTracker.reset()
+	tc.reset.runSQLTracker.reset(sealRunSQL)
 	tc.reset.incrStmtCounter = counter{}
 	tc.reset.rollbackStmtCounter = counter{}
 	// fprints is external pointer, don't reset here
-	tc.reset.runningSQL.Store(false)
 	tc.reset.commitErr = nil
+	tc.reset.commitNeedsResolution = false
+	tc.reset.commitDeadline = time.Time{}
+	tc.reset.commitSequence = 0
+	tc.reset.unknownCommitResolutionTransferred = false
+	tc.reset.internalUnknownCommitAdmissionHeld = false
+	tc.reset.tryAcquireUnknownCommit = nil
+	tc.reset.unknownCommitResolved = nil
 	tc.reset.cache = sync.Map{}
 }
 
-func (tc *txnOperator) initProtectedFields() {
+func (tc *txnOperator) initProtectedFields(sealTerminalCall bool) {
 	tc.mu.waitActive = false
 	tc.mu.closed = false
+	tc.mu.restarting = false
+	terminalState := txnTerminalCallIdle
+	if sealTerminalCall {
+		terminalState = txnTerminalCallSealed
+	}
+	tc.terminalCall.Store(uint32(terminalState))
+	tc.mu.terminalAction = txnTerminalActionNone
+	tc.mu.terminalOutcome = txnTerminalOutcomeNone
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
+	tc.mu.flag = 0
 	tc.mu.txn = txn.TxnMeta{}
 	tc.mu.lastLockTableBindCheck = time.Time{}
 	tc.mu.lockTableBindChanged = false
 	tc.mu.lockTables = tc.mu.lockTables[:0]
-	tc.mu.children = tc.mu.children[:0]
 	if tc.mu.cachedWrites != nil {
 		for k := range tc.mu.cachedWrites {
 			delete(tc.mu.cachedWrites, k)
 		}
 	}
-	if tc.mu.callbacks != nil {
-		for k, v := range tc.mu.callbacks {
-			tc.mu.callbacks[k] = v[:0]
-		}
-	}
+	tc.mu.callbacks = nil
 	if tc.mu.waitLocks != nil {
 		for k := range tc.mu.waitLocks {
 			delete(tc.mu.waitLocks, k)
@@ -597,10 +811,6 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.logger = tc.logger
 	op.sender = tc.sender
 	op.timestampWaiter = tc.timestampWaiter
-
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.mu.children = append(tc.mu.children, op)
 
 	op.reset.parent.Store(tc)
 	return op
@@ -635,7 +845,6 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 	}
 
 	defer func() {
-		tc.reset.waiter.close()
 		tc.setWaitActive(false)
 	}()
 
@@ -666,11 +875,18 @@ func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
 }
 
 func (tc *txnOperator) notifyActive() {
+	tc.completeActiveWait(nil)
+}
+
+func (tc *txnOperator) failActiveWait(err error) {
+	tc.completeActiveWait(err)
+}
+
+func (tc *txnOperator) completeActiveWait(err error) {
 	if tc.reset.waiter == nil {
 		panic("BUG: notify active on non-waiter txn operator")
 	}
-	defer tc.reset.waiter.close()
-	tc.reset.waiter.notify()
+	tc.reset.waiter.complete(err)
 }
 
 func (tc *txnOperator) AddWorkspace(workspace Workspace) {
@@ -743,6 +959,22 @@ func (tc *txnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 func (tc *txnOperator) UpdateSnapshot(
 	ctx context.Context,
 	ts timestamp.Timestamp) error {
+	return tc.updateSnapshot(ctx, ts, nil)
+}
+
+func (tc *txnOperator) updateSnapshotWithClose(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) error {
+	return tc.updateSnapshot(ctx, ts, closeC)
+}
+
+func (tc *txnOperator) updateSnapshot(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
@@ -760,9 +992,11 @@ func (tc *txnOperator) UpdateSnapshot(
 		UpdateSnapshotEvent,
 		func() error {
 			var err error
-			tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(
-				ctx,
-				ts)
+			if waiter, ok := tc.timestampWaiter.(closeAwareTimestampWaiter); ok {
+				tc.mu.txn.SnapshotTS, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
+			} else {
+				tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
+			}
 			return err
 		},
 		true)
@@ -830,7 +1064,7 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 
 	requests = tc.maybeInsertCachedWrites(requests, false)
 	result, err := tc.doSend(ctx, requests, false)
-	return tc.trimResponses(tc.handleError(ctx, result, err))
+	return tc.trimResponses(tc.handleError(ctx, result, err, false))
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
@@ -838,17 +1072,55 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 	return tc.doWrite(ctx, requests, false)
 }
 
-func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+func (tc *txnOperator) WriteAndCommit(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+) (resp *rpc.SendResult, err error) {
+	if err := tc.claimTerminalCall(); err != nil {
+		return nil, err
+	}
+	defer tc.releaseTerminalCall()
+	completedNormally := false
+	defer func() {
+		tc.publishTerminalOutcome(err, completedNormally)
+	}()
+
+	resp, err = tc.writeAndCommitOwned(ctx, requests)
+	completedNormally = true
+	return
+}
+
+func (tc *txnOperator) writeAndCommitOwned(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+) (*rpc.SendResult, error) {
+	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<write-and-commit>"); err != nil {
+		tc.scheduleRollbackAfterRunningSQL(err)
+		return nil, err
+	}
 	util.LogTxnWrite(tc.logger, tc.getTxnMeta(false))
 	util.LogTxnCommit(tc.logger, tc.getTxnMeta(false))
 	return tc.doWrite(ctx, requests, true)
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<commit>"); err != nil {
-		// Commit can be called with an already-canceled context while SQL is still running.
-		// The commit has not been sent yet, so close locally as aborted to release active/leak state.
-		tc.closeAsAborted(ctx, err)
+	if err := tc.claimTerminalCall(); err != nil {
+		return err
+	}
+	defer tc.releaseTerminalCall()
+	completedNormally := false
+	defer func() {
+		tc.publishTerminalOutcome(err, completedNormally)
+	}()
+
+	err = tc.commitOwned(ctx)
+	completedNormally = true
+	return
+}
+
+func (tc *txnOperator) commitOwned(ctx context.Context) (err error) {
+	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<commit>"); err != nil {
+		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
 	}
 
@@ -899,23 +1171,62 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
-	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<rollback>"); err != nil {
-		// Rollback can be called from connection cleanup with an already-canceled context.
-		// Still close the operator locally so txnClient active/leak-check state is released.
-		tc.closeAsAborted(ctx, err)
+	if err := tc.claimTerminalCall(); err != nil {
 		return err
 	}
+	defer tc.releaseTerminalCall()
 
+	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<rollback>"); err != nil {
+		tc.scheduleRollbackAfterRunningSQL(err)
+		return err
+	}
+	return tc.rollback(ctx)
+}
+
+// rollback is the cleanup implementation for a terminal-call owner. It is
+// intentionally private: deferred running-SQL cleanup and commit-failure
+// cleanup already own the terminal transition and must not re-enter the public
+// ownership gate.
+func (tc *txnOperator) rollback(ctx context.Context) (err error) {
+	tc.mu.Lock()
+	ownsTerminalOutcome := !tc.mu.closed &&
+		(tc.mu.terminalOutcome == txnTerminalOutcomeNone ||
+			tc.mu.terminalOutcome == txnTerminalOutcomePending)
+	if ownsTerminalOutcome && tc.mu.terminalOutcome == txnTerminalOutcomeNone {
+		tc.mu.terminalOutcome = txnTerminalOutcomePending
+	}
+	tc.mu.Unlock()
+
+	err = tc.rollbackOwned(ctx)
+	if !ownsTerminalOutcome {
+		return err
+	}
+	outcome := txnTerminalOutcomeFailed
+	if err == nil {
+		outcome = txnTerminalOutcomeSucceeded
+	}
+	tc.mu.Lock()
+	tc.mu.terminalOutcome = outcome
+	tc.mu.Unlock()
+	return err
+}
+
+// rollbackOwned attempts every cleanup layer even if an earlier layer fails.
+// Its returned error is the authoritative input to the generation outcome.
+// If it panics or exits abnormally, rollback leaves the outcome pending and
+// RestartTxn remains conservatively sealed.
+func (tc *txnOperator) rollbackOwned(ctx context.Context) (err error) {
 	tc.reset.rollbackCounter.addEnter()
 	defer tc.reset.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(tc.logger, txnMeta)
 
-	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace {
-		if err = tc.reset.workspace.Rollback(ctx); err != nil {
+	var workspaceErr error
+	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace.Load() {
+		if workspaceErr = tc.reset.workspace.Rollback(ctx); workspaceErr != nil {
 			tc.logger.Error("rollback workspace failed",
-				util.TxnIDField(txnMeta), zap.Error(err))
+				util.TxnIDField(txnMeta), zap.Error(workspaceErr))
 		}
 	}
 
@@ -923,7 +1234,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	defer tc.mu.Unlock()
 
 	if tc.mu.closed {
-		return nil
+		return workspaceErr
 	}
 
 	seq := tc.NextSequence()
@@ -940,11 +1251,19 @@ func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	}()
 
 	if tc.needUnlockLocked() {
-		defer tc.unlock(ctx)
+		defer func() {
+			if unlockErr := tc.unlock(ctx); unlockErr != nil {
+				if err == nil {
+					err = unlockErr
+				} else {
+					err = errors.Join(err, unlockErr)
+				}
+			}
+		}()
 	}
 
 	if len(tc.mu.txn.TNShards) == 0 {
-		return nil
+		return workspaceErr
 	}
 
 	sendresult, err := tc.doSend(ctx, []txn.TxnRequest{{
@@ -952,17 +1271,20 @@ func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true)
 
-	result, err := tc.handleError(ctx, sendresult, err)
+	result, err := tc.handleError(ctx, sendresult, err, true)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnClosed) {
-			return nil
+			return workspaceErr
+		}
+		if workspaceErr != nil {
+			return errors.Join(workspaceErr, err)
 		}
 		return err
 	}
 	if result != nil {
 		result.Release()
 	}
-	return nil
+	return workspaceErr
 }
 
 func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
@@ -1113,7 +1435,7 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 
 	requests = tc.maybeInsertCachedWrites(requests, false)
 	result, err := tc.doSend(ctx, requests, false)
-	return tc.trimResponses(tc.handleError(ctx, result, err))
+	return tc.trimResponses(tc.handleError(ctx, result, err, false))
 }
 
 func (tc *txnOperator) doWrite(
@@ -1130,12 +1452,33 @@ func (tc *txnOperator) doWrite(
 	}
 	var payload []txn.TxnRequest
 	workspacePrepared := false
+	var commitDeadline time.Time
+	var hasCommitDeadline bool
+	var commitSequence uint64
+	if commit && !tc.opts.options.UserTxn() && tc.needUnlockLocked() &&
+		tc.reset.tryAcquireUnknownCommit != nil {
+		if !tc.reset.tryAcquireUnknownCommit() {
+			busyErr := moerr.NewAllCNServersBusyNoCtx()
+			if rollbackErr := tc.rollback(ctx); rollbackErr != nil {
+				return nil, errors.Join(busyErr, rollbackErr)
+			}
+			return nil, busyErr
+		}
+		tc.reset.internalUnknownCommitAdmissionHeld = true
+		defer func() {
+			if tc.reset.internalUnknownCommitAdmissionHeld &&
+				!tc.reset.commitNeedsResolution {
+				tc.reset.unknownCommitResolved()
+				tc.reset.internalUnknownCommitAdmissionHeld = false
+			}
+		}()
+	}
 	if commit {
 		if tc.reset.workspace != nil {
 			var reqs []txn.TxnRequest
 			reqs, err = tc.reset.workspace.Commit(ctx)
 			if err != nil {
-				return nil, errors.Join(err, tc.Rollback(ctx))
+				return nil, errors.Join(err, tc.rollback(ctx))
 			}
 			payload = reqs
 			workspacePrepared = true
@@ -1144,7 +1487,8 @@ func (tc *txnOperator) doWrite(
 					return
 				}
 				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+					if tc.reset.commitNeedsResolution {
+						tc.reset.cannotCleanWorkspace.Store(true)
 						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
 						return
 					}
@@ -1159,12 +1503,21 @@ func (tc *txnOperator) doWrite(
 			}()
 		}
 		tc.mu.Lock()
+		// Keep unlock in its own defer. closeLocked invokes callbacks while the
+		// mutex is held; if one panics or calls runtime.Goexit, later statements
+		// in that callback-owning defer would not run.
+		defer tc.mu.Unlock()
 		defer func() {
+			// Set the guard before closeLocked. A later Rollback
+			// must not delete objects when the Commit result is unknown and TN
+			// may already have committed them.
+			if tc.reset.commitNeedsResolution {
+				tc.reset.cannotCleanWorkspace.Store(true)
+			}
 			if err != nil && tc.reset.commitErr == nil {
 				tc.reset.commitErr = err
 			}
 			tc.closeLocked(ctx)
-			tc.mu.Unlock()
 		}()
 		if tc.mu.closed {
 			tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
@@ -1173,7 +1526,15 @@ func (tc *txnOperator) doWrite(
 
 		if tc.needUnlockLocked() {
 			tc.mu.txn.LockTables = tc.mu.lockTables
-			defer tc.unlock(ctx)
+			defer func() {
+				// Commit may already be durable. An unlock failure must not turn a
+				// successful commit into an error and make workspace finalization
+				// roll back committed objects, but the unresolved locks still make
+				// this operator generation unsafe to reuse.
+				if tc.unlock(ctx) != nil {
+					tc.mu.terminalOutcome = txnTerminalOutcomeFailed
+				}
+			}()
 		}
 	}
 
@@ -1205,24 +1566,37 @@ func (tc *txnOperator) doWrite(
 		}
 
 		requests = tc.maybeInsertCachedWrites(requests, true)
+		commitDeadline, hasCommitDeadline = ctx.Deadline()
+		if !hasCommitDeadline {
+			commitDeadline = time.Now().Add(commitDeadlineFallback)
+		}
+		if sequencer, ok := tc.lockService.(lockservice.CommitSequenceProvider); ok {
+			commitSequence = sequencer.NextCommitSequence()
+		}
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Commit,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
-				Payload:       txnReqs,
-				Disable1PCOpt: tc.opts.options.Is1PCDisabled(),
+				Payload:          txnReqs,
+				Disable1PCOpt:    tc.opts.options.Is1PCDisabled(),
+				DeadlineUnixNano: commitDeadline.UnixNano(),
+				CommitSequence:   commitSequence,
 			}})
 	}
 	if commit && tc.markAbortedLocked() {
 		tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 		return nil, tc.reset.commitErr
 	}
-
 	var result *rpc.SendResult
 	result, err = tc.doSend(ctx, requests, commit)
-	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
+	resp, err = tc.trimResponses(tc.handleError(ctx, result, err, commit))
 	if err != nil && commit {
 		tc.reset.commitErr = err
+		if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+			tc.reset.commitNeedsResolution = true
+			tc.reset.commitDeadline = commitDeadline
+			tc.reset.commitSequence = commitSequence
+		}
 	}
 	return resp, err
 }
@@ -1254,7 +1628,7 @@ func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
-		tc.logger.Fatal("context deadline set")
+		tc.logger.Fatal("context deadline not set")
 	}
 
 	return tc.checkStatus(locked)
@@ -1266,7 +1640,7 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 		defer tc.mu.RUnlock()
 	}
 
-	if tc.mu.closed {
+	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
 	return nil
@@ -1365,37 +1739,19 @@ func (tc *txnOperator) doSend(
 	util.LogTxnSendRequests(tc.logger, requests)
 	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
-		if commit {
-			// TODO: remove this workaround
-			// set tc.mu.txn.CommitTS = now+10s
-			now, _ := tc.clock.Now()
-			now.PhysicalTime += 10000000000
-			tc.mu.txn.CommitTS = now
-		}
 		util.LogTxnSendRequestsFailed(tc.logger, requests, err)
 		return nil, err
 	}
 	util.LogTxnReceivedResponses(tc.logger, result.Responses)
 
-	if len(result.Responses) == 0 {
-		return result, nil
-	}
-
-	// update commit timestamp
-	resp := result.Responses[len(result.Responses)-1]
-	if resp.Txn == nil {
-		return result, nil
-	}
-	if !commit {
-		tc.mu.Lock()
-		defer tc.mu.Unlock()
-	}
-	tc.mu.txn.CommitTS = resp.Txn.CommitTS
-	tc.mu.txn.Status = resp.Txn.Status
 	return result, nil
 }
-
-func (tc *txnOperator) handleError(ctx context.Context, result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+func (tc *txnOperator) handleError(
+	ctx context.Context,
+	result *rpc.SendResult,
+	err error,
+	locked bool,
+) (*rpc.SendResult, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -1406,7 +1762,34 @@ func (tc *txnOperator) handleError(ctx context.Context, result *rpc.SendResult, 
 			return nil, err
 		}
 	}
+
+	// A response is externally supplied protocol data. Publish its transaction
+	// state only after every response in the batch has passed validation, so a
+	// malformed response cannot poison a still-owned local operator.
+	tc.publishResponseTxn(result, locked)
 	return result, nil
+}
+
+func (tc *txnOperator) publishResponseTxn(result *rpc.SendResult, locked bool) {
+	if result == nil || len(result.Responses) == 0 {
+		return
+	}
+	resp := result.Responses[len(result.Responses)-1]
+	if resp.Txn == nil {
+		return
+	}
+	if !locked {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+	}
+	// A non-terminal response can race a direct terminal API caller that does
+	// not participate in the SQL tracker. Never let a late Active response
+	// rewrite the observable state of an already closed operator.
+	if tc.mu.closed {
+		return
+	}
+	tc.mu.txn.CommitTS = resp.Txn.CommitTS
+	tc.mu.txn.Status = resp.Txn.Status
 }
 
 func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResponse) error {
@@ -1496,10 +1879,9 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	default:
-		tc.logger.Fatal("invalid response status for read or write",
-			util.TxnField(*txnMeta))
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid response status for read or write: %v", txnMeta.Status)
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap map[uint16]struct{}) error {
@@ -1518,7 +1900,8 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 		return txnError.UnwrapError()
 	}
 
-	panic(moerr.NewInternalErrorNoCtxf("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
+	return moerr.NewInternalErrorNoCtxf(
+		"invalid txn error, code %d, msg %s", txnCode, txnError.DebugString())
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) error {
@@ -1535,7 +1918,7 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("invalid response status for commit, %v", txnMeta.Status))
+		return moerr.NewInternalErrorNoCtxf("invalid response status for commit, %v", txnMeta.Status)
 	}
 }
 
@@ -1553,7 +1936,7 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("invalid response status for rollback %v", txnMeta.Status))
+		return moerr.NewInternalErrorNoCtxf("invalid response status for rollback %v", txnMeta.Status)
 	}
 }
 
@@ -1572,11 +1955,39 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 	return result, nil
 }
 
-func (tc *txnOperator) unlock(ctx context.Context) {
+func (tc *txnOperator) unlock(ctx context.Context) error {
 	if tc.reset.workspace != nil &&
 		tc.reset.workspace.Readonly() &&
 		len(tc.mu.lockTables) == 0 {
-		return
+		return nil
+	}
+
+	if tc.reset.commitNeedsResolution {
+		resolver, ok := tc.lockService.(lockservice.UnknownCommitResolver)
+		if !ok {
+			err := moerr.NewInternalErrorNoCtx(
+				"lockservice does not support unknown commit resolution")
+			tc.logger.Error("lockservice does not support unknown commit resolution",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+			tc.releaseInternalUnknownCommitAdmission()
+			return err
+		}
+		if err := resolver.ResolveCommitUnknown(
+			tc.mu.txn.ID,
+			tc.reset.commitDeadline,
+			tc.reset.commitSequence,
+			tc.reset.unknownCommitResolved,
+		); err != nil {
+			tc.logger.Error("failed to schedule unknown commit resolution",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+			tc.releaseInternalUnknownCommitAdmission()
+			return err
+		}
+		tc.reset.unknownCommitResolutionTransferred = true
+		tc.reset.internalUnknownCommitAdmissionHeld = false
+		return nil
 	}
 
 	if !tc.reset.commitAt.IsZero() {
@@ -1620,6 +2031,14 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
 	}
+	return err
+}
+
+func (tc *txnOperator) releaseInternalUnknownCommitAdmission() {
+	if tc.reset.internalUnknownCommitAdmissionHeld {
+		tc.reset.unknownCommitResolved()
+		tc.reset.internalUnknownCommitAdmissionHeld = false
+	}
 }
 
 func (tc *txnOperator) needUnlockLocked() bool {
@@ -1631,9 +2050,21 @@ func (tc *txnOperator) needUnlockLocked() bool {
 }
 
 func (tc *txnOperator) closeLocked(ctx context.Context) {
+	// A close that is not owned by a public terminal call still has to seal the
+	// public gate. If a public owner is active, leave it active until its final
+	// defer publishes sealed: workspace finalization and event callbacks can run
+	// after closeLocked, and RestartTxn must not enter that new generation early.
+	tc.terminalCall.CompareAndSwap(
+		uint32(txnTerminalCallIdle),
+		uint32(txnTerminalCallSealed),
+	)
 	if !tc.mu.closed {
+		tc.reset.runSQLTracker.seal()
 		tc.mu.closed = true
-		if tc.reset.commitErr != nil {
+		// A missing Commit response only describes the CN's observation. TN may
+		// already have committed, so do not rewrite the status to Aborted.
+		if tc.reset.commitErr != nil &&
+			!tc.reset.commitNeedsResolution {
 			tc.mu.txn.Status = txn.TxnStatus_Aborted
 		}
 		tc.triggerEventLocked(
@@ -1647,14 +2078,100 @@ func (tc *txnOperator) closeLocked(ctx context.Context) {
 }
 
 func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
+	tc.reset.runSQLTracker.sealAndCancelAllExcept(0)
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
 	if !tc.mu.closed {
+		// Success is published only after closeLocked and every ClosedEvent
+		// callback return normally. A panic or runtime.Goexit still runs this
+		// defer and leaves the closed generation permanently non-restartable.
+		tc.mu.terminalOutcome = txnTerminalOutcomePending
+		defer func() {
+			if tc.mu.terminalOutcome == txnTerminalOutcomePending {
+				tc.mu.terminalOutcome = txnTerminalOutcomeFailed
+			}
+		}()
 		tc.reset.commitErr = err
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked(ctx)
+		tc.mu.terminalOutcome = txnTerminalOutcomeSucceeded
 	}
+}
+
+// closeUnadmitted terminates an operator whose client admission failed. It
+// deliberately does not emit ClosedEvent because the operator was never added
+// to the client's active or waiting ownership graph.
+func (tc *txnOperator) closeUnadmitted(err error) {
+	tc.reset.runSQLTracker.seal()
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.terminalCall.Store(uint32(txnTerminalCallSealed))
+	if tc.mu.closed {
+		return
+	}
+	tc.mu.terminalOutcome = txnTerminalOutcomeSucceeded
+	tc.reset.commitErr = err
+	tc.mu.txn.Status = txn.TxnStatus_Aborted
+	tc.mu.closed = true
+}
+
+// scheduleRollbackAfterRunningSQL preserves the transaction's cleanup owner when
+// a caller gives up waiting for another SQL statement. Closing the operator at
+// that point would skip workspace rollback, TN rollback, and lock release;
+// cleaning concurrently is unsafe because the running SQL still owns the
+// workspace. Sealing rejects new SQL before the final exit performs one
+// detached, bounded rollback.
+func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
+	tc.mu.Lock()
+	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {
+		tc.mu.Unlock()
+		return
+	}
+	tc.mu.terminalAction = txnTerminalActionRollbackAfterRunningSQL
+	tc.mu.terminalOutcome = txnTerminalOutcomePending
+	tc.reset.commitErr = waitErr
+	tc.terminalCall.Store(uint32(txnTerminalCallSealed))
+	tc.mu.Unlock()
+
+	tc.reset.runSQLTracker.sealAndRunWhenDrained(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), runningSQLWaitTimeout)
+		defer cancel()
+		if err := tc.rollback(ctx); err != nil {
+			tc.logger.Error("rollback after running SQL wait failed",
+				util.TxnIDField(tc.getTxnMeta(false)),
+				zap.Error(waitErr),
+				zap.Error(err))
+			return
+		}
+	})
+}
+
+// publishTerminalOutcome is the final epilogue for commit owners. It runs after
+// all downstream finalization and before releaseTerminalCall makes the closed
+// operator restartable. A nil named error is not proof of normal completion:
+// panic and runtime.Goexit both run defers while leaving it nil.
+func (tc *txnOperator) publishTerminalOutcome(err error, completedNormally bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if !tc.mu.closed {
+		return
+	}
+	if !completedNormally {
+		// The outer terminal owner did not finish its lifecycle. Even if nested
+		// cleanup had published success, a later finalizer or callback may have
+		// stopped midway, so this generation must never be reused.
+		tc.mu.terminalOutcome = txnTerminalOutcomeFailed
+		return
+	}
+	if tc.mu.terminalOutcome != txnTerminalOutcomeNone {
+		return
+	}
+	if err == nil {
+		tc.mu.terminalOutcome = txnTerminalOutcomeSucceeded
+		return
+	}
+	tc.mu.terminalOutcome = txnTerminalOutcomeFailed
 }
 
 func (tc *txnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
@@ -1767,17 +2284,25 @@ func (tc *txnOperator) doCostAction(
 }
 
 func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
-	tc.reset.runningSQL.Store(true)
-	tc.reset.runSqlCounter.addEnter()
-	return tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
+	token, _ := tc.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
+	return token
+}
+
+func (tc *txnOperator) TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
+	token := tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
+	if token == 0 {
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	return token, nil
 }
 
 func (tc *txnOperator) ExitRunSqlWithToken(token uint64) {
-	tc.reset.runSqlCounter.addExit()
-	tc.reset.runSQLTracker.exitToken(token)
-	if !tc.reset.runSqlCounter.more() {
-		tc.reset.runningSQL.Store(false)
+	if token == 0 {
+		return
 	}
+	// Removing the token can release a terminal waiter and allow RestartTxn.
+	// It must therefore be the final old-generation operation.
+	tc.reset.runSQLTracker.exitToken(token)
 }
 
 func (tc *txnOperator) CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error {
@@ -1789,9 +2314,26 @@ func (tc *txnOperator) CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepT
 }
 
 func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken uint64, currentSQL string) error {
+	return tc.waitRunningSQL(ctx, keepToken, currentSQL, true)
+}
+
+func (tc *txnOperator) sealAndWaitRunningSQLWithSQL(ctx context.Context, currentSQL string) error {
+	skipToken := runSQLSkipTokenFromCtx(ctx)
+	tc.reset.runSQLTracker.sealAndCancelAllExcept(skipToken)
+	return tc.waitRunningSQL(ctx, 0, currentSQL, false)
+}
+
+func (tc *txnOperator) waitRunningSQL(
+	ctx context.Context,
+	keepToken uint64,
+	currentSQL string,
+	cancelOthers bool,
+) error {
 	// Cancel other running SQL first, then wait for them to exit to avoid workspace races.
 	skipToken := runSQLSkipTokenFromCtx(ctx)
-	tc.reset.runSQLTracker.cancelAllExcept(keepToken, skipToken)
+	if cancelOthers {
+		tc.reset.runSQLTracker.cancelAllExcept(keepToken, skipToken)
+	}
 	waitSQL := tc.reset.runSQLTracker.waitingInfo(keepToken, skipToken)
 	if len(waitSQL) > 0 {
 		fields := []zap.Field{
@@ -1824,7 +2366,7 @@ func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken ui
 			}
 			tc.logger.Error("wait running sql timeout",
 				fields...)
-			return nil
+			return err
 		}
 		return err
 	}
@@ -1832,7 +2374,95 @@ func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken ui
 }
 
 func (tc *txnOperator) inRunSql() bool {
-	return tc.reset.runSqlCounter.more()
+	return tc.reset.runSQLTracker.active()
+}
+
+func (tc *txnOperator) claimRestart() error {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if !tc.mu.closed || tc.mu.restarting ||
+		tc.mu.terminalOutcome != txnTerminalOutcomeSucceeded {
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+	}
+	terminalState := txnTerminalCallState(tc.terminalCall.Load())
+	if terminalState == txnTerminalCallActive {
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+	}
+	claimedTerminalGate := false
+	if terminalState == txnTerminalCallIdle {
+		if !tc.terminalCall.CompareAndSwap(
+			uint32(txnTerminalCallIdle),
+			uint32(txnTerminalCallSealed),
+		) {
+			return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+		}
+		claimedTerminalGate = true
+	}
+	if !tc.reset.runSQLTracker.sealForRestart() {
+		if claimedTerminalGate {
+			tc.terminalCall.CompareAndSwap(
+				uint32(txnTerminalCallSealed),
+				uint32(txnTerminalCallIdle),
+			)
+		}
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+	}
+	tc.mu.restarting = true
+	return nil
+}
+
+// claimTerminalCall gives exactly one public Commit, Rollback, or
+// WriteAndCommit call ownership of the terminal transition. The ownership state
+// is independent of tc.mu because commit holds tc.mu across downstream RPCs;
+// competing calls must still fail fast while that RPC is blocked. Internal
+// cleanup owners bypass this gate through rollback.
+func (tc *txnOperator) claimTerminalCall() error {
+	if !tc.terminalCall.CompareAndSwap(
+		uint32(txnTerminalCallIdle),
+		uint32(txnTerminalCallActive),
+	) {
+		// The gate can reject while restart is replacing reset.txnID. The error
+		// code is the public contract; avoid racing that diagnostic-only byte
+		// slice on this lock-free path.
+		return moerr.NewTxnClosedNoCtx(nil)
+	}
+	return nil
+}
+
+func (tc *txnOperator) releaseTerminalCall() {
+	// This is the public terminal owner's final defer, after workspace
+	// finalization and terminal event callbacks. Keep the gate sealed once that
+	// owner closed the operator; only a call that returned without a terminal
+	// transition may reopen the same generation. Holding tc.mu across the state
+	// read and CAS also closes the race with an independent internal close.
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	next := txnTerminalCallIdle
+	if tc.mu.closed {
+		next = txnTerminalCallSealed
+	}
+	// A running-SQL timeout changes active to sealed before scheduling its
+	// deferred rollback owner. In that case this CAS deliberately does nothing.
+	tc.terminalCall.CompareAndSwap(
+		uint32(txnTerminalCallActive),
+		uint32(next),
+	)
+}
+
+// openRunSQLAfterRestart completes restart admission without racing a
+// concurrent close. Both paths take tc.mu before the tracker lock, so a close
+// can never seal the tracker and then have this method reopen it.
+func (tc *txnOperator) openRunSQLAfterRestart() error {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	if tc.mu.closed {
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+	}
+	tc.reset.runSQLTracker.open()
+	// Restart admission deliberately keeps both gates sealed. Publish the new
+	// generation to terminal callers only after SQL registration is open.
+	tc.terminalCall.Store(uint32(txnTerminalCallIdle))
+	return nil
 }
 
 func (tc *txnOperator) inCommit() bool {
@@ -1874,7 +2504,7 @@ func (tc *txnOperator) counter() string {
 	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s txnMeta: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
-		tc.reset.runSqlCounter.String(),
+		tc.reset.runSQLTracker.counterString(),
 		tc.reset.incrStmtCounter.String(),
 		tc.reset.rollbackStmtCounter.String(),
 		tc.Txn().DebugString(),
@@ -1893,6 +2523,26 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	for _, flag := range flags {
 		tc.mu.flag |= flag
 	}
+}
+
+// addFlagIfGeneration applies flags only if tc still represents the generation
+// captured by a delayed caller. RestartTxn reuses the txnOperator pointer, so
+// checking the pointer without checking generation identity permits stale work
+// from the old transaction to mutate the restarted transaction.
+func (tc *txnOperator) addFlagIfGeneration(
+	txnID string,
+	createAt time.Time,
+	flags ...uint32,
+) bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if string(tc.reset.txnID) != txnID || !tc.reset.createAt.Equal(createAt) {
+		return false
+	}
+	for _, flag := range flags {
+		tc.mu.flag |= flag
+	}
+	return true
 }
 
 func (tc *txnOperator) markAbortedLocked() bool {

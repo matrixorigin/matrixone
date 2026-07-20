@@ -8,7 +8,7 @@ Before building MatrixOne, ensure you have the following installed:
 
 ### Required Tools
 
-1. **Go** (version 1.22)
+1. **Go** (version 1.26.4 or later)
    - [Installation Guide](https://go.dev/doc/install)
    - Verify: `go version`
 
@@ -42,9 +42,12 @@ cd matrixone
 ### Step 2: Prepare Dependencies
 
 ```bash
-# Download and vendor dependencies
-go mod vendor
+# Verify and download the read-only production/test package graph
+make config
 ```
+
+Official Make targets set `GOWORK=off`, so a parent-directory or user-selected
+Go workspace cannot replace MatrixOne dependencies during a normal build.
 
 ### Step 3: Build
 
@@ -149,8 +152,8 @@ mysql -h 127.0.0.1 -P 6001 -u root -p
 ```bash
 # 1. Make changes to source code
 
-# 2. Update dependencies (only if go.mod changed)
-go mod vendor
+# 2. Synchronize dependencies (only if imports or go.mod changed)
+make mod-tidy
 
 # 3. Rebuild
 make build
@@ -163,18 +166,15 @@ make build
 ### Dependency Management
 
 ```bash
-# Download dependencies
-go mod download
+# Verify and download the read-only module graph
+make config
 
-# Vendor dependencies (required before build)
-go mod vendor
-
-# Clean up unused dependencies
-go mod tidy
+# Synchronize module metadata after dependency changes and remove unused requirements
+make mod-tidy
 
 # Update specific dependency
 go get -u github.com/package/name
-go mod vendor
+make mod-tidy
 ```
 
 ### Running Tests
@@ -222,8 +222,10 @@ make ut SKIP_TEST="pkg/frontend"
 | `make musl` | Build static binary with musl |
 | `make mo-tool` | Build mo-tool utility |
 | `make clean` | Clean build artifacts |
-| `make config` | Generate configuration |
-| `make vendor-build` | Build vendor directory |
+| `make config` | Verify and download the module graph without modifying go.mod/go.sum |
+| `make mod-tidy` | Synchronize go.mod/go.sum after dependency changes |
+| `make proto-vendor` | Stage protobuf imports outside the module vendor directory |
+| `make vendor-build` | Compatibility alias for `make proto-vendor` |
 | `make pb` | Generate protobuf files |
 
 ### Testing Commands
@@ -510,27 +512,24 @@ profile/CN_uuid_20240101_120000.000000_mutex.pprof.gz
 
 **Go version mismatch:**
 ```bash
-go version  # Must be 1.22
+go version  # Must be 1.26.4 or later
 ```
 
 **Missing dependencies:**
 ```bash
-go mod download
-go mod vendor  # Required before build
-go mod tidy
+make config
 ```
 
-**Vendor directory issues:**
+**Stale vendor directory:**
 ```bash
-# Remove vendor directory and re-vendor
+# MatrixOne builds use read-only module mode because go mod vendor cannot retain all
+# C/C++ header-only dependencies. Remove a stale local vendor directory.
 rm -rf vendor/
-go mod vendor
 ```
 
 **Clean rebuild:**
 ```bash
 make clean
-go mod vendor  # Re-vendor dependencies
 make build
 ```
 
@@ -810,4 +809,3 @@ For production builds, consider:
 ## Contributing
 
 For development and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
-

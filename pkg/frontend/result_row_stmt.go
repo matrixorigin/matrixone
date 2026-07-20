@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -50,6 +51,20 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 	return cols, columns, err
 }
 
+func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
+	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
+		if _, ok = txnCW.GetAst().(*tree.Select); ok {
+			return txnCW.getColumnsWithResultColumns(ctx)
+		}
+	}
+
+	columns, err := cw.GetColumns(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -59,7 +74,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
-		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
@@ -67,7 +82,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
-		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
@@ -295,6 +310,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		if err != nil {
 			return
 		}
+		appendSchedulingExplain(buffer, schedulingTraceForExplain(ses, execCtx.cw))
 
 		err = buildMoExplainQuery(execCtx, explainColName, buffer, ses, getDataFromPipeline)
 		if err != nil {
@@ -317,7 +333,14 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 		txnCompileWrapper := execCtx.cw.(*TxnComputationWrapper)
 		reader := bufio.NewReader(txnCompileWrapper.explainBuffer)
-		err = buildMoExplainPhyPlan(execCtx, explainColName, reader, ses, getDataFromPipeline)
+		err = buildMoExplainPhyPlan(
+			execCtx,
+			explainColName,
+			reader,
+			ses,
+			getDataFromPipeline,
+			schedulingTraceForExplain(ses, execCtx.cw),
+		)
 		if err != nil {
 			return
 		}
@@ -336,6 +359,20 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	}
 
 	return
+}
+
+func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace {
+	if provider, ok := cw.(interface{ SchedulingTrace() schedule.Trace }); ok {
+		return provider.SchedulingTrace()
+	}
+	return schedule.Trace{}
+}
+
+func schedulingTraceForExplain(ses *Session, cw ComputationWrapper) schedule.Trace {
+	if !explainSchedulingEnabled(ses) {
+		return schedule.Trace{}
+	}
+	return schedulingTraceFromComputationWrapper(cw)
 }
 
 func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
@@ -391,7 +428,8 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	} else {
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt
+			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

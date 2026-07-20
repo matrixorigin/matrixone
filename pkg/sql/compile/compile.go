@@ -15,12 +15,13 @@
 package compile
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -133,22 +135,39 @@ func NewCompile(
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
-	if c.proc.GetTxnOperator() != nil {
-		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
-		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
-		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-	} else {
-		c.TxnOffset = 0
-	}
+	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
+	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
+	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	return c
+}
+
+// txnOffsetOfCompile returns the workspace write offset a new compile reads
+// with. Compiling a user statement advances the statement boundary of the
+// workspace and reads with it. An internal sub-sql of the current statement
+// (DisableIncrStatement, marked on the process) instead captures the current
+// end of the workspace — it reads everything its caller has written so far,
+// but it opens no statement, so it must not advance the shared boundary:
+// moving the boundary mid-statement breaks the positional visibility of the
+// caller's workspace entries (issue #25557).
+func txnOffsetOfCompile(proc *process.Process) int {
+	op := proc.GetTxnOperator()
+	if op == nil {
+		return 0
+	}
+	ws := op.GetWorkspace()
+	if proc.IncrStatementDisabled() {
+		return int(ws.WriteOffset())
+	}
+	ws.UpdateSnapshotWriteOffset()
+	return ws.GetSnapshotWriteOffset()
 }
 
 func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
@@ -213,9 +232,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		f.reset()
 	}
 	c.startAt = startAt
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	if c.proc.GetTxnOperator() != nil {
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -223,8 +241,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
 			}
 		}
-	} else {
-		c.TxnOffset = 0
+	}
+
+	// A reused prepared pipeline runs directly after Reset. Only retries compile
+	// again, so the cached placement is this execution's first real attempt.
+	c.beginSchedulingTraceAttempt()
+	if c.queryPlacement.Reason != "" {
+		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
 }
 
@@ -261,11 +284,18 @@ func (c *Compile) clear() {
 	c.anal = nil
 	c.e = nil
 
+	if c.lockMeta != nil {
+		c.lockMeta.clear(c.proc)
+		c.lockMeta = nil
+	}
+
 	c.proc.Free()
 	c.proc = nil
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
+	c.schedulingTrace = nil
+	c.schedulingAttempt = 0
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -278,11 +308,6 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
-
-	if c.lockMeta != nil {
-		c.lockMeta.clear(c.proc)
-		c.lockMeta = nil
-	}
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -377,7 +402,6 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(1)
 		return nil
 	case CreateTable:
 		return s.CreateTable(c)
@@ -520,6 +544,15 @@ func (c *Compile) runOnce() (err error) {
 			}
 		}
 	}
+
+	// Publish every dispatch receiver that will execute on this CN before any
+	// scope goroutine starts. Remote consumers can otherwise notify while a
+	// local source is still blocked before vm.Prepare reaches its Dispatch.
+	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
+	if err != nil {
+		return err
+	}
+	defer registrations.cleanup()
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -770,9 +803,7 @@ func (c *Compile) lockTable() error {
 	for tableID := range c.lockTables {
 		tableIDs = append(tableIDs, tableID)
 	}
-	sort.Slice(tableIDs, func(i, j int) bool {
-		return tableIDs[i] < tableIDs[j]
-	})
+	slices.Sort(tableIDs)
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
@@ -827,6 +858,10 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
+	c.compiledRightSingleNodes = nil
+	defer func() {
+		c.compiledRightSingleNodes = nil
+	}()
 
 	start := time.Now()
 	defer func() {
@@ -877,6 +912,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 			return nil, err
 		}
 		steps = append(steps, scopes...)
+	}
+	if err = validateRightSingleRuntimeFilterTopology(qry, c.compiledRightSingleNodes, steps); err != nil {
+		return nil, err
 	}
 
 	return steps, err
@@ -981,6 +1019,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 				}
 			}
 		}
+	}
+
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
+		// This is deliberately after the literal LIMIT 0 shortcut. The flat
+		// logical plan retains pruned descendants, while topology validation must
+		// cover only right-SINGLE nodes whose physical subtree was constructed.
+		c.compiledRightSingleNodes = append(c.compiledRightSingleNodes, curNodeIdx)
 	}
 
 	switch node.NodeType {
@@ -2304,8 +2349,8 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		return hiveFileSizeAt(fileSize, indices[i]) > hiveFileSizeAt(fileSize, indices[j])
+	slices.SortStableFunc(indices, func(a, b int) int {
+		return cmp.Compare(hiveFileSizeAt(fileSize, b), hiveFileSizeAt(fileSize, a))
 	})
 
 	for _, fileIdx := range indices {
@@ -2355,16 +2400,16 @@ func splitParquetRowGroupShards(
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		left := rowGroups[indices[i]]
-		right := rowGroups[indices[j]]
-		if parquetRowGroupLoad(left) != parquetRowGroupLoad(right) {
-			return parquetRowGroupLoad(left) > parquetRowGroupLoad(right)
+	slices.SortStableFunc(indices, func(a, b int) int {
+		left := rowGroups[a]
+		right := rowGroups[b]
+		if c := cmp.Compare(parquetRowGroupLoad(right), parquetRowGroupLoad(left)); c != 0 {
+			return c
 		}
-		if left.fileIndex != right.fileIndex {
-			return left.fileIndex < right.fileIndex
+		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
+			return c
 		}
-		return left.rowGroupIndex < right.rowGroupIndex
+		return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
 	})
 
 	for _, rowGroupIdx := range indices {
@@ -2406,13 +2451,11 @@ func splitParquetRowGroupShards(
 		if len(shard.rowGroupShards) == 0 {
 			continue
 		}
-		sort.SliceStable(shard.rowGroupShards, func(i, j int) bool {
-			left := shard.rowGroupShards[i]
-			right := shard.rowGroupShards[j]
-			if left.FileIndex != right.FileIndex {
-				return left.FileIndex < right.FileIndex
+		slices.SortStableFunc(shard.rowGroupShards, func(left, right *pipeline.ParquetRowGroupShard) int {
+			if c := cmp.Compare(left.FileIndex, right.FileIndex); c != 0 {
+				return c
 			}
-			return left.RowGroupStart < right.RowGroupStart
+			return cmp.Compare(left.RowGroupStart, right.RowGroupStart)
 		})
 		shard.rowGroupShards = mergeAdjacentParquetRowGroupShards(shard.rowGroupShards)
 		shard.originalToLocal = nil
@@ -2724,6 +2767,64 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 	return ss, nil
 }
 
+func shouldDispatchIvfSearchMultiCN(
+	node *plan.Node,
+	execType plan2.ExecType,
+	cnList engine.Nodes,
+	workspace client.Workspace,
+) bool {
+	return plan2.IsIvfSearchEntriesInternalScan(node) &&
+		execType == plan2.ExecTypeAP_MULTICN &&
+		len(cnList) > 1 &&
+		(workspace == nil || workspace.Readonly()) &&
+		(node.GetStats() == nil || !node.GetStats().GetForceOneCN())
+}
+
+func partitionedIndexReaderParam(param *plan.IndexReaderParam, cncnt, cnidx int32) *plan.IndexReaderParam {
+	ret := plan2.DeepCopyIndexReaderParam(param)
+	if ret == nil {
+		ret = &plan.IndexReaderParam{}
+	}
+	ret.PartitionCnCnt = cncnt
+	ret.PartitionCnIdx = cnidx
+	return ret
+}
+
+func (c *Compile) compileIvfSearchParallel(node *plan.Node) ([]*Scope, error) {
+	var workspace client.Workspace
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		workspace = txnOp.GetWorkspace()
+	}
+	if !shouldDispatchIvfSearchMultiCN(node, c.execType, c.cnList, workspace) {
+		return c.compileSingleTableFunction(node)
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, 0, len(c.cnList))
+	cncnt := int32(len(c.cnList))
+	for i := range c.cnList {
+		ds := newScope(Remote)
+		ds.NodeInfo = engine.Node{
+			Id:    c.cnList[i].Id,
+			Addr:  c.cnList[i].Addr,
+			Mcpu:  1,
+			CNCNT: cncnt,
+			CNIDX: int32(i),
+		}
+		ds.DataSource = &Source{isConst: true, node: node}
+		ds.Proc = c.proc.NewNoContextChildProc(0)
+		ds.IsTbFunc = true
+
+		op := constructTableFunction(node, c.pn.GetQuery())
+		op.IndexReaderParam = partitionedIndexReaderParam(node.IndexReaderParam, ds.NodeInfo.CNCNT, ds.NodeInfo.CNIDX)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ds.setRootOperator(op)
+		ss = append(ss, ds)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
 func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 
@@ -2743,6 +2844,8 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 				return c.compileSingleTableFunction(node)
 			}
 			return c.compileGenerateSeriesParallel(node, ss, parallelSize, canOpt, offset, step)
+		case ivfflatplan.IVFFLATSearchFuncName:
+			return c.compileIvfSearchParallel(node)
 		default:
 			return c.compileSingleTableFunction(node)
 		}
@@ -2901,17 +3004,13 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 		rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 		if err != nil {
-			if txnOp.IsSnapOp() {
-				return err
-			}
 			return err
 		}
-		tblDef = rel.GetTableDef(ctx)
-		s.DataSource.Rel = rel
-	} else {
-		s.DataSource.Rel.Reset(txnOp)
-		tblDef = s.DataSource.Rel.GetTableDef(ctx)
+		s.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if err = s.DataSource.Rel.Reset(txnOp); err != nil {
+		return err
 	}
+	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
@@ -3294,6 +3393,80 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 	return probeScopes
 }
 
+// canUseHashMarkJoin returns true when equality hashing is sufficient to
+// preserve MARK's three-valued result.
+//
+// A single equality key only needs two hash-side facts: exact membership and
+// whether the build contains NULL. Every predicate must be an actual hash key
+// with one relation per operand; residual or mixed-side predicates require
+// row-aware evaluation by LoopJoin. For composite keys, a partially-NULL row
+// can be FALSE or UNKNOWN depending on the other components, so use hash MARK
+// only when every key is statically NOT NULL.
+func canUseHashMarkJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_MARK {
+		return false
+	}
+
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	nonEqCond, hashConditions := extraJoinConditions(conditions)
+	if nonEqCond != nil || len(hashConditions) != len(conditions) {
+		return false
+	}
+
+	allNotNull := true
+	for _, condition := range hashConditions {
+		fn := condition.GetF()
+		if fn == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+			return false
+		}
+		leftRel, leftSingleRel := hashMarkOperandRel(fn.Args[0])
+		rightRel, rightSingleRel := hashMarkOperandRel(fn.Args[1])
+		if !leftSingleRel || !rightSingleRel ||
+			!((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
+			return false
+		}
+		allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
+	}
+	return len(hashConditions) == 1 || allNotNull
+}
+
+// hashMarkOperandRel returns the single relation referenced by an equality
+// operand. MARK cannot hash an operand that mixes probe and build columns: the
+// resulting residual condition needs row-aware evaluation by LoopJoin.
+func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
+	relPos := int32(-1)
+	singleRel := true
+
+	var visit func(*plan.Expr)
+	visit = func(current *plan.Expr) {
+		if current == nil || !singleRel {
+			return
+		}
+		switch impl := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if relPos == -1 {
+				relPos = impl.Col.RelPos
+			} else if relPos != impl.Col.RelPos {
+				singleRel = false
+			}
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				visit(arg)
+			}
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				visit(item)
+			}
+		}
+	}
+
+	visit(expr)
+	return relPos, singleRel && relPos >= 0
+}
+
 func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
@@ -3420,8 +3593,13 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			var op vm.Operator
+			if canUseHashMarkJoin(node) {
+				op = constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			} else {
+				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
+			}
+			op.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
@@ -4605,7 +4783,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
+		arg.SegmentMap = colexec.MustGetServer(c.proc.GetService()).GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
@@ -4665,18 +4843,27 @@ func (c *Compile) newScopeListOnSingleWorkerStage(childrenCount int, mcpu int) [
 }
 
 func (c *Compile) singleWorkerStageNode() engine.Node {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideSingleWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordSingleWorkerStage(c.schedulingAttempt, queryWorkers, decision)
 	return c.materializeScheduledWorker(decision.Worker)
 }
 
 func (c *Compile) queryWorkerStageNodes() engine.Nodes {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideQueryWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordStage(
+		c.schedulingAttempt,
+		schedule.StageKindQueryWorkerSet,
+		queryWorkers,
+		decision,
+	)
 	return c.materializeScheduledWorkers(decision.Workers)
 }
 

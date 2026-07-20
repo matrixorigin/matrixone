@@ -29,7 +29,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
     if node == nil {
         return ""
     }
-    return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
+    return tree.StringWithOpts(node, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString())
 }
 
 // makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
@@ -51,7 +51,7 @@ func sqlTaskBodyString(stmt tree.Statement) string {
     parts := make([]string, 0, len(compound.Stmts))
     for _, s := range compound.Stmts {
         if s != nil {
-            parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithSingleQuoteString()))
+            parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
         }
     }
     return strings.Join(parts, "; ")
@@ -75,6 +75,7 @@ func sqlTaskInt64(v any) int64 {
     id  int
     str string
     item interface{}
+    pos int
 }
 
 %union {
@@ -270,6 +271,9 @@ func sqlTaskInt64(v any) int64 {
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
     showType tree.ShowType
+    checkTableOption tree.CheckTableOption
+    analyzeTableEntries []*tree.AnalyzeTableEntry
+    analyzeTableEntry *tree.AnalyzeTableEntry
     joinTableExpr *tree.JoinTableExpr
     applyTableExpr *tree.ApplyTableExpr
 
@@ -351,7 +355,8 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
-%left <str> OR PIPE_CONCAT
+%left <str> OR
+%token <str> PIPE_CONCAT
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
@@ -364,6 +369,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> '+' '-'
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
+%left PIPE_CONCAT
 %right <str> '~' UNARY
 %nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
@@ -452,7 +458,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
-%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
+%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES PROFILE
 
 // Load
 %token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
@@ -508,6 +514,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
+%token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
 %token <str> SRID
 
@@ -589,7 +596,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
-%type <statement> analyze_stmt
+%type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt
@@ -663,6 +670,10 @@ func sqlTaskInt64(v any) int64 {
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
+%type <analyzeTableEntries> analyze_table_list
+%type <analyzeTableEntry> analyze_table_entry
+%type <checkTableOption> check_table_option_opt
+%type <int64Val> for_query_opt
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -929,11 +940,7 @@ start_command:
     stmt_type
 
 stmt_type:
-    block_stmt
-    {
-        yylex.(*Lexer).AppendStmt($1)
-    }
-|   stmt_list
+    stmt_list
 
 stmt_list:
     stmt
@@ -944,6 +951,7 @@ stmt_list:
     }
 |   stmt_list ';' stmt
     {
+        yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
         if $3 != nil {
             yylex.(*Lexer).AppendStmt($3)
         }
@@ -985,7 +993,11 @@ block_type_stmt:
     }
 
 stmt:
-    normal_stmt
+    block_stmt
+    {
+        $$ = $1
+    }
+|   normal_stmt
     {
         $$ = $1
     }
@@ -1018,6 +1030,8 @@ normal_stmt:
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
+|   check_table_stmt
+|   show_profile_stmt
 |   update_stmt
 |   use_stmt
 |   set_stmt
@@ -3202,6 +3216,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Ignore: $3 != "",
             Where: $7,
             OrderBy: $8,
             Limit: $9,
@@ -3213,6 +3228,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Ignore: $3 != "",
             Where: $7,
         }
     }
@@ -3225,6 +3241,7 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs:  $6,
+            Ignore: $3 != "",
             From:   &tree.From{Tables: tree.TableExprs{$8}},
             Where:  $9,
         }
@@ -3517,9 +3534,65 @@ utility_option_arg:
 |   STRING                      { $$ = $1 }
 
 analyze_stmt:
-    ANALYZE TABLE table_name '(' column_list ')'
+    ANALYZE TABLE analyze_table_list
     {
-        $$ = tree.NewAnalyzeStmt($3, $5)
+        $$ = tree.NewAnalyzeStmt($3)
+    }
+
+analyze_table_list:
+    analyze_table_entry
+    {
+        $$ = []*tree.AnalyzeTableEntry{$1}
+    }
+|   analyze_table_list ',' analyze_table_entry
+    {
+        $$ = append($1, $3)
+    }
+
+analyze_table_entry:
+    table_name
+    {
+        $$ = &tree.AnalyzeTableEntry{Table: $1}
+    }
+|   table_name '(' column_list ')'
+    {
+        $$ = &tree.AnalyzeTableEntry{Table: $1, Cols: $3}
+    }
+
+check_table_stmt:
+    CHECK TABLE table_name_list check_table_option_opt
+    {
+        $$ = tree.NewCheckTableStmt($3, $4)
+    }
+
+check_table_option_opt:
+    /* empty */
+    {
+        $$ = tree.CheckTableOptionNone
+    }
+|   EXTENDED
+    {
+        $$ = tree.CheckTableOptionExtended
+    }
+|   FOR UPGRADE
+    {
+        $$ = tree.CheckTableOptionForUpgrade
+    }
+
+show_profile_stmt:
+    SHOW PROFILE for_query_opt limit_opt
+    {
+        $$ = tree.NewShowProfileStmt($3, $4)
+    }
+
+for_query_opt:
+    /* empty */
+    {
+        $$ = 0
+    }
+|   FOR QUERY INTEGRAL
+    {
+        $$ = $3.(int64)
     }
 
 upgrade_stmt:
@@ -5377,8 +5450,13 @@ quick_opt:
 |    QUICK
 
 ignore_opt:
-    {}
+    {
+        $$ = ""
+    }
 |    IGNORE
+    {
+        $$ = "ignore"
+    }
 
 // MySQL REPLACE only allows LOW_PRIORITY or DELAYED (not HIGH_PRIORITY). Both are
 // accepted for compatibility and ignored: MatrixOne has no corresponding scheduling,
@@ -6619,14 +6697,18 @@ join_table:
         }
     }
 |   table_reference outer_join table_factor join_condition_opt
-    {
-        $$ = &tree.JoinTableExpr{
-            Left: $1,
-            JoinType: $2,
-            Right: $3,
-            Cond: $4,
-        }
-    }
+	{
+		if $4 == nil {
+			yylex.Error("outer join requires ON/USING clause")
+			goto ret1
+		}
+		$$ = &tree.JoinTableExpr{
+			Left: $1,
+			JoinType: $2,
+			Right: $3,
+			Cond: $4,
+		}
+	}
 |   table_reference natural_join table_factor
     {
         $$ = &tree.JoinTableExpr{
@@ -10960,6 +11042,15 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.BIT_XOR, $1, $3)
     }
+|   bit_expr PIPE_CONCAT bit_expr
+    {
+        name := tree.NewUnresolvedColName("concat")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("concat", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
 |   bit_expr '+' bit_expr %prec '+'
     {
         $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3)
@@ -12039,6 +12130,28 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
+|   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   JSON_OBJECTAGG '(' func_type_opt expression ',' expression ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$4, $6},
+            Type: $3,
+            WindowSpec: $8,
+        }
+    }
 
 std_dev_pop:
     STD
@@ -12662,15 +12775,6 @@ expression:
 |   expression OR expression %prec OR
     {
         $$ = tree.NewOrExpr($1, $3)
-    }
-|   expression PIPE_CONCAT expression %prec PIPE_CONCAT
-    {
-        name := tree.NewUnresolvedColName("concat")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr("concat", 1),
-            Exprs: tree.Exprs{$1, $3},
-        }
     }
 |   expression XOR expression %prec XOR
     {
@@ -13360,13 +13464,19 @@ decimal_type:
 |   REAL float_length_opt
     {
         locale := ""
+        width := int32(64)
+        oid := uint32(defines.MYSQL_TYPE_DOUBLE)
+        if yylex.(*Lexer).HasSQLMode(SQLModeRealAsFloat) {
+            width = 32
+            oid = uint32(defines.MYSQL_TYPE_FLOAT)
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.FloatFamily,
                 FamilyString: $1,
-                Width:  64,
+                Width:  width,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+                Oid:    oid,
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
             },
@@ -14236,6 +14346,7 @@ non_reserved_keyword:
 |   QUERY
 |   PAUSE
 |   PROFILES
+|   PROFILE
 |   ROLE
 |   RULE
 |   RULES
@@ -14515,6 +14626,8 @@ not_keyword:
 |   DATE_SUB
 |   EXTRACT
 |   GROUP_CONCAT
+|   JSON_ARRAYAGG
+|   JSON_OBJECTAGG
 |   CLUSTER_CENTERS
 |   KMEANS
 |   MAX

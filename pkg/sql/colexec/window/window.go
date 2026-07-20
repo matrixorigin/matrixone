@@ -131,7 +131,15 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if function.GetFunctionIsWinValueFunByName(winName) {
 					continue
 				}
-				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				// Derive one argument type per aggregate argument so multi-argument
+				// window aggregates (e.g. json_objectagg) receive all their types,
+				// mirroring the group operator (colexec/group/helper.go).
+				argExprs := ag.GetArgExpressions()
+				argTypes := make([]types.Type, len(argExprs))
+				for j, arg := range argExprs {
+					argTypes[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+				}
+				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 				if err != nil {
 					return result, err
 				}
@@ -334,14 +342,10 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
-	if len(vecs) > 1 {
-		for _, vec := range vecs {
-			vec.Free(proc.Mp())
-		}
-		return moerr.NewInternalErrorNoCtx("the Window operator currently does not support sending split result of window function.")
+	ctr.vec, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return err
 	}
-
-	ctr.vec = vecs[0]
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}

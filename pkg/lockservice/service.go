@@ -47,19 +47,21 @@ func WithWait(wait func()) Option {
 }
 
 type service struct {
-	cfg                  Config
-	serviceID            string
-	tableGroups          *lockTableHolders
-	activeTxnHolder      activeTxnHolder
-	fsp                  *fixedSlicePool
-	deadlockDetector     *detector
-	events               *waiterEvents
-	clock                clock.Clock
-	stopper              *stopper.Stopper
-	stopOnce             sync.Once
-	bindChangeMu         sync.RWMutex
-	fetchWhoWaitingListC chan who
-	logger               *log.MOLogger
+	cfg                   Config
+	serviceID             string
+	tableGroups           *lockTableHolders
+	activeTxnHolder       activeTxnHolder
+	fsp                   *fixedSlicePool
+	deadlockDetector      *detector
+	events                *waiterEvents
+	unknownCommitResolver *unknownCommitResolver
+	clock                 clock.Clock
+	stopper               *stopper.Stopper
+	stopOnce              sync.Once
+	bindChangeMu          sync.RWMutex
+	fetchWhoWaitingListC  chan who
+	logger                *log.MOLogger
+	commitSequence        atomic.Uint64
 
 	allocatorVersionMu         sync.Mutex
 	lastAllocatorVersion       uint64
@@ -90,6 +92,19 @@ type service struct {
 }
 
 const maxSupersededAllocatorIDs = 64
+
+var _ CommitSequenceProvider = (*service)(nil)
+
+// NextCommitSequence returns a non-zero sequence scoped to this lockservice
+// incarnation. serviceID also includes the process creation time, so a restart
+// gets a distinct source identity at TN.
+func (s *service) NextCommitSequence() uint64 {
+	sequence := s.commitSequence.Add(1)
+	if sequence != 0 {
+		return sequence
+	}
+	return s.commitSequence.Add(1)
+}
 
 // NewLockService create a lock service instance
 func NewLockService(
@@ -126,6 +141,7 @@ func NewLockService(
 	s.clock = runtime.ServiceRuntime(cfg.ServiceID).Clock()
 
 	s.initRemote()
+	s.unknownCommitResolver = newUnknownCommitResolver(s)
 	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.cfg.RemoteLockTimeout.Duration, s.Unlock, s.logger)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
@@ -237,12 +253,91 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
+	// completion even when the caller's request context has ended.
+	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+}
+
+// unlockUnknownCommit is used only after Commit returned an unknown outcome.
+// The allocator fence has already made a later Commit impossible, so shutdown
+// may cancel a remote cleanup and leave orphan recovery to release its lock.
+func (s *service) unlockUnknownCommit(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Keep the source transaction registered until every owner-side unlock has
+	// acknowledged. In particular, a local proxy must not publish a replacement
+	// holder before its ReplaceTo mutation reaches the remote owner. Retaining
+	// the active transaction on a bounded-attempt failure makes orphan cleanup
+	// fail closed; the resolver retries it later.
+	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	if txn == nil {
+		return nil
+	}
+
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
+	defer logUnlockTxn(s.logger, txn)()
+	if err := txn.closeWithoutFreeWithContext(
+		ctx,
+		txnID,
+		commitTS,
+		s.getLockTable,
+		s.logger,
+		mutations...,
+	); err != nil {
+		return err
+	}
+
+	if s.activeTxnHolder.deleteActiveTxn(txnID) != txn {
+		return nil
+	}
+	if !s.isStatus(pb.Status_ServiceLockEnable) {
+		s.reduceCanMoveGroupTables(txn)
+		if s.isStatus(pb.Status_ServiceLockWaiting) && s.activeTxnHolder.empty() {
+			s.setStatus(pb.Status_ServiceUnLockSucc)
+		}
+	}
+	s.deadlockDetector.txnClosed(txnID)
+	reuse.Free(txn, nil)
+	return nil
+}
+
+func (s *service) unlockWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
@@ -264,13 +359,13 @@ func (s *service) Unlock(
 	}
 
 	defer logUnlockTxn(s.logger, txn)()
-	txn.close(txnID, commitTS, s.getLockTable, s.logger, mutations...)
+	err := txn.closeWithContext(ctx, txnID, commitTS, s.getLockTable, s.logger, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
-	return nil
+	return err
 }
 
 func (s *service) IsOrphanTxn(
@@ -1044,31 +1139,47 @@ type activeTxnHolder interface {
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
-	canUnlockRemoteTxn(pb.WaitTxn) bool
+	canUnlockRemoteTxn(pb.WaitTxn) (bool, timestamp.Timestamp)
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
+		fenceTSByTxn map[string]timestamp.Timestamp,
 		maxKeepInterval time.Duration) [][]byte
 	isValidRemoteTxn(pb.WaitTxn) bool
+}
+
+const activeTxnHolderShards = 16
+
+type activeTxnEntry struct {
+	txn           *activeTxn
+	remoteService string
+}
+
+type activeTxnShard struct {
+	sync.RWMutex
+	txns map[string]activeTxnEntry
 }
 
 type mapBasedTxnHolder struct {
 	serviceID string
 	logger    *log.MOLogger
 	fsp       *fixedSlicePool
-	validTxn  func(txn pb.WaitTxn) (bool, error)
-	valid     func(sid string) (bool, error)
-	notify    func([]pb.OrphanTxn) ([][]byte, error)
-	mu        struct {
+	// validTxn returns an authoritative liveness result only when err is nil.
+	// Any error means the remote transaction state is unknown; transport
+	// reachability is not evidence that the transaction is inactive.
+	validTxn       func(txn pb.WaitTxn) (bool, error)
+	valid          func(sid string) (bool, error)
+	notify         func([]pb.OrphanTxn) (pb.CannotCommitResponse, error)
+	activeTxnCount atomic.Int64
+	activeTxns     [activeTxnHolderShards]activeTxnShard
+	mu             struct {
 		sync.RWMutex
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
 		// remoteLockBinds records the last heartbeat seen for a specific remote service + bind.
 		remoteLockBinds map[string]time.Time
 		// head(oldest) -> tail (newest)
-		dequeue           list.Deque[remote]
-		activeTxns        map[string]*activeTxn
-		activeTxnServices map[string]string
+		dequeue list.Deque[remote]
 	}
 }
 
@@ -1077,7 +1188,7 @@ func newMapBasedTxnHandler(
 	logger *log.MOLogger,
 	fsp *fixedSlicePool,
 	valid func(sid string) (bool, error),
-	notify func([]pb.OrphanTxn) ([][]byte, error),
+	notify func([]pb.OrphanTxn) (pb.CannotCommitResponse, error),
 	validTxn func(txn pb.WaitTxn) (bool, error),
 ) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
@@ -1087,19 +1198,22 @@ func newMapBasedTxnHandler(
 	h.notify = notify
 	h.validTxn = validTxn
 	h.serviceID = serviceID
-	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
-	h.mu.activeTxnServices = make(map[string]string)
+	for i := range h.activeTxns {
+		h.activeTxns[i].txns = make(map[string]activeTxnEntry, 64)
+	}
 	h.mu.remoteServices = make(map[string]*list.Element[remote])
 	h.mu.remoteLockBinds = make(map[string]time.Time)
 	h.mu.dequeue = list.New[remote]()
 	return h
 }
 
-func (h *mapBasedTxnHolder) getActiveLocked(txnKey string) *activeTxn {
-	if v, ok := h.mu.activeTxns[txnKey]; ok {
-		return v
+func (h *mapBasedTxnHolder) getActiveTxnShard(txnKey string) *activeTxnShard {
+	hash := uint32(2166136261)
+	for i := 0; i < len(txnKey); i++ {
+		hash ^= uint32(txnKey[i])
+		hash *= 16777619
 	}
-	return nil
+	return &h.activeTxns[hash%activeTxnHolderShards]
 }
 
 func (h *mapBasedTxnHolder) getActiveTxn(
@@ -1108,28 +1222,31 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	remoteService string,
 ) *activeTxn {
 	txnKey := util.UnsafeBytesToString(txnID)
-	h.mu.RLock()
-	v := h.getActiveLocked(txnKey)
-	if v != nil {
-		h.mu.RUnlock()
-		return v
+	shard := h.getActiveTxnShard(txnKey)
+	shard.RLock()
+	entry, ok := shard.txns[txnKey]
+	shard.RUnlock()
+	if ok {
+		return entry.txn
 	}
-	h.mu.RUnlock()
 	if !create {
 		return nil
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if v := h.getActiveLocked(txnKey); v != nil {
-		return v
+	shard.Lock()
+	defer shard.Unlock()
+	if entry, ok := shard.txns[txnKey]; ok {
+		return entry.txn
 	}
 
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
-	h.mu.activeTxns[txnKey] = txn
-	h.mu.activeTxnServices[txnKey] = txn.remoteService
-
+	// Publish the transaction count before the map entry. This keeps empty()
+	// conservative while a create is in flight: count == 0 always means that
+	// every shard is empty, which is required by the service drain transition.
+	h.activeTxnCount.Add(1)
+	shard.txns[txnKey] = activeTxnEntry{txn: txn, remoteService: remoteService}
 	if remoteService != "" {
+		h.mu.Lock()
 		if _, ok := h.mu.remoteServices[remoteService]; !ok {
 			h.mu.remoteServices[remoteService] = h.mu.dequeue.PushBack(remote{
 				id:   remoteService,
@@ -1137,6 +1254,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 			})
 
 		}
+		h.mu.Unlock()
 	}
 	logTxnCreated(h.logger, txn)
 	return txn
@@ -1144,53 +1262,54 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
 	txnKey := util.UnsafeBytesToString(txnID)
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if v := h.getActiveLocked(txnKey); v != nil {
-		return true
-	}
-	return false
+	shard := h.getActiveTxnShard(txnKey)
+	shard.RLock()
+	_, ok := shard.txns[txnKey]
+	shard.RUnlock()
+	return ok
 }
 
 func (h *mapBasedTxnHolder) empty() bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.mu.activeTxns) == 0
+	return h.activeTxnCount.Load() == 0
 }
 
 func (h *mapBasedTxnHolder) getAllTxnID() [][]byte {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	txns := make([][]byte, len(h.mu.activeTxns))
-	i := 0
-	for k := range h.mu.activeTxns {
-		txns[i] = util.UnsafeStringToBytes(k)
-		i++
+	txns := make([][]byte, 0, h.activeTxnCount.Load())
+	for i := range h.activeTxns {
+		shard := &h.activeTxns[i]
+		shard.RLock()
+		for txnKey := range shard.txns {
+			txns = append(txns, []byte(txnKey))
+		}
+		shard.RUnlock()
 	}
 	return txns
 }
 
 func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	txnKey := util.UnsafeBytesToString(txnID)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	v, ok := h.mu.activeTxns[txnKey]
+	shard := h.getActiveTxnShard(txnKey)
+	shard.Lock()
+	entry, ok := shard.txns[txnKey]
 	if ok {
-		delete(h.mu.activeTxns, txnKey)
-		delete(h.mu.activeTxnServices, txnKey)
+		delete(shard.txns, txnKey)
+		h.activeTxnCount.Add(-1)
 	}
-	return v
+	shard.Unlock()
+	return entry.txn
 }
 
 func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	n := 0
-	for _, txn := range h.mu.activeTxns {
-		if txn.fenceByBindChanged(bind, h.logger) {
-			n++
+	for i := range h.activeTxns {
+		shard := &h.activeTxns[i]
+		shard.RLock()
+		for _, entry := range shard.txns {
+			if entry.txn.fenceByBindChanged(bind, h.logger) {
+				n++
+			}
 		}
+		shard.RUnlock()
 	}
 	return n
 }
@@ -1229,9 +1348,13 @@ func (h *mapBasedTxnHolder) hasRemoteLockBind(remoteService string, bind pb.Lock
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
 	needRemoved [][]byte,
+	fenceTSByTxn map[string]timestamp.Timestamp,
 	maxKeepInterval time.Duration,
 ) [][]byte {
 	needRemoved = needRemoved[:0]
+	for k := range fenceTSByTxn {
+		delete(fenceTSByTxn, k)
+	}
 	for k := range timeoutServices {
 		delete(timeoutServices, k)
 	}
@@ -1266,23 +1389,22 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		}
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	// all txns in the timeout services need to be removed
-	for txnKey := range h.mu.activeTxns {
-		remoteService := h.mu.activeTxnServices[txnKey]
+	for i := range h.activeTxns {
+		shard := &h.activeTxns[i]
+		shard.RLock()
+		for txnKey, entry := range shard.txns {
+			if idx, ok := cannotCommitServices[entry.remoteService]; ok {
+				cannotCommit[idx].Txn = append(cannotCommit[idx].Txn, []byte(txnKey))
+				continue
+			}
 
-		if idx, ok := cannotCommitServices[remoteService]; ok {
-			cannotCommit[idx].Txn = append(cannotCommit[idx].Txn, util.UnsafeStringToBytes(txnKey))
-			continue
+			if _, ok := timeoutServices[entry.remoteService]; ok {
+				needRemoved = append(needRemoved, []byte(txnKey))
+			}
 		}
-
-		if _, ok := timeoutServices[remoteService]; ok {
-			needRemoved = append(needRemoved, util.UnsafeStringToBytes(txnKey))
-		}
+		shard.RUnlock()
 	}
-	h.mu.Unlock()
 
 	if len(cannotCommit) > 0 {
 		// found txn1 cannot commit, but txn1 is still running in other cn.
@@ -1294,18 +1416,25 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		// In case2: txn1'commit request will failed, and we can make txn1 as
 		//           timeout txn.
 		if committing, err := h.notify(cannotCommit); err == nil {
-			for sid, idx := range cannotCommitServices {
-				if len(committing) == 0 {
-					needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
-					timeoutServices[sid] = struct{}{}
-				} else {
-					m := make(map[string]struct{}, len(committing))
-					for _, v := range committing {
-						m[util.UnsafeBytesToString(v)] = struct{}{}
-					}
-					for _, v := range cannotCommit[idx].Txn {
-						if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
-							needRemoved = append(needRemoved, v)
+			if !committing.FenceTS.IsEmpty() {
+				committingTxns := committing.CommittingTxn
+				for sid, idx := range cannotCommitServices {
+					if len(committingTxns) == 0 {
+						needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
+						for _, txn := range cannotCommit[idx].Txn {
+							fenceTSByTxn[util.UnsafeBytesToString(txn)] = committing.FenceTS
+						}
+						timeoutServices[sid] = struct{}{}
+					} else {
+						m := make(map[string]struct{}, len(committingTxns))
+						for _, v := range committingTxns {
+							m[util.UnsafeBytesToString(v)] = struct{}{}
+						}
+						for _, v := range cannotCommit[idx].Txn {
+							if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
+								needRemoved = append(needRemoved, v)
+								fenceTSByTxn[util.UnsafeBytesToString(v)] = committing.FenceTS
+							}
 						}
 					}
 				}
@@ -1321,6 +1450,7 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 			h.mu.dequeue.Remove(e)
 		}
 	}
+	h.mu.Unlock()
 	return needRemoved
 }
 
@@ -1329,26 +1459,31 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 		return true
 	}
 
-	valid, err := h.validTxn(txn)
-	if err == nil {
-		if valid {
-			return true
-		}
-		// A remote CN active-txn miss does not prove the txn is safe to unlock.
-		// The commit response may be lost after TN has already committed it, so
-		// require the allocator to confirm the txn cannot still be committing.
-		return !h.canUnlockRemoteTxn(txn)
-	}
-	logValidTxnFailed(h.logger, txn, err)
-	if isRetryError(err) {
+	active, err := h.validTxn(txn)
+	if err != nil {
+		// A failed observation cannot establish transaction liveness. In
+		// particular, BackendClosed also represents transient MORPC pool and
+		// creation states; fencing on it can abort a healthy remote transaction.
+		// Keep the holder for this cycle. The waiter checker retries periodically,
+		// while a genuinely dead service is still reclaimed by the independent
+		// remote-bind heartbeat timeout path.
+		logValidTxnFailed(h.logger, txn, err)
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("indeterminate").Inc()
 		return true
 	}
-	return !h.canUnlockRemoteTxn(txn)
+	if active {
+		return true
+	}
+	// A remote CN active-txn miss does not prove the txn is safe to unlock.
+	// The commit response may be lost after TN has already committed it, so
+	// require the allocator to confirm the txn cannot still be committing.
+	canUnlock, _ := h.canUnlockRemoteTxn(txn)
+	return !canUnlock
 }
 
-func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) bool {
+func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) (bool, timestamp.Timestamp) {
 	if txn.CreatedOn == h.serviceID {
-		return false
+		return false, timestamp.Timestamp{}
 	}
 	cannotCommit := []pb.OrphanTxn{
 		{
@@ -1360,28 +1495,37 @@ func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) bool {
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
 		// any error, we cannot determine that the txn is safe to unlock.
-		return false
+		return false, timestamp.Timestamp{}
 	}
-	// the target txn is safe to unlock only when TN confirms it is not committing.
-	return len(committing) == 0
+	// The target txn is safe to unlock only when TN confirms it is not
+	// committing and returns an allocator fence that dominates future commits.
+	return len(committing.CommittingTxn) == 0 && !committing.FenceTS.IsEmpty(), committing.FenceTS
 }
 
 func (h *mapBasedTxnHolder) close() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	for k, txn := range h.mu.activeTxns {
-		reuse.Free(txn, nil)
-		delete(h.mu.activeTxns, k)
+	for i := range h.activeTxns {
+		h.activeTxns[i].Lock()
+	}
+	for i := range h.activeTxns {
+		for txnKey, entry := range h.activeTxns[i].txns {
+			reuse.Free(entry.txn, nil)
+			delete(h.activeTxns[i].txns, txnKey)
+		}
+	}
+	h.activeTxnCount.Store(0)
+	for i := len(h.activeTxns) - 1; i >= 0; i-- {
+		h.activeTxns[i].Unlock()
 	}
 }
 
 func (h *mapBasedTxnHolder) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	for _, txn := range h.mu.activeTxns {
-		txn.incLockTableRef(m, serviceID)
+	for i := range h.activeTxns {
+		shard := &h.activeTxns[i]
+		shard.RLock()
+		for _, entry := range shard.txns {
+			entry.txn.incLockTableRef(m, serviceID)
+		}
+		shard.RUnlock()
 	}
 }
 

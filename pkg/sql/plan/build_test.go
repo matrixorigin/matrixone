@@ -31,11 +31,24 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+type sqlModeMockCompilerContext struct {
+	*MockCompilerContext
+	sqlMode string
+}
+
+func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if varName == "sql_mode" {
+		return c.sqlMode, nil
+	}
+	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
+}
 
 func BenchmarkInsert(b *testing.B) {
 	typ := types.T_varchar.ToType()
@@ -63,6 +76,41 @@ func BenchmarkInsert(b *testing.B) {
 			break
 		}
 	}
+}
+
+func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "PIPES_AS_CONCAT",
+	}
+	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
+}
+
+func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "ANSI_QUOTES",
+	}
+	stmt, err := mysql.ParseOneWithSQLMode(
+		context.Background(),
+		`create view v_sql_mode as select 1 as "c"`,
+		1,
+		ctx.sqlMode,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	viewDef := p.GetDdl().GetCreateView().GetTableDef().GetViewSql()
+	require.NotNil(t, viewDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(viewDef.GetView()), &viewData))
+	require.NotNil(t, viewData.SQLMode)
+	require.Equal(t, ctx.sqlMode, *viewData.SQLMode)
 }
 
 // only use in developing
@@ -825,6 +873,632 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, tc := range []struct {
+		name             string
+		sql              string
+		expectedHeadings []string
+	}{
+		{
+			name: "aliased aggregate output",
+			sql: `
+				select
+					l_returnflag,
+					l_linestatus,
+					sum(l_quantity) as total_qty,
+					row_number() over (order by sum(l_quantity) desc, l_returnflag, l_linestatus) as row_num,
+					rank() over (order by sum(l_quantity) desc) as rank_num,
+					dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+				from lineitem
+				group by l_returnflag, l_linestatus with rollup
+				having total_qty > 0
+				order by total_qty desc, l_returnflag, l_linestatus`,
+			expectedHeadings: []string{"l_returnflag", "l_linestatus", "total_qty", "row_num", "rank_num", "dense_rank_num"},
+		},
+		{
+			name: "aggregate output without alias",
+			sql: `
+				select
+					l_returnflag,
+					l_linestatus,
+					sum(l_quantity),
+					row_number() over (order by sum(l_quantity) desc) as row_num,
+					rank() over (order by sum(l_quantity) desc) as rank_num,
+					dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+				from lineitem
+				group by l_returnflag, l_linestatus with rollup
+				order by sum(l_quantity) desc, l_returnflag, l_linestatus`,
+			expectedHeadings: []string{"l_returnflag", "l_linestatus", "sum(l_quantity)", "row_num", "rank_num", "dense_rank_num"},
+		},
+		{
+			name: "aggregate used only by windows",
+			sql: `
+				select
+					l_returnflag,
+					l_linestatus,
+					row_number() over (order by sum(l_quantity) desc) as row_num,
+					rank() over (order by sum(l_quantity) desc) as rank_num,
+					dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+				from lineitem
+				group by l_returnflag, l_linestatus with rollup
+				order by row_num`,
+			expectedHeadings: []string{"l_returnflag", "l_linestatus", "row_num", "rank_num", "dense_rank_num"},
+		},
+		{
+			name: "window outputs only",
+			sql: `
+				select
+					row_number() over (order by 1) as row_num,
+					rank() over (order by 1) as rank_num,
+					dense_rank() over (order by 1) as dense_rank_num
+				from lineitem
+				group by l_returnflag with rollup`,
+			expectedHeadings: []string{"row_num", "rank_num", "dense_rank_num"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.Equal(t, tc.expectedHeadings, query.Headings)
+
+			windowCount := 0
+			windowAfterUnionCount := 0
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_WINDOW {
+					windowCount++
+					require.Len(t, node.Children, 1)
+					if query.Nodes[node.Children[0]].NodeType == plan.Node_UNION_ALL {
+						windowAfterUnionCount++
+					}
+				}
+			}
+
+			require.Equal(t, 3, windowCount)
+			require.Equal(t, 1, windowAfterUnionCount)
+		})
+	}
+}
+
+func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name               string
+		sql                string
+		expectedHeadings   []string
+		expectedProjectLen int
+		expectedHavingType int32
+	}{
+		{
+			name: "select alias collides with source column",
+			sql: `
+				select n_name as n_regionkey, n_regionkey, sum(n_nationkey),
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_name, n_regionkey with rollup`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)", "rn"},
+			expectedProjectLen: 4,
+		},
+		{
+			name: "window output alias collides with source column",
+			sql: `
+				select n_name, n_regionkey, sum(n_nationkey),
+				       row_number() over (order by n_regionkey) as n_regionkey
+				from nation
+				group by n_name, n_regionkey with rollup`,
+			expectedHeadings:   []string{"n_name", "n_regionkey", "sum(n_nationkey)", "n_regionkey"},
+			expectedProjectLen: 4,
+		},
+		{
+			name: "final order by window keeps source scope",
+			sql: `
+				select n_name as n_regionkey, n_regionkey, sum(n_nationkey)
+				from nation
+				group by n_name, n_regionkey with rollup
+				order by row_number() over (order by n_regionkey)`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)"},
+			expectedProjectLen: 3,
+		},
+		{
+			name: "having alias collision keeps source scope",
+			sql: `
+				select sum(n_nationkey) as n_regionkey, n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having N_REGIONKEY > 0`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "rn"},
+			expectedProjectLen: 3,
+			expectedHavingType: int32(types.T_int32),
+		},
+		{
+			name: "qualified grouped source keeps bare having source scope",
+			sql: `
+				select sum(t.n_nationkey) as n_regionkey, t.n_regionkey,
+				       row_number() over (order by t.n_regionkey) as rn
+				from nation t
+				group by t.n_regionkey with rollup
+				having n_regionkey > 0`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "rn"},
+			expectedProjectLen: 3,
+			expectedHavingType: int32(types.T_int32),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.Equal(t, test.expectedHeadings, query.Headings)
+			require.NotEmpty(t, query.Steps)
+
+			root := query.Nodes[query.Steps[len(query.Steps)-1]]
+			require.Len(t, root.ProjectList, test.expectedProjectLen)
+			require.Equal(t, int32(types.T_int32), root.ProjectList[1].Typ.Id)
+
+			foundRowNumber := false
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_WINDOW {
+					continue
+				}
+				for _, winExpr := range node.WinSpecList {
+					spec := winExpr.GetW()
+					if spec == nil || spec.Name != "row_number" {
+						continue
+					}
+					foundRowNumber = true
+					require.Len(t, spec.OrderBy, 1)
+					require.Equal(t, int32(types.T_int32), spec.OrderBy[0].Expr.Typ.Id)
+				}
+			}
+			require.True(t, foundRowNumber)
+
+			if test.expectedHavingType != 0 {
+				foundHaving := false
+				for _, node := range query.Nodes {
+					if node.NodeType != plan.Node_FILTER || !node.RollupFilter {
+						continue
+					}
+					for _, filter := range node.FilterList {
+						fn := filter.GetF()
+						require.NotNil(t, fn)
+						require.Equal(t, ">", fn.Func.ObjName)
+						require.NotEmpty(t, fn.Args)
+						require.Equal(t, test.expectedHavingType, fn.Args[0].Typ.Id)
+						foundHaving = true
+					}
+				}
+				require.True(t, foundHaving)
+			}
+		})
+	}
+}
+
+func TestRollupWindowHavingAliasCollisionWithHiddenGroup(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		select sum(n_nationkey) as n_regionkey,
+		       row_number() over (order by sum(n_nationkey)) as rn
+		from nation
+		group by n_regionkey with rollup
+		having N_REGIONKEY > 0`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	foundHaving := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER || !node.RollupFilter {
+			continue
+		}
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			require.NotNil(t, fn)
+			require.Equal(t, ">", fn.Func.ObjName)
+			require.NotEmpty(t, fn.Args)
+			require.Equal(t, int32(types.T_int32), fn.Args[0].Typ.Id)
+			foundHaving = true
+		}
+	}
+	require.True(t, foundHaving)
+}
+
+func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name      string
+		sql       string
+		wantError string
+	}{
+		{
+			name: "ambiguous source without window",
+			sql: `
+				select n1.n_regionkey
+				from nation n1
+				join nation n2 on n1.n_nationkey = n2.n_nationkey
+				group by n1.n_regionkey with rollup
+				having n_regionkey > 0`,
+			wantError: "ambiguous column reference",
+		},
+		{
+			name: "ambiguous source with window",
+			sql: `
+				select n1.n_regionkey,
+				       row_number() over (order by n1.n_regionkey) as rn
+				from nation n1
+				join nation n2 on n1.n_nationkey = n2.n_nationkey
+				group by n1.n_regionkey with rollup
+				having n_regionkey > 0`,
+			wantError: "ambiguous column reference",
+		},
+		{
+			name: "non-grouped source without window",
+			sql: `
+				select sum(n_nationkey) as n_name
+				from nation
+				group by n_regionkey with rollup
+				having n_name <> ''`,
+			wantError: "must appear in the GROUP BY clause",
+		},
+		{
+			name: "non-grouped source with window",
+			sql: `
+				select sum(n_nationkey) as n_name,
+				       row_number() over (order by sum(n_nationkey)) as rn
+				from nation
+				group by n_regionkey with rollup
+				having n_name <> ''`,
+			wantError: "must appear in the GROUP BY clause",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, test.sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.wantError)
+		})
+	}
+}
+
+func TestRollupWindowHavingAvoidsUnsafeASTVisitor(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "searched case",
+			sql: `
+				select n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having case when n_regionkey > 0 then 1 else 0 end = 1`,
+		},
+		{
+			name: "prepared parameter",
+			sql: `
+				prepare stmt1 from select n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having sum(n_nationkey) > ?`,
+		},
+		{
+			name: "case insensitive name in expression",
+			sql: `
+				select n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having abs(N_REGIONKEY) >= 0`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			_, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRollupWindowVolatileExprOccurrencesStayIndependent(t *testing.T) {
+	stmt := mustParseRollupWindowSelect(t, `
+		select rand() as r1, rand() as r2,
+		       row_number() over (order by rand()) as rn
+		from nation
+		group by n_regionkey with rollup`)
+	clause := stmt.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(clause.GroupBy)
+
+	rewritten, ok := rewriteRollupWindowSelect(clause, stmt.OrderBy, stmt.Limit, stmt.RankOption)
+	require.True(t, ok)
+	require.NotNil(t, rewritten)
+
+	outerClause := rewritten.Select.(*tree.SelectClause)
+	require.Len(t, outerClause.Exprs, 3)
+	firstRand, ok := outerClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	secondRand, ok := outerClause.Exprs[1].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.NotEqual(t, firstRand.ColNameOrigin(), secondRand.ColNameOrigin())
+
+	rowNumber, ok := outerClause.Exprs[2].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.NotNil(t, rowNumber.WindowSpec)
+	require.Len(t, rowNumber.WindowSpec.OrderBy, 1)
+	_, ok = rowNumber.WindowSpec.OrderBy[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok, "the window's rand occurrence must not reuse either SELECT projection")
+}
+
+func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
+	stmt := mustParseRollupWindowSelect(t, `
+		select
+			l_returnflag as flag,
+			l_linestatus as status,
+			sum(l_quantity) as total_qty,
+			row_number() over (order by sum(l_quantity) desc) as rn
+		from lineitem
+		group by l_returnflag, l_linestatus with rollup
+		having sum(l_quantity) > 0
+		order by sum(l_quantity) desc
+		limit 10`)
+	clause := stmt.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(clause.GroupBy)
+
+	rewritten, ok := rewriteRollupWindowSelect(clause, stmt.OrderBy, stmt.Limit, stmt.RankOption)
+	require.True(t, ok)
+	require.NotNil(t, rewritten)
+	require.NotNil(t, rewritten.Limit)
+	require.Len(t, rewritten.OrderBy, 1)
+	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "__mo_rollup_window")
+	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "total_qty")
+
+	state := newRollupWindowRewriteState(clause.Exprs)
+	outerExprs, ok := buildRollupWindowSelectExprs(clause.Exprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 4)
+	require.Len(t, outerExprs, 4)
+	for _, innerExpr := range state.innerExprs {
+		require.NotNil(t, innerExpr.As)
+		require.True(t, strings.HasPrefix(innerExpr.As.Origin(), rollupWindowInternalAliasPrefix))
+	}
+
+	alias, ok := state.lookupExprAlias(clause.Exprs[0].Expr)
+	require.True(t, ok)
+	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
+	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("l_returnflag"))
+	require.False(t, ok)
+	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
+	require.False(t, ok)
+
+	state.addHavingAliasExprs(clause.Exprs)
+	require.Len(t, state.innerExprs, 7)
+	require.Equal(t, "flag", state.innerExprs[4].As.Origin())
+	require.Equal(t, "status", state.innerExprs[5].As.Origin())
+	require.Equal(t, "total_qty", state.innerExprs[6].As.Origin())
+}
+
+func TestRewriteRollupWindowSelectGuards(t *testing.T) {
+	_, ok := rewriteRollupWindowSelect(nil, nil, nil, nil)
+	require.False(t, ok)
+
+	noGroup := mustParseRollupWindowSelect(t, "select a, row_number() over () from t")
+	_, ok = rewriteRollupWindowSelect(noGroup.Select.(*tree.SelectClause), noGroup.OrderBy, noGroup.Limit, noGroup.RankOption)
+	require.True(t, ok)
+
+	distinct := mustParseRollupWindowSelect(t, "select distinct a, row_number() over () from t group by a, b with rollup")
+	distinctClause := distinct.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(distinctClause.GroupBy)
+	rewritten, ok := rewriteRollupWindowSelect(distinctClause, distinct.OrderBy, distinct.Limit, distinct.RankOption)
+	require.True(t, ok)
+	require.Nil(t, rewritten)
+
+	havingWindow := mustParseRollupWindowSelect(t, "select a, b, row_number() over () from t group by a, b with rollup having row_number() over () > 0")
+	havingWindowClause := havingWindow.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(havingWindowClause.GroupBy)
+	rewritten, ok = rewriteRollupWindowSelect(havingWindowClause, havingWindow.OrderBy, havingWindow.Limit, havingWindow.RankOption)
+	require.True(t, ok)
+	require.Nil(t, rewritten)
+
+	oneGroup := mustParseRollupWindowSelect(t, "select a, row_number() over () from t group by a")
+	_, ok = rewriteRollupWindowSelect(oneGroup.Select.(*tree.SelectClause), oneGroup.OrderBy, oneGroup.Limit, oneGroup.RankOption)
+	require.True(t, ok)
+
+	state := newRollupWindowRewriteState(nil)
+	_, ok = buildRollupWindowSelectExprs(nil, state)
+	require.False(t, ok)
+	star := mustParseRollupWindowSelect(t, "select *, row_number() over () from t")
+	starExprs := star.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(starExprs)
+	_, ok = buildRollupWindowSelectExprs(starExprs, state)
+	require.False(t, ok)
+
+	noWindow := mustParseRollupWindowSelect(t, "select a from t")
+	_, ok = rewriteRollupWindowSelect(noWindow.Select.(*tree.SelectClause), noWindow.OrderBy, noWindow.Limit, noWindow.RankOption)
+	require.False(t, ok)
+
+	complexInnerExpr := mustParseRollupWindowSelect(t, "select a + b, row_number() over () from t")
+	complexExprs := complexInnerExpr.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(complexExprs)
+	_, ok = buildRollupWindowSelectExprs(complexExprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 1)
+
+	windowBeforeAlias := mustParseRollupWindowSelect(t, "select row_number() over (order by total) as rn, sum(a) as total from t")
+	windowBeforeAliasExprs := windowBeforeAlias.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(windowBeforeAliasExprs)
+	outerExprs, ok := buildRollupWindowSelectExprs(windowBeforeAliasExprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 2)
+	aggregateAlias := state.innerExprs[0].As.Origin()
+	sourceAlias := state.innerExprs[1].As.Origin()
+	rewrittenWindow := tree.String(outerExprs[0].Expr, dialect.MYSQL)
+	require.Contains(t, rewrittenWindow, sourceAlias)
+	require.NotContains(t, rewrittenWindow, aggregateAlias)
+
+	duplicateAlias := mustParseRollupWindowSelect(t, "select a as x, b as x, row_number() over () from t")
+	duplicateExprs := duplicateAlias.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(duplicateExprs)
+	_, ok = buildRollupWindowSelectExprs(duplicateExprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 2)
+
+	state = newRollupWindowRewriteState(nil)
+	upperLiteralAlias, ok := state.ensureInnerExpr(mustParseRollupWindowExpr(t, "'A'"))
+	require.True(t, ok)
+	lowerLiteralAlias, ok := state.ensureInnerExpr(mustParseRollupWindowExpr(t, "'a'"))
+	require.True(t, ok)
+	require.NotEqual(t, upperLiteralAlias, lowerLiteralAlias)
+
+	parenAggregate := mustParseRollupWindowSelect(t, "select (sum(a)), row_number() over () from t")
+	require.Equal(t, "sum(a)", rollupWindowOutputAlias(parenAggregate.Select.(*tree.SelectClause).Exprs[0]).Origin())
+}
+
+func TestRewriteRollupWindowUnsupportedDoesNotFallback(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, sql := range []string{
+		"select distinct a, row_number() over () from nation group by a, n_regionkey with rollup",
+		"select a, row_number() over () is null from nation group by a, n_regionkey with rollup",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
+	}
+}
+
+func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
+	state := rollupWindowAliasMap(
+		"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+	)
+
+	complexExpr := mustParseRollupWindowExpr(t, `
+		case a
+			when 1 then not (
+				((b + -c) > cast(d as signed)) and (e like f escape g)
+				xor h = i
+				or (j, k) = (l, m)
+			)
+			else 'fallback'
+		end`)
+	rewritten, ok := rewriteRollupWindowExpr(complexExpr, state)
+	require.True(t, ok)
+	rewrittenSQL := tree.String(rewritten, dialect.MYSQL)
+	require.Contains(t, rewrittenSQL, "a_alias")
+	require.Contains(t, rewrittenSQL, "m_alias")
+
+	windowExpr := mustParseRollupWindowExpr(t, `
+		sum(a) over (
+			partition by b
+			order by c
+			rows between 1 preceding and 2 following
+		)`)
+	windowState := newRollupWindowRewriteState(nil)
+	rewritten, ok = rewriteRollupWindowExpr(windowExpr, windowState)
+	require.True(t, ok)
+	rewrittenSQL = tree.String(rewritten, dialect.MYSQL)
+	require.Len(t, windowState.innerExprs, 3)
+	require.Contains(t, rewrittenSQL, windowState.innerExprs[0].As.Origin())
+	require.Contains(t, rewrittenSQL, "partition by "+windowState.innerExprs[1].As.Origin())
+	require.Contains(t, rewrittenSQL, "order by "+windowState.innerExprs[2].As.Origin())
+
+	state = newRollupWindowRewriteState(nil)
+	aggregateExpr := mustParseRollupWindowExpr(t, "sum(missing)")
+	rewritten, ok = rewriteRollupWindowExpr(aggregateExpr, state)
+	require.True(t, ok)
+	require.True(t, strings.HasPrefix(tree.String(rewritten, dialect.MYSQL), rollupWindowInternalAliasPrefix))
+	require.Len(t, state.innerExprs, 1)
+
+	state = rollupWindowAliasMap("a", "b")
+	tupleExprs, ok := rewriteRollupWindowExprs(tree.Exprs{tree.NewUnresolvedColName("a"), tree.NewUnresolvedColName("b")}, state)
+	require.True(t, ok)
+	require.Len(t, tupleExprs, 2)
+
+	emptyExprs, ok := rewriteRollupWindowExprs(nil, state)
+	require.True(t, ok)
+	require.Nil(t, emptyExprs)
+
+	state = newRollupWindowRewriteState(nil)
+	orderBy, ok := rewriteRollupWindowOrderBy(tree.OrderBy{{Expr: tree.NewUnresolvedColName("another_missing")}}, state)
+	require.True(t, ok)
+	require.Len(t, orderBy, 1)
+	require.True(t, strings.HasPrefix(tree.String(orderBy[0].Expr, dialect.MYSQL), rollupWindowInternalAliasPrefix))
+}
+
+func TestRollupWindowExprContainsWindowRecursiveShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr string
+	}{
+		{name: "func args", expr: "coalesce(sum(a) over (), b)"},
+		{name: "func order by", expr: "group_concat(a order by sum(b) over ())"},
+		{name: "binary", expr: "a + sum(b) over ()"},
+		{name: "unary", expr: "-sum(a) over ()"},
+		{name: "comparison", expr: "sum(a) over () > 0"},
+		{name: "and", expr: "sum(a) over () and b"},
+		{name: "xor", expr: "a xor sum(b) over ()"},
+		{name: "or", expr: "a or sum(b) over ()"},
+		{name: "not", expr: "not sum(a) over ()"},
+		{name: "is null", expr: "sum(a) over () is null"},
+		{name: "is not null", expr: "sum(a) over () is not null"},
+		{name: "paren", expr: "(sum(a) over ())"},
+		{name: "cast", expr: "cast(sum(a) over () as signed)"},
+		{name: "tuple", expr: "(a, sum(b) over ())"},
+		{name: "between", expr: "sum(a) over () between 1 and 2"},
+		{name: "case expr", expr: "case sum(a) over () when 1 then b else c end"},
+		{name: "case when", expr: "case when a then sum(b) over () else c end"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, rollupWindowExprContainsWindow(mustParseRollupWindowExpr(t, tc.expr)))
+		})
+	}
+
+	require.False(t, rollupWindowExprContainsWindow(mustParseRollupWindowExpr(t, "case when a then b else c end")))
+}
+
+func mustParseRollupWindowSelect(t *testing.T, sql string) *tree.Select {
+	t.Helper()
+	stmts, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	return stmt
+}
+
+func mustParseRollupWindowExpr(t *testing.T, expr string) tree.Expr {
+	t.Helper()
+	stmt := mustParseRollupWindowSelect(t, "select "+expr)
+	clause, ok := stmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 1)
+	return clause.Exprs[0].Expr
+}
+
+func rollupWindowAliasMap(cols ...string) *rollupWindowRewriteState {
+	state := newRollupWindowRewriteState(nil)
+	state.activeNameAliases = make(map[string]string, len(cols))
+	for _, col := range cols {
+		state.activeNameAliases[col] = col + "_alias"
+	}
+	return state
+}
+
+func expandRollupGroupByForTest(groupBy *tree.GroupByClause) {
+	if groupBy == nil || !groupBy.Rollup || len(groupBy.GroupByExprsList) == 0 {
+		return
+	}
+	for i := len(groupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
+		groupBy.GroupByExprsList = append(groupBy.GroupByExprsList, groupBy.GroupByExprsList[0][0:i])
+	}
+	groupBy.GroupByExprsList = append(groupBy.GroupByExprsList, nil)
+}
+
 func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
 	sqls := []string{
 		`
@@ -1160,6 +1834,133 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION a SET a.N_NAME = 'x' FROM NATION2 b WHERE a.N_REGIONKEY = b.NOT_A_COL",    // FROM column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NATIONKEY = N_NATIONKEY + 1")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.JoinType == plan.Node_DEDUP {
+			found = true
+			require.Equal(t, plan.Node_IGNORE, node.OnDuplicateAction)
+		}
+	}
+	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
+func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sql              string
+		expectRecomputed bool
+	}{
+		{
+			name:             "first component",
+			sql:              "update constraint_test.products set pid = pid + 8 where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "last component",
+			sql:              "update constraint_test.products set pname = 'new' where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "all components",
+			sql:              "update constraint_test.products set pid = 9, pname = 'new' where pid = 1",
+			expectRecomputed: true,
+		},
+		{
+			name:             "non cluster column",
+			sql:              "update constraint_test.products set description = 'new' where pid = 1",
+			expectRecomputed: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			configureProductsAsCompositeClusterByTable(t, mock)
+
+			logicPlan, err := runOneStmt(mock, t, testCase.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var multiUpdate *plan.Node
+			var originUpdateCtx *plan.UpdateCtx
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_MULTI_UPDATE {
+					continue
+				}
+				multiUpdate = node
+				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "products" {
+						originUpdateCtx = updateCtx
+						break
+					}
+				}
+			}
+			require.NotNil(t, multiUpdate)
+			require.NotNil(t, originUpdateCtx)
+
+			clusterByName := originUpdateCtx.TableDef.ClusterBy.Name
+			clusterByPos := originUpdateCtx.TableDef.Name2ColIndex[clusterByName]
+			clusterByInsertCol := originUpdateCtx.InsertCols[clusterByPos]
+
+			require.Len(t, multiUpdate.Children, 1)
+			lockNode := query.Nodes[multiUpdate.Children[0]]
+			require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+			require.Len(t, lockNode.Children, 1)
+			finalProject := query.Nodes[lockNode.Children[0]]
+			require.Equal(t, plan.Node_PROJECT, finalProject.NodeType)
+			clusterByExpr := finalProject.ProjectList[clusterByInsertCol.ColPos]
+
+			if !testCase.expectRecomputed {
+				require.NotNil(t, clusterByExpr.GetCol())
+				return
+			}
+
+			clusterByFunc := clusterByExpr.GetF()
+			require.NotNil(t, clusterByFunc)
+			require.Equal(t, "serial_full", clusterByFunc.Func.ObjName)
+			require.Len(t, clusterByFunc.Args, 2)
+
+			for i, componentName := range []string{"pid", "pname"} {
+				componentPos := originUpdateCtx.TableDef.Name2ColIndex[componentName]
+				componentInsertCol := originUpdateCtx.InsertCols[componentPos]
+				componentExpr := finalProject.ProjectList[componentInsertCol.ColPos]
+				require.Equal(t, componentExpr.GetCol(), clusterByFunc.Args[i].GetCol())
+			}
+		})
+	}
+}
+
+func configureProductsAsCompositeClusterByTable(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["products"]
+	require.NotNil(t, tableDef)
+	require.Len(t, tableDef.Cols, 6)
+
+	clusterByCol := tableDef.Cols[4]
+	clusterByCol.Hidden = true
+	tableDef.ClusterBy.CompCbkeyCol = clusterByCol
+
+	fakePrimaryKey := DeepCopyColDef(mock.ctxt.tables["fake_pk_t"].Cols[2])
+	tableDef.Cols = append(tableDef.Cols, nil)
+	copy(tableDef.Cols[5:], tableDef.Cols[4:])
+	tableDef.Cols[4] = fakePrimaryKey
+	for i, col := range tableDef.Cols {
+		col.ColId = uint64(i)
+	}
+	tableDef.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.FakePrimaryKeyColName},
+		PkeyColName: catalog.FakePrimaryKeyColName,
+		Cols:        []uint64{4},
+		CompPkeyCol: fakePrimaryKey,
+	}
 }
 
 func TestDropIndexIfExistsMissingIndex(t *testing.T) {
@@ -1531,6 +2332,89 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	if empnoRefs != 2 {
 		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
 	}
+}
+
+func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
+	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent update cascade marks prepare uncacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set deptno = deptno + 10 where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent delete set null marks prepare uncacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from delete from dept where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent delete restrict keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_RESTRICT)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from delete from dept where deptno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+}
+
+func buildPreparedQuery(t *testing.T, mock *MockOptimizer, sql string) *plan.Query {
+	t.Helper()
+
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(logicPlan)
+	require.NotNil(t, queryPlan.GetQuery())
+	return queryPlan.GetQuery()
+}
+
+func setMockEmpDeptForeignKeyAction(
+	t *testing.T,
+	mock *MockOptimizer,
+	onDelete plan.ForeignKeyDef_RefAction,
+	onUpdate plan.ForeignKeyDef_RefAction,
+) {
+	t.Helper()
+
+	const (
+		mockDeptTableID uint64 = 88888
+		mockEmpTableID  uint64 = 88889
+	)
+
+	empTable := mock.ctxt.tables["emp"]
+	require.NotNil(t, empTable)
+	require.NotEmpty(t, empTable.Fkeys)
+
+	deptTable := mock.ctxt.tables["dept"]
+	require.NotNil(t, deptTable)
+
+	delete(mock.ctxt.id2name, empTable.TblId)
+	delete(mock.ctxt.id2name, deptTable.TblId)
+	empTable.TblId = mockEmpTableID
+	deptTable.TblId = mockDeptTableID
+	mock.ctxt.id2name[mockEmpTableID] = "emp"
+	mock.ctxt.id2name[mockDeptTableID] = "dept"
+	require.NotNil(t, mock.ctxt.objects["emp"])
+	require.NotNil(t, mock.ctxt.objects["dept"])
+	mock.ctxt.objects["emp"].Obj = int64(mockEmpTableID)
+	mock.ctxt.objects["dept"].Obj = int64(mockDeptTableID)
+
+	empTable.Fkeys[0].ForeignTbl = deptTable.TblId
+	empTable.Fkeys[0].ForeignCols = []uint64{0}
+	empTable.Fkeys[0].OnDelete = onDelete
+	empTable.Fkeys[0].OnUpdate = onUpdate
+
+	deptTable.RefChildTbls = []uint64{empTable.TblId}
 }
 
 func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
@@ -3569,7 +4453,36 @@ func TestCountDistinctRowSubqueryRejected(t *testing.T) {
 func TestSubqueryInJoinOn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
+		"SELECT a.n_nationkey FROM nation a JOIN nation b ON b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z WHERE z.n_regionkey = a.n_regionkey)",
 		"SELECT n_name FROM nation JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+		"SELECT n_name FROM nation JOIN region ON n_regionkey = r_regionkey AND r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		foundFilter := false
+		foundJoinCondition := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				foundFilter = true
+			}
+			for _, expr := range node.OnList {
+				foundJoinCondition = true
+				require.False(t, hasSubquery(expr), "JOIN OnList contains an executable Expr_Sub: %s", sql)
+			}
+			for _, expr := range node.FilterList {
+				require.False(t, hasSubquery(expr), "FILTER contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundFilter, "subquery predicate was not lowered to a FILTER: %s", sql)
+		if strings.Contains(sql, "n_regionkey = r_regionkey AND") {
+			require.True(t, foundJoinCondition, "ordinary ON predicate was removed from the JOIN: %s", sql)
+		}
+	}
+
+	runTestShouldError(mock, t, []string{
+		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	})
 }

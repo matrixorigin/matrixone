@@ -2466,6 +2466,38 @@ func TestIssue5176_2(t *testing.T) {
 	)
 }
 
+func TestCheckTxnTimeoutSkipRemoteTxnIfSecondCannotCommitReportsCommitting(t *testing.T) {
+	txn := []byte("remote-committing")
+	var notifyCalls atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			if notifyCalls.Add(1) == 1 {
+				return pb.CannotCommitResponse{
+					FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+				}, nil
+			}
+			return pb.CannotCommitResponse{CommittingTxn: [][]byte{txn}}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return false, nil },
+	)
+	hold.getActiveTxn(txn, true, "s2")
+
+	s := &service{
+		serviceID:       "s1",
+		activeTxnHolder: hold,
+		logger:          getLogger(""),
+	}
+	s.setStatus(pb.Status_ServiceLockWaiting)
+	s.checkTxnTimeout(context.Background())
+
+	require.Equal(t, int32(2), notifyCalls.Load())
+	require.NotNil(t, hold.getActiveTxn(txn, false, ""))
+}
+
 func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -5354,9 +5386,9 @@ func TestLockWaitTimeout(t *testing.T) {
 
 			// Should time out after ~1 second, not immediately and not indefinitely.
 			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
-				"expected lock-timeout error (ErrInvalidState), got %v", err)
-			require.Contains(t, err.Error(), "lock timeout")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected lock-wait-timeout error, got %v", err)
+			require.Contains(t, err.Error(), "Lock wait timeout exceeded")
 			require.GreaterOrEqual(t, elapsed, time.Second)
 			require.Less(t, elapsed, 3*time.Second)
 		},

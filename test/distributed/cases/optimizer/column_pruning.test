@@ -1,0 +1,93 @@
+drop database if exists column_pruning;
+create database column_pruning;
+use column_pruning;
+
+create table l(a int, b int, payload varchar(100));
+create table r(a int, b int, payload varchar(100));
+insert into l values (1, 10, 'x'), (1, 10, 'y'), (1, 20, 'w'), (2, 30, 'z');
+insert into r values (1, 10, 'u'), (3, 40, 'v');
+
+-- UNION ALL can prune unused positions but must preserve every input row.
+select a from (select a, b from l union all select a, b from r) u order by a;
+
+-- Retaining only a nonzero UNION ALL position must compact it to output slot 0.
+select b from (select a, b from l union all select a, b from r) u order by b;
+
+-- UNION DISTINCT must retain the unprojected b key: (1,10) and (1,20)
+-- remain two rows after the outer projection removes b.
+select a from (select a, b from l union select a, b from r) u order by a;
+
+-- count(payload) is unused and may be removed. sum(b), although not projected,
+-- is still required by HAVING and exercises aggregate slot compaction.
+select a from (select a, count(payload) as unused_count, sum(b) as total from l group by a having sum(b) > 0) g order by a;
+
+-- The retained aggregate starts at logical slot 1 and must be remapped to
+-- physical aggregate slot 0 after count(payload) is removed.
+select total from (select count(payload) as unused_count, sum(b) as total from l) g;
+
+-- An unused window result must not change rows; a used result must retain its
+-- partition/order inputs and keep the compact output slot correct.
+select a from (select a, row_number() over(partition by b order by payload) as rn from l) w order by a;
+select a, rn from (select a, row_number() over(partition by b order by payload) as rn from l) w order by a, rn;
+
+-- An order-sensitive aggregate observes its input sequence. The window result
+-- is unused, but its ordering cannot be removed without changing the JSON array.
+select a, json_arrayagg(payload) from (select a, payload, row_number() over(partition by a order by b desc, payload) as rn from l) w group by a order by a;
+
+-- A scalar aggregate with a discarded value still produces one row on empty
+-- input, so pruning must retain a row-producing aggregate carrier.
+create table empty_t(v int);
+select 1 from (select sum(v) as discarded from empty_t) s;
+
+-- Row-only consumers choose a low-cost carrier while preserving every row.
+create table carrier_l(payload varchar(1000), id tinyint);
+create table carrier_r(payload varchar(2000), id tinyint);
+insert into carrier_l values ('wide-a', 1), ('wide-b', 2);
+insert into carrier_r values ('wide-c', 3);
+select 1 from carrier_l order by id;
+select 1 from (
+    select payload, id from carrier_l
+    union all
+    select payload, id from carrier_r
+) u;
+
+-- A discarded expensive aggregate must not become the scalar row carrier.
+select 1 from (select group_concat(payload), count(*) from carrier_l) s;
+select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
+select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+
+-- SAMPLE prunes unused values and compacts a retained nonzero output slot.
+create table sample_nn(a int not null, b int not null, payload varchar(100) not null);
+insert into sample_nn select * from l;
+select b from (select sample(payload, b, 4 rows) from sample_nn) s order by b;
+
+-- A row-only SAMPLE consumer keeps a low-cost carrier and preserves sampled rows.
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn) s) q;
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn where a < 0) s) q;
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn where a = 2) s) q;
+select count(*) from (select 1 from (select sample(payload, b, 100 percent) from sample_nn) s) q;
+
+-- An internal filter is the only consumer of b; payload remains removable.
+select a from (
+    select a, sample(payload, b, 4 rows) from sample_nn group by a
+) s where b > 15 order by a, b;
+
+-- A function inferred as NOT NULL can still return SQL NULL at runtime.
+create table sample_runtime_null(j json not null, id int not null);
+insert into sample_runtime_null values
+    ('{}', 1),
+    ('{}', 2),
+    ('{"x":3}', 3),
+    ('{"x":4}', 4);
+select id from (
+    select sample(json_extract(j, '$.x'), id, 2 rows)
+    from sample_runtime_null
+) s order by id;
+
+-- _wstart is deliberately unprojected. Column pruning must continue and keep
+-- _wend instead of leaving the time-window remapping incomplete.
+create table tw(ts timestamp, v int);
+insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
+select _wend, max(v) from tw interval(ts, 1, day);
+
+drop database column_pruning;

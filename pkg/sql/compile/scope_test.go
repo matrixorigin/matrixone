@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -47,9 +48,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -57,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -119,11 +124,85 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
+	catalog.SetupDefines("")
+	scope := generateScopeCases(t, []string{
+		"select uid from R order by uid limit 2 + 3 offset 0 + 2",
+	})[0]
+
+	var topLimits []uint64
+	var offsets []uint64
+	var opTypes []vm.OpType
+	var visitOperator func(vm.Operator)
+	visitOperator = func(operator vm.Operator) {
+		if operator == nil {
+			return
+		}
+		base := operator.GetOperatorBase()
+		for i := 0; i < base.NumChildren(); i++ {
+			visitOperator(base.GetChildren(i))
+		}
+		opTypes = append(opTypes, operator.OpType())
+		switch op := operator.(type) {
+		case *top.Top:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *mergetop.MergeTop:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *offset.Offset:
+			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+		}
+	}
+	var visitScope func(*Scope)
+	visitScope = func(current *Scope) {
+		visitOperator(current.RootOp)
+		for _, preScope := range current.PreScopes {
+			visitScope(preScope)
+		}
+	}
+	visitScope(scope)
+
+	require.NotEmpty(t, topLimits)
+	for _, candidateLimit := range topLimits {
+		require.Equal(t, uint64(7), candidateLimit)
+	}
+	require.Contains(t, offsets, uint64(2))
+	require.NotContains(t, opTypes, vm.Order)
+	require.NotContains(t, opTypes, vm.MergeOrder)
+}
+
 func checkScopeRoot(t *testing.T, s *Scope) {
 	require.NotEqual(t, nil, s.RootOp)
 	for i := range s.PreScopes {
 		checkScopeRoot(t, s.PreScopes[i])
 	}
+}
+
+func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
+	rel := &mockRelationForMembershipFilter{}
+	s := &Scope{
+		RootOp: colexec.NewMockOperator(),
+		DataSource: &Source{
+			R:   &struct{ engine.Reader }{},
+			Rel: rel,
+		},
+	}
+
+	require.NoError(t, s.Reset(NewMockCompile(t)))
+	require.Nil(t, s.DataSource.R)
+	require.Same(t, rel, s.DataSource.Rel)
+}
+
+func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
+	l := NewLockMeta()
+	databaseRel := &mockRelationForMembershipFilter{}
+	tableRel := &mockRelationForMembershipFilter{}
+	l.database_rel = databaseRel
+	l.table_rel = tableRel
+
+	l.reset(nil)
+
+	require.Same(t, databaseRel, l.database_rel)
+	require.Same(t, tableRel, l.table_rel)
 }
 
 func TestScopeSerialization2(t *testing.T) {
@@ -152,6 +231,24 @@ func TestScopeSerialization2(t *testing.T) {
 	scope, err := decodeScope(scopeData, testCompile.proc, true, nil)
 	require.NoError(t, err)
 	checkScopeRoot(t, scope)
+}
+
+func TestDecodeRemoteScopePreservesRemoteRunContextDuringPipelineInit(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.counterSet = &perfcounter.CounterSet{}
+	sourceScope := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	scopeData, err := encodeScope(sourceScope)
+	require.NoError(t, err)
+
+	remoteScope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	testCompile.scopes = []*Scope{remoteScope}
+	testCompile.InitPipelineContextToExecuteQuery()
+
+	require.Equal(t, true, testCompile.proc.Ctx.Value(defines.RemoteRunContext{}))
+	require.Equal(t, true, remoteScope.Proc.Ctx.Value(defines.RemoteRunContext{}))
 }
 
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
@@ -343,7 +440,7 @@ func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
 	require.True(t, sender.safeToClose)
-	require.True(t, sender.alreadyClose)
+	require.True(t, sender.receiveClosed)
 }
 
 func TestNewParallelScope(t *testing.T) {
@@ -567,6 +664,53 @@ func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.errText)
 		})
+	}
+}
+
+// A prepared statement's cached compile reuses its scope tree across
+// executions. The previous run's cleanup delivers End into the pipeline edges
+// and marks them done; a done edge silently rejects both data and End, so
+// without clearing that state the next run's receivers would wait forever.
+// Scope.Reset must clear the terminal state on the whole scope tree.
+func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
+	testCompile := NewMockCompile(t)
+
+	child := &Scope{
+		Magic: Normal,
+		Proc:  testCompile.proc.NewNoContextChildProc(1),
+	}
+	s := &Scope{
+		Magic:     Merge,
+		Proc:      testCompile.proc.NewNoContextChildProc(2),
+		PreScopes: []*Scope{child},
+	}
+
+	var regs []*process.WaitRegister
+	regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	regs = append(regs, child.Proc.Reg.MergeReceivers...)
+	for _, reg := range regs {
+		require.True(t, reg.SendEnd())
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("edge should be done after SendEnd")
+		}
+	}
+
+	require.NoError(t, s.Reset(testCompile))
+
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+			t.Fatal("Reset must clear edge terminal state for reuse")
+		default:
+		}
+		select {
+		case <-reg.Ch2:
+			t.Fatal("Reset must drain stale buffered signals")
+		default:
+		}
+		require.True(t, reg.SendEnd(), "edge must accept End again after Reset")
 	}
 }
 
@@ -1413,7 +1557,7 @@ func TestNotifyMessageClean(t *testing.T) {
 		streamSender: ff,
 		safeToClose:  true,
 	}
-	// no matter error happens or not, clean method should close the sender.
+	// Repeated cleanup attempts must retire a sender exactly once.
 	n1 := notifyMessageResult{
 		sender: sender,
 		err:    moerr.NewInternalErrorNoCtx("there is an error."),
@@ -1427,7 +1571,7 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 
 	n2.clean(proc)
-	require.Equal(t, 2, ff.number)
+	require.Equal(t, 1, ff.number)
 }
 
 func TestSuppressRemoteRunCancelError(t *testing.T) {
@@ -1539,6 +1683,7 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorContains(t, err, "malformed remote CN address")
+		require.ErrorIs(t, context.Cause(parent.Proc.Ctx), err)
 	case <-time.After(2 * time.Second):
 		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
 		t.Fatal("merge run hung after malformed remote pre-scope failed")
@@ -1565,6 +1710,7 @@ func TestScopeGetRelDataError(t *testing.T) {
 	}
 
 	// Create a mock compile with engine
+	catalog.SetupDefines("")
 	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	c := NewMockCompile(t)
 	c.proc = s.Proc
@@ -1910,5 +2056,94 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
+	}
+}
+
+func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
+	ivfNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit:        &plan.Expr{},
+			OrigFuncName: "l2_distance",
+		},
+	}
+	ordinaryNode := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{}}
+
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
+}
+
+func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
+	probeType := plan.Type{Id: int32(types.T_int64), NotNullable: true}
+
+	tests := []struct {
+		name            string
+		passingNotOnPK  bool
+		acceptedNotOnPK bool
+	}{
+		{
+			name:            "PASS on PK before non-PK IN",
+			passingNotOnPK:  false,
+			acceptedNotOnPK: true,
+		},
+		{
+			name:            "PASS on non-PK before PK IN",
+			passingNotOnPK:  true,
+			acceptedNotOnPK: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+
+			passingSpec := plan2.MakeRuntimeFilter(
+				101, false, 1, plan2.GetColExpr(probeType, 1, 0), test.passingNotOnPK)
+			acceptedSpec := plan2.MakeRuntimeFilter(
+				102, false, 1, plan2.GetColExpr(probeType, 1, 0), test.acceptedNotOnPK)
+			tableScan := table_scan.NewArgument()
+			defer tableScan.Release()
+			scope := &Scope{
+				Proc:   proc,
+				RootOp: tableScan,
+				DataSource: &Source{
+					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{passingSpec, acceptedSpec},
+				},
+			}
+			compile := &Compile{proc: proc}
+
+			message.SendMessage(message.RuntimeFilterMessage{
+				Tag: passingSpec.Tag,
+				Typ: message.RuntimeFilter_PASS,
+			}, board)
+			message.SendMessage(message.RuntimeFilterMessage{
+				Tag:  acceptedSpec.Tag,
+				Typ:  message.RuntimeFilter_IN,
+				Card: 1,
+			}, board)
+
+			runtimeFilters, emptyScan, err := scope.waitForRuntimeFilters(compile)
+			require.NoError(t, err)
+			require.False(t, emptyScan)
+			require.Len(t, runtimeFilters, 1)
+			require.Same(t, acceptedSpec, runtimeFilters[0].spec)
+
+			blockFilters, err := scope.handleRuntimeFilters(compile, runtimeFilters)
+			require.NoError(t, err)
+			require.Len(t, blockFilters, 1)
+			require.Same(t, runtimeFilters[0].expr, blockFilters[0])
+			if test.acceptedNotOnPK {
+				require.Equal(t, runtimeFilters[0].expr, tableScan.RuntimeFilterExprs[0])
+				require.Nil(t, scope.DataSource.FilterExpr)
+			} else {
+				require.Empty(t, tableScan.RuntimeFilterExprs)
+				require.NotNil(t, scope.DataSource.FilterExpr)
+			}
+		})
 	}
 }

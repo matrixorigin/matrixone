@@ -61,6 +61,8 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	c.beginSchedulingTraceAttempt()
+
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
@@ -156,7 +158,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	MarkQueryRunning(c, txnOperator)
+	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
+		return nil, err
+	}
 	defer func() {
 		MarkQueryDone(c, txnOperator)
 	}()
@@ -573,6 +577,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if e != nil {

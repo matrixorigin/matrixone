@@ -209,6 +209,8 @@ func (mw *waiterEvents) close() {
 	for _, w := range mw.mu.blockedWaiters {
 		w.close("waiterEvents close", mw.logger)
 	}
+	clear(mw.mu.blockedWaiters)
+	mw.mu.blockedWaiters = nil
 	mw.mu.Unlock()
 }
 
@@ -250,6 +252,24 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
+}
+
+// removeBlockedWaiter stops the background checker from retaining a waiter
+// that the synchronous lock path is about to reuse.
+func (mw *waiterEvents) removeBlockedWaiter(w *waiter) {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
+	blocked := mw.mu.blockedWaiters[:0]
+	for _, current := range mw.mu.blockedWaiters {
+		if current == w {
+			current.close("waiterEvents remove blocked waiter", mw.logger)
+			continue
+		}
+		blocked = append(blocked, current)
+	}
+	clear(mw.mu.blockedWaiters[len(blocked):])
+	mw.mu.blockedWaiters = blocked
 }
 
 func (mw *waiterEvents) wakeCheck() {
@@ -403,7 +423,8 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 
 	for _, h := range holders {
 		if !mw.txnHolder.hasRemoteLockBind(h.CreatedOn, v.lt.bind, mw.remoteLockTimeout) {
-			if !mw.txnHolder.canUnlockRemoteTxn(h) {
+			canUnlock, fenceTS := mw.txnHolder.canUnlockRemoteTxn(h)
+			if !canUnlock {
 				mw.logger.Warn("found stale remote lock without bind heartbeat, but txn may still commit",
 					zap.String("bind", v.lt.bind.DebugString()),
 					bytesArrayField("txns", [][]byte{h.TxnID}))
@@ -411,17 +432,26 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 			}
 			mw.logger.Warn("found stale remote lock without bind heartbeat",
 				zap.String("bind", v.lt.bind.DebugString()),
+				zap.String("fence-ts", fenceTS.DebugString()),
 				bytesArrayField("txns", [][]byte{h.TxnID}))
-			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
+			_ = mw.unlock(context.Background(), h.TxnID, fenceTS)
 			continue
 		}
 		// When you have determined that a remote transaction is an orphaned transaction, you
 		// can release the lock that the remote transaction has placed on the current cn.
 		if !mw.txnHolder.isValidRemoteTxn(h) {
-			mw.logger.Warn("found orphans txns",
+			canUnlock, fenceTS := mw.txnHolder.canUnlockRemoteTxn(h)
+			if !canUnlock {
+				mw.logger.Warn("remote txn is inactive but cannot be confirmed safe to unlock",
+					zap.String("bind", v.lt.bind.DebugString()),
+					bytesArrayField("txns", [][]byte{h.TxnID}))
+				continue
+			}
+			mw.logger.Warn("found orphan remote txn, unlock with fence timestamp",
+				zap.String("bind", v.lt.bind.DebugString()),
+				zap.String("fence-ts", fenceTS.DebugString()),
 				bytesArrayField("txns", [][]byte{h.TxnID}))
-			// ignore error. If failed will retry until lock removed
-			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
+			_ = mw.unlock(context.Background(), h.TxnID, fenceTS)
 		}
 	}
 }

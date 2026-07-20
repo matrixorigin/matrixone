@@ -748,7 +748,6 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		minMaxIdx = 1
 	}
 
-	var getValueFailed bool
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	sysAccountCtx := proc.Ctx
@@ -759,11 +758,14 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		getValueFailed := false
 		db, null1 := dbNames.GetStrValue(i)
 		table, null2 := tableNames.GetStrValue(i)
 		column, null3 := columnNames.GetStrValue(i)
 		if null1 || null2 || null3 {
-			rs.AppendMustNull()
+			if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
+				return appendErr
+			}
 		} else {
 			dbStr, tableStr, columnStr := string(db), string(table), string(column)
 
@@ -825,6 +827,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 					getValueFailed = true
 				}
 			} else {
+				getValueFailed = true
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
 				tValues, _, er := rel.MaxAndMinValues(ctx)
 				if er != nil {
@@ -844,7 +847,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				}
 			}
 			if getValueFailed {
-				rs.AppendMustNull()
+				if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
+					return appendErr
+				}
 			}
 		}
 	}
@@ -1165,21 +1170,30 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 		if strings.HasPrefix(columnSubtype, "SRID=") {
 			columnSubtype = ""
 		}
-
-		wkt, valueSubtype, _, _, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
-		if err != nil {
-			return nil, err
-		}
-		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
-			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
-		}
-		// Store bare WKB — float32 coordinates for a GEOMETRY32 column, float64
-		// otherwise — regardless of whether the input was WKB or (legacy) WKT.
-		if float32Column {
-			return encodeGeometryPayloadFloat32(wkt), nil
-		}
-		return encodeGeometryPayload(wkt, 0, false), nil
+		return NormalizeGeometryForStorage(proc, payload, columnSubtype, float32Column)
 	}, selectList)
+}
+
+// NormalizeGeometryForStorage validates a geometry payload (WKB or legacy WKT)
+// against a column's subtype constraint and returns the bare WKB to store:
+// float32-coordinate WKB when float32Column is set, float64 otherwise. It is the
+// shared core of the cast_geometry_to_subtype runtime cast and the external-table
+// CSV loader, so both produce byte-identical, validated geometry. columnSubtype is
+// the upper-cased subtype keyword (e.g. "POINT"); "" or "GEOMETRY" accepts any
+// subtype. SRID is enforced at bind time from the value/column types, not here,
+// because the WKB payload does not carry an SRID.
+func NormalizeGeometryForStorage(proc *process.Process, payload []byte, columnSubtype string, float32Column bool) ([]byte, error) {
+	wkt, valueSubtype, _, _, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
+	if err != nil {
+		return nil, err
+	}
+	if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
+		return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
+	}
+	if float32Column {
+		return encodeGeometryPayloadFloat32(wkt), nil
+	}
+	return encodeGeometryPayload(wkt, 0, false), nil
 }
 
 func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

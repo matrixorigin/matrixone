@@ -617,6 +617,7 @@ message UpdateCtx {
   repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
   bool skip_insert_on_null_pk = 10;
   int32 insert_pk_col_idx = 11;
+  bool count_delete_affect_rows = 12;
 }
 
 message InsertCtx {
@@ -715,6 +716,8 @@ message IndexReaderParam {
   Expr limit = 2;
   string orig_func_name = 3;
   DistRange dist_range = 4;
+  int32 partition_cn_cnt = 5;
+  int32 partition_cn_idx = 6;
 }
 
 message Node {
@@ -1117,6 +1120,9 @@ message Query {
 
   // run time config that can change query behaviors
   int64 maxDop = 10;
+
+  // True when the planner generated recursive FK side-effect DML for this query.
+  bool has_foreign_key_action = 11;
 }
 
 message TransationControl {

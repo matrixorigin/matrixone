@@ -287,8 +287,10 @@ type Compile struct {
 
 	MessageBoard *message.MessageBoard
 
-	cnList         engine.Nodes
-	queryPlacement schedule.QueryDecision
+	cnList            engine.Nodes
+	queryPlacement    schedule.QueryDecision
+	schedulingTrace   *schedule.TraceRecorder
+	schedulingAttempt schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
 
@@ -309,6 +311,11 @@ type Compile struct {
 	lockTables map[uint64]*plan.LockTarget
 
 	filterExprExes []colexec.ExpressionExecutor
+
+	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
+	// visited by compilePlanScope. It is statement-local and remains empty for
+	// queries without right-SINGLE joins.
+	compiledRightSingleNodes []int32
 
 	needLockMeta bool
 	needBlock    bool

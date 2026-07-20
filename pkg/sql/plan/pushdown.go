@@ -553,8 +553,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.FilterList = append(node.FilterList, selfFilters...)
 		if len(node.Children) != 0 {
 			childId := node.Children[0]
-			childId, _ = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
+			var cantPushdownChild []*plan.Expr
+			childId, cantPushdownChild = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
 			node.Children[0] = childId
+			cantPushdown = append(cantPushdown, cantPushdownChild...)
+		} else {
+			cantPushdown = append(cantPushdown, downFilters...)
 		}
 
 	case plan.Node_APPLY:
@@ -626,12 +630,12 @@ func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	nodePushDown = DeepCopyNode(node)
 
 	if nodePushDown.Offset != nil {
-		newExpr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{nodePushDown.Limit, nodePushDown.Offset})
-		if err != nil {
+		candidateLimit, ok := buildCandidateLimit(nodePushDown.Limit, nodePushDown.Offset)
+		if !ok {
 			goto END
 		}
 		nodePushDown.Offset = nil
-		nodePushDown.Limit = newExpr
+		nodePushDown.Limit = candidateLimit
 	}
 	newNodeID = builder.appendNode(nodePushDown, nil)
 	nodePushDown.Children[0] = joinnode.Children[0]
@@ -658,36 +662,24 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
-
-			// if there is a limit, outcnt is limit number
-			if child.Limit != nil {
-				if cExpr, ok := child.Limit.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						child.Stats.Outcnt = float64(c.U64Val)
-						if child.Stats.Selectivity < 0.5 {
-							newblockNum := int32(c.U64Val / 2)
-							if newblockNum < child.Stats.BlockNum {
-								child.Stats.BlockNum = newblockNum
-							}
-						} else {
-							child.Stats.BlockNum = 1
-						}
-						child.Stats.Cost = float64(child.Stats.BlockNum * objectio.BlockMaxRows)
-					}
-				}
-			}
 		}
 	}
 }
 
 func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
-	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
-		return
-	}
-
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
 		builder.pushdownVectorIndexTopToTableScan(childID)
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN && node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
+			if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
+				applyIvfReaderParamToEntriesScan(node, readerParam)
+			}
+		}
+	}
+	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
+		return
 	}
 
 	if node.NodeType != plan.Node_SORT || node.Limit == nil || node.Offset != nil {
@@ -717,8 +709,8 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.OrderBy != nil {
 		return
 	}
-	limitVal := node.Limit.GetLit().GetU64Val()
-	if limitVal == 0 {
+	limitVal, literal := getLiteralUint64(node.Limit)
+	if !literal || limitVal == 0 {
 		return
 	}
 	if limitVal > maxVectorIndexTopPushdownLimit {
@@ -740,8 +732,7 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
 		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-			scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
-			scanNode.IndexReaderParam.DistRange = readerParam.DistRange
+			applyIvfReaderParamToEntriesScan(scanNode, readerParam)
 		}
 	}
 
@@ -762,6 +753,21 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
+}
+
+func applyIvfReaderParamToEntriesScan(scanNode *plan.Node, readerParam *plan.IndexReaderParam) {
+	if scanNode == nil || scanNode.NodeType != plan.Node_TABLE_SCAN ||
+		scanNode.GetTableDef().GetTableType() != catalog.SystemSI_IVFFLAT_TblType_Entries ||
+		readerParam == nil || readerParam.GetOrigFuncName() == "" {
+		return
+	}
+	if scanNode.IndexReaderParam == nil {
+		scanNode.IndexReaderParam = &plan.IndexReaderParam{}
+	}
+	scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
+	scanNode.IndexReaderParam.DistRange = readerParam.DistRange
+	scanNode.IndexReaderParam.PartitionCnCnt = readerParam.PartitionCnCnt
+	scanNode.IndexReaderParam.PartitionCnIdx = readerParam.PartitionCnIdx
 }
 
 // exprColRefsSubsetOf returns true when every column reference in expr

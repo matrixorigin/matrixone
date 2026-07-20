@@ -15,7 +15,7 @@
 package disttae
 
 import (
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -160,9 +160,8 @@ func (tp *TrackedPartitions) Add(
 	// Only evict if maxCount > 0 and we have reached the limit
 	if maxCount > 0 && len(tp.snaps) >= maxCount {
 		// Sort by last access time (oldest first)
-		sort.Slice(tp.snaps, func(i, j int) bool {
-			return tp.snaps[i].GetLastAccessTime().Before(
-				tp.snaps[j].GetLastAccessTime())
+		slices.SortFunc(tp.snaps, func(a, b *TrackedPartition) int {
+			return a.GetLastAccessTime().Compare(b.GetLastAccessTime())
 		})
 
 		// Evict oldest snapshots to make room for new one

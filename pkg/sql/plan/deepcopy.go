@@ -75,13 +75,14 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:             DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:           DeepCopyTableDef(ctx.TableDef, true),
-			InsertCols:         slices.Clone(ctx.InsertCols),
-			DeleteCols:         slices.Clone(ctx.DeleteCols),
-			PartitionCols:      slices.Clone(ctx.PartitionCols),
-			SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-			InsertPkColIdx:     ctx.InsertPkColIdx,
+			ObjRef:                DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:              DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols:            slices.Clone(ctx.InsertCols),
+			DeleteCols:            slices.Clone(ctx.DeleteCols),
+			PartitionCols:         slices.Clone(ctx.PartitionCols),
+			SkipInsertOnNullPk:    ctx.SkipInsertOnNullPk,
+			InsertPkColIdx:        ctx.InsertPkColIdx,
+			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 		}
 	}
 
@@ -286,8 +287,11 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 	}
 
 	ret := &plan.IndexReaderParam{
-		OrderBy: DeepCopyOrderBySpecList(oldParam.OrderBy),
-		Limit:   DeepCopyExpr(oldParam.Limit),
+		OrderBy:        DeepCopyOrderBySpecList(oldParam.OrderBy),
+		Limit:          DeepCopyExpr(oldParam.Limit),
+		OrigFuncName:   oldParam.OrigFuncName,
+		PartitionCnCnt: oldParam.PartitionCnCnt,
+		PartitionCnIdx: oldParam.PartitionCnIdx,
 	}
 
 	if oldParam.DistRange != nil {
@@ -581,11 +585,12 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	newQry := &plan.Query{
-		StmtType: qry.StmtType,
-		Steps:    qry.Steps,
-		Nodes:    make([]*plan.Node, len(qry.Nodes)),
-		Params:   DeepCopyExprList(qry.Params),
-		Headings: qry.Headings,
+		StmtType:            qry.StmtType,
+		Steps:               qry.Steps,
+		Nodes:               make([]*plan.Node, len(qry.Nodes)),
+		Params:              DeepCopyExprList(qry.Params),
+		Headings:            qry.Headings,
+		HasForeignKeyAction: qry.HasForeignKeyAction,
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)

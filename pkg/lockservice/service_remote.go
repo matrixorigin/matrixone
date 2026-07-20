@@ -25,9 +25,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var methodVersions = map[pb.Method]int64{
@@ -84,70 +86,13 @@ func (s *service) initRemote() {
 			// transaction is marked as cannot commit on tn.
 			return false, err
 		},
-		func(txn []pb.OrphanTxn) ([][]byte, error) {
-			req := acquireRequest()
-			defer releaseRequest(req)
-
-			req.Method = pb.Method_CannotCommit
-			req.CannotCommit.OrphanTxnList = txn
-
+		func(txn []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
 			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote1)
 			defer cancel()
-
-			resp, err := s.remote.client.Send(ctx, req)
-			if err != nil {
-				return nil, moerr.AttachCause(ctx, err)
-			}
-			defer releaseResponse(resp)
-			return resp.CannotCommit.CommittingTxn, nil
+			return s.notifyCannotCommit(ctx, txn)
 		},
 		func(txn pb.WaitTxn) (bool, error) {
-			req := acquireRequest()
-			defer releaseRequest(req)
-
-			req.Method = pb.Method_CheckActiveTxn
-			req.CheckActiveTxn.ServiceID = txn.CreatedOn
-			req.CheckActiveTxn.Txn = txn.TxnID
-
-			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote2)
-			defer cancel()
-
-			resp, err := s.remote.client.Send(ctx, req)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-					req = acquireRequest()
-					defer releaseRequest(req)
-
-					req.Method = pb.Method_GetActiveTxn
-					req.GetActiveTxn.ServiceID = txn.CreatedOn
-
-					resp, err = s.remote.client.Send(ctx, req)
-					if err != nil {
-						return false, moerr.AttachCause(ctx, err)
-					}
-					defer releaseResponse(resp)
-
-					if !resp.GetActiveTxn.Valid {
-						return false, nil
-					}
-
-					for _, v := range resp.GetActiveTxn.Txn {
-						if bytes.Equal(v, txn.TxnID) {
-							return true, nil
-						}
-					}
-					return false, nil
-				}
-				return false, moerr.AttachCause(ctx, err)
-			}
-			defer releaseResponse(resp)
-
-			// cn restarted
-			if !resp.CheckActiveTxn.Valid {
-				return false, nil
-			}
-
-			return resp.CheckActiveTxn.Active, nil
+			return checkRemoteActiveTxn(s.remote.client, txn)
 		},
 	)
 
@@ -177,6 +122,125 @@ func (s *service) initRemote() {
 	if err := s.stopper.RunTask(s.unlockTimeoutRemoteTxn); err != nil {
 		panic(err)
 	}
+}
+
+func (s *service) notifyCannotCommit(
+	ctx context.Context,
+	txns []pb.OrphanTxn,
+) (pb.CannotCommitResponse, error) {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_CannotCommit
+	req.CannotCommit.OrphanTxnList = txns
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return pb.CannotCommitResponse{}, moerr.AttachCause(ctx, err)
+	}
+	defer releaseResponse(resp)
+	return resp.CannotCommit, nil
+}
+
+// checkRemoteActiveTxn treats a service-identity mismatch as a routing signal,
+// not as proof that the transaction is inactive. A negative identity response
+// becomes authoritative only after the old backend was successfully detached
+// and the request was repeated through freshly resolved routing.
+func checkRemoteActiveTxn(client Client, txn pb.WaitTxn) (bool, error) {
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		defaultRPCTimeout,
+		moerr.CauseInitRemote2,
+	)
+	defer cancel()
+
+	for attempt := 0; attempt < 2; attempt++ {
+		valid, active, err := sendRemoteActiveTxnCheck(ctx, client, txn)
+		if err != nil {
+			if attempt > 0 {
+				v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("confirmation-failure").Inc()
+			}
+			return false, moerr.AttachCause(ctx, err)
+		}
+		if valid {
+			if attempt > 0 {
+				result := "confirmed-inactive"
+				if active {
+					result = "confirmed-active"
+				}
+				v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues(result).Inc()
+			}
+			return active, nil
+		}
+		if attempt == 1 {
+			// A lockservice identifier includes the process start version. After
+			// authoritative discovery and a fresh connection, another identity
+			// mismatch means that the old incarnation which owned this txn has
+			// been replaced. This relies on the process manager terminating the
+			// old listener before publishing its replacement.
+			v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("incarnation-replaced").Inc()
+			return false, nil
+		}
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("confirmation-started").Inc()
+		resetter, ok := client.(interface {
+			ResetBackend(context.Context, string) error
+		})
+		if !ok {
+			return false, moerr.NewInternalErrorNoCtx(
+				"lockservice client does not support active-txn backend reset")
+		}
+		if err := resetter.ResetBackend(ctx, txn.CreatedOn); err != nil {
+			// Preserve the original error for observability. The caller treats every
+			// error as an indeterminate observation, independent of its transport
+			// error code.
+			return false, moerr.AttachCause(ctx, err)
+		}
+	}
+	return false, nil
+}
+
+func sendRemoteActiveTxnCheck(
+	ctx context.Context,
+	client Client,
+	txn pb.WaitTxn,
+) (bool, bool, error) {
+	req := acquireRequest()
+	req.Method = pb.Method_CheckActiveTxn
+	req.CheckActiveTxn.ServiceID = txn.CreatedOn
+	req.CheckActiveTxn.Txn = txn.TxnID
+	resp, err := client.Send(ctx, req)
+	releaseRequest(req)
+	if err == nil {
+		valid, active := resp.CheckActiveTxn.Valid, resp.CheckActiveTxn.Active
+		releaseResponse(resp)
+		return valid, active, nil
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		return false, false, err
+	}
+
+	// Older peers do not support CheckActiveTxn. GetActiveTxn has the same
+	// service-identity bit, so it follows the same reset-and-confirm contract.
+	req = acquireRequest()
+	req.Method = pb.Method_GetActiveTxn
+	req.GetActiveTxn.ServiceID = txn.CreatedOn
+	resp, err = client.Send(ctx, req)
+	releaseRequest(req)
+	if err != nil {
+		return false, false, err
+	}
+	valid := resp.GetActiveTxn.Valid
+	active := false
+	if valid {
+		for _, txnID := range resp.GetActiveTxn.Txn {
+			if bytes.Equal(txnID, txn.TxnID) {
+				active = true
+				break
+			}
+		}
+	}
+	releaseResponse(resp)
+	return valid, active, nil
 }
 
 func (s *service) initRemoteHandler() {
@@ -467,7 +531,16 @@ func (s *service) handleCheckActiveTxn(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CheckActiveTxn.Valid = s.serviceID == req.CheckActiveTxn.ServiceID
-	if resp.CheckActiveTxn.Valid && s.cfg.TxnIterFunc != nil {
+	if resp.CheckActiveTxn.Valid && s.unknownCommitResolver != nil {
+		// TxnIterFunc tracks frontend transaction operators. An unknown Commit
+		// can already have removed its operator while lockservice is still
+		// retaining it to finish a remote proxy ReplaceTo. Only that resolver-
+		// owned state must delay orphan cleanup. activeTxnHolder also contains
+		// ordinary lockservice holders, whose liveness must remain governed by
+		// TxnIterFunc.
+		resp.CheckActiveTxn.Active = s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
+	}
+	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active && s.cfg.TxnIterFunc != nil {
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {
 			resp.CheckActiveTxn.Active = bytes.Equal(req.CheckActiveTxn.Txn, txnID)
 			return !resp.CheckActiveTxn.Active
@@ -498,6 +571,12 @@ func (s *service) handleRemoteGetLock(
 			resp.GetTxnLock.Value = int32(lock.value)
 			values := make([]pb.WaitTxn, 0)
 			lock.waiters.iter(func(w *waiter) bool {
+				// The response is a wait-for graph snapshot. Only waiters that
+				// are actively blocking represent an edge; notified and completed
+				// waiters may still be present in the queue.
+				if w.getStatus() != blocking {
+					return true
+				}
 				values = append(values, w.txn)
 				return true
 			})
@@ -708,6 +787,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 
 	var timeoutTxns [][]byte
 	timeoutServices := make(map[string]struct{})
+	fenceTSByTxn := make(map[string]timestamp.Timestamp)
 	for {
 		select {
 		case <-ctx.Done():
@@ -716,12 +796,22 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 			timeoutTxns = s.activeTxnHolder.getTimeoutRemoveTxn(
 				timeoutServices,
 				timeoutTxns,
+				fenceTSByTxn,
 				s.cfg.RemoteLockTimeout.Duration)
 			if len(timeoutTxns) > 0 {
 				s.logger.Warn("found orphans txns",
 					bytesArrayField("txns", timeoutTxns))
 				for _, txnID := range timeoutTxns {
-					s.Unlock(ctx, txnID, timestamp.Timestamp{})
+					fenceTS := fenceTSByTxn[util.UnsafeBytesToString(txnID)]
+					if fenceTS.IsEmpty() {
+						s.logger.Warn("skip orphan unlock without allocator fence",
+							bytesArrayField("txn", [][]byte{txnID}))
+						continue
+					}
+					s.logger.Warn("unlock orphan txn with fence timestamp",
+						bytesArrayField("txn", [][]byte{txnID}),
+						zap.String("fence-ts", fenceTS.DebugString()))
+					s.Unlock(ctx, txnID, fenceTS)
 				}
 			}
 
@@ -742,26 +832,34 @@ func (s *service) checkTxnTimeout(ctx context.Context) {
 		txn := s.activeTxnHolder.getActiveTxn(t, false, "")
 		createOn := txn.remoteService
 		if len(createOn) == 0 {
-			if !s.isValidLocalTxn(t) {
+			if canUnlock, fenceTS := s.canUnlockLocalTxn(t); canUnlock {
 				s.logger.Warn("found timeout txn",
-					bytesArrayField("txn", [][]byte{t}))
-				_ = s.Unlock(ctx, t, timestamp.Timestamp{})
+					bytesArrayField("txn", [][]byte{t}),
+					zap.String("fence-ts", fenceTS.DebugString()))
+				_ = s.Unlock(ctx, t, fenceTS)
 			}
 			continue
 		}
 
 		waitTxn := pb.WaitTxn{TxnID: t, CreatedOn: createOn}
 		if !s.activeTxnHolder.isValidRemoteTxn(waitTxn) {
+			canUnlock, fenceTS := s.activeTxnHolder.canUnlockRemoteTxn(waitTxn)
+			if !canUnlock {
+				s.logger.Warn("found timeout txn but cannot confirm it is safe to unlock",
+					bytesArrayField("txn", [][]byte{t}))
+				continue
+			}
 			s.logger.Warn("found timeout txn",
-				bytesArrayField("txn", [][]byte{t}))
-			_ = s.Unlock(ctx, t, timestamp.Timestamp{})
+				bytesArrayField("txn", [][]byte{t}),
+				zap.String("fence-ts", fenceTS.DebugString()))
+			_ = s.Unlock(ctx, t, fenceTS)
 		}
 	}
 }
 
-func (s *service) isValidLocalTxn(t []byte) bool {
+func (s *service) canUnlockLocalTxn(t []byte) (bool, timestamp.Timestamp) {
 	if s.cfg.TxnIterFunc == nil {
-		return true
+		return false, timestamp.Timestamp{}
 	}
 	valid := false
 	s.cfg.TxnIterFunc(func(txnID []byte) bool {
@@ -772,7 +870,7 @@ func (s *service) isValidLocalTxn(t []byte) bool {
 		return true
 	})
 	if valid {
-		return valid
+		return false, timestamp.Timestamp{}
 	}
 
 	cannotCommit := []pb.OrphanTxn{
@@ -784,15 +882,16 @@ func (s *service) isValidLocalTxn(t []byte) bool {
 
 	h, ok := s.activeTxnHolder.(*mapBasedTxnHolder)
 	if !ok {
-		return true
+		return false, timestamp.Timestamp{}
 	}
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
 		// any error, we cannot make txn as a invalid txn
-		return true
+		return false, timestamp.Timestamp{}
 	}
-	// the target txn is committing, valid
-	return len(committing) != 0
+	// The target txn is safe to unlock only when TN confirms it is not
+	// committing and returns an allocator fence that dominates future commits.
+	return len(committing.CommittingTxn) == 0 && !committing.FenceTS.IsEmpty(), committing.FenceTS
 }
 
 type allocatorState struct {
@@ -807,7 +906,26 @@ func getLockTableBind(
 	originTableID uint64,
 	serviceID string,
 	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
+	return getLockTableBindWithContext(
+		context.Background(),
+		c,
+		group,
+		tableID,
+		originTableID,
+		serviceID,
+		sharding,
+	)
+}
+
+func getLockTableBindWithContext(
+	parent context.Context,
+	c Client,
+	group uint32,
+	tableID uint64,
+	originTableID uint64,
+	serviceID string,
+	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
+	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
 	req := acquireRequest()

@@ -16,6 +16,7 @@ package clusterservice
 
 import (
 	"context"
+	"sync"
 
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -52,6 +53,14 @@ type Selector struct {
 	all bool
 
 	// regexCache is the cache for compiled regexp item.
+	regexpCache *regexpCache
+}
+
+// SelectorMatcher reuses glob regular expressions while matching one service
+// snapshot. Its zero value is ready to use and its cache is bounded by the
+// patterns encountered during that snapshot resolution.
+type SelectorMatcher struct {
+	once        sync.Once
 	regexpCache *regexpCache
 }
 
@@ -98,6 +107,14 @@ type MOCluster interface {
 	AddCN(metadata.CNService)
 	// UpdateCN updates the specified CN in the cluster
 	UpdateCN(metadata.CNService)
+}
+
+// AuthoritativeRefresher is an optional capability for callers that must know
+// whether a synchronous cluster snapshot refresh actually succeeded. The
+// legacy ForceRefresh API intentionally has no result and is unsuitable for
+// correctness decisions based on freshness.
+type AuthoritativeRefresher interface {
+	Refresh(context.Context) error
 }
 
 type ClusterClient interface {

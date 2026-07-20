@@ -124,10 +124,16 @@ var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 var newHAKeeperClientFunc = newHAKeeperClient
 var sendCNAllocateIDFunc = (*hakeeperClient).sendCNAllocateID
 
+// NewClusterHAKeeperClient creates a HAKeeper client to query cluster details.
+//
+// NB: caller must set a deadline on ctx and could specify options for morpc.Client via ctx.
 func NewClusterHAKeeperClient(
 	ctx context.Context, sid string, cfg HAKeeperClientConfig,
 ) (ClusterHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateHAKeeperClientContext(ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -135,7 +141,7 @@ func NewClusterHAKeeperClient(
 
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
 //
-// NB: caller could specify options for morpc.Client via ctx.
+// NB: caller must set a deadline on ctx and could specify options for morpc.Client via ctx.
 func NewCNHAKeeperClient(
 	ctx context.Context,
 	sid string,
@@ -144,12 +150,15 @@ func NewCNHAKeeperClient(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return nil, err
+	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
 // NewTNHAKeeperClient creates a HAKeeper client to be used by a TN node.
 //
-// NB: caller could specify options for morpc.Client via ctx.
+// NB: caller must set a deadline on ctx and could specify options for morpc.Client via ctx.
 func NewTNHAKeeperClient(
 	ctx context.Context,
 	sid string,
@@ -158,18 +167,24 @@ func NewTNHAKeeperClient(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return nil, err
+	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
 }
 
 // NewLogHAKeeperClient creates a HAKeeper client to be used by a Log Service node.
 //
-// NB: caller could specify options for morpc.Client via ctx.
+// NB: caller must set a deadline on ctx and could specify options for morpc.Client via ctx.
 func NewLogHAKeeperClient(
 	ctx context.Context,
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (LogHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateHAKeeperClientContext(ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -206,7 +221,13 @@ func NewLogHAKeeperClientWithRetry(
 
 		default:
 			if err := createFn(); err != nil {
-				time.Sleep(time.Second * 3)
+				retryTimer := time.NewTimer(time.Second * 3)
+				select {
+				case <-ctx.Done():
+					retryTimer.Stop()
+					return nil
+				case <-retryTimer.C:
+				}
 				continue
 			}
 			return c
@@ -216,7 +237,7 @@ func NewLogHAKeeperClientWithRetry(
 
 // NewProxyHAKeeperClient creates a HAKeeper client to be used by a proxy service.
 //
-// NB: caller could specify options for morpc.Client via ctx.
+// NB: caller must set a deadline on ctx and could specify options for morpc.Client via ctx.
 func NewProxyHAKeeperClient(
 	ctx context.Context,
 	sid string,
@@ -225,7 +246,20 @@ func NewProxyHAKeeperClient(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return nil, err
+	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
+func validateHAKeeperClientContext(ctx context.Context) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("nil context")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return moerr.NewInvalidInput(ctx, "HAKeeper client context deadline not set")
+	}
+	return nil
 }
 
 func newManagedHAKeeperClient(
@@ -286,6 +320,9 @@ func (c *managedHAKeeperClient) Close() error {
 
 // CheckLogServiceHealth implements the ClusterHAKeeperClient interface.
 func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -327,6 +364,9 @@ func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error
 }
 
 func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.ClusterDetails{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -352,6 +392,9 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 }
 
 func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CheckerState{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -377,6 +420,9 @@ func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.Checker
 }
 
 func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return 0, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -429,6 +475,9 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 
 // AllocateIDByKey implements the basicHAKeeperClient interface.
 func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return 0, err
+	}
 	if key == "" {
 		return c.AllocateID(ctx)
 	}
@@ -439,6 +488,9 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	ctx context.Context,
 	key string,
 	batchSize uint64) (uint64, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return 0, err
+	}
 	// empty key is used in shared allocated IDs.
 	if len(key) == 0 {
 		return 0, moerr.NewInternalError(ctx, "key should not be empty")
@@ -489,6 +541,9 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 
 func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 	hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CommandBatch{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -515,6 +570,9 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 
 func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CommandBatch{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -541,6 +599,9 @@ func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 
 func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CommandBatch{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -567,6 +628,9 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 
 // GetCNState implements the ProxyHAKeeperClient interface.
 func (c *managedHAKeeperClient) GetCNState(ctx context.Context) (pb.CNState, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CNState{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -595,6 +659,9 @@ func (c *managedHAKeeperClient) GetCNState(ctx context.Context) (pb.CNState, err
 func (c *managedHAKeeperClient) UpdateCNLabel(
 	ctx context.Context, label pb.CNStoreLabel,
 ) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -623,6 +690,9 @@ func (c *managedHAKeeperClient) UpdateCNLabel(
 func (c *managedHAKeeperClient) UpdateCNWorkState(
 	ctx context.Context, state pb.CNWorkState,
 ) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -651,6 +721,9 @@ func (c *managedHAKeeperClient) UpdateCNWorkState(
 func (c *managedHAKeeperClient) PatchCNStore(
 	ctx context.Context, stateLabel pb.CNStateLabel,
 ) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -679,6 +752,9 @@ func (c *managedHAKeeperClient) PatchCNStore(
 func (c *managedHAKeeperClient) DeleteCNStore(
 	ctx context.Context, cnStore pb.DeleteCNStore,
 ) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -707,6 +783,9 @@ func (c *managedHAKeeperClient) DeleteCNStore(
 func (c *managedHAKeeperClient) SendProxyHeartbeat(
 	ctx context.Context, hb pb.ProxyHeartbeat,
 ) (pb.CommandBatch, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CommandBatch{}, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -733,6 +812,9 @@ func (c *managedHAKeeperClient) SendProxyHeartbeat(
 
 // GetBackupData implements the BRHAKeeperClient interface.
 func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return nil, err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -761,6 +843,9 @@ func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, erro
 func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(
 	ctx context.Context, num uint64,
 ) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -789,6 +874,9 @@ func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(
 func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 	ctx context.Context, locality pb.Locality,
 ) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			if c.isRetryableError(err) {
@@ -1237,6 +1325,9 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {
 	if c == nil {
 		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
+	}
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.Response{}, err
 	}
 	ctx, span := trace.Debug(ctx, "hakeeperClient.request")
 	defer span.End()

@@ -108,6 +108,7 @@ func (ps *PipelineSpool) SendBatch(
 
 	dst, useCache, cacheID, err := ps.cache.GetCopiedBatch(data)
 	if err != nil {
+		ps.freeShardPool <- messageIdx
 		return false, err
 	}
 	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
@@ -252,10 +253,15 @@ func (ps *PipelineSpool) ForceCleanupAfterTerminalSignal() {
 
 // Abort terminates the spool without waiting for receiver acknowledgement.
 // Pending, not-yet-consumed slots are released immediately. Slots already handed
-// to receivers stay valid until their receiver calls ReleaseCurrent.
-func (ps *PipelineSpool) Abort() {
+// to receivers stay valid until their receiver calls ReleaseCurrent. The first
+// abort cause is returned to receivers whose queued spool signals race with the
+// terminal signal. A nil cause falls back to ErrPipelineSpoolAborted.
+func (ps *PipelineSpool) Abort(cause error) {
 	if ps == nil {
 		return
+	}
+	if cause == nil {
+		cause = ErrPipelineSpoolAborted
 	}
 
 	ps.abortOnce.Do(func() {
@@ -263,7 +269,7 @@ func (ps *PipelineSpool) Abort() {
 		defer ps.mu.Unlock()
 
 		ps.aborted = true
-		ps.abortErr = ErrPipelineSpoolAborted
+		ps.abortErr = cause
 		close(ps.abortDone)
 		ps.abortLocked()
 	})
@@ -329,8 +335,16 @@ func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
 			if ps.cleanupDone {
 				ps.cleanSlotLocked(last)
 			} else {
-				ps.cache.CacheBatch(
-					ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
+				// The slot and batch pools have independent reuse orders, so a
+				// returned batch may be assigned to a different slot immediately.
+				// Detach the batch before either object is republished; otherwise
+				// this slot can retain an alias that later cleanup frees prematurely.
+				msg := &ps.shardPool[last]
+				data := msg.dataContent
+				useCache := msg.useCache
+				cacheID := msg.cacheID
+				ps.clearSlotLocked(last)
+				ps.cache.CacheBatch(useCache, cacheID, data)
 				ps.freeShardPool <- last
 			}
 		}
@@ -377,8 +391,10 @@ func (ps *PipelineSpool) cleanSlotLocked(idx uint32) {
 	if msg.useCache && msg.dataContent != nil {
 		msg.dataContent.Clean(ps.cache.mp)
 	}
-	msg.dataContent = nil
-	msg.errContent = nil
-	msg.useCache = false
-	msg.cacheID = 0
+	ps.clearSlotLocked(idx)
+}
+
+func (ps *PipelineSpool) clearSlotLocked(idx uint32) {
+	ps.shardPool[idx] = pipelineSpoolMessage{}
+	ps.doRefCheck[idx] = false
 }

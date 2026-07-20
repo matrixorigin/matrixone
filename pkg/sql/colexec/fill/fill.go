@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -436,19 +437,9 @@ func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, 
 				ctr.status = receiveBat
 			}
 		case fillValue:
-			b := batch.NewWithSize(2)
-			b.Vecs[0] = vector.NewVec(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
-			err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[idx], ctr.preRow, proc)
-			if err != nil {
-				return err
-			}
-			b.Vecs[1] = vector.NewVec(*ctr.bats[ctr.curIdx].Vecs[idx].GetType())
-			err = appendValue(b.Vecs[1], ctr.bats[ctr.curIdx].Vecs[idx], ctr.curRow, proc)
-			if err != nil {
-				return err
-			}
-			b.SetRowCount(1)
-			ctr.valVecs[idx], err = ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
+			var valVec *vector.Vector
+			var owned bool
+			valVec, owned, err = linearFillValue(ctr, proc, idx)
 			if err != nil {
 				return err
 			}
@@ -461,8 +452,11 @@ func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, 
 					if !vec.IsNull(uint64(ctr.preRow)) {
 						continue
 					}
-					err = setValue(vec, ctr.valVecs[idx], ctr.preRow, 0, proc)
+					err = setValue(vec, valVec, ctr.preRow, 0, proc)
 					if err != nil {
+						if owned {
+							valVec.Free(proc.Mp())
+						}
 						return err
 					}
 
@@ -477,10 +471,16 @@ func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, 
 				if !vec.IsNull(uint64(ctr.preRow)) {
 					continue
 				}
-				err = setValue(vec, ctr.valVecs[idx], ctr.preRow, 0, proc)
+				err = setValue(vec, valVec, ctr.preRow, 0, proc)
 				if err != nil {
+					if owned {
+						valVec.Free(proc.Mp())
+					}
 					return err
 				}
+			}
+			if owned {
+				valVec.Free(proc.Mp())
 			}
 
 			ctr.nullIdx = ctr.preIdx
@@ -488,6 +488,53 @@ func processLinearCol(ctr *container, ap *Fill, proc *process.Process, idx int, 
 			ctr.status = findNullPre
 		}
 	}
+}
+
+func linearFillValue(ctr *container, proc *process.Process, idx int) (*vector.Vector, bool, error) {
+	preVec := ctr.bats[ctr.preIdx].Vecs[idx]
+	curVec := ctr.bats[ctr.curIdx].Vecs[idx]
+	if preVec.GetType().Oid == types.T_decimal128 && curVec.GetType().Oid == types.T_decimal128 {
+		result := vector.NewVec(*preVec.GetType())
+		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, ctr.preRow)
+		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, ctr.curRow)
+		value, err := decimal128LinearMidpoint(left, right, preVec.GetType().Scale)
+		if err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		if err = vector.AppendFixed(result, value, false, proc.Mp()); err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		return result, true, nil
+	}
+
+	b := batch.NewWithSize(2)
+	b.Vecs[0] = vector.NewVec(*preVec.GetType())
+	if err := appendValue(b.Vecs[0], preVec, ctr.preRow, proc); err != nil {
+		b.Clean(proc.Mp())
+		return nil, false, err
+	}
+	b.Vecs[1] = vector.NewVec(*curVec.GetType())
+	if err := appendValue(b.Vecs[1], curVec, ctr.curRow, proc); err != nil {
+		b.Clean(proc.Mp())
+		return nil, false, err
+	}
+	b.SetRowCount(1)
+	result, err := ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
+	return result, false, err
+}
+
+func decimal128LinearMidpoint(left, right types.Decimal128, scale int32) (types.Decimal128, error) {
+	sum, err := left.Add128(right)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	value, valueScale, err := sum.Div(types.Decimal128FromInt64(2), scale, 0)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	return value.Scale(scale - valueScale)
 }
 
 func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -723,7 +770,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 	case types.T_decimal64:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j))
 	case types.T_decimal128:
-		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j))
+		err = setDecimal128Value(v, w, i, j)
 	case types.T_uuid:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j))
 	case types.T_TS:
@@ -738,4 +785,57 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
 	}
 	return err
+}
+
+func setDecimal128Value(v, w *vector.Vector, i, j int) error {
+	if v.GetType().Oid == w.GetType().Oid && v.GetType().Scale == w.GetType().Scale {
+		return vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j))
+	}
+
+	var (
+		value types.Decimal128
+		err   error
+	)
+	targetScale := v.GetType().Scale
+	switch w.GetType().Oid {
+	case types.T_int8:
+		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int8](w, j)))
+	case types.T_int16:
+		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int16](w, j)))
+	case types.T_int32:
+		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int32](w, j)))
+	case types.T_int64:
+		value = types.Decimal128FromInt64(vector.GetFixedAtNoTypeCheck[int64](w, j))
+	case types.T_uint8:
+		value = types.Decimal128{B0_63: uint64(vector.GetFixedAtNoTypeCheck[uint8](w, j))}
+	case types.T_uint16:
+		value = types.Decimal128{B0_63: uint64(vector.GetFixedAtNoTypeCheck[uint16](w, j))}
+	case types.T_uint32:
+		value = types.Decimal128{B0_63: uint64(vector.GetFixedAtNoTypeCheck[uint32](w, j))}
+	case types.T_uint64:
+		value = types.Decimal128{B0_63: vector.GetFixedAtNoTypeCheck[uint64](w, j)}
+	case types.T_float32:
+		value, err = types.Decimal128FromFloat64(float64(vector.GetFixedAtNoTypeCheck[float32](w, j)), v.GetType().Width, targetScale)
+	case types.T_float64:
+		value, err = types.Decimal128FromFloat64(vector.GetFixedAtNoTypeCheck[float64](w, j), v.GetType().Width, targetScale)
+	case types.T_decimal64:
+		value = types.Decimal128FromDecimal64(vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j), w.GetType().Scale)
+		value, err = value.Scale(targetScale - w.GetType().Scale)
+	case types.T_decimal128:
+		value = vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j)
+		value, err = value.Scale(targetScale - w.GetType().Scale)
+	default:
+		return moerr.NewInternalErrorNoCtxf("cannot set decimal128 fill value from %s", w.GetType())
+	}
+	if err != nil {
+		return err
+	}
+	if w.GetType().Oid != types.T_float32 && w.GetType().Oid != types.T_float64 &&
+		w.GetType().Oid != types.T_decimal64 && w.GetType().Oid != types.T_decimal128 {
+		value, err = value.Scale(targetScale)
+		if err != nil {
+			return err
+		}
+	}
+	return vector.SetFixedAtNoTypeCheck(v, i, value)
 }

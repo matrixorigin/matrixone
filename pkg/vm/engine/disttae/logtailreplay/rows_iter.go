@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"container/heap"
 	"fmt"
 	"math"
 
@@ -344,7 +345,10 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	// 1: (,]
 	// 2: [,)
 	// 3: (,)
-	// 4: prefix between
+	// 4: prefix between [,]
+	// 5: prefix between (,]
+	// 6: prefix between [,)
+	// 7: prefix between (,)
 	var validCheck func(bb []byte) bool
 	var seek2First func(iter *btree.IterG[*PrimaryIndexEntry]) bool
 	switch kind {
@@ -379,6 +383,35 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	case 4:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	case 5:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+			if len(lb) == 0 {
+				return false
+			}
+			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
+				if ok := iter.Next(); !ok {
+					return false
+				}
+			}
+			return true
+		}
+	case 6:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	case 7:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+			if len(lb) == 0 {
+				return false
+			}
+			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
+				if ok := iter.Next(); !ok {
+					return false
+				}
+			}
+			return true
+		}
 	default:
 		logutil.Infof("between kind missed: kind: %d, lb=%v, ub=%v\n", kind, lb, ub)
 		validCheck = func(bb []byte) bool { return true }
@@ -423,12 +456,14 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			if p.specHint.isDelIter != p.iter.Item().Deleted {
+			item := p.iter.Item()
+			if !validCheck(item.Bytes) {
+				return false
+			}
+			if p.specHint.isDelIter != item.Deleted {
 				continue
 			}
-
-			item := p.iter.Item()
-			return validCheck(item.Bytes)
+			return true
 		}
 	}
 
@@ -737,7 +772,8 @@ func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
 		return GreatKind(keys[0], op == function.GREAT_EQUAL)
 
 	case function.BETWEEN, readutil.RangeLeftOpen,
-		readutil.RangeRightOpen, readutil.RangeBothOpen, function.PREFIX_BETWEEN:
+		readutil.RangeRightOpen, readutil.RangeBothOpen, function.PREFIX_BETWEEN,
+		readutil.PrefixRangeLeftOpen, readutil.PrefixRangeRightOpen, readutil.PrefixRangeBothOpen:
 		var kind int
 		switch op {
 		case function.BETWEEN:
@@ -750,6 +786,12 @@ func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
 			kind = 3
 		case function.PREFIX_BETWEEN:
 			kind = 4
+		case readutil.PrefixRangeLeftOpen:
+			kind = 5
+		case readutil.PrefixRangeRightOpen:
+			kind = 6
+		case readutil.PrefixRangeBothOpen:
+			kind = 7
 		}
 
 		return BetweenKind(keys[0], keys[1], kind)
@@ -770,6 +812,151 @@ func (p *PartitionState) NewPrimaryKeyIter(
 		iter:         index.Iter(),
 		primaryIndex: index,
 		rows:         p.rows,
+	}
+}
+
+type primaryKeyIterHeap struct {
+	children []primaryKeyOrderedIter
+	indexes  []int
+}
+
+func (h primaryKeyIterHeap) Len() int {
+	return len(h.indexes)
+}
+
+func (h primaryKeyIterHeap) Less(i, j int) bool {
+	left := h.children[h.indexes[i]].currentIndexEntry()
+	right := h.children[h.indexes[j]].currentIndexEntry()
+	return left.Less(right)
+}
+
+func (h primaryKeyIterHeap) Swap(i, j int) {
+	h.indexes[i], h.indexes[j] = h.indexes[j], h.indexes[i]
+}
+
+func (h *primaryKeyIterHeap) Push(value any) {
+	h.indexes = append(h.indexes, value.(int))
+}
+
+func (h *primaryKeyIterHeap) Pop() any {
+	last := len(h.indexes) - 1
+	value := h.indexes[last]
+	h.indexes = h.indexes[:last]
+	return value
+}
+
+type primaryKeyUnionIter struct {
+	heap        primaryKeyIterHeap
+	initialized bool
+	closed      bool
+	curRow      *RowEntry
+	last        PrimaryIndexEntry
+	hasLast     bool
+}
+
+var _ RowsIter = new(primaryKeyUnionIter)
+
+type primaryKeyOrderedIter interface {
+	RowsIter
+	currentIndexEntry() *PrimaryIndexEntry
+}
+
+func (p *primaryKeyIter) currentIndexEntry() *PrimaryIndexEntry {
+	return p.iter.Item()
+}
+
+func samePrimaryIndexEntry(left, right *PrimaryIndexEntry) bool {
+	return left.RowEntryID == right.RowEntryID &&
+		left.Time.Compare(&right.Time) == 0 &&
+		bytes.Equal(left.Bytes, right.Bytes)
+}
+
+func (p *primaryKeyUnionIter) Next() bool {
+	if p.closed {
+		return false
+	}
+	if !p.initialized {
+		p.initialized = true
+		for idx := range p.heap.children {
+			if p.heap.children[idx].Next() {
+				heap.Push(&p.heap, idx)
+			}
+		}
+	}
+
+	for p.heap.Len() > 0 {
+		idx := heap.Pop(&p.heap).(int)
+		child := p.heap.children[idx]
+		entry := *child.currentIndexEntry()
+		row := child.Entry()
+		if child.Next() {
+			heap.Push(&p.heap, idx)
+		}
+
+		if p.hasLast && samePrimaryIndexEntry(&entry, &p.last) {
+			continue
+		}
+		p.last = entry
+		p.hasLast = true
+		p.curRow = row
+		return true
+	}
+
+	return false
+}
+
+func (p *primaryKeyUnionIter) Entry() *RowEntry {
+	return p.curRow
+}
+
+func (p *primaryKeyUnionIter) Close() error {
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	var firstErr error
+	for idx := range p.heap.children {
+		if err := p.heap.children[idx].Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	p.heap.children = nil
+	p.heap.indexes = nil
+	return firstErr
+}
+
+func (p *PartitionState) NewPrimaryKeyIterWithFilters(
+	ts types.TS,
+	filters []readutil.MemPKFilterSpec,
+) RowsIter {
+	if len(filters) == 1 {
+		return p.NewPrimaryKeyIter(ts, filters[0].Op, filters[0].Keys)
+	}
+
+	children := make([]primaryKeyOrderedIter, 0, len(filters))
+	for idx := range filters {
+		children = append(children, p.NewPrimaryKeyIter(ts, filters[idx].Op, filters[idx].Keys))
+	}
+	return &primaryKeyUnionIter{
+		heap: primaryKeyIterHeap{children: children},
+	}
+}
+
+func (p *PartitionState) NewPrimaryKeyDelIterWithFilters(
+	ts *types.TS,
+	bid *types.Blockid,
+	filters []readutil.MemPKFilterSpec,
+) RowsIter {
+	if len(filters) == 1 {
+		return p.NewPrimaryKeyDelIter(ts, bid, filters[0].Op, filters[0].Keys)
+	}
+
+	children := make([]primaryKeyOrderedIter, 0, len(filters))
+	for idx := range filters {
+		children = append(children, p.NewPrimaryKeyDelIter(ts, bid, filters[idx].Op, filters[idx].Keys))
+	}
+	return &primaryKeyUnionIter{
+		heap: primaryKeyIterHeap{children: children},
 	}
 }
 

@@ -201,7 +201,7 @@ func TestFlushErrorMsg(t *testing.T) {
 		[]*iscp.JobStatus{{}},
 		types.MaxTs(),
 		"test",
-		[]uint64{1},
+		[]uint64{0},
 	)
 	require.NoError(t, err)
 }
@@ -4431,19 +4431,13 @@ func TestApplyISCPLog(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestISCPReplay(t *testing.T) {
-
+func TestISCPResumeRecoversAcceptedIteration(t *testing.T) {
 	catalog.SetupDefines("")
-
-	// idAllocator := common.NewIdAllocator(1000)
-
-	var (
-		accountId = catalog.System_Account
-	)
+	accountID := catalog.System_Account
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
@@ -4460,25 +4454,32 @@ func TestISCPReplay(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-	// create database and table
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
 	defer bat.Close()
 
-	// append 1 row
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
-	require.Nil(t, err)
+	require.NoError(t, err)
+	tableID := rel.GetTableID(ctxWithTimeout)
+	require.NoError(t, rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0])))
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+	minimumRecoveredWatermark := taeHandler.GetDB().TxnMgr.Now()
 
-	// tableID := rel.GetTableID(ctxWithTimeout)
+	// Fail after admission but before FlushJobStatusOnIterationState persists
+	// Running. This creates the original divergence deterministically: memory is
+	// Pending at LSN 1 while storage is still Completed at LSN 0.
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectCDCExecutor("iteration:src_table")
+	require.NoError(t, err)
+	faultRemoved := false
+	defer func() {
+		if !faultRemoved {
+			_, _ = rmFault()
+		}
+	}()
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
-	require.Nil(t, err)
-
-	txn.Commit(ctxWithTimeout)
-
-	// init cdc executor
 	checkLeaseStub := gostub.Stub(
 		&iscp.CheckLeaseWithRetry,
 		func(
@@ -4508,36 +4509,79 @@ func TestISCPReplay(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 
-	registerFn := func(indexName string) {
-		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
-		require.NoError(t, err)
-		ok, err := iscp.RegisterJob(
-			ctx, "", txn,
-			&iscp.JobSpec{
-				ConsumerInfo: iscp.ConsumerInfo{
-					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-				},
-			},
-			&iscp.JobID{
-				JobName:   indexName,
-				DBName:    "srcdb",
-				TableName: "src_table",
-			},
-			true,
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := iscp.RegisterJob(
+		ctx,
+		"",
+		txn,
+		&iscp.JobSpec{ConsumerInfo: iscp.ConsumerInfo{ConsumerType: int8(iscp.ConsumerType_CNConsumer)}},
+		&iscp.JobID{JobName: "replay_job", DBName: "srcdb", TableName: "src_table"},
+		false,
+	)
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	require.Eventually(t, func() bool {
+		lsn, state, found := cdcExecutor.GetJobState(accountID, tableID, "replay_job")
+		return found && lsn == 1 && state == iscp.ISCPJobState_Pending
+	}, 4*time.Second, 10*time.Millisecond)
+
+	readPersistedState := func() (int8, uint64) {
+		readTxn, readErr := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, readErr)
+		result, readErr := iscp.ExecWithResult(
+			ctxWithTimeout,
+			fmt.Sprintf(
+				"SELECT job_state, job_status FROM `mo_catalog`.`mo_iscp_log` WHERE account_id = %d AND table_id = %d AND job_name = 'replay_job'",
+				accountID,
+				tableID,
+			),
+			"",
+			readTxn,
 		)
-		assert.True(t, ok)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))
+		require.NoError(t, readErr)
+		defer result.Close()
+
+		var state int8
+		var lsn uint64
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			require.Equal(t, 1, rows)
+			state = vector.MustFixedColWithTypeCheck[int8](cols[0])[0]
+			status, statusErr := iscp.UnmarshalJobStatus(cols[1].GetBytesAt(0))
+			require.NoError(t, statusErr)
+			lsn = status.LSN
+			return true
+		})
+		require.NoError(t, readTxn.Commit(ctxWithTimeout))
+		return state, lsn
 	}
 
-	for i := 0; i < 10; i++ {
-		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
-	}
+	persistedState, persistedLSN := readPersistedState()
+	require.Equal(t, iscp.ISCPJobState_Completed, persistedState)
+	require.Zero(t, persistedLSN)
+
 	cdcExecutor.Stop()
-	cdcExecutor.Start()
+	_, err = rmFault()
+	require.NoError(t, err)
+	faultRemoved = true
+	require.NoError(t, cdcExecutor.Resume())
+
+	require.Eventually(t, func() bool {
+		lsn, state, found := cdcExecutor.GetJobState(accountID, tableID, "replay_job")
+		watermark, watermarkFound := cdcExecutor.GetWatermark(accountID, tableID, "replay_job")
+		return found && watermarkFound &&
+			lsn == 1 && state == iscp.ISCPJobState_Completed &&
+			watermark.GE(&minimumRecoveredWatermark)
+	}, 10*time.Second, 10*time.Millisecond)
+
+	persistedState, persistedLSN = readPersistedState()
+	require.Equal(t, iscp.ISCPJobState_Completed, persistedState)
+	require.Equal(t, uint64(1), persistedLSN)
 }
 
 func TestRenameSrcTable(t *testing.T) {
@@ -4768,9 +4812,11 @@ func TestISCPExecutorStartError(t *testing.T) {
 	assert.NoError(t, err)
 	err = cdcExecutor.Resume()
 	require.Error(t, err)
+	require.False(t, cdcExecutor.IsRunning())
 	rmFn()
 	err = cdcExecutor.Resume()
 	require.NoError(t, err)
+	require.True(t, cdcExecutor.IsRunning())
 }
 
 func TestStaleRead(t *testing.T) {

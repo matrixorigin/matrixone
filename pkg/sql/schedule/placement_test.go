@@ -154,12 +154,21 @@ func TestDecideQueryPlacementUsesCandidatesForMultiCN(t *testing.T) {
 		ExecKind:   QueryExecAPMultiCN,
 		CurrentCN:  local,
 		Candidates: candidates,
+		CandidateResolution: CandidateResolution{
+			DiscoverySource: CandidateSourceEngineNodes,
+			PoolResolution:  PoolResolutionLegacyEngineNodes,
+			DiscoveredCount: 2,
+		},
 	})
 
 	require.Equal(t, QueryExecAPMultiCN, decision.ExecKind)
 	require.Equal(t, ReasonMultiCN, decision.Reason)
 	require.Equal(t, Workers{candidates[1], candidates[0]}, decision.Workers)
 	require.Equal(t, CurrentCNAllowed, decision.CurrentCNPolicy)
+	require.Equal(t, local, decision.CurrentCN)
+	require.Equal(t, CandidateSourceEngineNodes, decision.CandidateResolution.DiscoverySource)
+	require.Equal(t, PoolResolutionLegacyEngineNodes, decision.CandidateResolution.PoolResolution)
+	require.Equal(t, 2, decision.ResolvedCandidateCount)
 	require.True(t, decision.Satisfied)
 
 	decision.Workers[0].Mcpu = 1
@@ -286,6 +295,26 @@ func TestDecideQueryPlacementCanRequireCurrentCN(t *testing.T) {
 	})
 
 	require.Equal(t, Workers{local, candidates[0]}, decision.Workers)
+	require.Equal(t, ReasonRequiredCurrentCN, decision.Reason)
+	require.True(t, decision.Satisfied)
+}
+
+func TestDecideQueryPlacementOrdersRequiredCurrentCNFirstWhenRequested(t *testing.T) {
+	local := Worker{ID: "local", Addr: "z-local:6001", Mcpu: 8}
+	remote := Worker{ID: "remote", Addr: "a-remote:6001", Mcpu: 16}
+
+	req := QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      Workers{remote, local},
+		CurrentCNPolicy: CurrentCNRequired,
+	}
+	require.Equal(t, Workers{remote, local}, DecideQueryPlacement(req).Workers)
+
+	req.CurrentCNFirst = true
+	decision := DecideQueryPlacement(req)
+
+	require.Equal(t, Workers{local, remote}, decision.Workers)
 	require.Equal(t, ReasonRequiredCurrentCN, decision.Reason)
 	require.True(t, decision.Satisfied)
 }

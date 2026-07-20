@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -592,6 +593,45 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+
+	cn := &CNServer{
+		addr: listener.Addr().String(),
+		salt: []byte("invalid"),
+	}
+	session, err := cn.Connect(nil, time.Second)
+	require.Nil(t, session)
+	require.ErrorContains(t, err, "salt is empty")
+
+	var backend net.Conn
+	select {
+	case backend = <-accepted:
+	case err := <-acceptErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "backend did not accept proxy connection")
+	}
+	defer backend.Close()
+	require.NoError(t, backend.SetReadDeadline(time.Now().Add(time.Second)))
+	n, readErr := backend.Read(make([]byte, 1))
+	require.Zero(t, n)
+	require.ErrorIs(t, readErr, io.EOF)
+}
+
 func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	defer leaktest.AfterTest(t)
 	temp := os.TempDir()
@@ -600,20 +640,66 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
+	backendAccepted := make(chan struct{})
+	allowBackendClose := make(chan struct{})
+	backendClosed := make(chan struct{})
 	stopFn := startTestCNServer(t, tp.ctx, addr, nil, withHandle(func(h *testHandler) {
-		// Simulate an immediate post-dial backend failure before the CN sends
-		// its initial handshake.
+		// startTestCNServer probes readiness without sending ExtraInfo. The
+		// connection opened by newServerConn does send it, so decode the wire
+		// protocol instead of relying on handler goroutine scheduling order.
+		rawConn := h.conn.RawConn()
+		if err := rawConn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			h.close()
+			return
+		}
+		reader := bufio.NewReader(rawConn)
+		extraInfo := proxy.ExtraInfo{}
+		if err := extraInfo.Decode(reader); err != nil {
+			h.close()
+			return
+		}
+		if err := rawConn.SetReadDeadline(time.Time{}); err != nil {
+			h.close()
+			return
+		}
+
+		close(backendAccepted)
+		select {
+		case <-allowBackendClose:
+		case <-tp.ctx.Done():
+		}
 		h.close()
+		close(backendClosed)
 	}))
+	var releaseBackendOnce sync.Once
+	releaseBackend := func() {
+		releaseBackendOnce.Do(func() {
+			close(allowBackendClose)
+		})
+	}
 	defer func() {
+		releaseBackend()
 		require.NoError(t, stopFn())
 	}()
+	waitSignal := func(c <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, message)
+		}
+	}
 
 	sc, err := newServerConn(cn1, nil, tp.re, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
 	defer sc.Close()
 
+	// Close only after newServerConn has sent ExtraInfo successfully, then make
+	// HandleHandshake observe the intended pre-handshake backend failure.
+	waitSignal(backendAccepted, "timed out waiting for test CN connection")
+	releaseBackend()
+	waitSignal(backendClosed, "timed out closing test CN connection")
 	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second)
 	require.Error(t, err)
 	require.False(t, isTimeoutErr(err), "early backend close must not be reclassified as timeout/busy")

@@ -62,6 +62,23 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestDupOffHeap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("longer value")}, nil, mp))
+
+	dup, err := vec.DupOffHeap(mp)
+	require.NoError(t, err)
+	require.True(t, dup.offHeap)
+	require.Equal(t, vec.Length(), dup.Length())
+	require.Equal(t, vec.GetBytesAt(0), dup.GetBytesAt(0))
+	require.Equal(t, vec.GetBytesAt(1), dup.GetBytesAt(1))
+
+	dup.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
@@ -3473,4 +3490,30 @@ func TestFunctionResultAppendNullAfterToConst(t *testing.T) {
 	require.NoError(t, result.AppendBytes(nil, true))
 	result.vec.ToConst()
 	require.True(t, result.vec.IsConstNull()) // must still be recognized as const null
+}
+
+func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	fixed := NewVec(types.T_int64.ToType())
+	for _, value := range []int64{3, 1, 2} {
+		require.NoError(t, AppendFixed(fixed, value, false, mp))
+	}
+	fixed.InplaceSortAndCompact()
+	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](fixed))
+	require.True(t, fixed.GetSorted())
+	fixed.Free(mp)
+
+	varlen := NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"c", "a", "b"} {
+		require.NoError(t, AppendBytes(varlen, []byte(value), false, mp))
+	}
+	varlen.InplaceSortAndCompact()
+	require.Equal(t, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, InefficientMustBytesCol(varlen))
+	require.True(t, varlen.GetSorted())
+	varlen.Free(mp)
+
+	unsupported := NewVec(types.T_any.ToType())
+	unsupported.InplaceSortAndCompact()
+	require.False(t, unsupported.GetSorted())
 }

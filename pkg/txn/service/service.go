@@ -17,7 +17,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -39,10 +38,11 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	sid       string
-	logger    *log.MOLogger
-	shard     metadata.TNShard
-	storage   storage.TxnStorage
+	sid     string
+	logger  *log.MOLogger
+	shard   metadata.TNShard
+	storage storage.TxnStorage
+	// sender is owned by the TN store and shared by all replica services.
 	sender    rpc.TxnSender
 	stopper   *stopper.Stopper
 	allocator lockservice.LockTableAllocator
@@ -64,6 +64,7 @@ type service struct {
 	zombieTimeout time.Duration
 	pool          sync.Pool
 	recoveryC     chan struct{}
+	recoveryOnce  sync.Once
 	txnC          chan txn.TxnMeta
 }
 
@@ -109,6 +110,7 @@ func (s *service) Shard() metadata.TNShard {
 
 func (s *service) Start() error {
 	if err := s.storage.Start(); err != nil {
+		s.finishRecovery()
 		return err
 	}
 	s.logger.Info("txn.service.start.recovery")
@@ -125,7 +127,7 @@ func (s *service) Close(destroy bool) error {
 		closer = s.storage.Destroy
 	}
 	// FIXME: all context.TODO() need to use tracing context
-	return errors.Join(closer(context.TODO()), s.sender.Close())
+	return closer(context.TODO())
 }
 
 func (s *service) gcZombieTxn(ctx context.Context) {
@@ -253,7 +255,7 @@ func (s *service) parallelSendWithRetry(
 			if err != nil {
 				err = moerr.AttachCause(ctx, err)
 				util.LogTxnSendRequestsFailed(s.logger, requests, err)
-				if !waitParallelSendRetryBackoff(ctx, backoff) {
+				if !waitRetryBackoff(ctx, backoff) {
 					return nil
 				}
 				backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
@@ -273,7 +275,7 @@ func (s *service) parallelSendWithRetry(
 				return result
 			}
 			result.Release()
-			if !waitParallelSendRetryBackoff(ctx, backoff) {
+			if !waitRetryBackoff(ctx, backoff) {
 				return nil
 			}
 			backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
@@ -281,7 +283,7 @@ func (s *service) parallelSendWithRetry(
 	}
 }
 
-func waitParallelSendRetryBackoff(ctx context.Context, backoff time.Duration) bool {
+func waitRetryBackoff(ctx context.Context, backoff time.Duration) bool {
 	if backoff <= 0 {
 		return ctx.Err() == nil
 	}

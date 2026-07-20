@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -137,8 +138,8 @@ func TestCannotUnlockOrphanTxnWithCommittingInAllocator(t *testing.T) {
 			txn2 := []byte{2}
 			table1 := uint64(1)
 
-			alloc.getCtl(l1.GetServiceID()).add(string(txn1), committingState)
-			alloc.getCtl(l2.GetServiceID()).add(string(txn2), committingState)
+			alloc.getCtl(l1.GetServiceID()).beginCommit(string(txn1))
+			alloc.getCtl(l2.GetServiceID()).beginCommit(string(txn2))
 
 			// table1 on l1
 			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
@@ -341,7 +342,7 @@ func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
 
 			mustAddTestLock(t, ctx, l1, table1, anchorTxn, [][]byte{row2}, pb.Granularity_Row)
 			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
-			alloc.getCtl(l2.GetServiceID()).add(string(holderTxn), committingState)
+			alloc.getCtl(l2.GetServiceID()).beginCommit(string(holderTxn))
 
 			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
 				return id == table1
@@ -385,13 +386,83 @@ func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
 	)
 }
 
+func TestUnlockLiveBindRemoteTxnWithFenceWhenCannotCommit(t *testing.T) {
+	remoteLockTimeout := time.Millisecond * 200
+	anchorTxn := []byte("anchor")
+	holderTxn := []byte("holder")
+	waiterTxn := []byte("waiter")
+	exposeHolder := atomic.Bool{}
+	exposeHolder.Store(true)
+
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			table1 := uint64(1)
+			row1 := []byte{1}
+			row2 := []byte{2}
+
+			mustAddTestLock(t, ctx, l1, table1, anchorTxn, [][]byte{row2}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
+
+			bind := l1.tableGroups.get(0, table1).getBind()
+			require.Eventually(t, func() bool {
+				return l1.activeTxnHolder.hasRemoteLockBind(l2.serviceID, bind, remoteLockTimeout)
+			}, time.Second*3, time.Millisecond*50)
+
+			exposeHolder.Store(false)
+			resultC := make(chan pb.Result, 1)
+			go func() {
+				resultC <- mustAddTestLock(t, ctx, l1, table1, waiterTxn, [][]byte{row1}, pb.Granularity_Row)
+			}()
+
+			var result pb.Result
+			select {
+			case result = <-resultC:
+			case <-ctx.Done():
+				require.FailNow(t, "waiter txn did not resume after fenced orphan unlock")
+			}
+
+			require.True(t, result.HasConflict)
+			require.True(t, result.HasPrevCommit)
+			require.False(t, result.Timestamp.IsEmpty())
+
+			require.NoError(t, l2.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, anchorTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = remoteLockTimeout
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+			c.TxnIterFunc = func(f func([]byte) bool) {
+				if exposeHolder.Load() && !f(holderTxn) {
+					return
+				}
+				for _, txn := range [][]byte{anchorTxn, waiterTxn} {
+					if !f(txn) {
+						return
+					}
+				}
+			}
+		},
+	)
+}
+
 func TestGetTimeoutRemoveTxn(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -405,20 +476,23 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
 	hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
 
-	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
+	fenceTSByTxn := make(map[string]timestamp.Timestamp)
+	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*20)
 	assert.Equal(t, 0, len(txns))
 
 	// s1 timeout
-	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
+	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*8)
 	assert.Equal(t, 1, len(txns))
+	assert.Contains(t, fenceTSByTxn, string(txnID1))
 	hold.mu.RLock()
 	assert.Equal(t, 1, hold.mu.dequeue.Len())
 	assert.Equal(t, 1, len(hold.mu.remoteServices))
 	hold.mu.RUnlock()
 
 	// s2 timeout
-	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
+	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*2)
 	assert.Equal(t, 1, len(txns))
+	assert.Contains(t, fenceTSByTxn, string(txnID2))
 	hold.mu.RLock()
 	assert.Equal(t, 0, hold.mu.dequeue.Len())
 	assert.Equal(t, 0, len(hold.mu.remoteServices))
@@ -431,7 +505,9 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return sid == "s1", nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -445,7 +521,8 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
 	hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
 
-	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
+	fenceTSByTxn := make(map[string]timestamp.Timestamp)
+	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*20)
 	assert.Equal(t, 0, len(txns))
 	hold.mu.RLock()
 	assert.Equal(t, 2, hold.mu.dequeue.Len())
@@ -453,7 +530,7 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 	hold.mu.RUnlock()
 
 	// s1 timeout
-	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
+	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*8)
 	assert.Equal(t, 0, len(txns))
 	hold.mu.RLock()
 	assert.Equal(t, 2, hold.mu.dequeue.Len())
@@ -461,8 +538,9 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 	hold.mu.RUnlock()
 
 	// s2 timeout
-	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
+	txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*2)
 	assert.Equal(t, 1, len(txns))
+	assert.Contains(t, fenceTSByTxn, string(txnID2))
 	hold.mu.RLock()
 	assert.Equal(t, 1, hold.mu.dequeue.Len())
 	assert.Equal(t, 1, len(hold.mu.remoteServices))
@@ -475,7 +553,9 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -487,8 +567,10 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
 
 	// s1 timeout
-	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
+	fenceTSByTxn := make(map[string]timestamp.Timestamp)
+	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*8)
 	assert.Equal(t, 1, len(txns))
+	assert.Contains(t, fenceTSByTxn, string(txnID1))
 	hold.mu.RLock()
 	assert.Equal(t, 0, hold.mu.dequeue.Len())
 	assert.Equal(t, 0, len(hold.mu.remoteServices))
@@ -501,7 +583,9 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyFailed(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrTxnNotFound },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, ErrTxnNotFound
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -513,8 +597,10 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyFailed(t *testing.T) {
 	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
 
 	// s1 timeout
-	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
+	fenceTSByTxn := make(map[string]timestamp.Timestamp)
+	txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, fenceTSByTxn, time.Second*8)
 	assert.Equal(t, 0, len(txns))
+	assert.Empty(t, fenceTSByTxn)
 	hold.mu.RLock()
 	assert.Equal(t, 1, hold.mu.dequeue.Len())
 	assert.Equal(t, 1, len(hold.mu.remoteServices))
@@ -568,13 +654,8 @@ func TestCannotCommitTxnCanBeRemovedWithNotInActiveTxn(t *testing.T) {
 				require.True(t, ok)
 
 				c := v.(*commitCtl)
-				_, ok = c.states.Load(string([]byte{1}))
-				n := 0
-				c.states.Range(func(key, value any) bool {
-					n++
-					return true
-				})
-				if n == 1 && ok {
+				_, ok = c.getCommitState(string([]byte{1}))
+				if c.size() == 1 && ok {
 					return
 				}
 				time.Sleep(time.Millisecond * 10)
@@ -827,27 +908,159 @@ func TestValidTxnWithLocalTxn(t *testing.T) {
 		"s1",
 		getLogger(""),
 		newFixedSlicePool(16),
-		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
-		func(txn pb.WaitTxn) (bool, error) {
+		func(string) (bool, error) {
+			require.FailNow(t, "local txn should not validate a remote service")
+			return false, nil
+		},
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			require.FailNow(t, "local txn should not notify cannot commit")
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) {
+			require.FailNow(t, "local txn should not run a remote active-txn check")
 			return false, nil
 		},
 	).(*mapBasedTxnHolder)
+	defer hold.close()
 	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
 }
 
 func TestValidTxnWithValidRemoteTxn(t *testing.T) {
+	var checks atomic.Int32
 	hold := newMapBasedTxnHandler(
 		"s1",
 		getLogger(""),
 		newFixedSlicePool(16),
-		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(string) (bool, error) {
+			require.FailNow(t, "active-txn check should not validate a remote service")
+			return false, nil
+		},
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			require.FailNow(t, "active remote txn should not notify cannot commit")
+			return pb.CannotCommitResponse{}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) {
+			checks.Add(1)
+			require.Equal(t, "s0", txn.CreatedOn)
 			return true, nil
 		},
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"}))
+	defer hold.close()
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	require.Equal(t, int32(1), checks.Load())
+}
+
+func TestValidTxnCheckErrorDoesNotFence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "backend closed", err: moerr.NewBackendClosedNoCtx()},
+		{name: "backend cannot connect", err: moerr.NewBackendCannotConnectNoCtx("target")},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+		{name: "unclassified error", err: moerr.NewInternalErrorNoCtx("active txn check failed")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var notified atomic.Int32
+			hold := newMapBasedTxnHandler(
+				"source",
+				getLogger(""),
+				newFixedSlicePool(16),
+				func(string) (bool, error) { return true, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+					notified.Add(1)
+					return pb.CannotCommitResponse{
+						FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+					}, nil
+				},
+				func(pb.WaitTxn) (bool, error) { return false, test.err },
+			).(*mapBasedTxnHolder)
+			defer hold.close()
+
+			require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("live"),
+				CreatedOn: "target",
+			}))
+			require.Zero(t, notified.Load(),
+				"an indeterminate check must not install a cannot-commit fence")
+		})
+	}
+}
+
+func TestValidTxnCheckErrorThenConfirmedInactive(t *testing.T) {
+	var checks atomic.Int32
+	var notified atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{
+				FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+			}, nil
+		},
+		func(pb.WaitTxn) (bool, error) {
+			if checks.Add(1) == 1 {
+				return false, moerr.NewBackendClosedNoCtx()
+			}
+			return false, nil
+		},
+	).(*mapBasedTxnHolder)
+	defer hold.close()
+	txn := pb.WaitTxn{TxnID: []byte("orphan"), CreatedOn: "target"}
+
+	require.True(t, hold.isValidRemoteTxn(txn),
+		"an indeterminate observation must keep the transaction live")
+	require.Zero(t, notified.Load())
+	require.False(t, hold.isValidRemoteTxn(txn),
+		"a later authoritative inactive result may be fenced")
+	require.Equal(t, int32(1), notified.Load())
+}
+
+func TestConcurrentValidTxnCheckErrorsDoNotFence(t *testing.T) {
+	const checks = 32
+	var notified atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{
+				FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+			}, nil
+		},
+		func(pb.WaitTxn) (bool, error) {
+			return false, moerr.NewBackendClosedNoCtx()
+		},
+	).(*mapBasedTxnHolder)
+	defer hold.close()
+
+	results := make(chan bool, checks)
+	var wg sync.WaitGroup
+	for i := 0; i < checks; i++ {
+		wg.Add(1)
+		go func(id byte) {
+			defer wg.Done()
+			results <- hold.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte{id},
+				CreatedOn: "target",
+			})
+		}(byte(i))
+	}
+	wg.Wait()
+	close(results)
+
+	for valid := range results {
+		require.True(t, valid)
+	}
+	require.Zero(t, notified.Load(),
+		"a burst of failed observations must not create any cannot-commit fences")
 }
 
 func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
@@ -856,7 +1069,9 @@ func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return false, nil
 		},
@@ -870,7 +1085,9 @@ func TestValidTxnWithInactiveRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{CommittingTxn: [][]byte{{1}}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return false, nil
 		},
@@ -884,7 +1101,7 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 		func(txn pb.WaitTxn) (bool, error) {
 			return false, ErrTxnNotFound
 		},
@@ -898,7 +1115,9 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrLockConflict },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, ErrLockConflict
+		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return false, ErrTxnNotFound
 		},
@@ -912,7 +1131,9 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{CommittingTxn: [][]byte{{1}}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return false, ErrTxnNotFound
 		},
@@ -921,15 +1142,37 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
 }
 
 func TestCanUnlockRemoteTxnWithNotifyOK(t *testing.T) {
+	fenceTS := timestamp.Timestamp{PhysicalTime: 10}
 	hold := newMapBasedTxnHandler(
 		"s1",
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: fenceTS}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
-	require.True(t, hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	canUnlock, actualFenceTS := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"})
+	require.True(t, canUnlock)
+	require.Equal(t, fenceTS, actualFenceTS)
+}
+
+func TestCanUnlockRemoteTxnWithLocalTxn(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			require.FailNow(t, "local txn should not notify cannot commit")
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	canUnlock, fenceTS := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"})
+	require.False(t, canUnlock)
+	require.True(t, fenceTS.IsEmpty())
 }
 
 func TestCanUnlockRemoteTxnWithNotifyFailed(t *testing.T) {
@@ -938,10 +1181,29 @@ func TestCanUnlockRemoteTxnWithNotifyFailed(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrLockConflict },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, ErrLockConflict
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
-	require.False(t, hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	canUnlock, _ := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"})
+	require.False(t, canUnlock)
+}
+
+func TestCanUnlockRemoteTxnWithoutFence(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	canUnlock, fenceTS := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"})
+	require.False(t, canUnlock)
+	require.True(t, fenceTS.IsEmpty())
 }
 
 func TestCanUnlockRemoteTxnWithNotifyFoundCommitting(t *testing.T) {
@@ -950,8 +1212,11 @@ func TestCanUnlockRemoteTxnWithNotifyFoundCommitting(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{CommittingTxn: [][]byte{{1}}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
-	require.False(t, hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+	canUnlock, _ := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"})
+	require.False(t, canUnlock)
 }

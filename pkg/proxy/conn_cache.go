@@ -133,6 +133,7 @@ func (a *pwdAuthenticator) Authenticate(salt, authResp []byte) bool {
 type serverConnAuth struct {
 	ServerConn
 	Authenticator
+	closeOnce sync.Once
 }
 
 // newServerConnAuth creates a new server connection entry with authenticator.
@@ -141,6 +142,14 @@ func newServerConnAuth(sc ServerConn, auth Authenticator) *serverConnAuth {
 		ServerConn:    sc,
 		Authenticator: auth,
 	}
+}
+
+func (s *serverConnAuth) close() error {
+	var err error
+	s.closeOnce.Do(func() {
+		err = s.ServerConn.Close()
+	})
+	return err
 }
 
 // cacheStore is the storage which stores the cached connections.
@@ -193,7 +202,7 @@ type connCache struct {
 	mu struct {
 		sync.Mutex
 		cache    map[cacheKey]*cacheStore
-		allConns map[ServerConn]struct{}
+		allConns map[ServerConn]*serverConnAuth
 		closed   bool
 	}
 	// resetSessionFunc is the function used to reset session.
@@ -288,7 +297,7 @@ func newConnCache(
 	// Set the default resetSession function.
 	cc.resetSessionFunc = cc.resetSession
 	cc.mu.cache = make(map[cacheKey]*cacheStore)
-	cc.mu.allConns = make(map[ServerConn]struct{})
+	cc.mu.allConns = make(map[ServerConn]*serverConnAuth)
 	for _, opt := range opts {
 		opt(cc)
 	}
@@ -325,28 +334,28 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	return resp.ResetSessionResponse.AuthString, nil
 }
 
-// Push implements the ConnCache interface.
-func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.mu.closed {
+// canPushLocked reports whether sc can be added to key. c.mu must be held.
+// Push checks this both before and after resetSession because the network call
+// deliberately runs without the cache mutex.
+func (c *connCache) canPushLocked(key cacheKey, sc ServerConn) bool {
+	if c.mu.closed || len(c.mu.allConns) >= c.maxNumTotal {
 		return false
 	}
-	if len(c.mu.allConns) >= c.maxNumTotal {
-		return false
-	}
-	// The connection already exists in the cache.
 	if _, ok := c.mu.allConns[sc]; ok {
 		return false
 	}
-	store, ok := c.mu.cache[key]
-	if !ok {
-		store = newCacheStore()
-		c.mu.cache[key] = store
-	}
-	if len(store.connections) >= c.maxNumPerTenant {
+	store := c.mu.cache[key]
+	return store == nil || len(store.connections) < c.maxNumPerTenant
+}
+
+// Push implements the ConnCache interface.
+func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
+	c.mu.Lock()
+	if !c.canPushLocked(key, sc) {
+		c.mu.Unlock()
 		return false
 	}
+	c.mu.Unlock()
 
 	var err error
 	var authString []byte
@@ -363,34 +372,55 @@ func (c *connCache) Push(key cacheKey, sc ServerConn) bool {
 		scWithAuth = newServerConnAuth(sc, nil)
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.canPushLocked(key, sc) {
+		return false
+	}
+	store := c.mu.cache[key]
+	if store == nil {
+		store = newCacheStore()
+		c.mu.cache[key] = store
+	}
 	connOperator[c.opStrategy].push(
 		store,
 		scWithAuth,
-		func() { c.mu.allConns[sc] = struct{}{} },
+		func() { c.mu.allConns[sc] = scWithAuth },
 	)
 	return true
 }
 
+// closeCachedConnection terminates a connection without protocol I/O. The
+// wrapper's closeOnce lets this race safely with Close, which also owns every
+// connection that has been removed from a store but not handed to a caller.
+func (c *connCache) closeCachedConnection(sc *serverConnAuth) {
+	if err := sc.close(); err != nil {
+		c.logger.Error("failed to close cached server connection",
+			zap.Uint32("conn ID", sc.ConnID()),
+			zap.Error(err),
+		)
+	}
+	c.mu.Lock()
+	delete(c.mu.allConns, sc.ServerConn)
+	c.mu.Unlock()
+}
+
 // Pop implements the ConnCache interface.
 func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byte) ServerConn {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.mu.closed {
-		return nil
-	}
-	store, ok := c.mu.cache[key]
-	if !ok {
-		return nil
-	}
-	if store == nil || len(store.connections) == 0 {
-		return nil
-	}
-	// If it has expired, trash it and pop the second one.
-	for len(store.connections) != 0 {
-		sc := connOperator[c.opStrategy].peek(c.mu.cache[key])
-
-		postPop := func() {
-			delete(c.mu.allConns, sc.ServerConn)
+	for {
+		// Reserve one available connection by removing it from the store. Keep
+		// it in allConns until it is handed to the caller so Close can terminate
+		// an in-flight SET CONNECTION ID that is blocked in backend I/O.
+		c.mu.Lock()
+		if c.mu.closed {
+			c.mu.Unlock()
+			return nil
+		}
+		store := c.mu.cache[key]
+		sc := connOperator[c.opStrategy].pop(store, nil)
+		c.mu.Unlock()
+		if sc == nil {
+			return nil
 		}
 
 		// Before using a cached connection for a fresh login, ensure its CN is
@@ -407,25 +437,7 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 				zap.Uint32("conn ID", sc.ConnID()),
 				zap.String("cn", cnUUID),
 			)
-			// Remove it from cache while holding the mutex so no other login
-			// can observe/reuse it, then perform the network cleanup outside the
-			// critical section.
-			connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
-			c.mu.Unlock()
-			if err := sc.Quit(); err != nil {
-				c.logger.Error("failed to send quit cmd to server",
-					zap.Uint32("conn ID", sc.ConnID()),
-					zap.Error(err),
-				)
-			}
-			c.mu.Lock()
-			if c.mu.closed {
-				return nil
-			}
-			store = c.mu.cache[key]
-			if store == nil {
-				return nil
-			}
+			c.closeCachedConnection(sc)
 			continue
 		}
 
@@ -440,18 +452,7 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 					zap.Uint32("conn ID", sc.ConnID()),
 					zap.Error(err),
 				)
-				// Failed to set connection ID, try to send quit command to the server.
-				if err := sc.Quit(); err != nil {
-					c.logger.Error("failed to send quit cmd to server",
-						zap.Uint32("conn ID", sc.ConnID()),
-						zap.Error(err),
-					)
-					// If send quit failed, pop the connection from the store.
-					connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
-				} else {
-					// If send quit successfully, pop the connection from the store either.
-					connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
-				}
+				c.closeCachedConnection(sc)
 				continue
 			}
 
@@ -461,26 +462,44 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 					zap.String("hash key", string(key)),
 					zap.Uint32("conn ID", connID),
 				)
+				// Preserve the existing behavior of keeping the connection reusable
+				// after an authentication mismatch. A concurrent Push may have filled
+				// the freed tenant slot; in that case discard this connection instead
+				// of exceeding the configured bound.
+				c.mu.Lock()
+				if c.mu.closed {
+					c.mu.Unlock()
+					return nil
+				}
+				store = c.mu.cache[key]
+				if store == nil {
+					store = newCacheStore()
+					c.mu.cache[key] = store
+				}
+				if len(store.connections) < c.maxNumPerTenant {
+					connOperator[c.opStrategy].push(store, sc, nil)
+					c.mu.Unlock()
+					return nil
+				}
+				c.mu.Unlock()
+				c.closeCachedConnection(sc)
 				return nil
 			}
 
-			// The peeked connection is ok to use, pop it from the store.
-			connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
-
+			// Transfer ownership to the caller. If Close linearized first, it
+			// already owns and closes this in-flight connection, so do not return it.
+			c.mu.Lock()
+			if c.mu.closed {
+				c.mu.Unlock()
+				return nil
+			}
+			delete(c.mu.allConns, sc.ServerConn)
+			c.mu.Unlock()
 			return sc.ServerConn
 		} else {
-			if err := sc.Quit(); err != nil {
-				c.logger.Error("failed to send quit cmd to server",
-					zap.Uint32("conn ID", sc.ConnID()),
-					zap.Error(err),
-				)
-			}
-			// The connection is expired, pop it from cache.
-			connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
+			c.closeCachedConnection(sc)
 		}
 	}
-	// There is no connection to use.
-	return nil
 }
 
 // Count implements the ConnCache interface.
@@ -505,8 +524,8 @@ func (c *connCache) Close() error {
 	c.mu.cache = nil
 	c.mu.allConns = nil
 	c.mu.Unlock()
-	for conn := range conns {
-		_ = conn.Quit()
+	for _, conn := range conns {
+		_ = conn.close()
 	}
 	return nil
 }

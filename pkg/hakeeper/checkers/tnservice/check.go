@@ -15,7 +15,8 @@
 package tnservice
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -209,8 +210,8 @@ func newRemoveStep(target string, shardID, replicaID, logShardID uint64) operato
 func expiredReplicas(shard *tnShard) []*tnReplica {
 	expired := shard.expiredReplicas()
 	// less replica first
-	sort.Slice(expired, func(i, j int) bool {
-		return expired[i].replicaID < expired[j].replicaID
+	slices.SortFunc(expired, func(a, b *tnReplica) int {
+		return cmp.Compare(a.replicaID, b.replicaID)
 	})
 	return expired
 }
@@ -224,8 +225,8 @@ func extraWorkingReplicas(shard *tnShard) []*tnReplica {
 	}
 
 	// less replica first
-	sort.Slice(working, func(i, j int) bool {
-		return working[i].replicaID < working[j].replicaID
+	slices.SortFunc(working, func(a, b *tnReplica) int {
+		return cmp.Compare(a.replicaID, b.replicaID)
 	})
 
 	return working[0 : len(working)-1]
@@ -241,8 +242,8 @@ func consumeLeastSpareStore(working []*util.Store) (string, error) {
 	}
 
 	// the least shards, the higher priority
-	sort.Slice(working, func(i, j int) bool {
-		return working[i].Length < working[j].Length
+	slices.SortFunc(working, func(a, b *util.Store) int {
+		return cmp.Compare(a.Length, b.Length)
 	})
 
 	// stores with the same Length
@@ -256,8 +257,8 @@ func consumeLeastSpareStore(working []*util.Store) (string, error) {
 		}
 		leastStores = append(leastStores, store)
 	}
-	sort.Slice(leastStores, func(i, j int) bool {
-		return leastStores[i].ID < leastStores[j].ID
+	slices.SortFunc(leastStores, func(a, b *util.Store) int {
+		return cmp.Compare(a.ID, b.ID)
 	})
 
 	// consume a slot from this tn store

@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -391,7 +393,7 @@ func getTxn(
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, op.Rollback(ctx))
 	}
 	return op, nil
 }
@@ -445,26 +447,43 @@ func checkLease(
 		return
 	}
 	defer result.Close()
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
-			return false
-		}
-		runner := cols[0].GetStringAt(0)
-		if runner == "" {
-			err = moerr.NewInternalErrorNoCtx("task runner is null")
-			return false
-		}
-		if runner == cnUUID {
-			ok = true
-		} else {
-			logutil.Errorf(
-				"ISCP-Task check lease failed, runner: %s, expected: %s",
-				runner,
-				cnUUID,
-			)
-		}
-		return false
-	})
+	var runner string
+	runner, err = readSingleTaskRunner(result)
+	if err != nil {
+		return
+	}
+	if runner == "" {
+		return
+	}
+	if runner == cnUUID {
+		ok = true
+	} else {
+		logutil.Errorf(
+			"ISCP-Task check lease failed, runner: %s, expected: %s",
+			runner,
+			cnUUID,
+		)
+	}
 	return
+}
+
+func readSingleTaskRunner(result executor.Result) (string, error) {
+	runners := make([]string, 0, 1)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		runners = append(runners, executor.GetStringRows(cols[0])...)
+		return len(runners) < 2
+	})
+	if len(runners) == 0 {
+		return "", nil
+	}
+	if len(runners) != 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", len(runners)))
+	}
+	if runners[0] == "" {
+		return "", moerr.NewInternalErrorNoCtx("task runner is null")
+	}
+	return runners[0], nil
 }
