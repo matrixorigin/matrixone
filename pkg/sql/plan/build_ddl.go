@@ -1808,7 +1808,7 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	}
 
 	// Format the original SQL expression text for SHOW CREATE TABLE output
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier())
 	astExpr.Format(fmtCtx)
 	originSql := fmtCtx.String()
 
@@ -1890,18 +1890,30 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	}
 
 	type recoveredCheck struct {
-		name string
-		expr tree.Expr
+		name           string
+		expr           tree.Expr
+		enforced       bool
+		enforcementSet bool
 	}
 	var checks []recoveredCheck
 	for _, def := range ct.Defs {
 		switch d := def.(type) {
 		case *tree.CheckIndex:
-			checks = append(checks, recoveredCheck{name: d.ConstraintSymbol, expr: d.Expr})
+			checks = append(checks, recoveredCheck{
+				name:           d.ConstraintSymbol,
+				expr:           d.Expr,
+				enforced:       d.Enforced,
+				enforcementSet: d.EnforcementSet,
+			})
 		case *tree.ColumnTableDef:
 			for _, attr := range d.Attributes {
 				if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
-					checks = append(checks, recoveredCheck{name: ca.Name, expr: ca.Expr})
+					checks = append(checks, recoveredCheck{
+						name:           ca.Name,
+						expr:           ca.Expr,
+						enforced:       ca.Enforced,
+						enforcementSet: ca.EnforcementSet,
+					})
 				}
 			}
 		}
@@ -1915,6 +1927,12 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	// binding, naming and OriginSql formatting used by CREATE TABLE.
 	scratch := &TableDef{Name: tableDef.Name, Cols: tableDef.Cols}
 	for _, c := range checks {
+		// Older versions accepted NOT ENFORCED but did not enforce it. Skipping
+		// those clauses preserves their pre-upgrade behavior; recovering them as
+		// ordinary CheckDefs would silently turn them into enforced constraints.
+		if c.enforcementSet && !c.enforced {
+			continue
+		}
 		if err := appendCheckDef(ctx, scratch, c.name, c.expr); err != nil {
 			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
 			return

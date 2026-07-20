@@ -727,7 +727,7 @@ func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
 		require.NoError(t, err)
 		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
 		require.Len(t, checks, 1)
-		require.Equal(t, "a > 0", checks[0].OriginSql)
+		require.Equal(t, "`a` > 0", checks[0].OriginSql)
 	})
 
 	t.Run("named check stores origin sql", func(t *testing.T) {
@@ -737,7 +737,7 @@ func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
 		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
 		require.Len(t, checks, 1)
 		require.Equal(t, "chk_ab", checks[0].GetName())
-		require.Equal(t, "a < b", checks[0].OriginSql)
+		require.Equal(t, "`a` < `b`", checks[0].OriginSql)
 	})
 }
 
@@ -762,7 +762,7 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0))")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
 		require.Len(t, td.Checks, 1)
-		require.Equal(t, "a > 0", td.Checks[0].OriginSql)
+		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
 		require.True(t, exprContainsFuncName(td.Checks[0].GetCheck(), ">"))
 	})
 
@@ -784,6 +784,30 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		td := newTableDef("CREATE TABLE t (a INT CHECK (a > 0), b INT, CHECK (b < 100))")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
 		require.Len(t, td.Checks, 2)
+	})
+
+	t.Run("skips table-level not enforced check", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0) NOT ENFORCED)")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Empty(t, td.Checks)
+	})
+
+	t.Run("skips column-level not enforced check", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT CHECK (a > 0) NOT ENFORCED, b INT)")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Empty(t, td.Checks)
+	})
+
+	t.Run("recovers only enforced checks from mixed legacy metadata", func(t *testing.T) {
+		td := newTableDef(`CREATE TABLE t (
+			a INT CHECK (a > 0),
+			b INT CHECK (b > 0) ENFORCED,
+			CHECK (a < 100) NOT ENFORCED
+		)`)
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 2)
+		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
+		require.Equal(t, "`b` > 0", td.Checks[1].OriginSql)
 	})
 
 	t.Run("no-op when checks already present", func(t *testing.T) {

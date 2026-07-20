@@ -121,7 +121,7 @@ func (node *UnresolvedName) ColNameOrigin() string {
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	if ctx.quoteIdentifier {
 		for i := node.NumParts - 1; i >= 0; i-- {
-			ctx.WriteString("`" + node.CStrParts[i].Origin() + "`")
+			ctx.WriteIdentifier(Identifier(node.CStrParts[i].Origin()))
 			if i > 0 {
 				ctx.WriteByte('.')
 			}

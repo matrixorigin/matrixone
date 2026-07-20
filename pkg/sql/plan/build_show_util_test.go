@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -233,10 +234,10 @@ func Test_ShowCreateTableRendersStructuredChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (c_age is null or (c_age >= 0 and c_age <= 200))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (`c_age` is null or (`c_age` >= 0 and `c_age` <= 200))") {
 		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (c_score is null or (c_score >= 0 and c_score <= 100))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (`c_score` is null or (`c_score` >= 0 and `c_score` <= 100))") {
 		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
 	}
 	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
@@ -265,7 +266,7 @@ func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CHECK (v > 0)") {
+	if !strings.Contains(showSQL, "CHECK (`v` > 0)") {
 		t.Fatalf("expected anonymous check clause in show create output: %s", showSQL)
 	}
 	if strings.Contains(showSQL, "__mo_chk_") {
@@ -305,9 +306,29 @@ func Test_ShowCreateTableChecksSurviveDeepCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT `chk_v` CHECK (v > 0)") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_v` CHECK (`v` > 0)") {
 		t.Fatalf("check constraint must survive deep copy into show create output: %s", showSQL)
 	}
+}
+
+func TestShowCreateTableQuotesCheckIdentifiersForRoundTrip(t *testing.T) {
+	const sql = "CREATE TABLE t_quoted_checks (" +
+		"`select` INT, `has space` INT, `tick``name` INT, " +
+		"CHECK (`select` > 0), CHECK (`has space` > 0), CHECK (`tick``name` > 0))"
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 3)
+	require.Equal(t, "`select` > 0", tableDef.Checks[0].OriginSql)
+	require.Equal(t, "`has space` > 0", tableDef.Checks[1].OriginSql)
+	require.Equal(t, "`tick``name` > 0", tableDef.Checks[2].OriginSql)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	stmt, err := mysql.ParseOne(context.Background(), showSQL, 1)
+	require.NoError(t, err, "SHOW CREATE output must be executable: %s", showSQL)
+	stmt.Free()
 }
 
 func Test_extractTopLevelCheckDefs(t *testing.T) {
