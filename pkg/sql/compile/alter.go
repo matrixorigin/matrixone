@@ -219,13 +219,6 @@ func (c *Compile) prepareAlterDataBranchLineage(
 		}
 	}
 
-	op := c.proc.GetTxnOperator()
-	opts := op.TxnOptions()
-	if err = validateAlterDataBranchLineageTxn(
-		opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
-	); err != nil {
-		return alterDataBranchLineagePlan{}, err
-	}
 	return alterDataBranchLineagePlan{
 		enabled:                  true,
 		preserveHistoricalSource: preserveHistoricalSource,

@@ -151,6 +151,26 @@ use br_txn_src;
 create table base(a int primary key, b varchar(20));
 insert into base values (1, 'one'), (2, 'two');
 
+-- Historical snapshot coverage alone must not turn an ordinary ALTER into the
+-- explicit-transaction restriction used for live data-branch lineages.
+create table alter_begin(a int primary key, b int);
+insert into alter_begin values (1, 10);
+create table alter_autocommit(a int primary key, b int);
+insert into alter_autocommit values (1, 10);
+create snapshot br_alter_begin_s for table br_txn_src alter_begin;
+create snapshot br_alter_autocommit_s for table br_txn_src alter_autocommit;
+begin;
+alter table alter_begin add column c int default 7;
+commit;
+select a, b, c from alter_begin order by a;
+set autocommit=0;
+alter table alter_autocommit add column c int default 9;
+commit;
+set autocommit=1;
+select a, b, c from alter_autocommit order by a;
+drop snapshot br_alter_begin_s;
+drop snapshot br_alter_autocommit_s;
+
 begin;
 data branch create table br_commit from base;
 commit;

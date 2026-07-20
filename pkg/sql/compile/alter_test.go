@@ -131,6 +131,49 @@ func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
 	}
 }
 
+func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
+	const (
+		oldTableID = uint64(42)
+		database   = "test"
+		table      = "dept"
+	)
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	snapshotSQL := alterDataBranchHistoricalSnapshotSourceSQL("", database, table, oldTableID)
+	pitrSQL := alterDataBranchHistoricalPitrSourceSQL("", database, table, oldTableID)
+
+	for _, tc := range []struct {
+		name     string
+		history  string
+		wantSQLs []string
+	}{
+		{
+			name:     "snapshot",
+			history:  snapshotSQL,
+			wantSQLs: []string{participationSQL, snapshotSQL},
+		},
+		{
+			name:     "pitr",
+			history:  pitrSQL,
+			wantSQLs: []string{participationSQL, snapshotSQL, pitrSQL},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			spyExec.results[tc.history] = newAlterCopyFixedResult(
+				t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+			)
+
+			lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+			require.NoError(t, err)
+			require.True(t, lineagePlan.enabled)
+			require.True(t, lineagePlan.preserveHistoricalSource)
+			require.Equal(t, tc.wantSQLs, spyExec.executedSQLs)
+		})
+	}
+}
+
 func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
 	require.True(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, true))
 	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, false))
