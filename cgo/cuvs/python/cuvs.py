@@ -255,8 +255,6 @@ if _lib:
     # IVF-PQ
     _lib.gpu_ivf_pq_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_pq_new.restype = ctypes.c_void_p
-    _lib.gpu_ivf_pq_new_from_data_file.argtypes = [ctypes.c_char_p, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
-    _lib.gpu_ivf_pq_new_from_data_file.restype = ctypes.c_void_p
     _lib.gpu_ivf_pq_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_ivf_pq_load_file.restype = ctypes.c_void_p
     _lib.gpu_ivf_pq_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
@@ -749,14 +747,6 @@ class IvfPqIndex:
         errmsg = ctypes.c_char_p()
         h = _lib.gpu_ivf_pq_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
-
-    @classmethod
-    def create_from_data_file(cls, filename, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32):
-        if build_params is None: build_params = IvfPqBuildParams.default()
-        dev_arr = (ctypes.c_int * len(devices))(*devices)
-        errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_pq_new_from_data_file(filename.encode('utf-8'), int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), ctypes.byref(errmsg))
-        _check_error(errmsg); return cls(h)
 
     @classmethod
     def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32):

@@ -145,28 +145,6 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
     return nullptr;
 }
 
-gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric_c,
-                                                ivf_pq_build_params_t build_params,
-                                                const int* devices, int device_count, uint32_t nthread,
-                                                distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype, void* errmsg) {
-    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
-    try {
-        std::vector<int> devs(devices, devices + device_count);
-        std::unique_ptr<gpu_ivf_pq_any_t> holder(new gpu_ivf_pq_any_t(btype, qtype, nullptr));
-        holder->ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
-            using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
-            using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
-            return new gpu_ivf_pq_t<B, Q>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
-        });
-        return static_cast<gpu_ivf_pq_c>(holder.release());
-    } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_from_data_file", e.what());
-    } catch (...) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_from_data_file", "unknown C++ exception");
-    }
-    return nullptr;
-}
-
 gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c,
                                        ivf_pq_build_params_t build_params,
                                        const int* devices, int device_count, uint32_t nthread,
