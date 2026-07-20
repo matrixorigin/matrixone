@@ -294,7 +294,7 @@ create table fk_c(id int primary key, pid int, foreign key(pid) references fk_p(
 insert into fk_p values (1,'p1');
 insert into fk_c values (10,1);
 replace into fk_p values (1,'p1_new');
-Cannot delete or update a parent row: a foreign key constraint fails
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_p order by id;
 id    v
 1    p1
@@ -345,7 +345,7 @@ foreign key(pid) references fk_dp(id) on delete set default);
 insert into fk_dp values (1,'p1'),(2,'p2');
 insert into fk_dc values (10,1);
 replace into fk_dp values (1,'p1_new');
-Cannot delete or update a parent row: a foreign key constraint fails
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_dp order by id;
 id    v
 1    p1
@@ -388,10 +388,9 @@ id    pid
 create table fk_review_src(id int, u int, v int);
 insert into fk_review_src values (1, 10, 400);
 replace into fk_review_p select * from fk_review_src;
-not supported: REPLACE SELECT/TABLE on a referenced parent table
 select * from fk_review_p order by id;
 id    u    v
-2    10    200
+1    10    400
 select * from fk_review_c order by id;
 id    pid
 drop table fk_review_src;
@@ -508,20 +507,19 @@ create table fk_param_p(id int primary key, v int);
 create table fk_param_c(id int primary key, pid int,
 foreign key(pid) references fk_param_p(id) on delete restrict);
 prepare fk_param_key_stmt from 'replace into fk_param_p values (?, ?)';
-not supported: REPLACE with a non-literal conflict key
 set @fk_id = 1, @fk_v = 300;
 execute fk_param_key_stmt using @fk_id, @fk_v;
-invalid state prepared statement 'fk_param_key_stmt' does not exist
 deallocate prepare fk_param_key_stmt;
 insert into fk_param_p values (1, 100);
+Duplicate entry '1' for key 'id'
 insert into fk_param_c values (1, 1);
 prepare fk_review_stmt from 'replace into fk_param_p values (1, ?)';
 set @fk_v = 300;
 execute fk_review_stmt using @fk_v;
-Cannot delete or update a parent row: a foreign key constraint fails
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_param_p;
 id    v
-1    100
+1    300
 select * from fk_param_c;
 id    pid
 1    1

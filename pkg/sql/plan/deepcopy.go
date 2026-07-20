@@ -460,6 +460,24 @@ func DeepCopySampleFuncSpec(source *plan.SampleFuncSpec) *plan.SampleFuncSpec {
 	}
 }
 
+// CloneTableDefForPlan returns a planner-owned TableDef shell. When withCols is
+// true, the Cols slice can also be changed without modifying table. Column
+// definitions and all other schema metadata are shared and must be treated as
+// immutable; callers that change nested schema objects must use DeepCopyTableDef.
+func CloneTableDefForPlan(table *plan.TableDef, withCols bool) *plan.TableDef {
+	if table == nil {
+		return nil
+	}
+
+	cloned := *table
+	if withCols {
+		cloned.Cols = slices.Clone(table.Cols)
+	} else {
+		cloned.Cols = nil
+	}
+	return &cloned
+}
+
 func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 	if table == nil {
 		return nil
