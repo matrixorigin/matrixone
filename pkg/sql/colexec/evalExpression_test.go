@@ -179,6 +179,38 @@ func TestEvalIffPropagatesSelectedBranchError(t *testing.T) {
 	require.Equal(t, 1, thenExecutor.calls)
 }
 
+func TestEvalIffUsesStatementCompatibilityMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(2)
+
+	condition := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("1abc"), []byte("abc")}, nil, types.T_varchar.ToType(), proc.Mp())
+	defer condition.Free(proc.Mp())
+	thenValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(11), 2, proc.Mp())
+	require.NoError(t, err)
+	defer thenValue.Free(proc.Mp())
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(22), 2, proc.Mp())
+	require.NoError(t, err)
+	defer elseValue.Free(proc.Mp())
+
+	expr := NewFunctionExpressionExecutor()
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	defer expr.Free()
+	expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, condition))
+	expr.SetParameter(1, NewFixedVectorExpressionExecutor(proc.Mp(), false, thenValue))
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{bat}, nil))
+	require.Equal(t, []bool{true, false}, expr.selectList1)
+	require.Equal(t, []bool{false, true}, expr.selectList2)
+
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+	err = expr.EvalIff(proc, []*batch.Batch{bat}, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
 func TestEvalIffShrinkingBatchDoesNotReuseStaleBranchSelection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

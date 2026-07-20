@@ -237,6 +237,7 @@ SELECT if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c)) FROM t1;
 0.3333333333333333  𝄀
 0.16666666666666666
 DROP TABLE t1;
+SET SESSION sql_mode = '';
 SELECT IF(NULL, 'T', 'F') AS if_null_false;
 ➤ if_null_false[12,-1,0]  𝄀
 F
@@ -300,24 +301,132 @@ T
 SELECT IF(X'3136', 'T', 'F') AS if_binary_text_16_true;
 ➤ if_binary_text_16_true[12,-1,0]  𝄀
 T
-SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_error;
-invalid input: "\x10" is invalid numeric string
+SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_true;
+➤ if_raw_binary_byte_true[12,-1,0]  𝄀
+T
 SELECT IF(CAST('0x10' AS BINARY(8)), 'T', 'F') AS if_fixed_binary_padding_error;
 invalid input: "10\x00\x00\x00\x00" is invalid numeric string
-SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_error;
-invalid input: "1abc" is invalid numeric string
-SELECT IF('abc', 'T', 'F') AS if_invalid_string_error;
-invalid input: "abc" is invalid numeric string
-SELECT IF('  -2.5foo', 'T', 'F') AS if_signed_suffix_error;
-invalid input: "-2.5foo" is invalid numeric string
-SELECT IF('', 'T', 'F') AS if_empty_string_error;
-invalid input: "" is invalid numeric string
-SELECT IF('true', 'T', 'F') AS if_bool_text_error;
-invalid input: "true" is invalid numeric string
-SELECT IF('0x', 'T', 'F') AS if_missing_hex_digits_error;
+SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_default_true;
+➤ if_decimal_prefix_default_true[12,-1,0]  𝄀
+T
+SELECT IF('abc', 'T', 'F') AS if_invalid_string_default_false;
+➤ if_invalid_string_default_false[12,-1,0]  𝄀
+F
+SELECT IF('  -2.5foo', 'T', 'F') AS if_signed_prefix_default_true;
+➤ if_signed_prefix_default_true[12,-1,0]  𝄀
+T
+SELECT IF('', 'T', 'F') AS if_empty_string_default_false;
+➤ if_empty_string_default_false[12,-1,0]  𝄀
+F
+SELECT IF('   ', 'T', 'F') AS if_whitespace_default_false;
+➤ if_whitespace_default_false[12,-1,0]  𝄀
+F
+SELECT IF('.5xyz', 'T', 'F') AS if_fraction_prefix_default_true;
+➤ if_fraction_prefix_default_true[12,-1,0]  𝄀
+T
+SELECT IF('1e2foo', 'T', 'F') AS if_exponent_prefix_default_true;
+➤ if_exponent_prefix_default_true[12,-1,0]  𝄀
+T
+SELECT IF('1eabc', 'T', 'F') AS if_malformed_exponent_default_true;
+➤ if_malformed_exponent_default_true[12,-1,0]  𝄀
+T
+SELECT IF('-0suffix', 'T', 'F') AS if_signed_zero_prefix_default_false;
+➤ if_signed_zero_prefix_default_false[12,-1,0]  𝄀
+F
+SELECT IF('1e10000', 'T', 'F') AS if_float_overflow_default_true;
+➤ if_float_overflow_default_true[12,-1,0]  𝄀
+T
+SELECT IF('0x', 'T', 'F') AS if_missing_hex_digits_default_error;
 invalid input: "0x" is invalid numeric string
-SELECT IF('1e10000', 'T', 'F') AS if_float_overflow_error;
+SELECT CAST('1abc' AS DOUBLE) AS cast_decimal_prefix_default;
+➤ cast_decimal_prefix_default[8,54,0]  𝄀
+1.0
+SELECT CAST('abc' AS DOUBLE) AS cast_invalid_string_default_zero;
+➤ cast_invalid_string_default_zero[8,54,0]  𝄀
+0.0
+SELECT CAST('  -2.5foo' AS DOUBLE) AS cast_signed_prefix_default;
+➤ cast_signed_prefix_default[8,54,0]  𝄀
+-2.5
+SELECT CAST('' AS DOUBLE) AS cast_empty_string_default_zero;
+➤ cast_empty_string_default_zero[8,54,0]  𝄀
+0.0
+PREPARE if_mode_literal FROM 'SELECT IF(''1abc'', ''T'', ''F'') AS prepared_if_literal';
+EXECUTE if_mode_literal;
+➤ prepared_if_literal[12,-1,0]  𝄀
+T
+SET @if_mode_value = '1eabc';
+PREPARE if_mode_parameter FROM 'SELECT IF(?, ''T'', ''F'') AS prepared_if_parameter';
+EXECUTE if_mode_parameter USING @if_mode_value;
+➤ prepared_if_parameter[12,-1,0]  𝄀
+T
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT IF('0x10', 'T', 'F') AS if_hex_native_true;
+➤ if_hex_native_true[12,-1,0]  𝄀
+T
+SELECT IF('0b1010', 'T', 'F') AS if_binary_prefix_native_true;
+➤ if_binary_prefix_native_true[12,-1,0]  𝄀
+T
+SELECT IF('0o17', 'T', 'F') AS if_octal_prefix_native_true;
+➤ if_octal_prefix_native_true[12,-1,0]  𝄀
+T
+SELECT IF('NaN', 'T', 'F') AS if_nan_native_true;
+➤ if_nan_native_true[12,-1,0]  𝄀
+T
+SELECT IF('Inf', 'T', 'F') AS if_inf_native_true;
+➤ if_inf_native_true[12,-1,0]  𝄀
+T
+SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_native_error;
+invalid input: "1abc" is invalid numeric string
+SELECT IF('abc', 'T', 'F') AS if_invalid_string_native_error;
+invalid input: "abc" is invalid numeric string
+SELECT IF('  -2.5foo', 'T', 'F') AS if_signed_suffix_native_error;
+invalid input: "-2.5foo" is invalid numeric string
+SELECT IF('', 'T', 'F') AS if_empty_string_native_error;
+invalid input: "" is invalid numeric string
+SELECT IF('   ', 'T', 'F') AS if_whitespace_native_error;
+invalid input: "" is invalid numeric string
+SELECT IF('.5xyz', 'T', 'F') AS if_fraction_suffix_native_error;
+invalid input: ".5xyz" is invalid numeric string
+SELECT IF('1e2foo', 'T', 'F') AS if_exponent_suffix_native_error;
+invalid input: "1e2foo" is invalid numeric string
+SELECT IF('1eabc', 'T', 'F') AS if_malformed_exponent_native_error;
+invalid input: "1eabc" is invalid numeric string
+SELECT IF('-0suffix', 'T', 'F') AS if_signed_zero_suffix_native_error;
+invalid input: "-0suffix" is invalid numeric string
+SELECT IF('true', 'T', 'F') AS if_bool_text_native_error;
+invalid input: "true" is invalid numeric string
+SELECT IF('0x', 'T', 'F') AS if_missing_hex_digits_native_error;
+invalid input: "0x" is invalid numeric string
+SELECT IF('1e10000', 'T', 'F') AS if_float_overflow_native_error;
 invalid input: "1e10000" is invalid numeric string
+SELECT CAST('1abc' AS DOUBLE) AS cast_decimal_prefix_native_error;
+invalid input: "1abc" is invalid numeric string
+SELECT CAST('abc' AS DOUBLE) AS cast_invalid_string_native_error;
+invalid input: "abc" is invalid numeric string
+SELECT CAST('  -2.5foo' AS DOUBLE) AS cast_signed_suffix_native_error;
+invalid input: "-2.5foo" is invalid numeric string
+SELECT CAST('' AS DOUBLE) AS cast_empty_string_native_error;
+invalid input: "" is invalid numeric string
+EXECUTE if_mode_literal;
+invalid input: "1abc" is invalid numeric string
+EXECUTE if_mode_parameter USING @if_mode_value;
+invalid input: "1eabc" is invalid numeric string
+SET SESSION sql_mode = '';
+SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_after_reset_true;
+➤ if_decimal_prefix_after_reset_true[12,-1,0]  𝄀
+T
+SELECT IF('abc', 'T', 'F') AS if_invalid_string_after_reset_false;
+➤ if_invalid_string_after_reset_false[12,-1,0]  𝄀
+F
+EXECUTE if_mode_literal;
+➤ prepared_if_literal[12,-1,0]  𝄀
+T
+EXECUTE if_mode_parameter USING @if_mode_value;
+➤ prepared_if_parameter[12,-1,0]  𝄀
+T
+DEALLOCATE PREPARE if_mode_literal;
+DEALLOCATE PREPARE if_mode_parameter;
+SET SESSION sql_mode = default;
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES(1),(2),(3);
 SELECT CASE WHEN id = 1 THEN 'string' WHEN id = 2 THEN 123 ELSE 'mixed' END AS mixed_case FROM t1 ORDER BY id;

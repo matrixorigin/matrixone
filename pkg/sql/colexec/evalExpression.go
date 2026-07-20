@@ -534,6 +534,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	}
 	expr.selectList1 = expr.selectList1[:rowCount]
 	expr.selectList2 = expr.selectList2[:rowCount]
+	mode := function.CompatibilityModeFromProcess(proc)
 
 	for i := 0; i < rowCount; i++ {
 		if selectList != nil {
@@ -546,7 +547,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if !expr.selectList1[i] {
 			continue
 		}
-		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i))
+		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), mode)
 		if err != nil {
 			return err
 		}

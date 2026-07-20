@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -1950,10 +1951,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloat(ctx, source, rs, 32, length, selectList)
+		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloat(ctx, source, rs, 64, length, selectList)
+		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(source, rs, length, selectList)
@@ -5258,6 +5259,20 @@ type castNumericToken struct {
 	negative bool
 }
 
+type SQLCompatibilityMode uint8
+
+const (
+	SQLCompatibilityMySQL SQLCompatibilityMode = iota
+	SQLCompatibilityMatrixOne
+)
+
+func CompatibilityModeFromProcess(proc *process.Process) SQLCompatibilityMode {
+	if proc != nil && proc.GetSessionInfo().MatrixOneNativeMode {
+		return SQLCompatibilityMatrixOne
+	}
+	return SQLCompatibilityMySQL
+}
+
 func parseCastNumericToken(s string) (castNumericToken, error) {
 	trimmed, body, negative, _ := splitCastNumericSign(s)
 	if body == "" {
@@ -5310,6 +5325,56 @@ func parseFloatCastString(s string) (float64, error) {
 }
 
 func parseFloatCastStringWithBitSize(s string, bitSize int) (float64, error) {
+	return parseStringToFloatWithBitSize(s, bitSize, SQLCompatibilityMatrixOne)
+}
+
+func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
+	return parseStringToFloatWithBitSize(s, 64, mode)
+}
+
+func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
+	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
+		return parseStrictFloatStringWithBitSize(s, bitSize)
+	}
+
+	prefix, negative, ok := scanDecimalFloatPrefix(s)
+	if !ok {
+		return 0, nil
+	}
+
+	value, err := strconv.ParseFloat(prefix, bitSize)
+	if err == nil {
+		return value, nil
+	}
+	if !errors.Is(err, strconv.ErrRange) {
+		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", s)
+	}
+	if math.IsInf(value, 0) {
+		if bitSize == 32 {
+			return math.Copysign(float64(math.MaxFloat32), value), nil
+		}
+		return math.Copysign(math.MaxFloat64, value), nil
+	}
+	if negative {
+		return math.Copysign(0, -1), nil
+	}
+	return 0, nil
+}
+
+func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompatibilityMode) (float64, error) {
+	if !isBinary {
+		return parseStringToFloatWithBitSize(convertByteSliceToString(value), bitSize, mode)
+	}
+
+	encoded := hex.EncodeToString(value)
+	raw, err := strconv.ParseUint(encoded, 16, 64)
+	if err != nil {
+		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", string(value))
+	}
+	return float64(raw), nil
+}
+
+func parseStrictFloatStringWithBitSize(s string, bitSize int) (float64, error) {
 	trimmed := strings.TrimSpace(s)
 	token, err := parseCastNumericToken(trimmed)
 	if err != nil {
@@ -5327,6 +5392,90 @@ func parseFloatCastStringWithBitSize(s string, bitSize int) (float64, error) {
 		value = -value
 	}
 	return value, nil
+}
+
+func isExtensionFloatCandidate(s string) bool {
+	_, body, _, _ := splitCastNumericSign(s)
+	if body == "" {
+		return false
+	}
+	if len(body) >= 2 && body[0] == '0' {
+		switch body[1] {
+		case 'b', 'B', 'o', 'O', 'x', 'X':
+			return true
+		}
+	}
+	if len(body) >= 3 && strings.EqualFold(body[:3], "nan") {
+		return true
+	}
+	if len(body) >= 3 && strings.EqualFold(body[:3], "inf") {
+		return true
+	}
+	return false
+}
+
+func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
+	i := skipASCIISpace(s, 0)
+	if i >= len(s) {
+		return "", false, false
+	}
+
+	prefixStart := i
+	if s[i] == '+' || s[i] == '-' {
+		negative = s[i] == '-'
+		i++
+	}
+	mantissaDigits := 0
+	for i < len(s) && isASCIIDigit(s[i]) {
+		i++
+		mantissaDigits++
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && isASCIIDigit(s[i]) {
+			i++
+			mantissaDigits++
+		}
+	}
+	if mantissaDigits == 0 {
+		return "", negative, false
+	}
+
+	prefixEnd := i
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		expStart := i
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		expDigitsStart := i
+		for i < len(s) && isASCIIDigit(s[i]) {
+			i++
+		}
+		if i > expDigitsStart {
+			prefixEnd = i
+		} else {
+			prefixEnd = expStart
+		}
+	}
+
+	return s[prefixStart:prefixEnd], negative, true
+}
+
+func skipASCIISpace(s string, i int) int {
+	for i < len(s) {
+		switch s[i] {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+func isASCIIDigit(b byte) bool {
+	return b >= '0' && b <= '9'
 }
 
 func parseSignedCastString(s string, bitSize int) (int64, error) {
@@ -5416,6 +5565,7 @@ func strToUnsigned[T constraints.Unsigned](
 
 func strToFloat[T constraints.Float](
 	ctx context.Context,
+	mode SQLCompatibilityMode,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList) error {
@@ -5429,7 +5579,6 @@ func strToFloat[T constraints.Float](
 
 	var result T
 	var tErr error
-	var r1 uint64
 	var r2 float64
 	for i = 0; i < l; i++ {
 		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
@@ -5444,38 +5593,18 @@ func strToFloat[T constraints.Float](
 				return err
 			}
 		} else {
-			if isBinary {
-				s := hex.EncodeToString(v)
-				r1, tErr = strconv.ParseUint(s, 16, 64)
-				if tErr != nil {
-					return moerr.NewInvalidInputf(ctx, "%q is invalid numeric string", string(v))
-				}
-				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
-					result = T(r1)
-				} else {
-					v2, err := floatNumToFixFloat(ctx, float64(r1), to, "")
-					if err != nil {
-						return err
-					}
-					result = T(v2)
-				}
+			r2, tErr = parseBytesToFloat(v, isBinary, bitSize, mode)
+			if tErr != nil {
+				return tErr
+			}
+			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
+				result = T(r2)
 			} else {
-				s := strings.TrimSpace(convertByteSliceToString(v))
-				r2, tErr = parseFloatCastStringWithBitSize(s, bitSize)
-				if tErr != nil {
-					return tErr
-				} else if bitSize == 32 {
-					r2, _ = parseFloatCastStringWithBitSize(s, 64)
+				v2, err := floatNumToFixFloat(ctx, r2, to, convertByteSliceToString(v))
+				if err != nil {
+					return err
 				}
-				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
-					result = T(r2)
-				} else {
-					v2, err := floatNumToFixFloat(ctx, r2, to, s)
-					if err != nil {
-						return err
-					}
-					result = T(v2)
-				}
+				result = T(v2)
 			}
 			if err := to.Append(result, false); err != nil {
 				return err

@@ -471,29 +471,36 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	stringVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(),
-		[]string{"0", "  -2.5 ", "+0x10", "0b1010", "NaN", "bad"}, nil)
-	for row, want := range []bool{false, true, true, true, true} {
-		got, err := IffConditionTruthyAt(stringVec, uint64(row))
+		[]string{
+			"0", "  -2.5 ", "+0x10", "0b1010", "NaN", "1abc", "bad", "",
+			".5xyz", "1e2foo", "1eabc", "-0suffix", "   ",
+		}, nil)
+	for row, want := range []bool{
+		false, true, true, true, true, true, false, false,
+		true, true, true, false, false,
+	} {
+		got, err := IffConditionTruthyAt(stringVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
-	_, err := IffConditionTruthyAt(stringVec, 5)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	for _, row := range []uint64{5, 6, 7, 8, 9, 10, 11, 12} {
+		_, err := IffConditionTruthyAt(stringVec, row, SQLCompatibilityMatrixOne)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
 
 	binaryVec := newVectorByType(proc.Mp(), types.T_varbinary.ToType(),
-		[]string{"16", "\x10", "0x10\x00"}, nil)
-	got, err := IffConditionTruthyAt(binaryVec, 0)
-	require.NoError(t, err)
-	require.True(t, got)
-	for _, row := range []uint64{1, 2} {
-		_, err = IffConditionTruthyAt(binaryVec, row)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		[]string{"\x00", "16", "\x10", "0x10\x00"}, nil)
+	binaryVec.SetIsBin(true)
+	for row, want := range []bool{false, true, true, true} {
+		got, err := IffConditionTruthyAt(binaryVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
 	}
 
 	intVec := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{0, -1, 9}, nil)
 	intVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err = IffConditionTruthyAt(intVec, uint64(row))
+		got, err := IffConditionTruthyAt(intVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -501,7 +508,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	floatVec := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{0, -0.1, 1}, nil)
 	floatVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err = IffConditionTruthyAt(floatVec, uint64(row))
+		got, err := IffConditionTruthyAt(floatVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -509,7 +516,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	decimalVec := newVectorByType(proc.Mp(), types.New(types.T_decimal64, 10, 1), []types.Decimal64{0, 1, 1}, nil)
 	decimalVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err = IffConditionTruthyAt(decimalVec, uint64(row))
+		got, err := IffConditionTruthyAt(decimalVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
@@ -517,7 +524,7 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	bitVec := newVectorByType(proc.Mp(), types.T_bit.ToType(), []uint64{0, 1, 1}, nil)
 	bitVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
-		got, err = IffConditionTruthyAt(bitVec, uint64(row))
+		got, err := IffConditionTruthyAt(bitVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}

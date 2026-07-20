@@ -515,7 +515,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func IffConditionTruthyAt(vec *vector.Vector, row uint64) (bool, error) {
+func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityMode) (bool, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return false, nil
 	}
@@ -552,7 +552,7 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64) (bool, error) {
 	case types.T_decimal256:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, int(row)).Compare(types.Decimal256{}) != 0, nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		value, err := parseFloatCastString(string(vec.GetBytesAt(int(row))))
+		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), vec.GetIsBin(), 64, mode)
 		if err != nil {
 			return false, err
 		}
@@ -614,11 +614,12 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
 
 	rs := vector.MustFunctionResult[T](result)
+	mode := CompatibilityModeFromProcess(proc)
 	var zero T
 	for i := uint64(0); i < uint64(length); i++ {
 		if iffRowSkipped(selectList, i) {
@@ -627,7 +628,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i)
+		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
 		if err != nil {
 			return err
 		}
@@ -644,11 +645,12 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 	return nil
 }
 
-func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	mode := CompatibilityModeFromProcess(proc)
 	for i := uint64(0); i < uint64(length); i++ {
 		if iffRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -656,7 +658,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i)
+		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
 		if err != nil {
 			return err
 		}

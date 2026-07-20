@@ -1416,6 +1416,21 @@ func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
 	require.Equal(t, "c", name.ColName())
 }
 
+func TestRefreshStatementScopedSessionInfo(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)

@@ -112,6 +112,7 @@ type SessionInfo struct {
 	Version              string
 	TimeZone             *time.Location
 	LockWaitTimeout      int64
+	MatrixOneNativeMode  bool
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
