@@ -137,22 +137,15 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 	if k <= 0 || idx.globalN == 0 || len(slots) == 0 {
 		return nil
 	}
-	// Collect the live matches across segments (one per pk — the live copy).
-	type match struct {
-		seg *Segment
-		ord int64
-		tf  int
-	}
-	matched := make(map[any]match)
-	// idf df is the CORPUS phrase df — all live docs containing the phrase, independent
-	// of the WHERE prefilter (else the same doc's score would change with an unrelated
-	// WHERE clause, and NL would disagree with BOOLEAN's gs.phraseDf). Only build the
-	// separate unfiltered set when a filter is present; without one, matched IS every
-	// live match.
-	var dfSet map[any]struct{}
-	if filter != nil {
-		dfSet = make(map[any]struct{})
-	}
+	// Single pass, O(k) memory (was O(matches): a matched map + a full results slice,
+	// which OOMs on a low-selectivity phrase that hits most of the corpus). A lone
+	// phrase has ONE idf² (idfSquared over its live df), and scoreTerm multiplies the
+	// per-doc factor by that constant, so idf² does not change the top-k order — rank on
+	// the idf²-free partial score in a bounded top-k, count the (filter-independent) live
+	// df alongside, and scale the k winners by idf² at the end. isLive is true for exactly
+	// one (si,ord) per pk, so counting live hits IS the distinct-live df (no dedup set).
+	tk := newBoundedTopK(k)
+	df := 0
 	for si, seg := range idx.segments {
 		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
 		for _, h := range seg.matchPhrase(slots) {
@@ -160,31 +153,85 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 			if !idx.isLive(si, h.ord, key) {
 				continue
 			}
-			if dfSet != nil {
-				dfSet[key] = struct{}{}
-			}
+			df++ // distinct live phrase match (filter-independent, matches the old dfSet)
 			if allowed(allow, h.ord) {
-				matched[key] = match{seg, h.ord, h.tf}
+				partial := seg.scoreTerm(algo, float64(h.tf), 1.0, h.ord, idx.globalAvgDocLen)
+				tk.push(seg.pks[h.ord], partial)
 			}
 		}
 	}
-	if len(matched) == 0 {
+	if tk.len() == 0 {
 		return nil
 	}
-
-	df := len(matched)
-	if dfSet != nil {
-		df = len(dfSet)
-	}
 	idf2 := idfSquared(idx.globalN, df) // df = live phrase-matched docs, filter-independent
-	results := make([]Result, 0, len(matched))
-	for _, m := range matched {
-		results = append(results, Result{
-			Pk:    m.seg.pks[m.ord],
-			Score: m.seg.scoreTerm(algo, float64(m.tf), idf2, m.ord, idx.globalAvgDocLen),
-		})
+	return tk.resultsDescScaled(float32(idf2))
+}
+
+// boundedTopK keeps only the highest-scoring k (pk, score) pairs seen via push in O(k)
+// memory — a binary min-heap by score, so the current k-th best sits at the root and is
+// evicted in O(log k) when a better candidate arrives. It replaces "materialize every
+// match, then top-k", which was O(matches). Ties at the k-th place are unspecified (as
+// before — no arbitrary pk tie-break; see topKResults).
+type topKItem struct {
+	pk    any
+	score float32
+}
+
+type boundedTopK struct {
+	k int
+	h []topKItem
+}
+
+func newBoundedTopK(k int) *boundedTopK { return &boundedTopK{k: k, h: make([]topKItem, 0, k)} }
+
+func (b *boundedTopK) len() int { return len(b.h) }
+
+func (b *boundedTopK) push(pk any, score float32) {
+	if b.k <= 0 {
+		return
 	}
-	return topKResults(results, k) // bounded top-k, score desc (ties unspecified)
+	if len(b.h) < b.k {
+		b.h = append(b.h, topKItem{pk, score})
+		for i := len(b.h) - 1; i > 0; {
+			p := (i - 1) / 2
+			if b.h[p].score <= b.h[i].score {
+				break
+			}
+			b.h[p], b.h[i] = b.h[i], b.h[p]
+			i = p
+		}
+		return
+	}
+	if score <= b.h[0].score {
+		return // not better than the current k-th best
+	}
+	b.h[0] = topKItem{pk, score}
+	n := len(b.h)
+	for i := 0; ; {
+		l, r, s := 2*i+1, 2*i+2, i
+		if l < n && b.h[l].score < b.h[s].score {
+			s = l
+		}
+		if r < n && b.h[r].score < b.h[s].score {
+			s = r
+		}
+		if s == i {
+			break
+		}
+		b.h[s], b.h[i] = b.h[i], b.h[s]
+		i = s
+	}
+}
+
+// resultsDescScaled returns the retained items as Results in score-descending order,
+// each partial score multiplied by scale (the idf² deferred out of the ranking).
+func (b *boundedTopK) resultsDescScaled(scale float32) []Result {
+	out := make([]Result, len(b.h))
+	for i := range b.h {
+		out[i] = Result{Pk: b.h[i].pk, Score: b.h[i].score * scale}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
 }
 
 // topKResults returns the top-k results ordered by score descending. Equal scores are
