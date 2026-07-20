@@ -286,7 +286,7 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 	for idx2 := range hb.executors {
 		var candidate *process.HashBuildReservation
 		if _, isColumn := hb.keyExprs[idx2].Expr.(*plan.Expr_Col); !isColumn && hb.budget != nil {
-			peak, err := expressionVectorPeak(hb.keyExprs[idx2], bat.RowCount(), hb.needDupVec)
+			peak, err := expressionVectorPeak(proc, hb.keyExprs[idx2], bat.RowCount(), hb.needDupVec)
 			if err != nil {
 				return err
 			}
@@ -337,11 +337,11 @@ func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process, candidate *
 // the SQL result type. Varlena widths use the declared maximum (or the engine
 // maximum when absent), so input-dependent expanding functions are rejected
 // by admission before Eval instead of allocating first.
-func expressionVectorPeak(expr *plan.Expr, rows int, duplicate bool) (uint64, error) {
+func expressionVectorPeak(proc *process.Process, expr *plan.Expr, rows int, duplicate bool) (uint64, error) {
 	if expr == nil || rows < 0 {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	total, root, err := expressionTreePeak(expr, uint64(rows))
+	total, root, err := expressionTreePeak(proc, expr, uint64(rows))
 	if err != nil {
 		return 0, err
 	}
@@ -354,7 +354,7 @@ func expressionVectorPeak(expr *plan.Expr, rows int, duplicate bool) (uint64, er
 	return total, nil
 }
 
-func expressionTreePeak(expr *plan.Expr, rows uint64) (total uint64, output uint64, err error) {
+func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (total uint64, output uint64, err error) {
 	if expr == nil {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -366,13 +366,31 @@ func expressionTreePeak(expr *plan.Expr, rows uint64) (total uint64, output uint
 			return 0, 0, process.ErrHashBuildBudgetInvalid
 		}
 		for _, arg := range node.F.Args {
-			child, _, childErr := expressionTreePeak(arg, rows)
+			child, _, childErr := expressionTreePeak(proc, arg, rows)
 			if childErr != nil || total > math.MaxUint64-child {
 				return 0, 0, process.ErrHashBuildBudgetInvalid
 			}
 			total += child
 		}
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Fold, *plan.Expr_T:
+	case *plan.Expr_P:
+		if node.P == nil || proc == nil || proc.GetPrepareParams() == nil {
+			return 0, 0, process.ErrHashBuildBudgetInvalid
+		}
+		paramPeak, paramErr := expressionParamPeak(proc, node.P.Pos)
+		if paramErr != nil {
+			return 0, 0, paramErr
+		}
+		typePeak, typeErr := expressionTypePeak(expr.Typ, 1)
+		if typeErr != nil {
+			return 0, 0, typeErr
+		}
+		if paramPeak > typePeak {
+			output = paramPeak
+		} else {
+			output = typePeak
+		}
+		return output, output, nil
+	case *plan.Expr_Lit, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Fold, *plan.Expr_T:
 		// These executors may materialize a vector but have no child expression
 		// tree. Expr_T is the target-type argument used by CAST/bit_cast and is
 		// evaluated as a fixed vector. Charge their declared output below.
@@ -386,6 +404,38 @@ func expressionTreePeak(expr *plan.Expr, rows uint64) (total uint64, output uint
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
 	return total + output, output, nil
+}
+
+// expressionParamPeak returns an upper bound for the allocations made by a
+// non-null ParamExpressionExecutor. Params are materialized as one-element
+// const vectors, whose data is one varlena header and whose area is allocated
+// only for payloads that do not fit in that header.
+func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
+	val, err := proc.GetPrepareParamsAt(int(pos))
+	if err != nil {
+		return 0, err
+	}
+	if val == nil {
+		return 0, nil
+	}
+
+	headerCap, ok := mpool.GrowCapacity(0, int64(types.VarlenaSize))
+	if !ok {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	peak := uint64(headerCap)
+	if len(val) <= types.VarlenaInlineSize {
+		return peak, nil
+	}
+
+	areaCap, ok := mpool.GrowCapacity(0, int64(len(val)))
+	if !ok || areaCap < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	if uint64(areaCap) > math.MaxUint64-peak {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return peak + uint64(areaCap), nil
 }
 
 func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {

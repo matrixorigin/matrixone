@@ -234,6 +234,8 @@ func TestExpressionHashKeyReservesDeclaredPeakBeforeEval(t *testing.T) {
 }
 
 func TestExpressionHashKeyAcceptsCastTargetType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
 	expr := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int32)},
 		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
@@ -245,9 +247,149 @@ func TestExpressionHashKeyAcceptsCastTargetType(t *testing.T) {
 		}}},
 	}
 
-	peak, err := expressionVectorPeak(expr, 1024, false)
+	peak, err := expressionVectorPeak(proc, expr, 1024, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(204800), peak, "charge the target-type and cast result vectors")
+}
+
+func TestPreparedParamExpressionPeakUsesConstCardinality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+
+	paramExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+		}
+	}
+
+	peakOne, err := expressionVectorPeak(proc, paramExpr(0), 1, false)
+	require.NoError(t, err)
+	peakBatch, err := expressionVectorPeak(proc, paramExpr(0), colexec.DefaultBatchSize, false)
+	require.NoError(t, err)
+	require.Equal(t, peakOne, peakBatch, "const parameter admission must not scale with input rows")
+	peakNull, err := expressionVectorPeak(proc, paramExpr(1), colexec.DefaultBatchSize, false)
+	require.NoError(t, err)
+	require.Equal(t, peakOne, peakNull, "null parameter keeps the declared one-row type bound")
+}
+
+func TestPreparedParamExpressionExecutorRemainsConst(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value []byte
+		null  bool
+	}{
+		{name: "non-null", value: []byte("prepared")},
+		{name: "null", null: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			params := vector.NewVec(types.T_text.ToType())
+			defer params.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(params, tc.value, tc.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+
+			expr := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize, proc.Mp())
+			defer input.Clean(proc.Mp())
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.True(t, result.IsConst())
+			require.Equal(t, 1, result.Length())
+		})
+	}
+}
+
+func TestPreparedParamExpressionPeakNestedFunctionCardinality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	cast := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			param,
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		}}},
+	}
+	modulo := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+			cast,
+		}}},
+	}
+
+	paramTotal, paramOutput, err := expressionTreePeak(proc, param, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	paramOne, _, err := expressionTreePeak(proc, param, 1)
+	require.NoError(t, err)
+	require.Equal(t, paramOne, paramTotal)
+	_, rootOutput, err := expressionTreePeak(proc, modulo, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	rootTypePeak, err := expressionTypePeak(modulo.Typ, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	require.Equal(t, rootTypePeak, rootOutput, "function output remains sized for input rows")
+	require.Greater(t, paramOutput, uint64(0))
+}
+
+func TestPreparedParamExpressionPeakRejectsInvalidPosition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, proc.Mp()))
+
+	expr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: -1}},
+	}
+	_, err := expressionVectorPeak(proc, expr, colexec.DefaultBatchSize, false)
+	require.Error(t, err)
+}
+
+func TestPreparedParamExpressionPeakAccountsLargePayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	payload := make([]byte, types.MaxBlobLen+1)
+	require.NoError(t, vector.AppendBytes(params, payload, false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	expr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	peak, err := expressionVectorPeak(proc, expr, colexec.DefaultBatchSize, false)
+	require.NoError(t, err)
+	header, ok := mpool.GrowCapacity(0, int64(types.VarlenaSize))
+	require.True(t, ok)
+	area, ok := mpool.GrowCapacity(0, int64(len(payload)))
+	require.True(t, ok)
+	require.GreaterOrEqual(t, peak, uint64(header)+uint64(area))
+	require.Greater(t, peak, uint64(types.MaxBlobLen))
 }
 
 func TestGetJoinMapTransfersGroupSels(t *testing.T) {
