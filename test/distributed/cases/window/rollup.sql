@@ -592,4 +592,68 @@ group by
 order by year_label;
 
 drop table sales_mixed_types;
+
+-- rollup with window functions should rank over the full rollup result
+create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
+insert into rollup_window_sales values
+('east', 'apple', 10),
+('east', 'banana', 20),
+('west', 'apple', 30),
+('west', 'banana', 10);
+select
+    region,
+    product,
+    sum(qty) as total_qty,
+    row_number() over (order by sum(qty) desc, region, product) as row_num,
+    rank() over (order by sum(qty) desc) as rank_num,
+    dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+    rollup_window_sales
+group by
+    region,
+    product with rollup
+order by total_qty desc, region, product;
+
+-- aggregate output without an alias must still be available to outer windows
+select
+    region,
+    product,
+    sum(qty),
+    row_number() over (order by sum(qty) desc, region, product) as row_num,
+    rank() over (order by sum(qty) desc) as rank_num,
+    dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+    rollup_window_sales
+group by
+    region,
+    product with rollup
+order by sum(qty) desc, region, product;
+
+-- aggregates used only by window specifications are hidden inner projections
+select
+    region,
+    product,
+    row_number() over (order by sum(qty) desc, region, product) as row_num,
+    rank() over (order by sum(qty) desc) as rank_num,
+    dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+    rollup_window_sales
+group by
+    region,
+    product with rollup
+order by row_num;
+
+-- HAVING keeps AliasAfterColumn precedence when an aggregate alias collides
+-- with the grouped source column name
+select
+    sum(r.qty) as qty,
+    row_number() over (order by sum(r.qty), count(*)) as row_num
+from
+    rollup_window_sales r
+group by
+    r.qty with rollup
+having qty > 0
+order by row_num;
+drop table rollup_window_sales;
+
 drop database rollup_test;

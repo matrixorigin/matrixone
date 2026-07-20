@@ -36,18 +36,16 @@ func (n noopTracerProvider) Tracer(string, ...TracerOption) Tracer {
 	return NoopTracer{}
 }
 
-// NoopTracer is an implementation of Tracer that preforms no operations.
+// NoopTracer is an implementation of Tracer that performs no operations.
 // It should have ZERO allocation overhead.
-// NoopTracer is only used when trace is disabled (disableSpan=true).
-// When trace is enabled, MOTracer is used instead.
+// MatrixOne uses it before telemetry initialization and when tracing is fully
+// disabled. Enabled telemetry uses NonRecordingTracer to retain correlation IDs.
 type NoopTracer struct{}
 
 // Start returns ctx and NoopSpan directly without any allocation.
 // All parameters are ignored since NoopTracer performs no operations.
-// This is safe because:
-// 1. NoopTracer is only used when trace is disabled
-// 2. When trace is disabled, empty SpanContext is expected behavior
-// 3. When trace is enabled, MOTracer.Start is called instead
+// SpanContext and RPC propagation remain available separately for logs,
+// errors, and compatibility with existing wire formats.
 func (t NoopTracer) Start(ctx context.Context, _ string, _ ...SpanStartOption) (context.Context, Span) {
 	return ctx, NoopSpan{}
 }
@@ -82,8 +80,80 @@ func (NoopSpan) TracerProvider() TracerProvider { return noopTracerProvider{} }
 // NonRecordingSpan keep SpanContext{TraceID, SpanID}
 type NonRecordingSpan struct {
 	NoopSpan
-	sc SpanContext
+	sc     SpanContext
+	parent SpanContext
 }
 
 func (s *NonRecordingSpan) SpanContext() SpanContext       { return s.sc }
-func (s *NonRecordingSpan) ParentSpanContext() SpanContext { return SpanContext{} }
+func (s *NonRecordingSpan) ParentSpanContext() SpanContext { return s.parent }
+
+// NonRecordingTracer preserves trace-context generation and propagation without
+// creating, recording, profiling, or exporting Spans.
+type NonRecordingTracer struct {
+	idGenerator IDGenerator
+}
+
+var _ Tracer = &NonRecordingTracer{}
+
+func NewNonRecordingTracer(idGenerator IDGenerator) Tracer {
+	if idGenerator == nil {
+		return NoopTracer{}
+	}
+	return &NonRecordingTracer{idGenerator: idGenerator}
+}
+
+func (t *NonRecordingTracer) Start(
+	ctx context.Context,
+	_ string,
+	opts ...SpanStartOption,
+) (context.Context, Span) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var cfg SpanConfig
+	for _, opt := range opts {
+		opt.ApplySpanStart(&cfg)
+	}
+	if isRetiredControlledSpanKind(cfg.Kind) {
+		return ctx, NoopSpan{}
+	}
+
+	parent := SpanFromContext(ctx).SpanContext()
+	spanContext := SpanContext{Kind: cfg.Kind}
+	if cfg.NewRoot || parent.IsEmpty() {
+		spanContext.TraceID, spanContext.SpanID = t.idGenerator.NewIDs()
+		parent = SpanContext{}
+	} else {
+		spanContext.TraceID = parent.TraceID
+		spanContext.SpanID = t.idGenerator.NewSpanID()
+	}
+
+	span := &NonRecordingSpan{sc: spanContext, parent: parent}
+	return ContextWithSpan(ctx, span), span
+}
+
+// Debug remains a no-op because debug Span recording is retired and disabled by
+// default. Existing trace context in ctx is preserved unchanged.
+func (t *NonRecordingTracer) Debug(ctx context.Context, _ string, _ ...SpanStartOption) (context.Context, Span) {
+	return ctx, NoopSpan{}
+}
+
+func (t *NonRecordingTracer) IsEnable(...SpanStartOption) bool { return false }
+
+// isRetiredControlledSpanKind identifies the diagnostic Span kinds that were
+// opt-in through mo_ctl and disabled by default. Retiring their runtime control
+// must not turn them on implicitly: doing so changes retained log/error
+// correlation from the parent kind to localFSOperation, remoteFSOperation, and
+// other values that were never emitted by the default configuration.
+func isRetiredControlledSpanKind(kind SpanKind) bool {
+	switch kind {
+	case SpanKindStatement,
+		SpanKindRemoteFSVis,
+		SpanKindLocalFSVis,
+		SpanKindTNRPCHandle:
+		return true
+	default:
+		return false
+	}
+}

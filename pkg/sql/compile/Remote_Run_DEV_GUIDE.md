@@ -371,7 +371,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool,
 **File:** `pkg/sql/compile/remoterunServer.go:501-544`
 
 ```go
-func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
+func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {
     // Deserialize ProcessInfo
     procInfo := &pipeline.ProcessInfo{}
     err := procInfo.Unmarshal(data)
@@ -390,7 +390,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
     }
     
     // Rebuild txnOperator from snapshot
-    result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
+    result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
     
     // Convert SessionInfo
     result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)

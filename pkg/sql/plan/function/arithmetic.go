@@ -227,20 +227,7 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	// If result type is decimal128, use decimal128 handler
 	// This handles cases like decimal64 + float64 where both are converted to decimal128
 	if resultType.Oid == types.T_decimal128 {
-		// If inputs have no nulls, ensure result nulls are cleared after computation.
-		inputHasNull := func(vec *vector.Vector) bool {
-			ns := vec.GetNulls()
-			return ns != nil && !ns.IsEmpty()
-		}
-		noNullInput := !inputHasNull(parameters[0]) && !inputHasNull(parameters[1])
-
-		if err := decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList); err != nil {
-			return err
-		}
-		if noNullInput {
-			result.GetResultVector().GetNulls().Reset()
-		}
-		return nil
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList)
 	}
 
 	paramType := parameters[0].GetType()
