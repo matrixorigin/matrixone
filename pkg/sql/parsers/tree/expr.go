@@ -1870,7 +1870,7 @@ type FullTextMatchExpr struct {
 	KeyParts []*KeyPart
 
 	// pattern
-	Pattern string
+	Pattern Expr
 
 	Mode FullTextSearchType
 }
@@ -1902,13 +1902,16 @@ func (node *FullTextMatchExpr) Valid() error {
 	if len(node.KeyParts) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("MATCH(expr list) expression list is empty.")
 	}
-	if len(node.Pattern) == 0 {
+	if node.Pattern == nil {
+		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
+	}
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char && len(val.String()) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
 	}
 	return nil
 }
 
-func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern Expr, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
 	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
 	if err := e.Valid(); err != nil {
@@ -1927,27 +1930,35 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	// Pattern is ALWAYS a string literal and is stored unquoted (search_pattern: STRING strips
-	// the surrounding quotes). Emit it as a single-quoted, escaped SQL string literal
-	// UNCONDITIONALLY — do NOT route it through ctx.WriteValue, which only quotes when the
-	// FmtCtx opts in (quoteString/singleQuoteString). The default tree.String() path does not
-	// opt in, so WriteValue emitted the pattern bare and any deparsed statement (CREATE TABLE
-	// AS SELECT, view expansion, or any other re-serialization) produced invalid SQL that
-	// failed to re-parse (#24823). Unconditional quoting is correct here precisely because the
-	// pattern is never a number/null/bool (unlike the polymorphic NumVal) — bare output is
-	// never valid SQL for this node.
-	ctx.WriteString("'")
-	if ctx.NoBackslashEscape() {
-		// Under NO_BACKSLASH_ESCAPES a backslash is a literal char and only '' escapes a
-		// quote. node.Pattern is the already-unescaped value, so routing it through
-		// FormatString (which escapes '\' -> '\\') would double the backslashes on every
-		// parse->format cycle. Emit it verbatim, quote-doubled only, to keep the
-		// format->parse contract idempotent under that mode (#24823 follow-up).
-		ctx.WriteString(strings.ReplaceAll(node.Pattern, "'", "''"))
+	// Post-#24796 the pattern is an Expr: a *NumVal (search_pattern: STRING) for a
+	// literal, or a *ParamExpr (VALUE_ARG) for a prepared '?'. For the string case
+	// (the common one) emit it as a single-quoted, escaped SQL string literal
+	// UNCONDITIONALLY — do NOT route it through NumVal.Format / ctx.WriteValue, which
+	// only quotes when the FmtCtx opts in (quoteString/singleQuoteString). The default
+	// tree.String() path does not opt in, so a bare pattern produced invalid SQL that
+	// failed to re-parse (CREATE TABLE AS SELECT, view expansion, or any other
+	// re-serialization) — #24823. Unconditional quoting is correct precisely because a
+	// string pattern is never a number/null/bool: bare output is never valid SQL here.
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char {
+		// origString holds the already-unescaped literal (NewNumVal($1,$1,...)).
+		pat := val.String()
+		ctx.WriteString("'")
+		if ctx.NoBackslashEscape() {
+			// Under NO_BACKSLASH_ESCAPES a backslash is a literal char and only '' escapes
+			// a quote. pat is the already-unescaped value, so routing it through
+			// FormatString (which escapes '\' -> '\\') would double the backslashes on
+			// every parse->format cycle. Emit it verbatim, quote-doubled only, to keep the
+			// format->parse contract idempotent under that mode (#24823 follow-up).
+			ctx.WriteString(strings.ReplaceAll(pat, "'", "''"))
+		} else {
+			ctx.WriteString(strings.ReplaceAll(FormatString(pat), "'", "''"))
+		}
+		ctx.WriteString("'")
 	} else {
-		ctx.WriteString(strings.ReplaceAll(FormatString(node.Pattern), "'", "''"))
+		// A non-string pattern (e.g. a prepared-statement '?' param, #24796) delegates
+		// to its own Format.
+		node.Pattern.Format(ctx)
 	}
-	ctx.WriteString("'")
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")

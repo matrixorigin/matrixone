@@ -187,7 +187,9 @@ func TestFullTextMatchPatternRoundTrip(t *testing.T) {
 		require.NotNil(t, clause.Where)
 		m, ok := clause.Where.Expr.(*tree.FullTextMatchExpr)
 		require.True(t, ok)
-		return m.Pattern
+		// Post-#24796 the pattern is an Expr; a string literal is a *NumVal whose
+		// String() returns the stored unescaped value.
+		return m.Pattern.(*tree.NumVal).String()
 	}
 
 	// sql is the source; want is the parsed pattern value under NO_BACKSLASH_ESCAPES.
@@ -373,6 +375,39 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	for _, sql := range tests {
 		_, err := ParseOne(context.TODO(), sql, 1)
 		require.NoError(t, err, sql)
+	}
+}
+
+func TestOuterJoinRequiresCondition(t *testing.T) {
+	for _, sql := range []string{
+		"select * from t1 left join t2",
+		"select * from t1 left outer join t2 where t1.id = 1",
+		"select * from t1 right join (select * from t2) as sub",
+		"select * from t1 right outer join t2 order by t1.id",
+		"select * from t1 full join t2",
+		"select * from t1 full outer join t2 limit 1",
+		"select * from t1 left join t2 join t3",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.ErrorContains(t, err, "outer join requires ON/USING clause")
+		})
+	}
+
+	for _, sql := range []string{
+		"select * from t1 left join t2 on t1.id = t2.id",
+		"select * from t1 right outer join t2 using (id)",
+		"select * from t1 full join t2 on true",
+		"select * from t1 natural left join t2",
+		"select * from t1 join t2",
+		"select * from t1 inner join t2",
+		"select * from t1 cross join t2",
+		"select * from t1 straight_join t2",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
 	}
 }
 
@@ -3909,6 +3944,10 @@ var (
 		{
 			input:  "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 			output: "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+		},
+		{
+			input:  "prepare st from 'select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)'",
+			output: "prepare st from select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)",
 		},
 		{
 			input:  "alter user user1 unlock",
