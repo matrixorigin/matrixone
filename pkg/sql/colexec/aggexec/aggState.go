@@ -46,6 +46,10 @@ type MarshalerUnmarshaler interface {
 	UnmarshalFromReader(io.Reader) error
 }
 
+type freeableMarshalerUnmarshaler interface {
+	Free()
+}
+
 type aggInfo struct {
 	aggId                    int64
 	isDistinct               bool
@@ -624,6 +628,12 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		vec.Free(mp)
 	}
 	ag.vecs = nil
+	for _, mob := range ag.mobs {
+		if freeable, ok := mob.(freeableMarshalerUnmarshaler); ok {
+			freeable.Free()
+		}
+	}
+	ag.mobs = nil
 }
 
 type aggExec struct {
@@ -781,9 +791,15 @@ func checkAggStateMagic(reader io.Reader) {
 	}
 }
 
-func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retErr error) {
 	checkAggStateMagic(reader)
 	defer checkAggStateMagic(reader)
+	defer func() {
+		if retErr != nil {
+			ae.Free()
+			ae.state = nil
+		}
+	}()
 
 	// Always unmarshal from a clean state.
 	ae.Free()

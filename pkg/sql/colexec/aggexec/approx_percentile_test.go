@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"math"
+	"math/big"
 	"strconv"
 	"testing"
 
@@ -889,4 +890,40 @@ func TestApproxPercentileExec_RejectsDifferentMergeConfig(t *testing.T) {
 	require.NoError(t, left.SetExtraInformation([]byte("0.95"), 0))
 	require.NoError(t, right.SetExtraInformation([]byte("0.99"), 0))
 	require.ErrorContains(t, left.Merge(right, 0, 0), "different percentile configurations")
+}
+
+func TestQuantileSketchMPoolLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	left := newQuantileSketch[int64](mp, orderedCompare[int64])
+	right := newQuantileSketch[int64](mp, orderedCompare[int64])
+	restored := newQuantileSketch[int64](mp, orderedCompare[int64])
+	defer left.Free()
+	defer right.Free()
+	defer restored.Free()
+
+	for value := range int64(2_000) {
+		require.NoError(t, left.Add(value))
+		require.NoError(t, right.Add(value+2_000))
+	}
+	require.Positive(t, mp.CurrNB(), "retained samples must be tracked by the mpool")
+
+	require.NoError(t, left.Merge(right))
+	beforeQuantile := mp.CurrNB()
+	_, _, _, err := left.Quantile(big.NewRat(1, 2))
+	require.NoError(t, err)
+	require.Equal(t, beforeQuantile, mp.CurrNB(), "quantile scratch space must be released")
+	encoded, err := left.MarshalBinary()
+	require.NoError(t, err)
+	require.NoError(t, restored.UnmarshalBinary(encoded))
+	require.Equal(t, left.count, restored.count)
+	require.Equal(t, left.retained(), restored.retained())
+
+	beforeInvalid := mp.CurrNB()
+	invalid := append(append([]byte(nil), encoded...), 0)
+	require.Error(t, restored.UnmarshalBinary(invalid))
+	require.Equal(t, beforeInvalid, mp.CurrNB(), "failed unmarshal must release its temporary state")
+	require.Error(t, restored.UnmarshalBinary(encoded[:len(encoded)-1]))
+	require.Equal(t, beforeInvalid, mp.CurrNB(), "truncated unmarshal must release partially decoded levels")
 }

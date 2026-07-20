@@ -41,7 +41,8 @@ type quantileValue interface {
 // quantileSketch is a bounded, mergeable KLL-style sketch. Each level stores
 // values with weight 2^level and is compacted once it reaches 2*k entries.
 // The fixed level limit bounds every group's retained state independently of
-// its input row count.
+// its input row count. Level headers are Go-managed, while every value buffer
+// is allocated from mp so group spill accounting sees the retained samples.
 type quantileSketch[T quantileValue] struct {
 	levels   [][]T
 	parity   []bool
@@ -50,15 +51,19 @@ type quantileSketch[T quantileValue] struct {
 	max      T
 	hasValue bool
 	compare  func(T, T) int
+	mp       *mpool.MPool
 }
 
-func newQuantileSketch[T quantileValue](compare func(T, T) int) *quantileSketch[T] {
-	return &quantileSketch[T]{compare: compare}
+func newQuantileSketch[T quantileValue](mp *mpool.MPool, compare func(T, T) int) *quantileSketch[T] {
+	return &quantileSketch[T]{compare: compare, mp: mp}
 }
 
 func (s *quantileSketch[T]) Add(value T) error {
 	if s.count == math.MaxUint64 {
 		return moerr.NewInvalidInputNoCtx("approx_percentile: row count overflow")
+	}
+	if err := s.appendValue(0, value); err != nil {
+		return err
 	}
 	if !s.hasValue {
 		s.min, s.max, s.hasValue = value, value, true
@@ -71,8 +76,6 @@ func (s *quantileSketch[T]) Add(value T) error {
 		}
 	}
 	s.count++
-	s.ensureLevel(0)
-	s.levels[0] = append(s.levels[0], value)
 	return s.compactFrom(0)
 }
 
@@ -93,21 +96,82 @@ func (s *quantileSketch[T]) Merge(other *quantileSketch[T]) error {
 			s.max = other.max
 		}
 	}
-	s.count += other.count
 	for level, values := range other.levels {
-		s.ensureLevel(level)
-		s.levels[level] = append(s.levels[level], values...)
+		if err := s.appendValues(level, values); err != nil {
+			return err
+		}
 		if level < len(other.parity) && other.parity[level] {
 			s.parity[level] = !s.parity[level]
 		}
 	}
-	return s.compactFrom(0)
+	if err := s.compactFrom(0); err != nil {
+		return err
+	}
+	s.count += other.count
+	return nil
 }
 
 func (s *quantileSketch[T]) ensureLevel(level int) {
 	for len(s.levels) <= level {
 		s.levels = append(s.levels, nil)
 		s.parity = append(s.parity, false)
+	}
+}
+
+func (s *quantileSketch[T]) appendValue(level int, value T) error {
+	s.ensureLevel(level)
+	values := s.levels[level]
+	if len(values) < cap(values) {
+		values = values[:len(values)+1]
+		values[len(values)-1] = value
+		s.levels[level] = values
+		return nil
+	}
+	return s.replaceLevel(level, len(values)+1, func(dst []T) {
+		copy(dst, values)
+		dst[len(values)] = value
+	})
+}
+
+func (s *quantileSketch[T]) appendValues(level int, added []T) error {
+	if len(added) == 0 {
+		return nil
+	}
+	s.ensureLevel(level)
+	values := s.levels[level]
+	needed := len(values) + len(added)
+	if needed <= cap(values) {
+		values = values[:needed]
+		copy(values[needed-len(added):], added)
+		s.levels[level] = values
+		return nil
+	}
+	return s.replaceLevel(level, needed, func(dst []T) {
+		copy(dst, values)
+		copy(dst[len(values):], added)
+	})
+}
+
+func (s *quantileSketch[T]) replaceLevel(level, length int, fill func([]T)) error {
+	old := s.levels[level]
+	capacity := max(1, cap(old)*2)
+	for capacity < length {
+		capacity *= 2
+	}
+	values, err := mpool.MakeSlice[T](capacity, s.mp, true)
+	if err != nil {
+		return err
+	}
+	values = values[:length]
+	fill(values)
+	s.freeLevel(old)
+	s.levels[level] = values
+	return nil
+}
+
+func (s *quantileSketch[T]) freeLevel(values []T) {
+	if cap(values) > 0 {
+		mpool.FreeSlice(s.mp, values[:1])
 	}
 }
 
@@ -123,29 +187,46 @@ func (s *quantileSketch[T]) compactFrom(start int) error {
 			})
 
 			pickSecond := s.parity[level]
-			s.parity[level] = !s.parity[level]
 			startAt, endAt := 0, len(values)
-			var retained []T
+			retained := 0
+			var retainedValue T
 			if len(values)&1 == 1 {
 				if pickSecond {
-					retained = append(retained, values[0])
+					retainedValue = values[0]
 					startAt = 1
 				} else {
 					endAt--
-					retained = append(retained, values[endAt])
+					retainedValue = values[endAt]
 				}
+				retained = 1
 			}
 			pick := 0
 			if pickSecond {
 				pick = 1
 			}
-			promoted := make([]T, 0, (endAt-startAt)/2)
-			for i := startAt; i < endAt; i += 2 {
-				promoted = append(promoted, values[i+pick])
-			}
-			s.levels[level] = retained
+			promoted := (endAt - startAt) / 2
 			s.ensureLevel(level + 1)
-			s.levels[level+1] = append(s.levels[level+1], promoted...)
+			next := s.levels[level+1]
+			needed := len(next) + promoted
+			if needed <= cap(next) {
+				next = next[:needed]
+				for i, dst := startAt, needed-promoted; i < endAt; i, dst = i+2, dst+1 {
+					next[dst] = values[i+pick]
+				}
+				s.levels[level+1] = next
+			} else if err := s.replaceLevel(level+1, needed, func(dst []T) {
+				copy(dst, next)
+				for i, out := startAt, len(next); i < endAt; i, out = i+2, out+1 {
+					dst[out] = values[i+pick]
+				}
+			}); err != nil {
+				return err
+			}
+			if retained == 1 {
+				values[0] = retainedValue
+			}
+			s.levels[level] = values[:retained]
+			s.parity[level] = !s.parity[level]
 		}
 	}
 	return nil
@@ -177,7 +258,12 @@ func (s *quantileSketch[T]) Quantile(p *big.Rat) (lo, hi T, frac *big.Rat, err e
 	if p.Cmp(big.NewRat(1, 1)) == 0 {
 		return s.max, s.max, new(big.Rat), nil
 	}
-	weighted := make([]weightedQuantileValue[T], 0, s.retained())
+	weighted, err := mpool.MakeSlice[weightedQuantileValue[T]](s.retained(), s.mp, true)
+	if err != nil {
+		return lo, hi, nil, err
+	}
+	defer mpool.FreeSlice(s.mp, weighted)
+	weighted = weighted[:0]
 	for level, values := range s.levels {
 		weight := uint64(1) << level
 		for _, value := range values {
@@ -207,6 +293,16 @@ func (s *quantileSketch[T]) Size() int64 {
 		capacity += cap(values)
 	}
 	return int64((capacity+2)*valueSize + cap(s.levels)*24 + cap(s.parity))
+}
+
+func (s *quantileSketch[T]) Free() {
+	for _, values := range s.levels {
+		s.freeLevel(values)
+	}
+	s.levels = nil
+	s.parity = nil
+	s.count = 0
+	s.hasValue = false
 }
 
 func (s *quantileSketch[T]) MarshalBinary() ([]byte, error) {
@@ -255,86 +351,122 @@ func (s *quantileSketch[T]) MarshalBinary() ([]byte, error) {
 
 func (s *quantileSketch[T]) UnmarshalBinary(data []byte) error {
 	reader := bytes.NewReader(data)
-	version, err := reader.ReadByte()
+	restored, err := s.decode(reader)
 	if err != nil {
 		return err
 	}
-	if version != approxPercentileSketchVersion {
-		return moerr.NewInvalidInputNoCtxf("approx_percentile: unsupported sketch version %d", version)
-	}
-	count, err := types.ReadUint64(reader)
-	if err != nil {
-		return err
-	}
-	var zero T
-	valueSize := len(types.EncodeFixed(zero))
-	hasValue, err := reader.ReadByte()
-	if err != nil || hasValue > 1 {
-		return moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch extrema flag")
-	}
-	if hasValue == 1 {
-		encoded := make([]byte, valueSize)
-		if _, err := io.ReadFull(reader, encoded); err != nil {
-			return err
-		}
-		s.min = types.DecodeFixed[T](encoded)
-		if _, err := io.ReadFull(reader, encoded); err != nil {
-			return err
-		}
-		s.max = types.DecodeFixed[T](encoded)
-		s.hasValue = true
-	}
-	levelCount, err := types.ReadUint16(reader)
-	if err != nil {
-		return err
-	}
-	if levelCount > approxPercentileMaxLevels {
-		return moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch level count")
-	}
-	s.levels = make([][]T, int(levelCount))
-	s.parity = make([]bool, int(levelCount))
-	var represented uint64
-	for level := range int(levelCount) {
-		parity, err := reader.ReadByte()
-		if err != nil || parity > 1 {
-			return moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch parity")
-		}
-		s.parity[level] = parity == 1
-		length, err := types.ReadUint16(reader)
-		if err != nil {
-			return err
-		}
-		if length >= 2*approxPercentileSketchCapacity {
-			return moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch level size")
-		}
-		values := make([]T, int(length))
-		for i := range values {
-			encoded := make([]byte, valueSize)
-			if _, err := io.ReadFull(reader, encoded); err != nil {
-				return err
-			}
-			values[i] = types.DecodeFixed[T](encoded)
-		}
-		s.levels[level] = values
-		weight := uint64(1) << level
-		if uint64(length) > math.MaxUint64/weight || math.MaxUint64-represented < uint64(length)*weight {
-			return moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch weight")
-		}
-		represented += uint64(length) * weight
-	}
-	if reader.Len() != 0 || represented != count || s.hasValue != (count > 0) || s.hasValue && s.compare(s.min, s.max) > 0 {
+	if reader.Len() != 0 {
+		restored.Free()
 		return moerr.NewInvalidInputNoCtx("approx_percentile: inconsistent sketch state")
 	}
-	s.count = count
+	s.restore(restored)
 	return nil
 }
 
+func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retErr error) {
+	restored := newQuantileSketch(s.mp, s.compare)
+	defer func() {
+		if retErr != nil {
+			restored.Free()
+		}
+	}()
+	readByte := func() (byte, error) {
+		var encoded [1]byte
+		_, err := io.ReadFull(reader, encoded[:])
+		return encoded[0], err
+	}
+	version, err := readByte()
+	if err != nil {
+		return nil, err
+	}
+	if version != approxPercentileSketchVersion {
+		return nil, moerr.NewInvalidInputNoCtxf("approx_percentile: unsupported sketch version %d", version)
+	}
+	count, err := types.ReadUint64(reader)
+	if err != nil {
+		return nil, err
+	}
+	var zero T
+	valueSize := len(types.EncodeFixed(zero))
+	hasValue, err := readByte()
+	if err != nil || hasValue > 1 {
+		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch extrema flag")
+	}
+	encoded := make([]byte, valueSize)
+	if hasValue == 1 {
+		if _, err := io.ReadFull(reader, encoded); err != nil {
+			return nil, err
+		}
+		restored.min = types.DecodeFixed[T](encoded)
+		if _, err := io.ReadFull(reader, encoded); err != nil {
+			return nil, err
+		}
+		restored.max = types.DecodeFixed[T](encoded)
+		restored.hasValue = true
+	}
+	levelCount, err := types.ReadUint16(reader)
+	if err != nil {
+		return nil, err
+	}
+	if levelCount > approxPercentileMaxLevels {
+		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch level count")
+	}
+	restored.levels = make([][]T, int(levelCount))
+	restored.parity = make([]bool, int(levelCount))
+	var represented uint64
+	for level := range int(levelCount) {
+		parity, err := readByte()
+		if err != nil || parity > 1 {
+			return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch parity")
+		}
+		restored.parity[level] = parity == 1
+		length, err := types.ReadUint16(reader)
+		if err != nil {
+			return nil, err
+		}
+		if length >= 2*approxPercentileSketchCapacity {
+			return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch level size")
+		}
+		if length > 0 {
+			values, err := mpool.MakeSlice[T](int(length), restored.mp, true)
+			if err != nil {
+				return nil, err
+			}
+			restored.levels[level] = values
+			for i := range values {
+				if _, err := io.ReadFull(reader, encoded); err != nil {
+					return nil, err
+				}
+				values[i] = types.DecodeFixed[T](encoded)
+			}
+		}
+		weight := uint64(1) << level
+		if uint64(length) > math.MaxUint64/weight || math.MaxUint64-represented < uint64(length)*weight {
+			return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch weight")
+		}
+		represented += uint64(length) * weight
+	}
+	if represented != count || restored.hasValue != (count > 0) ||
+		restored.hasValue && restored.compare(restored.min, restored.max) > 0 {
+		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: inconsistent sketch state")
+	}
+	restored.count = count
+	return restored, nil
+}
+
 func (s *quantileSketch[T]) UnmarshalFromReader(reader io.Reader) error {
-	data, err := io.ReadAll(reader)
+	restored, err := s.decode(reader)
 	if err != nil {
 		return err
 	}
-	return s.UnmarshalBinary(data)
+	s.restore(restored)
+	return nil
+}
+
+func (s *quantileSketch[T]) restore(restored *quantileSketch[T]) {
+	s.Free()
+	*s = *restored
+	restored.levels = nil
 }
 
 func percentileRanks(count uint64, p *big.Rat) (lo, hi uint64, frac *big.Rat) {
@@ -410,8 +542,8 @@ func newApproxPercentileExecBase[T quantileValue](mp *mpool.MPool, info singleAg
 		retType:    info.retType,
 		emptyNull:  true,
 		saveArg:    false,
-		makeMarshalerUnmarshaler: func(*mpool.MPool) (MarshalerUnmarshaler, error) {
-			return newQuantileSketch(compare), nil
+		makeMarshalerUnmarshaler: func(mp *mpool.MPool) (MarshalerUnmarshaler, error) {
+			return newQuantileSketch(mp, compare), nil
 		},
 	}
 	return exec
