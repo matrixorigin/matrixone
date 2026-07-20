@@ -158,6 +158,31 @@ func TestCompactHistoricalAlterLineageWithBHRetainsPitrCoveredEdge(t *testing.T)
 	require.Len(t, bh.executedSQLs, 4)
 }
 
+func TestCompactHistoricalAlterLineageWithBHReclaimsDeletedRowsWithoutEdges(t *testing.T) {
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{
+			{uint64(2), uint64(1), int64(100), uint64(0), "alter", true},
+			{uint64(3), uint64(2), int64(200), uint64(0), "alter", true},
+		},
+		nil,
+		nil,
+		nil,
+	)
+
+	err := compactHistoricalAlterLineageWithBH(
+		context.Background(), bh, time.Unix(0, 1_000).UTC(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		historicalAlterLineageMetadataSQL(),
+		historicalAlterLineageEdgeSQL(),
+		historicalSnapshotSourceSQL(),
+		historicalPitrSourceSQL(),
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2','__mo_branch_3')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%')",
+	}, bh.executedSQLs)
+}
+
 func TestCompactHistoricalAlterLineageWithBHPropagatesDeleteError(t *testing.T) {
 	bh := newHistoricalLineageBackgroundExec(
 		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},

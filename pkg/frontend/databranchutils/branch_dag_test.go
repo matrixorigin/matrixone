@@ -269,6 +269,43 @@ func TestComputeAlterLineageCompactionPlan(t *testing.T) {
 	)
 }
 
+func TestComputeAlterLineageCompactionPlanReclaimsDeletedAlterGenerations(t *testing.T) {
+	rows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+	}
+	edges := map[uint64]HistoricalLineageEdge{
+		2: {ChildTableID: 2, ParentTableID: 1, CloneTS: 100},
+		3: {ChildTableID: 3, ParentTableID: 2, CloneTS: 200},
+	}
+
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2, 3},
+			SnapshotNames: []string{"__mo_branch_2", "__mo_branch_3"},
+		},
+		ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(rows), edges, nil),
+	)
+
+	// Plain DROP can reclaim both snapshots while a user snapshot still owns
+	// the history. After that owner disappears, the deleted metadata rows
+	// must remain reclaimable even though their matching edges are gone.
+	rows[1].TableDeleted = true
+	require.Equal(t,
+		AlterLineageCompactionPlan{
+			TableIDs:      []uint64{2, 3},
+			SnapshotNames: []string{"__mo_branch_2", "__mo_branch_3"},
+		},
+		ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(rows), nil, nil),
+	)
+
+	covered := []HistoricalSource{{Level: "table", ObjectID: 1, OldestTS: 50}}
+	require.Empty(t,
+		ComputeAlterLineageCompactionPlan(NewBranchReclaimDag(rows), nil, covered).TableIDs,
+		"the dropped current table's historical owner must retain orphaned metadata until owner deletion",
+	)
+}
+
 func TestComputeAlterLineageCompactionPlanScopeAndOwners(t *testing.T) {
 	baseRows := []DataBranchMetadata{
 		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter"},

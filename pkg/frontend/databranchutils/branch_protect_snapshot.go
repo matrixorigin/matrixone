@@ -217,7 +217,7 @@ func historicalSourceOwnsComponent(
 	return false
 }
 
-// ComputeAlterLineageCompactionPlan finds live ALTER-only edges that no
+// ComputeAlterLineageCompactionPlan finds ALTER-only generations that no
 // longer have an owner. A live logical branch conservatively owns its entire
 // connected component so sibling/ancestor LCA paths are never disconnected.
 func ComputeAlterLineageCompactionPlan(
@@ -278,17 +278,26 @@ func ComputeAlterLineageCompactionPlan(
 		}
 		for _, tableID := range component {
 			meta, ok := dag.Info[tableID]
-			if !ok || meta.Deleted || !IsAlterLineageLevel(meta.Level) {
+			if !ok || !IsAlterLineageLevel(meta.Level) {
 				continue
 			}
 			edge, ok := edges[tableID]
-			if !ok || edge.ChildTableID != tableID ||
-				edge.ParentTableID != meta.ParentTableID || edge.CloneTS != meta.CloneTS {
+			if ok && (edge.ChildTableID != tableID ||
+				edge.ParentTableID != meta.ParentTableID || edge.CloneTS != meta.CloneTS) {
+				continue
+			}
+			// A live row without its identity-matched snapshot is retained
+			// conservatively. A deleted row may legitimately have no snapshot:
+			// plain DROP reclaims branch snapshots before the last historical
+			// owner disappears. Once that owner is gone, deleting the orphaned
+			// metadata row (and the deterministic snapshot name, idempotently)
+			// closes the lifecycle instead of leaking one row per ALTER.
+			if !ok && !meta.Deleted {
 				continue
 			}
 			covered := false
 			for _, source := range componentSources {
-				if source.OldestTS <= edge.CloneTS {
+				if source.OldestTS <= meta.CloneTS {
 					covered = true
 					break
 				}

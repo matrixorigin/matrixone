@@ -119,6 +119,38 @@ select count(*) as lineage_after_second_alter
  where table_id = @history_owner_second_tid and level = 'alter';
 drop table history_owner_base;
 
+-- Two covered ALTERs leave a deleted intermediate generation. Dropping the
+-- last historical owner must reclaim both metadata/snapshot pairs.
+drop snapshot if exists history_multi_s;
+create table history_multi(a int primary key, b int);
+create snapshot history_multi_s for table br_schema_drift history_multi;
+alter table history_multi add column c int default 0;
+set @history_multi_t2 = (select rel_id from mo_catalog.mo_tables where reldatabase = 'br_schema_drift' and relname = 'history_multi');
+alter table history_multi add column d int default 0;
+set @history_multi_t3 = (select rel_id from mo_catalog.mo_tables where reldatabase = 'br_schema_drift' and relname = 'history_multi');
+select count(*) as multi_lineage_before_owner_drop from mo_catalog.mo_branch_metadata where table_id in (@history_multi_t2, @history_multi_t3) and level = 'alter';
+select count(*) as multi_snapshots_before_owner_drop from mo_catalog.mo_snapshots where sname in (concat('__mo_branch_', cast(@history_multi_t2 as char)), concat('__mo_branch_', cast(@history_multi_t3 as char))) and kind = 'branch';
+drop snapshot history_multi_s;
+select count(*) as multi_lineage_after_owner_drop from mo_catalog.mo_branch_metadata where table_id in (@history_multi_t2, @history_multi_t3) and level = 'alter';
+select count(*) as multi_snapshots_after_owner_drop from mo_catalog.mo_snapshots where sname in (concat('__mo_branch_', cast(@history_multi_t2 as char)), concat('__mo_branch_', cast(@history_multi_t3 as char))) and kind = 'branch';
+drop table history_multi;
+
+-- If the current table is dropped first, ordinary DROP reclaims the branch
+-- snapshots. The later owner drop must still reclaim the orphaned metadata.
+drop snapshot if exists history_drop_current_s;
+create table history_drop_current(a int primary key, b int);
+create snapshot history_drop_current_s for table br_schema_drift history_drop_current;
+alter table history_drop_current add column c int default 0;
+set @history_drop_current_t2 = (select rel_id from mo_catalog.mo_tables where reldatabase = 'br_schema_drift' and relname = 'history_drop_current');
+alter table history_drop_current add column d int default 0;
+set @history_drop_current_t3 = (select rel_id from mo_catalog.mo_tables where reldatabase = 'br_schema_drift' and relname = 'history_drop_current');
+drop table history_drop_current;
+select count(*) as dropped_current_lineage_before_owner_drop from mo_catalog.mo_branch_metadata where table_id in (@history_drop_current_t2, @history_drop_current_t3) and level = 'alter';
+select count(*) as dropped_current_snapshots_before_owner_drop from mo_catalog.mo_snapshots where sname in (concat('__mo_branch_', cast(@history_drop_current_t2 as char)), concat('__mo_branch_', cast(@history_drop_current_t3 as char))) and kind = 'branch';
+drop snapshot history_drop_current_s;
+select count(*) as dropped_current_lineage_after_owner_drop from mo_catalog.mo_branch_metadata where table_id in (@history_drop_current_t2, @history_drop_current_t3) and level = 'alter';
+select count(*) as dropped_current_snapshots_after_owner_drop from mo_catalog.mo_snapshots where sname in (concat('__mo_branch_', cast(@history_drop_current_t2 as char)), concat('__mo_branch_', cast(@history_drop_current_t3 as char))) and kind = 'branch';
+
 -- A live logical branch owns the connected ALTER component. Deleting the
 -- final branch releases both its protect snapshot and the ALTER-only edge.
 create table history_live_base(a int primary key, b int);
