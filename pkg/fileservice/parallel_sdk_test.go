@@ -518,13 +518,9 @@ func TestAwsParallelMultipartBufferBudgetBlocksBeforeRead(t *testing.T) {
 	if tokensPerPart < 1 {
 		tokensPerPart = 1
 	}
-	oldBudgetOnce := parallelUploadBufferBudgetOnce
-	oldBudget := parallelUploadBufferBudget
-	parallelUploadBufferBudgetOnce = sync.Once{}
+	oldBudget := getParallelUploadBufferBudget()
 	parallelUploadBufferBudget = make(chan struct{}, tokensPerPart*2)
-	parallelUploadBufferBudgetOnce.Do(func() {})
 	defer func() {
-		parallelUploadBufferBudgetOnce = oldBudgetOnce
 		parallelUploadBufferBudget = oldBudget
 	}()
 
