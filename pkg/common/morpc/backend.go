@@ -332,6 +332,7 @@ func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Fu
 func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
 	f := rb.getFuture(ctx, request, internal)
 	if err := rb.doSend(f); err != nil {
+		f.messageSent(err)
 		f.Close()
 		return nil, err
 	}

@@ -63,6 +63,90 @@ func mustRuntimeFilter(node *plan.Node) bool {
 	return false
 }
 
+// runtimeFilterJoinPolicy is the semantic and delivery contract for a
+// broadcast-join runtime filter.  RuntimeFilterSpec describes the filter
+// payload, but it does not describe which side may be discarded or where the
+// payload can be delivered.  Keep those decisions together so candidate
+// generation and physical placement cannot drift apart.
+type runtimeFilterJoinPolicy struct {
+	eligible              bool
+	requiresLocalDelivery bool
+}
+
+func analyzeRuntimeFilterJoinPolicy(node *plan.Node) runtimeFilterJoinPolicy {
+	if node == nil || node.NodeType != plan.Node_JOIN {
+		return runtimeFilterJoinPolicy{}
+	}
+
+	switch node.JoinType {
+	case plan.Node_LEFT, plan.Node_OUTER, plan.Node_MARK:
+		return runtimeFilterJoinPolicy{}
+
+	case plan.Node_SINGLE:
+		// A left SINGLE preserves its physical probe side.  Filtering that side
+		// would remove the rows which must produce the scalar-subquery NULL for
+		// a missing match.  After right conversion and the physical child swap,
+		// child 0 is discardable and child 1 remains the preserved side.
+		return runtimeFilterJoinPolicy{
+			eligible:              node.IsRightJoin,
+			requiresLocalDelivery: node.IsRightJoin,
+		}
+
+	case plan.Node_ANTI:
+		return runtimeFilterJoinPolicy{
+			eligible:              node.IsRightJoin,
+			requiresLocalDelivery: node.IsRightJoin,
+		}
+
+	case plan.Node_DEDUP:
+		return runtimeFilterJoinPolicy{eligible: !node.IsRightJoin}
+
+	case plan.Node_RIGHT:
+		return runtimeFilterJoinPolicy{eligible: true, requiresLocalDelivery: true}
+
+	case plan.Node_SEMI:
+		return runtimeFilterJoinPolicy{eligible: true, requiresLocalDelivery: node.IsRightJoin}
+
+	case plan.Node_INDEX:
+		return runtimeFilterJoinPolicy{eligible: true, requiresLocalDelivery: true}
+
+	default:
+		return runtimeFilterJoinPolicy{eligible: true}
+	}
+}
+
+func (builder *QueryBuilder) canSatisfyRuntimeFilterDelivery(node *plan.Node, policy runtimeFilterJoinPolicy) bool {
+	if node.JoinType != plan.Node_SINGLE || !policy.requiresLocalDelivery {
+		return true
+	}
+	// forceOneCN is an optimizer diagnostic override which suppresses the
+	// automatic placement pass.  A current-CN-only runtime filter must not be
+	// generated when that placement guarantee has been disabled.
+	return builder.optimizerHints == nil || builder.optimizerHints.forceOneCN == 0
+}
+
+func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bool {
+	if node.JoinType != plan.Node_SINGLE {
+		return true
+	}
+	if upperLimit <= 0 || build == nil || build.NodeType != plan.Node_TABLE_SCAN || build.Stats == nil {
+		return false
+	}
+	// DefaultStats is an unavailable-statistics sentinel, not evidence that the
+	// complete build contains 1,000 rows.  Treating it as an exact upper bound
+	// can serialize an arbitrarily large scan only for hashbuild to send PASS.
+	if IsDefaultStats(build.Stats) {
+		return false
+	}
+	// LOCAL_COLOCATED applies to the whole preserved/build subtree. Phase 1
+	// accepts only a direct scan whose full table cardinality and filtered
+	// output both fit exact IN. Looking only at Outcnt would incorrectly force a
+	// scan/aggregate of a large input onto one CN merely because its final output
+	// was estimated to be small.
+	limit := float64(upperLimit)
+	return build.Stats.Outcnt <= limit && build.Stats.TableCnt <= limit
+}
+
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	sid := builder.compCtx.GetProcess().GetService()
@@ -92,22 +176,18 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_SINGLE || node.JoinType == plan.Node_MARK {
+	policy := analyzeRuntimeFilterJoinPolicy(node)
+	if !policy.eligible || !builder.canSatisfyRuntimeFilterDelivery(node, policy) {
 		return
 	}
-
-	if node.JoinType == plan.Node_ANTI && !node.IsRightJoin {
-		return
-	}
-
-	if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+	if node.JoinType == plan.Node_SINGLE && builder.optimizerHints != nil && builder.optimizerHints.disableRightSingleRF != 0 {
 		return
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil || leftChild.Offset != nil {
 		return
 	}
 
@@ -163,11 +243,21 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	if len(probeExprs) == 1 {
 		convertToCPKey := false
 		tableDef := leftChild.TableDef
+		if tableDef == nil || tableDef.Pkey == nil {
+			return
+		}
 		probeCol := probeExprs[0].GetCol()
 		if probeCol == nil {
 			return
 		}
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
+		// LOCAL_COLOCATED gives up multi-CN scan bandwidth.  In phase 1 only
+		// enable right-SINGLE on the leading PK/cluster key, where exact IN can
+		// prune ranges predictably.  A scattered non-key filter may still scan
+		// nearly every block and would be a performance regression on one CN.
+		if node.JoinType == plan.Node_SINGLE && policy.requiresLocalDelivery && sortOrder != 0 {
+			return
+		}
 		if node.JoinType != plan.Node_INDEX {
 			probeNdv := getExprNdv(probeExprs[0], builder)
 			if probeNdv <= 1 {
@@ -197,16 +287,18 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		}
 
 		notOnPk := probeCol.Name != tableDef.Pkey.PkeyColName
-		if convertToCPKey {
-			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef, notOnPk))
-		} else {
-			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk))
-		}
-
 		inLimit := GetInFilterCardLimit(sid)
 		if sortOrder == 0 {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
 		}
+		// Placement is decided before hashbuild knows the actual number of
+		// unique keys.  If the planner already knows the build cannot fit in an
+		// exact IN, hashbuild would send PASS after both scans were forced onto
+		// one CN.  Reject that no-benefit topology up front for right-SINGLE.
+		if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
+			return
+		}
+
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
 			Expr: &plan.Expr_Col{
@@ -216,16 +308,35 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				},
 			},
 		}
+		var probeSpec, buildSpec *plan.RuntimeFilterSpec
 		if convertToCPKey {
-			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr, notOnPk))
+			if _, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]; !ok {
+				return
+			}
+			probeSpec = MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef, notOnPk)
+			buildSpec = MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr, notOnPk)
+			if buildSpec.Expr == nil {
+				return
+			}
 		} else {
-			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk))
+			probeSpec = MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk)
+			buildSpec = MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk)
 		}
-		recalcStatsByRuntimeFilter(leftChild, node, builder)
+		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
+		// SINGLE output cardinality belongs to its semantic preserved side.  Do
+		// not feed the existing probe-side RF heuristic into SINGLE stats here;
+		// preserved-side cardinality and cost selection are a separate phase.
+		if node.JoinType != plan.Node_SINGLE {
+			recalcStatsByRuntimeFilter(leftChild, node, builder)
+		}
 		return
 	}
 
 	tableDef := leftChild.TableDef
+	if tableDef == nil || tableDef.Pkey == nil {
+		return
+	}
 	if len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}
@@ -279,7 +390,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			},
 		},
 	}
-	leftChild.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr, false))
+	inLimit := GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+	if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
+		return
+	}
 
 	buildArgs := make([]*plan.Expr, len(probeExprs))
 	for i := range probeExprs {
@@ -295,10 +409,16 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		}
 	}
 
-	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
+	buildExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
+	if err != nil || buildExpr == nil {
+		return
+	}
 
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), buildExpr, false))
-	recalcStatsByRuntimeFilter(leftChild, node, builder)
+	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr, false))
+	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), inLimit, buildExpr, false))
+	if node.JoinType != plan.Node_SINGLE {
+		recalcStatsByRuntimeFilter(leftChild, node, builder)
+	}
 }
 
 func (builder *QueryBuilder) isMasterIndexInnerJoin(node *plan.Node) bool {

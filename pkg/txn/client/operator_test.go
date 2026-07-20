@@ -336,6 +336,26 @@ func TestRead(t *testing.T) {
 	})
 }
 
+func TestReadConsumesTNShardNotFoundTxnError(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			require.NoError(t, err)
+			require.Len(t, result.Responses, 1)
+			result.Responses[0].TxnError = txn.WrapError(
+				moerr.NewTNShardNotFound(ctx, "tn-uuid", 1),
+				0,
+			)
+			return result, nil
+		})
+
+		result, err := tc.Read(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTNShardNotFound), err)
+		require.NotContains(t, err.Error(), "invalid txn error")
+	})
+}
+
 func TestWrite(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		assert.Empty(t, tc.mu.txn.TNShards)
