@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -308,6 +310,74 @@ func TestGenerateTimestamp(t *testing.T) {
 			require.Equal(t, kase.res, res)
 		}
 	}
+}
+
+func TestGenerateSeriesUsesPreparedResultSchema(t *testing.T) {
+	proc := testutil.NewProc(t)
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	start, err := types.ParseDatetime("2020-02-29 23:59:59.124356", datetimeType.Scale)
+	require.NoError(t, err)
+	end, err := types.ParseDatetime("2020-02-29 23:59:59.124360", datetimeType.Scale)
+	require.NoError(t, err)
+
+	startVec, err := vector.NewConstFixed[types.Datetime](datetimeType, start, 1, proc.Mp())
+	require.NoError(t, err)
+	defer startVec.Free(proc.Mp())
+	endVec, err := vector.NewConstFixed[types.Datetime](datetimeType, end, 1, proc.Mp())
+	require.NoError(t, err)
+	defer endVec.Free(proc.Mp())
+	stepVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("1 microsecond"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer stepVec.Free(proc.Mp())
+
+	tf := &TableFunction{
+		Attrs: []string{"result"},
+		Rets: []*plan.ColDef{{
+			Name: "result",
+			Typ: plan.Type{
+				Id:    int32(types.T_datetime),
+				Scale: datetimeType.Scale,
+			},
+		}},
+	}
+	tf.ctr.executorsForArgs = make([]colexec.ExpressionExecutor, 3)
+	tf.ctr.argVecs = []*vector.Vector{startVec, endVec, stepVec}
+	tf.ctr.retSchema = []types.Type{datetimeType}
+	originalRet := tf.Rets[0].Typ
+	originalSchema := tf.ctr.retSchema[0]
+
+	state := new(generateSeriesArg)
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	defer state.free(tf, proc, false, nil)
+	require.Equal(t, originalRet, tf.Rets[0].Typ)
+	require.Equal(t, originalSchema, tf.ctr.retSchema[0])
+
+	result, err := state.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, datetimeType, *result.Batch.Vecs[0].GetType())
+	require.Equal(t, "2020-02-29 23:59:59.124356", vector.GetFixedAtWithTypeCheck[types.Datetime](result.Batch.Vecs[0], 0).String2(datetimeType.Scale))
+
+	stringType := types.T_varchar.ToType()
+	stringTF := &TableFunction{
+		Attrs: []string{"result"},
+		Rets: []*plan.ColDef{{
+			Name: "result",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: stringType.Width},
+		}},
+	}
+	stringTF.ctr.executorsForArgs = make([]colexec.ExpressionExecutor, 3)
+	stringTF.ctr.argVecs = []*vector.Vector{startVec, endVec, stepVec}
+	stringTF.ctr.retSchema = []types.Type{stringType}
+	originalStringRet := stringTF.Rets[0].Typ
+
+	stringState := new(generateSeriesArg)
+	require.NoError(t, stringState.start(stringTF, proc, 0, nil))
+	defer stringState.free(stringTF, proc, false, nil)
+	require.Equal(t, originalStringRet, stringTF.Rets[0].Typ)
+	stringResult, err := stringState.call(stringTF, proc)
+	require.NoError(t, err)
+	require.Equal(t, types.T_varchar, stringResult.Batch.Vecs[0].GetType().Oid)
+	require.Equal(t, "2020-02-29 23:59:59.124356", stringResult.Batch.Vecs[0].GetStringAt(0))
 }
 
 func TestInitStartAndEndNumNoTypeCheck(t *testing.T) {

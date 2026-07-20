@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,6 +27,7 @@ var _ vm.Operator = new(Shuffle)
 
 type Shuffle struct {
 	ctr                container
+	CurrentShuffleIdx  int32
 	ShuffleColIdx      int32
 	ShuffleType        int32
 	BucketNum          int32
@@ -37,7 +37,7 @@ type Shuffle struct {
 	ShuffleRangeInt64  []int64
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	ShuffleExpr        *plan.Expr
-	msgReceiver        *message.MessageReceiver
+	DrainAllBuckets    bool
 	vm.OperatorBase
 }
 
@@ -74,12 +74,15 @@ func (shuffle *Shuffle) Release() {
 
 type container struct {
 	ending               bool
-	lastForShufflePool   bool
 	sels                 [][]int32
 	buf                  *batch.Batch
+	pendingBat           *batch.Batch
+	pendingBucket        int
+	pendingOffset        int
 	shufflePool          *ShufflePool
 	runtimeFilterHandled bool
 	exprExec             colexec.ExpressionExecutor
+	held                 bool
 }
 
 func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
@@ -91,28 +94,39 @@ func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	if shuffle.ctr.buf != nil {
-		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
 		shuffle.ctr.buf = nil
 	}
 	if shuffle.ctr.shufflePool != nil {
-		//shuffle.ctr.shufflePool.Print()
+		var peak int64
+		var ownsStats bool
 		if pipelineFailed || err != nil {
-			shuffle.ctr.shufflePool.Reset(proc.Mp(), true)
-		} else if shuffle.ctr.lastForShufflePool {
-			shuffle.ctr.shufflePool.Reset(proc.Mp(), false)
+			if shuffle.ctr.held {
+				peak, ownsStats = shuffle.ctr.shufflePool.release(proc.Mp(), true)
+			} else {
+				shuffle.ctr.shufflePool.abort(proc.Mp())
+			}
+		} else if shuffle.ctr.held {
+			peak, ownsStats = shuffle.ctr.shufflePool.release(proc.Mp(), false)
+		}
+		if ownsStats && shuffle.OpAnalyzer != nil {
+			shuffle.OpAnalyzer.SetMemUsed(peak)
 		}
 	}
-	shuffle.ctr.lastForShufflePool = false
+	shuffle.ctr.shufflePool = nil
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
+	shuffle.ctr.pendingBat = nil
+	shuffle.ctr.pendingBucket = 0
+	shuffle.ctr.pendingOffset = 0
+	shuffle.ctr.runtimeFilterHandled = false
+	shuffle.ctr.held = false
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffle.ctr.buf = nil
+	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.shufflePool = nil
 	if shuffle.ctr.exprExec != nil {
 		shuffle.ctr.exprExec.Free()
