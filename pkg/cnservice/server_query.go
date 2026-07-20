@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -102,6 +103,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -189,6 +191,56 @@ func (s *service) handleCtlPrefetchOnSubscribed(ctx context.Context, req *query.
 	resp.CtlPrefetchOnSubscribedResponse.Resp = ctl.UpdateCurrentCNPrefetchOnSubscribed(
 		req.CtlPrefetchOnSubscribedRequest.Patterns,
 	)
+	return nil
+}
+
+func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if req == nil || req.ISCPDrainConsumerRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	r := req.ISCPDrainConsumerRequest
+	exec, ok := iscp.GetExecutorRuntime(s.cfg.UUID)
+	if !ok || exec == nil {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+			s.cfg.UUID,
+			r.TableID,
+			r.JobName,
+			r.JobID,
+		)
+	}
+	key := iscp.NewJobRuntimeKey(r.AccountID, r.TableID, r.JobName, r.JobID)
+	if r.RemoveFenceOnly {
+		if _, msg, injected := fault.TriggerFault(objectio.FJ_ISCPCancelRemoveFenceError); injected {
+			if msg == "" {
+				msg = objectio.FJ_ISCPCancelRemoveFenceError
+			}
+			return moerr.NewInternalErrorNoCtxf("injected ISCP remove fence error: %s", msg)
+		}
+		exec.RemoveJobFence(key)
+		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+		return nil
+	}
+	if r.RenewFenceOnly {
+		if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
+				s.cfg.UUID,
+				r.TableID,
+				r.JobName,
+				r.JobID,
+			)
+		}
+		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+		return nil
+	}
+	if err := exec.CancelAndDrainJobConsumer(ctx, r.AccountID, r.TableID, r.JobName, r.JobID); err != nil {
+		exec.RemoveJobFence(key)
+		return err
+	}
+	resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 	return nil
 }
 
