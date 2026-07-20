@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -1225,6 +1226,23 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 	ok, info = tcLeast.Run()
 	require.True(t, ok, info)
 
+	dt0, err := types.ParseDatetime("2019-12-31 23:59:59", 0)
+	require.NoError(t, err)
+	dt1, err := types.ParseDatetime("2020-01-02 00:00:00", 0)
+	require.NoError(t, err)
+	dt2, err := types.ParseDatetime("2020-01-01 12:00:00", 0)
+	require.NoError(t, err)
+	tcConstDate := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(dateTyp, []types.Date{d1, d1, d1}, nil),
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt0, dt1, dt2}, nil),
+		},
+		NewFunctionTestResult(types.T_datetime.ToType(), false,
+			[]types.Datetime{d1.ToDatetime(), dt1, dt2}, nil),
+		greatestTemporalFn)
+	ok, info = tcConstDate.Run()
+	require.True(t, ok, info)
+
 	tcInvalidDatePeer := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(dateTyp, []types.Date{d1}, nil),
@@ -1259,25 +1277,27 @@ func TestLeastGreatestTemporalAllocationsDoNotScaleWithRows(t *testing.T) {
 		defer dateVec.Free(proc.Mp())
 		defer datetimeVec.Free(proc.Mp())
 
-		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
-		defer result.Free()
-		require.NoError(t, result.PreExtendAndReset(rowCount))
-
-		return testing.AllocsPerRun(5, func() {
-			if err := result.PreExtendAndReset(rowCount); err != nil {
-				panic(err)
-			}
-			if err := greatestTemporalFn(
-				[]*vector.Vector{dateVec, datetimeVec}, result, proc, rowCount, nil); err != nil {
-				panic(err)
+		parameters := []*vector.Vector{dateVec, datetimeVec}
+		readers := make([]leastGreatestTemporalReader, len(parameters))
+		allocs := testing.AllocsPerRun(1000, func() {
+			for i, parameter := range parameters {
+				reader, err := newLeastGreatestTemporalReader(parameter)
+				if err != nil {
+					panic(err)
+				}
+				readers[i] = reader
 			}
 		})
+		runtime.KeepAlive(readers)
+		return allocs
 	}
 
 	oneRowAllocs := measure(1)
 	batchAllocs := measure(8192)
-	require.LessOrEqual(t, batchAllocs, oneRowAllocs+4,
-		"fixed temporal accessor allocations must be batch-scoped: one row=%v, 8192 rows=%v",
+	require.Zero(t, oneRowAllocs,
+		"fixed temporal reader setup must not allocate: one row=%v", oneRowAllocs)
+	require.Zero(t, batchAllocs,
+		"fixed temporal reader setup must not scale with rows: one row=%v, 8192 rows=%v",
 		oneRowAllocs, batchAllocs)
 }
 

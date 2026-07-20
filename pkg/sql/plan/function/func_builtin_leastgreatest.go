@@ -1068,26 +1068,27 @@ func leastGreatestSetNullResult(result vector.FunctionResultWrapper, length int)
 
 type leastGreatestTemporalReader struct {
 	source    *vector.Vector
-	date      vector.FunctionParameterWrapper[types.Date]
-	datetime  vector.FunctionParameterWrapper[types.Datetime]
-	timestamp vector.FunctionParameterWrapper[types.Timestamp]
-	time      vector.FunctionParameterWrapper[types.Time]
-	year      vector.FunctionParameterWrapper[types.MoYear]
+	isConst   bool
+	date      []types.Date
+	datetime  []types.Datetime
+	timestamp []types.Timestamp
+	time      []types.Time
+	year      []types.MoYear
 }
 
 func newLeastGreatestTemporalReader(v *vector.Vector) (leastGreatestTemporalReader, error) {
-	reader := leastGreatestTemporalReader{source: v}
+	reader := leastGreatestTemporalReader{source: v, isConst: v.IsConst()}
 	switch v.GetType().Oid {
 	case types.T_date:
-		reader.date = vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		reader.date = vector.MustFixedColWithTypeCheck[types.Date](v)
 	case types.T_datetime:
-		reader.datetime = vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+		reader.datetime = vector.MustFixedColWithTypeCheck[types.Datetime](v)
 	case types.T_timestamp:
-		reader.timestamp = vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
+		reader.timestamp = vector.MustFixedColWithTypeCheck[types.Timestamp](v)
 	case types.T_time:
-		reader.time = vector.GenerateFunctionFixedTypeParameter[types.Time](v)
+		reader.time = vector.MustFixedColWithTypeCheck[types.Time](v)
 	case types.T_year:
-		reader.year = vector.GenerateFunctionFixedTypeParameter[types.MoYear](v)
+		reader.year = vector.MustFixedColWithTypeCheck[types.MoYear](v)
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
 	default:
 		return leastGreatestTemporalReader{}, moerr.NewInternalErrorNoCtxf(
@@ -1102,22 +1103,21 @@ func (r *leastGreatestTemporalReader) datetimeValue(
 	proc *process.Process,
 	loc *time.Location,
 ) (types.Datetime, error) {
+	idx := int(row)
+	if r.isConst {
+		idx = 0
+	}
 	switch r.source.GetType().Oid {
 	case types.T_date:
-		val, _ := r.date.GetValue(row)
-		return val.ToDatetime(), nil
+		return r.date[idx].ToDatetime(), nil
 	case types.T_datetime:
-		val, _ := r.datetime.GetValue(row)
-		return val, nil
+		return r.datetime[idx], nil
 	case types.T_timestamp:
-		val, _ := r.timestamp.GetValue(row)
-		return val.ToDatetime(loc), nil
+		return r.timestamp[idx].ToDatetime(loc), nil
 	case types.T_time:
-		val, _ := r.time.GetValue(row)
-		return leastGreatestTimeToDatetime(val, r.source.GetType().Scale, proc, loc), nil
+		return leastGreatestTimeToDatetime(r.time[idx], r.source.GetType().Scale, proc, loc), nil
 	case types.T_year:
-		val, _ := r.year.GetValue(row)
-		return types.DatetimeFromClock(int32(val.ToInt64()), 1, 1, 0, 0, 0, 0), nil
+		return types.DatetimeFromClock(int32(r.year[idx].ToInt64()), 1, 1, 0, 0, 0, 0), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
 		return leastGreatestParsePackedDateBytes(r.source.GetBytesAt(int(row)), temporalItemType, proc, loc)
 	default:
