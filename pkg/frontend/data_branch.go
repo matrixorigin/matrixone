@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -714,15 +715,16 @@ func diffMergeAgency(
 		return
 	}
 	var (
-		done      bool
-		wg        = new(sync.WaitGroup)
-		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
-		stopCh    = make(chan struct{})
-		stopOnce  sync.Once
-		emit      emitFunc
-		stop      func()
-		waited    bool
+		done        bool
+		wg          = new(sync.WaitGroup)
+		outputErr   atomic.Value
+		retBatCh    = make(chan batchWithKind, 10)
+		stopCh      = make(chan struct{})
+		stopOnce    sync.Once
+		emit        emitFunc
+		stop        func()
+		waited      bool
+		outputPhase *dataBranchOutputAsTablePhase
 	)
 
 	defer func() {
@@ -755,6 +757,17 @@ func diffMergeAgency(
 
 		if done {
 			return
+		}
+
+		if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
+			if outputPhase, err = newDataBranchOutputAsTablePhase(ctx, ses.proc); err != nil {
+				return
+			}
+			defer func() {
+				if closeErr := outputPhase.close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
+			}()
 		}
 	}
 
@@ -803,9 +816,15 @@ func diffMergeAgency(
 			// 4. as table
 			// 5. as file
 
-			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
+			var err2 error
+			if outputPhase != nil {
+				err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
+			} else {
+				err2 = satisfyDiffOutputOpt(
+					ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+				)
+			}
+			if err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else if pickStmt != nil {
@@ -848,7 +867,12 @@ func diffMergeAgency(
 	wg.Wait()
 
 	if outputErr.Load() != nil {
-		err = outputErr.Load().(error)
+		return outputErr.Load().(error)
+	}
+
+	if outputPhase != nil {
+		outputPhase.markProducerDone()
+		return outputPhase.materialize(ctx, cancel, ses, bh, diffStmt, tblStuff)
 	}
 
 	return err

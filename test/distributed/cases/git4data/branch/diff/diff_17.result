@@ -427,6 +427,31 @@ rollback;
 select * from diff_txn_existing;
 ➤ sentinel[4,32,0]  𝄀
 9
+begin;
+data branch diff branch_full against base_full output as diff_txn_nonempty;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as`.`diff_txn_nonempty`
+commit;
+select __mo_diff_source, __mo_diff_flag, id, source
+from diff_txn_nonempty order by id;
+➤ __mo_diff_source[12,-1,0]  ¦  __mo_diff_flag[12,-1,0]  ¦  id[4,32,0]  ¦  source[12,-1,0]  𝄀
+branch_full  ¦  UPDATE  ¦  1  ¦  branch-1  𝄀
+branch_full  ¦  DELETE  ¦  2  ¦  base-2  𝄀
+branch_full  ¦  INSERT  ¦  4  ¦  branch-4
+create snapshot diff_output_as_phase_base_sp for table test_diff_output_as base_full;
+begin;
+data branch diff branch_full against base_full{snapshot="diff_output_as_phase_base_sp"}
+columns (id, source) output as diff_txn_snapshot;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_output_as`.`diff_txn_snapshot`
+commit;
+select __mo_diff_source, __mo_diff_flag, id, source
+from diff_txn_snapshot order by id;
+➤ __mo_diff_source[12,-1,0]  ¦  __mo_diff_flag[12,-1,0]  ¦  id[4,32,0]  ¦  source[12,-1,0]  𝄀
+branch_full  ¦  UPDATE  ¦  1  ¦  branch-1  𝄀
+branch_full  ¦  DELETE  ¦  2  ¦  base-2  𝄀
+branch_full  ¦  INSERT  ¦  4  ¦  branch-4
+drop snapshot diff_output_as_phase_base_sp;
 create table base_schema_mismatch(id int primary key, payload varchar(20));
 data branch create table branch_schema_mismatch from base_schema_mismatch;
 alter table branch_schema_mismatch modify payload varchar(80);

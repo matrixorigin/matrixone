@@ -507,7 +507,7 @@ func materializeDiffOutputAsTable(
 	bh BackgroundExec,
 	stmt *tree.DataBranchDiff,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
+	spool *dataBranchOutputSpool,
 ) (err error) {
 	output, err := newDiffOutputTable(ctx, ses, stmt, tblStuff)
 	if err != nil {
@@ -561,18 +561,23 @@ func materializeDiffOutputAsTable(
 		rowCount int
 		row      = make([]any, len(tblStuff.def.colNames))
 	)
-	for wrapped := range retCh {
-		if firstErr != nil {
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+	for {
+		wrapped, ok, nextErr := spool.next()
+		if nextErr != nil {
+			firstErr = nextErr
+			break
+		}
+		if !ok {
+			break
 		}
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
 		}
 
 		for rowIdx := range wrapped.batch.RowCount() {
+			if firstErr != nil {
+				break
+			}
 			rowValues := acquireBuffer(tblStuff.bufPool)
 			rowValues.Reset()
 			rowValues.WriteByte('(')
@@ -625,8 +630,9 @@ func materializeDiffOutputAsTable(
 				break
 			}
 		}
-
-		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+		if firstErr != nil {
+			break
+		}
 	}
 
 	if firstErr != nil {
@@ -871,7 +877,7 @@ func satisfyDiffOutputOpt(
 		mrs.AddRow([]any{"UPDATED", targetUpdateCnt, baseUpdateCnt})
 
 	} else if stmt.OutputOpt.As.ObjectName != "" {
-		return materializeDiffOutputAsTable(ctx, cancel, ses, bh, stmt, tblStuff, retCh)
+		return moerr.NewInternalErrorNoCtx("DATA BRANCH OUTPUT AS requires the materialization phase")
 
 	} else if len(stmt.OutputOpt.DirPath) != 0 {
 		var (

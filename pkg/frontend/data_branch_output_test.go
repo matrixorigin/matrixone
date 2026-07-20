@@ -243,9 +243,13 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 	bat.SetRowCount(1)
 	defer tblStuff.retPool.freeAllRetBatches(mp)
 
-	retCh := make(chan batchWithKind, 1)
-	retCh <- batchWithKind{name: "branch", kind: diffUpdate, batch: bat}
-	close(retCh)
+	phase, err := newDataBranchOutputAsTablePhase(ctx, ses.proc)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, phase.close())
+	}()
+	require.NoError(t, phase.spool.append(batchWithKind{name: "branch", kind: diffUpdate, batch: bat}))
+	phase.markProducerDone()
 
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
 	var sqls []string
@@ -263,20 +267,117 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
 		nil,
 	)
-	err := materializeDiffOutputAsTable(
+	err = phase.materialize(
 		ctx,
 		func() {},
 		ses,
 		bh,
 		&tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}},
 		tblStuff,
-		retCh,
 	)
 	require.ErrorContains(t, err, "injected insert failure")
 	require.Len(t, sqls, 3)
 	require.True(t, strings.HasPrefix(sqls[0], "create table `out_db`.`diff_out`"))
 	require.True(t, strings.HasPrefix(sqls[1], "insert into `out_db`.`diff_out`"))
 	require.Equal(t, "drop table if exists `out_db`.`diff_out`", sqls[2])
+}
+
+func TestDataBranchOutputAsTablePhase_BlocksOutputSQLUntilProducerCompletes(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	phase, err := newDataBranchOutputAsTablePhase(ctx, ses.proc)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, phase.close())
+	}()
+
+	tblStuff := tableStuff{retPool: &retBatchList{}}
+	tblStuff.def.colNames = []string{"id"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	defer tblStuff.retPool.freeAllRetBatches(mp)
+
+	retCh := make(chan batchWithKind)
+	producerSent := make(chan struct{})
+	allowProducerFinish := make(chan struct{})
+	drained := make(chan error, 1)
+	go func() {
+		drained <- phase.drain(ctx, func() {}, tblStuff.retPool, retCh)
+	}()
+	go func() {
+		retCh <- batchWithKind{name: "branch", kind: diffUpdate, batch: bat}
+		close(producerSent)
+		<-allowProducerFinish
+		close(retCh)
+	}()
+	<-producerSent
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	dst := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+	err = phase.materialize(
+		ctx,
+		func() {},
+		ses,
+		bh,
+		&tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}},
+		tblStuff,
+	)
+	require.ErrorContains(t, err, "before diff production completed")
+
+	close(allowProducerFinish)
+	require.NoError(t, <-drained)
+}
+
+func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	spool, err := newDataBranchOutputSpool(ctx, ses.proc)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, spool.close())
+	}()
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{0, '\'', '\\', 0xff}, false, ses.proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(ses.proc.Mp())
+
+	require.NoError(t, spool.append(batchWithKind{name: "branch_1", kind: diffUpdate, batch: bat}))
+	require.NoError(t, spool.rewind())
+
+	got, ok, err := spool.next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "branch_1", got.name)
+	require.Equal(t, diffUpdate, got.kind)
+	require.Equal(t, 1, got.batch.RowCount())
+	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](got.batch.Vecs[0])[0])
+	require.Equal(t, []byte{0, '\'', '\\', 0xff}, got.batch.Vecs[1].GetBytesAt(0))
+
+	_, ok, err = spool.next()
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestDataBranchOutputSpoolRejectsOversizedMetadata(t *testing.T) {
+	size := int32(dataBranchOutputSpoolMaxMetadataSize + 1)
+	_, err := readDataBranchOutputSpoolString(bytes.NewReader(types.EncodeInt32(&size)))
+	require.ErrorContains(t, err, "metadata is too large")
 }
 
 func TestDataBranchOutputBuildOutputSchema(t *testing.T) {

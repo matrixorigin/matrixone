@@ -310,7 +310,25 @@ data branch diff branch_empty against base_empty output as diff_txn_existing;
 rollback;
 select * from diff_txn_existing;
 
--- Case 13: inplace ALTER can preserve the branch column ID while changing
+-- Case 13: a non-empty result is spooled while the DIFF producer reads, then
+-- materialized in the same explicit transaction.  The historical-source
+-- variant covers the same phase boundary after snapshot resolution.
+begin;
+data branch diff branch_full against base_full output as diff_txn_nonempty;
+commit;
+select __mo_diff_source, __mo_diff_flag, id, source
+    from diff_txn_nonempty order by id;
+
+create snapshot diff_output_as_phase_base_sp for table test_diff_output_as base_full;
+begin;
+data branch diff branch_full against base_full{snapshot="diff_output_as_phase_base_sp"}
+    columns (id, source) output as diff_txn_snapshot;
+commit;
+select __mo_diff_source, __mo_diff_flag, id, source
+    from diff_txn_snapshot order by id;
+drop snapshot diff_output_as_phase_base_sp;
+
+-- Case 14: inplace ALTER can preserve the branch column ID while changing
 -- logical type metadata. Reject the DIFF before OUTPUT AS creates a table;
 -- otherwise a target value valid under VARCHAR(80) would be inserted into the
 -- base-side VARCHAR(20) result schema.
