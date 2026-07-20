@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -61,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -2243,4 +2245,77 @@ func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
+}
+
+func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
+	probeType := plan.Type{Id: int32(types.T_int64), NotNullable: true}
+
+	tests := []struct {
+		name            string
+		passingNotOnPK  bool
+		acceptedNotOnPK bool
+	}{
+		{
+			name:            "PASS on PK before non-PK IN",
+			passingNotOnPK:  false,
+			acceptedNotOnPK: true,
+		},
+		{
+			name:            "PASS on non-PK before PK IN",
+			passingNotOnPK:  true,
+			acceptedNotOnPK: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+
+			passingSpec := plan2.MakeRuntimeFilter(
+				101, false, 1, plan2.GetColExpr(probeType, 1, 0), test.passingNotOnPK)
+			acceptedSpec := plan2.MakeRuntimeFilter(
+				102, false, 1, plan2.GetColExpr(probeType, 1, 0), test.acceptedNotOnPK)
+			tableScan := table_scan.NewArgument()
+			defer tableScan.Release()
+			scope := &Scope{
+				Proc:   proc,
+				RootOp: tableScan,
+				DataSource: &Source{
+					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{passingSpec, acceptedSpec},
+				},
+			}
+			compile := &Compile{proc: proc}
+
+			message.SendMessage(message.RuntimeFilterMessage{
+				Tag: passingSpec.Tag,
+				Typ: message.RuntimeFilter_PASS,
+			}, board)
+			message.SendMessage(message.RuntimeFilterMessage{
+				Tag:  acceptedSpec.Tag,
+				Typ:  message.RuntimeFilter_IN,
+				Card: 1,
+			}, board)
+
+			runtimeFilters, emptyScan, err := scope.waitForRuntimeFilters(compile)
+			require.NoError(t, err)
+			require.False(t, emptyScan)
+			require.Len(t, runtimeFilters, 1)
+			require.Same(t, acceptedSpec, runtimeFilters[0].spec)
+
+			blockFilters, err := scope.handleRuntimeFilters(compile, runtimeFilters)
+			require.NoError(t, err)
+			require.Len(t, blockFilters, 1)
+			require.Same(t, runtimeFilters[0].expr, blockFilters[0])
+			if test.acceptedNotOnPK {
+				require.Equal(t, runtimeFilters[0].expr, tableScan.RuntimeFilterExprs[0])
+				require.Nil(t, scope.DataSource.FilterExpr)
+			} else {
+				require.Empty(t, tableScan.RuntimeFilterExprs)
+				require.NotNil(t, scope.DataSource.FilterExpr)
+			}
+		})
+	}
 }
