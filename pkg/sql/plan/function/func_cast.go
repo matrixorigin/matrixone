@@ -118,7 +118,7 @@ func floatToUint64Explicit[T constraints.Float](
 		rounded := math.Round(floatValue)
 		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
 			rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
-			return moerr.NewOutOfRangeNoCtx("uint64", strconv.FormatFloat(floatValue, 'g', -1, 64))
+			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
 		}
 		var converted uint64
 		if rounded < 0 {
@@ -150,7 +150,7 @@ func floatToInt64Explicit[T constraints.Float](
 		rounded := math.Round(floatValue)
 		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
 			rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
-			return moerr.NewOutOfRangeNoCtx("int64", strconv.FormatFloat(floatValue, 'g', -1, 64))
+			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
 		}
 		if err := to.Append(int64(rounded), false); err != nil {
 			return err
