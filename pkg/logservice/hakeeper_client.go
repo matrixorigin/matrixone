@@ -221,7 +221,13 @@ func NewLogHAKeeperClientWithRetry(
 
 		default:
 			if err := createFn(); err != nil {
-				time.Sleep(time.Second * 3)
+				retryTimer := time.NewTimer(time.Second * 3)
+				select {
+				case <-ctx.Done():
+					retryTimer.Stop()
+					return nil
+				case <-retryTimer.C:
+				}
 				continue
 			}
 			return c

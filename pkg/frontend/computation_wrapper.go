@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +74,11 @@ type TxnComputationWrapper struct {
 	prepareName   string
 
 	schedulingTrace schedule.TraceRecorder
+
+	// remapDb is the effective database remap for this statement only. A COM_QUERY
+	// can contain statements with different inline overrides, so this metadata
+	// must travel with the wrapper rather than live at request scope.
+	remapDb map[string]string
 }
 
 func InitTxnComputationWrapper(
@@ -92,6 +98,14 @@ func InitTxnComputationWrapper(
 
 func (cwft *TxnComputationWrapper) BinaryExecute() (bool, string) {
 	return cwft.binaryPrepare, cwft.prepareName
+}
+
+func (cwft *TxnComputationWrapper) SetRemapDb(remapDb map[string]string) {
+	cwft.remapDb = maps.Clone(remapDb)
+}
+
+func (cwft *TxnComputationWrapper) GetRemapDb() map[string]string {
+	return cwft.remapDb
 }
 
 func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
@@ -131,6 +145,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.paramVals = nil
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
+	cwft.remapDb = nil
 	cwft.schedulingTrace.Reset()
 }
 
@@ -142,8 +157,25 @@ func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
 }
 
+func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interface{}, error) {
+	columns := make([]interface{}, len(cols))
+	for i, col := range cols {
+		c, err := colDef2MysqlColumn(ctx, col)
+		if err != nil {
+			return nil, err
+		}
+		columns[i] = c
+	}
+	return columns, nil
+}
+
+func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Context) ([]interface{}, []*plan2.ColDef, error) {
+	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	columns, err := columnsToMysqlColumns(ctx, cols)
+	return columns, cols, err
+}
+
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
-	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowColumns:
@@ -171,15 +203,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 			}
 		}
 	}
-	columns := make([]interface{}, len(cols))
-	for i, col := range cols {
-		c, err := colDef2MysqlColumn(ctx, col)
-		if err != nil {
-			return nil, err
-		}
-		columns[i] = c
-	}
-	return columns, err
+	return columnsToMysqlColumns(ctx, cols)
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {

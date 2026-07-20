@@ -209,6 +209,8 @@ func (mw *waiterEvents) close() {
 	for _, w := range mw.mu.blockedWaiters {
 		w.close("waiterEvents close", mw.logger)
 	}
+	clear(mw.mu.blockedWaiters)
+	mw.mu.blockedWaiters = nil
 	mw.mu.Unlock()
 }
 
@@ -250,6 +252,24 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
+}
+
+// removeBlockedWaiter stops the background checker from retaining a waiter
+// that the synchronous lock path is about to reuse.
+func (mw *waiterEvents) removeBlockedWaiter(w *waiter) {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
+	blocked := mw.mu.blockedWaiters[:0]
+	for _, current := range mw.mu.blockedWaiters {
+		if current == w {
+			current.close("waiterEvents remove blocked waiter", mw.logger)
+			continue
+		}
+		blocked = append(blocked, current)
+	}
+	clear(mw.mu.blockedWaiters[len(blocked):])
+	mw.mu.blockedWaiters = blocked
 }
 
 func (mw *waiterEvents) wakeCheck() {

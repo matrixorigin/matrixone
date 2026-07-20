@@ -15,3 +15,4 @@ create table t1 (a int, b float);
 insert into t1 values (1, 1.1), (2, 2.2), (3, 3.3);
 select approx_percentile(b, 0.5) from t1;
 select approx_percentile(b, 0.95) from t1;
+drop table t1;

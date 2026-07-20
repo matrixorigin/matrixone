@@ -16,11 +16,12 @@ package function
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
-	"sort"
+	"slices"
 	"strconv"
 	"unicode/utf8"
 
@@ -436,8 +437,8 @@ func (e *JqEncoder) encodeObject(vs map[string]any) error {
 		kvs[i] = keyVal{k, v}
 		i++
 	}
-	sort.Slice(kvs, func(i, j int) bool {
-		return kvs[i].key < kvs[j].key
+	slices.SortFunc(kvs, func(a, b keyVal) int {
+		return cmp.Compare(a.key, b.key)
 	})
 	for i, kv := range kvs {
 		if i > 0 {

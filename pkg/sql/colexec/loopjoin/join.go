@@ -302,7 +302,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 					b, null := rs.GetValue(j)
 					if !null && b {
 						if ap.JoinType == plan.Node_SINGLE && matched {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						matched = true
@@ -371,7 +371,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 						}
 						rowCountIncrease++
 					} else {
-						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 					}
 
 				case plan.Node_SEMI:

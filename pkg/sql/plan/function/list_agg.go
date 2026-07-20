@@ -607,7 +607,7 @@ var supportedAggInNewFramework = []FuncNew{
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 
-			// check Arg[1]: must be int32/int64/float32/float64
+			// check Arg[1]: must be a supported integer, float, or decimal type
 			t1 := inputs[1]
 			if t1.Oid == types.T_any {
 				return newCheckResultWithCast(0, []types.Type{inputs[0], types.T_float64.ToType()})

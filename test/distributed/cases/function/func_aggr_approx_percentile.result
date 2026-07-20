@@ -30,3 +30,4 @@ select approx_percentile(b, 0.5) from t1;
 select approx_percentile(b, 0.95) from t1;
 ➤ approx_percentile(b, 0.95)[8,54,0]  𝄀
 3.19
+drop table t1;

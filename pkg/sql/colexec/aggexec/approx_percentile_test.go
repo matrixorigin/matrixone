@@ -726,3 +726,167 @@ func TestApproxPercentileExec_Decimal128Merge(t *testing.T) {
 	left.Free()
 	right.Free()
 }
+
+func TestApproxPercentileExec_LargeDecimalDoesNotUseFloat64(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		values any
+		p      string
+		want   string
+	}{
+		{
+			name:   "decimal64 min boundary",
+			typ:    types.New(types.T_decimal64, 18, 2),
+			values: mustDecimal64sWithType(t, 18, 2, "9007199254740993.00", "9007199254740994.00"),
+			p:      "0",
+			want:   "9007199254740993.000",
+		},
+		{
+			name:   "decimal64 interpolation",
+			typ:    types.New(types.T_decimal64, 18, 2),
+			values: mustDecimal64sWithType(t, 18, 2, "9007199254740993.00", "9007199254740994.00"),
+			p:      "0.5",
+			want:   "9007199254740993.500",
+		},
+		{
+			name:   "decimal128 min boundary",
+			typ:    types.New(types.T_decimal128, 30, 2),
+			values: mustDecimal128s(t, "9007199254740993.00", "9007199254740994.00"),
+			p:      "0",
+			want:   "9007199254740993.000",
+		},
+		{
+			name:   "decimal128 negative interpolation",
+			typ:    types.New(types.T_decimal128, 30, 2),
+			values: mustDecimal128s(t, "-9007199254740994.00", "-9007199254740993.00"),
+			p:      "0.5",
+			want:   "-9007199254740993.500",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, test.typ)
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation([]byte(test.p), 0))
+			vec := medianTestVector(t, mp, test.typ, test.values)
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+			ret, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, test.want,
+				vector.GetFixedAtNoTypeCheck[types.Decimal128](ret[0], 0).Format(ret[0].GetType().Scale))
+
+			vec.Free(mp)
+			ret[0].Free(mp)
+			exec.Free()
+		})
+	}
+}
+
+func mustDecimal64sWithType(t *testing.T, precision, scale int32, values ...string) []types.Decimal64 {
+	t.Helper()
+	result := make([]types.Decimal64, len(values))
+	for i, value := range values {
+		decimal, err := types.ParseDecimal64(value, precision, scale)
+		require.NoError(t, err)
+		result[i] = decimal
+	}
+	return result
+}
+
+func TestApproxPercentileExec_BoundedSketchPartialMerge10K(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	const (
+		rowCount = 10_000
+		parts    = 4
+	)
+	execs := make([]AggFuncExec, parts)
+	exact := make([]int64, 0, rowCount)
+	for part := range parts {
+		exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation([]byte("0.95"), 0))
+		execs[part] = exec
+
+		values := make([]int64, rowCount/parts)
+		nulls := make([]bool, len(values))
+		for row := range values {
+			globalRow := part*len(values) + row
+			values[row] = int64(globalRow % 1_000)
+			nulls[row] = globalRow%11 == 0
+			if !nulls[row] {
+				exact = append(exact, values[row])
+			}
+		}
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, values, nulls, mp))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		vec.Free(mp)
+	}
+	defer func() {
+		for _, exec := range execs {
+			exec.Free()
+		}
+	}()
+
+	for part := 1; part < parts; part++ {
+		require.NoError(t, execs[0].Merge(execs[part], 0, 0))
+	}
+	impl := execs[0].(*approxPercentileNumericExec[int64])
+	sketch := impl.state[0].mobs[0].(*quantileSketch[int64])
+	require.Equal(t, uint64(len(exact)), sketch.count)
+	require.Less(t, sketch.retained(), 1_000, "retained state must stay bounded well below input rows")
+
+	var intermediate bytes.Buffer
+	require.NoError(t, execs[0].SaveIntermediateResult(1, [][]uint8{{1}}, &intermediate))
+	require.Less(t, intermediate.Len(), 20_000, "distributed intermediate state must be bounded")
+
+	restored, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer restored.Free()
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(intermediate.Bytes()), mp))
+	require.NoError(t, restored.SetExtraInformation([]byte("0.95"), 0))
+
+	ret, err := restored.Flush()
+	require.NoError(t, err)
+	got := vector.GetFixedAtNoTypeCheck[float64](ret[0], 0)
+	want := percentileNumericVals(exact, 0.95)
+	require.InDelta(t, want, got, 25, "bounded sketch rank error exceeded test tolerance")
+	ret[0].Free(mp)
+
+	require.NoError(t, restored.SetExtraInformation([]byte("0"), 0))
+	ret, err = restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 0.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	require.NoError(t, restored.SetExtraInformation([]byte("1"), 0))
+	ret, err = restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 999.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+}
+
+func TestApproxPercentileExec_RejectsDifferentMergeConfig(t *testing.T) {
+	mp := mpool.MustNewZero()
+	left, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	right, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer left.Free()
+	defer right.Free()
+	require.NoError(t, left.GroupGrow(1))
+	require.NoError(t, right.GroupGrow(1))
+	require.NoError(t, left.SetExtraInformation([]byte("0.95"), 0))
+	require.NoError(t, right.SetExtraInformation([]byte("0.99"), 0))
+	require.ErrorContains(t, left.Merge(right, 0, 0), "different percentile configurations")
+}

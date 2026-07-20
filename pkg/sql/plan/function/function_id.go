@@ -643,6 +643,7 @@ const (
 	JSON_SCHEMA_VALID        = 460
 	JSON_SCHEMA_VALID_REPORT = 461
 	JSON_VALUE               = 462
+
 	// GIS binary I/O
 	ST_ASWKB       = 463
 	ST_GEOMFROMWKB = 464
@@ -655,6 +656,7 @@ const (
 	ST_MLINEFROMTEXT    = 469
 	ST_MPOLYFROMTEXT    = 470
 	ST_GEOMCOLLFROMTEXT = 471
+
 	// GIS typed WKB constructors
 	ST_POINTFROMWKB    = 472
 	ST_LINEFROMWKB     = 473
@@ -764,12 +766,14 @@ const (
 	JSON_REMOVE                  = 544
 	JSON_CONTAINS_PATH           = 545
 	INTERNAL_JSON_ORDERING_PARAM = 546
+	JSON_MERGE_PATCH             = 547
+	JSON_MERGE_PRESERVE          = 548
 
-	APPROX_PERCENTILE = 547
+	APPROX_PERCENTILE = 549
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 548
+	FUNCTION_END_NUMBER = 550
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1056,6 +1060,8 @@ var functionIdRegister = map[string]int32{
 	"json_length":                    JSON_LENGTH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge_patch":               JSON_MERGE_PATCH,
+	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,

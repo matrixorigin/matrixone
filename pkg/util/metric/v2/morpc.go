@@ -181,6 +181,14 @@ var (
 			Help:      "Size of server sessions size.",
 		}, []string{"name"})
 
+	rpcServerStreamStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "server_stream_state_size",
+			Help:      "Current server-side stream sequence and fragment-cache entries.",
+		}, []string{"name", "type"})
+
 	rpcGCRegisteredClientsGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -338,6 +346,10 @@ func NewRPCBackendDoneDurationHistogramByName(name string) prometheus.Observer {
 
 func NewRPCServerSessionSizeGaugeByName(name string) prometheus.Gauge {
 	return rpcServerSessionSizeGauge.WithLabelValues(name)
+}
+
+func NewRPCServerStreamStateGaugeByName(name, stateType string) prometheus.Gauge {
+	return rpcServerStreamStateGauge.WithLabelValues(name, stateType)
 }
 
 func NewRPCInputCounter() prometheus.Counter {

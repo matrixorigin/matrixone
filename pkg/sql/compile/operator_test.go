@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -55,6 +56,16 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestDupHashBuildPreservesNullTracking(t *testing.T) {
+	source := hashbuild.NewArgument()
+	defer source.Release()
+	source.TrackNullKeys = true
+
+	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
+	defer duplicated.Release()
+	require.True(t, duplicated.TrackNullKeys)
 }
 
 func TestDupOperatorMergeTop(t *testing.T) {
@@ -289,6 +300,30 @@ func TestGetPercentileConfig(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "1", string(cfg))
 	})
+
+	t.Run("decimal64 preserves exact text", func(t *testing.T) {
+		typ := types.New(types.T_decimal64, 10, 6)
+		value, err := types.ParseDecimal64("0.123456", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec, err := vector.NewConstFixed(typ, value, 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0.123456", string(cfg))
+	})
+
+	t.Run("decimal128 preserves exact text", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 38, 30)
+		value, err := types.ParseDecimal128("0.123456789012345678901234567890", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec, err := vector.NewConstFixed(typ, value, 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0.123456789012345678901234567890", string(cfg))
+	})
 }
 
 func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
@@ -309,6 +344,12 @@ func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
 	require.NoError(t, err)
 	inf, err := vector.NewConstFixed(types.T_float64.ToType(), math.Inf(1), 1, mp)
 	require.NoError(t, err)
+	decimalType := types.New(types.T_decimal128, 38, 37)
+	decimalAboveValue, err := types.ParseDecimal128(
+		"1.0000000000000000000000000000000000001", decimalType.Width, decimalType.Scale)
+	require.NoError(t, err)
+	decimalAbove, err := vector.NewConstFixed(decimalType, decimalAboveValue, 1, mp)
+	require.NoError(t, err)
 
 	tests := []struct {
 		name string
@@ -321,6 +362,7 @@ func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
 		{name: "above range", vec: above},
 		{name: "nan", vec: nan},
 		{name: "infinity", vec: inf},
+		{name: "decimal above range beyond float64 precision", vec: decimalAbove},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

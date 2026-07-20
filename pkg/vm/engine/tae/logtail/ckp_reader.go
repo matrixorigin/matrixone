@@ -15,9 +15,10 @@
 package logtail
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -860,8 +861,8 @@ func getMetaInfo(
 		objectCount += count.delete
 		deleteCount += count.delete
 	}
-	sort.Slice(tableinfos, func(i, j int) bool {
-		return tableinfos[i].add > tableinfos[j].add
+	slices.SortFunc(tableinfos, func(a, b *tableinfo) int {
+		return cmp.Compare(b.add, a.add)
 	})
 	tableJsons := make([]TableInfoJson, 0, objBatchLength)
 	tables := make(map[uint64]int)
@@ -884,8 +885,8 @@ func getMetaInfo(
 		objectCount2 += count.add
 		addCount2 += count.add
 	}
-	sort.Slice(tableinfos2, func(i, j int) bool {
-		return tableinfos2[i].add > tableinfos2[j].add
+	slices.SortFunc(tableinfos2, func(a, b *tableinfo) int {
+		return cmp.Compare(b.add, a.add)
 	})
 
 	for i := range len(tableinfos2) {

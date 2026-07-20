@@ -63,7 +63,10 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 	}
 
 	// valid arg1 types
-	for _, arg1Oid := range []types.T{types.T_int32, types.T_int64, types.T_float32, types.T_float64} {
+	for _, arg1Oid := range []types.T{
+		types.T_int32, types.T_int64, types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+	} {
 		result = check(nil, []types.Type{types.T_int64.ToType(), arg1Oid.ToType()})
 		require.Equal(t, succeedMatched, result.status, "arg1 oid %d should succeed", arg1Oid)
 	}

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -140,7 +141,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
-		op.CanSpill = t.CanSpill
 		op.Conditions = t.Conditions
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
@@ -159,6 +159,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.TrackNullKeys = t.TrackNullKeys
 		return op
 
 	case vm.Group:
@@ -589,6 +590,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.SpillThreshold = t.SpillThreshold
 		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
@@ -612,6 +614,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.PostDml:
@@ -1245,6 +1248,7 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 			}
 		}
 	}
+	arg.SpillThreshold = node.SpillMem
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1302,6 +1306,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
 	}
+	arg.SpillThreshold = node.SpillMem
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1419,9 +1424,9 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 			//for approx_percentile, the last arg is the percentile value
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 				f.F.Func.ObjName == plan2.NameClusterCenters ||
-				f.F.Func.ObjName == "approx_percentile") && len(f.F.Args) > 1 {
+				f.F.Func.ObjName == plan2.NameApproxPercentile) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
-				if f.F.Func.ObjName == "approx_percentile" {
+				if f.F.Func.ObjName == plan2.NameApproxPercentile {
 					if err := validateApproxPercentileExpr(argExpr); err != nil {
 						panic(err)
 					}
@@ -1430,7 +1435,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 				if err != nil {
 					panic(err)
 				}
-				if f.F.Func.ObjName == "approx_percentile" {
+				if f.F.Func.ObjName == plan2.NameApproxPercentile {
 					cfg, err = getPercentileConfig(vec)
 					if err != nil {
 						free()
@@ -1488,9 +1493,9 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 				//for approx_percentile, the last arg is the percentile value
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 					f.F.Func.ObjName == plan2.NameClusterCenters ||
-					f.F.Func.ObjName == "approx_percentile") && len(f.F.Args) > 1 {
+					f.F.Func.ObjName == plan2.NameApproxPercentile) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
-					if f.F.Func.ObjName == "approx_percentile" {
+					if f.F.Func.ObjName == plan2.NameApproxPercentile {
 						if err := validateApproxPercentileExpr(argExpr); err != nil {
 							panic(err)
 						}
@@ -1499,7 +1504,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 					if err != nil {
 						panic(err)
 					}
-					if f.F.Func.ObjName == "approx_percentile" {
+					if f.F.Func.ObjName == plan2.NameApproxPercentile {
 						cfg, err = getPercentileConfig(vec)
 						if err != nil {
 							free()
@@ -1911,23 +1916,11 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 
-		// to find if hashmap need to keep build batches for probe
-		var needMergedBatch bool
-		if arg.NonEqCond != nil {
-			needMergedBatch = true
-		} else {
-			for _, rp := range arg.ResultCols {
-				if rp.Rel == 1 {
-					needMergedBatch = true
-					break
-				}
-			}
-		}
-		ret.NeedBatches = needMergedBatch
+		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = !arg.HashOnPK
-		ret.CanSpill = true
+		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -2007,23 +2000,11 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
-		// to find if hashmap need to keep build batches for probe
-		var needMergedBatch bool
-		if arg.NonEqCond != nil {
-			needMergedBatch = true
-		} else {
-			for _, rp := range arg.ResultCols {
-				if rp.Rel == 1 {
-					needMergedBatch = true
-					break
-				}
-			}
-		}
-		ret.NeedBatches = needMergedBatch
+		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = !arg.HashOnPK
-		ret.CanSpill = true
+		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
+		ret.TrackNullKeys = arg.IsMark()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
@@ -2362,21 +2343,30 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	}
 
 	var p float64
+	var config string
 	switch vec.GetType().Oid {
 	case types.T_float64:
 		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		config = strconv.FormatFloat(p, 'f', -1, 64)
 	case types.T_float32:
 		p = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
+		config = strconv.FormatFloat(p, 'f', -1, 32)
 	case types.T_int64:
-		p = float64(vector.MustFixedColWithTypeCheck[int64](vec)[0])
+		v := vector.MustFixedColWithTypeCheck[int64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(v, 10)
 	case types.T_int32:
-		p = float64(vector.MustFixedColWithTypeCheck[int32](vec)[0])
+		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
 	case types.T_decimal64:
 		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
 		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
 	case types.T_decimal128:
 		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
 		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
@@ -2385,5 +2375,10 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
 	}
-	return []byte(strconv.FormatFloat(p, 'f', -1, 64)), nil
+	exact, ok := new(big.Rat).SetString(config)
+	if !ok || exact.Sign() < 0 || exact.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be in [0,1], got %s", config)
+	}
+	return []byte(config), nil
 }

@@ -17,7 +17,7 @@ package fulltext
 import (
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -400,8 +400,8 @@ func (pool *FixedBytePool) Spill() error {
 		return nil
 	}
 
-	sort.Slice(lru, func(i, j int) bool {
-		return lru[i].last_update.Before(lru[j].last_update)
+	slices.SortFunc(lru, func(a, b Lru) int {
+		return a.last_update.Compare(b.last_update)
 	})
 
 	//fmt.Printf("sorted %v\n", lru)

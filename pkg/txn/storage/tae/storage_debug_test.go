@@ -33,6 +33,10 @@ type storageUsageErrorHandler struct {
 	rpchandle.Handler
 }
 
+type backupErrorHandler struct {
+	rpchandle.Handler
+}
+
 func (h *storageUsageErrorHandler) HandleStorageUsage(
 	context.Context,
 	txn.TxnMeta,
@@ -40,6 +44,27 @@ func (h *storageUsageErrorHandler) HandleStorageUsage(
 	*cmd_util.StorageUsageResp_V3,
 ) (func(), error) {
 	return nil, errStorageUsage
+}
+
+func (h *backupErrorHandler) HandleBackup(
+	context.Context,
+	txn.TxnMeta,
+	*cmd_util.Checkpoint,
+	*api.SyncLogTailResp,
+) (func(), error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestDebugBackupReturnsCheckpointError(t *testing.T) {
+	s := &taeStorage{taeHandler: &backupErrorHandler{}}
+	resp, err := s.Debug(
+		context.Background(),
+		txn.TxnMeta{},
+		uint32(api.OpCode_OpBackup),
+		nil,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, resp)
 }
 
 func TestDebugStorageUsageReturnsHandlerError(t *testing.T) {
