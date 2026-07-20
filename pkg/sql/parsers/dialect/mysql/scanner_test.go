@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -82,9 +83,13 @@ func TestQuotedUnicodeIdentifier(t *testing.T) {
 	}{
 		{name: "quoted Arabic", input: "`الكمية`", want: QUOTE_ID},
 		{name: "quoted Chinese", input: "`数量`", want: QUOTE_ID},
+		{name: "escaped delimiter with BMP", input: "`数``量`", want: QUOTE_ID},
 		{name: "invalid UTF-8", input: "`\xff`", want: LEX_ERROR},
+		{name: "invalid UTF-8 before escaped delimiter", input: "`\xff``name`", want: LEX_ERROR},
 		{name: "NUL", input: "`a\x00b`", want: LEX_ERROR},
+		{name: "NUL after escaped delimiter", input: "`a``\x00b`", want: LEX_ERROR},
 		{name: "supplementary character", input: "`😀`", want: LEX_ERROR},
+		{name: "supplementary after escaped delimiter", input: "`a``😀`", want: LEX_ERROR},
 	}
 
 	for _, test := range tests {
@@ -108,7 +113,9 @@ func TestQuotedUnicodeUserVariable(t *testing.T) {
 		{name: "supplementary character", input: "@`😀`", want: AT_ID, value: "😀"},
 		{name: "escaped delimiter", input: "@`😀``name`", want: AT_ID, value: "😀`name"},
 		{name: "invalid UTF-8", input: "@`\xff`", want: LEX_ERROR},
+		{name: "invalid UTF-8 after escaped delimiter", input: "@`a``\xff`", want: LEX_ERROR},
 		{name: "NUL", input: "@`a\x00b`", want: LEX_ERROR},
+		{name: "NUL after escaped delimiter", input: "@`a``\x00b`", want: LEX_ERROR},
 		{name: "system variable remains BMP restricted", input: "@@`😀`", want: LEX_ERROR},
 	}
 
@@ -119,6 +126,120 @@ func TestQuotedUnicodeUserVariable(t *testing.T) {
 			if got != test.want || value != test.value {
 				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
 					test.input, tokenName(got), value, tokenName(test.want), test.value)
+			}
+		})
+	}
+}
+
+func TestANSIQuotedUnicodeIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{name: "BMP", input: `"数量"`, want: QUOTE_ID},
+		{name: "escaped delimiter with BMP", input: `"数""量"`, want: QUOTE_ID},
+		{name: "supplementary", input: `"😀"`, want: LEX_ERROR},
+		{name: "supplementary after escaped delimiter", input: `"a""😀"`, want: LEX_ERROR},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScannerWithSQLMode(dialect.MYSQL, test.input, ParseSQLModeFlags("ANSI_QUOTES"))
+			got, _ := scanner.Scan()
+			if got != test.want {
+				t.Fatalf("Scan(%q) token = %s, want %s", test.input, tokenName(got), tokenName(test.want))
+			}
+		})
+	}
+}
+
+func TestQuotedASCIIIdentifierFastPathAllocs(t *testing.T) {
+	input := "`" + strings.Repeat("a", 64) + "`"
+	scanner := &Scanner{}
+	var token int
+	var value string
+	allocs := testing.AllocsPerRun(1000, func() {
+		scanner.setSql(input)
+		token, value = scanner.Scan()
+	})
+	if token != QUOTE_ID || value != input[1:len(input)-1] {
+		t.Fatalf("Scan(%q) = (%s, %q)", input, tokenName(token), value)
+	}
+	if allocs != 0 {
+		t.Fatalf("quoted ASCII fast path allocated %v times, want 0", allocs)
+	}
+}
+
+func TestQuotedIdentifierChunkBoundaries(t *testing.T) {
+	for pos := 0; pos < 16; pos++ {
+		prefix := strings.Repeat("a", pos)
+		t.Run(fmt.Sprintf("closing delimiter at %d", pos), func(t *testing.T) {
+			input := "`" + prefix + "x`"
+			scanner := NewScanner(dialect.MYSQL, input)
+			token, value := scanner.Scan()
+			if token != QUOTE_ID || value != prefix+"x" {
+				t.Fatalf("Scan(%q) = (%s, %q)", input, tokenName(token), value)
+			}
+		})
+		t.Run(fmt.Sprintf("escaped delimiter at %d", pos), func(t *testing.T) {
+			input := "`" + prefix + "``x`"
+			scanner := NewScanner(dialect.MYSQL, input)
+			token, value := scanner.Scan()
+			if token != QUOTE_ID || value != prefix+"`x" {
+				t.Fatalf("Scan(%q) = (%s, %q)", input, tokenName(token), value)
+			}
+		})
+		t.Run(fmt.Sprintf("NUL at %d", pos), func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, "`"+prefix+"\x00x`")
+			token, _ := scanner.Scan()
+			if token != LEX_ERROR {
+				t.Fatalf("token = %s, want LEX_ERROR", tokenName(token))
+			}
+		})
+		t.Run(fmt.Sprintf("non-ASCII at %d", pos), func(t *testing.T) {
+			input := "`" + prefix + "数`"
+			scanner := NewScanner(dialect.MYSQL, input)
+			token, value := scanner.Scan()
+			if token != QUOTE_ID || value != prefix+"数" {
+				t.Fatalf("Scan(%q) = (%s, %q)", input, tokenName(token), value)
+			}
+		})
+		t.Run(fmt.Sprintf("newline at %d", pos), func(t *testing.T) {
+			input := "`" + prefix + "\nx`"
+			scanner := NewScanner(dialect.MYSQL, input)
+			token, value := scanner.Scan()
+			if token != QUOTE_ID || value != prefix+"\nx" || scanner.Line != 1 {
+				t.Fatalf("Scan(%q) = (%s, %q), line %d", input, tokenName(token), value, scanner.Line)
+			}
+		})
+	}
+}
+
+func BenchmarkQuotedIdentifier(b *testing.B) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "ASCII64", input: "`" + strings.Repeat("a", 64) + "`"},
+		{name: "BMP64", input: "`" + strings.Repeat("数", 64) + "`"},
+		{name: "EscapedDelimiter", input: "`" + strings.Repeat("a", 31) + "``" + strings.Repeat("b", 32) + "`"},
+	}
+
+	for _, test := range tests {
+		b.Run(test.name, func(b *testing.B) {
+			scanner := &Scanner{}
+			var token int
+			var value string
+			b.ReportAllocs()
+			b.SetBytes(int64(len(test.input)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				scanner.setSql(test.input)
+				token, value = scanner.Scan()
+			}
+			if token != QUOTE_ID || value == "" {
+				b.Fatalf("Scan(%q) = (%s, %q)", test.input, tokenName(token), value)
 			}
 		})
 	}

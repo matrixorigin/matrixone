@@ -4089,6 +4089,20 @@ func TestQuotedUnicodeUserVariables(t *testing.T) {
 	}
 }
 
+func BenchmarkParseQuotedIdentifiers(b *testing.B) {
+	ctx := context.Background()
+	const sql = "SELECT `column_name` FROM `database_name`.`table_name`"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		stmt, err := ParseOne(ctx, sql, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		stmt.Free()
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
