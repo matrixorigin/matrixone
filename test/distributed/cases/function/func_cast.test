@@ -8,6 +8,12 @@ select cast('1e-3   ' as decimal(8,4));
 select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
 
+# Explicit numeric casts clamp or wrap values that exceed the target range.
+select cast('999999999999999999999999' as signed);
+select cast('999999999999999999999999' as unsigned);
+select cast('9999999.99' as decimal(6,2));
+select cast(-1 as unsigned);
+
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
 # Leading zero without a radix prefix is still decimal.
