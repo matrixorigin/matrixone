@@ -132,6 +132,27 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "outer parameter follows scalar derived column double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (select cast(1 as double) as x) d) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows nested scalar derived column double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select d.x from (select x from (select cast(1 as double) as x) s) d) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar cte column double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select x from (with c as (select cast(1 as double) as x) select x from c)) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
 			name:       "outer parameter keeps decimal target with scalar integer subquery",
 			sql:        "insert into constraint_test.emp (sal) select (select 1) + ?",
 			want:       types.T_decimal64,
@@ -333,6 +354,29 @@ func TestPreparedNumericContextReusesGroupByAliasParameters(t *testing.T) {
 		require.Equal(t, int32(7), typ.Width)
 		require.Equal(t, int32(2), typ.Scale)
 	}
+}
+
+func TestResolveNumericScalarColumnIsScopeSafe(t *testing.T) {
+	doubleScan := numericAstTypedOperand(planpb.Type{Id: int32(types.T_float64)})
+	sources := []numericScalarSource{
+		{alias: "a", cols: []string{"x"}, types: []numericAstTypeScan{doubleScan}, known: true},
+		{alias: "b", cols: []string{"x"}, types: []numericAstTypeScan{doubleScan}, known: true},
+	}
+
+	_, ok := resolveNumericScalarColumn(sources, tree.NewUnresolvedName(tree.NewCStr("x", 0)))
+	require.False(t, ok)
+
+	scan, ok := resolveNumericScalarColumn(
+		sources,
+		tree.NewUnresolvedName(tree.NewCStr("a", 0), tree.NewCStr("x", 0)),
+	)
+	require.True(t, ok)
+	require.Len(t, scan.strong, 1)
+	require.Equal(t, int32(types.T_float64), scan.strong[0].Id)
+
+	sources[1] = numericScalarSource{alias: "b"}
+	_, ok = resolveNumericScalarColumn(sources, tree.NewUnresolvedName(tree.NewCStr("x", 0)))
+	require.False(t, ok)
 }
 
 func TestPreparedNumericContextHandlesMergedJoinStarColumns(t *testing.T) {
@@ -677,6 +721,13 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "update parameter follows scalar derived column double domain",
+			sql: "update constraint_test.emp set sal = " +
+				"(select x from (select cast(1 as double) as x) d) + ? where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_float64)},
+			paramCount: 1,
+		},
+		{
 			name: "on duplicate key update decimal assignment",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = ? + ?",
@@ -714,6 +765,15 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			name: "on duplicate key update parameter follows scalar subquery double domain",
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = (select cast(1 as double)) + ?",
+			want:         planpb.Type{Id: int32(types.T_float64)},
+			checkFlatten: true,
+			paramCount:   1,
+		},
+		{
+			name: "on duplicate key update parameter follows scalar derived column double domain",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = " +
+				"(select x from (select cast(1 as double) as x) d) + ?",
 			want:         planpb.Type{Id: int32(types.T_float64)},
 			checkFlatten: true,
 			paramCount:   1,
