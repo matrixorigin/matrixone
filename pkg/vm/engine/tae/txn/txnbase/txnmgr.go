@@ -203,8 +203,10 @@ func (mgr *TxnManager) initMaxCommittedTS() {
 }
 
 func (mgr *TxnManager) TryUpdateMaxCommittedTS(ts types.TS) {
-	if ts.GT(&MinCommittedTS) {
-		mgr.MaxCommittedTS.CompareAndSwap(mgr.MaxCommittedTS.Load(), &ts)
+	for old := mgr.MaxCommittedTS.Load(); ts.GT(old); old = mgr.MaxCommittedTS.Load() {
+		if mgr.MaxCommittedTS.CompareAndSwap(old, &ts) {
+			return
+		}
 	}
 }
 
