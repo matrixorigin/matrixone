@@ -3226,6 +3226,20 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testin
 	require.True(t, foundGroupConcatAgg)
 }
 
+func TestGroupConcatRejectsPositionalOrderBySubquery(t *testing.T) {
+	sql := `SELECT n.N_REGIONKEY,
+	               GROUP_CONCAT(
+	                   (SELECT r.R_NAME
+	                      FROM REGION r
+	                     WHERE r.R_REGIONKEY = n.N_NATIONKEY)
+	                   ORDER BY 1)
+	        FROM NATION n
+	        GROUP BY n.N_REGIONKEY`
+	_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
+}
+
 func TestMysqlCompatibilityMode(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
