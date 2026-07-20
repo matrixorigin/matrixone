@@ -136,8 +136,8 @@ func (m LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
 	return m
 }
 
-// WithLockWaitTimeout sets the lock wait timeout in seconds. 0 disables
-// lock-wait-timeout enforcement and relies on the caller context instead.
+// WithLockWaitTimeout sets the caller lock wait timeout in seconds. A zero
+// value delegates to the caller context and the lockservice safety ceiling.
 func (m LockOptions) WithLockWaitTimeout(seconds int64) LockOptions {
 	m.LockWaitTimeout = seconds
 	return m

@@ -97,6 +97,43 @@ func TestWaitMultiTimes(t *testing.T) {
 	})
 }
 
+func TestWaitTooLongLoggedOncePerWaiterLifecycle(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
+		key := []byte{1}
+		lt := &localLockTable{}
+		w.conflictKey.Store(&key)
+		w.lt.Store(lt)
+		events := &waiterEvents{checkOrphanC: make(chan checkOrphan, 2)}
+
+		events.addToOrphanCheck(w, waitTooLong)
+		require.True(t, (<-events.checkOrphanC).logWaitTooLong)
+		require.True(t, w.waitTooLongLogged.Load())
+
+		events.addToOrphanCheck(w, waitTooLong+time.Second)
+		require.False(t, (<-events.checkOrphanC).logWaitTooLong)
+
+		w.reset()
+		require.False(t, w.waitTooLongLogged.Load())
+		w.conflictKey.Store(&key)
+		w.lt.Store(lt)
+
+		for len(events.checkOrphanC) < cap(events.checkOrphanC) {
+			events.checkOrphanC <- checkOrphan{}
+		}
+		events.addToOrphanCheck(w, waitTooLong)
+		require.False(t, w.waitTooLongLogged.Load(),
+			"a full diagnostics queue must not suppress every later warning")
+		for len(events.checkOrphanC) > 0 {
+			<-events.checkOrphanC
+		}
+
+		events.addToOrphanCheck(w, waitTooLong)
+		require.True(t, (<-events.checkOrphanC).logWaitTooLong)
+	})
+}
+
 func TestNotifyAfterCompleted(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		w := acquireWaiter(pb.WaitTxn{}, "", nil)
