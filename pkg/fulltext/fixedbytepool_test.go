@@ -158,6 +158,50 @@ func TestPoolFirstPartitionOverBudget(t *testing.T) {
 	mp.Close()
 }
 
+// TestPoolPartitionZeroFillCrossesBudget covers the review hole that the budget was only
+// re-checked at partition boundaries: the first partition holds ~1M items, so a query whose
+// non-spillable side maps push the heap over budget WHILE filling partition 0 (before it is
+// ever full) must still be refused. The fast-path interval check (HeapCheckInterval) enforces
+// this without waiting for a second partition.
+func TestPoolPartitionZeroFillCrossesBudget(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origInterval := HeapCheckInterval
+	defer func() { memGolang = origHeap; memTotal = origTotal; HeapCheckInterval = origInterval }()
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// A large partition_cap (500 items) so every item below lands in partition 0 — the
+	// new-partition gate never fires; only the fast-path interval check can catch the overrun.
+	mp := NewFixedBytePool(proc, 2, 1000, 0)
+	defer mp.Close()
+	HeapCheckInterval = 4 // re-check every 4 items on the fast path
+
+	memTotal = func() uint64 { return 1000 } // 800 budget
+	memGolang = func() int { return 0 }      // under budget
+
+	// Fill several items inside partition 0 (all fast path) while under budget — all accepted.
+	for i := 0; i < 6; i++ {
+		_, _, err := mp.NewItem()
+		require.NoError(t, err, "item %d should be accepted under budget", i)
+	}
+
+	// The heap crosses the budget mid-fill (side maps grew). Still deep inside partition 0
+	// (cap 500), so ONLY the fast-path interval check guards it — within HeapCheckInterval more
+	// items it must refuse, not wait for partition 0 to fill.
+	memGolang = func() int { return 900 } // > 800 budget
+	var err error
+	for i := 0; i <= int(HeapCheckInterval); i++ {
+		if _, _, err = mp.NewItem(); err != nil {
+			break
+		}
+	}
+	require.Error(t, err, "fast-path interval check must refuse once the heap crosses the budget while filling partition 0")
+	require.Contains(t, err.Error(), "too many documents")
+}
+
 // TestPoolUnspillBounded covers the review hole that the top-K scoring pass (fulltext TVF
 // evaluate/sort_topk) GetItems every matched doc, which unspills partitions. Without an
 // eviction policy on that path it would re-materialize ALL spilled partitions and grow
@@ -211,6 +255,66 @@ func TestPoolUnspillBounded(t *testing.T) {
 			require.Equal(t, byte(i), data[j])
 		}
 		require.LessOrEqual(t, mp.mem_in_use, bound, "unspill on GetItem re-materialized past the resident bound")
+	}
+
+	mp.Close()
+}
+
+// TestPoolUnspillHeapBudgetBinds covers the review point that the top-K unspill path must obey
+// the HEAP budget, not only mem_limit: mem_limit is a fixed default that can EXCEED the heap
+// budget on a small/loaded CN. Here mem_limit is loose but the heap budget is tight during the
+// scoring phase (the CN grew near its budget from other work), so GetItem must evict against the
+// heap budget and keep resident pool memory well below mem_limit.
+func TestPoolUnspillHeapBudgetBinds(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	defer func() { memGolang = origHeap; memTotal = origTotal }()
+
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{FileService: localFS}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// dsize=2, partition_cap=6 (3 items/partition), mem_limit=30 -> spills during build.
+	const nitem = 30
+	mp := NewFixedBytePool(proc, 2, 6, 30)
+
+	// Build with the heap gate OUT of the way (huge budget) so all 30 items build; mem_limit
+	// keeps resident <= 30 by spilling.
+	memTotal = func() uint64 { return 1 << 40 }
+	memGolang = func() int { return 0 }
+	addrs := make([]uint64, nitem)
+	for i := 0; i < nitem; i++ {
+		addr, data, err := mp.NewItem()
+		require.NoError(t, err)
+		addrs[i] = addr
+		for j := range data {
+			data[j] = byte(i)
+		}
+	}
+
+	// Scoring phase: the CN is now near its heap budget from OTHER work (non-pool ~30 bytes),
+	// and the node is small (budget=40) — TIGHTER than mem_limit=30. memGolang models the real
+	// heap = non-pool + resident pool. GetItem must evict against the heap budget so the
+	// resident pool stays <= budget-nonPool = 10, i.e. below the looser mem_limit.
+	memTotal = func() uint64 { return 50 } // 80% -> budget 40
+	memGolang = func() int { return 30 + int(mp.mem_in_use) }
+	const heapBound = uint64(10) // budget(40) - nonPool(30)
+	for i, addr := range addrs {
+		data, err := mp.GetItem(addr)
+		require.NoError(t, err)
+		for j := range data {
+			require.Equal(t, byte(i), data[j])
+		}
+		require.LessOrEqual(t, mp.mem_in_use, heapBound,
+			"unspill must evict against the HEAP budget (%d), not the looser mem_limit (%d)", heapBound, mp.mem_limit)
 	}
 
 	mp.Close()
