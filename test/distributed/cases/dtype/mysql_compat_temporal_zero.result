@@ -114,6 +114,18 @@ d date,
 dt datetime,
 ts timestamp
 );
+set sql_mode = 'TRADITIONAL';
+select cast('0000-00-00' as date) as traditional_zero_date,
+cast('0000-00-00 00:00:00' as datetime) as traditional_zero_datetime,
+cast('0000-00-00 00:00:00' as timestamp) as traditional_zero_timestamp;
+➤ traditional_zero_date[91,64,0]  ¦  traditional_zero_datetime[93,64,0]  ¦  traditional_zero_timestamp[93,64,0]  𝄀
+null  ¦  null  ¦  null
+insert into mysql_compat_temporal_zero values
+('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+truncated type date value 0000-00-00 for column value, 1
+select count(*) as traditional_rejected_rows from mysql_compat_temporal_zero;
+➤ traditional_rejected_rows[-5,64,0]  𝄀
+0
 set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 insert into mysql_compat_temporal_zero values
 ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');

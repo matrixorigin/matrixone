@@ -94,6 +94,15 @@ create table mysql_compat_temporal_zero_dml(
     ts timestamp
 );
 
+-- TRADITIONAL expands to strict mode plus NO_ZERO_DATE in MySQL.
+set sql_mode = 'TRADITIONAL';
+select cast('0000-00-00' as date) as traditional_zero_date,
+       cast('0000-00-00 00:00:00' as datetime) as traditional_zero_datetime,
+       cast('0000-00-00 00:00:00' as timestamp) as traditional_zero_timestamp;
+insert into mysql_compat_temporal_zero values
+    ('0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00');
+select count(*) as traditional_rejected_rows from mysql_compat_temporal_zero;
+
 -- NO_ZERO_DATE only rejects zero temporals when a strict mode is also enabled.
 set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 insert into mysql_compat_temporal_zero values
