@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -123,6 +125,24 @@ func TestFormatValIntoString_StringEscaping(t *testing.T) {
 	val := "a'b\"c\\\n\t\r\x1a\x00"
 	require.NoError(t, formatValIntoString(ses, val, types.New(types.T_varchar, 0, 0), &buf))
 	require.Equal(t, `'a\'b"c\\\n\t\r\Z\0'`, buf.String())
+}
+
+func TestFormatValIntoString_ControlByteRoundTrip(t *testing.T) {
+	value := make([]byte, 0x21)
+	for controlByte := byte(0); controlByte < 0x20; controlByte++ {
+		value = append(value, controlByte)
+	}
+	value = append(value, 0x7f)
+
+	var literal bytes.Buffer
+	require.NoError(t, formatValIntoString(&Session{}, value, types.T_varchar.ToType(), &literal))
+	require.NotContains(t, literal.String(), `\x`)
+
+	scanner := mysql.NewScanner(dialect.MYSQL, literal.String())
+	defer mysql.PutScanner(scanner)
+	token, got := scanner.Scan()
+	require.Equal(t, mysql.STRING, token)
+	require.Equal(t, value, []byte(got))
 }
 
 func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {

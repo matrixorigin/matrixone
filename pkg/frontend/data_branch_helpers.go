@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"regexp"
@@ -642,7 +641,10 @@ func extractDataBranchSQLRowValue(
 	}
 }
 
-// writeEscapedSQLString escapes special and control characters for SQL literal output.
+// writeEscapedSQLString emits a SQL literal that MatrixOne's default MySQL
+// scanner reads byte-for-byte. It uses the scanner's named escapes where
+// available and leaves all other control bytes raw: the scanner has no \xNN
+// escape syntax.
 func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte('\'')
 	for _, c := range b {
@@ -666,12 +668,7 @@ func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 		case 0x1A:
 			buf.WriteString("\\Z")
 		default:
-			if c < 0x20 || c == 0x7f {
-				buf.WriteString("\\x")
-				buf.WriteString(hex.EncodeToString([]byte{c}))
-			} else {
-				buf.WriteByte(c)
-			}
+			buf.WriteByte(c)
 		}
 	}
 	buf.WriteByte('\'')
