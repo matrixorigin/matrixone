@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -102,9 +103,9 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
-			name:       "group by matching expression",
+			name:       "independent group by parameters keep default type",
 			sql:        "insert into constraint_test.emp (sal) select ? + ? from nation group by ? + ?",
-			want:       types.T_decimal64,
+			want:       types.T_float64,
 			paramCount: 2,
 		},
 		{
@@ -140,6 +141,26 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 		{
 			name:       "derived column alias passthrough",
 			sql:        "insert into constraint_test.emp (sal) select d.y from (select ? + ?) d(y)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "derived qualified star passthrough",
+			sql:        "insert into constraint_test.emp (sal, comm) select d.* from (select ? + ? as x, ? + ? as y) d",
+			want:       types.T_decimal64,
+			paramCount: 4,
+		},
+		{
+			name: "derived union passthrough",
+			sql: "insert into constraint_test.emp (sal) select d.x from " +
+				"(select ? + ? as x union all select ? + ?) d",
+			want:       types.T_decimal64,
+			paramCount: 4,
+		},
+		{
+			name: "chained cte passthrough",
+			sql: "insert into constraint_test.emp (sal) " +
+				"with c as (select ? + ? as x), d as (select x from c) select x from d",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -189,35 +210,41 @@ func TestPreparedNumericContextUsesSampleSuffixTarget(t *testing.T) {
 	}
 }
 
-func TestGroupNumericTargetRequiresUniqueProjectionMatch(t *testing.T) {
+func TestPreparedNumericContextUsesLegacyInsertSelectTarget(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
-	parseSelectClause := func(sql string) *tree.SelectClause {
-		stmt, err := mysql.ParseOne(optimizer.CurrentContext().GetContext(), sql, 1)
-		require.NoError(t, err)
-		selectStmt, ok := stmt.(*tree.Select)
-		require.True(t, ok)
-		clause, ok := selectStmt.Select.(*tree.SelectClause)
-		require.True(t, ok)
-		return clause
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into ext(v) select ? + ? from nation",
+		1,
+	)
+	require.NoError(t, err)
+
+	insertStmt := stmt.(*tree.Insert)
+	tableDef := &planpb.TableDef{
+		Name:      "ext",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*planpb.ColDef{{
+			Name: "v",
+			Typ:  planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+		}},
 	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, optimizer.CurrentContext(), true, false)
+	bindCtx := NewBindContext(builder, nil)
+	info := &dmlSelectInfo{tblInfo: &dmlTableInfo{
+		tableDefs: []*planpb.TableDef{tableDef},
+		objRef:    []*planpb.ObjectRef{{ObjName: "ext"}},
+	}}
 
-	target := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}
-	matching := parseSelectClause("select ? + ?")
-	binder := &GroupBinder{
-		baseBinder: baseBinder{
-			ctx: &BindContext{numericProjectionTypes: []planpb.Type{target}},
-		},
-		selectList: matching.Exprs,
+	_, _, _, err = initInsertStmt(builder, bindCtx, insertStmt, info)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, &Plan{Plan: &planpb.Plan_Query{Query: builder.qry}})
+	require.Len(t, paramTypes, 2)
+	for _, typ := range paramTypes {
+		require.Equal(t, int32(types.T_decimal64), typ.Id)
+		require.Equal(t, int32(7), typ.Width)
+		require.Equal(t, int32(2), typ.Scale)
 	}
-	require.Equal(t, &target, binder.numericTargetForProjectionExpr(matching.Exprs[0].Expr))
-
-	nonMatching := parseSelectClause("select ? * ?")
-	require.Nil(t, binder.numericTargetForProjectionExpr(nonMatching.Exprs[0].Expr))
-
-	ambiguous := parseSelectClause("select ? + ?, ? + ?")
-	binder.selectList = ambiguous.Exprs
-	binder.ctx.numericProjectionTypes = []planpb.Type{target, target}
-	require.Nil(t, binder.numericTargetForProjectionExpr(ambiguous.Exprs[0].Expr))
 }
 
 func collectUniquePlanParamTypes(t *testing.T, queryPlan *Plan) map[int32]planpb.Type {
@@ -417,6 +444,18 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 				"on duplicate key update sal = ? + ?",
 			want: types.T_decimal64,
 		},
+		{
+			name: "on duplicate key update scalar subquery",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = (select ? + ?)",
+			want: types.T_decimal64,
+		},
+		{
+			name: "update from derived source",
+			sql: "update constraint_test.emp set sal = d.x " +
+				"from (select ? + ? as x) d where emp.empno = 1",
+			want: types.T_decimal64,
+		},
 	}
 
 	for _, test := range tests {
@@ -433,6 +472,40 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			for _, typ := range paramTypes {
 				require.Equal(t, int32(test.want), typ.Id)
 			}
+			if test.name == "on duplicate key update scalar subquery" {
+				for _, node := range queryPlan.GetQuery().Nodes {
+					if node.DedupJoinCtx == nil {
+						continue
+					}
+					for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+						require.False(t, exprContainsSubqueryRef(expr))
+					}
+				}
+			}
 		})
 	}
+}
+
+func exprContainsSubqueryRef(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetSub() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprContainsSubqueryRef(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsSubqueryRef(item) {
+				return true
+			}
+		}
+	}
+	return false
 }

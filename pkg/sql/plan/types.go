@@ -361,6 +361,7 @@ type BindContext struct {
 
 	numericProjectionTypes      []Type
 	numericTableProjectionTypes map[string][]Type
+	numericCteByName            map[string]*tree.CTE
 
 	timeAsts []tree.Expr
 

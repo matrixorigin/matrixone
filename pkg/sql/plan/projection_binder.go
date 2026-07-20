@@ -98,7 +98,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
-		if subquery, ok := astExpr.(*tree.Subquery); ok && !subquery.Exists {
+		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
 			b.numericSubqueryTarget = target
 			defer func() { b.numericSubqueryTarget = nil }()
 			return b.baseBindExpr(astExpr, depth, isRoot)

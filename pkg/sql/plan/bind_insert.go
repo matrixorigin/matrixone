@@ -1348,6 +1348,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 
+		for colName, updateExpr := range updateExprs {
+			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
+			if err != nil {
+				return 0, err
+			}
+			updateExprs[colName] = updateExpr
+		}
+
 		// Recompute generated columns from the final updated row image, so
 		// ON DUPLICATE KEY UPDATE stays consistent with regular UPDATE behavior.
 		finalRowExprs := make([]*plan.Expr, len(tableDef.Cols))

@@ -3398,7 +3398,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
+	registerNumericCteDefinitions(stmt, ctx)
 	seedNumericTableProjectionTypes(stmt, ctx)
+	seedNumericCteProjectionTypes(ctx)
 
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
@@ -3765,106 +3767,140 @@ func seedNumericTableProjectionTypes(stmt *tree.Select, ctx *BindContext) {
 	if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
 		return
 	}
-
-	source, sourceName, alias, aliasCols := numericProjectionSource(clause.From.Tables[0])
-	if source == nil {
-		var cteCols tree.IdentifierList
-		source, cteCols = numericProjectionCteSource(stmt, sourceName)
-		if source == nil {
-			return
+	sources := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+	for i := range sources {
+		if sources[i].source == nil {
+			sources[i].source, sources[i].aliasCols = numericProjectionCteSource(
+				stmt,
+				ctx,
+				sources[i].sourceName,
+				sources[i].aliasCols,
+			)
 		}
-		if len(aliasCols) == 0 {
-			aliasCols = cteCols
-		}
-	}
-	outputNames := numericProjectionOutputNames(source)
-	if len(aliasCols) > 0 {
-		clause, ok := getSelectTree(source).Select.(*tree.SelectClause)
-		if !ok || len(aliasCols) != len(clause.Exprs) {
-			return
-		}
-		outputNames = make([]string, len(aliasCols))
-		for i := range aliasCols {
-			outputNames[i] = strings.ToLower(string(aliasCols[i]))
-		}
-	}
-	if len(outputNames) == 0 {
-		return
-	}
-
-	targets := make([]Type, len(outputNames))
-	seeded := false
-	for i, selectExpr := range clause.Exprs {
-		if i >= len(ctx.numericProjectionTypes) || ctx.numericProjectionTypes[i].Id == 0 {
+		if sources[i].source == nil {
 			continue
 		}
-		name, ok := selectExpr.Expr.(*tree.UnresolvedName)
-		if !ok || name.Star || name.ColName() == "" {
-			continue
-		}
-		if qualifier := name.TblName(); qualifier != "" && !strings.EqualFold(qualifier, alias) {
-			continue
-		}
-		matched := -1
-		for pos, outputName := range outputNames {
-			if strings.EqualFold(outputName, name.ColName()) {
-				if matched >= 0 {
-					matched = -1
-					break
-				}
-				matched = pos
+		sources[i].outputNames = numericProjectionOutputNames(sources[i].source)
+		if len(sources[i].aliasCols) > 0 {
+			if len(sources[i].aliasCols) != numericProjectionOutputCount(sources[i].source) {
+				sources[i].outputNames = nil
+				continue
+			}
+			sources[i].outputNames = make([]string, len(sources[i].aliasCols))
+			for pos := range sources[i].aliasCols {
+				sources[i].outputNames[pos] = strings.ToLower(string(sources[i].aliasCols[pos]))
 			}
 		}
-		if matched >= 0 {
-			targets[matched] = ctx.numericProjectionTypes[i]
-			seeded = true
+		sources[i].targets = make([]Type, len(sources[i].outputNames))
+	}
+
+	targetPos := 0
+	for _, selectExpr := range clause.Exprs {
+		switch expr := selectExpr.Expr.(type) {
+		case tree.UnqualifiedStar:
+			sourceIdx := uniqueNumericStarSource(sources, "")
+			if sourceIdx < 0 {
+				return
+			}
+			targetPos = seedNumericStarTargets(&sources[sourceIdx], ctx.numericProjectionTypes, targetPos)
+		case *tree.UnresolvedName:
+			if expr.Star {
+				sourceIdx := uniqueNumericStarSource(sources, expr.ColName())
+				if sourceIdx < 0 {
+					return
+				}
+				targetPos = seedNumericStarTargets(&sources[sourceIdx], ctx.numericProjectionTypes, targetPos)
+				continue
+			}
+			if targetPos < len(ctx.numericProjectionTypes) {
+				seedNumericColumnTarget(sources, expr, ctx.numericProjectionTypes[targetPos])
+			}
+			targetPos++
+		default:
+			targetPos++
 		}
 	}
-	if seeded {
+
+	for i := range sources {
+		if !hasNumericProjectionTarget(sources[i].targets) {
+			continue
+		}
 		if ctx.numericTableProjectionTypes == nil {
 			ctx.numericTableProjectionTypes = make(map[string][]Type)
 		}
-		ctx.numericTableProjectionTypes[strings.ToLower(alias)] = targets
-		if sourceName != "" {
-			ctx.numericTableProjectionTypes[strings.ToLower(sourceName)] = targets
+		storeNumericTableProjectionTargets(ctx.numericTableProjectionTypes, sources[i].alias, sources[i].targets)
+		if sources[i].sourceName != "" {
+			storeNumericTableProjectionTargets(ctx.numericTableProjectionTypes, sources[i].sourceName, sources[i].targets)
 		}
 	}
 }
 
-func numericProjectionSource(tableExpr tree.TableExpr) (*tree.Select, string, string, tree.IdentifierList) {
-	var sourceName string
-	var alias string
-	var aliasCols tree.IdentifierList
-	for {
-		switch expr := tableExpr.(type) {
-		case *tree.JoinTableExpr:
-			if expr.Right != nil {
-				return nil, "", "", nil
-			}
-			tableExpr = expr.Left
-		case *tree.AliasedTableExpr:
-			alias = string(expr.As.Alias)
-			aliasCols = expr.As.Cols
-			tableExpr = expr.Expr
-		case *tree.ParenTableExpr:
-			tableExpr = expr.Expr
-		case *tree.Select:
-			return expr, sourceName, alias, aliasCols
-		case *tree.TableName:
-			sourceName = string(expr.ObjectName)
-			if alias == "" {
-				alias = sourceName
-			}
-			return nil, sourceName, alias, aliasCols
-		default:
-			return nil, "", "", nil
+func storeNumericTableProjectionTargets(targetsByTable map[string][]Type, table string, targets []Type) {
+	key := strings.ToLower(table)
+	existing, ok := targetsByTable[key]
+	if !ok {
+		targetsByTable[key] = append([]Type(nil), targets...)
+		return
+	}
+	if len(existing) != len(targets) {
+		targetsByTable[key] = nil
+		return
+	}
+	for i := range existing {
+		if existing[i].Id == 0 {
+			existing[i] = targets[i]
+			continue
 		}
+		if targets[i].Id == 0 {
+			continue
+		}
+		if existing[i].Id != targets[i].Id || existing[i].Width != targets[i].Width || existing[i].Scale != targets[i].Scale {
+			existing[i] = Type{}
+		}
+	}
+}
+
+type numericProjectionSourceInfo struct {
+	source      *tree.Select
+	sourceName  string
+	alias       string
+	aliasCols   tree.IdentifierList
+	outputNames []string
+	targets     []Type
+}
+
+func collectNumericProjectionSources(
+	tableExpr tree.TableExpr,
+	alias string,
+	aliasCols tree.IdentifierList,
+) []numericProjectionSourceInfo {
+	switch expr := tableExpr.(type) {
+	case *tree.JoinTableExpr:
+		sources := collectNumericProjectionSources(expr.Left, alias, aliasCols)
+		if expr.Right != nil {
+			sources = append(sources, collectNumericProjectionSources(expr.Right, "", nil)...)
+		}
+		return sources
+	case *tree.AliasedTableExpr:
+		return collectNumericProjectionSources(expr.Expr, string(expr.As.Alias), expr.As.Cols)
+	case *tree.ParenTableExpr:
+		return collectNumericProjectionSources(expr.Expr, alias, aliasCols)
+	case *tree.Select:
+		return []numericProjectionSourceInfo{{source: expr, alias: alias, aliasCols: aliasCols}}
+	case *tree.TableName:
+		sourceName := string(expr.ObjectName)
+		if alias == "" {
+			alias = sourceName
+		}
+		return []numericProjectionSourceInfo{{sourceName: sourceName, alias: alias, aliasCols: aliasCols}}
+	default:
+		return nil
 	}
 }
 
 func numericProjectionOutputNames(source *tree.Select) []string {
-	clause, ok := getSelectTree(source).Select.(*tree.SelectClause)
-	if !ok {
+	clause := firstNumericProjectionSelectClause(source.Select)
+	if clause == nil {
 		return nil
 	}
 	names := make([]string, len(clause.Exprs))
@@ -3882,22 +3918,171 @@ func numericProjectionOutputNames(source *tree.Select) []string {
 	return names
 }
 
-func numericProjectionCteSource(stmt *tree.Select, table string) (*tree.Select, tree.IdentifierList) {
+func numericProjectionOutputCount(source *tree.Select) int {
+	clause := firstNumericProjectionSelectClause(source.Select)
+	if clause == nil {
+		return 0
+	}
+	return len(clause.Exprs)
+}
+
+func firstNumericProjectionSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.UnionClause:
+		return firstNumericProjectionSelectClause(selectStmt.Left)
+	case *tree.ParenSelect:
+		return firstNumericProjectionSelectClause(selectStmt.Select.Select)
+	default:
+		return nil
+	}
+}
+
+func numericProjectionCteSource(
+	stmt *tree.Select,
+	ctx *BindContext,
+	table string,
+	existingCols tree.IdentifierList,
+) (*tree.Select, tree.IdentifierList) {
+	var cte *tree.CTE
+	if stmt.With != nil {
+		for _, candidate := range stmt.With.CTEs {
+			if strings.EqualFold(string(candidate.Name.Alias), table) {
+				cte = candidate
+				break
+			}
+		}
+	}
+	if cte == nil && ctx != nil {
+		cte = ctx.numericCteByName[strings.ToLower(table)]
+	}
+	if cte == nil && ctx != nil {
+		if ref := ctx.findCTE(table); ref != nil {
+			cte = ref.ast
+		}
+	}
+	if cte == nil {
+		return nil, existingCols
+	}
+	if len(existingCols) == 0 {
+		existingCols = cte.Name.Cols
+	}
+	switch source := cte.Stmt.(type) {
+	case *tree.Select:
+		return source, existingCols
+	case *tree.ParenSelect:
+		return source.Select, existingCols
+	default:
+		return nil, existingCols
+	}
+}
+
+func registerNumericCteDefinitions(stmt *tree.Select, ctx *BindContext) {
 	if stmt.With == nil {
-		return nil, nil
+		return
+	}
+	definitions := make(map[string]*tree.CTE, len(ctx.numericCteByName)+len(stmt.With.CTEs))
+	for name, cte := range ctx.numericCteByName {
+		definitions[name] = cte
 	}
 	for _, cte := range stmt.With.CTEs {
-		if !strings.EqualFold(string(cte.Name.Alias), table) {
-			continue
-		}
-		switch source := cte.Stmt.(type) {
-		case *tree.Select:
-			return source, cte.Name.Cols
-		case *tree.ParenSelect:
-			return source.Select, cte.Name.Cols
+		definitions[strings.ToLower(string(cte.Name.Alias))] = cte
+	}
+	ctx.numericCteByName = definitions
+}
+
+func seedNumericCteProjectionTypes(ctx *BindContext) {
+	if len(ctx.numericCteByName) == 0 || len(ctx.numericTableProjectionTypes) == 0 {
+		return
+	}
+	// Each pass can move targets across one CTE edge. The number of definitions
+	// bounds the longest acyclic chain and also terminates recursive references.
+	for range ctx.numericCteByName {
+		for name, cte := range ctx.numericCteByName {
+			targets := ctx.numericTableProjectionTypes[name]
+			if len(targets) == 0 {
+				continue
+			}
+			var source *tree.Select
+			switch stmt := cte.Stmt.(type) {
+			case *tree.Select:
+				source = stmt
+			case *tree.ParenSelect:
+				source = stmt.Select
+			}
+			if source == nil {
+				continue
+			}
+			subCtx := &BindContext{
+				numericProjectionTypes:      targets,
+				numericTableProjectionTypes: ctx.numericTableProjectionTypes,
+				numericCteByName:            ctx.numericCteByName,
+			}
+			seedNumericTableProjectionTypes(source, subCtx)
 		}
 	}
-	return nil, nil
+}
+
+func uniqueNumericStarSource(sources []numericProjectionSourceInfo, qualifier string) int {
+	matched := -1
+	for i := range sources {
+		if len(sources[i].outputNames) == 0 {
+			continue
+		}
+		if qualifier != "" && !strings.EqualFold(qualifier, sources[i].alias) {
+			continue
+		}
+		if matched >= 0 {
+			return -1
+		}
+		matched = i
+	}
+	return matched
+}
+
+func seedNumericStarTargets(source *numericProjectionSourceInfo, targets []Type, targetPos int) int {
+	for pos := range source.outputNames {
+		if targetPos >= len(targets) {
+			return targetPos
+		}
+		source.targets[pos] = targets[targetPos]
+		targetPos++
+	}
+	return targetPos
+}
+
+func seedNumericColumnTarget(sources []numericProjectionSourceInfo, name *tree.UnresolvedName, target Type) {
+	if target.Id == 0 {
+		return
+	}
+	matchedSource, matchedPos := -1, -1
+	for i := range sources {
+		if qualifier := name.TblName(); qualifier != "" && !strings.EqualFold(qualifier, sources[i].alias) {
+			continue
+		}
+		for pos, outputName := range sources[i].outputNames {
+			if !strings.EqualFold(outputName, name.ColName()) {
+				continue
+			}
+			if matchedSource >= 0 {
+				return
+			}
+			matchedSource, matchedPos = i, pos
+		}
+	}
+	if matchedSource >= 0 {
+		sources[matchedSource].targets[matchedPos] = target
+	}
+}
+
+func hasNumericProjectionTarget(targets []Type) bool {
+	for _, target := range targets {
+		if target.Id != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func rewriteRollupWindowSelect(
@@ -6813,6 +6998,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
+	leftCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
+	rightCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
 
 	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {
