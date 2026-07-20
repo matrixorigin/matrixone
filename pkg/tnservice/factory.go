@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
@@ -47,29 +46,12 @@ func (s *store) createTxnStorage(
 	shard metadata.TNShard,
 	txnServer rpc.TxnServer,
 ) (storage.TxnStorage, error) {
-
-	factory := s.createLogServiceClientFactroy(shard)
-	closeLogClientFn := func(logClient logservice.Client) {
-		if err := logClient.Close(); err != nil {
-			s.rt.Logger().Error("close log client failed",
-				zap.Error(err))
-		}
-	}
-
 	switch s.cfg.Txn.Storage.Backend {
 	case StorageMEM:
-		logClient, err := factory()
-		if err != nil {
-			return nil, err
-		}
-		ts, err := s.newMemTxnStorage(shard, logClient, s.hakeeperClient)
-		if err != nil {
-			closeLogClientFn(logClient)
-			return nil, err
-		}
-		return ts, nil
+		return s.newMemTxnStorage(shard, s.hakeeperClient)
 
 	case StorageMEMKV:
+		factory := s.createLogServiceClientFactroy(shard)
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
@@ -77,6 +59,7 @@ func (s *store) createTxnStorage(
 		return s.newMemKVStorage(shard, logClient)
 
 	case StorageTAE:
+		factory := s.createLogServiceClientFactroy(shard)
 		ts, err := s.newTAEStorage(ctx, shard, factory, txnServer)
 		if err != nil {
 			return nil, err
@@ -119,7 +102,6 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 
 func (s *store) newMemTxnStorage(
 	shard metadata.TNShard,
-	logClient logservice.Client,
 	hakeeper logservice.TNHAKeeperClient,
 ) (storage.TxnStorage, error) {
 	// should it be no fixed or a certain size?

@@ -48,7 +48,7 @@ type fakeCodecTxnClient struct {
 	op client.TxnOperator
 }
 
-func (f fakeCodecTxnClient) NewWithSnapshot(snapshot txnpb.CNTxnSnapshot) (client.TxnOperator, error) {
+func (f fakeCodecTxnClient) NewWithSnapshot(context.Context, txnpb.CNTxnSnapshot) (client.TxnOperator, error) {
 	return f.op, nil
 }
 
