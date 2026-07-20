@@ -1890,29 +1890,23 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	}
 
 	type recoveredCheck struct {
-		name           string
-		expr           tree.Expr
-		enforced       bool
-		enforcementSet bool
+		name string
+		expr tree.Expr
 	}
 	var checks []recoveredCheck
 	for _, def := range ct.Defs {
 		switch d := def.(type) {
 		case *tree.CheckIndex:
 			checks = append(checks, recoveredCheck{
-				name:           d.ConstraintSymbol,
-				expr:           d.Expr,
-				enforced:       d.Enforced,
-				enforcementSet: d.EnforcementSet,
+				name: d.ConstraintSymbol,
+				expr: d.Expr,
 			})
 		case *tree.ColumnTableDef:
 			for _, attr := range d.Attributes {
 				if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
 					checks = append(checks, recoveredCheck{
-						name:           ca.Name,
-						expr:           ca.Expr,
-						enforced:       ca.Enforced,
-						enforcementSet: ca.EnforcementSet,
+						name: ca.Name,
+						expr: ca.Expr,
 					})
 				}
 			}
@@ -1927,12 +1921,10 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	// binding, naming and OriginSql formatting used by CREATE TABLE.
 	scratch := &TableDef{Name: tableDef.Name, Cols: tableDef.Cols}
 	for _, c := range checks {
-		// Older versions accepted NOT ENFORCED but did not enforce it. Skipping
-		// those clauses preserves their pre-upgrade behavior; recovering them as
-		// ordinary CheckDefs would silently turn them into enforced constraints.
-		if c.enforcementSet && !c.enforced {
-			continue
-		}
+		// Legacy column CHECK formatting serialized an omitted enforcement clause
+		// as NOT ENFORCED, while legacy table CHECK formatting omitted it. Since
+		// Createsql cannot distinguish that artifact from an explicit clause, the
+		// migration policy consistently recovers every legacy CHECK as enforced.
 		if err := appendCheckDef(ctx, scratch, c.name, c.expr); err != nil {
 			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
 			return

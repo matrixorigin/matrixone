@@ -758,6 +758,35 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		}
 	}
 
+	// Generate migration fixtures with the parser/formatter behavior immediately
+	// before 9c5f5eec9. Its column grammar used Enforced=false both when the clause
+	// was omitted and when NOT ENFORCED was explicit, and its formatter always
+	// emitted that bool. The persisted SQL was therefore identical.
+	legacyColumnCheckCreateSQL := func(input string) string {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, input, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		ct := stmt.(*tree.CreateTable)
+		for _, def := range ct.Defs {
+			column, ok := def.(*tree.ColumnTableDef)
+			if !ok {
+				continue
+			}
+			for _, attr := range column.Attributes {
+				if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+					check.Enforced = false
+					check.EnforcementSet = true
+				}
+			}
+		}
+		return tree.String(ct, dialect.MYSQL)
+	}
+	legacyDefaultColumnCheck := legacyColumnCheckCreateSQL(
+		"CREATE TABLE t (a INT CHECK (a > 0), b INT)")
+	legacyExplicitColumnNotEnforced := legacyColumnCheckCreateSQL(
+		"CREATE TABLE t (a INT CHECK (a > 0) NOT ENFORCED, b INT)")
+	const legacyDefaultTableCheck = "CREATE TABLE t (a INT, b INT, CHECK (a > 0))"
+
 	t.Run("recovers table-level check", func(t *testing.T) {
 		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0))")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
@@ -786,28 +815,43 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		require.Len(t, td.Checks, 2)
 	})
 
-	t.Run("skips table-level not enforced check", func(t *testing.T) {
+	t.Run("recovers table-level not enforced from legacy metadata", func(t *testing.T) {
 		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0) NOT ENFORCED)")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Empty(t, td.Checks)
+		require.Len(t, td.Checks, 1)
 	})
 
-	t.Run("skips column-level not enforced check", func(t *testing.T) {
-		td := newTableDef("CREATE TABLE t (a INT CHECK (a > 0) NOT ENFORCED, b INT)")
+	t.Run("recovers default column check serialized by legacy formatter", func(t *testing.T) {
+		td := newTableDef(legacyDefaultColumnCheck)
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Empty(t, td.Checks)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
 	})
 
-	t.Run("recovers only enforced checks from mixed legacy metadata", func(t *testing.T) {
+	t.Run("applies migration policy to ambiguous explicit column not enforced", func(t *testing.T) {
+		require.Equal(t, legacyDefaultColumnCheck, legacyExplicitColumnNotEnforced)
+		td := newTableDef(legacyExplicitColumnNotEnforced)
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+	})
+
+	t.Run("recovers default table check serialized by legacy formatter", func(t *testing.T) {
+		td := newTableDef(legacyDefaultTableCheck)
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+	})
+
+	t.Run("recovers all checks from mixed legacy metadata", func(t *testing.T) {
 		td := newTableDef(`CREATE TABLE t (
-			a INT CHECK (a > 0),
+			a INT CONSTRAINT CHECK (a > 0) NOT ENFORCED,
 			b INT CHECK (b > 0) ENFORCED,
 			CHECK (a < 100) NOT ENFORCED
 		)`)
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Len(t, td.Checks, 2)
+		require.Len(t, td.Checks, 3)
 		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
 		require.Equal(t, "`b` > 0", td.Checks[1].OriginSql)
+		require.Equal(t, "`a` < 100", td.Checks[2].OriginSql)
 	})
 
 	t.Run("no-op when checks already present", func(t *testing.T) {
