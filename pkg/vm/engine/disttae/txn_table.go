@@ -2920,7 +2920,7 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	pkIndex int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
-	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false)
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false, false)
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(
@@ -2932,7 +2932,53 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	_ int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
-	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true, true)
+}
+
+func (tbl *txnTable) getPartitionStateForPKCheck(
+	ctx context.Context,
+	to types.TS,
+) (*logtailreplay.PartitionState, bool, error) {
+	eng := tbl.eng.(*Engine)
+	ps, subscribed, _ := eng.PushClient().isSubscribed(
+		ctx,
+		uint64(tbl.accountId),
+		tbl.db.databaseId,
+		tbl.tableId,
+	)
+	if subscribed {
+		canServe, _ := eng.PushClient().canServeTableSnapshotNoWait(
+			tbl.db.databaseId,
+			tbl.tableId,
+			ps,
+			to.ToTimestamp(),
+		)
+		return ps, canServe, nil
+	}
+
+	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !createdInTxn {
+		return nil, false, nil
+	}
+
+	// A table created by this transaction has no committed remote history.
+	// Preserve the existing empty latest-state behavior without requiring a
+	// logtail subscription for a table that TN cannot expose yet.
+	part, err := eng.LazyLoadLatestCkp(
+		ctx,
+		uint64(tbl.accountId),
+		tbl.tableId,
+		tbl.tableName,
+		tbl.db.databaseId,
+		tbl.db.databaseName,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	return part.Snapshot(), true, nil
 }
 
 func (tbl *txnTable) primaryKeysMayBeChanged(
@@ -2941,6 +2987,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	to types.TS,
 	keysVector *vector.Vector,
 	checkTombstone bool,
+	requireSubscribed bool,
 ) (bool, error) {
 	start := time.Now()
 	defer func() {
@@ -2966,20 +3013,36 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	// Measure LazyLoadLatestCkp duration
-	lazyLoadStart := time.Now()
-	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
-		ctx,
-		uint64(tbl.accountId),
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName)
-	v2.TxnLazyLoadCkpDurationHistogram.Observe(time.Since(lazyLoadStart).Seconds())
-	if err != nil {
-		return false, err
+
+	var snap *logtailreplay.PartitionState
+	if requireSubscribed {
+		var ready bool
+		snap, ready, err = tbl.getPartitionStateForPKCheck(ctx, to)
+		if err != nil {
+			return false, err
+		}
+		if !ready {
+			// Absence in an unsubscribed, rebuilding, or not-yet-applied state is
+			// unknown, not proof that the primary keys were unchanged. Returning
+			// true makes LockOp retry the statement on a fresh table snapshot.
+			return true, nil
+		}
+	} else {
+		// Measure LazyLoadLatestCkp duration
+		lazyLoadStart := time.Now()
+		part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.tableId,
+			tbl.tableName,
+			tbl.db.databaseId,
+			tbl.db.databaseName)
+		v2.TxnLazyLoadCkpDurationHistogram.Observe(time.Since(lazyLoadStart).Seconds())
+		if err != nil {
+			return false, err
+		}
+		snap = part.Snapshot()
 	}
-	snap := part.Snapshot()
 
 	var packer *types.Packer
 	put := tbl.eng.(*Engine).packerPool.Get(&packer)

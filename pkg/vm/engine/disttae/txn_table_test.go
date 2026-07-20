@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -310,6 +311,146 @@ func TestReusableRelationHandleRejectsNonDisttaeWorkspace(t *testing.T) {
 	op.EXPECT().Status().Return(txn.TxnStatus_Active)
 
 	require.ErrorContains(t, handle.Reset(op), "disttae transaction workspace")
+}
+
+func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
+	t.Helper()
+
+	eng := &Engine{
+		partitions: make(map[[2]uint64]*logtailreplay.Partition),
+		packerPool: fileservice.NewPool(
+			8,
+			func() *types.Packer { return types.NewPacker() },
+			func(packer *types.Packer) { packer.Reset() },
+			func(packer *types.Packer) { packer.Close() },
+		),
+	}
+	eng.catalog.Store(cache.NewCatalog())
+	eng.pClient.eng = eng
+	eng.pClient.subscribed = subscribedTable{
+		eng: eng,
+		m:   make(map[uint64]*subEntry),
+	}
+
+	op, closeFn := client.NewTestTxnOperator(context.Background())
+	t.Cleanup(closeFn)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+
+	tbl := &txnTable{
+		accountId: 1,
+		tableId:   42,
+		tableName: "t",
+		db: &txnDatabase{
+			databaseId:   10,
+			databaseName: "db",
+			op:           op,
+		},
+		eng:  eng,
+		fake: true,
+	}
+	tbl.proc.Store(proc)
+
+	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	return tbl, eng
+}
+
+func TestPrimaryKeysMayBeModifiedRequiresReadySubscription(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.True(t, changed, "a subscribing partition cannot prove that the key is unchanged")
+	changed, err = tbl.PrimaryKeysMayBeUpserted(context.Background(), from, to, bat, 0)
+	require.NoError(t, err)
+	require.False(t, changed, "the auto-increment recheck keeps its existing lazy-state semantics")
+
+	eng.pClient.SetSubscribeState(10, 42, SubRspReceived)
+	changed, err = tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.True(t, changed, "a subscription response is not ready until checkpoint loading completes")
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	changed, err = tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.False(t, changed, "a complete subscribed state with no matching key should keep the fast path")
+}
+
+func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp)
+	defer bat.Clean(mp)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	changed, err := tbl.PrimaryKeysMayBeModified(
+		context.Background(),
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.NoError(t, err)
+	require.False(t, changed, "an empty key set cannot conflict even while the table is rebuilding")
+}
+
+func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+	eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+
+	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.True(t, changed, "a pending table update makes an empty lookup inconclusive")
+
+	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateAppliedTo(to.Prev())
+	done()
+
+	changed, err = tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.False(t, changed, "the fast path is safe after the table state covers the visible range")
+}
+
+func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
+	tbl, _ := newPrimaryKeyCheckTableForTest(t)
+	tbl.fake = false
+	tbl.remoteWorkspace = true
+	tbl.createdInTxn = true
+
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	changed, err := tbl.PrimaryKeysMayBeModified(
+		context.Background(),
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.NoError(t, err)
+	require.False(t, changed, "a table created in this transaction has no committed remote history")
 }
 
 // func TestPrimaryKeyCheck(t *testing.T) {
