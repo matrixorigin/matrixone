@@ -796,7 +796,7 @@ func TestObject1(t *testing.T) {
 		t.Log(iobj.String())
 		cnt++
 	}
-	assert.Equal(t, 1, cnt)
+	assert.Equal(t, 2, cnt)
 
 	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
@@ -808,7 +808,7 @@ func TestObject1(t *testing.T) {
 		t.Log(iobj.String())
 		cnt++
 	}
-	assert.Equal(t, 1, cnt)
+	assert.Equal(t, 2, cnt)
 }
 
 func TestObject2(t *testing.T) {

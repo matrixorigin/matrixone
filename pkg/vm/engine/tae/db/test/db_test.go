@@ -1585,6 +1585,99 @@ func TestRollback1(t *testing.T) {
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
+func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		checkpoint bool
+	}{
+		{name: "wal"},
+		{name: "checkpoint-collect", checkpoint: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer testutils.AfterTest(t)()
+			testutils.EnsureNoLeak(t)
+			ctx := context.Background()
+
+			opts := config.WithLongScanAndCKPOpts(nil)
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+			defer tae.Close()
+			schema := catalog.MockSchema(2, 0)
+			tae.BindSchema(schema)
+			setupTxn, err := tae.StartTxn(nil)
+			require.NoError(t, err)
+			setupDB, err := testutil.CreateDatabase2(ctx, setupTxn, testutil.DefaultTestDB)
+			require.NoError(t, err)
+			_, err = testutil.CreateRelation2(ctx, setupTxn, setupDB, schema)
+			require.NoError(t, err)
+			require.NoError(t, setupTxn.Commit(ctx))
+
+			txn, rel := tae.GetRelation()
+			obj, err := rel.CreateObject(false)
+			require.NoError(t, err)
+			meta := obj.GetMeta().(*catalog.ObjectEntry)
+			objectID := *meta.ID()
+			createTS := meta.GetCreatedAt()
+			require.NoError(t, obj.Close())
+			require.NoError(t, txn.Commit(ctx))
+			require.True(t, meta.GetObjectData().PrepareCompact())
+
+			beforeFlushTxn, beforeFlushRel := tae.GetRelation()
+			flushTxn, _ := tae.GetRelation()
+			require.Zero(t, tae.Runtime.TransferTable.Len())
+			flushStart := flushTxn.GetStartTS()
+			require.Truef(t, flushStart.GE(&createTS), "flush txn %s starts before object create %s", flushStart.ToString(), createTS.ToString())
+			task, err := jobs.NewFlushTableTailTask(
+				nil, flushTxn, []*catalog.ObjectEntry{meta}, nil, tae.Runtime,
+			)
+			require.NoError(t, err)
+			require.NoError(t, task.OnExec(ctx))
+			require.Nil(t, task.GetCreatedObjects())
+			require.NoError(t, flushTxn.Commit(ctx))
+			require.Zero(t, tae.Runtime.TransferTable.Len())
+
+			dedupBat := catalog.MockBatch(schema, 1)
+			beforeFlushIt := beforeFlushRel.MakeObjectIt(false)
+			require.True(t, beforeFlushIt.Next())
+			require.False(t, beforeFlushIt.Next())
+			beforeFlushIt.Close()
+			require.NoError(t, beforeFlushRel.Append(ctx, dedupBat))
+			require.NoError(t, beforeFlushTxn.Rollback(ctx))
+			afterFlushTxn, afterFlushRel := tae.GetRelation()
+			afterFlushIt := afterFlushRel.MakeObjectIt(false)
+			require.False(t, afterFlushIt.Next())
+			afterFlushIt.Close()
+			require.NoError(t, afterFlushRel.Append(ctx, dedupBat))
+			require.NoError(t, afterFlushTxn.Rollback(ctx))
+			dedupBat.Close()
+
+			if tc.checkpoint {
+				anchor := catalog.MockBatch(schema, 1)
+				txn, rel = tae.GetRelation()
+				require.NoError(t, rel.Append(ctx, anchor))
+				require.NoError(t, txn.Commit(ctx))
+				anchor.Close()
+				tae.CompactBlocks(true)
+				tae.ForceCheckpoint()
+				tae.Restart(ctx)
+				txn, rel = tae.GetRelation()
+				checkpointed, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(&objectID, false)
+				require.NoError(t, err)
+				require.True(t, checkpointed.HasDropCommitted())
+				require.Equal(t, createTS, checkpointed.GetCreatedAt())
+				require.NoError(t, txn.Commit(ctx))
+				return
+			}
+			tae.Restart(ctx)
+			txn, rel = tae.GetRelation()
+			replayed, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(&objectID, false)
+			require.NoError(t, err)
+			require.True(t, replayed.HasDropCommitted())
+			require.Equal(t, createTS, replayed.GetCreatedAt())
+			require.NoError(t, txn.Commit(ctx))
+		})
+	}
+}
+
 func TestMVCC1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

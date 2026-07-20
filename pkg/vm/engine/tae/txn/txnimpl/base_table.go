@@ -176,6 +176,9 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 	}
 	for it.Next() {
 		obj := it.Item()
+		if isEmptyDroppedAppendableObject(obj) {
+			continue
+		}
 		objData := obj.GetObjectData()
 		if objData == nil {
 			continue
@@ -233,6 +236,9 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			break
 		}
 		obj := objIt.Item()
+		if isEmptyDroppedAppendableObject(obj) {
+			continue
+		}
 
 		if obj.CreatedAt.GT(&to) {
 			continue
@@ -282,6 +288,17 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	// 	zap.String("candidates", s),
 	// )
 	return
+}
+
+func isEmptyDroppedAppendableObject(obj *catalog.ObjectEntry) bool {
+	stats := obj.GetObjectStats()
+	if !obj.IsAppendable() || stats.Rows() != 0 || stats.BlkCnt() != 0 {
+		return false
+	}
+	if obj.HasDropCommitted() {
+		return true
+	}
+	return obj.IsCEntry() && obj.HasDCounterpart() && obj.GetNextVersion().HasDropCommitted()
 }
 
 func (tbl *baseTable) CleanUp() {

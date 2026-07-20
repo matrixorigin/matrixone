@@ -101,6 +101,9 @@ func TestObjectListUpdateCreateTSWithDeleteEntry(t *testing.T) {
 	require.Equal(t, updatedCreateTS, nodes[1].CreateNode.GetPrepare())
 	require.Same(t, nodes[0].prevVersion, nodes[1])
 	require.Same(t, nodes[1].nextVersion, nodes[0])
+	require.Equal(t, 2, ll.tree.Load().Len())
+	require.NoError(t, ll.DeleteAllEntries(createEntry.ID()))
+	require.Zero(t, ll.tree.Load().Len())
 }
 
 func TestGetSoftdeleteObjects(t *testing.T) {

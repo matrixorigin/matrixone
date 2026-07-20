@@ -339,6 +339,7 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
 		newNode.prevVersion = newPrev
 		newTree.Delete(oldNode)
+		newTree.Delete(oldNode.prevVersion)
 		newTree.Set(newNode)
 		newTree.Set(newPrev)
 	} else {

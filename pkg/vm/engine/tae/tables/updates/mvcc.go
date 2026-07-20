@@ -334,6 +334,9 @@ func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
 			meta.GetDeleteAt().ToString())
 		return false
 	}
+	if n.appends.IsEmpty() {
+		return true
+	}
 	return n.appends.IsCommitted()
 }
 
