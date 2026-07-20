@@ -34,12 +34,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type txnModeTestOperator struct {
+	client.TxnOperator
+	meta txnpb.TxnMeta
+}
+
+func (o txnModeTestOperator) Txn() txnpb.TxnMeta {
+	return o.meta
+}
+
+func setMockTxnMode(mock *MockOptimizer, mode txnpb.TxnMode) {
+	proc := testutil.NewProc(nil)
+	proc.Base.TxnOperator = txnModeTestOperator{meta: txnpb.TxnMeta{Mode: mode}}
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+}
 
 type sqlModeMockCompilerContext struct {
 	*MockCompilerContext
@@ -3636,10 +3654,14 @@ func TestReplaceParentSideFKAutoIncrementZero(t *testing.T) {
 		sqlMode    string
 		literal    string
 		wantAction bool
+		predicate  string
 	}{
 		{name: "numeric zero allocates generated value", sqlMode: "", literal: "0", wantAction: false},
 		{name: "string zero allocates generated value", sqlMode: "", literal: "'0'", wantAction: false},
-		{name: "zero is explicit key", sqlMode: "NO_AUTO_VALUE_ON_ZERO", literal: "0", wantAction: true},
+		{name: "hex zero allocates generated value", sqlMode: "", literal: "0x0", wantAction: false},
+		{name: "bit zero allocates generated value", sqlMode: "", literal: "b'0'", wantAction: false},
+		{name: "hex nonzero is explicit key", sqlMode: "", literal: "0x1", wantAction: true, predicate: "`id` = cast(0x1 as INT)"},
+		{name: "zero is explicit key", sqlMode: "NO_AUTO_VALUE_ON_ZERO", literal: "0", wantAction: true, predicate: "`id` = cast(0 as INT)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
@@ -3660,12 +3682,86 @@ func TestReplaceParentSideFKAutoIncrementZero(t *testing.T) {
 			require.NoError(t, err)
 			if tc.wantAction {
 				require.Len(t, actions, 1)
-				assert.Contains(t, actions[0], "`id` = cast(0 as INT)")
+				assert.Contains(t, actions[0], tc.predicate)
 			} else {
 				assert.Empty(t, actions)
 			}
 		})
 	}
+}
+
+func TestChildInsertSkipsForeignKeyLockBarrierInOptimisticMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "insert", sql: "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1)"},
+		{name: "insert ignore", sql: "INSERT IGNORE INTO replace_fk_c VALUES (10, 1), (11, 1)"},
+		{name: "on duplicate key update", sql: "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1) ON DUPLICATE KEY UPDATE pid = VALUES(pid)"},
+		{name: "replace", sql: "REPLACE INTO replace_fk_c VALUES (10, 1), (11, 1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockTxnMode(mock, txnpb.TxnMode_Optimistic)
+
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			for _, node := range query.Nodes {
+				for _, target := range node.LockTargets {
+					assert.NotEqual(t, lockpb.LockMode_Shared, target.Mode,
+						"optimistic child FK validation must not plan prerequisite shared locks")
+				}
+			}
+			assert.Len(t, query.Steps, 1,
+				"optimistic FK validation must remain in the streaming DML step")
+		})
+	}
+	// The row count is deliberately much larger than the cases above. Plan shape
+	// must remain one streaming step; only the VALUE_SCAN payload may grow.
+	values := make([]string, 256)
+	for i := range values {
+		values[i] = fmt.Sprintf("(%d, 1)", i+100)
+	}
+	mock := NewMockOptimizer(true)
+	setMockTxnMode(mock, txnpb.TxnMode_Optimistic)
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES "+strings.Join(values, ","))
+	require.NoError(t, err)
+	assert.Len(t, logicPlan.GetQuery().Steps, 1)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, target := range node.LockTargets {
+			assert.NotEqual(t, lockpb.LockMode_Shared, target.Mode)
+		}
+	}
+}
+
+func TestChildInsertKeepsForeignKeyLockBarrierInPessimisticMode(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockTxnMode(mock, txnpb.TxnMode_Pessimistic)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	hasLock := false
+	hasSinkScan := false
+	for _, node := range query.Nodes {
+		hasLock = hasLock || node.NodeType == plan.Node_LOCK_OP
+		hasSinkScan = hasSinkScan || node.NodeType == plan.Node_SINK_SCAN
+	}
+	assert.True(t, hasLock)
+	assert.True(t, hasSinkScan)
+	assert.Greater(t, len(query.Steps), 1)
+}
+
+func TestDeepCopyQueryKeepsReplaceDetectionSQLIndependent(t *testing.T) {
+	original := &plan.Query{DetectSqls: []string{
+		"REPLACE_PARENT_LOCK:select 1 for update",
+		"REPLACE_PARENT_CHK:select true",
+	}}
+	copied := DeepCopyQuery(original)
+	require.Equal(t, original.DetectSqls, copied.DetectSqls)
+	copied.DetectSqls[0] = "changed"
+	assert.Equal(t, "REPLACE_PARENT_LOCK:select 1 for update", original.DetectSqls[0])
 }
 
 func TestReplaceParentSideFKMaterializesGeneratedUniqueKey(t *testing.T) {
@@ -4624,6 +4720,7 @@ func TestChildInsertUsesCanonicalForeignKeyLockOrder(t *testing.T) {
 }
 
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
+	assert.Nil(t, DeepCopyLockTarget(nil))
 	target := &plan.LockTarget{
 		TableId:              42,
 		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},

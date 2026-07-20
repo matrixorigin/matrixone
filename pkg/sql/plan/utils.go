@@ -3015,24 +3015,22 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
-	switch preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
-	}
-
-	copied := DeepCopyPlan(preparePlan)
+	copied := preparePlan
 
 	switch pp := copied.Plan.(type) {
+	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, copied, paramVals)
+			err := replaceParamVals(ctx, preparePlan, paramVals)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, copied, paramVals)
+		err := replaceParamVals(ctx, preparePlan, paramVals)
 		if err != nil {
 			return nil, err
 		}

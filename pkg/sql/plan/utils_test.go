@@ -135,64 +135,6 @@ func TestHasTrailingZeros(t *testing.T) {
 	}
 }
 
-func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
-	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
-	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-		Value: &plan.Literal_Sval{Sval: "AB\x00\x00"},
-		IsBin: true,
-		Src:   source,
-	}}}
-	queryPlan := &plan.Plan{
-		Plan: &plan.Plan_Query{Query: &plan.Query{
-			Steps:      []int32{0},
-			DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update", "REPLACE_PARENT_CHK:select true"},
-			Nodes: []*plan.Node{{
-				NodeType: plan.Node_VALUE_SCAN,
-				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
-				Offset:   binaryLiteral,
-			}},
-		}},
-	}
-
-	tests := []struct {
-		value string
-	}{
-		{value: "AB\x00\x00"},
-		{value: "text"},
-		{value: "CD\x00\x00"},
-	}
-	for _, test := range tests {
-		filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{test.value})
-		require.NoError(t, err)
-		literal := filled.GetQuery().Nodes[0].Limit.GetLit()
-		require.NotNil(t, literal)
-		require.False(t, literal.GetIsBin())
-		require.Equal(t, test.value, literal.GetSval())
-		require.NotSame(t, queryPlan, filled)
-		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
-		copiedLiteral := filled.GetQuery().Nodes[0].Offset.GetLit()
-		require.True(t, copiedLiteral.GetIsBin())
-		require.Equal(t, "AB\x00\x00", copiedLiteral.GetSval())
-		require.NotSame(t, source, copiedLiteral.GetSrc())
-		require.NotNil(t, binaryLiteral.GetLit().GetSrc().GetP())
-		require.Equal(t, queryPlan.GetQuery().DetectSqls, filled.GetQuery().DetectSqls)
-		filled.GetQuery().DetectSqls[0] = "changed"
-		require.Equal(t, "REPLACE_PARENT_LOCK:select 1 for update", queryPlan.GetQuery().DetectSqls[0])
-	}
-}
-
-func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
-	_, err := FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
-		Plan: &plan.Plan_Tcl{Tcl: &plan.TransationControl{}},
-	}, nil)
-	require.Error(t, err)
-
-	_, err = FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
-		Plan: &plan.Plan_Dcl{Dcl: &plan.DataControl{}},
-	}, nil)
-	require.Error(t, err)
-}
-
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string

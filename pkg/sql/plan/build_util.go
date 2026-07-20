@@ -1259,13 +1259,71 @@ func genParentSideReplaceFKSqls(
 	} else if mode, ok := sqlMode.(string); ok {
 		treatAutoIncrementZeroAsGenerated = !strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
 	}
-	isExplicitNumericZero := func(expr tree.Expr) bool {
-		value, ok := expr.(*tree.NumVal)
-		if !ok || value.ValType == tree.P_null || value.ValType == tree.P_bool {
-			return false
+	isAssignmentConvertedZero := func(expr tree.Expr, col *plan.ColDef) (bool, error) {
+		var value *tree.NumVal
+		switch input := expr.(type) {
+		case *tree.NumVal:
+			value = input
+		case *tree.StrVal:
+			value = tree.NewNumVal(input.String(), input.String(), false, tree.P_char)
+		default:
+			return false, nil
 		}
-		number, err := strconv.ParseFloat(value.String(), 64)
-		return err == nil && number == 0
+		if value.ValType == tree.P_null || value.ValType == tree.P_bool {
+			return false, nil
+		}
+		proc := ctx.GetProcess()
+		if proc == nil {
+			return false, moerr.NewInternalError(ctx.GetContext(),
+				"cannot materialize auto-increment value without a process")
+		}
+		converted, err := MakeInsertValueConstExpr(proc, value, &types.Type{
+			Oid:   types.T(col.Typ.Id),
+			Width: col.Typ.Width,
+			Scale: col.Typ.Scale,
+		})
+		if err != nil {
+			return false, err
+		}
+		if converted == nil {
+			binder := NewDefaultBinder(ctx.GetContext(), nil, nil, plan.Type{}, nil)
+			converted, err = binder.BindExpr(expr, 0, true)
+			if err != nil {
+				return false, err
+			}
+			converted, err = forceAssignmentCastExpr(ctx.GetContext(), converted, col.Typ)
+			if err != nil {
+				return false, err
+			}
+			converted, err = ConstantFold(batch.EmptyForConstFoldBatch, converted, proc, false, true)
+			if err != nil {
+				return false, err
+			}
+		}
+		lit := converted.GetLit()
+		if lit == nil {
+			return false, nil
+		}
+		switch val := lit.Value.(type) {
+		case *plan.Literal_I8Val:
+			return val.I8Val == 0, nil
+		case *plan.Literal_I16Val:
+			return val.I16Val == 0, nil
+		case *plan.Literal_I32Val:
+			return val.I32Val == 0, nil
+		case *plan.Literal_I64Val:
+			return val.I64Val == 0, nil
+		case *plan.Literal_U8Val:
+			return val.U8Val == 0, nil
+		case *plan.Literal_U16Val:
+			return val.U16Val == 0, nil
+		case *plan.Literal_U32Val:
+			return val.U32Val == 0, nil
+		case *plan.Literal_U64Val:
+			return val.U64Val == 0, nil
+		default:
+			return false, nil
+		}
 	}
 
 	type uniqueKey struct {
@@ -1493,8 +1551,14 @@ func genParentSideReplaceFKSqls(
 			}
 			return castForColumn(value, col), nil
 		}
-		if col.Typ.AutoIncr && treatAutoIncrementZeroAsGenerated && isExplicitNumericZero(row[pos]) {
-			return "null", nil
+		if col.Typ.AutoIncr && treatAutoIncrementZeroAsGenerated {
+			zero, err := isAssignmentConvertedZero(row[pos], col)
+			if err != nil {
+				return "", err
+			}
+			if zero {
+				return "null", nil
+			}
 		}
 		value, err := formatInputLiteral(row[pos], col)
 		if err != nil {
@@ -1542,7 +1606,15 @@ func genParentSideReplaceFKSqls(
 						break
 					}
 				} else {
-					if col.Typ.AutoIncr && treatAutoIncrementZeroAsGenerated && isExplicitNumericZero(row[pos]) {
+					zero := false
+					if col.Typ.AutoIncr && treatAutoIncrementZeroAsGenerated {
+						var zeroErr error
+						zero, zeroErr = isAssignmentConvertedZero(row[pos], col)
+						if zeroErr != nil {
+							return "", nil, nil, zeroErr
+						}
+					}
+					if zero {
 						// PRE_INSERT turns an explicit numeric zero into NULL and
 						// allocates a fresh auto-increment value unless
 						// NO_AUTO_VALUE_ON_ZERO is enabled. Such a value cannot

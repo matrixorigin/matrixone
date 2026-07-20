@@ -54,6 +54,7 @@ type MockCompilerContext struct {
 	ResolveAccountIdsFunc func([]string) ([]uint32, error)
 	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
 	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
+	GetProcessFunc        func() *process.Process
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -1878,6 +1879,9 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
+	if m.GetProcessFunc != nil {
+		return m.GetProcessFunc()
+	}
 	proc := testutil.NewProc(nil)
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 		moruntime.InternalSQLExecutor,

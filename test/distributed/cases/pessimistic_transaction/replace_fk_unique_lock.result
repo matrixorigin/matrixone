@@ -104,12 +104,25 @@ select * from parent_auto_zero order by id;
 select * from child_auto_zero;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
 1  ¦  0
+replace into parent_auto_zero values (0x0, 'allocated-hex');
+replace into parent_auto_zero values (b'0', 'allocated-bit');
+select * from parent_auto_zero order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+0  ¦  old  𝄀
+1  ¦  allocated  𝄀
+2  ¦  allocated-hex  𝄀
+3  ¦  allocated-bit
+select * from child_auto_zero;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  0
 set session sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
 replace into parent_auto_zero values (0, 'explicit-zero');
 select * from parent_auto_zero order by id;
 ➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
 0  ¦  explicit-zero  𝄀
-1  ¦  allocated
+1  ¦  allocated  𝄀
+2  ¦  allocated-hex  𝄀
+3  ¦  allocated-bit
 select * from child_auto_zero;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]
 set session sql_mode = '';
