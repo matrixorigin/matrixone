@@ -124,8 +124,14 @@ func (s *service) Start() error {
 	return nil
 }
 
-func (s *service) Close(destroy bool) error {
+// CancelRecovery interrupts recovery without closing storage. TN replica
+// shutdown uses this to unblock Start before running the normal Close path.
+func (s *service) CancelRecovery() {
 	s.recoveryCancel()
+}
+
+func (s *service) Close(destroy bool) error {
+	s.CancelRecovery()
 	s.finishRecovery()
 	s.waitRecoveryCompleted()
 	s.stopper.Stop()

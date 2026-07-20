@@ -35,6 +35,7 @@ type replica struct {
 	logger       *log.MOLogger
 	shard        metadata.TNShard
 	service      service.TxnService
+	serviceC     chan struct{}
 	startedC     chan struct{}
 	createCtx    context.Context
 	cancelCreate context.CancelFunc
@@ -55,6 +56,7 @@ func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 		rt:           rt,
 		shard:        shard,
 		logger:       rt.Logger().With(util.TxnTNShardField(shard)),
+		serviceC:     make(chan struct{}),
 		startedC:     make(chan struct{}),
 		createCtx:    ctx,
 		cancelCreate: cancel,
@@ -86,6 +88,7 @@ func (r *replica) startReserved(txnService service.TxnService) error {
 	}
 	r.service = txnService
 	r.mu.Unlock()
+	close(r.serviceC)
 
 	err := txnService.Start()
 	r.finishStart(err)
@@ -119,10 +122,6 @@ func (r *replica) closeStorage(txnStorage storage.TxnStorage) error {
 	return txnStorage.Close(context.Background())
 }
 
-func (r *replica) waitStartCompleted() {
-	<-r.startedC
-}
-
 func (r *replica) close(destroy bool) error {
 	r.mu.RLock()
 	starting := r.mu.starting
@@ -130,13 +129,18 @@ func (r *replica) close(destroy bool) error {
 	if !starting {
 		return nil
 	}
-	startErr := r.waitStarted(context.Background())
+	select {
+	case <-r.serviceC:
+	case <-r.startedC:
+	}
 	r.mu.RLock()
 	txnService := r.service
 	r.mu.RUnlock()
 	if txnService == nil {
-		return startErr
+		return r.waitStarted(context.Background())
 	}
+	txnService.CancelRecovery()
+	startErr := r.waitStarted(context.Background())
 	return errors.Join(startErr, txnService.Close(destroy))
 }
 

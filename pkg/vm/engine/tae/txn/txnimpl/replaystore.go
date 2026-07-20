@@ -93,9 +93,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 		command.SetReplayTxn(txn)
 		store.prepareCmd(command)
 	}
-	if txn.Is2PC() {
-		store.registerPreparedDMLTables(txn)
-	}
+	store.registerPreparedDMLTables(txn)
 	return
 }
 

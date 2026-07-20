@@ -812,6 +812,31 @@ func TestAlterTableAutoIncrementCopyPath(t *testing.T) {
 			Names:       []string{"id"},
 		},
 	}
+	mock.ctxt.objects["simple_not_auto"] = &ObjectRef{
+		SchemaName: "constraint_test",
+		ObjName:    "simple_not_auto",
+	}
+	mock.ctxt.tables["simple_not_auto"] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     24532,
+		Name:      "simple_not_auto",
+		Cols: []*ColDef{
+			{
+				ColId:   0,
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id: int32(types.T_uint64),
+				},
+				Default: &plan.Default{},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+		},
+	}
 
 	tests := []struct {
 		name string
@@ -849,6 +874,21 @@ func TestAlterTableAutoIncrementCopyPath(t *testing.T) {
 			require.Equal(t, tt.want, copyTableDef.AutoIncrOffset)
 		})
 	}
+
+	for _, sql := range []string{
+		`ALTER TABLE simple_not_auto MODIFY COLUMN id BIGINT UNSIGNED AUTO_INCREMENT, AUTO_INCREMENT = 100, ALGORITHM = COPY;`,
+		`ALTER TABLE simple_not_auto AUTO_INCREMENT = 100, MODIFY COLUMN id BIGINT UNSIGNED AUTO_INCREMENT, ALGORITHM = COPY;`,
+	} {
+		p, err := buildSingleStmt(mock, t, sql)
+		require.NoError(t, err)
+		copyTableDef := p.GetDdl().GetAlterTable().GetCopyTableDef()
+		require.True(t, tableHasAutoIncrementColumn(copyTableDef))
+		require.Equal(t, uint64(99), copyTableDef.AutoIncrOffset)
+	}
+
+	_, err := buildSingleStmt(mock, t,
+		`ALTER TABLE simple_auto MODIFY COLUMN id BIGINT UNSIGNED NOT NULL, AUTO_INCREMENT = 100, ALGORITHM = COPY;`)
+	require.Error(t, err)
 }
 
 func TestAlterTableAutoIncrementRejectNoAutoColumn(t *testing.T) {

@@ -55,6 +55,10 @@ type waitingSchemaTxn struct {
 	once      sync.Once
 }
 
+type noopReplayObserver struct{}
+
+func (noopReplayObserver) OnTimeStamp(types.TS) {}
+
 func (txn *waitingSchemaTxn) GetPrepareTS() types.TS { return txn.prepareTS }
 func (txn *waitingSchemaTxn) GetCommitTS() types.TS  { return txn.prepareTS }
 func (txn *waitingSchemaTxn) GetTxnState(wait bool) txnif.TxnState {
@@ -403,6 +407,44 @@ func TestReplayMOTablesTailReconcilesTableVersion(t *testing.T) {
 	store.captureReplayedMOTablesVersions(cmd)
 	store.reconcileReplayedTableVersions()
 	assert.Equal(t, uint32(7), tableEntry.GetLastestSchema(false).Version)
+}
+
+func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(
+		catalog.MockTxnStoreFactory(c),
+		catalog.MockTxnFactory(c),
+		types.NewMockHLCClock(1),
+	)
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_1pc", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	prepareTS := types.BuildTS(11, 0)
+	commitTS := types.BuildTS(12, 0)
+	replayTxn := newPreparingTestTxn(t, "replay-1pc", startTS, prepareTS)
+	assert.False(t, replayTxn.Is2PC())
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
+	store := &replayTxnStore{
+		Cmd:      &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()},
+		Observer: noopReplayObserver{},
+		catalog:  c,
+	}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS.Prev(), prepareTS.Next()))
+	assert.NoError(t, store.applyCommit(replayTxn))
+	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
 }
 
 // 1. 30 concurrency

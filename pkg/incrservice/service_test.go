@@ -364,6 +364,20 @@ func TestReloadIncrCache(t *testing.T) {
 		})
 }
 
+func TestReloadDoesNotRetainGenerationWithoutActiveBuilder(t *testing.T) {
+	s := NewIncrService("", NewMemStore(), Config{}).(*service)
+	defer s.Close()
+	for tableID := uint64(1); tableID <= 1000; tableID++ {
+		require.NoError(t, s.Reload(context.Background(), tableID))
+	}
+	s.mu.Lock()
+	generations := len(s.mu.generation)
+	builds := len(s.mu.generationBuilds)
+	s.mu.Unlock()
+	require.Zero(t, generations)
+	require.Zero(t, builds)
+}
+
 func TestSetOffset(t *testing.T) {
 	runServiceTests(
 		t,
@@ -760,12 +774,68 @@ func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
 		def := newTestTableDef(1)
 		require.NoError(t, s.Create(ctx, 0, def, createTxn))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
 		require.NoError(t, createTxn.Commit(ctx))
+		s.mu.Lock()
+		_, resetExists := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.False(t, resetExists)
 
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
 		last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestDiscardOffsetResetRestoresCreatedTableCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		original := s.getTableCache(0)
+
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		replacement := s.getTableCache(0)
+		require.NotSame(t, original, replacement)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 0, createTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		previous := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.Same(t, original, previous)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, createTxn))
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, createTxn))
+		require.Same(t, original, s.getTableCache(0))
+		s.mu.Lock()
+		_, exists := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.False(t, exists)
+		cache := replacement.(*tableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+
+		require.NoError(t, createTxn.Rollback(ctx))
+		originalCache := original.(*tableCache)
+		originalCache.lifecycle.Lock()
+		require.True(t, originalCache.lifecycle.retired)
+		require.True(t, originalCache.lifecycle.closed)
+		originalCache.lifecycle.Unlock()
 	})
 }
 
@@ -1688,7 +1758,11 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		require.True(t, moerr.IsMoErrCode(<-result, moerr.ErrTxnNeedRetryWithDefChanged))
 		s.mu.Lock()
 		cache, installed := s.mu.tables[0]
+		_, generationExists := s.mu.generation[0]
+		_, generationBuildExists := s.mu.generationBuilds[0]
 		s.mu.Unlock()
+		require.False(t, generationExists)
+		require.False(t, generationBuildExists)
 		if closeService {
 			require.True(t, installed)
 			require.Equal(t, uint32(0), cache.epoch())

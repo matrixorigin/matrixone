@@ -155,7 +155,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	var (
-		pkAffected bool
+		pkAffected             bool
+		hasAutoIncrementOption bool
 
 		affectedCols        = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
@@ -218,10 +219,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.TableOptionAutoIncrement:
-			if !tableHasAutoIncrementColumn(tableDef) {
-				return nil, moerr.NewInvalidInputf(ctx,
-					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
-			}
+			hasAutoIncrementOption = true
 			copyTableDef.AutoIncrOffset = autoIncrementValueToOffset(uint64(option.Value))
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
@@ -240,6 +238,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+	}
+	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 	}
 
 	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)

@@ -72,8 +72,10 @@ type service struct {
 		destroyed        map[uint64]deleteCtx
 		tables           map[uint64]incrTableCache
 		generation       map[uint64]uint64
+		generationBuilds map[uint64]uint64
 		private          map[privateResetKey]incrTableCache
 		privateCallbacks map[privateResetKey]*privateResetRegistration
+		createdResets    map[privateResetKey]incrTableCache
 		creates          map[string][]uint64
 		deletes          map[string][]deleteCtx
 	}
@@ -97,8 +99,10 @@ func NewIncrService(
 	s.mu.destroyed = make(map[uint64]deleteCtx)
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
 	s.mu.generation = make(map[uint64]uint64, 1024)
+	s.mu.generationBuilds = make(map[uint64]uint64)
 	s.mu.private = make(map[privateResetKey]incrTableCache)
 	s.mu.privateCallbacks = make(map[privateResetKey]*privateResetRegistration)
+	s.mu.createdResets = make(map[privateResetKey]incrTableCache)
 	s.mu.creates = make(map[string][]uint64, 1024)
 	s.mu.deletes = make(map[string][]deleteCtx, 1024)
 	if err := s.stopper.RunTask(s.destroyTables); err != nil {
@@ -307,10 +311,7 @@ func (s *service) Reload(
 		s.mu.Unlock()
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
-	if s.mu.generation == nil {
-		s.mu.generation = make(map[uint64]uint64)
-	}
-	s.mu.generation[tableID]++
+	s.bumpGenerationLocked(tableID)
 	c, ok := s.mu.tables[tableID]
 	if !ok {
 		s.mu.Unlock()
@@ -337,6 +338,9 @@ func (s *service) SetOffset(
 		createCache      incrTableCache
 		createEpoch      uint32
 		createGeneration uint64
+		createResetKey   privateResetKey
+		staleCreateCache incrTableCache
+		trackGeneration  bool
 	)
 
 	s.mu.Lock()
@@ -349,26 +353,31 @@ func (s *service) SetOffset(
 		txnKey = string(txnOp.Txn().ID)
 		ownedCreate = s.ownsCreateLocked(txnKey, tableID)
 		if ownedCreate {
+			createResetKey = privateResetKey{txnID: txnKey, tableID: tableID}
+			staleCreateCache = s.mu.createdResets[createResetKey]
+			delete(s.mu.createdResets, createResetKey)
 			createCache = s.mu.tables[tableID]
 			if createCache != nil {
 				createEpoch = createCache.epoch()
-				if s.mu.generation == nil {
-					s.mu.generation = make(map[uint64]uint64)
-				}
-				s.mu.generation[tableID]++
-				createGeneration = s.mu.generation[tableID]
-				delete(s.mu.tables, tableID)
+				s.startGenerationBuildLocked(tableID)
+				trackGeneration = true
+				createGeneration = s.bumpGenerationLocked(tableID)
 			}
 		}
 	}
 	s.mu.Unlock()
 	defer s.builders.Done()
+	if trackGeneration {
+		defer s.finishGenerationBuild(tableID)
+	}
+	if staleCreateCache != nil {
+		staleCreateCache.retire()
+	}
 
 	if ownedCreate {
 		if createCache == nil {
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
-		createCache.retire()
 	} else {
 		if err := s.Reload(ctx, tableID); err != nil {
 			return err
@@ -416,12 +425,13 @@ func (s *service) SetOffset(
 		if s.mu.closed ||
 			!s.ownsCreateLocked(txnKey, tableID) ||
 			s.mu.generation[tableID] != createGeneration ||
-			s.mu.tables[tableID] != nil {
+			s.mu.tables[tableID] != createCache {
 			s.mu.Unlock()
 			replacement.retire()
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
 		s.mu.tables[tableID] = replacement
+		s.mu.createdResets[createResetKey] = createCache
 		s.mu.Unlock()
 		return nil
 	}
@@ -450,6 +460,31 @@ func (s *service) ownsCreateLocked(txnKey string, tableID uint64) bool {
 		}
 	}
 	return false
+}
+
+func (s *service) startGenerationBuildLocked(tableID uint64) uint64 {
+	s.mu.generationBuilds[tableID]++
+	return s.mu.generation[tableID]
+}
+
+func (s *service) finishGenerationBuild(tableID uint64) {
+	s.mu.Lock()
+	if s.mu.generationBuilds[tableID] <= 1 {
+		delete(s.mu.generationBuilds, tableID)
+		delete(s.mu.generation, tableID)
+	} else {
+		s.mu.generationBuilds[tableID]--
+	}
+	s.mu.Unlock()
+}
+
+func (s *service) bumpGenerationLocked(tableID uint64) uint64 {
+	if s.mu.generationBuilds[tableID] == 0 {
+		delete(s.mu.generation, tableID)
+		return 0
+	}
+	s.mu.generation[tableID]++
+	return s.mu.generation[tableID]
 }
 
 func (s *service) buildPrivateTableCache(
@@ -497,9 +532,24 @@ func (s *service) DiscardOffsetReset(
 	s.mu.Lock()
 	private := s.mu.private[key]
 	delete(s.mu.private, key)
+	previous := s.mu.createdResets[key]
+	delete(s.mu.createdResets, key)
+	var current incrTableCache
+	if previous != nil && s.ownsCreateLocked(key.txnID, tableID) {
+		current = s.mu.tables[tableID]
+		s.bumpGenerationLocked(tableID)
+		s.mu.tables[tableID] = previous
+		previous = nil
+	}
 	s.mu.Unlock()
 	if private != nil {
 		private.retire()
+	}
+	if current != nil {
+		current.retire()
+	}
+	if previous != nil {
+		previous.retire()
 	}
 	return nil
 }
@@ -517,15 +567,21 @@ func (s *service) Close() {
 	s.builders.Wait()
 
 	s.mu.Lock()
-	tables := make([]incrTableCache, 0, len(s.mu.tables)+len(s.mu.private))
+	tables := make([]incrTableCache, 0, len(s.mu.tables)+len(s.mu.private)+len(s.mu.createdResets))
 	for _, tc := range s.mu.tables {
 		tables = append(tables, tc)
 	}
 	for _, tc := range s.mu.private {
 		tables = append(tables, tc)
 	}
+	for _, tc := range s.mu.createdResets {
+		tables = append(tables, tc)
+	}
 	s.mu.private = make(map[privateResetKey]incrTableCache)
 	s.mu.privateCallbacks = make(map[privateResetKey]*privateResetRegistration)
+	s.mu.createdResets = make(map[privateResetKey]incrTableCache)
+	s.mu.generation = make(map[uint64]uint64)
+	s.mu.generationBuilds = make(map[uint64]uint64)
 	s.mu.Unlock()
 	for _, tc := range tables {
 		tc.retire()
@@ -675,7 +731,7 @@ func (s *service) txnEpochCacheClosed(
 		s.mu.Unlock()
 		return nil
 	}
-	s.mu.generation[callback.tableID]++
+	s.bumpGenerationLocked(callback.tableID)
 	delete(s.mu.tables, callback.tableID)
 	s.mu.Unlock()
 	callback.cache.retire()
@@ -762,10 +818,11 @@ func (s *service) getCommittedTableCacheForEpoch(
 		s.mu.Unlock()
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
-	generation := s.mu.generation[tableID]
+	generation := s.startGenerationBuildLocked(tableID)
 	s.builders.Add(1)
 	s.mu.Unlock()
 	defer s.builders.Done()
+	defer s.finishGenerationBuild(tableID)
 
 	cols, err := s.store.GetColumns(ctx, tableID, nil)
 	if err != nil {
@@ -911,6 +968,11 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 	}
 
 	for _, id := range tables {
+		resetKey := privateResetKey{txnID: key, tableID: id}
+		if previous := s.mu.createdResets[resetKey]; previous != nil {
+			previous.retire()
+			delete(s.mu.createdResets, resetKey)
+		}
 		if tc, ok := s.mu.tables[id]; ok {
 			if txnMeta.Status == txn.TxnStatus_Committed {
 				tc.commit()

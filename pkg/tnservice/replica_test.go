@@ -17,6 +17,7 @@ package tnservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,28 @@ type startErrorStorage struct {
 	destroyErr   error
 	closeCalls   int
 	destroyCalls int
+}
+
+type closeUnblocksStartTxnService struct {
+	service.TxnService
+	started   chan struct{}
+	closed    chan struct{}
+	startOnce sync.Once
+	closeOnce sync.Once
+}
+
+func (s *closeUnblocksStartTxnService) Start() error {
+	s.startOnce.Do(func() { close(s.started) })
+	<-s.closed
+	return context.Canceled
+}
+
+func (s *closeUnblocksStartTxnService) CancelRecovery() {
+	s.closeOnce.Do(func() { close(s.closed) })
+}
+
+func (s *closeUnblocksStartTxnService) Close(bool) error {
+	return nil
 }
 
 func (s *startErrorStorage) Start() error {
@@ -109,6 +132,37 @@ func TestCloseFailedStartReplica(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCloseCancelsBlockedReplicaStart(t *testing.T) {
+	txnService := &closeUnblocksStartTxnService{
+		started: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- r.start(txnService)
+	}()
+
+	select {
+	case <-txnService.started:
+	case <-time.After(time.Second):
+		t.Fatal("replica start did not begin")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- r.close(false)
+	}()
+
+	select {
+	case err := <-closeResult:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("close did not cancel blocked replica start")
+	}
+	require.ErrorIs(t, <-startResult, context.Canceled)
 }
 
 func TestWaitStarted(t *testing.T) {
