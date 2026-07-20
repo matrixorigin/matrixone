@@ -786,15 +786,27 @@ func (s *service) observeAllocatorStateLocked(
 	hasRequestAllocator bool,
 	holders *lockTableHolders,
 ) (int, bool) {
+	oldVersion := s.lastAllocatorVersion
+	oldID := s.lastAllocatorID
 	if observed.version == 0 && observed.id == "" {
+		// Zero metadata is valid while this CN is talking only to a legacy
+		// allocator. Once a non-empty allocator identity has been observed,
+		// accepting a delayed legacy response could republish a bind from the
+		// superseded allocator after its empty-ID binds were purged.
+		if oldID != "" {
+			v2.GetLockServiceAllocatorEpochRegressionCounter(source).Inc()
+			logAllocatorEpochRegression(s.logger, source, oldVersion, observed.version)
+			return 0, false
+		}
 		return 0, true
 	}
 
-	oldVersion := s.lastAllocatorVersion
-	oldID := s.lastAllocatorID
+	// The first non-empty allocator ID is also an identity boundary. A CN may
+	// have cached binds from a legacy allocator that did not publish allocator
+	// metadata; those empty-ID binds must not survive the first upgraded
+	// allocator observation even when its numeric epoch regresses or is equal.
 	allocatorChanged := observed.id != "" &&
-		observed.id != oldID &&
-		(oldID != "" || oldVersion != 0)
+		observed.id != oldID
 	if s.isAllocatorStateRejectedLocked(source, observed, requestAllocator, hasRequestAllocator, allocatorChanged, oldID, oldVersion) {
 		return 0, false
 	}

@@ -3515,6 +3515,81 @@ func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *tes
 	)
 }
 
+func TestGetBindPurgesLegacyBindWhenAllocatorIDFirstAppearsWithRegressedVersion(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			staleTable := uint64(19003)
+			freshTable := uint64(19004)
+			staleTxnID := newTestTxnID(1)
+			freshTxnID := newTestTxnID(2)
+			option := newTestRowExclusiveOptions()
+
+			alloc.mu.Lock()
+			legacyVersion := alloc.version
+			alloc.mu.Unlock()
+			legacyBind := pb.LockTable{
+				Group:       0,
+				Table:       staleTable,
+				OriginTable: staleTable,
+				ServiceID:   l1.serviceID,
+				Version:     legacyVersion,
+				Valid:       true,
+			}
+			l1.tableGroups.set(
+				legacyBind.Group,
+				legacyBind.Table,
+				l1.createLockTableByBind(legacyBind))
+
+			_, err := l1.Lock(ctx, staleTable, newTestRows(1), staleTxnID, option)
+			require.NoError(t, err)
+			observed := l1.allocatorStateSnapshot()
+			require.Empty(t, observed.id)
+			require.Zero(t, observed.version)
+
+			alloc.mu.Lock()
+			alloc.mu.services = make(map[string]*serviceBinds)
+			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+			alloc.allocatorID = "first-visible-allocator-with-lower-version"
+			alloc.version = legacyVersion - 1
+			restartedAllocatorID := alloc.allocatorID
+			restartedVersion := alloc.version
+			alloc.mu.Unlock()
+
+			// Register this CN through another table first. Keepalive is then OK,
+			// so the first allocator identity observation must purge legacy binds
+			// even when the new allocator epoch regresses.
+			_, err = l1.Lock(ctx, freshTable, newTestRows(2), freshTxnID, option)
+			require.NoError(t, err)
+			require.True(t, alloc.KeepLockTableBind(l1.serviceID))
+
+			require.Nil(t, l1.tableGroups.get(0, staleTable))
+			freshBind := l1.tableGroups.get(0, freshTable).getBind()
+			require.Equal(t, restartedAllocatorID, freshBind.AllocatorID)
+			require.Equal(t, restartedVersion, freshBind.Version)
+			observed = l1.allocatorStateSnapshot()
+			require.Equal(t, restartedAllocatorID, observed.id)
+			require.Equal(t, restartedVersion, observed.version)
+
+			staleTxn := l1.activeTxnHolder.getActiveTxn(staleTxnID, false, "")
+			require.NotNil(t, staleTxn)
+			staleTxn.Lock()
+			require.True(t, staleTxn.bindChanged)
+			staleTxn.Unlock()
+
+			_, err = l1.Lock(ctx, staleTable, newTestRows(3), staleTxnID, option)
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+			require.NoError(t, l1.Unlock(ctx, staleTxnID, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, freshTxnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -3795,6 +3870,47 @@ func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
 			require.Equal(t, newAllocator.id, l1.lastAllocatorID)
 			require.Equal(t, newAllocator.version, l1.lastAllocatorVersion)
+		},
+	)
+}
+
+func TestAllocatorPublishRejectsLegacyResponseAfterAllocatorIDObserved(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			currentAllocator := allocatorState{
+				id:      "current-allocator-after-upgrade",
+				version: 90,
+			}
+			legacyTable := uint64(21516)
+			legacyBind := pb.LockTable{
+				Group:       0,
+				Table:       legacyTable,
+				OriginTable: legacyTable,
+				ServiceID:   l1.serviceID,
+				Version:     100,
+				Valid:       true,
+			}
+
+			l1.allocatorVersionMu.Lock()
+			l1.lastAllocatorID = currentAllocator.id
+			l1.lastAllocatorVersion = currentAllocator.version
+			l1.allocatorVersionMu.Unlock()
+
+			lt, err := l1.publishLockTableBindFromAllocator(
+				"late-legacy-get-bind-test",
+				legacyBind.Group,
+				legacyBind.Table,
+				legacyBind,
+				allocatorState{},
+				allocatorState{})
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+			require.Nil(t, lt)
+			require.Nil(t, l1.tableGroups.get(0, legacyTable))
+			observed := l1.allocatorStateSnapshot()
+			require.Equal(t, currentAllocator, observed)
 		},
 	)
 }
