@@ -270,6 +270,7 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }

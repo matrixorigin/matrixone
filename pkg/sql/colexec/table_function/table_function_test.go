@@ -226,6 +226,62 @@ func TestResetAndFreeWithPartiallyInitializedExecutors(t *testing.T) {
 	require.Nil(t, arg.ctr.executorsForArgs)
 }
 
+func TestPrepareReleasesPreviousExecutorsAndState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	executor := &stubExpressionExecutor{}
+	state := &stubTableFunctionState{}
+	arg := &TableFunction{FuncName: "unsupported"}
+	arg.ctr.executorsForArgs = []colexec.ExpressionExecutor{executor}
+	arg.ctr.state = state
+
+	require.Error(t, arg.Prepare(proc))
+	require.Equal(t, 1, executor.freeCount)
+	require.Equal(t, 1, state.freeCount)
+	require.Nil(t, arg.ctr.executorsForArgs)
+	require.Nil(t, arg.ctr.state)
+}
+
+func TestPreparePreservesOptimizedGenerateSeriesState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := &TableFunction{
+		FuncName: "generate_series",
+		CanOpt:   true,
+		Attrs:    []string{"result"},
+		Rets: []*plan.ColDef{{
+			Name: "result",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	arg.GenerateSeriesCtrNumState(1, 3, 1, 1)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 3, result.Batch.RowCount())
+	arg.Free(proc, false, nil)
+}
+
+func TestSourceTableFunctionResetAfterStartError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	state := &startErrorState{startErr: moerr.NewInvalidInputNoCtx("invalid argument")}
+	arg := &TableFunction{}
+	arg.ctr.state = state
+
+	_, err := arg.Call(proc)
+	require.ErrorContains(t, err, "invalid argument")
+	require.True(t, arg.ctr.isDone)
+
+	arg.Reset(proc, true, err)
+	state.startErr = nil
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, 2, state.startCount)
+}
+
 func TestGenerateSeriesPrepareFaultLeavesPartialInitSafeToFree(t *testing.T) {
 	proc := testutil.NewProc(t)
 	fault.Enable()
@@ -259,6 +315,53 @@ func TestGenerateSeriesPrepareFaultLeavesPartialInitSafeToFree(t *testing.T) {
 type stubExpressionExecutor struct {
 	resetCount int
 	freeCount  int
+}
+
+type startErrorState struct {
+	startErr   error
+	startCount int
+	called     bool
+}
+
+func (s *startErrorState) start(*TableFunction, *process.Process, int, process.Analyzer) error {
+	s.startCount++
+	return s.startErr
+}
+
+func (s *startErrorState) call(*TableFunction, *process.Process) (vm.CallResult, error) {
+	if s.called {
+		return vm.CancelResult, nil
+	}
+	s.called = true
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(1)
+	return vm.CallResult{Status: vm.ExecNext, Batch: bat}, nil
+}
+
+func (s *startErrorState) end(*TableFunction, *process.Process) error { return nil }
+
+func (s *startErrorState) reset(*TableFunction, *process.Process) { s.called = false }
+
+func (s *startErrorState) free(*TableFunction, *process.Process, bool, error) {}
+
+type stubTableFunctionState struct {
+	freeCount int
+}
+
+func (*stubTableFunctionState) start(*TableFunction, *process.Process, int, process.Analyzer) error {
+	return nil
+}
+
+func (*stubTableFunctionState) call(*TableFunction, *process.Process) (vm.CallResult, error) {
+	return vm.CancelResult, nil
+}
+
+func (*stubTableFunctionState) end(*TableFunction, *process.Process) error { return nil }
+
+func (*stubTableFunctionState) reset(*TableFunction, *process.Process) {}
+
+func (s *stubTableFunctionState) free(*TableFunction, *process.Process, bool, error) {
+	s.freeCount++
 }
 
 func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {

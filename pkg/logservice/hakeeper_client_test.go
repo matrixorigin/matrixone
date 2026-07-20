@@ -1102,6 +1102,60 @@ func TestAllocateBatchIDRetriesEOFSendError(t *testing.T) {
 	require.Equal(t, 2, sendCalls)
 }
 
+func TestAllocateBatchIDKeepsClientOnContextError(t *testing.T) {
+	originalSend := sendCNAllocateIDFunc
+	defer func() {
+		sendCNAllocateIDFunc = originalSend
+	}()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &hakeeperClient{}
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				actualClient *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Same(t, client, actualClient)
+				require.Equal(t, "x", key)
+				require.Equal(t, uint64(2), batch)
+				if sendCalls == 1 {
+					return 0, tt.err
+				}
+				return 100, nil
+			}
+
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			c.mu.client = client
+			c.mu.allocIDByKey = make(map[string]*allocID)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			_, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+			require.ErrorIs(t, err, tt.err)
+			require.Same(t, client, c.mu.client,
+				"a caller-scoped context error must not close the shared client")
+
+			firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+			require.NoError(t, err)
+			require.Equal(t, uint64(100), firstID)
+			require.Equal(t, 2, sendCalls)
+		})
+	}
+}
+
 func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
