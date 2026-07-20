@@ -7,7 +7,7 @@ id int primary key,
 title varchar(255),
 content text,
 author_id int,
-fulltext index ft_articles(title, content)
+fulltext index ft_articles(title, content) with parser gojieba
 );
 insert into articles values
 (1, 'Database Guide', 'database search engine', 1),

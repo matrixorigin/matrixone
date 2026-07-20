@@ -11,7 +11,7 @@ create table articles (
     title varchar(255),
     content text,
     author_id int,
-    fulltext index ft_articles(title, content)
+    fulltext index ft_articles(title, content) with parser gojieba
 );
 
 insert into articles values
