@@ -2353,12 +2353,7 @@ func buildHashmapForTable(
 				return
 			}
 
-			if dataBat != nil && dataBat.RowCount() > 0 && side == "base" &&
-				len(tblStuff.def.tarOnlyIdxes) > 0 &&
-				!dataBranchBatchHasTargetLayout(dataBat, tblStuff) {
-				projected := projectBaseBatchToTarget(dataBat, tblStuff, mp)
-				dataBat = projected // projected will be cleaned in putVectors
-			}
+			dataBat = projectBaseBatchToTargetIfNeeded(side, dataBat, tblStuff, mp)
 
 			if dataBat != nil && dataBat.RowCount() > 0 {
 				totalRows += int64(dataBat.RowCount())
@@ -2586,6 +2581,19 @@ func projectBaseBatchToTarget(
 	return projectDataBranchBatchToTarget(
 		baseBat, tblStuff, tblStuff.def.baseColToTarIdx, mp,
 	)
+}
+
+func projectBaseBatchToTargetIfNeeded(
+	side string,
+	dataBat *batch.Batch,
+	tblStuff *tableStuff,
+	mp *mpool.MPool,
+) *batch.Batch {
+	if side != "base" || dataBat == nil || dataBat.RowCount() == 0 ||
+		dataBranchBatchHasTargetLayout(dataBat, tblStuff) {
+		return dataBat
+	}
+	return projectBaseBatchToTarget(dataBat, tblStuff, mp)
 }
 
 func dataBranchSourceColToTargetIdx(

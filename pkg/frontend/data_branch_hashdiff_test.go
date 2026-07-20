@@ -2450,6 +2450,45 @@ func TestProjectBaseBatchToTargetPreservesTrailingCommitTS(t *testing.T) {
 	require.Equal(t, baseline, mp.CurrNB(), "projection must transfer or clean every input vector")
 }
 
+func TestProjectBaseBatchToTargetIfNeededForPureColumnReorder(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	// MODIFY ... FIRST/AFTER can reorder columns without adding any target-only
+	// column. The base physical layout is [a, b], while target indexes refer to
+	// [b, a].
+	tblStuff.def.colNames = []string{"b", "a"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+	tblStuff.def.baseColToTarIdx = []int{1, 0}
+	require.Empty(t, tblStuff.def.tarOnlyIdxes)
+
+	mp := ses.proc.Mp()
+	baseline := mp.CurrNB()
+	baseBat := batch.NewWithSize(3)
+	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	uid, err := types.BuildUuid()
+	require.NoError(t, err)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[1], int64(11), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[2], int64(22), false, mp))
+	baseBat.SetRowCount(1)
+
+	projected := projectBaseBatchToTargetIfNeeded("base", baseBat, &tblStuff, mp)
+	require.True(t, dataBranchBatchHasTargetLayout(projected, &tblStuff))
+	require.Equal(t, []string{catalog.Row_ID, "b", "a"}, projected.Attrs)
+	require.Equal(t, int64(22), vector.GetFixedAtNoTypeCheck[int64](projected.Vecs[1], 0))
+	require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](projected.Vecs[2], 0))
+
+	projected.Clean(mp)
+	require.Equal(t, baseline, mp.CurrNB(), "reorder projection must transfer every input vector")
+}
+
 func TestDataBranchSourceColToTargetIdxRejectsHistoricalTypeDrift(t *testing.T) {
 	sourceDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
