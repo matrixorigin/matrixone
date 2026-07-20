@@ -424,58 +424,29 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 	switch childImpl := child.Expr.(type) {
 	case *plan.Expr_List:
 		childList := childImpl.List.List
+		if len(childList) == 0 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "row comparison requires at least one column")
+		}
 		switch op {
-		case "=":
-			leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
-				childList[0],
-				getProjectExpr(0, ctx, strip),
-			})
-			if err != nil {
-				return nil, err
+		case "=", "<>":
+			logicalOp := "and"
+			if op == "<>" {
+				logicalOp = "or"
 			}
 
-			for i := 1; i < len(childList); i++ {
-				rightExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+			comparisons := make([]*plan.Expr, len(childList))
+			for i := range childList {
+				comparison, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 					childList[i],
 					getProjectExpr(i, ctx, strip),
 				})
 				if err != nil {
 					return nil, err
 				}
-
-				leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{leftExpr, rightExpr})
-				if err != nil {
-					return nil, err
-				}
+				comparisons[i] = comparison
 			}
 
-			return leftExpr, nil
-
-		case "<>":
-			leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
-				childList[0],
-				getProjectExpr(0, ctx, strip),
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			for i := 1; i < len(childList); i++ {
-				rightExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
-					childList[i],
-					getProjectExpr(i, ctx, strip),
-				})
-				if err != nil {
-					return nil, err
-				}
-
-				leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{leftExpr, rightExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			return leftExpr, nil
+			return combinePlanExprsBalanced(builder.GetContext(), logicalOp, comparisons)
 
 		case "<", "<=", ">", ">=":
 			projList := make([]*plan.Expr, len(childList))

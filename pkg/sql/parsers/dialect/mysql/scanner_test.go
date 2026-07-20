@@ -74,37 +74,43 @@ func TestLiteralID(t *testing.T) {
 	}
 }
 
-func TestUnicodeIdentifier(t *testing.T) {
+func TestQuotedUnicodeIdentifier(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
-		allowUnicode bool
-		want         int
+		name  string
+		input string
+		want  int
 	}{
-		{name: "unquoted Arabic", input: "الكمية", allowUnicode: true, want: ID},
-		{name: "unquoted Chinese", input: "数量", allowUnicode: true, want: ID},
-		{name: "digit prefix Chinese", input: "1数量", allowUnicode: true, want: ID},
 		{name: "quoted Arabic", input: "`الكمية`", want: QUOTE_ID},
 		{name: "quoted Chinese", input: "`数量`", want: QUOTE_ID},
 		{name: "invalid UTF-8", input: "`\xff`", want: LEX_ERROR},
-		{name: "digit prefix invalid UTF-8", input: "1\xff", allowUnicode: true, want: LEX_ERROR},
 		{name: "NUL", input: "`a\x00b`", want: LEX_ERROR},
 		{name: "supplementary character", input: "`😀`", want: LEX_ERROR},
-		{name: "digit prefix supplementary character", input: "1😀", allowUnicode: true, want: LEX_ERROR},
-		{name: "hex prefix supplementary character", input: "0x😀", allowUnicode: true, want: LEX_ERROR},
-		{name: "binary prefix supplementary character", input: "0b😀", allowUnicode: true, want: LEX_ERROR},
-		{name: "invalid UTF-8 bind variable", input: ":\xff", want: LEX_ERROR},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			scanner := NewScanner(dialect.MYSQL, test.input)
-			scanner.allowUnicodeIdentifier = test.allowUnicode
 			got, _ := scanner.Scan()
 			if got != test.want {
 				t.Fatalf("Scan(%q) token = %s, want %s", test.input, tokenName(got), tokenName(test.want))
 			}
 		})
+	}
+}
+
+func TestScannerSQLModePipeConcat(t *testing.T) {
+	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
+	id, _ := s.Scan()
+	if id != PIPE_CONCAT {
+		t.Fatalf("PIPES_AS_CONCAT || token = %s, want PIPE_CONCAT", tokenName(id))
+	}
+	PutScanner(s)
+
+	s = NewScanner(dialect.MYSQL, "||")
+	defer PutScanner(s)
+	id, _ = s.Scan()
+	if id != OR {
+		t.Fatalf("default || token after scanner reuse = %s, want OR", tokenName(id))
 	}
 }
 

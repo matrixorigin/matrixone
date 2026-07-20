@@ -43,6 +43,7 @@ type Scanner struct {
 	LastError           error
 	posVarIndex         int
 	dialectType         dialect.DialectType
+	sqlMode             SQLModeFlags
 	MysqlSpecialComment *Scanner
 
 	CommentFlag bool
@@ -51,10 +52,6 @@ type Scanner struct {
 	Col         int
 	PrePos      int
 	buf         string
-
-	// allowUnicodeIdentifier is enabled by the lexer only where the grammar
-	// accepts Unicode aliases. Other contexts retain the original tokenization.
-	allowUnicodeIdentifier bool
 
 	strBuilder bytes.Buffer
 }
@@ -66,11 +63,11 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.posVarIndex = 0
 	s.MysqlSpecialComment = nil
 	s.CommentFlag = false
-	s.allowUnicodeIdentifier = false
 	s.Pos = 0
 	s.Line = 0
 	s.Col = 0
 	s.PrePos = 0
+	s.sqlMode = 0
 
 	if clearLargeOnly {
 		if oversized {
@@ -92,9 +89,19 @@ func (s *Scanner) setSql(sql string) {
 	s.strBuilder.Reset()
 }
 
+func (s *Scanner) setSQLMode(mode SQLModeFlags) {
+	s.sqlMode = mode
+}
+
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 	scanner := scannerPool.Get().(*Scanner)
 	scanner.setSql(sql)
+	return scanner
+}
+
+func NewScannerWithSQLMode(dialectType dialect.DialectType, sql string, sqlMode SQLModeFlags) *Scanner {
+	scanner := NewScanner(dialectType, sql)
+	scanner.setSQLMode(sqlMode)
 	return scanner
 }
 
@@ -146,7 +153,7 @@ func (s *Scanner) Scan() (int, string) {
 			return tID, ""
 		}
 		return tokenID, tBytes
-	case s.isIdentifierLetter(ch):
+	case isLetter(ch):
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -376,7 +383,10 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	case '|':
 		if s.cur() == '|' {
 			s.inc()
-			return PIPE_CONCAT, ""
+			if s.sqlMode.Has(SQLModePipesAsConcat) {
+				return PIPE_CONCAT, ""
+			}
+			return OR, ""
 		}
 		return int(ch), ""
 	case '?':
@@ -448,7 +458,12 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			return NE, ""
 		}
 		return int(ch), ""
-	case '\'', '"':
+	case '\'':
+		return s.scanString(ch, STRING)
+	case '"':
+		if s.sqlMode.Has(SQLModeANSIQuotes) {
+			return s.scanLiteralIdentifierWithDelim('"')
+		}
 		return s.scanString(ch, STRING)
 	case '`':
 		return s.scanLiteralIdentifier()
@@ -474,7 +489,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' && delim != '$' {
+		} else if ch == '\\' && delim != '$' && !s.sqlMode.Has(SQLModeNoBackslashEscapes) {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -507,7 +522,7 @@ func (s *Scanner) scanStringAddPlus(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' && delim != '$' {
+		} else if ch == '\\' && delim != '$' && !s.sqlMode.Has(SQLModeNoBackslashEscapes) {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -548,11 +563,15 @@ func handleEscape(s *Scanner, buf *bytes.Buffer) uint16 {
 // is a simple literal, it'll be returned as a slice of the input buffer. If the identifier
 // contains escape sequences, this function will fall back to scanLiteralIdentifierSlow
 func (s *Scanner) scanLiteralIdentifier() (int, string) {
+	return s.scanLiteralIdentifierWithDelim('`')
+}
+
+func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 	start := s.Pos
 	for {
 		switch s.cur() {
-		case '`':
-			if s.peek(1) != '`' {
+		case delim:
+			if s.peek(1) != delim {
 				if s.Pos == start {
 					return LEX_ERROR, ""
 				}
@@ -567,7 +586,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 			var buf strings.Builder
 			buf.WriteString(s.buf[start:s.Pos])
 			s.inc()
-			return s.scanLiteralIdentifierSlow(&buf)
+			return s.scanLiteralIdentifierSlow(&buf, delim)
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, s.buf[start:s.Pos]
@@ -582,22 +601,22 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 // scanLiteralIdentifier once the first escape sequence is found in the identifier.
 // The provided `buf` contains the contents of the identifier that have been scanned
 // so far.
-func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) {
-	backTickSeen := true
+func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) (int, string) {
+	delimSeen := true
 	for {
-		if backTickSeen {
-			if s.cur() != '`' {
+		if delimSeen {
+			if s.cur() != delim {
 				break
 			}
-			backTickSeen = false
-			buf.WriteByte('`')
+			delimSeen = false
+			buf.WriteByte(byte(delim))
 			s.inc()
 			continue
 		}
-		// The previous char was not a backtick.
+		// The previous char was not the identifier delimiter.
 		switch s.cur() {
-		case '`':
-			backTickSeen = true
+		case delim:
+			delimSeen = true
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, buf.String()
@@ -744,10 +763,7 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				typ, _ := s.scanIdentifier(false)
-				if typ == LEX_ERROR {
-					return LEX_ERROR, s.buf[start:s.Pos]
-				}
+				s.scanIdentifier(false)
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
 
@@ -760,10 +776,7 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				typ, _ := s.scanIdentifier(false)
-				if typ == LEX_ERROR {
-					return LEX_ERROR, s.buf[start:s.Pos]
-				}
+				s.scanIdentifier(false)
 				return token, strings.ToLower(s.buf[start:s.Pos])
 			}
 
@@ -794,13 +807,10 @@ exponent:
 	}
 
 exit:
-	if s.isIdentifierLetter(s.cur()) {
+	if isLetter(s.cur()) {
 		// TODO: optimize
-		typ, _ := s.scanIdentifier(false)
-		if typ == LEX_ERROR {
-			return LEX_ERROR, s.buf[start:s.Pos]
-		}
 		token = ID
+		s.scanIdentifier(false)
 	}
 
 	return token, strings.ToLower(s.buf[start:s.Pos])
@@ -819,7 +829,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '$' && dollarFlag {
 			break
 		}
-		if !s.isIdentifierLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
+		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
 		if ch == '@' {
@@ -829,9 +839,6 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
-	if s.allowUnicodeIdentifier && !validIdentifier(keywordName) {
-		return LEX_ERROR, keywordName
-	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
 		// make transaction statements coexist with plsql
@@ -950,10 +957,6 @@ func validIdentifier(s string) bool {
 		s = s[size:]
 	}
 	return true
-}
-
-func (s *Scanner) isIdentifierLetter(ch uint16) bool {
-	return isLetter(ch) || s.allowUnicodeIdentifier && ch >= utf8.RuneSelf && ch != eofChar
 }
 
 func isLetter(ch uint16) bool {

@@ -16,7 +16,6 @@ package rpc
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -47,32 +46,32 @@ func TestHandlePrecommitWrite_Deprecated(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestNewTAEHandleWithErrorReturnsCanceled(t *testing.T) {
+func TestNewTAEHandleReturnsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	h, err := NewTAEHandleWithError(ctx, t.TempDir(), nil, &options.Options{})
+	h, err := NewTAEHandle(ctx, t.TempDir(), nil, &options.Options{})
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, h)
 }
 
-func TestHandleCloseClosesDBWhenQueryClientCloseFails(t *testing.T) {
-	clientErr := errors.New("query client close failed")
-	c := &closeErrorQueryClient{err: clientErr}
-	h := NewTAEHandle(context.Background(), t.TempDir(), c, &options.Options{})
+func TestHandleCloseKeepsCallerOwnedQueryClientOpen(t *testing.T) {
+	c := &closeErrorQueryClient{}
+	h, err := NewTAEHandle(context.Background(), t.TempDir(), c, &options.Options{})
+	require.NoError(t, err)
 
-	err := h.HandleClose(context.Background())
-	require.ErrorIs(t, err, clientErr)
-	require.Equal(t, 1, c.closeCalls)
+	require.NoError(t, h.HandleClose(context.Background()))
+	require.Equal(t, 0, c.closeCalls)
+	require.False(t, c.closed)
 	require.NotNil(t, h.db.Closed.Load())
 }
 
 func TestHandleCloseKeepsSharedQueryClientOpen(t *testing.T) {
 	sharedClient := &closeErrorQueryClient{}
-	existing, err := NewTAEHandleWithError(
+	existing, err := NewTAEHandle(
 		context.Background(), t.TempDir(), sharedClient, &options.Options{})
 	require.NoError(t, err)
-	canceled, err := NewTAEHandleWithError(
+	canceled, err := NewTAEHandle(
 		context.Background(), t.TempDir(), sharedClient, &options.Options{})
 	require.NoError(t, err)
 

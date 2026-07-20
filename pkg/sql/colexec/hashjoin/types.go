@@ -52,6 +52,9 @@ type container struct {
 	itr         hashmap.Iterator
 	rightBats   []*batch.Batch
 	rightRowCnt int64
+	// globalBuildRowCnt is independent of the currently loaded spill bucket.
+	// MARK join needs the global empty-build fact for SQL three-valued logic.
+	globalBuildRowCnt int64
 
 	leftBat *batch.Batch
 	resBat  *batch.Batch
@@ -77,6 +80,8 @@ type container struct {
 	probeLeftSingle    bool
 	probeLeftSemi      bool
 	probeLeftAnti      bool
+	probeMark          bool
+	buildHasNullKey    bool
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -193,6 +198,9 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
+	ctr.probeMark = false
+	ctr.buildHasNullKey = false
+	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
@@ -317,6 +325,10 @@ func (hashJoin *HashJoin) IsRightAnti() bool {
 
 func (hashJoin *HashJoin) IsSingle() bool {
 	return hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (hashJoin *HashJoin) IsMark() bool {
+	return hashJoin.JoinType == plan.Node_MARK
 }
 
 func (hashJoin *HashJoin) IsLeftSingle() bool {

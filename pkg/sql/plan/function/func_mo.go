@@ -748,7 +748,6 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		minMaxIdx = 1
 	}
 
-	var getValueFailed bool
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	sysAccountCtx := proc.Ctx
@@ -759,11 +758,14 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		getValueFailed := false
 		db, null1 := dbNames.GetStrValue(i)
 		table, null2 := tableNames.GetStrValue(i)
 		column, null3 := columnNames.GetStrValue(i)
 		if null1 || null2 || null3 {
-			rs.AppendMustNull()
+			if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
+				return appendErr
+			}
 		} else {
 			dbStr, tableStr, columnStr := string(db), string(table), string(column)
 
@@ -825,6 +827,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 					getValueFailed = true
 				}
 			} else {
+				getValueFailed = true
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
 				tValues, _, er := rel.MaxAndMinValues(ctx)
 				if er != nil {
@@ -844,7 +847,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				}
 			}
 			if getValueFailed {
-				rs.AppendMustNull()
+				if appendErr := rs.AppendMustNullForBytesResult(); appendErr != nil {
+					return appendErr
+				}
 			}
 		}
 	}
