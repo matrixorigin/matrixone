@@ -345,7 +345,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		return nil, nil, nil
 	}
 
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if isTmpTable || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
 		tableDef.Name = tableName

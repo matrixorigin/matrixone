@@ -563,7 +563,7 @@ t_chk_showcreate  ¦  CREATE TABLE `t_chk_showcreate` (
   `id` int NOT NULL,
   `v` int DEFAULT NULL,
   PRIMARY KEY (`id`),
-  CONSTRAINT `chk_v` CHECK (v > 0)
+  CONSTRAINT `chk_v` CHECK (`v` > 0)
 )
 drop table t_chk_showcreate;
 drop table if exists t_ctas_chk;

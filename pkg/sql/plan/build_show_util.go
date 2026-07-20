@@ -317,8 +317,8 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				formattedComment := formatStr(indexdef.Comment)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -326,7 +326,7 @@ func ConstructCreateTableSQL(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
 					}
 				}
 			}

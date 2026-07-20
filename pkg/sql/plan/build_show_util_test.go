@@ -208,6 +208,26 @@ func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
 }
 
+func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE comment_src (
+		id INT PRIMARY KEY,
+		KEY idx_id (id)
+	)`)
+	require.NoError(t, err)
+	require.NotEmpty(t, tableDef.Indexes)
+
+	tableDef.Indexes[0].Comment = "O'Reilly"
+	first, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	second, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, first, second)
+	require.Equal(t, "O'Reilly", tableDef.Indexes[0].Comment)
+	require.Contains(t, first, `COMMENT 'O''Reilly'`)
+}
+
 func Test_ShowCreateTableRendersStructuredChecks(t *testing.T) {
 	// SHOW CREATE renders CHECK constraints from the structured TableDef.Checks
 	// (each check's formatted OriginSql), not from the raw Createsql text. This
