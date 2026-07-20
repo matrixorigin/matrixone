@@ -829,7 +829,6 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
-	var userVarIsBin bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -866,7 +865,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.SetUserDefinedVar(name, value, sql)
 			if err != nil {
 				return err
 			}
@@ -877,9 +876,8 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 	for _, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
-		userVarIsBin = false
 
-		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
+		value, err = getExprValue(assign.Value, ses, execCtx)
 		if err != nil {
 			return err
 		}
@@ -3725,18 +3723,6 @@ func executeStmt(ses *Session,
 	defer ses.ExitFPrint(FPExecStmt)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 
-	// record goroutine info when ddl stmt run timeout
-	switch execCtx.stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
-		_, span := trace.Start(execCtx.reqCtx, "executeStmtHung",
-			trace.WithHungThreshold(time.Minute), // be careful with this options
-			trace.WithProfileGoroutine(),
-			trace.WithProfileTraceSecs(10*time.Second),
-		)
-		defer span.End()
-	default:
-	}
-
 	var cmpBegin time.Time
 	var ret interface{}
 
@@ -3957,7 +3943,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// ROW_COUNT() builtin can read it.
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
-	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
 	// IsFrontend from opts.IsFrontend() (default false → background);

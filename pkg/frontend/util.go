@@ -183,7 +183,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -193,9 +193,6 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if len(isBin) > 0 {
-			*isBin[0] = false
-		}
 		return v.ColName(), nil
 	}
 
@@ -283,9 +280,6 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		}
 	}
 
-	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
-	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
