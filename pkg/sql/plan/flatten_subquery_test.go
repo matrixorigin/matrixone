@@ -116,6 +116,99 @@ func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 	}
 }
 
+func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		subquery     string
+		joinType     plan.Node_JoinType
+		wantTruePred bool
+	}{
+		{
+			name:     "direct",
+			subquery: "select n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey",
+			joinType: plan.Node_SINGLE,
+		},
+		{
+			name:     "order by",
+			subquery: "select n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey order by r.r_regionkey",
+			joinType: plan.Node_SINGLE,
+		},
+		{
+			name:     "distinct",
+			subquery: "select distinct n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey",
+			joinType: plan.Node_MARK,
+		},
+		{
+			name:         "predicate-free distinct",
+			subquery:     "select distinct n.n_regionkey from tpch.region r",
+			joinType:     plan.Node_MARK,
+			wantTruePred: true,
+		},
+		{
+			name:     "order by limit one",
+			subquery: "select n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey order by r.r_regionkey limit 1",
+			joinType: plan.Node_MARK,
+		},
+		{
+			name:         "predicate-free limit one",
+			subquery:     "select n.n_regionkey from tpch.region r limit 1",
+			joinType:     plan.Node_MARK,
+			wantTruePred: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+				"select n.*, ("+tt.subquery+") as x from tpch.nation n")
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+
+			var scalarJoin *plan.Node
+			hasCase := false
+			for _, node := range query.Nodes {
+				for _, expr := range node.ProjectList {
+					require.False(t, hasCorrCol(expr), "executable PROJECT contains a correlated expression")
+					if f := expr.GetF(); f != nil && f.Func.GetObjName() == "case" {
+						hasCase = true
+						require.Len(t, f.Args, 3)
+					}
+				}
+				for _, expr := range node.OnList {
+					require.False(t, hasCorrCol(expr), "executable JOIN contains a correlated expression")
+				}
+				for _, expr := range node.FilterList {
+					require.False(t, hasCorrCol(expr), "executable FILTER contains a correlated expression")
+				}
+				for _, orderBy := range node.OrderBy {
+					require.False(t, hasCorrCol(orderBy.Expr), "executable SORT contains a correlated expression")
+				}
+				if node.NodeType == plan.Node_JOIN && node.JoinType == tt.joinType {
+					scalarJoin = node
+				}
+			}
+
+			require.NotNil(t, scalarJoin)
+			require.Len(t, scalarJoin.Children, 2)
+			if tt.wantTruePred {
+				require.NotEmpty(t, scalarJoin.OnList)
+				pred := scalarJoin.OnList[0].GetLit()
+				require.NotNil(t, pred)
+				require.True(t, pred.GetBval())
+			}
+			rightProject := query.Nodes[scalarJoin.Children[1]]
+			require.Equal(t, plan.Node_PROJECT, rightProject.NodeType)
+			require.NotEmpty(t, rightProject.ProjectList)
+			if tt.joinType == plan.Node_SINGLE {
+				marker := rightProject.ProjectList[0].GetLit()
+				require.NotNil(t, marker)
+				require.True(t, marker.GetBval())
+			}
+			require.True(t, hasCase)
+		})
+	}
+}
+
 func TestGenerateRowComparisonBuildsBalancedTree(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	subqueryCtx := NewBindContext(builder, nil)
