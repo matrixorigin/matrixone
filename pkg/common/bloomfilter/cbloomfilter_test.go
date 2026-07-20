@@ -825,6 +825,66 @@ func TestCBloomFilterConstVector(t *testing.T) {
 		require.Equal(t, []bool{false, true, true}, flatStates)
 		require.Equal(t, flatStates, constStates)
 	})
+
+	// A non-null constant shrunk to logical length 0 (public SetLength(0) on a reused/
+	// shrunk vector) still retains its physical value, but has no rows: every helper must
+	// stay a no-op — no callback, no filter mutation — exactly like the original
+	// `if v.Length() == 0 { return }` contract. Regression: previously vecPhysCount returned
+	// 1 for it, so TestAndAdd/Add inserted the retained value and a later real row of that
+	// value was wrongly reported present.
+	zeroLenConst := func(t *testing.T, mk func() (*vector.Vector, error)) *vector.Vector {
+		t.Helper()
+		v, err := mk()
+		require.NoError(t, err)
+		v.SetLength(0)
+		require.Equal(t, 0, v.Length())
+		require.True(t, v.IsConst())
+		require.False(t, v.IsConstNull())
+		return v
+	}
+
+	assertZeroLenNoop := func(t *testing.T, empty *vector.Vector, realOneRow *vector.Vector) {
+		t.Helper()
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+
+		// Add / TestAndAdd / Test on the zero-length constant must never fire the callback
+		// or return a row, and must not mutate the filter.
+		called := false
+		cb := func(bool, bool, int) { called = true }
+		require.NotPanics(t, func() { bf.AddVector(empty) })
+		require.NotPanics(t, func() { bf.TestAndAddVector(empty, cb) })
+		require.NotPanics(t, func() { require.Empty(t, bf.TestVector(empty, cb)) })
+		require.False(t, called, "zero-length constant must not invoke the callback")
+
+		// The empty-const calls must NOT have inserted the retained value: a later real
+		// one-row vector of that same value is reported absent (present=false).
+		first := make([]bool, 1)
+		bf.TestAndAddVector(realOneRow, func(exist bool, _ bool, row int) { first[row] = exist })
+		require.Equal(t, []bool{false}, first, "real row must be absent — the zero-length const must not have inserted it")
+	}
+
+	t.Run("zerolen_const_int64_noop", func(t *testing.T) {
+		empty := zeroLenConst(t, func() (*vector.Vector, error) {
+			return vector.NewConstFixed[int64](int64Typ, 99, 1, mp)
+		})
+		defer empty.Free(mp)
+		real99 := vector.NewVec(int64Typ)
+		defer real99.Free(mp)
+		require.NoError(t, vector.AppendFixed[int64](real99, 99, false, mp))
+		assertZeroLenNoop(t, empty, real99)
+	})
+
+	t.Run("zerolen_const_varchar_noop", func(t *testing.T) {
+		empty := zeroLenConst(t, func() (*vector.Vector, error) {
+			return vector.NewConstBytes(varTyp, []byte("key"), 1, mp)
+		})
+		defer empty.Free(mp)
+		realKey := vector.NewVec(varTyp)
+		defer realKey.Free(mp)
+		require.NoError(t, vector.AppendBytes(realKey, []byte("key"), false, mp))
+		assertZeroLenNoop(t, empty, realKey)
+	})
 }
 
 // TestCBloomFilterEmptyFixedVector covers #25618: the fixed-width vector APIs (Test/Add/

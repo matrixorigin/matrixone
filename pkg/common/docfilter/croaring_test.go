@@ -113,6 +113,22 @@ func runConstVectorFilterTest(t *testing.T, newFromVec func(*testing.T, *vector.
 	require.NoError(t, err)
 	defer probe.Free(mp)
 	require.Equal(t, []uint8{1, 1}, f2.TestVector(probe, nil))
+
+	// A non-null constant shrunk to logical length 0 (public SetLength(0)) retains its
+	// physical value but has no rows: building a filter FROM it must yield an EMPTY filter,
+	// NOT one containing the retained value. Regression: vecFixedArgs used to return nitem=1
+	// for it, inserting the value.
+	cEmpty, err := vector.NewConstFixed[int64](typ, 77, 1, mp)
+	require.NoError(t, err)
+	cEmpty.SetLength(0)
+	require.Equal(t, 0, cEmpty.Length())
+	defer cEmpty.Free(mp)
+	fEmpty := newFromVec(t, cEmpty)
+	defer fEmpty.Free()
+	probe77, err := vector.NewConstFixed[int64](typ, 77, 2, mp)
+	require.NoError(t, err)
+	defer probe77.Free(mp)
+	require.Equal(t, []uint8{0, 0}, fEmpty.TestVector(probe77, nil), "zero-length const must build an empty filter")
 }
 
 func TestCRoaringConstVector(t *testing.T) {

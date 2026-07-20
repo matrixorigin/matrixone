@@ -57,7 +57,10 @@ func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elem
 	elemsz = C.size_t(v.GetType().TypeSize())
 	isConst := v.IsConst()
 	if isConst {
-		if v.IsConstNull() {
+		// A zero-logical-length constant retains its physical value (SetLength(0) on a
+		// reused/shrunk vector) but has no rows: treat it as empty so build/test stay
+		// no-ops instead of inserting/probing the retained value.
+		if v.IsConstNull() || v.Length() == 0 {
 			nitem = 0
 		} else {
 			nitem = 1

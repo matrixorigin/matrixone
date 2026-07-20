@@ -275,7 +275,12 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 // 0 for a const-null, v.Length() otherwise) and whether v is a constant vector.
 func vecPhysCount(v *vector.Vector) (nitem int, isConst bool) {
 	if v.IsConst() {
-		if v.IsConstNull() {
+		// A zero-logical-length constant still retains its single physical value (e.g.
+		// NewConstFixed(...) then the public SetLength(0) on a reused/shrunk vector), but
+		// it has no rows to process. Return 0 so every helper stays a no-op — preserving
+		// the original `if v.Length() == 0 { return }` contract — instead of feeding the
+		// retained value to C and mutating the filter for a logically empty input.
+		if v.IsConstNull() || v.Length() == 0 {
 			return 0, true
 		}
 		return 1, true
