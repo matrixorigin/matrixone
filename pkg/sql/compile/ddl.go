@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2567,7 +2568,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 }
 
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, []string, error) {
-	dropIndexTableNames := []string{}
+	dropIndexTables := []hiddenIndexTableDrop{}
 	// must fount dropName because of being checked in plan
 	for i := 0; i < len(oldCt.Cts); i++ {
 		ct := oldCt.Cts[i]
@@ -2581,12 +2582,10 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
 				if index.IndexName == dropName && len(index.IndexTableName) > 0 {
-					if catalog.ToLower(index.IndexAlgo) == "hnsw" &&
-						catalog.ToLower(index.IndexAlgoTableType) == catalog.Hnsw_TblType_Storage {
-						dropIndexTableNames = append([]string{index.IndexTableName}, dropIndexTableNames...)
-					} else {
-						dropIndexTableNames = append(dropIndexTableNames, index.IndexTableName)
-					}
+					dropIndexTables = append(dropIndexTables, hiddenIndexTableDrop{
+						name:     index.IndexTableName,
+						priority: hiddenIndexTableDropPriority(index),
+					})
 				}
 				return index.IndexName == dropName
 			}
@@ -2594,7 +2593,30 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			oldCt.Cts[i] = def
 		}
 	}
+	sort.SliceStable(dropIndexTables, func(i, j int) bool {
+		return dropIndexTables[i].priority > dropIndexTables[j].priority
+	})
+	dropIndexTableNames := make([]string, 0, len(dropIndexTables))
+	for _, table := range dropIndexTables {
+		dropIndexTableNames = append(dropIndexTableNames, table.name)
+	}
 	return oldCt, dropIndexTableNames, nil
+}
+
+type hiddenIndexTableDrop struct {
+	name     string
+	priority int
+}
+
+func hiddenIndexTableDropPriority(index *plan.IndexDef) int {
+	if index == nil {
+		return 0
+	}
+	p, ok := indexplugin.Get(index.IndexAlgo)
+	if !ok || p.Compile() == nil {
+		return 0
+	}
+	return p.Compile().HiddenTableDropPriority(catalog.ToLower(index.IndexAlgoTableType))
 }
 
 func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (*engine.ConstraintDef, error) {

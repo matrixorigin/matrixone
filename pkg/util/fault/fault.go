@@ -178,7 +178,10 @@ func (e *faultEntry) do() (int64, string) {
 		e.mutex.Lock()
 		if !e.removed {
 			e.nWaiters += 1
-			e.cond.Wait()
+			notifySeq := e.notifySeq
+			for !e.removed && e.notifySeq == notifySeq {
+				e.cond.Wait()
+			}
 			e.nWaiters -= 1
 		}
 		e.mutex.Unlock()

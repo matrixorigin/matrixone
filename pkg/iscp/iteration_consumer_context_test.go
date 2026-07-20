@@ -204,7 +204,7 @@ func TestRunInitSQLWithRuntimeSkipsFencedInitSQL(t *testing.T) {
 		return nil
 	})
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errInitSQLJobFenced)
 	require.False(t, called)
 }
 

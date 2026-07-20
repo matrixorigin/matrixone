@@ -172,7 +172,7 @@ func ExecuteIterationWithRuntime(
 			},
 		)
 		if err != nil {
-			if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])) {
+			if errors.Is(err, errInitSQLJobFenced) {
 				return nil
 			}
 			return
@@ -971,6 +971,19 @@ func initSQLResolver(sessionVars []byte) (func(string, bool, bool) (interface{},
 	}, nil
 }
 
+type initSQLJobFencedError struct{}
+
+func (initSQLJobFencedError) Error() string {
+	return "iscp init sql job fenced"
+}
+
+func (initSQLJobFencedError) Is(target error) bool {
+	_, ok := target.(initSQLJobFencedError)
+	return ok
+}
+
+var errInitSQLJobFenced error = initSQLJobFencedError{}
+
 func runInitSQLWithRuntime(
 	ctx context.Context,
 	runtime *ISCPTaskExecutor,
@@ -994,7 +1007,7 @@ func runInitSQLWithRuntime(
 		nil,
 	)
 	if !ok {
-		return nil
+		return errInitSQLJobFenced
 	}
 	defer runtime.UnregisterRunningConsumer(handle)
 	return run(initCtx)

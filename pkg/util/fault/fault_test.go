@@ -366,6 +366,64 @@ func TestTriggerWaitFaultWithContextCancelDoesNotReleaseOtherWaiters(t *testing.
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestTriggerWaitFaultWithContextCancelDoesNotReleasePlainWaiter(t *testing.T) {
+	ctx := context.Background()
+
+	Enable()
+	defer Disable()
+
+	require.NoError(t, AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false))
+	require.NoError(t, AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w", false))
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	ctxDone := make(chan struct{})
+	plainDone := make(chan struct{})
+	go func() {
+		TriggerFaultWithContext(waitCtx, "w")
+		close(ctxDone)
+	}()
+	go func() {
+		TriggerFault("w")
+		close(plainDone)
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := TriggerFault("gw")
+		return ok && cnt == 2
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-ctxDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case <-plainDone:
+		t.Fatal("canceling context-aware wait released a plain waiter")
+	default:
+	}
+	cnt, _, ok := TriggerFault("gw")
+	require.True(t, ok)
+	require.Equal(t, int64(1), cnt)
+
+	removed, err := RemoveFaultPoint(ctx, "w")
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.Eventually(t, func() bool {
+		select {
+		case <-plainDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestTriggerWaitFaultWithContextReturnsOnNotifyAll(t *testing.T) {
 	ctx := context.Background()
 
