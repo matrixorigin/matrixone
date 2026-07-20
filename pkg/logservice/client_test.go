@@ -37,6 +37,17 @@ import (
 
 var testLogger = logutil.GetGlobalLogger().Named("logservice-test")
 
+func TestReleaseOrphanRPCResponse(t *testing.T) {
+	pool := &sync.Pool{}
+	response := &RPCResponse{
+		payload: []byte("payload"),
+		pool:    pool,
+	}
+
+	releaseOrphanRPCResponse(response)
+	require.Nil(t, response.payload)
+}
+
 func TestClientConfigIsValidated(t *testing.T) {
 	cfg := ClientConfig{}
 	cc, err := NewClient(context.TODO(), "", cfg)

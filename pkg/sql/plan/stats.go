@@ -1413,6 +1413,32 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
+// reCalcNodeStatsAfterSwap mirrors ReCalcNodeStats recursion after
+// swapJoinChildren has changed the physical child order. IsRightJoin is set
+// before that swap, so putting this rule in the general stats pass would select
+// the wrong preserved side during earlier optimizer phases.
+func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		for _, childID := range node.Children {
+			reCalcNodeStatsAfterSwap(childID, builder, true, leafNode, needResetHashMapStats)
+		}
+	}
+
+	ReCalcNodeStats(nodeID, builder, false, leafNode, needResetHashMapStats)
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
+		return
+	}
+
+	preservedStats := builder.qry.Nodes[node.Children[1]].Stats
+	node.Stats.Outcnt = preservedStats.Outcnt
+	node.Stats.BlockNum = preservedStats.BlockNum
+	node.Stats.Selectivity = preservedStats.Selectivity
+	if node.Limit != nil {
+		applyLimitToStats(node.Stats, node.Limit, builder)
+	}
+}
+
 func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {
 	if stats == nil {
 		return
