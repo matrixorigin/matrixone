@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -133,11 +134,14 @@ func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt,
 	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
 	execCtx := &ExecCtx{
 		reqCtx: ctx,
+		ses:    ses,
+		proc:   proc,
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
 		},
 	}
+	ses.txnCompileCtx.execCtx = execCtx
 	return ses, prepareStmt, cw, execCtx
 }
 
@@ -181,7 +185,7 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 }
 
 func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 106, "select 1")
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 106)
 	defer prepareStmt.Close()
 
 	originalPlan := prepareStmt.PreparePlan
