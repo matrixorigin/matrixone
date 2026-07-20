@@ -91,6 +91,33 @@ func TestExplicitCastFloatToSigned(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestExplicitCastFloatOverflowErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		value  float64
+		target types.Type
+		zero   any
+	}{
+		{name: "signed finite overflow", value: 9.223372036854776e18, target: types.T_int64.ToType(), zero: []int64{0}},
+		{name: "unsigned finite underflow", value: -1.8446744073709552e19, target: types.T_uint64.ToType(), zero: []uint64{0}},
+		{name: "signed infinity", value: math.Inf(1), target: types.T_int64.ToType(), zero: []int64{0}},
+		{name: "unsigned nan", value: math.NaN(), target: types.T_uint64.ToType(), zero: []uint64{0}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{test.value}, nil),
+				NewFunctionTestInput(test.target, test.zero, nil),
+			}
+			expect := NewFunctionTestResult(test.target, true, test.zero, []bool{false})
+			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestExplicitCastDecimalsToUnsigned(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimal64, err := types.ParseDecimal64("-1.00", 10, 2)
@@ -163,6 +190,35 @@ func TestExplicitCastDecimalsToSigned(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-1, 0}, []bool{false, true})
+			testCase := NewFunctionTestCase(proc, test.inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestExplicitCastDecimalPositiveOverflowToSigned(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal128, err := types.ParseDecimal128("18446744073709551615", 20, 0)
+	require.NoError(t, err)
+	decimal256, err := types.ParseDecimal256("18446744073709551615", 40, 0)
+	require.NoError(t, err)
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+	}{
+		{name: "decimal128", inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{decimal128}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}},
+		{name: "decimal256", inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{decimal256}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MaxInt64}, nil)
 			testCase := NewFunctionTestCase(proc, test.inputs, expect, NewExplicitCast)
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
@@ -243,13 +299,13 @@ func TestExplicitCastStringDecimal256Overflow(t *testing.T) {
 }
 
 func TestExplicitCastOverflowHelperBoundaries(t *testing.T) {
-	value64, err := explicitInt64FromIntegerString("18446744073709551615")
+	value64, err := decimalInt64Explicit("18446744073709551615")
 	require.NoError(t, err)
-	require.Equal(t, int64(-1), value64)
-	value64, err = explicitInt64FromIntegerString("-999999999999999999999999")
+	require.Equal(t, int64(math.MaxInt64), value64)
+	value64, err = decimalInt64Explicit("-999999999999999999999999")
 	require.NoError(t, err)
 	require.Equal(t, int64(math.MinInt64), value64)
-	_, err = explicitInt64FromIntegerString("not-a-number")
+	_, err = decimalInt64Explicit("not-a-number")
 	require.Error(t, err)
 
 	value, err := parseSignedExplicitCastString("255", 8)

@@ -85,23 +85,20 @@ func explicitUint64FromIntegerString(value string) (uint64, error) {
 	return integer.Uint64(), nil
 }
 
-func explicitInt64FromIntegerString(value string) (int64, error) {
+func decimalInt64Explicit(value string) (int64, error) {
 	var integer big.Int
 	if _, ok := integer.SetString(value, 10); !ok {
 		return 0, strconv.ErrSyntax
 	}
-	if integer.Sign() < 0 {
-		minimum := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
-		if integer.Cmp(minimum) < 0 {
-			return math.MinInt64, nil
-		}
-		return integer.Int64(), nil
+	minimum := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
+	if integer.Cmp(minimum) < 0 {
+		return math.MinInt64, nil
 	}
-	maximumUnsigned := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
-	if integer.Cmp(maximumUnsigned) > 0 {
-		integer.Set(maximumUnsigned)
+	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 63), big.NewInt(1))
+	if integer.Cmp(maximum) > 0 {
+		return math.MaxInt64, nil
 	}
-	return int64(integer.Uint64()), nil
+	return integer.Int64(), nil
 }
 
 func floatToUint64Explicit[T constraints.Float](
@@ -118,14 +115,18 @@ func floatToUint64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		if math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
-			return moerr.NewOutOfRangeNoCtx("uint64", "")
+		rounded := math.Round(floatValue)
+		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+			rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
+			return moerr.NewOutOfRangeNoCtx("uint64", strconv.FormatFloat(floatValue, 'g', -1, 64))
 		}
-		converted, err := explicitUint64FromIntegerString(strconv.FormatFloat(math.Round(floatValue), 'f', 0, 64))
-		if err != nil {
-			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%v'", value)
+		var converted uint64
+		if rounded < 0 {
+			converted = uint64(int64(rounded))
+		} else {
+			converted = uint64(rounded)
 		}
-		if err = to.Append(converted, false); err != nil {
+		if err := to.Append(converted, false); err != nil {
 			return err
 		}
 	}
@@ -146,14 +147,12 @@ func floatToInt64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		if math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
-			return moerr.NewOutOfRangeNoCtx("int64", "")
+		rounded := math.Round(floatValue)
+		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+			rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+			return moerr.NewOutOfRangeNoCtx("int64", strconv.FormatFloat(floatValue, 'g', -1, 64))
 		}
-		converted, err := explicitInt64FromIntegerString(strconv.FormatFloat(math.Round(floatValue), 'f', 0, 64))
-		if err != nil {
-			return moerr.NewOutOfRangeNoCtxf("int64", "value '%v'", value)
-		}
-		if err = to.Append(converted, false); err != nil {
+		if err := to.Append(int64(rounded), false); err != nil {
 			return err
 		}
 	}
@@ -199,7 +198,7 @@ func decimalToInt64Explicit[T types.FixedSizeTExceptStrType](
 			continue
 		}
 		integerPart := strings.SplitN(format(value), ".", 2)[0]
-		converted, err := explicitInt64FromIntegerString(integerPart)
+		converted, err := decimalInt64Explicit(integerPart)
 		if err != nil {
 			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", integerPart)
 		}
