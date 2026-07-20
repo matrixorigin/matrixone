@@ -37,6 +37,19 @@ func loadedSeg(t *testing.T, b *Builder) *Segment {
 	return loaded
 }
 
+// collectLiveDocs drains the ReconstructLiveDocs iterator into a slice for
+// assertions (the production consumer streams it one doc at a time).
+func collectLiveDocs(idx *Index, positionFree bool) ([]TokenizedDoc, error) {
+	var out []TokenizedDoc
+	for d, err := range idx.ReconstructLiveDocs(positionFree) {
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
 func TestReconstructLiveDocs(t *testing.T) {
 	// base (recency 0): doc 0 "apple pie", doc 1 "banana bread".
 	bb := NewBuilder("base", int32(types.T_int64))
@@ -55,7 +68,7 @@ func TestReconstructLiveDocs(t *testing.T) {
 	// delete doc 0 at recency 100.
 	idx := NewIndex([]*Segment{base, tail}, map[any]int64{normalizeKey(int64(0)): 100})
 
-	docs, err := idx.ReconstructLiveDocs(false)
+	docs, err := collectLiveDocs(idx, false)
 	require.NoError(t, err)
 
 	got := map[any][]string{}

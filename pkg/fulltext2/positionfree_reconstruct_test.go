@@ -31,7 +31,7 @@ func TestReconstructLiveDocsPositionFree(t *testing.T) {
 	seg := loadedSeg(t, b)
 	idx := NewIndex([]*Segment{seg}, nil)
 
-	docs, err := idx.ReconstructLiveDocs(true)
+	docs, err := collectLiveDocs(idx, true)
 	require.NoError(t, err)
 
 	got := map[any]map[string]int{}

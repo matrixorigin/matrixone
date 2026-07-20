@@ -59,34 +59,23 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 		pkType = segs[0].PkType
 	}
 	idx := NewIndex(segs, deletes)
-	docs, err := idx.ReconstructLiveDocs(cfg.PositionFree)
-	if err != nil {
-		return 0, err
+	if capacity <= 0 {
+		capacity = DefaultBuildCapacity // floor so the fresh base is sealed+spilled per ~1M docs
 	}
 
 	ts := time.Now().UnixMicro()
 	uid := fmt.Sprintf("%s:%d", cfg.IndexTable, ts)
-	var fresh []*Segment
-	if len(docs) > 0 {
-		var bopts []BuildOpt
-		if cfg.PositionFree {
-			bopts = append(bopts, WithPositionFree())
-		}
-		b := NewBuilder(uid, pkType, bopts...)
-		for _, d := range docs {
-			for i, w := range d.Terms {
-				if e := b.Add(w, d.Positions[i], d.Pk); e != nil {
-					return 0, e
-				}
-			}
-		}
-		if fresh, err = b.FinishSegments(capacity); err != nil {
-			return 0, err
-		}
+	var bopts []BuildOpt
+	if cfg.PositionFree {
+		bopts = append(bopts, WithPositionFree())
 	}
 
-	// Atomic replace (one txn = the TVF statement): drop every prior base + the
-	// tail, then write the fresh base(s) at the new recency.
+	// Atomic replace, all in the caller's (TVF statement) txn: drop every prior base +
+	// the whole tail FIRST, then STREAM the fresh dead-doc-free base(s). Deleting first
+	// is required because DeleteAllBases is indiscriminate over tag=0 — writing the fresh
+	// bases first would let it wipe them. It is safe because ReconstructLiveDocs reads the
+	// already-loaded in-memory idx (not the storage rows), and a mid-stream failure rolls
+	// the whole statement back.
 	for _, s := range DeleteAllBasesSqls(cfg) {
 		if e := runCompactSql(sqlproc, s); e != nil {
 			return 0, e
@@ -97,20 +86,56 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 			return 0, e
 		}
 	}
-	for i, seg := range fresh {
-		seg.Id = SubIndexId(uid, i)
+
+	// Stream the reconstructed live docs into a capacity-bounded builder, sealing +
+	// persisting + freeing each fresh base segment as it fills — so peak build memory is
+	// one open segment, not the whole rebuilt corpus.
+	var cur *Builder
+	segIdx := 0
+	nlive := 0
+	sealFresh := func() error {
+		if cur == nil || cur.NumDocs() == 0 {
+			cur = nil
+			return nil
+		}
+		seg, err := cur.Finish()
+		cur = nil
+		if err != nil {
+			return err
+		}
+		seg.Id = SubIndexId(uid, segIdx)
 		seg.Recency = recency
+		segIdx++
 		sqls, cleanup, e := seg.ToInsertSqls(cfg, ts, 0 /* tag=0 base */)
 		if e != nil {
-			return 0, e
+			return e
 		}
-		e = runCompactSqls(sqlproc, sqls)
-		cleanup()
-		if e != nil {
-			return 0, e
+		defer cleanup()
+		return runCompactSqls(sqlproc, sqls)
+	}
+	for d, derr := range idx.ReconstructLiveDocs(cfg.PositionFree) {
+		if derr != nil {
+			return 0, derr
+		}
+		if cur == nil {
+			cur = NewBuilder(uid, pkType, bopts...)
+		}
+		for i, w := range d.Terms {
+			if e := cur.Add(w, d.Positions[i], d.Pk); e != nil {
+				return 0, e
+			}
+		}
+		nlive++
+		if int64(cur.NumDocs()) >= capacity {
+			if e := sealFresh(); e != nil {
+				return 0, e
+			}
 		}
 	}
-	return len(docs), nil
+	if e := sealFresh(); e != nil {
+		return 0, e
+	}
+	return nlive, nil
 }
 
 func runCompactSql(sqlproc *sqlexec.SqlProcess, sql string) error {

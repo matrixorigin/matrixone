@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"fmt"
+	"iter"
 	"sort"
 	"strconv"
 
@@ -372,82 +373,95 @@ func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 	return idx.SearchBoolean(q, algo, k, nil) // convenience entry: no WHERE prefilter
 }
 
-// ReconstructLiveDocs reconstructs each LIVE document as (pk, ordered terms) from
-// the positional postings across all loaded segments — the input to a MERGE
-// compaction that folds base + tail into a fresh dead-doc-free base WITHOUT
-// re-tokenizing the source. Per-doc term order is recovered from token positions;
-// docs are returned in ascending pk-key order (deterministic output).
-func (idx *Index) ReconstructLiveDocs(positionFree bool) ([]TokenizedDoc, error) {
-	type posTerm struct {
-		pos  int32
-		term string
-	}
-	// Bucket postings only for LIVE (si, ord) locations.
-	buckets := make(map[docLoc][]posTerm, len(idx.liveLoc))
-	for _, l := range idx.liveLoc {
-		buckets[l] = nil
-	}
-	for si, seg := range idx.segments {
-		err := seg.forEachPosting(func(term string, tp *termPostings) {
-			docs := tp.materializeDocIDs() // docIDs (block-compressed on load)
-			if positionFree {
-				// A position-free segment has no positions: reconstruct each doc's terms
-				// from tf — emit the term tf times with a synthetic ascending position.
-				// Order is irrelevant (the position-free rebuild drops positions again),
-				// but tf is preserved so BM25 ranking is unchanged.
-				tfs := tp.materializeTfs()
+// ReconstructLiveDocs yields each LIVE document as (pk, ordered terms) from the
+// positional postings across all loaded segments — the input to a MERGE compaction
+// that folds base + tail into a fresh dead-doc-free base WITHOUT re-tokenizing the
+// source. Per-doc term order is recovered from token positions; docs are yielded in
+// ascending pk-key order (deterministic output).
+//
+// It is an iterator so the compaction consumer can stream one doc at a time into a
+// capacity-bounded builder (sealing + spilling each segment as it fills) instead of
+// materializing the whole live corpus as a []TokenizedDoc and then a second full
+// copy inside the builder. Peak extra memory is thus one open segment rather than
+// N× the corpus. (The per-doc posting `buckets` are still built up front — a doc is
+// only complete once every term/segment is scanned — but each is freed the moment
+// its doc is yielded, so the map drains as iteration proceeds.) On a posting-decode
+// error the iterator yields once with a non-nil error and stops.
+func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc, error] {
+	return func(yield func(TokenizedDoc, error) bool) {
+		type posTerm struct {
+			pos  int32
+			term string
+		}
+		// Bucket postings only for LIVE (si, ord) locations.
+		buckets := make(map[docLoc][]posTerm, len(idx.liveLoc))
+		for _, l := range idx.liveLoc {
+			buckets[l] = nil
+		}
+		for si, seg := range idx.segments {
+			err := seg.forEachPosting(func(term string, tp *termPostings) {
+				docs := tp.materializeDocIDs() // docIDs (block-compressed on load)
+				if positionFree {
+					// A position-free segment has no positions: reconstruct each doc's terms
+					// from tf — emit the term tf times with a synthetic ascending position.
+					// Order is irrelevant (the position-free rebuild drops positions again),
+					// but tf is preserved so BM25 ranking is unchanged.
+					tfs := tp.materializeTfs()
+					for i, ord := range docs {
+						l := docLoc{si, ord}
+						if _, live := buckets[l]; !live {
+							continue
+						}
+						for t := int32(0); t < int32(tfs[i]); t++ {
+							buckets[l] = append(buckets[l], posTerm{t, term})
+						}
+					}
+					return
+				}
+				mat := tp.materializePositions() // decode this term's positions once
 				for i, ord := range docs {
 					l := docLoc{si, ord}
 					if _, live := buckets[l]; !live {
 						continue
 					}
-					for t := int32(0); t < int32(tfs[i]); t++ {
-						buckets[l] = append(buckets[l], posTerm{t, term})
+					for _, pos := range mat[i] {
+						buckets[l] = append(buckets[l], posTerm{pos, term})
 					}
 				}
+			})
+			if err != nil {
+				yield(TokenizedDoc{}, err)
 				return
 			}
-			mat := tp.materializePositions() // decode this term's positions once
-			for i, ord := range docs {
-				l := docLoc{si, ord}
-				if _, live := buckets[l]; !live {
-					continue
-				}
-				for _, pos := range mat[i] {
-					buckets[l] = append(buckets[l], posTerm{pos, term})
-				}
-			}
-		})
-		if err != nil {
-			return nil, err
 		}
-	}
 
-	// Decorate-sort-undecorate: compute each pk's sortKey ONCE (O(n)) rather than per
-	// comparison (O(n log n) Sprintf/allocs), which matters at MERGE over a large index.
-	type keyed struct {
-		sk  string
-		loc docLoc
-	}
-	keys := make([]keyed, 0, len(idx.liveLoc))
-	for k, l := range idx.liveLoc {
-		keys = append(keys, keyed{sortKey(k), l})
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk }) // deterministic output
-	out := make([]TokenizedDoc, 0, len(keys))
-	for _, kd := range keys {
-		l := kd.loc
-		b := buckets[l]
-		sort.SliceStable(b, func(i, j int) bool { return b[i].pos < b[j].pos })
-		terms := make([]string, len(b))
-		positions := make([]int32, len(b))
-		for i, pt := range b {
-			terms[i] = pt.term
-			positions[i] = pt.pos // byte position, carried through MERGE
+		// Decorate-sort-undecorate: compute each pk's sortKey ONCE (O(n)) rather than per
+		// comparison (O(n log n) Sprintf/allocs), which matters at MERGE over a large index.
+		type keyed struct {
+			sk  string
+			loc docLoc
 		}
-		out = append(out, TokenizedDoc{Pk: idx.segments[l.si].pks[l.ord], Terms: terms, Positions: positions})
+		keys := make([]keyed, 0, len(idx.liveLoc))
+		for k, l := range idx.liveLoc {
+			keys = append(keys, keyed{sortKey(k), l})
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk }) // deterministic output
+		for _, kd := range keys {
+			l := kd.loc
+			b := buckets[l]
+			sort.SliceStable(b, func(i, j int) bool { return b[i].pos < b[j].pos })
+			terms := make([]string, len(b))
+			positions := make([]int32, len(b))
+			for i, pt := range b {
+				terms[i] = pt.term
+				positions[i] = pt.pos // byte position, carried through MERGE
+			}
+			buckets[l] = nil // this doc's postings are copied out — let GC reclaim them
+			if !yield(TokenizedDoc{Pk: idx.segments[l.si].pks[l.ord], Terms: terms, Positions: positions}, nil) {
+				return
+			}
+		}
 	}
-	return out, nil
 }
 
 // NumDocs returns the number of live documents in the index.
