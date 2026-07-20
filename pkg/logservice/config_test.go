@@ -166,6 +166,16 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	err = c4.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
+	nonCoordinator := c
+	nonCoordinator.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	nonCoordinator.BootstrapConfig.Restore.Enabled = true
+	assert.NoError(t, nonCoordinator.Validate())
+
+	nonMember := nonCoordinator
+	nonMember.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41be"
+	err = nonMember.Validate()
+	require.ErrorContains(t, err, "initial HAKeeper member")
+
 	recovery := c
 	recovery.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 	recovery.BootstrapConfig.Restore.FilePath = "/recovery/hakeeper_backup.data"

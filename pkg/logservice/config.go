@@ -404,15 +404,17 @@ func (c *Config) Validate() error {
 			return moerr.NewBadConfigNoCtx("InitHAKeeperMembers does not match NumOfLogShardReplicas")
 		}
 	}
+	if c.BootstrapConfig.Restore.Enabled {
+		if _, ok := c.Bootstrapping(); !ok {
+			return moerr.NewBadConfigNoCtx("LogService recovery must run on an initial HAKeeper member")
+		}
+	}
 	if c.BootstrapConfig.Restore.WALDataPath != "" {
 		if !c.BootstrapConfig.Restore.Enabled {
 			return moerr.NewBadConfigNoCtx("WAL recovery requires restore.enabled on every initial HAKeeper member")
 		}
 		if c.BootstrapConfig.Restore.FilePath == "" {
 			return moerr.NewBadConfigNoCtx("HAKeeper restore file path is required for WAL recovery")
-		}
-		if _, ok := c.Bootstrapping(); !ok {
-			return moerr.NewBadConfigNoCtx("WAL recovery must run on an initial HAKeeper member")
 		}
 	}
 
