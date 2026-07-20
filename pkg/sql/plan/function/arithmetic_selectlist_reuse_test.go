@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -30,6 +31,36 @@ import (
 // then two. Row 2 is outside the current batch but retains its old mask bit.
 func staleSelectList() *FunctionSelectList {
 	return &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}}
+}
+
+func TestHasEvaluableRows(t *testing.T) {
+	t.Run("zero length", func(t *testing.T) {
+		require.False(t, hasEvaluableRows(nulls.NewWithSize(0), 0))
+	})
+
+	t.Run("empty bitmap fast path", func(t *testing.T) {
+		require.True(t, hasEvaluableRows(nulls.NewWithSize(2), 2))
+	})
+
+	t.Run("all current rows null with stale tail", func(t *testing.T) {
+		rsNull := nulls.NewWithSize(3)
+		rsNull.Add(0)
+		rsNull.Add(1)
+		rsNull.Add(2)
+		require.False(t, hasEvaluableRows(rsNull, 2))
+	})
+
+	t.Run("partial null", func(t *testing.T) {
+		rsNull := nulls.NewWithSize(2)
+		rsNull.Add(1)
+		require.True(t, hasEvaluableRows(rsNull, 2))
+	})
+
+	t.Run("stale tail only", func(t *testing.T) {
+		rsNull := nulls.NewWithSize(3)
+		rsNull.Add(2)
+		require.True(t, hasEvaluableRows(rsNull, 2))
+	})
 }
 
 func runWithStaleSelectList(

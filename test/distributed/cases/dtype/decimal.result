@@ -5,29 +5,29 @@ select 1123.2333+1233.3331;
 ➤ 1123.2333 + 1233.3331[3,18,4]  𝄀
 2356.5664
 select cast(9223372.036854775808 as decimal)+1;
-➤ cast(9223372.036854775808 as decimal(38)) + 1[3,38,0]  𝄀
+➤ cast(9223372.036854775808 as decimal(38)) + 1[3,39,0]  𝄀
 9223373
 select round(cast(2320310.66666612312 as decimal));
-➤ round(cast(2320310.66666612312 as decimal(38)))[3,38,0]  𝄀
+➤ round(cast(2320310.66666612312 as decimal(38)))[3,39,0]  𝄀
 2320311
 select floor(cast(2231231.501231 as decimal));
-➤ floor(cast(2231231.501231 as decimal(38)))[3,38,0]  𝄀
+➤ floor(cast(2231231.501231 as decimal(38)))[3,39,0]  𝄀
 2231232
 drop table if exists t1;
 create table t1 (a decimal(29,0) not null, primary key(a));
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFE), (18446744073709551613.0000000), (18446744073709551612.0000000001);
 select * from t1 order by 1 asc;
-➤ a[3,29,0]  𝄀
+➤ a[3,30,0]  𝄀
 72057594037927934  𝄀
 18446744073709551612  𝄀
 18446744073709551613  𝄀
 18446744073709551615
 select * from t1 where a=18446744073709551615 order by a desc;
-➤ a[3,29,0]  𝄀
+➤ a[3,30,0]  𝄀
 18446744073709551615
 delete from t1 where a=18446744073709551615.000000000;
 select * from t1;
-➤ a[3,29,0]  𝄀
+➤ a[3,30,0]  𝄀
 72057594037927934  𝄀
 18446744073709551613  𝄀
 18446744073709551612
@@ -114,14 +114,14 @@ drop table t1;
 create table t1 (decimal_col decimal(29,0));
 insert into t1 values (-17666000000000000000);
 select * from t1 where decimal_col=-17666000000000000000 order by 1 asc;
-➤ decimal_col[3,29,0]  𝄀
+➤ decimal_col[3,30,0]  𝄀
 -17666000000000000000
 select * from t1 where decimal_col='-17666000000000000000' order by decimal_col desc;
-➤ decimal_col[3,29,0]  𝄀
+➤ decimal_col[3,30,0]  𝄀
 -17666000000000000000
 drop table t1;
 select cast(10000002383263201056 as decimal) mod 50 as result;
-➤ result[3,38,0]  𝄀
+➤ result[3,39,0]  𝄀
 6
 select cast(cast(19999999999999999999 as decimal) as unsigned);
 Data truncation: data out of range: data type uint64, value '19999999999999999999'
@@ -135,9 +135,9 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
-➤ id[4,32,0]  ¦  a[3,20,0]  ¦  b[12,-1,0]
+➤ id[4,32,0]  ¦  a[3,21,0]  ¦  b[12,-1,0]
 select a,count(a) from t1 group by a having count(a)>=2;
-➤ a[3,20,0]  ¦  count(a)[-5,64,0]
+➤ a[3,21,0]  ¦  count(a)[-5,64,0]
 CREATE TABLE t_decimal(id decimal(10,5));
 INSERT INTO t_decimal VALUES (1), (2),(1.099999999),(2.20000000001);
 select * from t_decimal;
@@ -733,25 +733,25 @@ INSERT INTO decimal07 VALUES(2, 0.327813092);
 INSERT INTO decimal07 VALUES(3, -3728.4324);
 INSERT INTO decimal07 VALUES(4, 12345678909876543212345678909876543243);
 SELECT * FROM decimal07;
-➤ a[4,32,0]  ¦  b[3,38,0]  𝄀
+➤ a[4,32,0]  ¦  b[3,39,0]  𝄀
 1  ¦  3728193  𝄀
 2  ¦  0  𝄀
 3  ¦  -3728  𝄀
 4  ¦  12345678909876543212345678909876543243
 SELECT a, a * b FROM decimal07;
-➤ a[4,32,0]  ¦  a * b[3,38,0]  𝄀
+➤ a[4,32,0]  ¦  a * b[3,39,0]  𝄀
 1  ¦  3728193  𝄀
 2  ¦  0  𝄀
 3  ¦  -11184  𝄀
 4  ¦  49382715639506172849382715639506172972
 SELECT a, a + b FROM decimal07;
-➤ a[4,32,0]  ¦  a + b[3,38,0]  𝄀
+➤ a[4,32,0]  ¦  a + b[3,39,0]  𝄀
 1  ¦  3728194  𝄀
 2  ¦  2  𝄀
 3  ¦  -3725  𝄀
 4  ¦  12345678909876543212345678909876543247
 SELECT a, a - b - b FROM decimal07;
-➤ a[4,32,0]  ¦  a - b - b[3,38,0]  𝄀
+➤ a[4,32,0]  ¦  a - b - b[3,39,0]  𝄀
 1  ¦  -7456385  𝄀
 2  ¦  2  𝄀
 3  ¦  7459  𝄀
@@ -759,13 +759,13 @@ SELECT a, a - b - b FROM decimal07;
 SELECT a, b DIV a FROM decimal07;
 Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
 SELECT a, ABS(b) FROM decimal07;
-➤ a[4,32,0]  ¦  ABS(b)[3,38,0]  𝄀
+➤ a[4,32,0]  ¦  ABS(b)[3,39,0]  𝄀
 1  ¦  3728193  𝄀
 2  ¦  0  𝄀
 3  ¦  3728  𝄀
 4  ¦  12345678909876543212345678909876543243
 SELECT a, CEIL(b) FROM decimal07;
-➤ a[4,32,0]  ¦  CEIL(b)[3,38,0]  𝄀
+➤ a[4,32,0]  ¦  CEIL(b)[3,39,0]  𝄀
 1  ¦  3728193  𝄀
 2  ¦  0  𝄀
 3  ¦  -3728  𝄀
@@ -809,7 +809,7 @@ INSERT INTO decimal08 VALUES(-63723829382993920323820398294832849309);
 INSERT INTO decimal08 VALUES(0.2777389100215365283243325321437821372);
 INSERT INTO decimal08 VALUES(-99999999999999999999999999999999999999);
 SELECT * FROM decimal08;
-➤ a[3,38,0]  𝄀
+➤ a[3,39,0]  𝄀
 21737187383787273829839184932843922131  𝄀
 99999999999999999999999999999999999999  𝄀
 1000000000000000  𝄀
@@ -818,7 +818,7 @@ SELECT * FROM decimal08;
 0  𝄀
 -99999999999999999999999999999999999999
 SELECT a + 1 FROM decimal08;
-➤ a + 1[3,38,0]  𝄀
+➤ a + 1[3,39,0]  𝄀
 21737187383787273829839184932843922132  𝄀
 100000000000000000000000000000000000000  𝄀
 1000000000000001  𝄀
@@ -838,7 +838,7 @@ INSERT INTO decimal09 VALUES(212839);
 INSERT INTO decimal09 VALUES(44455788525777778895412365489563123654);
 INSERT INTO decimal09 VALUES(0.1236547899874561233211236544569877898);
 SELECT * FROM decimal09;
-➤ d[3,38,0]  𝄀
+➤ d[3,39,0]  𝄀
 null  𝄀
 212839  𝄀
 44455788525777778895412365489563123654  𝄀
@@ -897,7 +897,7 @@ SELECT ABS(a) * c FROM decimal10;
 1226525.9167065881  𝄀
 812.1660199148803
 SELECT FLOOR(a) FROM decimal10;
-➤ FLOOR(a)[3,20,0]  𝄀
+➤ FLOOR(a)[3,21,0]  𝄀
 12323  𝄀
 3829  𝄀
 -3728833  𝄀
@@ -1003,19 +1003,19 @@ SELECT CAST(b AS DECIMAL(10,9)) FROM decimal10;
 0E-9  𝄀
 111.000000000
 SELECT CAST(b AS DECIMAL(10)) FROM decimal10;
-➤ cast(b as decimal(10))[3,10,0]  𝄀
+➤ cast(b as decimal(10))[3,11,0]  𝄀
 155  𝄀
 78  𝄀
 0  𝄀
 111
 SELECT CAST(ABS(a) AS decimal) FROM decimal10;
-➤ cast(ABS(a) as decimal(38))[3,38,0]  𝄀
+➤ cast(ABS(a) as decimal(38))[3,39,0]  𝄀
 0  𝄀
 0  𝄀
 2  𝄀
 9
 SELECT CAST(a AS decimal) FROM decimal10;
-➤ cast(a as decimal(38))[3,38,0]  𝄀
+➤ cast(a as decimal(38))[3,39,0]  𝄀
 0  𝄀
 0  𝄀
 -2  𝄀
@@ -1114,14 +1114,14 @@ c  ¦  545676678738  𝄀
 d  ¦  null  𝄀
 e  ¦  99999999009999999999999999999999999999
 SELECT CAST(b AS DECIMAL(38,0)) FROM decimal12;
-➤ cast(b as decimal(38))[3,38,0]  𝄀
+➤ cast(b as decimal(38))[3,39,0]  𝄀
 3140000000  𝄀
 -3140000000  𝄀
 545676678738  𝄀
 null  𝄀
 99999999009999999999999999999999999999
 SELECT CAST(b AS DECIMAL) FROM decimal12 WHERE a = 'b';
-➤ cast(b as decimal(38))[3,38,0]  𝄀
+➤ cast(b as decimal(38))[3,39,0]  𝄀
 -3140000000
 DROP TABLE IF EXISTS decimal13;
 DROP TABLE IF EXISTS decimal14;
@@ -1173,7 +1173,7 @@ DROP TABLE IF EXISTS decimal16;
 CREATE TABLE decimal16(a decimal, b decimal(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));
 INSERT INTO decimal16 VALUES(1234789456456456456567898552556, 3728321323.4321214,'小明');
 SELECT * FROM decimal16;
-➤ a[3,38,0]  ¦  b[3,38,10]  ¦  c[12,-1,0]  𝄀
+➤ a[3,39,0]  ¦  b[3,38,10]  ¦  c[12,-1,0]  𝄀
 1234789456456456456567898552556  ¦  3728321323.4321214000  ¦  小明
 INSERT INTO decimal16 VALUES(-64564567898552556, 3728321323.4321214,'小花');
 INSERT INTO decimal16 VALUES(-64564568552556, 8321323.4321214,'小强');
@@ -1188,7 +1188,7 @@ CREATE TABLE decimal18(a DECIMAL, b DECIMAL(38,0));
 INSERT INTO decimal18 (a,b) SELECT a,b FROM decimal17;
 INSERT INTO decimal18 (a,b) SELECT c,d FROM decimal17;
 SELECT * FROM decimal17;
-➤ a[3,38,0]  ¦  b[3,38,0]  ¦  c[3,20,4]  ¦  d[3,10,0]  𝄀
+➤ a[3,39,0]  ¦  b[3,39,0]  ¦  c[3,20,4]  ¦  d[3,11,0]  𝄀
 3231  ¦  0  ¦  -38232432541431.7890  ¦  3728739824  𝄀
 -3892  ¦  null  ¦  3872932.3289  ¦  3829  𝄀
 123  ¦  null  ¦  7281392.9020  ¦  328392323
@@ -1208,7 +1208,7 @@ SELECT * FROM decimal18;
 0.3728378427437620000000000000000000000  ¦  9.9999999999999999999999999999999999999  ¦  0.0  ¦  -454.49845  𝄀
 -0.3728329487324893628746328746873236438  ¦  -9.3820342423000000000000000000000000000  ¦  -3.2983784E11  ¦  0.0
 SELECT CAST(col3 AS decimal(38)) FROM decimal18;
-➤ cast(col3 as decimal(38))[3,38,0]  𝄀
+➤ cast(col3 as decimal(38))[3,39,0]  𝄀
 1278945  𝄀
 1545  𝄀
 453201  𝄀
@@ -1296,13 +1296,13 @@ SELECT CAST('1.2' AS decimal(3,2));
 ➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
 1.20
 SELECT CAST('1.327832' AS decimal(20));
-➤ cast(1.327832 as decimal(20))[3,20,0]  𝄀
+➤ cast(1.327832 as decimal(20))[3,21,0]  𝄀
 1
 SELECT CAST('-29012123143.432478274329432' AS DECIMAL);
-➤ cast(-29012123143.432478274329432 as decimal(38))[3,38,0]  𝄀
+➤ cast(-29012123143.432478274329432 as decimal(38))[3,39,0]  𝄀
 -29012123143
 SELECT CAST('-99999999999999999999999999999999999999' AS DECIMAL(38));
-➤ cast(-99999999999999999999999999999999999999 as decimal(38))[3,38,0]  𝄀
+➤ cast(-99999999999999999999999999999999999999 as decimal(38))[3,39,0]  𝄀
 -99999999999999999999999999999999999999
 SELECT 1e18 * CAST('1.2' as decimal(3,2));
 ➤ 1e18 * cast(1.2 as decimal(3, 2))[8,54,0]  𝄀
@@ -1318,18 +1318,18 @@ SELECT CAST(-1e18 as decimal(22,2));
 ➤ cast(-1e18 as decimal(22, 2))[3,22,2]  𝄀
 -1000000000000000000.00
 SELECT CAST(NULL AS decimal(6));
-➤ cast(null as decimal(6))[3,6,0]  𝄀
+➤ cast(null as decimal(6))[3,7,0]  𝄀
 null
 SELECT 10.0 + CAST('aaa' AS decimal);
 invalid input: aaa beyond the range, can't be converted to Decimal128(38,0).
 SELECT CAST('101010101001' AS decimal);
-➤ cast(101010101001 as decimal(38))[3,38,0]  𝄀
+➤ cast(101010101001 as decimal(38))[3,39,0]  𝄀
 101010101001
 SELECT CAST('10101010010101010101010101' AS decimal(26));
-➤ cast(10101010010101010101010101 as decimal(26))[3,26,0]  𝄀
+➤ cast(10101010010101010101010101 as decimal(26))[3,27,0]  𝄀
 10101010010101010101010101
 SELECT CAST('0101010' AS decimal);
-➤ cast(0101010 as decimal(38))[3,38,0]  𝄀
+➤ cast(0101010 as decimal(38))[3,39,0]  𝄀
 101010
 SELECT CAST('' AS decimal);
 invalid input: "" is invalid numeric string
@@ -1342,7 +1342,7 @@ SELECT * FROM decimal20;
 1.01415  ¦  2.02115  ¦  -3.03  ¦  444.04  ¦  4515.05  𝄀
 123654.78984115855111555555888859999999  ¦  1e18  ¦  229e15  ¦  2178291  ¦  873273271432714032713243214333
 SELECT CAST(v AS DECIMAL) FROM decimal20;
-➤ cast(v as decimal(38))[3,38,0]  𝄀
+➤ cast(v as decimal(38))[3,39,0]  𝄀
 1  𝄀
 123655
 SELECT CAST(tt AS decimal(24,2)) FROM decimal20;
@@ -1350,15 +1350,15 @@ SELECT CAST(tt AS decimal(24,2)) FROM decimal20;
 2.02  𝄀
 1000000000000000000.00
 SELECT CAST(t AS decimal(20)) FROM decimal20;
-➤ cast(t as decimal(20))[3,20,0]  𝄀
+➤ cast(t as decimal(20))[3,21,0]  𝄀
 -3  𝄀
 229000000000000000
 SELECT CAST(mt AS decimal) FROM decimal20;
-➤ cast(mt as decimal(38))[3,38,0]  𝄀
+➤ cast(mt as decimal(38))[3,39,0]  𝄀
 444  𝄀
 2178291
 SELECT CAST(lt AS decimal) FROM decimal20;
-➤ cast(lt as decimal(38))[3,38,0]  𝄀
+➤ cast(lt as decimal(38))[3,39,0]  𝄀
 4515  𝄀
 873273271432714032713243214333
 SELECT 12487561513.48465123 / CAST(t AS decimal(20)) FROM decimal20;
@@ -1400,21 +1400,21 @@ DROP TABLE IF EXISTS decimal_compare_test;
 CREATE TABLE decimal_compare_test (col1 DECIMAL(38,0) NOT NULL PRIMARY KEY, col2 DOUBLE);
 INSERT INTO decimal_compare_test VALUES (12, -32734928490.328403), (1000000, 3289323423);
 SELECT * FROM decimal_compare_test ORDER BY col1;
-➤ col1[3,38,0]  ¦  col2[8,54,0]  𝄀
+➤ col1[3,39,0]  ¦  col2[8,54,0]  𝄀
 12  ¦  -3.2734928490328403E10  𝄀
 1000000  ¦  3.289323423E9
 SELECT * FROM decimal_compare_test WHERE col1 = 12.213231000021312;
-➤ col1[3,38,0]  ¦  col2[8,54,0]
+➤ col1[3,39,0]  ¦  col2[8,54,0]
 SELECT * FROM decimal_compare_test WHERE col1 = 12;
-➤ col1[3,38,0]  ¦  col2[8,54,0]  𝄀
+➤ col1[3,39,0]  ¦  col2[8,54,0]  𝄀
 12  ¦  -3.2734928490328403E10
 SELECT * FROM decimal_compare_test WHERE col1 = 12.9;
-➤ col1[3,38,0]  ¦  col2[8,54,0]
+➤ col1[3,39,0]  ¦  col2[8,54,0]
 SELECT * FROM decimal_compare_test WHERE col1 = 11.9;
-➤ col1[3,38,0]  ¦  col2[8,54,0]
+➤ col1[3,39,0]  ¦  col2[8,54,0]
 DELETE FROM decimal_compare_test WHERE col1 = 12.213231000021312;
 SELECT * FROM decimal_compare_test ORDER BY col1;
-➤ col1[3,38,0]  ¦  col2[8,54,0]  𝄀
+➤ col1[3,39,0]  ¦  col2[8,54,0]  𝄀
 12  ¦  -3.2734928490328403E10  𝄀
 1000000  ¦  3.289323423E9
 DROP TABLE decimal_compare_test;
@@ -1445,7 +1445,7 @@ Project  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -1453,7 +1453,7 @@ Project  𝄀
   ->  Table Scan on decimal.decimal_opt_test  𝄀
         Filter Cond: false
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
@@ -1467,7 +1467,7 @@ Project  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = 99.99;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
 EXPLAIN SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -1482,7 +1482,7 @@ Project  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_quantity [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
 -- @regex("prefix_between", true)
@@ -1493,12 +1493,12 @@ Project  𝄀
         Join Cond: (decimal_opt_test.id = __mo_index_pri_col)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
-              Filter Cond: (decimal_opt_test.price >= 99.990000), (decimal_opt_test.price <= 299.990000)  𝄀
+              Filter Cond: (decimal_opt_test.price <= 299.990000), (decimal_opt_test.price >= 99.990000)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_between(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
@@ -1515,7 +1515,7 @@ Project  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_in(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
@@ -1532,27 +1532,27 @@ Project  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_amount [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE amount = 12.34;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 DELETE FROM decimal_opt_test WHERE price = 99.990000000;
 SELECT * FROM decimal_opt_test ORDER BY id;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
 INSERT INTO decimal_opt_test VALUES (1, 99.99, 12.34567, 100);
 UPDATE decimal_opt_test SET price = 999.99 WHERE price = 99.990000000;
 SELECT * FROM decimal_opt_test WHERE id = 1;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  999.99  ¦  12.34567  ¦  100
 SELECT * FROM decimal_opt_test
 WHERE price = 999.990000 AND amount = 12.345670000
 ORDER BY id;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  999.99  ¦  12.34567  ¦  100
 SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991;
 ➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
@@ -1582,7 +1582,7 @@ Project  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = -50.500000;
-➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,18,0]  𝄀
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 4  ¦  -50.50  ¦  -10.12345  ¦  -100
 DROP TABLE decimal_opt_test;
 DROP TABLE IF EXISTS decimal128_large_test;
@@ -1598,25 +1598,25 @@ INSERT INTO decimal128_large_test VALUES
 (2, 99999999999999999999, 99999999999999999999.000000),
 (3, 12345678901234567891, 12345678901234567890.123000);
 SELECT * FROM decimal128_large_test WHERE large_val = 12345678901234567890.000000;
-➤ id[4,32,0]  ¦  large_val[3,38,0]  ¦  large_val_scale[3,38,6]  𝄀
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
 1  ¦  12345678901234567890  ¦  12345678901234567890.123456
 SELECT * FROM decimal128_large_test WHERE large_val = 12345678901234567890.123456;
-➤ id[4,32,0]  ¦  large_val[3,38,0]  ¦  large_val_scale[3,38,6]
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]
 SELECT * FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123456;
-➤ id[4,32,0]  ¦  large_val[3,38,0]  ¦  large_val_scale[3,38,6]  𝄀
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
 1  ¦  12345678901234567890  ¦  12345678901234567890.123456
 SELECT * FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123000;
-➤ id[4,32,0]  ¦  large_val[3,38,0]  ¦  large_val_scale[3,38,6]  𝄀
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
 3  ¦  12345678901234567891  ¦  12345678901234567890.123000
 SELECT COUNT(*) FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123456789;
 ➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT * FROM decimal128_large_test WHERE large_val = 99999999999999999999.00000;
-➤ id[4,32,0]  ¦  large_val[3,38,0]  ¦  large_val_scale[3,38,6]  𝄀
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
 2  ¦  99999999999999999999  ¦  99999999999999999999.000000
 DELETE FROM decimal128_large_test WHERE large_val = 12345678901234567890.000000;
 SELECT * FROM decimal128_large_test ORDER BY id;
-➤ id[4,32,0]  ¦  large_val[3,38,0]  ¦  large_val_scale[3,38,6]  𝄀
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
 2  ¦  99999999999999999999  ¦  99999999999999999999.000000  𝄀
 3  ¦  12345678901234567891  ¦  12345678901234567890.123000
 DROP TABLE decimal128_large_test;

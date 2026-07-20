@@ -1612,6 +1612,12 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 // outside [0, length) when an expression executor is reused with a smaller
 // batch, so its total cardinality must not be used here.
 func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
+	if length <= 0 {
+		return false
+	}
+	if rsNull.IsEmpty() {
+		return true
+	}
 	for i := 0; i < length; i++ {
 		if !rsNull.Contains(uint64(i)) {
 			return true
