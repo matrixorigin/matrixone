@@ -754,6 +754,18 @@ func TestCBloomFilterConstVector(t *testing.T) {
 		require.Equal(t, []bool{true, true, true}, nulls)
 	})
 
+	// testAndAddVec captures the per-row "exists" state that TestAndAddVector reports.
+	testAndAddVec := func(bf *CBloomFilter, v *vector.Vector) []bool {
+		out := make([]bool, v.Length())
+		bf.TestAndAddVector(v, func(exist bool, isNull bool, row int) { out[row] = exist })
+		return out
+	}
+
+	// TestAndAdd is STATEFUL and must preserve logical per-row semantics for a
+	// constant: row 0 inserts the value, so rows 1..n-1 observe it (no false
+	// negatives). Pre-fix this broadcast row 0's pre-insert result to every row
+	// ([false,false,false]), which is wrong — and made constant and flat
+	// representations of the same rows observably different.
 	t.Run("testAndAdd_const_int64", func(t *testing.T) {
 		bf := NewCBloomFilter(1000, 3)
 		defer bf.Free()
@@ -761,14 +773,57 @@ func TestCBloomFilterConstVector(t *testing.T) {
 		require.NoError(t, err)
 		defer v.Free(mp)
 
-		// not present yet: all rows report false, then the value is added.
-		first := make([]bool, 3)
-		bf.TestAndAddVector(v, func(exist bool, isNull bool, row int) { first[row] = exist })
-		require.Equal(t, []bool{false, false, false}, first)
+		require.Equal(t, []bool{false, true, true}, testAndAddVec(bf, v))
 
 		// now present in every logical row (no false negatives).
 		res, _ := testVec(bf, v)
 		require.Equal(t, []uint8{1, 1, 1}, res)
+	})
+
+	// Equivalence: a constant vector and a flat vector holding the same repeated
+	// value must report identical TestAndAdd per-row states.
+	t.Run("testAndAdd_const_eq_flat_int64", func(t *testing.T) {
+		constV, err := vector.NewConstFixed[int64](int64Typ, 99, 3, mp)
+		require.NoError(t, err)
+		defer constV.Free(mp)
+
+		flatV := vector.NewVec(int64Typ)
+		defer flatV.Free(mp)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, vector.AppendFixed[int64](flatV, 99, false, mp))
+		}
+
+		bfConst := NewCBloomFilter(1000, 3)
+		defer bfConst.Free()
+		bfFlat := NewCBloomFilter(1000, 3)
+		defer bfFlat.Free()
+
+		flatStates := testAndAddVec(bfFlat, flatV)
+		constStates := testAndAddVec(bfConst, constV)
+		require.Equal(t, []bool{false, true, true}, flatStates)
+		require.Equal(t, flatStates, constStates)
+	})
+
+	t.Run("testAndAdd_const_eq_flat_varchar", func(t *testing.T) {
+		constV, err := vector.NewConstBytes(varTyp, []byte("key"), 3, mp)
+		require.NoError(t, err)
+		defer constV.Free(mp)
+
+		flatV := vector.NewVec(varTyp)
+		defer flatV.Free(mp)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, vector.AppendBytes(flatV, []byte("key"), false, mp))
+		}
+
+		bfConst := NewCBloomFilter(1000, 3)
+		defer bfConst.Free()
+		bfFlat := NewCBloomFilter(1000, 3)
+		defer bfFlat.Free()
+
+		flatStates := testAndAddVec(bfFlat, flatV)
+		constStates := testAndAddVec(bfConst, constV)
+		require.Equal(t, []bool{false, true, true}, flatStates)
+		require.Equal(t, flatStates, constStates)
 	})
 }
 

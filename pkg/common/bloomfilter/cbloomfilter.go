@@ -322,6 +322,35 @@ func broadcastResults(v *vector.Vector, physResults []uint8, isConst bool, callB
 	return out
 }
 
+// broadcastAddResults maps physical test-AND-add results onto logical rows.
+// Unlike broadcastResults it is STATE-AWARE for a constant vector: test-and-add
+// is stateful, so the single physical value is tested+added once (row 0's
+// pre-insert result), and every subsequent logical row now observes the
+// just-inserted value and reports present (true). Broadcasting row 0's
+// pre-insert result to all rows (as the read-only broadcastResults does) would
+// wrongly report repeated logical values as new to a dedup callback and make
+// constant and flat representations of the same rows observably different.
+func broadcastAddResults(v *vector.Vector, physResults []uint8, isConst bool, callBack func(bool, bool, int)) {
+	if callBack == nil {
+		return
+	}
+	n := v.Length()
+	if !isConst {
+		nulls := v.GetNulls()
+		for j := 0; j < n; j++ {
+			callBack(physResults[j] != 0, nulls.Contains(uint64(j)), j)
+		}
+		return
+	}
+	// Constant, non-null: row 0 carries the pre-insert result; after it inserts
+	// the value, rows 1..n-1 always observe it (bloom filters have no false
+	// negatives), so they report present.
+	for j := 0; j < n; j++ {
+		present := j > 0 || physResults[0] != 0
+		callBack(present, false, j)
+	}
+}
+
 func (bf *CBloomFilter) testAndAddFixedVector(v *vector.Vector, callBack func(bool, bool, int)) {
 	if v.IsConstNull() {
 		emitConstNull(v, callBack)
@@ -348,7 +377,7 @@ func (bf *CBloomFilter) testAndAddFixedVector(v *vector.Vector, callBack func(bo
 	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
 
-	broadcastResults(v, physResults, isConst, callBack)
+	broadcastAddResults(v, physResults, isConst, callBack)
 }
 
 func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) {
@@ -376,7 +405,7 @@ func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(
 	physResults := make([]uint8, nitem)
 	C.bloomfilter_test_and_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(nitem), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&physResults[0]))
 
-	broadcastResults(v, physResults, isConst, callBack)
+	broadcastAddResults(v, physResults, isConst, callBack)
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
