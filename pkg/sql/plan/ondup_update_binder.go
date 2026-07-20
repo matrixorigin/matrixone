@@ -80,10 +80,10 @@ func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (
 	if !isNumericAssignmentTarget(target) {
 		return b.BindExpr(astExpr, 0, true)
 	}
-	previousSubqueryTarget := b.numericSubqueryTarget
-	b.numericSubqueryTarget = &target
-	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
 	if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
+		previousSubqueryTarget := b.numericSubqueryTarget
+		b.numericSubqueryTarget = &target
+		defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
 		return b.baseBindExpr(astExpr, 0, true)
 	}
 	return b.bindNumericExprWithContext(astExpr, 0, &target)

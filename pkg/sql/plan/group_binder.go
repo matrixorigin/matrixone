@@ -28,18 +28,30 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 	b.ctx = ctx
 	b.impl = b
 	b.selectList = selectList
+	b.projectionExprPos = -1
 
 	return b
 }
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	var numericTarget *plan.Type
-	isOrdinal := false
+	reusesProjection := false
+	if isRoot && b.projectionExprPos >= 0 {
+		pos := b.projectionExprPos
+		astExpr = b.selectList[pos].Expr
+		reusesProjection = true
+		if int(pos) < len(b.ctx.numericProjectionTypes) {
+			target := b.ctx.numericProjectionTypes[pos]
+			if target.Id != 0 {
+				numericTarget = &target
+			}
+		}
+	}
 	if isRoot {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
 			case tree.Int:
-				isOrdinal = true
+				reusesProjection = true
 				colPos, _ := numVal.Int64()
 				if colPos < 1 || int(colPos) > len(b.selectList) {
 					return nil, moerr.NewSyntaxErrorf(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
@@ -80,7 +92,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		// Independently written prepared expressions have different parameter
 		// identities even when their formatted SQL is identical. Only an ordinal
 		// GROUP BY is guaranteed to refer to the SELECT expression itself.
-		registerAst := isOrdinal || !containsDynamicParam(expr)
+		registerAst := reusesProjection || !containsDynamicParam(expr)
 		if registerAst {
 			if _, ok := b.ctx.groupByAst[astStr]; ok {
 				return nil, nil
@@ -100,6 +112,12 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	return expr, err
+}
+
+func (b *GroupBinder) BindProjectionExpr(pos int32) (*plan.Expr, error) {
+	b.projectionExprPos = pos
+	defer func() { b.projectionExprPos = -1 }()
+	return b.BindExpr(b.selectList[pos].Expr, 0, true)
 }
 
 func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {

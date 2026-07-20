@@ -806,6 +806,9 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 	planType := makePlan2Type(&paramType)
 	b.numericParamType = &planType
 	defer func() { b.numericParamType = nil }()
+	previousSubqueryTarget := b.numericSubqueryTarget
+	b.numericSubqueryTarget = &planType
+	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
 
 	return b.bindNumericExprWithCurrentContext(astExpr, depth)
 }
@@ -866,6 +869,11 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.Subquery:
+		if !expr.Exists {
+			return numericAstTypeScan{hasParam: true}, nil
+		}
+		return numericAstTypeScan{}, nil
 	case *tree.ParenExpr:
 		return b.numericAstTypes(expr.Expr, depth)
 	case *tree.BinaryExpr:

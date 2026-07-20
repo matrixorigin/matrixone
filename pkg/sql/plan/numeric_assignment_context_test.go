@@ -120,6 +120,12 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "scalar subquery follows double sibling domain",
+			sql:        "insert into constraint_test.emp (sal) select (select ? + ?) + cast(1 as double)",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
 			name:       "scalar subquery inside unary arithmetic",
 			sql:        "insert into constraint_test.emp (sal) select -(select ? + ?)",
 			want:       types.T_decimal64,
@@ -153,6 +159,19 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 		{
 			name:       "nested derived table passthrough",
 			sql:        "insert into constraint_test.emp (sal) select x from (select x from (select ? + ? as x) d1) d2",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "nested derived star passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.x from (select * from (select ? + ? as x) s) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "nested derived merged star passthrough",
+			sql: "insert into constraint_test.emp (sal) select d.v from " +
+				"(select * from (select 1 as a) x join (select 1 as a, ? + ? as v) y using (a)) d",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -191,6 +210,13 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "chained cte passthrough",
 			sql: "insert into constraint_test.emp (sal) " +
 				"with c as (select ? + ? as x), d as (select x from c) select x from d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "chained cte star passthrough",
+			sql: "insert into constraint_test.emp (sal) " +
+				"with c as (select ? + ? as x), d as (select * from c) select d.x from d",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -273,6 +299,27 @@ func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
 	}
 	for _, pos := range []int32{3, 4} {
 		require.Equal(t, int32(types.T_float64), paramTypes[pos].Id)
+	}
+}
+
+func TestPreparedNumericContextReusesGroupByAliasParameters(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) select ? + ? as x from nation group by x",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Len(t, paramTypes, 2)
+	for _, typ := range paramTypes {
+		require.Equal(t, int32(types.T_decimal64), typ.Id)
+		require.Equal(t, int32(7), typ.Width)
+		require.Equal(t, int32(2), typ.Scale)
 	}
 }
 
@@ -636,6 +683,13 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = (select ? + ?) + 0",
 			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update scalar subquery follows double sibling domain",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = (select ? + ?) + cast(1 as double)",
+			want:         planpb.Type{Id: int32(types.T_float64)},
 			checkFlatten: true,
 		},
 		{

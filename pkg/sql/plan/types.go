@@ -502,7 +502,8 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList tree.SelectExprs
+	selectList        tree.SelectExprs
+	projectionExprPos int32
 }
 
 type HavingBinder struct {

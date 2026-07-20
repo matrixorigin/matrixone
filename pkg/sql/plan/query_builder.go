@@ -3776,34 +3776,10 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		return
 	}
 	sources := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+	resolveNumericProjectionSourceOutputs(builder, stmt, ctx, sources, make(map[*tree.Select]bool))
 	for i := range sources {
-		if sources[i].source == nil {
-			sources[i].source, sources[i].aliasCols = numericProjectionCteSource(
-				stmt,
-				ctx,
-				sources[i].sourceName,
-				sources[i].aliasCols,
-			)
-		}
-		if sources[i].source == nil {
-			if sources[i].sourceName != "" {
-				sources[i].outputNames = numericPhysicalTableOutputNames(builder, sources[i])
-				sources[i].outputKnown = sources[i].outputNames != nil
-			}
+		if !sources[i].outputKnown || sources[i].source == nil {
 			continue
-		}
-		sources[i].outputNames = numericProjectionOutputNames(sources[i].source)
-		sources[i].outputKnown = sources[i].outputNames != nil
-		if len(sources[i].aliasCols) > 0 {
-			if len(sources[i].aliasCols) != numericProjectionOutputCount(sources[i].source) {
-				sources[i].outputNames = nil
-				sources[i].outputKnown = false
-				continue
-			}
-			sources[i].outputNames = make([]string, len(sources[i].aliasCols))
-			for pos := range sources[i].aliasCols {
-				sources[i].outputNames[pos] = strings.ToLower(string(sources[i].aliasCols[pos]))
-			}
 		}
 		sources[i].targets = make([]Type, len(sources[i].outputNames))
 	}
@@ -3880,6 +3856,9 @@ func numericProjectionStarOutputs(
 		left, ok := numericProjectionStarOutputs(expr.Left, sources, cursor)
 		if !ok {
 			return nil, false
+		}
+		if expr.Right == nil {
+			return left, true
 		}
 		right, ok := numericProjectionStarOutputs(expr.Right, sources, cursor)
 		if !ok {
@@ -4070,32 +4049,98 @@ func collectNumericProjectionSources(
 	}
 }
 
-func numericProjectionOutputNames(source *tree.Select) []string {
+func resolveNumericProjectionSourceOutputs(
+	builder *QueryBuilder,
+	owner *tree.Select,
+	ctx *BindContext,
+	sources []numericProjectionSourceInfo,
+	visiting map[*tree.Select]bool,
+) {
+	for i := range sources {
+		if sources[i].source == nil {
+			sources[i].source, sources[i].aliasCols = numericProjectionCteSource(
+				owner, ctx, sources[i].sourceName, sources[i].aliasCols,
+			)
+		}
+		if sources[i].source == nil {
+			if sources[i].sourceName != "" {
+				sources[i].outputNames = numericPhysicalTableOutputNames(builder, sources[i])
+				sources[i].outputKnown = sources[i].outputNames != nil
+			}
+			continue
+		}
+		sources[i].outputNames = numericProjectionOutputNames(builder, sources[i].source, ctx, visiting)
+		sources[i].outputKnown = sources[i].outputNames != nil
+		if len(sources[i].aliasCols) == 0 || !sources[i].outputKnown {
+			continue
+		}
+		if len(sources[i].aliasCols) != len(sources[i].outputNames) {
+			sources[i].outputNames = nil
+			sources[i].outputKnown = false
+			continue
+		}
+		sources[i].outputNames = make([]string, len(sources[i].aliasCols))
+		for pos := range sources[i].aliasCols {
+			sources[i].outputNames[pos] = strings.ToLower(string(sources[i].aliasCols[pos]))
+		}
+	}
+}
+
+func numericProjectionOutputNames(
+	builder *QueryBuilder,
+	source *tree.Select,
+	ctx *BindContext,
+	visiting map[*tree.Select]bool,
+) []string {
+	if visiting[source] {
+		return nil
+	}
+	visiting[source] = true
+	defer delete(visiting, source)
+
 	clause := firstNumericProjectionSelectClause(source.Select)
 	if clause == nil {
 		return nil
 	}
-	names := make([]string, len(clause.Exprs))
-	for i, expr := range clause.Exprs {
+	var sources []numericProjectionSourceInfo
+	if clause.From != nil && len(clause.From.Tables) == 1 {
+		sources = collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+		resolveNumericProjectionSourceOutputs(builder, source, ctx, sources, visiting)
+	}
+	names := make([]string, 0, len(clause.Exprs))
+	for _, expr := range clause.Exprs {
 		if expr.As != nil && !expr.As.Empty() {
-			names[i] = strings.ToLower(expr.As.Origin())
+			names = append(names, strings.ToLower(expr.As.Origin()))
 			continue
 		}
-		name, ok := expr.Expr.(*tree.UnresolvedName)
-		if !ok || name.Star {
-			continue
+		switch item := expr.Expr.(type) {
+		case tree.UnqualifiedStar:
+			if clause.From == nil || len(clause.From.Tables) != 1 {
+				return nil
+			}
+			cursor := 0
+			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
+			if !ok || cursor != len(sources) {
+				return nil
+			}
+			for _, output := range outputs {
+				names = append(names, output.name)
+			}
+		case *tree.UnresolvedName:
+			if item.Star {
+				sourceIdx := uniqueNumericStarSource(sources, item.ColName())
+				if sourceIdx < 0 {
+					return nil
+				}
+				names = append(names, sources[sourceIdx].outputNames...)
+			} else {
+				names = append(names, strings.ToLower(item.ColName()))
+			}
+		default:
+			names = append(names, "")
 		}
-		names[i] = strings.ToLower(name.ColName())
 	}
 	return names
-}
-
-func numericProjectionOutputCount(source *tree.Select) int {
-	clause := firstNumericProjectionSelectClause(source.Select)
-	if clause == nil {
-		return 0
-	}
-	return len(clause.Exprs)
 }
 
 func firstNumericProjectionSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
@@ -5260,6 +5305,17 @@ func (builder *QueryBuilder) bindGroupBy(
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {
 			for _, group := range list {
+				if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
+					col := name.ColName()
+					_, sourceColumn := ctx.bindingByCol[col]
+					alias, aliasExists := ctx.aliasMap[col]
+					if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
+						if _, err = groupBinder.BindProjectionExpr(alias.idx); err != nil {
+							return
+						}
+						continue
+					}
+				}
 				if group, err = ctx.qualifyColumnNames(group, AliasAfterColumn); err != nil {
 					return
 				}
