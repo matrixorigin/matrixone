@@ -52,15 +52,9 @@ func initAllSupportedFunctions() {
 	}
 
 	for _, fn := range supportedWindowInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 }
@@ -245,7 +239,7 @@ func GetAggFunctionNameByID(overloadID int64) string {
 	if !exist {
 		return "unknown function"
 	}
-	return f.aggFramework.str
+	return f.aggName
 }
 
 // DeduceNotNullable helps optimization sometimes.
@@ -359,14 +353,6 @@ type executeFreeOfOverload func() error
 // in case we need it in the future.
 type executeResetOfOverload func() error
 
-type aggregationLogicOfOverload struct {
-	// agg related string for error message.
-	str string
-
-	// how to register the aggregation.
-	aggRegister func(overloadID int64)
-}
-
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
@@ -394,9 +380,11 @@ type overload struct {
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
-	isAgg        bool
-	isWin        bool
-	aggFramework aggregationLogicOfOverload
+	isAgg bool
+	isWin bool
+
+	// aggName is used in aggregate-related error messages.
+	aggName string
 
 	// if true, overload was unable to run in parallel.
 	// For example,

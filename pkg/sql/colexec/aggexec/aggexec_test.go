@@ -30,11 +30,9 @@ func TestMakeAggSpecialAgg(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	const testAggID = -9901
 	param := types.T_int64.ToType()
-	RegisterAvgTwCache(testAggID)
 
-	exec, err := MakeAgg(mp, testAggID, false, param)
+	exec, err := MakeAgg(mp, AggIdOfAvgTwCache, false, param)
 	require.NoError(t, err)
 
 	require.NoError(t, exec.GroupGrow(2))

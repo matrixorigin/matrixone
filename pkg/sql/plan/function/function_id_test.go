@@ -17,8 +17,66 @@ package function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAggregateExecutorIDs(t *testing.T) {
+	tests := []struct {
+		name       string
+		functionID int
+		executorID int64
+	}{
+		{"any_value", ANY_VALUE, aggexec.AggIdOfAny},
+		{"approx_count", APPROX_COUNT, aggexec.AggIdOfApproxCount},
+		{"avg", AVG, aggexec.AggIdOfAvg},
+		{"avg_tw_cache", AVG_TW_CACHE, aggexec.AggIdOfAvgTwCache},
+		{"avg_tw_result", AVG_TW_RESULT, aggexec.AggIdOfAvgTwResult},
+		{"bit_and", BIT_AND, aggexec.AggIdOfBitAnd},
+		{"bit_or", BIT_OR, aggexec.AggIdOfBitOr},
+		{"bit_xor", BIT_XOR, aggexec.AggIdOfBitXor},
+		{"count", COUNT, aggexec.AggIdOfCountColumn},
+		{"cume_dist", CUME_DIST, aggexec.WinIdOfCumeDist},
+		{"dense_rank", DENSE_RANK, aggexec.WinIdOfDenseRank},
+		{"first_value", FIRST_VALUE, aggexec.WinIdOfFirstValue},
+		{"lag", LAG, aggexec.WinIdOfLag},
+		{"last_value", LAST_VALUE, aggexec.WinIdOfLastValue},
+		{"lead", LEAD, aggexec.WinIdOfLead},
+		{"max", MAX, aggexec.AggIdOfMax},
+		{"median", MEDIAN, aggexec.AggIdOfMedian},
+		{"min", MIN, aggexec.AggIdOfMin},
+		{"nth_value", NTH_VALUE, aggexec.WinIdOfNthValue},
+		{"ntile", NTILE, aggexec.WinIdOfNtile},
+		{"percent_rank", PERCENT_RANK, aggexec.WinIdOfPercentRank},
+		{"rank", RANK, aggexec.WinIdOfRank},
+		{"row_number", ROW_NUMBER, aggexec.WinIdOfRowNumber},
+		{"count_star", STARCOUNT, aggexec.AggIdOfCountStar},
+		{"stddev_pop", STDDEV_POP, aggexec.AggIdOfStdDevPop},
+		{"stddev_sample", STDDEV_SAMPLE, aggexec.AggIdOfStdDevSample},
+		{"sum", SUM, aggexec.AggIdOfSum},
+		{"group_concat", GROUP_CONCAT, aggexec.AggIdOfGroupConcat},
+		{"var_pop", VAR_POP, aggexec.AggIdOfVarPop},
+		{"var_sample", VAR_SAMPLE, aggexec.AggIdOfVarSample},
+		{"approx_count_distinct", APPROX_COUNT_DISTINCT, aggexec.AggIdOfApproxCountDistinct},
+		{"bitmap_construct_agg", BITMAP_CONSTRUCT_AGG, aggexec.AggIdOfBitmapConstruct},
+		{"bitmap_or_agg", BITMAP_OR_AGG, aggexec.AggIdOfBitmapOr},
+		{"json_arrayagg", JSON_ARRAYAGG, aggexec.AggIdOfJsonArrayAgg},
+		{"json_objectagg", JSON_OBJECTAGG, aggexec.AggIdOfJsonObjectAgg},
+		{"hll_add_agg", HLL_ADD_AGG, aggexec.AggIdOfHllAdd},
+		{"hll_merge_agg", HLL_MERGE_AGG, aggexec.AggIdOfHllMerge},
+		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			overloads := allSupportedFunctions[test.functionID].Overloads
+			require.Len(t, overloads, 1)
+			require.Equal(t,
+				encodeOverloadID(int32(test.functionID), int32(overloads[0].overloadId)),
+				test.executorID)
+		})
+	}
+}
 
 // all fixed function ids defined at 2024-12-12
 var predefinedFunids = map[int]int{

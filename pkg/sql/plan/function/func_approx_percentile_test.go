@@ -72,13 +72,13 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 	}
 }
 
-func TestApproxPercentileIsRegistered(t *testing.T) {
+func TestApproxPercentileCatalogEntry(t *testing.T) {
 	fn := allSupportedFunctions[APPROX_PERCENTILE]
 	require.Equal(t, APPROX_PERCENTILE, fn.functionId)
 	require.True(t, fn.isAggregate())
 	require.Equal(t, 1, len(fn.Overloads))
 	require.True(t, fn.Overloads[0].isAgg)
-	require.Equal(t, "approx_percentile", fn.Overloads[0].aggFramework.str)
+	require.Equal(t, "approx_percentile", fn.Overloads[0].aggName)
 	require.Equal(t, types.New(types.T_decimal128, 38, 0),
 		fn.Overloads[0].retType([]types.Type{types.New(types.T_decimal128, 38, 0)}))
 	require.Equal(t, types.New(types.T_decimal128, 38, 38),

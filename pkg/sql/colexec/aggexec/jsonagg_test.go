@@ -227,12 +227,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 	}
 }
 
-func TestJsonAggRegistersAndHelpers(t *testing.T) {
-	RegisterJsonArrayAgg(101)
-	RegisterJsonObjectAgg(202)
-	require.Equal(t, int64(101), AggIdOfJsonArrayAgg)
-	require.Equal(t, int64(202), AggIdOfJsonObjectAgg)
-
+func TestJsonAggHelpers(t *testing.T) {
 	exec := newJsonArrayAggExec(mpool.MustNewZero(), multiAggInfo{
 		aggID:     0,
 		distinct:  false,
