@@ -3768,6 +3768,10 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 	if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
 		return
 	}
+	if numericProjectionHasUnqualifiedStar(clause.Exprs) &&
+		numericProjectionHasMergedJoinColumns(clause.From.Tables[0]) {
+		return
+	}
 	sources := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
 	for i := range sources {
 		if sources[i].source == nil {
@@ -3840,6 +3844,33 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		if sources[i].sourceName != "" {
 			storeNumericTableProjectionTargets(ctx.numericTableProjectionTypes, sources[i].sourceName, sources[i].targets)
 		}
+	}
+}
+
+func numericProjectionHasUnqualifiedStar(exprs tree.SelectExprs) bool {
+	for _, expr := range exprs {
+		if _, ok := expr.Expr.(tree.UnqualifiedStar); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func numericProjectionHasMergedJoinColumns(tableExpr tree.TableExpr) bool {
+	switch expr := tableExpr.(type) {
+	case *tree.JoinTableExpr:
+		switch expr.Cond.(type) {
+		case *tree.UsingJoinCond, *tree.NaturalJoinCond:
+			return true
+		}
+		return numericProjectionHasMergedJoinColumns(expr.Left) ||
+			numericProjectionHasMergedJoinColumns(expr.Right)
+	case *tree.AliasedTableExpr:
+		return numericProjectionHasMergedJoinColumns(expr.Expr)
+	case *tree.ParenTableExpr:
+		return numericProjectionHasMergedJoinColumns(expr.Expr)
+	default:
+		return false
 	}
 }
 

@@ -222,6 +222,60 @@ func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericContextHandlesMergedJoinStarColumnsConservatively(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		{
+			name: "using join unqualified star",
+			sql: "insert into constraint_test.emp (empno, sal) select * " +
+				"from (select 1 as a) x join (select 1 as a, ? + ? as v) y using (a)",
+			want: types.T_float64,
+		},
+		{
+			name: "natural join unqualified star",
+			sql: "insert into constraint_test.emp (empno, sal) select * " +
+				"from (select 1 as a) x natural join (select 1 as a, ? + ? as v) y",
+			want: types.T_float64,
+		},
+		{
+			name: "using join qualified star",
+			sql: "insert into constraint_test.emp (empno, sal) select y.* " +
+				"from (select 1 as a) x join (select 1 as a, ? + ? as v) y using (a)",
+			want: types.T_decimal64,
+		},
+		{
+			name: "on join unqualified star",
+			sql: "insert into constraint_test.emp (empno, mgr, sal) select * " +
+				"from (select 1 as a) x join (select 1 as b, ? + ? as v) y on x.a = y.b",
+			want: types.T_decimal64,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmt, err := mysql.ParseOne(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+			require.NoError(t, err)
+
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+			require.Len(t, paramTypes, 2)
+			for _, typ := range paramTypes {
+				require.Equal(t, int32(test.want), typ.Id)
+				if test.want == types.T_decimal64 {
+					require.Equal(t, int32(7), typ.Width)
+					require.Equal(t, int32(2), typ.Scale)
+				}
+			}
+		})
+	}
+}
+
 func TestPreparedNumericContextUsesSampleSuffixTarget(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	stmt, err := mysql.ParseOne(
