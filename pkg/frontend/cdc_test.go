@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -866,6 +867,7 @@ var _ ie.InternalExecutorWithStatus = new(captureExecContextIE)
 
 type captureExecContextIE struct {
 	execCtxErr       error
+	execErr          error
 	execSQL          string
 	querySQL         string
 	affectedRows     uint64
@@ -878,7 +880,7 @@ type captureExecContextIE struct {
 func (e *captureExecContextIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
-	return nil
+	return e.execErr
 }
 
 func (e *captureExecContextIE) ExecWithStatus(ctx context.Context, sql string, options ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
@@ -888,7 +890,7 @@ func (e *captureExecContextIE) ExecWithStatus(ctx context.Context, sql string, o
 	}
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
-	return ie.InternalExecStatus{AffectedRows: affectedRows}, nil
+	return ie.InternalExecStatus{AffectedRows: affectedRows}, e.execErr
 }
 
 func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -901,6 +903,32 @@ func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie
 }
 
 func (e *captureExecContextIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+type captureExecOnlyIE struct {
+	execSQL string
+	execErr error
+}
+
+func (e *captureExecOnlyIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
+	e.execSQL = sql
+	return e.execErr
+}
+
+func (e *captureExecOnlyIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	panic("unexpected query")
+}
+
+func (e *captureExecOnlyIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+type nilQueryResultIE struct {
+	captureExecContextIE
+}
+
+func (e *nilQueryResultIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	e.querySQL = sql
+	return nil
 }
 
 type cdcStateQueryResult struct {
@@ -2683,6 +2711,93 @@ func TestCDCTaskUpdateErrMsgAlreadyInTargetStateAllowsZeroAffectedRows(t *testin
 	require.Contains(t, capture.execSQL, "SET state = 'running'")
 	require.Contains(t, capture.execSQL, "AND state = 'running'")
 	require.Contains(t, capture.querySQL, "SELECT state")
+}
+
+func TestExecCDCSQLWithAffectedRowsPropagatesExecError(t *testing.T) {
+	capture := &captureExecContextIE{
+		execErr: errors.New("exec failed"),
+	}
+
+	err := execCDCSQLWithAffectedRows(
+		context.Background(),
+		capture,
+		"update cdc task",
+		1,
+		"task1",
+		cdc.CDCState_Failed,
+		cdc.CDCState_Running,
+	)
+	require.ErrorContains(t, err, "exec failed")
+	require.Equal(t, "update cdc task", capture.execSQL)
+}
+
+func TestExecCDCSQLWithAffectedRowsRejectsUnexpectedRowCount(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:    2,
+		hasAffectedRows: true,
+	}
+
+	err := execCDCSQLWithAffectedRows(
+		context.Background(),
+		capture,
+		"update cdc task",
+		1,
+		"task1",
+		cdc.CDCState_Failed,
+		cdc.CDCState_Running,
+	)
+	require.ErrorContains(t, err, "affected 2 rows")
+	require.Empty(t, capture.querySQL)
+}
+
+func TestExecCDCSQLWithAffectedRowsFallsBackWithoutStatus(t *testing.T) {
+	capture := &captureExecOnlyIE{}
+
+	require.NoError(t, execCDCSQLWithAffectedRows(
+		context.Background(),
+		capture,
+		"update cdc task",
+		1,
+		"task1",
+		cdc.CDCState_Failed,
+		cdc.CDCState_Running,
+	))
+	require.Equal(t, "update cdc task", capture.execSQL)
+}
+
+func TestValidateCDCStateTransitionResultReportsQueryFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		exec        ie.InternalExecutor
+		errContains string
+	}{
+		{
+			name:        "nil result",
+			exec:        &nilQueryResultIE{},
+			errContains: "query returned no result",
+		},
+		{
+			name: "query error",
+			exec: &captureExecContextIE{
+				queryErr: errors.New("query failed"),
+			},
+			errContains: "query failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCDCStateTransitionResult(
+				context.Background(),
+				tt.exec,
+				1,
+				"task1",
+				cdc.CDCState_Running,
+				cdc.CDCState_Failed,
+			)
+			require.ErrorContains(t, err, tt.errContains)
+		})
+	}
 }
 
 type cdcCatalogStateExecutor struct {
