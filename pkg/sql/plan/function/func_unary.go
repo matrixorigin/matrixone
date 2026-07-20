@@ -7159,11 +7159,22 @@ func userLevelLockService(proc *process.Process) (lockservice.LockService, error
 	return proc.GetLockService(), nil
 }
 
+type userLevelLockContextUnlocker interface {
+	UnlockWithContext(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error
+}
+
+func unlockUserLevelLockTxnID(ctx context.Context, ls lockservice.LockService, txnID []byte) error {
+	if unlocker, ok := ls.(userLevelLockContextUnlocker); ok {
+		return unlocker.UnlockWithContext(ctx, txnID, timestamp.Timestamp{})
+	}
+	return ls.Unlock(ctx, txnID, timestamp.Timestamp{})
+}
+
 func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
-	if err := ls.Unlock(ctx, userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
+	if err := unlockUserLevelLockTxnID(ctx, ls, userLevelLockTxnID(owner, connID, name)); err != nil {
 		return err
 	}
-	return ls.Unlock(ctx, userLevelLockTxnIDOld(owner, name), timestamp.Timestamp{})
+	return unlockUserLevelLockTxnID(ctx, ls, userLevelLockTxnIDOld(owner, name))
 }
 
 func enqueueDetachedUserLevelLockCleanup(ls lockservice.LockService, owner string, connID uint64, name string) bool {

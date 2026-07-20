@@ -1639,7 +1639,7 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 
 			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 			defer unlockCancel()
-			err = l1.Unlock(unlockCtx, txnID, timestamp.Timestamp{})
+			err = l1.UnlockWithContext(unlockCtx, txnID, timestamp.Timestamp{})
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
 
@@ -1648,6 +1648,37 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 			l1.tableGroups.Unlock()
 			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
 			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+		},
+		nil,
+	)
+}
+
+func TestUnlockIgnoresCanceledCallerContextForTransactionCleanup(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("timed-out-statement-cleanup")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l1.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
+			require.NoError(t, err)
+
+			canceledCtx, cancelCanceledCtx := context.WithCancel(context.Background())
+			cancelCanceledCtx()
+			require.NoError(t, l1.Unlock(canceledCtx, txnID, timestamp.Timestamp{}))
+
+			_, err = l1.Lock(ctx, 0, [][]byte{{1}}, []byte("contender"), option)
+			require.NoError(t, err)
 		},
 		nil,
 	)

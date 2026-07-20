@@ -253,6 +253,17 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	// Keep ordinary transaction cleanup independent from the caller statement
+	// context. A timed-out statement still owns lock cleanup; if its canceled
+	// context short-circuits Unlock, later DDL can observe leaked table locks.
+	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+}
+
+func (s *service) UnlockWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
