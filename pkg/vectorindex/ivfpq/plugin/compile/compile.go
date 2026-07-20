@@ -302,6 +302,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	return nil
 }
 
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
+}
+
 // IdxcronMetadata pins IVF-PQ's build-time params into the cron task's
 // metadata blob — see CAGRA's compile.go for the rationale.
 // kmeans_train_percent is consumed at rebuild time by the cuvs
