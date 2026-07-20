@@ -190,8 +190,61 @@ func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (chec
 	return checksum, filesize, recency, found, nil
 }
 
+// estBytesPerDocHeap approximates the Go-heap cost of loading ONE document's
+// index-level metadata: the docmap slot (pk `any` + docLen) plus the per-doc
+// liveness structures NewIndex builds from it (liveLoc/top map entries + a liveOrd
+// bit). Base posting blocks are mmap'd (reclaimable OS page cache) and are excluded —
+// they cannot OOM-kill the CN. It is deliberately generous so checkBaseLoadBudget
+// fails a doomed load fast rather than letting it crash the node; a modest
+// over-estimate only rejects a borderline load (recoverable via compaction / more
+// memory), never silently OOMs.
+const estBytesPerDocHeap = 256
+
+// checkBaseLoadBudget fails fast if loading every tag=0 base's per-doc metadata into
+// the Go heap would blow the CN memory budget — the base analogue of
+// checkTailLoadBudget (which guards the tail). It gates on SUM(nrow) (doc count), NOT
+// filesize: the bulk of a base (posting blocks) is mmap'd and reclaimable, so only the
+// O(docs) docmap + NewIndex liveness maps land on the Go heap. Budget = MemoryTotal*0.8
+// - live Go heap (cgroup-aware). Turns a node-killing OOM into a clear, actionable
+// error suggesting compaction.
+func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
+	// CAST AS SIGNED so the sum reads back as int64 regardless of how SUM types its
+	// result (GetFixedAtNoTypeCheck[int64] would misread a decimal vector).
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	var ndoc int64
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		ndoc = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+	}
+	need := ndoc * estBytesPerDocHeap
+	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
+	if need > avail {
+		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(
+			"fulltext2 index %s.%s needs ~%d MB of heap for %d docs' metadata but only ~%d MB is free "+
+				"(MemoryTotal*0.8 - Go heap). If the index has many deleted rows, MERGE "+
+				"(ALTER TABLE ... ALTER REINDEX ... MERGE) reclaims them and may bring it under budget; "+
+				"otherwise the live index is too large for this CN — add memory",
+			cfg.DbName, cfg.IndexTable, need>>20, ndoc, avail>>20))
+	}
+	return nil
+}
+
 // LoadAllBases loads every tag=0 base sub-index listed in the metadata table.
 // Returns nil when no base was built (empty-table create → CDC-only index).
+//
+// NOTE: the heap-budget guard (checkBaseLoadBudget) is deliberately NOT called here.
+// This is shared by the query load path AND CompactSegments (MERGE). Guarding it here
+// would make the guard self-blocking — MERGE is the very remedy the guard's error
+// suggests, but MERGE must load the bases to reclaim dead docs. The query path calls
+// the guard itself (Fulltext2Search.Load); MERGE stays exempt so it can always run.
 func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))

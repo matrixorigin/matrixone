@@ -70,6 +70,13 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
+	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
+	// budget, rather than OOM-killing the CN (which takes down every query on the node).
+	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
+	// stays exempt and can still load the bases to reclaim dead docs.
+	if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
+		return err
+	}
 	bases, err := LoadAllBases(sqlproc, s.cfg)
 	if err != nil {
 		return err

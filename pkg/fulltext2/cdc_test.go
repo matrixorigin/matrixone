@@ -135,3 +135,69 @@ func TestTailBuilderLiveness(t *testing.T) {
 	require.Equal(t, []any{int64(1)}, q("blueberry"), "updated doc 1's new text wins")
 	require.Equal(t, []any{int64(2)}, q("cherry"), "inserted doc 2 present")
 }
+
+// TestTailBuilderDeleteSpill: at a small capacity the delete batch spills into
+// MULTIPLE delete frames instead of one. Folded liveness must be identical to the
+// single-frame case — every tombstone still sorts below every insert — including a
+// base-doc delete that lands in the last delete frame and an update that crosses the
+// spill boundary.
+func TestTailBuilderDeleteSpill(t *testing.T) {
+	c := NewCdc(int32(types.T_int64))
+	// 5 no-op deletes + an update of base doc 1 (insert-side) + delete of base doc 0
+	// + a fresh insert. Interleaved so deletes cross several spill boundaries.
+	c.Delete(int64(10))
+	c.Delete(int64(11))
+	c.Delete(int64(12))
+	c.Delete(int64(13))
+	c.Delete(int64(14))
+	c.Upsert(int64(1), "blueberry muffin")
+	c.Delete(int64(0))
+	c.Insert(int64(2), "cherry cake")
+
+	// base (recency 0): doc 0 "apple pie", doc 1 "banana bread".
+	bb := NewBuilder("base", int32(types.T_int64))
+	feed(t, bb, int64(0), "apple", "pie")
+	feed(t, bb, int64(1), "banana", "bread")
+	base, err := bb.Finish()
+	require.NoError(t, err)
+	base.Recency = 0
+
+	// capacity 2 => 6 deletes (10,11,12,13,14,0) seal into >=3 delete frames.
+	tb, err := NewTailBuilder(int32(types.T_int64), 2, wsTokenize)
+	require.NoError(t, err)
+	defer tb.Cleanup()
+	require.NoError(t, tb.AddBatch(c))
+	segs, err := tb.Finish()
+	require.NoError(t, err)
+
+	tails := []*Segment{base}
+	deletes := map[any]int64{}
+	nDeleteFrames := 0
+	recency := int64(100)
+	for i, ts := range segs {
+		framed, rerr := os.ReadFile(ts.Path)
+		require.NoError(t, rerr)
+		seg, dels, uerr := UnframeTail("tail", framed)
+		require.NoError(t, uerr)
+		switch {
+		case seg != nil:
+			seg.Recency = recency + int64(i)
+			tails = append(tails, seg)
+		case dels != nil:
+			nDeleteFrames++
+			deletes = foldDeleteFrame(deletes, dels, recency+int64(i))
+		}
+	}
+	require.GreaterOrEqual(t, nDeleteFrames, 3, "6 deletes at capacity 2 must spill into multiple delete frames")
+
+	idx := NewIndex(tails, deletes)
+	q := func(w string) []any {
+		res, qerr := idx.SearchQuery([]byte(w), false, ParserDefault, BM25, 100, nil)
+		require.NoError(t, qerr)
+		return resultIDs(res)
+	}
+	require.Empty(t, q("apple"), "deleted base doc 0 (tombstone in the last spilled frame) must be gone")
+	require.Empty(t, q("banana"), "updated doc 1's old base text superseded")
+	require.Equal(t, []any{int64(1)}, q("blueberry"), "updated doc 1's new text wins across the delete spill")
+	require.Equal(t, []any{int64(2)}, q("cherry"), "inserted doc 2 present")
+}
