@@ -774,24 +774,22 @@ func shouldCheckpointWALRecoveryState(completed, total uint64) bool {
 }
 
 func normalizeWALEntrySafeDSN(entries []WALEntry) {
-	baseSafeDSN := firstNormalDSN(entries)
-	if baseSafeDSN > 0 {
-		baseSafeDSN--
+	contiguousDSN := firstNormalDSN(entries)
+	if contiguousDSN > 0 {
+		contiguousDSN--
 	}
 
-	contiguousDSN := baseSafeDSN
 	pending := make(dsnIntervalHeap, 0)
 	for i := range entries {
 		entry := &entries[i]
 		// SafeDSN describes entries known durable before this LogEntry. Including
 		// the current batch causes TN replay to skip a multi-entry batch because
 		// the replayer indexes the batch only by its starting DSN.
+		// Never raise the source watermark: lower DSNs may occur at later PSNs
+		// when asynchronous commits complete out of order.
 		safeDSN := entry.SafeDSN
-		if safeDSN == 0 || safeDSN > contiguousDSN {
+		if safeDSN > contiguousDSN {
 			safeDSN = contiguousDSN
-		}
-		if safeDSN < baseSafeDSN {
-			safeDSN = baseSafeDSN
 		}
 		entry.SafeDSN = safeDSN
 		if len(entry.RawData) >= logEntrySafeDSNOffset+8 {

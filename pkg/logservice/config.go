@@ -215,6 +215,7 @@ type Config struct {
 			// Enabled puts every initial LogService member into recovery mode.
 			// It must be set consistently on all initial HAKeeper members. Only
 			// the member with WALDataPath needs access to the recovery artifacts.
+			// TN services must remain stopped until WAL recovery completes.
 			Enabled bool `toml:"enabled"`
 			// FilePath is the path of the file, which contains the backup data.
 			// If is not set, nothing will be done for restore.

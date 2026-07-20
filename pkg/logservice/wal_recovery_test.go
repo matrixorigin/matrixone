@@ -192,6 +192,35 @@ func TestReadWALDataFileNormalizesSafeDSN(t *testing.T) {
 	}
 }
 
+func TestReadWALDataFilePreservesSourceSafeDSN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal_data.bin")
+	input := []WALEntry{
+		{DSN: 10, SafeDSN: 3, RaftIndex: 100, RaftTerm: 1, EntryCount: 1, RawData: testRawLogEntry(10, 3, 1)},
+		{DSN: 4, SafeDSN: 3, RaftIndex: 200, RaftTerm: 1, EntryCount: 1, RawData: testRawLogEntry(4, 3, 1)},
+		{DSN: 5, SafeDSN: 4, RaftIndex: 300, RaftTerm: 1, EntryCount: 5, RawData: testRawLogEntry(5, 4, 5)},
+	}
+	require.NoError(t, writeTestWALDataFile(path, input))
+
+	s := &Service{runtime: runtime.DefaultRuntime()}
+	data, err := s.readWALDataFile(context.Background(), path)
+	require.NoError(t, err)
+
+	got := make([]uint64, 0, len(data.Entries))
+	gotPayload := make([]uint64, 0, len(data.Entries))
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	defer file.Close()
+	for i, entry := range data.Entries {
+		got = append(got, entry.SafeDSN)
+		payload, err := loadWALRecoveryEntryData(context.Background(), data, file, i)
+		require.NoError(t, err)
+		gotPayload = append(gotPayload,
+			binary.LittleEndian.Uint64(payload[logEntrySafeDSNOffset:]))
+	}
+	require.Equal(t, []uint64{3, 3, 4}, got)
+	require.Equal(t, []uint64{3, 3, 4}, gotPayload)
+}
+
 func TestValidateWALLogEntry(t *testing.T) {
 	ctx := context.Background()
 	outer := WALEntry{DSN: 10, SafeDSN: 9, EntryCount: 2}
