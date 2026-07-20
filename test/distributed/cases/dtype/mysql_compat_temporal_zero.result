@@ -1,3 +1,4 @@
+set @old_time_zone = @@time_zone;
 set time_zone = '+00:00';
 set @old_sql_mode = @@sql_mode;
 set sql_mode = '';
@@ -84,6 +85,11 @@ monthname(cast('0000-00-00 00:00:00' as datetime)) as zero_monthname_datetime,
 monthname(cast('0000-00-00 00:00:00' as timestamp)) as zero_monthname_timestamp;
 ➤ zero_monthname_date[12,-1,0]  ¦  zero_monthname_datetime[12,-1,0]  ¦  zero_monthname_timestamp[12,-1,0]  𝄀
 null  ¦  null  ¦  null
+select last_day('0000-00-00') as zero_last_day_date,
+last_day('0000-00-00 00:00:00') as zero_last_day_datetime,
+last_day('2024-02-10') as leap_year_last_day;
+➤ zero_last_day_date[12,-1,0]  ¦  zero_last_day_datetime[12,-1,0]  ¦  leap_year_last_day[12,-1,0]  𝄀
+null  ¦  null  ¦  2024-02-29
 select dayofmonth(cast('0000-00-00' as date)) as zero_dayofmonth_date,
 dayofmonth(cast('0000-00-00 00:00:00' as datetime)) as zero_dayofmonth_datetime,
 dayofmonth(cast('0000-00-00 00:00:00' as timestamp)) as zero_dayofmonth_timestamp,
@@ -224,6 +230,29 @@ select id, d, dt, ts from mysql_compat_temporal_zero_dml;
 30  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
 truncate table mysql_compat_temporal_zero_dml;
 set sql_mode = 'STRICT_TRANS_TABLES';
+prepare temporal_zero_cast from 'select cast(''0000-00-00'' as date), cast(''0000-00-00 00:00:00'' as datetime), cast(''0000-00-00 00:00:00'' as timestamp)';
+execute temporal_zero_cast;
+➤ cast(0000-00-00 as date)[91,64,0]  ¦  cast(0000-00-00 00:00:00 as datetime)[93,64,0]  ¦  cast(0000-00-00 00:00:00 as timestamp)[93,64,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
+execute temporal_zero_cast;
+➤ cast(0000-00-00 as date)[91,64,0]  ¦  cast(0000-00-00 00:00:00 as datetime)[93,64,0]  ¦  cast(0000-00-00 00:00:00 as timestamp)[93,64,0]  𝄀
+null  ¦  null  ¦  null
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute temporal_zero_cast;
+➤ cast(0000-00-00 as date)[91,64,0]  ¦  cast(0000-00-00 00:00:00 as datetime)[93,64,0]  ¦  cast(0000-00-00 00:00:00 as timestamp)[93,64,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+deallocate prepare temporal_zero_cast;
+prepare temporal_timestamp_cast from 'select cast(''1970-01-01 08:00:01'' as timestamp)';
+execute temporal_timestamp_cast;
+➤ cast(1970-01-01 08:00:01 as timestamp)[93,64,0]  𝄀
+1970-01-01 08:00:01
+set time_zone = '+08:00';
+execute temporal_timestamp_cast;
+➤ cast(1970-01-01 08:00:01 as timestamp)[93,64,0]  𝄀
+1970-01-01 08:00:01
+deallocate prepare temporal_timestamp_cast;
+set time_zone = '+00:00';
 prepare temporal_zero_insert from 'insert into mysql_compat_temporal_zero_dml values (40, ''0000-00-00'', ''0000-00-00 00:00:00'', ''0000-00-00 00:00:00'')';
 execute temporal_zero_insert;
 select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
@@ -243,5 +272,6 @@ select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
 40  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
 deallocate prepare temporal_zero_insert;
 set sql_mode = @old_sql_mode;
+set time_zone = @old_time_zone;
 drop table mysql_compat_temporal_zero;
 drop table mysql_compat_temporal_zero_dml;

@@ -63,6 +63,24 @@ internal error: the input value 'not-a-timestamp' is not Timestamp type for colu
 select count(*) as strict_invalid_timestamp_rows from t_load_temporal;
 ➤ strict_invalid_timestamp_rows[-5,64,0]  𝄀
 0
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 6 lines;
+internal error: the input value '1970-01-01 00:00:00' is not Timestamp type for column 3
+select count(*) as strict_timestamp_below_minimum_rows from t_load_temporal;
+➤ strict_timestamp_below_minimum_rows[-5,64,0]  𝄀
+0
+set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+ignore into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 4 lines;
+select id, d, dt, ts from t_load_temporal order by id;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+5  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  𝄀
+6  ¦  1970-01-01  ¦  1970-01-01 00:00:01  ¦  1970-01-01 00:00:01  𝄀
+7  ¦  1970-01-01  ¦  1970-01-01 00:00:00  ¦  0000-00-00 00:00:00
 set sql_mode = '';
 set time_zone = @old_time_zone;
 set sql_mode = 'STRICT_TRANS_TABLES';

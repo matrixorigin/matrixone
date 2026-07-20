@@ -335,6 +335,7 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 				FileSize:              []int64{8192},
 				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
 				ParquetRowGroupShards: shards,
+				StrictSqlMode:         true,
 			},
 			ExParam: external.ExParam{
 				Fileparam: &external.ExFileparam{},
@@ -346,11 +347,13 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+	require.True(t, pipeInstr.ExternalScan.StrictSqlMode)
 
 	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 	require.NoError(t, err)
 	restoredExternal := restored.(*external.External)
 	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+	require.True(t, restoredExternal.Es.StrictSqlMode)
 }
 
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {

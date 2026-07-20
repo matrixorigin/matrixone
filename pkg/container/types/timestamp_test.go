@@ -137,6 +137,13 @@ func TestParseTimestamp(t *testing.T) {
 	//require.Error(t, err)
 }
 
+func TestValidTimestampColumnLowerBound(t *testing.T) {
+	require.True(t, ValidTimestamp(ZeroTimestamp))
+	require.True(t, ValidTimestamp(TimestampMinValue))
+	require.True(t, ValidTimestamp(TimestampMinValue+1))
+	require.False(t, ValidTimestamp(TimestampMinValue-1))
+}
+
 func TestLocation(t *testing.T) {
 	loc := time.FixedZone("test", 8*3600)
 	locPtr := (*unsafeLoc)(unsafe.Pointer(loc))

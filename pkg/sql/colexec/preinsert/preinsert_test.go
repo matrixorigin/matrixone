@@ -386,6 +386,40 @@ func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *te
 	child.Free(proc, false, nil)
 }
 
+func TestPreInsertCallRejectsTimestampBelowMinimum(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	vec, err := vector.NewConstFixed(
+		types.T_timestamp.ToType(),
+		types.TimestampMinValue-1,
+		1,
+		proc.Mp(),
+	)
+	require.NoError(t, err)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vec
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	pre := &PreInsert{
+		RejectZeroTemporal: false,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+			Name: "v",
+			Typ:  plan.Type{Id: int32(types.T_timestamp)},
+		}}},
+		Attrs: []string{"v"},
+	}
+	pre.AppendChild(child)
+	require.NoError(t, pre.Prepare(proc))
+
+	_, err = pre.Call(proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValueForField))
+
+	pre.Free(proc, false, err)
+	child.Free(proc, false, nil)
+}
+
 func newZeroTemporalConstVector(t *testing.T, typ types.T, proc *proc) *vector.Vector {
 	t.Helper()
 	switch typ {

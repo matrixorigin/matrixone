@@ -275,9 +275,19 @@ func isIgnoreStatement(statement tree.Statement) bool {
 		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	case *tree.Update:
 		return stmt.Ignore
+	case *tree.Load:
+		return isLoadDataIgnore(stmt)
 	default:
 		return false
 	}
+}
+
+func isLoadDataIgnore(stmt *tree.Load) bool {
+	if stmt == nil {
+		return false
+	}
+	_, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
+	return ok
 }
 
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {

@@ -288,8 +288,10 @@ func CurrentTimestamp() Timestamp {
 	return Timestamp(time.Now().UnixMicro() + unixEpochMicroSecs)
 }
 
+// ValidTimestamp reports whether a value is representable by a TIMESTAMP column.
+// The zero sentinel remains subject to the statement's sql_mode policy.
 func ValidTimestamp(timestamp Timestamp) bool {
-	return timestamp == ZeroTimestamp || timestamp > TimestampMinValue
+	return timestamp == ZeroTimestamp || timestamp >= TimestampMinValue
 }
 
 func UnixToTimestamp(ts int64) Timestamp {

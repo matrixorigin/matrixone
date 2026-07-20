@@ -119,6 +119,24 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
 	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	loadIgnoreLines := &tree.Load{
+		DuplicateHandling: &tree.DuplicateKeyError{},
+		Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Tail: &tree.TailParameter{IgnoredLines: 1},
+		}},
+	}
+	require.False(t, isIgnoreStatement(loadIgnoreLines))
+
+	parsed, err := mysql.Parse(ctx, "load data local infile 'data.csv' ignore into table t fields terminated by ','", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.True(t, isIgnoreStatement(parsed[0]))
+
+	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.False(t, isIgnoreStatement(parsed[0]))
 }
 
 func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
@@ -134,6 +152,27 @@ func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
 	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "update ignore t set a = 0", constant.ExternSql, true)
 	require.NoError(t, err)
 	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
+}
+
+func TestRecordStatementSetsIgnoreForLoadDataIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	loadIgnore := &tree.Load{DuplicateHandling: &tree.DuplicateKeyIgnore{}}
+	cw := InitTxnComputationWrapper(ses, loadIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' ignore into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	load := &tree.Load{DuplicateHandling: &tree.DuplicateKeyError{}}
+	cw = InitTxnComputationWrapper(ses, load, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
 }
 
 func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {

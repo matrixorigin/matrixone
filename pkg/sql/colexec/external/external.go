@@ -948,7 +948,7 @@ func normalizeLoadDataNonStrictTemporalValue(
 		}
 		var err error
 		parsed.timestamp, err = types.ParseTimestamp(tz, val, scale)
-		if err != nil || (parsed.timestamp != types.ZeroTimestamp && parsed.timestamp < types.TimestampMinValue) {
+		if err != nil || !types.ValidTimestamp(parsed.timestamp) {
 			parsed.timestamp = types.ZeroTimestamp
 			val = "0000-00-00 00:00:00"
 		}
@@ -1579,6 +1579,9 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			d, err = types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
 			if err != nil {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			}
+			if !types.ValidTimestamp(d) {
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
 			}
 		}

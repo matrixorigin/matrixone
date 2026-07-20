@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -307,9 +308,9 @@ func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
 }
 
 // checkZeroTemporalInStrictMode covers expression-produced values that bypass
-// the literal conversion helpers used by INSERT ... VALUES.
+// literal conversion. It also enforces the unconditional TIMESTAMP lower bound.
 func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc *proc) error {
-	if preInsert == nil || bat == nil || proc == nil || !preInsert.RejectZeroTemporal {
+	if preInsert == nil || bat == nil || proc == nil {
 		return nil
 	}
 
@@ -319,21 +320,34 @@ func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc 
 			continue
 		}
 		vec := bat.Vecs[vecIdx]
+		switch vec.GetType().Oid {
+		case types.T_timestamp:
+		case types.T_date, types.T_datetime:
+			if !preInsert.RejectZeroTemporal {
+				continue
+			}
+		default:
+			continue
+		}
 		for row := 0; row < vec.Length(); row++ {
 			if vec.IsNull(uint64(row)) {
 				continue
 			}
 			switch vec.GetType().Oid {
 			case types.T_date:
-				if vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
 					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
 				}
 			case types.T_datetime:
-				if vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
 					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
 				}
 			case types.T_timestamp:
-				if vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row) == types.ZeroTimestamp {
+				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+				if !types.ValidTimestamp(timestamp) {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+				}
+				if preInsert.RejectZeroTemporal && timestamp == types.ZeroTimestamp {
 					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
 				}
 			}

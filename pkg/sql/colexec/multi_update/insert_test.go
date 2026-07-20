@@ -120,6 +120,61 @@ func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
 	}
 }
 
+func TestCheckTemporalWriteRejectsTimestampBelowMinimum(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	for _, tc := range []struct {
+		name    string
+		value   types.Timestamp
+		wantErr bool
+	}{
+		{name: "below minimum", value: types.TimestampMinValue - 1, wantErr: true},
+		{name: "exact minimum", value: types.TimestampMinValue},
+		{name: "zero follows zero temporal policy", value: types.ZeroTimestamp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixed(vec, tc.value, false, proc.Mp()))
+			bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+
+			err := checkZeroTemporalInStrictMode(false, proc, bat)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestInsertRejectsTimestampBelowMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(*testing.T, bool, bool) (*process.Process, *testCase)
+	}{
+		{name: "write table", build: buildInsertTestCase},
+		{name: "write s3", build: buildInsertS3TestCase},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc, c := tc.build(t, false, false)
+			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_timestamp)}
+			for _, bat := range c.inputBatchs {
+				timestamps := vector.NewVec(types.T_timestamp.ToType())
+				for i := 0; i < bat.RowCount(); i++ {
+					require.NoError(t, vector.AppendFixed(timestamps, types.TimestampMinValue-1, false, proc.Mp()))
+				}
+				bat.Vecs[3].Free(proc.Mp())
+				bat.Vecs[3] = timestamps
+			}
+			c.expectErr = true
+			runTestCases(t, proc, []*testCase{c})
+		})
+	}
+}
+
 func TestMultiUpdatePreparePreservesCompiledZeroTemporalPolicy(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, false)
 	defer ctrl.Finish()

@@ -901,6 +901,18 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			format:           tree.CSV,
 		},
 		{
+			name:              "strict timestamp below UTC lower bound is rejected",
+			colType:           plan.Type{Id: int32(types.T_timestamp)},
+			vecType:           types.T_timestamp.ToType(),
+			fieldVal:          "1970-01-01 00:00:00",
+			sessionTZ:         time.UTC,
+			wantParallelText:  "1970-01-01 00:00:00",
+			wantDirectErrText: "not Timestamp type",
+			local:             true,
+			format:            tree.CSV,
+			strict:            true,
+		},
+		{
 			name:              "strict local date keeps existing error",
 			colType:           plan.Type{Id: int32(types.T_date)},
 			vecType:           types.T_date.ToType(),

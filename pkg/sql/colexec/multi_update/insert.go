@@ -244,13 +244,24 @@ func (update *MultiUpdate) insert_table(
 	return
 }
 
+// checkZeroTemporalInStrictMode also enforces the unconditional lower bound for
+// non-zero TIMESTAMP values that can reach MultiUpdate through parallel LOAD.
 func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batch.Batch) error {
-	if proc == nil || bat == nil || !reject {
+	if proc == nil || bat == nil {
 		return nil
 	}
 
 	for _, vec := range bat.Vecs {
 		if vec == nil {
+			continue
+		}
+		switch vec.GetType().Oid {
+		case types.T_timestamp:
+		case types.T_date, types.T_datetime:
+			if !reject {
+				continue
+			}
+		default:
 			continue
 		}
 		for row := 0; row < vec.Length(); row++ {
@@ -259,15 +270,19 @@ func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batc
 			}
 			switch vec.GetType().Oid {
 			case types.T_date:
-				if vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+				if reject && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
 					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
 				}
 			case types.T_datetime:
-				if vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+				if reject && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
 					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
 				}
 			case types.T_timestamp:
-				if vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row) == types.ZeroTimestamp {
+				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+				if !types.ValidTimestamp(timestamp) {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+				}
+				if reject && timestamp == types.ZeroTimestamp {
 					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
 				}
 			}

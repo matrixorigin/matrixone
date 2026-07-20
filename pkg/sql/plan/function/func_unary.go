@@ -7784,6 +7784,12 @@ func LastDay(
 
 			year := dt.Year()
 			month := dt.Month()
+			if dt == types.ZeroDate || month == 0 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
 
 			lastDay := types.LastDay(int32(year), month)
 			resDt := types.DateFromCalendar(int32(year), month, lastDay)

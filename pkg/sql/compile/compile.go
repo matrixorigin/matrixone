@@ -1516,6 +1516,13 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 	return nil, false
 }
 
+func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam, strict bool) bool {
+	if !strict || proc == nil || param == nil || param.ExternType != int32(plan.ExternType_LOAD) {
+		return strict
+	}
+	return !proc.GetStmtProfile().GetStatementIgnore()
+}
+
 func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
 	param := &tree.ExternParam{}
 	if externScan.LoadType == tree.INLINE {
@@ -1831,6 +1838,7 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	strictSqlMode = effectiveExternalStrictMode(c.proc, param, strictSqlMode)
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(node, param, strictSqlMode)
 	}

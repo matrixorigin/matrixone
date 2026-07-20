@@ -194,6 +194,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
+	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+		return expr
+	}
 	if f.IsAgg() || f.IsWin() {
 		return expr
 	}
@@ -655,6 +658,27 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 	} else {
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 		return false, err
+	}
+}
+
+func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST || len(fn.Args) != 2 {
+		return false
+	}
+
+	switch types.T(fn.Args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return false
+	}
+
+	switch types.T(fn.Args[1].Typ.Id) {
+	case types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	default:
+		return false
 	}
 }
 
