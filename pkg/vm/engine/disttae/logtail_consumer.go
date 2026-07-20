@@ -1321,6 +1321,10 @@ func (c *PushClient) getSubscribedSnapshotForPKCheck(
 	ctx context.Context,
 	accId, dbId, tId uint64,
 ) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
+	if !c.receivedLogTailTime.ready.Load() {
+		return nil, false, InvalidSubState, false
+	}
+
 	s := &c.subscribed
 	s.rw.RLock()
 	ent, exist := s.m[tId]
@@ -1340,6 +1344,10 @@ func (c *PushClient) getSubscribedSnapshotForPKCheck(
 	}
 	pending := ent.pendingTo.Load() != nil
 	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	if !c.receivedLogTailTime.ready.Load() {
+		s.rw.RUnlock()
+		return nil, false, InvalidSubState, false
+	}
 	s.rw.RUnlock()
 	return ps, true, Subscribed, pending
 }

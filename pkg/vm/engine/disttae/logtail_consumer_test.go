@@ -1173,6 +1173,7 @@ func TestPKCheckSnapshotRejectsResetSubscriptionGeneration(t *testing.T) {
 			42: {dbID: 10, state: Subscribed},
 		},
 	}
+	e.pClient.receivedLogTailTime.ready.Store(true)
 
 	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
 	state, done := part.MutateState()
@@ -1211,6 +1212,7 @@ func TestPKCheckSnapshotRefreshesAfterPendingApply(t *testing.T) {
 			42: {dbID: 10, state: Subscribed},
 		},
 	}
+	e.pClient.receivedLogTailTime.ready.Store(true)
 
 	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
 	state, done := part.MutateState()
@@ -1237,6 +1239,37 @@ func TestPKCheckSnapshotRefreshesAfterPendingApply(t *testing.T) {
 	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
 	require.Positive(t, e.pClient.subscribed.m[42].lastTs.Load(),
 		"PK checks must keep write-only subscriptions active for GC")
+}
+
+func TestPKCheckSnapshotRejectsClosedPushClientAdmission(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	ps, ok, subState, pending := e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.Nil(t, ps)
+	require.False(t, ok)
+	require.Equal(t, InvalidSubState, subState)
+	require.False(t, pending)
+
+	e.pClient.receivedLogTailTime.ready.Store(true)
+	ps, ok, subState, pending = e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.NotNil(t, ps)
+	require.True(t, ok)
+	require.Equal(t, Subscribed, subState)
+	require.False(t, pending)
 }
 
 type waitReadyObservedContext struct {

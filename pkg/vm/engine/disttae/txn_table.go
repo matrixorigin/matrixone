@@ -2950,7 +2950,7 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 			return nil, false, err
 		}
 
-		ps, subscribed, _, pending := eng.PushClient().getSubscribedSnapshotForPKCheck(
+		ps, subscribed, state, pending := eng.PushClient().getSubscribedSnapshotForPKCheck(
 			ctx,
 			uint64(tbl.accountId),
 			tbl.db.databaseId,
@@ -2973,7 +2973,6 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 			}
 			continue
 		}
-
 		if !checkedCreatedInTxn {
 			var err error
 			createdInTxn, err = tbl.isCreatedInTxn(ctx)
@@ -2998,6 +2997,17 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 				return nil, false, err
 			}
 			return part.Snapshot(), true, nil
+		}
+		if state == InvalidSubState {
+			// Reconnect closes the push-client admission gate before clearing the
+			// old subscription map. Do not let getPartitionState reuse an entry
+			// from that old generation, and do not spin while reconnect is active.
+			select {
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			case <-ticker.C:
+			}
+			continue
 		}
 
 		// Drive the existing subscription state machine to completion, then

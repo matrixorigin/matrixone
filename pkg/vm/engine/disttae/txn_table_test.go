@@ -333,6 +333,7 @@ func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
 		eng: eng,
 		m:   make(map[uint64]*subEntry),
 	}
+	eng.pClient.receivedLogTailTime.ready.Store(true)
 
 	op, closeFn := client.NewTestTxnOperator(context.Background())
 	t.Cleanup(closeFn)
@@ -467,6 +468,28 @@ func TestPrimaryKeysMayBeModifiedStopsWaitingWhenSubscriptionContextEnds(t *test
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestPrimaryKeysMayBeModifiedStopsWaitingWhenPushClientIsNotReady(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	eng.pClient.receivedLogTailTime.ready.Store(false)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := tbl.PrimaryKeysMayBeModified(
+		ctx,
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
 	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	mp := tbl.proc.Load().Mp()
@@ -511,10 +534,11 @@ func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
 }
 
 func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
-	tbl, _ := newPrimaryKeyCheckTableForTest(t)
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	tbl.fake = false
 	tbl.remoteWorkspace = true
 	tbl.createdInTxn = true
+	eng.pClient.receivedLogTailTime.ready.Store(false)
 
 	mp := tbl.proc.Load().Mp()
 	bat := makeBatchForTest(mp, 7)
@@ -529,7 +553,8 @@ func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
 		-1,
 	)
 	require.NoError(t, err)
-	require.False(t, changed, "a table created in this transaction has no committed remote history")
+	require.False(t, changed,
+		"a table created in this transaction has no committed remote history even during reconnect")
 }
 
 // func TestPrimaryKeyCheck(t *testing.T) {
