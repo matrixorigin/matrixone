@@ -25,11 +25,42 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type leaseCancelReadTxnService struct {
+	service.TxnService
+	shard   metadata.TNShard
+	entered chan struct{}
+	readErr error
+}
+
+func (s *leaseCancelReadTxnService) Shard() metadata.TNShard {
+	return s.shard
+}
+
+func (s *leaseCancelReadTxnService) Start() error {
+	return nil
+}
+
+func (s *leaseCancelReadTxnService) Close(bool) error {
+	return nil
+}
+
+func (s *leaseCancelReadTxnService) Read(ctx context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {
+	if s.entered != nil {
+		close(s.entered)
+	}
+	if s.readErr != nil {
+		return s.readErr
+	}
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
 
 func TestRetryWaitHonorsContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -234,6 +265,91 @@ func TestHandleRead(t *testing.T) {
 		req.CNRequest.Target.ReplicaID = 2
 		assert.NoError(t, s.handleRead(context.Background(), &req, &txn.TxnResponse{}))
 	})
+}
+
+func TestDoReadReturnsCallerCancellation(t *testing.T) {
+	s := &store{cfg: &Config{UUID: "test"}, replicas: &sync.Map{}}
+	shard := newTestTNShard(1, 2, 3)
+	r := newReplica(shard, runtime.DefaultRuntime())
+	require.NoError(t, r.start(&leaseCancelReadTxnService{
+		shard:   shard,
+		entered: make(chan struct{}),
+	}))
+	t.Cleanup(func() { require.NoError(t, r.close(false)) })
+	s.replicas.Store(uint64(1), r)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
+	req.CNRequest.Target.ReplicaID = 2
+	resp := &txn.TxnResponse{}
+
+	require.ErrorIs(t, s.doRead(ctx, &req, resp), context.Canceled)
+	require.Nil(t, resp.TxnError)
+}
+
+func TestDoReadMapsLeaseCancellationToTNShardNotFound(t *testing.T) {
+	s := &store{cfg: &Config{UUID: "test"}, replicas: &sync.Map{}}
+	shard := newTestTNShard(1, 2, 3)
+	entered := make(chan struct{})
+	r := newReplica(shard, runtime.DefaultRuntime())
+	require.NoError(t, r.start(&leaseCancelReadTxnService{
+		shard:   shard,
+		entered: entered,
+	}))
+	s.replicas.Store(uint64(1), r)
+
+	req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
+	req.CNRequest.Target.ReplicaID = 2
+	resp := &txn.TxnResponse{}
+	done := make(chan error, 1)
+	go func() {
+		done <- s.doRead(context.Background(), &req, resp)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(replicaTestTimeout):
+		t.Fatal("Read did not enter the lease context wait")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		closed <- r.close(false)
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(replicaTestTimeout):
+		t.Fatal("doRead did not return after lease cancellation")
+	}
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(replicaTestTimeout):
+		t.Fatal("replica close did not drain")
+	}
+	require.NotNil(t, resp.TxnError)
+	require.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.TxnErrCode)
+}
+
+func TestDoReadReturnsReadError(t *testing.T) {
+	s := &store{cfg: &Config{UUID: "test"}, replicas: &sync.Map{}}
+	shard := newTestTNShard(1, 2, 3)
+	readErr := errors.New("read failed")
+	r := newReplica(shard, runtime.DefaultRuntime())
+	require.NoError(t, r.start(&leaseCancelReadTxnService{
+		shard:   shard,
+		readErr: readErr,
+	}))
+	t.Cleanup(func() { require.NoError(t, r.close(false)) })
+	s.replicas.Store(uint64(1), r)
+
+	req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
+	req.CNRequest.Target.ReplicaID = 2
+	resp := &txn.TxnResponse{}
+
+	require.ErrorIs(t, s.doRead(context.Background(), &req, resp), readErr)
+	require.Nil(t, resp.TxnError)
 }
 
 func TestHandleReadWithRetry(t *testing.T) {
