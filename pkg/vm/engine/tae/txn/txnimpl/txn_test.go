@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -845,6 +846,79 @@ func TestObject2(t *testing.T) {
 	assert.Equal(t, objCnt, cnt)
 	assert.Nil(t, txn2.Commit(context.Background()))
 	t.Log(c.SimplePPString(common.PPL1))
+}
+
+func TestIsEmptyDroppedAppendableObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchema(1, 0)
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	_, err = db.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	require.NoError(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, rel.Append(ctx, bat))
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	require.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	it := rel.MakeObjectIt(false)
+	require.True(t, it.Next())
+	dataObjectID := *it.GetObject().GetID()
+	it.Close()
+	emptyObject, err := rel.CreateObject(false)
+	require.NoError(t, err)
+	emptyObjectID := *emptyObject.GetID()
+	require.NoError(t, emptyObject.Close())
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	require.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, rel.SoftDeleteObject(&dataObjectID, false))
+	require.NoError(t, rel.SoftDeleteObject(&emptyObjectID, false))
+	require.NoError(t, txn.Commit(ctx))
+
+	table := rel.GetMeta().(*catalog.TableEntry)
+	dataObject, err := table.GetObjectByID(&dataObjectID, false)
+	require.NoError(t, err)
+	require.True(t, dataObject.HasDropCommitted())
+	require.Zero(t, dataObject.GetObjectStats().Rows())
+	rows, err := dataObject.GetObjectData().Rows()
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+	require.False(t, isEmptyDroppedAppendableObject(dataObject))
+
+	emptyObjectMeta, err := table.GetObjectByID(&emptyObjectID, false)
+	require.NoError(t, err)
+	require.True(t, emptyObjectMeta.HasDropCommitted())
+	require.True(t, isEmptyDroppedAppendableObject(emptyObjectMeta))
 }
 
 func TestDedup1(t *testing.T) {

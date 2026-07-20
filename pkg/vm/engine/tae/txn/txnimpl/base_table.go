@@ -295,10 +295,22 @@ func isEmptyDroppedAppendableObject(obj *catalog.ObjectEntry) bool {
 	if !obj.IsAppendable() || stats.Rows() != 0 || stats.BlkCnt() != 0 {
 		return false
 	}
-	if obj.HasDropCommitted() {
-		return true
+	dropCommitted := obj.HasDropCommitted()
+	if !dropCommitted && obj.IsCEntry() && obj.HasDCounterpart() {
+		dropCommitted = obj.GetNextVersion().HasDropCommitted()
 	}
-	return obj.IsCEntry() && obj.HasDCounterpart() && obj.GetNextVersion().HasDropCommitted()
+	if !dropCommitted {
+		return false
+	}
+	objData := obj.GetObjectData()
+	if objData == nil {
+		return false
+	}
+	rows, err := objData.Rows()
+	if err != nil || rows != 0 {
+		return false
+	}
+	return true
 }
 
 func (tbl *baseTable) CleanUp() {
