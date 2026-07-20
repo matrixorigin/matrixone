@@ -42,12 +42,14 @@ type Index struct {
 
 	globalN         int64
 	globalAvgDocLen float64
-	// liveLoc maps a live pk key (normalizeKey) to the (segment index, doc ord) of its live copy.
-	liveLoc map[any]docLoc
 	// liveOrd[si] is a per-segment ord-indexed liveness bitmap (built once in resolve),
-	// so the boolean walk's livenessMembership is O(1) and allocation-free — no per-
-	// candidate keyOf + map lookup. A fully-live segment keeps liveOrd[si]==nil ("all
-	// live" fast path). Mirrors bm25's ComputeLiveness []Membership.
+	// so every liveness check — isLive (phrase), livenessMembership (boolean/stream), and
+	// ReconstructLiveDocs (compact) — is an O(1) bitmap index, allocation-free, with no
+	// per-candidate keyOf + map lookup. A fully-live segment keeps liveOrd[si]==nil ("all
+	// live" fast path), so an append-only index costs ZERO resident liveness heap. It is
+	// the SOLE resident liveness structure: the pk->loc map that resolve() builds to
+	// derive it is local and discarded (it was O(live docs) of Go heap — the dominant
+	// load-time floor). Mirrors bm25's ComputeLiveness []Membership.
 	liveOrd [][]bool
 }
 
@@ -84,16 +86,19 @@ func (idx *Index) resolve() {
 		}
 	}
 
-	idx.liveLoc = make(map[any]docLoc, len(top))
+	// liveLoc (pk key -> live loc) is LOCAL: it drives the liveOrd bitmap + global stats
+	// below and is then discarded, so it never becomes part of the resident cache
+	// footprint (it was O(live docs) of Go-heap map — the biggest load-time allocation).
+	liveLoc := make(map[any]docLoc, len(top))
 	var sumDocLen int64
 	for key, b := range top {
 		if d, ok := idx.deletes[key]; ok && b.rec < d {
 			continue // shadowed by a later delete
 		}
-		idx.liveLoc[key] = b.loc
+		liveLoc[key] = b.loc
 		sumDocLen += int64(idx.segments[b.loc.si].docLen[b.loc.ord])
 	}
-	idx.globalN = int64(len(idx.liveLoc))
+	idx.globalN = int64(len(liveLoc))
 	if idx.globalN > 0 {
 		idx.globalAvgDocLen = float64(sumDocLen) / float64(idx.globalN)
 	}
@@ -103,11 +108,11 @@ func (idx *Index) resolve() {
 
 	// Per-segment liveness bitmap (mirrors bm25's ComputeLiveness): a fully-live
 	// segment keeps liveOrd[si]==nil (the common single-base / append-only case) so it
-	// costs no O(doc-count) allocation; otherwise mark each live ord true. The boolean
-	// walk's livenessMembership then indexes this O(1) instead of keyOf+map per candidate.
+	// costs no O(doc-count) allocation; otherwise mark each live ord true. Every query
+	// and compact liveness check then indexes this O(1) instead of keyOf+map per candidate.
 	idx.liveOrd = make([][]bool, len(idx.segments))
 	liveCount := make([]int, len(idx.segments))
-	for _, loc := range idx.liveLoc {
+	for _, loc := range liveLoc {
 		liveCount[loc.si]++
 	}
 	for si, seg := range idx.segments {
@@ -115,17 +120,33 @@ func (idx *Index) resolve() {
 			idx.liveOrd[si] = make([]bool, len(seg.pks))
 		}
 	}
-	for _, loc := range idx.liveLoc {
+	for _, loc := range liveLoc {
 		if b := idx.liveOrd[loc.si]; b != nil {
 			b[loc.ord] = true
 		}
 	}
 }
 
-// isLive reports whether (si, ord) is the live copy of key (a normalizeKey value).
-func (idx *Index) isLive(si int, ord int64, key any) bool {
-	l, ok := idx.liveLoc[key]
-	return ok && l.si == si && l.ord == ord
+// isLive reports whether (si, ord) is the live copy of its pk, via the per-segment
+// liveness bitmap (nil => the segment is fully live). Same semantics as
+// livenessMembership; no pk key or map lookup needed.
+func (idx *Index) isLive(si int, ord int64) bool {
+	b := idx.liveOrd[si]
+	return b == nil || b[ord]
+}
+
+// forEachLive calls fn for every live (segment index, doc ord), driven by the liveOrd
+// bitmap (nil => the whole segment is live). This replaces iterating the transient
+// liveLoc map — same set of locations, no resident pk->loc map.
+func (idx *Index) forEachLive(fn func(si int, ord int64)) {
+	for si, seg := range idx.segments {
+		b := idx.liveOrd[si]
+		for ord := 0; ord < len(seg.pks); ord++ {
+			if b == nil || b[ord] {
+				fn(si, int64(ord))
+			}
+		}
+	}
 }
 
 // SearchPhrase runs an NL exact-phrase query across all segments and returns the
@@ -149,8 +170,7 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 	for si, seg := range idx.segments {
 		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
 		for _, h := range seg.matchPhrase(slots) {
-			key := normalizeKey(seg.pks[h.ord])
-			if !idx.isLive(si, h.ord, key) {
+			if !idx.isLive(si, h.ord) {
 				continue
 			}
 			df++ // distinct live phrase match (filter-independent, matches the old dfSet)
@@ -441,10 +461,10 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 			term string
 		}
 		// Bucket postings only for LIVE (si, ord) locations.
-		buckets := make(map[docLoc][]posTerm, len(idx.liveLoc))
-		for _, l := range idx.liveLoc {
-			buckets[l] = nil
-		}
+		buckets := make(map[docLoc][]posTerm, idx.globalN)
+		idx.forEachLive(func(si int, ord int64) {
+			buckets[docLoc{si, ord}] = nil
+		})
 		for si, seg := range idx.segments {
 			err := seg.forEachPosting(func(term string, tp *termPostings) {
 				docs := tp.materializeDocIDs() // docIDs (block-compressed on load)
@@ -488,10 +508,10 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 			sk  string
 			loc docLoc
 		}
-		keys := make([]keyed, 0, len(idx.liveLoc))
-		for k, l := range idx.liveLoc {
-			keys = append(keys, keyed{sortKey(k), l})
-		}
+		keys := make([]keyed, 0, idx.globalN)
+		idx.forEachLive(func(si int, ord int64) {
+			keys = append(keys, keyed{sortKey(normalizeKey(idx.segments[si].pks[ord])), docLoc{si, ord}})
+		})
 		sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk }) // deterministic output
 		for _, kd := range keys {
 			l := kd.loc
