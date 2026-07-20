@@ -101,7 +101,7 @@ func TestMultiSegmentGlobalStats(t *testing.T) {
 	scoreByPk := func(rs []Result) map[int64]float64 {
 		m := make(map[int64]float64, len(rs))
 		for _, r := range rs {
-			m[r.Pk.(int64)] = r.Score
+			m[r.Pk.(int64)] = float64(r.Score)
 		}
 		return m
 	}
@@ -118,7 +118,7 @@ func TestMultiSegmentGlobalStats(t *testing.T) {
 		for pk, s := range ws {
 			g, ok := gsc[pk]
 			require.Truef(t, ok, "q=%q: pk %d present in split", q, pk)
-			require.InDeltaf(t, s, g, 1e-9, "q=%q pk %d: global score matches single-segment", q, pk)
+			require.InDeltaf(t, s, g, 1e-5, "q=%q pk %d: global score matches single-segment", q, pk)
 		}
 		// Bounded top-k: the ranked SCORE sequence is identical (which tie member fills
 		// the k-th slot is arbitrary — the documented WAND tie caveat — but the scores at
@@ -130,7 +130,7 @@ func TestMultiSegmentGlobalStats(t *testing.T) {
 			require.NoError(t, err)
 			require.Lenf(t, g, len(w), "q=%q k=%d: same count (no truncation loss)", q, k)
 			for i := range w {
-				require.InDeltaf(t, w[i].Score, g[i].Score, 1e-9, "q=%q k=%d rank=%d: score", q, k, i)
+				require.InDeltaf(t, w[i].Score, g[i].Score, 1e-5, "q=%q k=%d rank=%d: score", q, k, i)
 			}
 		}
 	}
@@ -167,7 +167,7 @@ func TestMultiSegmentPhraseStats(t *testing.T) {
 	byPk := func(rs []Result) map[int64]float64 {
 		m := make(map[int64]float64, len(rs))
 		for _, r := range rs {
-			m[r.Pk.(int64)] = r.Score
+			m[r.Pk.(int64)] = float64(r.Score)
 		}
 		return m
 	}
@@ -182,7 +182,7 @@ func TestMultiSegmentPhraseStats(t *testing.T) {
 	for pk, s := range ws {
 		g, ok := gsc[pk]
 		require.Truef(t, ok, "pk %d present in split", pk)
-		require.InDeltaf(t, s, g, 1e-9, "pk %d: global phrase idf matches single-segment", pk)
+		require.InDeltaf(t, s, g, 1e-5, "pk %d: global phrase idf matches single-segment", pk)
 	}
 }
 

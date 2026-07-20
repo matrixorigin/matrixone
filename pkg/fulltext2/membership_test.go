@@ -107,7 +107,7 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 	scoreOf := func(rs []Result, pk int64) float64 {
 		for _, r := range rs {
 			if r.Pk.(int64) == pk {
-				return r.Score
+				return float64(r.Score)
 			}
 		}
 		t.Fatalf("pk %d not in results", pk)
@@ -130,6 +130,6 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 
 	filtered := idx.SearchPhrase(phr("alpha"), BM25, 100, filter)
 	require.Len(t, filtered, 2, "only the allowed docs are returned")
-	require.InDelta(t, s0, scoreOf(filtered, 0), 1e-9,
+	require.InDelta(t, s0, scoreOf(filtered, 0), 1e-5,
 		"doc 0's score must be filter-independent (corpus df, not filtered count)")
 }

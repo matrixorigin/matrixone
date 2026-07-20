@@ -59,10 +59,10 @@ func requireSameRanking(t *testing.T, label string, wand, full []Result) {
 	// is the sufficient correctness invariant: a pruned or mis-scored doc changes a score
 	// here, while a pk difference can only occur among EQUAL scores, whose identity is
 	// unspecified (neither heap imposes a tiebreak, matching bm25). So we compare scores,
-	// not pk. (1e-9 also absorbs the float-ULP score noise between the two accumulation
+	// not pk. (1e-5 also absorbs the float-ULP score noise between the two accumulation
 	// orders, which can flip a near-tie's doc identity.)
 	for i := range full {
-		require.InDelta(t, full[i].Score, wand[i].Score, 1e-9, "%s: rank %d score", label, i)
+		require.InDelta(t, full[i].Score, wand[i].Score, 1e-5, "%s: rank %d score", label, i)
 	}
 }
 

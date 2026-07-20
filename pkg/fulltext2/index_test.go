@@ -80,7 +80,7 @@ func TestIndexGlobalStats(t *testing.T) {
 	rs, err := idx.SearchText([]byte("cat"), tokenizer.NewSimpleTokenizer(), TfIdf, 10, nil)
 	require.NoError(t, err)
 	want := idfSquared(4, 2) // tf=1
-	require.InDelta(t, want, rs[0].Score, 1e-9)
+	require.InDelta(t, want, rs[0].Score, 1e-5)
 }
 
 // TestIndexPhraseAcrossSegments: an exact phrase resolves within each segment;

@@ -55,7 +55,7 @@ func TestStreamQuery(t *testing.T) {
 		for _, r := range want {
 			g, ok := got[r.Pk.(int64)]
 			require.Truef(t, ok, "%q: pk %v streamed", pattern, r.Pk)
-			require.InDeltaf(t, r.Score, g, 1e-9, "%q: pk %v score", pattern, r.Pk)
+			require.InDeltaf(t, r.Score, g, 1e-5, "%q: pk %v score", pattern, r.Pk)
 		}
 	}
 

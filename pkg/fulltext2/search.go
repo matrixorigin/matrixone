@@ -45,10 +45,13 @@ const (
 	bm25B  = 0.75
 )
 
-// Result is one ranked hit: the source pk and its relevance score.
+// Result is one ranked hit: the source pk and its relevance score. Score is float32
+// (matches classic fulltext, whose score/score-map are float32 — float32 relevance is
+// enough for BM25/TF-IDF); only the idf/avgDocLen intermediates are computed in float64
+// and narrowed, as classic does.
 type Result struct {
 	Pk    any
-	Score float64
+	Score float32
 }
 
 // lookup resolves a term to its posting list on either a build-side segment (the
@@ -472,11 +475,11 @@ func idfSquared(n int64, df int) float64 {
 }
 
 // scoreTerm scores one (tf, idf², doc) contribution under the active algorithm.
-func (s *Segment) scoreTerm(algo ScoreAlgo, tf, idf2 float64, ord int64, avgDocLen float64) float64 {
+func (s *Segment) scoreTerm(algo ScoreAlgo, tf, idf2 float64, ord int64, avgDocLen float64) float32 {
 	if algo == BM25 {
-		return idf2 * bm25Factor(tf, s.docLen[ord], avgDocLen)
+		return float32(idf2 * bm25Factor(tf, s.docLen[ord], avgDocLen))
 	}
-	return tf * idf2 // TfIdf
+	return float32(tf * idf2) // TfIdf
 }
 
 // avgDocLenOrMean returns the segment's AvgDocLen, falling back to the

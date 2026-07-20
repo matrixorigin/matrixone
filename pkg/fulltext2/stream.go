@@ -36,12 +36,12 @@ type streamSink struct {
 	stopped bool
 }
 
-func (s *streamSink) push(pk any, score float64) {
+func (s *streamSink) push(pk any, score float32) {
 	if s.stopped {
 		return
 	}
 	s.keys = append(s.keys, pk)
-	s.scores = append(s.scores, score)
+	s.scores = append(s.scores, float64(score))
 	if len(s.keys) >= streamBatch {
 		s.flush()
 	}
@@ -84,7 +84,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 			break // all cursors exhausted
 		}
 		if allowed(allow, minDoc) {
-			var score float64
+			var score float32
 			for _, it := range iters {
 				if it.doc() == minDoc {
 					// tf-aware, same as searchWAND / evalClause (fulltext2 keeps real tf).

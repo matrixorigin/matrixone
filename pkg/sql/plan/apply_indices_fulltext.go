@@ -797,7 +797,17 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		if idx == nil || !idx.TableExist {
+			continue
+		}
+		// A fulltext2 index has two hidden-table defs (storage + metadata) sharing the
+		// IndexName; resolve against the STORAGE def so IndexTableName/Parts are the ones
+		// the fulltext2_search TVF expects. Classic fulltext has a single def.
+		if catalog.IsFullText2IndexAlgo(idx.IndexAlgo) {
+			if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
+				continue
+			}
+		} else if !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

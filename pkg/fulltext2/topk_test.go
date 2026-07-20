@@ -38,7 +38,7 @@ func TestTopKResultsValidTopK(t *testing.T) {
 				for i := range results {
 					results[i] = Result{
 						Pk:    int64(rng.Intn(1 << 30)),
-						Score: float64(rng.Intn(scoreBuckets)),
+						Score: float32(rng.Intn(scoreBuckets)),
 					}
 				}
 				got := topKResults(results, k)
@@ -64,14 +64,14 @@ func TestTopKResultsValidTopK(t *testing.T) {
 				// score overall, i.e. nothing better than a returned doc was dropped.
 				allScores := make([]float64, n)
 				for i := range results {
-					allScores[i] = results[i].Score
+					allScores[i] = float64(results[i].Score)
 				}
 				sort.Sort(sort.Reverse(sort.Float64Slice(allScores)))
 				kth := allScores[len(got)-1] // k-th largest overall (got has min(k,n) items)
 				minReturned := math.Inf(1)
 				for _, r := range got {
-					if r.Score < minReturned {
-						minReturned = r.Score
+					if float64(r.Score) < minReturned {
+						minReturned = float64(r.Score)
 					}
 				}
 				require.GreaterOrEqualf(t, minReturned, kth,

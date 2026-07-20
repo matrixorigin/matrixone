@@ -23,7 +23,7 @@ func benchResults(n, buckets int) []Result {
 	rng := rand.New(rand.NewSource(7))
 	rs := make([]Result, n)
 	for i := range rs {
-		rs[i] = Result{Pk: int64(rng.Intn(1 << 30)), Score: float64(rng.Intn(buckets))}
+		rs[i] = Result{Pk: int64(rng.Intn(1 << 30)), Score: float32(rng.Intn(buckets))}
 	}
 	return rs
 }

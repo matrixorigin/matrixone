@@ -74,11 +74,11 @@ func requireSameTopK(t *testing.T, got, want []Result, ctx string) {
 	}
 	// Score multiset: both are score-desc, so compare pairwise within tolerance.
 	for i := range want {
-		require.InDeltaf(t, want[i].Score, got[i].Score, 1e-9, "%s: score at rank %d", ctx, i)
+		require.InDeltaf(t, want[i].Score, got[i].Score, 1e-5, "%s: score at rank %d", ctx, i)
 	}
 	// Set of docs strictly above the boundary score must match exactly (only the
 	// boundary tie may differ in membership).
-	const tol = 1e-9
+	const tol = 1e-5
 	boundary := want[len(want)-1].Score
 	above := func(rs []Result) map[any]struct{} {
 		m := make(map[any]struct{})
@@ -128,7 +128,7 @@ func TestBlockMaxWANDParity(t *testing.T) {
 	}) BoolQuery {
 		var q BoolQuery
 		for _, e := range weights {
-			q.should = append(q.should, clause{kind: clauseTerm, terms: []string{e.w}, weight: e.x})
+			q.should = append(q.should, clause{kind: clauseTerm, terms: []string{e.w}, weight: float32(e.x)})
 		}
 		return q
 	}

@@ -151,7 +151,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	dist := make([]float64, len(results))
 	for i, r := range results {
 		keysOut[i] = r.Pk
-		dist[i] = r.Score
+		dist[i] = float64(r.Score)
 	}
 	return keysOut, dist, nil
 }

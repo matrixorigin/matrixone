@@ -129,7 +129,9 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 			for i := range b.keys {
 				vector.AppendAny(u.batch.Vecs[0], b.keys[i], false, proc.Mp())
 				if withScore {
-					vector.AppendFixed[float64](u.batch.Vecs[1], b.distances[i], false, proc.Mp())
+					// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
+					// the engine computes float64 relevance, narrow it on append.
+					vector.AppendFixed[float32](u.batch.Vecs[1], float32(b.distances[i]), false, proc.Mp())
 				}
 			}
 			u.batch.SetRowCount(len(b.keys))
@@ -144,7 +146,9 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendAny(u.batch.Vecs[0], u.keys[i], false, proc.Mp())
 		if withScore {
-			vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+			// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
+			// the engine computes float64 relevance, narrow it on append.
+			vector.AppendFixed[float32](u.batch.Vecs[1], float32(u.distances[i]), false, proc.Mp())
 		}
 		n++
 	}

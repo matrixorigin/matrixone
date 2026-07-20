@@ -58,8 +58,8 @@ type wandIter struct {
 	bDocs     []int64 // decoded docIDs of curBlk (cap BlockSize)
 	bTfs      []uint8 // decoded tfs of curBlk (cap BlockSize)
 	idf2      float64
-	weight    float64
-	maxImpact float64 // term-level upper bound of this term's weighted contribution
+	weight    float32
+	maxImpact float32 // term-level upper bound of this term's weighted contribution
 }
 
 func (it *wandIter) atEnd() bool { return it.idx >= it.tp.df() }
@@ -143,15 +143,15 @@ func (it *wandIter) blockIndexAt(d int64) int {
 // doc d, in the SAME scorer as termMaxImpact (so it is ≤ the term-level bound). 0
 // if d is past the list. blockMaxTf (max tf in block) and blockMinDocLn (min doc
 // length in block) give the largest bm25Factor achievable in the block.
-func (it *wandIter) blockMax(d int64, algo ScoreAlgo, avgDocLen float64) float64 {
+func (it *wandIter) blockMax(d int64, algo ScoreAlgo, avgDocLen float64) float32 {
 	b := it.blockIndexAt(d)
 	if b >= len(it.tp.blockLastDoc) {
 		return 0
 	}
 	if algo == BM25 {
-		return it.weight * it.idf2 * bm25Factor(float64(it.tp.blockMaxTf[b]), it.tp.blockMinDocLn[b], avgDocLen)
+		return it.weight * float32(it.idf2*bm25Factor(float64(it.tp.blockMaxTf[b]), it.tp.blockMinDocLn[b], avgDocLen))
 	}
-	return it.weight * float64(it.tp.blockMaxTf[b]) * it.idf2 // TfIdf
+	return it.weight * float32(float64(it.tp.blockMaxTf[b])*it.idf2) // TfIdf
 }
 
 // blockEndAt is the last ord of the block containing doc d (the upper edge of the
@@ -169,7 +169,7 @@ func (it *wandIter) blockEndAt(d int64) int64 {
 // block-skip / align callers guarantee at least one such cursor exists.
 func chooseSkip(iters []*wandIter, pivot int, target int64) int {
 	best := -1
-	var bestImpact float64
+	var bestImpact float32
 	for i := 0; i <= pivot; i++ {
 		if iters[i].doc() < target && (best < 0 || iters[i].maxImpact > bestImpact) {
 			best = i
@@ -187,7 +187,7 @@ func chooseSkip(iters []*wandIter, pivot int, target int64) int {
 // the k SMALLEST distances keeps the k HIGHEST scores with zero per-candidate allocation
 // and no interface dispatch. Its root distance is the current threshold θ (the k-th best
 // score, negated). Equal scores are equally relevant — ties are unspecified.
-type topKHeap = vectorindex.FastMaxHeap[float64, int64]
+type topKHeap = vectorindex.FastMaxHeap[float32, int64]
 
 // newTopKHeap allocates the bounded heap's backing buffers. k is capped to maxDocs (the
 // segment's live doc count) because the heap can never hold more than that many results:
@@ -201,7 +201,7 @@ func newTopKHeap(k int, maxDocs int64) *topKHeap {
 	if k < 0 {
 		k = 0
 	}
-	return vectorindex.NewFastMaxHeap[float64, int64](k, make([]int64, k), make([]float64, k))
+	return vectorindex.NewFastMaxHeap[float32, int64](k, make([]int64, k), make([]float32, k))
 }
 
 // searchWAND runs WAND over the disjunctive single-term SHOULD clauses and
@@ -245,7 +245,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 	}
 
 	h := newTopKHeap(k, s.N)
-	theta := math.Inf(-1) // until the heap holds k, accept everything
+	theta := float32(math.Inf(-1)) // until the heap holds k, accept everything
 
 	for {
 		// Order cursors by current doc ascending (exhausted ones, doc()==sentinel,
@@ -271,7 +271,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 
 		// Term-level WAND pivot: first cursor at which the cumulative max-impact
 		// reaches θ.
-		acc, pivot := 0.0, -1
+		acc, pivot := float32(0), -1
 		for i, it := range iters {
 			if it.atEnd() {
 				break
@@ -300,7 +300,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 		// If that can't exceed θ, skip the whole region instead of scoring pivotDoc.
 		// Skipped docs have score ≤ blockSum ≤ θ, which `score > θ` rejects anyway →
 		// same top-k SET, less work. (bm25 uses the identical `blockSum <= theta`.)
-		blockSum := 0.0
+		blockSum := float32(0)
 		for i := 0; i <= pivot; i++ {
 			blockSum += iters[i].blockMax(pivotDoc, algo, avgDocLen)
 		}
@@ -329,7 +329,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 			// only if it passes the WHERE prefilter; the cursor advance always runs so a
 			// filtered-out pivot never stalls the walk.
 			if allowed(allow, pivotDoc) {
-				var score float64
+				var score float32
 				for _, it := range iters {
 					if it.doc() == pivotDoc {
 						// tf-aware, matching the full-scan evalClause scorer so WAND returns the
@@ -363,11 +363,11 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 
 // termMaxImpact is the largest weighted-free score a term can contribute to any
 // document, from its raw maxTf (and minDocLen for BM25's saturating factor).
-func (s *Segment) termMaxImpact(algo ScoreAlgo, idf2 float64, pl *termPostings, avgDocLen float64) float64 {
+func (s *Segment) termMaxImpact(algo ScoreAlgo, idf2 float64, pl *termPostings, avgDocLen float64) float32 {
 	if algo == BM25 {
-		return idf2 * bm25Factor(float64(pl.maxTf), pl.minDocLen, avgDocLen)
+		return float32(idf2 * bm25Factor(float64(pl.maxTf), pl.minDocLen, avgDocLen))
 	}
-	return float64(pl.maxTf) * idf2 // TfIdf
+	return float32(float64(pl.maxTf) * idf2) // TfIdf
 }
 
 // heapToResults drains the bounded top-k heap into results ordered by score descending

@@ -205,8 +205,8 @@ func topKResults(results []Result, k int) []Result {
 		k = len(results)
 	}
 	keysBuf := make([]int64, k)
-	distsBuf := make([]float64, k)
-	h := vectorindex.NewFastMaxHeap[float64, int64](k, keysBuf, distsBuf)
+	distsBuf := make([]float32, k)
+	h := vectorindex.NewFastMaxHeap[float32, int64](k, keysBuf, distsBuf)
 	for i := range results {
 		h.Push(int64(i), -results[i].Score)
 	}

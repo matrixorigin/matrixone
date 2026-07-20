@@ -83,7 +83,7 @@ type clause struct {
 	terms    []string     // leaf (term / prefix)
 	phrase   []phraseSlot // clausePhrase: positional (byte-offset) slots
 	children []clause     // group
-	weight   float64      // impact multiplier (1.0 default; > < ~ change it)
+	weight   float32      // impact multiplier (1.0 default; > < ~ change it)
 }
 
 // BoolQuery is a parsed boolean-mode query. adjust holds the ~ clauses, which
@@ -145,12 +145,12 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		return nil, nil
 	}
 	avgDocLen := gs.avgdl(s)
-	score := make([]float64, n)
+	score := make([]float32, n)
 
 	// MUST-NOT: presence only, into an exclusion bitset.
 	mustNot := newDocBitset(n)
 	for _, c := range q.mustNot {
-		if err := s.evalClauseInto(c, algo, avgDocLen, gs, false, func(ord int64, _ float64) {
+		if err := s.evalClauseInto(c, algo, avgDocLen, gs, false, func(ord int64, _ float32) {
 			mustNot.set(int(ord))
 		}); err != nil {
 			return nil, err
@@ -170,7 +170,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		mustHit := make([]int32, n)
 		touched := newDocBitset(n)
 		for _, c := range q.must {
-			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float64) {
+			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
 				score[ord] += sc
 				mustHit[ord]++
 				touched.set(int(ord))
@@ -182,7 +182,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		// docs are collected, so contributions to non-candidates are simply never read.
 		for _, cs := range [][]clause{q.should, q.adjust} {
 			for _, c := range cs {
-				if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float64) {
+				if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
 					score[ord] += sc
 				}); err != nil {
 					return nil, err
@@ -205,7 +205,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 	cand := newDocBitset(n)
 	for _, cs := range [][]clause{q.should, q.adjust} {
 		for _, c := range cs {
-			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float64) {
+			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
 				score[ord] += sc
 				cand.set(int(ord))
 			}); err != nil {
@@ -222,7 +222,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 // directly (weight folded in); prefix and group clauses need a per-doc MAX over their
 // expansion/children, so they fall back to evalClause's map (rare, and bounded by the
 // prefix's terms). scored=false emits presence only (score 0), for MUST-NOT.
-func (s *Segment) evalClauseInto(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool, emit func(int64, float64)) error {
+func (s *Segment) evalClauseInto(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool, emit func(int64, float32)) error {
 	w := c.weight
 	switch c.kind {
 	case clauseTerm:
@@ -281,8 +281,8 @@ func (s *Segment) evalClauseInto(c clause, algo ScoreAlgo, avgDocLen float64, gs
 // scored=false skips the per-doc score computation (idf + scoreTerm) and returns a
 // presence-only map (all 0 values). MUST-NOT clauses use this: only the ord set is read
 // there, so scoring every doc of a common negated term (e.g. `-the`) was wasted work.
-func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool) (map[int64]float64, error) {
-	raw := make(map[int64]float64)
+func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool) (map[int64]float32, error) {
+	raw := make(map[int64]float32)
 	switch c.kind {
 	case clauseTerm:
 		if pl, ok := s.lookup(c.terms[0]); ok {
@@ -416,7 +416,7 @@ func bucketOf(prefix byte) bucket {
 	}
 }
 
-func weightOf(prefix byte) float64 {
+func weightOf(prefix byte) float32 {
 	switch prefix {
 	case '>':
 		return weightGreater
