@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,17 +47,13 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		shuffle.OpAnalyzer.Reset()
 	}
 
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	if shuffle.ctr.sels == nil {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
 	}
 	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
+		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1, true))
+		shuffle.DrainAllBuckets = true
 	}
-	shuffle.ctr.shufflePool.Hold()
-	shuffle.ctr.ending = false
 
 	if shuffle.ShuffleExpr != nil && shuffle.ctr.exprExec == nil {
 		var err error
@@ -65,54 +62,118 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
+	if !shuffle.ctr.shufflePool.hold() {
+		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
+	}
+	shuffle.ctr.held = true
+	shuffle.ctr.ending = false
+	shuffle.ctr.runtimeFilterHandled = false
 	return nil
 }
 
-// there are two ways for shuffle to send a batch
-// if a batch belongs to one bucket, send this batch directly, and shuffle need to do nothing
-// else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
-// for now, we shuffle null to the first bucket
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := shuffle.OpAnalyzer
 
-	result := vm.NewCallResult()
-
+	// Put old buf back to pool after cleaning data
 	if shuffle.ctr.buf != nil {
-		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.buf.CleanOnlyData()
+		shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
 		shuffle.ctr.buf = nil
 	}
 
-	if shuffle.ctr.ending {
-		if shuffle.ctr.lastForShufflePool {
-			//send shuffle pool
-			shuffle.ctr.buf = shuffle.ctr.shufflePool.GetEndingBatch(proc)
-			if shuffle.ctr.buf == nil {
-				result.Status = vm.ExecStop
-			} else {
-				result.Status = vm.ExecHasMore
-			}
-			result.Batch = shuffle.ctr.buf
+	getFull := func() *batch.Batch {
+		if shuffle.DrainAllBuckets {
+			return shuffle.ctr.shufflePool.getAnyFullBatch()
 		}
-		return result, nil
+		return shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+	}
+	getLast := func() *batch.Batch {
+		if shuffle.DrainAllBuckets {
+			return shuffle.ctr.shufflePool.getAnyLastBatch()
+		}
+		return shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx)
+	}
+	wait := func() {
+		if shuffle.DrainAllBuckets {
+			shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc)
+		} else {
+			shuffle.ctr.shufflePool.waitBatchOrEnd(shuffle.CurrentShuffleIdx, proc)
+		}
 	}
 
-	var err error
 	for {
-		shuffle.ctr.buf = shuffle.ctr.shufflePool.GetFullBatch(proc)
-		if shuffle.ctr.buf != nil { // find a full batch
-			break
+		result := vm.NewCallResult()
+		tmpBat := getFull()
+		if tmpBat != nil { // find a full batch
+			shuffle.ctr.buf = tmpBat
+			if err := shuffle.handleRuntimeFilter(proc); err != nil {
+				return vm.CancelResult, err
+			}
+			result.Batch = tmpBat
+			return result, nil
 		}
+
+		if shuffle.ctr.pendingBat != nil {
+			done, spaceWaiter, err := shuffle.flushPending(proc)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if done {
+				continue
+			}
+
+			// Every fixed-bucket holder is both a producer and a consumer.
+			// Drain its own bucket before waiting for global capacity so a
+			// cross-write cycle cannot deadlock.
+			if tmpBat = getFull(); tmpBat != nil {
+				shuffle.ctr.buf = tmpBat
+				if err = shuffle.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
+				result.Batch = tmpBat
+				return result, nil
+			}
+			select {
+			case <-spaceWaiter:
+			case <-shuffle.ctr.shufflePool.endingWaiter:
+			case <-proc.Ctx.Done():
+				return vm.CancelResult, nil
+			}
+			continue
+		}
+
+		if shuffle.ctr.shufflePool.allStop() {
+			shuffle.ctr.ending = true
+			tmpBat = getLast()
+			if tmpBat != nil {
+				shuffle.ctr.buf = tmpBat
+				if err := shuffle.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
+				result.Batch = tmpBat
+				return result, nil
+			}
+			return vm.CancelResult, nil
+		}
+
+		if shuffle.ctr.ending {
+			wait()
+			result.Batch = batch.EmptyBatch
+			return result, nil
+		}
+
 		// do input
-		result, err = vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
-
+		// Child completion is not shuffle completion: buffered batches may remain.
 		result.Status = vm.ExecNext
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
-			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
+			shuffle.ctr.shufflePool.stopWriting()
+			result.Status = vm.ExecNext
 			result.Batch = batch.EmptyBatch
 			return result, nil
 		} else if bat.Last() {
@@ -130,24 +191,39 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if bat != nil {
 				// can directly send this batch
-				//need to wait for runtimefilter_pass before send batch
 				if err = shuffle.handleRuntimeFilter(proc); err != nil {
 					return vm.CancelResult, err
 				}
 				return result, nil
 			}
-			analyzer.SetMemUsed(shuffle.ctr.shufflePool.Size())
 		}
 	}
+}
 
-	//need to wait for runtimefilter_pass before send batch
-	if err = shuffle.handleRuntimeFilter(proc); err != nil {
-		return vm.CancelResult, err
+func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct{}, error) {
+	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWrite(
+		shuffle.ctr.pendingBat,
+		shuffle.ctr.sels,
+		shuffle.ctr.pendingBucket,
+		shuffle.ctr.pendingOffset,
+		proc,
+	)
+	shuffle.ctr.pendingBucket = nextBucket
+	shuffle.ctr.pendingOffset = nextOffset
+	if done || err != nil {
+		shuffle.ctr.pendingBat = nil
+		shuffle.ctr.pendingBucket = 0
+		shuffle.ctr.pendingOffset = 0
 	}
+	return done, waiter, err
+}
 
-	// send the batch
-	result.Batch = shuffle.ctr.buf
-	return result, nil
+func (shuffle *Shuffle) enqueueBySels(bat *batch.Batch, proc *process.Process) error {
+	shuffle.ctr.pendingBat = bat
+	shuffle.ctr.pendingBucket = 0
+	shuffle.ctr.pendingOffset = 0
+	_, _, err := shuffle.flushPending(proc)
+	return err
 }
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,
@@ -160,16 +236,16 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 	}
 
 	if vec.IsConstNull() {
-		bat.ShuffleIDX = 0
-		return bat, nil
+		return shuffle.routeSingleBucket(bat, 0, proc)
 	}
 	if vec.IsConst() {
+		var shuffleIdx uint64
 		if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
-			bat.ShuffleIDX = int32(rangeShuffleConstVec(shuffle, vec))
+			shuffleIdx = rangeShuffleConstVec(shuffle, vec)
 		} else {
-			bat.ShuffleIDX = int32(shuffleConstVecByHash(shuffle.BucketNum, vec))
+			shuffleIdx = shuffleConstVecByHash(shuffle.BucketNum, vec)
 		}
-		return bat, nil
+		return shuffle.routeSingleBucket(bat, int32(shuffleIdx), proc)
 	}
 
 	sels := shuffle.clearSels()
@@ -189,37 +265,50 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 			break
 		}
 		if len(sels[i]) == bat.RowCount() {
-			bat.ShuffleIDX = int32(i)
-			return bat, nil
+			return shuffle.routeSingleBucket(bat, int32(i), proc)
 		}
 	}
 
-	err = shuffle.ctr.shufflePool.putBatchIntoShuffledPoolsBySels(bat, sels, proc)
+	err = shuffle.enqueueBySels(bat, proc)
+	return nil, err
+}
+
+func (shuffle *Shuffle) routeSingleBucket(bat *batch.Batch, shuffleIdx int32, proc *process.Process) (*batch.Batch, error) {
+	bat.ShuffleIDX = shuffleIdx
+	if shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx {
+		return bat, nil
+	}
+	sels := shuffle.clearSels()
+	for row := 0; row < bat.RowCount(); row++ {
+		sels[shuffleIdx] = append(sels[shuffleIdx], int32(row))
+	}
+	err := shuffle.enqueueBySels(bat, proc)
 	return nil, err
 }
 
 func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
-	if !shuffle.ctr.runtimeFilterHandled && shuffle.RuntimeFilterSpec != nil {
-		shuffle.msgReceiver = message.NewMessageReceiver(
-			[]int32{shuffle.RuntimeFilterSpec.Tag},
-			message.AddrBroadCastOnCurrentCN(),
-			proc.GetMessageBoard())
-		msgs, ctxDone, err := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
-		if ctxDone {
-			shuffle.ctr.runtimeFilterHandled = true
-			return nil
+	if shuffle.ctr.runtimeFilterHandled || shuffle.RuntimeFilterSpec == nil {
+		return nil
+	}
+	receiver := message.NewMessageReceiver(
+		[]int32{shuffle.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		proc.GetMessageBoard())
+	msgs, ctxDone, err := receiver.ReceiveMessage(true, proc.Ctx)
+	if ctxDone {
+		shuffle.ctr.runtimeFilterHandled = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for i := range msgs {
+		msg, ok := msgs[i].(message.RuntimeFilterMessage)
+		if !ok {
+			continue
 		}
-		if err != nil {
-			return err
-		} else {
-			for i := range msgs {
-				msg, _ := msgs[i].(message.RuntimeFilterMessage)
-				switch msg.Typ {
-				case message.RuntimeFilter_PASS, message.RuntimeFilter_DROP:
-					shuffle.ctr.runtimeFilterHandled = true
-					continue
-				}
-			}
+		if msg.Typ == message.RuntimeFilter_PASS || msg.Typ == message.RuntimeFilter_DROP {
+			shuffle.ctr.runtimeFilterHandled = true
 		}
 	}
 	return nil
@@ -406,22 +495,19 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
-		bat.ShuffleIDX = 0
-		return bat, nil
+		return ap.routeSingleBucket(bat, 0, proc)
 	}
 	if groupByVec.IsConst() {
-		bat.ShuffleIDX = int32(shuffleConstVectorByHash(ap, bat))
-		return bat, nil
+		return ap.routeSingleBucket(bat, int32(shuffleConstVectorByHash(ap, bat)), proc)
 	}
 
-	var sels [][]int32
 	if groupByVec.HasNull() {
-		sels = getShuffledSelsByHashWithNull(ap, bat)
+		getShuffledSelsByHashWithNull(ap, bat)
 	} else {
-		sels = getShuffledSelsByHashWithoutNull(ap, bat)
+		getShuffledSelsByHashWithoutNull(ap, bat)
 	}
 
-	err := ap.ctr.shufflePool.putBatchIntoShuffledPoolsBySels(bat, sels, proc)
+	err := ap.enqueueBySels(bat, proc)
 	return nil, err
 }
 
@@ -817,8 +903,7 @@ func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
-			bat.ShuffleIDX = int32(regIndex)
-			return bat, nil
+			return ap.routeSingleBucket(bat, int32(regIndex), proc)
 		}
 	}
 	var sels [][]int32
@@ -831,12 +916,11 @@ func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.
 		if len(sels[i]) > 0 && len(sels[i]) != bat.RowCount() {
 			break
 		}
-		if len(sels[i]) == bat.RowCount() {
-			bat.ShuffleIDX = int32(i)
-			return bat, nil
+		if len(sels[i]) == bat.RowCount() { // all batch in one range
+			return ap.routeSingleBucket(bat, int32(i), proc)
 		}
 	}
-	err := ap.ctr.shufflePool.putBatchIntoShuffledPoolsBySels(bat, sels, proc)
+	err := ap.enqueueBySels(bat, proc)
 	return nil, err
 }
 
@@ -864,7 +948,7 @@ func shuffleConstVecByHash(bucketNum int32, vec *vector.Vector) uint64 {
 	}
 }
 
-// rangeShuffleConstVec computes the range bucket index for a constant expression result vector.
+// rangeShuffleConstVec computes the range bucket index for a constant vector.
 func rangeShuffleConstVec(ap *Shuffle, vec *vector.Vector) uint64 {
 	bucketNum := uint64(ap.BucketNum)
 	switch vec.GetType().Oid {
@@ -1097,6 +1181,7 @@ func rangeShuffleVec(ap *Shuffle, sels [][]int32, vec *vector.Vector) {
 		panic("unsupported shuffle type, wrong plan!")
 	}
 }
+
 func hashShuffleVecWithNull(sels [][]int32, vec *vector.Vector, lenRegs uint64) {
 	switch vec.GetType().Oid {
 	case types.T_int64:

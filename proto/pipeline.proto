@@ -82,6 +82,7 @@ message Shuffle {
   repeated int64 shuffle_ranges_int64 = 7;
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
+  bool drain_all_buckets = 10;
 }
 
 message Dispatch {

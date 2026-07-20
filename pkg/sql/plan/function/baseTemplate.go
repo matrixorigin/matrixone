@@ -379,7 +379,7 @@ type templateDecOut interface {
 // For integer division (DIV): TIn=Decimal, TOut=int64.
 // The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
 // Scale values and null bitmap are provided for kernels that need them.
-func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)
@@ -417,12 +417,15 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
 			}
 		}
+	}
+	if !hasEvaluableRows(rsNull, length) {
+		return nil
 	}
 
 	var v1, v2 []TIn
@@ -440,6 +443,9 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	}
 	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
+		}
 		return err
 	}
 	// Only reset rsNull if the kernel didn't add any nulls (e.g., div-by-zero).
@@ -477,7 +483,7 @@ func opBinaryFixedFixedToFixed[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -600,7 +606,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1369,7 +1375,7 @@ func specialTemplateForModFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1445,14 +1451,21 @@ func specialTemplateForModFunction[
 		v2, null2 := p2.GetValue(0)
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
-		} else if v2 == 0 {
-			if checkDivisionByZeroBehavior(proc, selectList) {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			if p1.WithAnyNullValue() || rsAnyNull {
+			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
@@ -1593,9 +1606,29 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	return false
 }
 
+// hasEvaluableRows reports whether at least one row in the current batch may
+// execute the arithmetic kernel. Input NULLs and selectList-masked rows must
+// already be merged into rsNull before calling it. The bitmap can retain bits
+// outside [0, length) when an expression executor is reused with a smaller
+// batch, so its total cardinality must not be used here.
+func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
+	if length <= 0 {
+		return false
+	}
+	if rsNull.IsEmpty() {
+		return true
+	}
+	for i := 0; i < length; i++ {
+		if !rsNull.Contains(uint64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
 func specialTemplateForDivFunction[
 	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	divFn func(v1, v2 T) T2, selectList *FunctionSelectList) error {
+	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -1614,7 +1647,7 @@ func specialTemplateForDivFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1636,7 +1669,10 @@ func specialTemplateForDivFunction[
 				nulls.AddRange(rsNull, 0, uint64(length))
 				return nil
 			}
-			r := divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
 			rowCount := uint64(length)
 			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
@@ -1665,7 +1701,11 @@ func specialTemplateForDivFunction[
 						// Return NULL (MySQL 8.0 behavior)
 						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			} else {
@@ -1679,7 +1719,11 @@ func specialTemplateForDivFunction[
 						// Return NULL (MySQL 8.0 behavior)
 						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			}
@@ -1692,6 +1736,12 @@ func specialTemplateForDivFunction[
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
 			if v2 == 0 {
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
@@ -1700,21 +1750,28 @@ func specialTemplateForDivFunction[
 				nulls.AddRange(rsNull, 0, uint64(length))
 				return nil
 			}
-			if p1.WithAnyNullValue() {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
 						continue
 					}
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			}
 		}
@@ -1739,7 +1796,11 @@ func specialTemplateForDivFunction[
 				// Return NULL (MySQL 8.0 behavior)
 				rsNull.Add(i)
 			} else {
-				rss[i] = divFn(v1, v2)
+				r, err := divFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = r
 			}
 		}
 		return nil
@@ -1756,7 +1817,11 @@ func specialTemplateForDivFunction[
 			}
 			rsNull.Add(i)
 		} else {
-			rss[i] = divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
 		}
 	}
 	return nil
