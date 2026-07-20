@@ -183,6 +183,11 @@ type Hooks interface {
 	// idxcron schedules. May be a no-op.
 	HandleDropIndex(ctx CompileContext, indexDefs map[string]*plan.IndexDef) error
 
+	// HiddenTableDropPriority returns the algorithm-defined drop order for a
+	// hidden table type. Higher values are dropped first. Algorithms that have
+	// no dependency between hidden tables should return 0.
+	HiddenTableDropPriority(algoTableType string) int
+
 	// IdxcronMetadata builds the metadata blob registered with idxcron
 	// alongside the action key (catalog.Hooks.CDC().IdxcronAction).
 	// Called by pkg/sql/compile/iscp_util.go:CreateAllIndexUpdateTasks

@@ -310,6 +310,13 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
+// HiddenTableDropPriority: fulltext2's storage and metadata hidden tables have no
+// inter-dependency that constrains drop order, so all types drop at the same
+// priority (mirrors classic fulltext).
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
+}
+
 // actionFulltext2Reindex is the idxcron action key for fulltext2's scheduled
 // compaction; must match the runtime plugin's SyncDescriptor.IdxcronAction.
 const actionFulltext2Reindex = "fulltext2_reindex"

@@ -134,6 +134,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
+}
+
 // IdxcronMetadata — fulltext has no idxcron action
 // (SyncDescriptor().IdxcronAction == ""); this is never invoked.
 func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {

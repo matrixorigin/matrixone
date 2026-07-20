@@ -43,8 +43,10 @@ import (
 
 type DataRetrieverConsumer interface {
 	DataRetriever
-	SetNextBatch(*ISCPData)
+	SetNextBatch(*ISCPData) bool
 	SetError(error)
+	Cancel(error)
+	IsCanceled() bool
 	Close()
 }
 
@@ -61,6 +63,22 @@ func ExecuteIteration(
 	iterCtx *IterationContext,
 	mp *mpool.MPool,
 ) (err error) {
+	return ExecuteIterationWithRuntime(ctx, nil, cnUUID, cnEngine, cnTxnClient, iterCtx, mp)
+}
+
+func ExecuteIterationWithRuntime(
+	ctx context.Context,
+	runtime *ISCPTaskExecutor,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	iterCtx *IterationContext,
+	mp *mpool.MPool,
+) (err error) {
+	iterCtx = runtime.filterFencedIteration(iterCtx)
+	if iterCtx == nil {
+		return nil
+	}
 	packer := types.NewPacker()
 	defer packer.Close()
 
@@ -139,15 +157,25 @@ func ExecuteIteration(
 		}
 	}
 	if needInit {
-		ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
-		err = ProcessInitSQL(
-			ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
-			jobSpecs[0].ConsumerInfo.InitSQL,
-			jobSpecs[0].ConsumerInfo.SrcTable.DBName,
-			jobSpecs[0].ConsumerInfo.SrcTable.TableName,
-			jobSpecs[0].ConsumerInfo.IndexName,
+		err = runInitSQLWithRuntime(
+			ctx,
+			runtime,
+			iterCtx,
+			func(initCtx context.Context) error {
+				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
+				return ProcessInitSQL(
+					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
+					jobSpecs[0].ConsumerInfo.InitSQL,
+					jobSpecs[0].ConsumerInfo.SrcTable.DBName,
+					jobSpecs[0].ConsumerInfo.SrcTable.TableName,
+					jobSpecs[0].ConsumerInfo.IndexName,
+				)
+			},
 		)
 		if err != nil {
+			if errors.Is(err, errInitSQLJobFenced) {
+				return nil
+			}
 			return
 		}
 		statuses[0] = prevStatus[0]
@@ -280,6 +308,7 @@ func ExecuteIteration(
 
 	runISCPTaskIterationConsumers(
 		ctxWithoutTimeout,
+		runtime,
 		iterCtx,
 		changes,
 		consumers,
@@ -293,6 +322,9 @@ func ExecuteIteration(
 		delCompositedPkColIdx,
 	)
 	for i, status := range statuses {
+		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
+			continue
+		}
 		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
 			state := ISCPJobState_Completed
 			if status.PermanentlyFailed() {
@@ -327,6 +359,7 @@ func ExecuteIteration(
 
 func runISCPTaskIterationConsumers(
 	ctx context.Context,
+	runtime *ISCPTaskExecutor,
 	iterCtx *IterationContext,
 	changes engine.ChangesHandle,
 	consumers []Consumer,
@@ -442,9 +475,26 @@ func runISCPTaskIterationConsumers(
 			}
 
 			noMoreData := data.noMoreData
-			data.Set(len(consumers))
-			for i := range consumers {
-				dataRetrievers[i].SetNextBatch(data)
+			active := make([]DataRetrieverConsumer, 0, len(dataRetrievers))
+			for i := range dataRetrievers {
+				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() {
+					active = append(active, dataRetrievers[i])
+				}
+			}
+			data.Set(len(active))
+			if len(active) == 0 {
+				data.Close()
+			}
+			for _, retriever := range active {
+				if objectio.WaitInjected(objectio.FJ_ISCPCancelFanoutBeforeSend) {
+					logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelFanoutBeforeSend)
+				}
+				if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iscp:fanout-before-send:") {
+					logutil.Infof("ISCP-Task injected hook %s", msg)
+				}
+				if !retriever.SetNextBatch(data) {
+					data.Done()
+				}
 			}
 
 			if noMoreData {
@@ -461,9 +511,37 @@ func runISCPTaskIterationConsumers(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			consumerCtx := context.WithValue(ctxWithCancel, defines.TenantIDKey{}, catalog.System_Account)
+			consumerCtx, consumerCancel := context.WithCancel(ctx)
+			defer consumerCancel()
+			consumerCtx = context.WithValue(consumerCtx, defines.TenantIDKey{}, catalog.System_Account)
+			var handle *RunningJobConsumer
+			key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])
+			if runtime != nil {
+				var ok bool
+				handle, ok = runtime.RegisterRunningConsumer(
+					key,
+					iterCtx.jobIDs[i],
+					iterCtx.lsn[i],
+					consumerCancel,
+					dataRetrievers[i].Cancel,
+				)
+				if !ok {
+					dataRetrievers[i].Cancel(moerr.NewInternalErrorNoCtx("iscp job consumer canceled"))
+					return
+				}
+				if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterRegisterConsumer) {
+					logutil.Infof("ISCP-Task cancel fault wait %s job=%s", objectio.FJ_ISCPCancelAfterRegisterConsumer, iterCtx.jobNames[i])
+				}
+				if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-register-consumer:"+iterCtx.jobNames[i] {
+					logutil.Infof("ISCP-Task injected hook %s", msg)
+				}
+				defer runtime.UnregisterRunningConsumer(handle)
+			}
 			err := consumerEntry.Consume(consumerCtx, dataRetrievers[i])
 			if err != nil {
+				if runtime != nil && runtime.IsJobFenced(key) {
+					return
+				}
 				logutil.Error(
 					"ISCP-Task sink consume failed",
 					zap.Uint32("tenantID", iterCtx.accountID),
@@ -894,6 +972,48 @@ func initSQLResolver(sessionVars []byte) (func(string, bool, bool) (interface{},
 	}, nil
 }
 
+type initSQLJobFencedError struct{}
+
+func (initSQLJobFencedError) Error() string {
+	return "iscp init sql job fenced"
+}
+
+func (initSQLJobFencedError) Is(target error) bool {
+	_, ok := target.(initSQLJobFencedError)
+	return ok
+}
+
+var errInitSQLJobFenced error = initSQLJobFencedError{}
+
+func runInitSQLWithRuntime(
+	ctx context.Context,
+	runtime *ISCPTaskExecutor,
+	iterCtx *IterationContext,
+	run func(context.Context) error,
+) error {
+	if run == nil {
+		return nil
+	}
+	if runtime == nil {
+		return run(ctx)
+	}
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	initCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	handle, ok := runtime.RegisterRunningConsumer(
+		key,
+		iterCtx.jobIDs[0],
+		iterCtx.lsn[0],
+		cancel,
+		nil,
+	)
+	if !ok {
+		return errInitSQLJobFenced
+	}
+	defer runtime.UnregisterRunningConsumer(handle)
+	return run(initCtx)
+}
+
 func ProcessInitSQL(
 	ctx context.Context,
 	cnUUID string,
@@ -920,13 +1040,10 @@ func ProcessInitSQL(
 		// Commit only when every InitSQL statement succeeded; roll back on any
 		// error so a multi-statement InitSQL (postings-populate + WAND build) is
 		// atomic — a mid-sequence failure must not leave the earlier statements
-		// committed (which an ISCP retry would then re-apply).
+		// committed (which an ISCP retry would then re-apply). finishInitSQLTxn
+		// runs that commit/rollback under a detached 5-minute timeout context.
 		defer func() {
-			if err != nil {
-				_ = txnOp.Rollback(ctx)
-			} else {
-				err = txnOp.Commit(ctx)
-			}
+			err = finishInitSQLTxn(ctx, txnOp, err)
 		}()
 	}
 	// injection is for ut
@@ -988,6 +1105,9 @@ func ProcessInitSQL(
 		}
 		res.Close()
 	}
+	if err = ctx.Err(); err != nil {
+		return
+	}
 	return
 }
 
@@ -1008,4 +1128,23 @@ func splitInitSQL(s string) []string {
 		return []string{one}
 	}
 	return []string{s}
+}
+
+func finishInitSQLTxn(ctx context.Context, txnOp client.TxnOperator, err error) error {
+	if txnOp == nil {
+		return err
+	}
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		time.Minute*5,
+		moerr.NewInternalErrorNoCtx("iscp init sql txn finish timeout"),
+	)
+	defer cancel()
+	if err != nil {
+		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return txnOp.Commit(cleanupCtx)
 }
