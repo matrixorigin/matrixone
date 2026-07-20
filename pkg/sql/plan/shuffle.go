@@ -19,6 +19,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,6 +97,13 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
 }
 
+// IVFObjectIDHashToRange maps the complete physical ObjectID to an IVF owner.
+// xxHash64 is deterministic across processes and provides uniform mixing for
+// production UUIDv7 ObjectIDs, whose timestamp prefix changes slowly.
+func IVFObjectIDHashToRange(objectID types.Objectid, upperLimit uint64) uint64 {
+	return xxhash.Sum64(objectID[:]) % upperLimit
+}
+
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
@@ -161,6 +169,10 @@ func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objecti
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
+	}
+	if rsp.ShuffleByObjectID {
+		objID := objstats.ObjectLocation().ObjectId()
+		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
 	}
 	if objstats.GetAppendable() {
 		//aobj always shuffle to local CN
@@ -479,7 +491,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		if len(dedupJoinCtx.GetOldColCaptureList()) > 0 {
 			return
 		}
-		if node.OnDuplicateAction == plan.Node_FAIL && len(dedupJoinCtx.GetOldColList()) > 0 {
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(dedupJoinCtx.GetOldColList()) > 0 {
 			return
 		}
 

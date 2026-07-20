@@ -150,6 +150,8 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnDeadlockDetectorEnqueueCounter)
 	registry.MustRegister(TxnDeadlockOwnerLocalCounter)
 	registry.MustRegister(TxnRemoteLockOwnerTimeoutCounter)
+	registry.MustRegister(TxnLockActiveTxnRecoveryCounter)
+	registry.MustRegister(TxnLockRPCQueueRejectCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
 	registry.MustRegister(txnPKMayBeChangedCounter)
 
@@ -224,6 +226,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcSendingQueueSizeGauge)
 	registry.MustRegister(rpcSendingBatchSizeGauge)
 	registry.MustRegister(rpcServerSessionSizeGauge)
+	registry.MustRegister(rpcServerStreamStateGauge)
 	registry.MustRegister(rpcGCRegisteredClientsGauge)
 	registry.MustRegister(rpcGCChannelQueueLengthGauge)
 	registry.MustRegister(rpcBackendActiveRequestsGauge)
@@ -240,6 +243,7 @@ func initRPCMetrics() {
 
 func initProxyMetrics() {
 	registry.MustRegister(proxyConnectCounter)
+	registry.MustRegister(ProxyConnectionsCurrentGauge)
 	registry.MustRegister(proxyDisconnectCounter)
 	registry.MustRegister(proxyTransferCounter)
 	registry.MustRegister(ProxyTransferDurationHistogram)
@@ -272,6 +276,11 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
 	registry.MustRegister(pipelineStreamGauge)
 	registry.MustRegister(PipelineCleanupEventCounter)
+	registry.MustRegister(PipelineStreamTeardownCounter)
+	registry.MustRegister(PipelineStreamLifecycleGauge)
+	registry.MustRegister(PipelineStreamFinishDurationHistogram)
+	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
+	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initLogServiceMetrics() {

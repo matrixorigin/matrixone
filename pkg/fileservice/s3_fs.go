@@ -16,13 +16,14 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
 	"iter"
 	pathpkg "path"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -429,8 +430,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// reader
@@ -507,6 +508,16 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// A merge leader must not wake its waiters until successful cache updates
+	// have completed. Cache updates are deferred below, so register this defer
+	// first and let their later defers run before the merge is marked done.
+	var finishMerge func()
+	defer func() {
+		if finishMerge != nil {
+			finishMerge()
+		}
+	}()
+
 	// Record S3 IO and netwokIO(un memory IO) time Consumption
 	stats := statistic.StatsInfoFromContext(ctx)
 	ioStart := time.Now()
@@ -660,7 +671,7 @@ read_disk_cache:
 		}
 		done, wait := s.ioMerger.Merge(mergeKey, waitDuration)
 		if done != nil {
-			defer done()
+			finishMerge = done
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_initiate)

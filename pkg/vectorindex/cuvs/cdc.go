@@ -21,13 +21,14 @@
 package cuvs
 
 import (
+	"cmp"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -435,7 +436,7 @@ type EventChunk struct {
 
 // SortChunks sorts chunks ascending by chunk_id in place.
 func SortChunks(chunks []EventChunk) {
-	sort.Slice(chunks, func(i, j int) bool { return chunks[i].ChunkId < chunks[j].ChunkId })
+	slices.SortFunc(chunks, func(a, b EventChunk) int { return cmp.Compare(a.ChunkId, b.ChunkId) })
 }
 
 // ReplayState is the post-replay output: pkids deleted in the main index and
@@ -579,8 +580,8 @@ func ReplayEventLog(
 	}
 	// Stable order so callers (and tests) get deterministic output regardless
 	// of map iteration order.
-	sort.Slice(out.Deleted, func(i, j int) bool { return out.Deleted[i] < out.Deleted[j] })
-	sort.Slice(out.Overflow, func(i, j int) bool { return out.Overflow[i].Pkid < out.Overflow[j].Pkid })
+	slices.Sort(out.Deleted)
+	slices.SortFunc(out.Overflow, func(a, b OverflowEntry) int { return cmp.Compare(a.Pkid, b.Pkid) })
 	return out, nil
 }
 
