@@ -179,6 +179,9 @@ var (
 
 	// defaultLongSpanTime default: 10 s
 	defaultLongSpanTime = 10 * time.Second
+	// defaultDisableSpan keeps the legacy effective configuration aligned with
+	// the permanently retired Span runtime.
+	defaultDisableSpan = true
 
 	defaultAggregationWindow = 5 * time.Second
 
@@ -612,7 +615,7 @@ type ObservabilityParameters struct {
 	// DisableTrace default is false. if false, enable trace at booting
 	DisableTrace bool `toml:"disable-trace" user_setting:"advanced"`
 
-	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
+	// EnableTraceDebug is retained for configuration compatibility after Span recording was retired.
 	EnableTraceDebug bool `toml:"enable-trace-debug"`
 
 	// TraceExportInterval default is 15s.
@@ -642,16 +645,17 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"merge-cycle"`
 
-	// DisableSpan default: false. Disable span collection
+	// DisableSpan defaults to true and is retained for configuration compatibility.
+	// Span recording cannot be enabled; statement, log, and error collection is independent.
 	DisableSpan bool `toml:"disable-span"`
 
-	// EnableSpanProfile default: false. Do NO profile by default.
+	// EnableSpanProfile is retained for configuration compatibility and has no effect.
 	EnableSpanProfile bool `toml:"enable-span-profile"`
 
 	// DisableError default: false. Disable error collection
 	DisableError bool `toml:"disable-error"`
 
-	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
+	// LongSpanTime is retained for configuration compatibility and has no effect.
 	LongSpanTime toml.Duration `toml:"long-span-time"`
 
 	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
@@ -739,7 +743,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MetricStorageUsageUpdateInterval:   toml.Duration{},
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
-		DisableSpan:                        false,
+		DisableSpan:                        defaultDisableSpan,
 		EnableSpanProfile:                  false,
 		DisableError:                       false,
 		LongSpanTime:                       toml.Duration{},
@@ -894,7 +898,7 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 	resetBoolConfig(&op.DisableMetric, false, op.DisableMetricV12)
 	resetBoolConfig(&op.DisableTrace, false, op.DisableTraceV12)
 	resetBoolConfig(&op.DisableError, false, op.DisableErrorV12)
-	resetBoolConfig(&op.DisableSpan, false, op.DisableSpanV12)
+	resetBoolConfig(&op.DisableSpan, defaultDisableSpan, op.DisableSpanV12)
 	// part metric
 	resetDurationConfig(&op.MetricStorageUsageUpdateInterval.Duration,
 		defaultMetricUpdateStorageUsageInterval,
