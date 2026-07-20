@@ -70,6 +70,25 @@ type compileTestCase struct {
 	txnClient client.TxnClient // Store txnClient for truncating table with real transaction
 }
 
+func TestReleaseRetryCompilePreservesPrepareParams(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+
+	for range 2 {
+		retryCompile := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Time{})
+		releaseRetryCompile(retryCompile)
+		require.Same(t, params, proc.GetPrepareParams())
+		require.True(t, proc.GetPrepareParamIsBin(0))
+		require.Equal(t, 1, params.Length())
+	}
+
+	proc.Free()
+	require.Zero(t, params.Length())
+	require.Nil(t, params.GetData())
+}
+
 func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 	return nil
 }
