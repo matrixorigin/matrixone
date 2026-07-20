@@ -94,7 +94,7 @@ select cast(sum(distinct ff) as decimal(5,2)) from t5;
 ➤ cast(sum(distinct ff) as decimal(5, 2))[3,5,2]  𝄀
 2.20
 select cast(sum(distinct ff) as signed) from t5;
-➤ cast(sum(distinct ff) as ff)[-5,64,0]  𝄀
+➤ cast(sum(distinct ff) as signed)[-5,64,0]  𝄀
 2
 select cast(variance(ff) as decimal(10,3)) from t5;
 ➤ cast(variance(ff) as decimal(10, 3))[3,10,3]  𝄀
@@ -108,10 +108,10 @@ create table t6 (df decimal(5,1));
 insert into t6 values(1.1);
 insert into t6 values(2.2);
 select cast(sum(distinct df) as signed) from t6;
-➤ cast(sum(distinct df) as df)[-5,64,0]  𝄀
+➤ cast(sum(distinct df) as signed)[-5,64,0]  𝄀
 3
 select cast(min(df) as signed) from t6;
-➤ cast(min(df) as df)[-5,64,0]  𝄀
+➤ cast(min(df) as signed)[-5,64,0]  𝄀
 1
 select 1e8 * sum(distinct df) from t6;
 ➤ 1e8 * sum(distinct df)[8,54,0]  𝄀
@@ -228,13 +228,13 @@ select distinct pk from v1;
 drop view v1;
 drop table t12;
 SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2);
-➤ AVG(2)[8,54,0]  ¦  BIT_AND(2)[-5,64,0]  ¦  BIT_OR(2)[-5,64,0]  ¦  BIT_XOR(2)[-5,64,0]  𝄀
-2.0  ¦  2  ¦  2  ¦  2
+➤ AVG(2)[3,38,4]  ¦  BIT_AND(2)[-5,64,0]  ¦  BIT_OR(2)[-5,64,0]  ¦  BIT_XOR(2)[-5,64,0]  𝄀
+2.0000  ¦  2  ¦  2  ¦  2
 select count(*);
 ➤ count(*)[-5,64,0]  𝄀
 1
 select COUNT(12), COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
-➤ COUNT(12)[-5,64,0]  ¦  COUNT(distinct 12)[-5,64,0]  ¦  MIN(2)[-5,64,0]  ¦  MAX(2)[-5,64,0]  ¦  STD(2)[8,54,0]  ¦  VARIANCE(2)[8,54,0]  ¦  SUM(2)[-5,64,0]  𝄀
+➤ COUNT(12)[-5,64,0]  ¦  COUNT(distinct 12)[-5,64,0]  ¦  MIN(2)[-5,64,0]  ¦  MAX(2)[-5,64,0]  ¦  STD(2)[8,54,0]  ¦  VARIANCE(2)[8,54,0]  ¦  SUM(2)[3,38,0]  𝄀
 1  ¦  1  ¦  2  ¦  2  ¦  0.0  ¦  0.0  ¦  2
 drop table if exists t13;
 CREATE TABLE t13(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER);
@@ -283,3 +283,37 @@ SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.
 1  ¦  1000  ¦  1  ¦  1000
 drop table t14;
 drop table t15;
+drop table if exists t_order;
+create table t_order(grp int, label varchar(10));
+insert into t_order values (2, 'b'), (1, 'b'), (2, 'a'), (1, 'a'), (1, 'a');
+select distinct grp, label from t_order order by concat(label, 'x'), grp;
+➤ grp[4,32,0]  ¦  label[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  a  𝄀
+1  ¦  b  𝄀
+2  ¦  b
+select distinct grp from t_order order by grp + 0 desc;
+➤ grp[4,32,0]  𝄀
+2  𝄀
+1
+select distinct grp + 1 as g from t_order order by g + 1 desc;
+➤ g[-5,64,0]  𝄀
+3  𝄀
+2
+drop table t_order;
+drop table if exists t_distinct_order_name;
+create table t_distinct_order_name(a int, b int);
+insert into t_distinct_order_name values (1, 100), (2, 0);
+select distinct a as b, b from t_distinct_order_name order by abs(b);
+➤ b[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  0  𝄀
+1  ¦  100
+select distinct a as b from t_distinct_order_name order by abs(b);
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct a as b, b from t_distinct_order_name order by (b);
+invalid input: Column 'b' in order clause is ambiguous
+select distinct a as x from t_distinct_order_name order by abs(x);
+➤ x[4,32,0]  𝄀
+1  𝄀
+2
+drop table t_distinct_order_name;

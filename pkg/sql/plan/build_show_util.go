@@ -140,7 +140,7 @@ func ConstructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -1158,6 +1158,14 @@ func formatStr(str string) string {
 		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
 	}
 	return strings.Replace(tmp, "'", "''", -1)
+}
+
+func formatDefaultExpr(expr string) string {
+	trimmed := strings.TrimSpace(expr)
+	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+		return trimmed
+	}
+	return formatStr(expr)
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

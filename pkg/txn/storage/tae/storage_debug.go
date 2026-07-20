@@ -93,9 +93,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpBackup):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleBackup)
 		if err != nil {
-			return types.Encode(&api.SyncLogTailResp{
-				CkpLocation: "Failed",
-			})
+			return nil, err
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpTraceSpan):

@@ -15,7 +15,8 @@
 package cache
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -582,7 +583,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 }
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
-	sort.Sort(cols)
+	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {

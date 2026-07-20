@@ -16,14 +16,52 @@ package tnservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+const replicaTestTimeout = 30 * time.Second
+
+type startErrorStorage struct {
+	storage.TxnStorage
+	startErr     error
+	closeErr     error
+	destroyErr   error
+	closeCalls   int
+	destroyCalls int
+}
+
+type closeTrackingTxnService struct {
+	service.TxnService
+	closeCalls int
+}
+
+func (s *closeTrackingTxnService) Close(destroy bool) error {
+	s.closeCalls++
+	return s.TxnService.Close(destroy)
+}
+
+func (s *startErrorStorage) Start() error {
+	return s.startErr
+}
+
+func (s *startErrorStorage) Close(context.Context) error {
+	s.closeCalls++
+	return s.closeErr
+}
+
+func (s *startErrorStorage) Destroy(context.Context) error {
+	s.destroyCalls++
+	return s.destroyErr
+}
 
 func TestNewReplica(t *testing.T) {
 	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
@@ -39,11 +77,144 @@ func TestCloseNotStartedReplica(t *testing.T) {
 	assert.NoError(t, r.close(false))
 }
 
+func TestCloseStartedReplicaIsIdempotent(t *testing.T) {
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	sender := service.NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	base := service.NewTestTxnService(t, 1, sender, service.NewTestClock(1))
+	txnService := &closeTrackingTxnService{TxnService: base}
+	require.NoError(t, r.start(txnService))
+
+	require.NoError(t, r.close(false))
+	require.NoError(t, r.close(true))
+	require.Equal(t, 1, txnService.closeCalls)
+}
+
+func TestCloseStartedReplicaCancelsAndDrainsActiveCalls(t *testing.T) {
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	sender := service.NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	txnService := &closeTrackingTxnService{
+		TxnService: service.NewTestTxnService(t, 1, sender, service.NewTestClock(1)),
+	}
+	require.NoError(t, r.start(txnService))
+
+	lease, err := r.acquireService(context.Background())
+	require.NoError(t, err)
+	closed := make(chan error, 1)
+	go func() {
+		closed <- r.close(false)
+	}()
+
+	select {
+	case <-lease.ctx.Done():
+		require.ErrorIs(t, context.Cause(lease.ctx), context.Canceled)
+	case <-time.After(replicaTestTimeout):
+		t.Fatal("active call context was not canceled")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("replica closed before active call was released: %v", err)
+	default:
+	}
+	nestedDone := make(chan error, 1)
+	go func() {
+		_, err := r.acquireService(context.Background())
+		nestedDone <- err
+	}()
+	select {
+	case err := <-nestedDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(replicaTestTimeout):
+		t.Fatal("nested local acquire blocked while close was draining")
+	}
+
+	lease.release()
+	lease.release()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(replicaTestTimeout):
+		t.Fatal("replica close did not drain")
+	}
+	require.Equal(t, 1, txnService.closeCalls)
+
+	_, err = r.acquireService(context.Background())
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestAcquireServiceRejectsCanceledCaller(t *testing.T) {
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	sender := service.NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	txnService := service.NewTestTxnService(t, 1, sender, service.NewTestClock(1))
+	require.NoError(t, r.start(txnService))
+	t.Cleanup(func() { require.NoError(t, r.close(false)) })
+
+	cause := errors.New("caller canceled")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cause)
+	for range 100 {
+		lease, err := r.acquireService(ctx)
+		require.Nil(t, lease)
+		require.ErrorIs(t, err, cause)
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	require.Zero(t, r.mu.activeCalls)
+}
+
+func TestCloseFailedStartReplica(t *testing.T) {
+	startErr := errors.New("storage start failed")
+	runtime.SetupServiceBasedRuntime("test", runtime.DefaultRuntime())
+	for _, test := range []struct {
+		name    string
+		destroy bool
+	}{
+		{name: "close", destroy: false},
+		{name: "destroy", destroy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cleanupErr := errors.New("storage cleanup failed")
+			storage := &startErrorStorage{startErr: startErr}
+			if test.destroy {
+				storage.destroyErr = cleanupErr
+			} else {
+				storage.closeErr = cleanupErr
+			}
+			txnService := service.NewTxnService(
+				"test", newTestTNShard(1, 2, 3), storage, service.NewTestSender(), time.Hour, nil)
+			r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+
+			require.ErrorIs(t, r.start(txnService), startErr)
+			closed := make(chan error, 1)
+			go func() {
+				closed <- r.close(test.destroy)
+			}()
+
+			select {
+			case err := <-closed:
+				require.ErrorIs(t, err, startErr)
+				require.ErrorIs(t, err, cleanupErr)
+				if test.destroy {
+					require.Equal(t, 0, storage.closeCalls)
+					require.Equal(t, 1, storage.destroyCalls)
+				} else {
+					require.Equal(t, 1, storage.closeCalls)
+					require.Equal(t, 0, storage.destroyCalls)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("close hung after failed start")
+			}
+		})
+	}
+}
+
 func TestWaitStarted(t *testing.T) {
 	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
 	c := make(chan struct{})
 	go func() {
-		r.waitStarted()
+		assert.NoError(t, r.waitStarted(context.Background()))
 		c <- struct{}{}
 	}()
 

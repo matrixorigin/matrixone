@@ -108,13 +108,42 @@ func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *
 	return
 }
 
-func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) (*Handle, error) {
+	return newTAEHandle(ctx, path, client, opt)
+}
+
+func MustNewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) *Handle {
+	h, err := NewTAEHandle(ctx, path, client, opt)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+// NewTAEHandleWithError opens a TAE handle and returns open failures to callers
+// that can handle them, such as service startup and cancellation paths. The
+// caller retains ownership of client.
+func NewTAEHandleWithError(
+	ctx context.Context,
+	path string,
+	client client.QueryClient,
+	opt *options.Options,
+) (*Handle, error) {
+	return NewTAEHandle(ctx, path, client, opt)
+}
+
+func newTAEHandle(
+	ctx context.Context,
+	path string,
+	client client.QueryClient,
+	opt *options.Options,
+) (*Handle, error) {
 	if path == "" {
 		path = "./store"
 	}
 	tae, err := openTAE(ctx, path, opt)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	h := &Handle{
@@ -122,9 +151,7 @@ func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, o
 		client: client,
 	}
 
-	RegisterManifestHTTP(tae)
-
-	return h
+	return h, nil
 }
 
 //#endregion Open
@@ -631,12 +658,6 @@ func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//if h.GCJob != nil {
 	//	h.GCJob.Stop()
 	//}
-	if h.client != nil {
-		err = h.client.Close()
-		if err != nil {
-			return err
-		}
-	}
 	return h.db.Close()
 }
 

@@ -159,6 +159,10 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
 }
 
+func TestLockWaitTimeoutIsNotRetryable(t *testing.T) {
+	require.False(t, isRetryLockError(lockservice.ErrLockTimeout))
+}
+
 func TestLockOpTargetHelpers(t *testing.T) {
 	op := NewArgument()
 	defer op.Release()

@@ -1643,7 +1643,7 @@ func TestMysqlResultSet(t *testing.T) {
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
@@ -2525,6 +2525,37 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
+}
+
+func TestParseExecuteDataRejectsTruncatedTemporalParam(t *testing.T) {
+	ctx := context.TODO()
+	// Each case declares a temporal payload length but supplies no payload bytes,
+	// so the fixed-offset readers would read past the buffer. The length guard must
+	// turn that into an error (which the caller maps to ROW_COUNT() = -1) instead of
+	// panicking.
+	cases := []struct {
+		name   string
+		tp     defines.MysqlType
+		length byte
+	}{
+		{"time-8", defines.MYSQL_TYPE_TIME, 8},
+		{"time-12", defines.MYSQL_TYPE_TIME, 12},
+		{"date-4", defines.MYSQL_TYPE_DATE, 4},
+		{"datetime-7", defines.MYSQL_TYPE_DATETIME, 7},
+		{"timestamp-11", defines.MYSQL_TYPE_TIMESTAMP, 11},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+			// null bitmap (not null) + new-params-bound flag + type + declared length,
+			// but the declared temporal payload is missing.
+			testData := []byte{0, 0, 0, 0, 0, 0, 1, byte(c.tp), 0, c.length}
+			require.NotPanics(t, func() {
+				err := proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
+				require.Error(t, err)
+			})
+		})
+	}
 }
 
 func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {

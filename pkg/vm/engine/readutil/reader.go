@@ -583,34 +583,10 @@ func validBoundType(boundType plan.BoundType) bool {
 		boundType == plan.BoundType_EXCLUSIVE
 }
 
+// getLiteralFloat64 delegates to plan.GetLiteralFloat64 (the single owner of the
+// literal->float64 decode) so plan-time and runtime bound handling can't drift.
 func getLiteralFloat64(expr *plan.Expr) (float64, bool) {
-	if expr == nil || expr.GetLit() == nil || expr.GetLit().Isnull {
-		return 0, false
-	}
-	switch value := expr.GetLit().Value.(type) {
-	case *plan.Literal_Fval:
-		return float64(value.Fval), true
-	case *plan.Literal_Dval:
-		return value.Dval, true
-	case *plan.Literal_I8Val:
-		return float64(value.I8Val), true
-	case *plan.Literal_I16Val:
-		return float64(value.I16Val), true
-	case *plan.Literal_I32Val:
-		return float64(value.I32Val), true
-	case *plan.Literal_I64Val:
-		return float64(value.I64Val), true
-	case *plan.Literal_U8Val:
-		return float64(value.U8Val), true
-	case *plan.Literal_U16Val:
-		return float64(value.U16Val), true
-	case *plan.Literal_U32Val:
-		return float64(value.U32Val), true
-	case *plan.Literal_U64Val:
-		return float64(value.U64Val), true
-	default:
-		return 0, false
-	}
+	return plan.GetLiteralFloat64(expr)
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {

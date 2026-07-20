@@ -15,12 +15,12 @@
 package frontend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -637,7 +637,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -700,6 +700,11 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			}
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
+			mode, getErr := erArray[0].GetString(ctx, i, 6)
+			if getErr != nil {
+				return nil, getErr
+			}
+			udf.SQLMode = &mode
 			// arg type check
 			argList := make([]*function.Arg, 0)
 			err = json.Unmarshal([]byte(argstr), &argList)
@@ -736,8 +741,8 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			return nil, err
 		}
 
-		sort.Slice(matchedList, func(i, j int) bool {
-			return matchedList[i].Cost < matchedList[j].Cost
+		slices.SortFunc(matchedList, func(a, b *MatchUdf) int {
+			return cmp.Compare(a.Cost, b.Cost)
 		})
 
 		minCost := matchedList[0].Cost

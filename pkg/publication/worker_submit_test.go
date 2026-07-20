@@ -81,6 +81,38 @@ type mockJob struct{}
 func (m *mockJob) Execute()      {}
 func (m *mockJob) WaitDone() any { return nil }
 func (m *mockJob) GetType() int8 { return 0 }
+func (m *mockJob) Fail(error)    {}
+
+type legacyJob struct{}
+
+func (m *legacyJob) Execute()      {}
+func (m *legacyJob) WaitDone() any { return nil }
+func (m *legacyJob) GetType() int8 { return 0 }
+
+var _ Job = (*legacyJob)(nil)
+
+func TestWorkerAdmissionRequiresAdditiveTerminalContract(t *testing.T) {
+	filterWorker := NewFilterObjectWorker()
+	defer filterWorker.Stop()
+	require.ErrorContains(t,
+		filterWorker.SubmitFilterObject(&legacyJob{}),
+		"terminal failure completion",
+	)
+
+	chunkWorker := NewGetChunkWorker()
+	defer chunkWorker.Stop()
+	require.ErrorContains(t,
+		chunkWorker.SubmitGetChunk(&legacyJob{}),
+		"terminal failure completion",
+	)
+
+	writeWorker := NewWriteObjectWorker()
+	defer writeWorker.Stop()
+	require.ErrorContains(t,
+		writeWorker.SubmitWriteObject(&legacyJob{}),
+		"terminal failure completion",
+	)
+}
 
 // ---- Worker pool submit success tests ----
 

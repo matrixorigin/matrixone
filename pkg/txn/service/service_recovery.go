@@ -90,7 +90,7 @@ func (s *service) addLog(txnMeta txn.TxnMeta) {
 }
 
 func (s *service) end() {
-	defer close(s.recoveryC)
+	defer s.finishRecovery()
 	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
@@ -115,6 +115,12 @@ func (s *service) end() {
 			s.removeTxn(txnMeta.ID)
 		}
 		return true
+	})
+}
+
+func (s *service) finishRecovery() {
+	s.recoveryOnce.Do(func() {
+		close(s.recoveryC)
 	})
 }
 
