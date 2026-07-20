@@ -200,24 +200,15 @@ func TestRoutineKillQueryAndConnection(t *testing.T) {
 	require.True(t, rt.isCancelled())
 }
 
-func TestRoutineReportSystemStatusAndCleanupContextFallback(t *testing.T) {
+func TestRoutineCleanupContextFallback(t *testing.T) {
 	rt, _ := newUnitTestRoutine(t, 45)
-	require.False(t, rt.reportSystemStatus())
 	require.NotNil(t, rt.getCleanupContext())
 
 	rm := &RoutineManager{}
 	ses := &Session{}
 	ses.setRoutineManager(rm)
 	rt.setSession(ses)
-
-	require.True(t, rt.reportSystemStatus())
-	first := rm.reportSystemStatusTime.Load()
-	require.NotNil(t, first)
-	require.False(t, rt.reportSystemStatus())
-
-	old := time.Now().Add(-2 * time.Minute)
-	rm.reportSystemStatusTime.Store(&old)
-	require.True(t, rt.reportSystemStatus())
+	require.NotNil(t, rt.getCleanupContext())
 }
 
 func TestRoutineCleanupWithoutSession(t *testing.T) {

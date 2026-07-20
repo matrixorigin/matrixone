@@ -6978,10 +6978,26 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 const userLevelLockTableID uint64 = 1 << 62
 
 const userLevelLockCloseTimeout = 5 * time.Second
+const userLevelLockDetachedCleanupAttemptTimeout = time.Second
+const userLevelLockDetachedCleanupInitialBackoff = 10 * time.Millisecond
+const userLevelLockDetachedCleanupMaxBackoff = time.Second
 
 type userLevelLockKey struct {
 	owner string
 	name  string
+}
+
+type detachedUserLevelLockCleanupKey struct {
+	serviceID string
+	owner     string
+	name      string
+	connID    uint64
+}
+
+type detachedUserLevelLockCleanupEntry struct {
+	key    detachedUserLevelLockCleanupKey
+	ls     lockservice.LockService
+	cancel context.CancelFunc
 }
 
 type UserLevelLockState struct {
@@ -7005,6 +7021,13 @@ var userLevelLocks = struct {
 	counts:        make(map[userLevelLockKey]uint64),
 	byOwner:       make(map[string]map[string]struct{}),
 	ownerSessions: make(map[string]string),
+}
+
+var detachedUserLevelLockCleanups = struct {
+	sync.Mutex
+	entries map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry
+}{
+	entries: make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry),
 }
 
 func userLevelLockOwner(proc *process.Process) string {
@@ -7143,6 +7166,75 @@ func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, 
 	return ls.Unlock(ctx, userLevelLockTxnIDOld(owner, name), timestamp.Timestamp{})
 }
 
+func enqueueDetachedUserLevelLockCleanup(ls lockservice.LockService, owner string, connID uint64, name string) bool {
+	if ls == nil || owner == "" || name == "" {
+		return false
+	}
+	key := detachedUserLevelLockCleanupKey{
+		serviceID: ls.GetServiceID(),
+		owner:     owner,
+		name:      name,
+		connID:    connID,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	entry := &detachedUserLevelLockCleanupEntry{
+		key:    key,
+		ls:     ls,
+		cancel: cancel,
+	}
+
+	detachedUserLevelLockCleanups.Lock()
+	if _, ok := detachedUserLevelLockCleanups.entries[key]; ok {
+		detachedUserLevelLockCleanups.Unlock()
+		cancel()
+		return true
+	}
+	detachedUserLevelLockCleanups.entries[key] = entry
+	detachedUserLevelLockCleanups.Unlock()
+
+	go runDetachedUserLevelLockCleanup(ctx, entry)
+	return true
+}
+
+func runDetachedUserLevelLockCleanup(ctx context.Context, entry *detachedUserLevelLockCleanupEntry) {
+	backoff := userLevelLockDetachedCleanupInitialBackoff
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, userLevelLockDetachedCleanupAttemptTimeout)
+		err := unlockUserLevelLockTxnIDs(attemptCtx, entry.ls, entry.key.owner, entry.key.connID, entry.key.name)
+		cancel()
+		if err == nil {
+			detachedUserLevelLockCleanups.Lock()
+			if detachedUserLevelLockCleanups.entries[entry.key] == entry {
+				delete(detachedUserLevelLockCleanups.entries, entry.key)
+			}
+			detachedUserLevelLockCleanups.Unlock()
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		logutil.Warn(fmt.Sprintf(
+			"detached user-level lock cleanup failed: owner=%s lock=%s err=%v",
+			entry.key.owner,
+			entry.key.name,
+			err,
+		))
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if backoff < userLevelLockDetachedCleanupMaxBackoff {
+			backoff *= 2
+			if backoff > userLevelLockDetachedCleanupMaxBackoff {
+				backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
+		}
+	}
+}
+
 func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
 	return lockpb.LockOptions{
 		Granularity: lockpb.Granularity_Row,
@@ -7259,9 +7351,16 @@ func userLevelLocksForOwner(owner string) []string {
 
 func UserLevelLocksForMigration(proc *process.Process) []UserLevelLockState {
 	owner := userLevelLockOwner(proc)
+	return userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
+}
+
+func userLevelLocksForOwnerSession(owner, sessionID string) []UserLevelLockState {
 	userLevelLocks.Lock()
 	defer userLevelLocks.Unlock()
 
+	if current := userLevelLocks.ownerSessions[owner]; sessionID != "" && current != "" && current != sessionID {
+		return nil
+	}
 	names := userLevelLocks.byOwner[owner]
 	if len(names) == 0 {
 		return nil
@@ -7544,10 +7643,18 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 	defer cancel()
 	if _, err := releaseAllUserLevelLocksWithContext(ctx, proc); err != nil && ctx.Err() != nil {
 		owner := userLevelLockOwner(proc)
-		detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
-		if detached > 0 {
+		connID := userLevelLockConnectionID(proc)
+		states := userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
+		var enqueued uint64
+		for _, state := range states {
+			if enqueueDetachedUserLevelLockCleanup(proc.GetLockService(), owner, connID, state.Name) {
+				enqueued += state.Count
+			}
+		}
+		if enqueued > 0 {
+			detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
 			logutil.Warn(fmt.Sprintf(
-				"ReleaseUserLevelLocksOnSessionClose detached local bookkeeping after timeout: owner=%s locks=%d err=%v",
+				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after timeout: owner=%s locks=%d err=%v",
 				owner,
 				detached,
 				err,
