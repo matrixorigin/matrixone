@@ -65,6 +65,9 @@ var (
 	// their independent per-connection bound is intentionally small.
 	defaultProtocolMemoryLimit        = toml.ByteSize(1 << 30)
 	defaultClientHandshakePacketLimit = toml.ByteSize(64 << 10)
+	// Proxy only consumes the address block; leave bounded room for common TLVs
+	// without coupling this unauthenticated framing limit to the MySQL login.
+	defaultProxyProtocolBodyLimit = toml.ByteSize(4 << 10)
 	// A protocol 4.1 SSLRequest contains only the 32-byte fixed response
 	// prefix. A usable final login must additionally carry at least a one-byte
 	// username, its NUL terminator, and one auth length/terminator byte. Keep the
@@ -74,6 +77,8 @@ var (
 	minimumClientHandshakePacketLimit = protocol41SSLRequestPayloadSize + 3
 	// The packet header itself can encode at most (1<<24)-1 payload bytes.
 	maximumClientHandshakePacketLimit = toml.ByteSize((1 << 24) - 1)
+	minimumProxyProtocolBodyLimit     = toml.ByteSize(2*ipv6AddrLength + 4)
+	maximumProxyProtocolBodyLimit     = toml.ByteSize((1 << 16) - 1)
 )
 
 type RebalancePolicy int
@@ -142,13 +147,16 @@ type Config struct {
 	// MaxConnectionsPerTenant bounds one tenant's live client connections.
 	// It must not exceed MaxConnections.
 	MaxConnectionsPerTenant int `toml:"max-connections-per-tenant" user_setting:"advanced"`
-	// ProtocolMemoryLimit bounds buffers allocated through the Proxy's shared
-	// MySQL protocol allocator, including the login packet retained for
-	// connection migration.
+	// ProtocolMemoryLimit bounds retained and phase-overlap MySQL protocol
+	// memory, including shared session buffers, pre-auth framing and login
+	// packets retained for connection migration.
 	ProtocolMemoryLimit toml.ByteSize `toml:"protocol-memory-limit" user_setting:"advanced"`
 	// ClientHandshakePacketLimit bounds the login packet retained for routing
 	// and migration for the lifetime of a client connection.
 	ClientHandshakePacketLimit toml.ByteSize `toml:"client-handshake-packet-limit" user_setting:"advanced"`
+	// ProxyProtocolBodyLimit bounds the unauthenticated PROXY v2 address and
+	// TLV body independently of the MySQL login packet.
+	ProxyProtocolBodyLimit toml.ByteSize `toml:"proxy-protocol-body-limit" user_setting:"advanced"`
 
 	// CNHealthCheckDisabled disables the CN health circuit breaker. By default
 	// the breaker is enabled: it temporarily skips CN servers that fail to
@@ -312,6 +320,9 @@ func (c *Config) FillDefault() {
 	if c.ClientHandshakePacketLimit == 0 {
 		c.ClientHandshakePacketLimit = defaultClientHandshakePacketLimit
 	}
+	if c.ProxyProtocolBodyLimit == 0 {
+		c.ProxyProtocolBodyLimit = defaultProxyProtocolBodyLimit
+	}
 }
 
 // Validate validates the configuration of proxy server.
@@ -341,6 +352,14 @@ func (c *Config) Validate() error {
 	if c.ClientHandshakePacketLimit > maximumClientHandshakePacketLimit {
 		return moerr.NewInternalError(noReport,
 			"proxy client-handshake-packet-limit exceeds the MySQL packet payload limit")
+	}
+	if c.ProxyProtocolBodyLimit > 0 && c.ProxyProtocolBodyLimit < minimumProxyProtocolBodyLimit {
+		return moerr.NewInternalError(noReport,
+			"proxy proxy-protocol-body-limit is smaller than a TCP/IPv6 address block")
+	}
+	if c.ProxyProtocolBodyLimit > maximumProxyProtocolBodyLimit {
+		return moerr.NewInternalError(noReport,
+			"proxy proxy-protocol-body-limit exceeds the PROXY v2 body length")
 	}
 	if _, err := calculateProtocolMemoryBudget(c); err != nil {
 		return err

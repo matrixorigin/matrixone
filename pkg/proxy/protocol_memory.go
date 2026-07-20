@@ -37,11 +37,13 @@ import (
 //
 // The shared allocator remains the byte-level hard limit. Weighted transient
 // leases prevent individually valid phase transitions from racing for the same
-// unreserved headroom, without charging small normal logins for a 16 MiB write.
+// unreserved headroom. One backend operation is reserved for the background
+// lane so a long-running UPGRADE cannot consume login and migration capacity.
 type protocolMemoryBudget struct {
 	steadyBytes       uint64
 	headroomBytes     uint64
 	transientBytes    uint64
+	backgroundBytes   uint64
 	initialBytes      uint64
 	backendBytes      uint64
 	loginDynamicBytes uint64
@@ -60,6 +62,10 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	handshakeLimit := uint64(c.ClientHandshakePacketLimit)
 	if handshakeLimit == 0 {
 		handshakeLimit = uint64(defaultClientHandshakePacketLimit)
+	}
+	proxyBodyLimit := uint64(c.ProxyProtocolBodyLimit)
+	if proxyBodyLimit == 0 {
+		proxyBodyLimit = uint64(defaultProxyProtocolBodyLimit)
 	}
 	memoryLimit := uint64(c.ProtocolMemoryLimit)
 	if memoryLimit == 0 {
@@ -86,11 +92,39 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	retainedLoginBytes, ok := checkedMulUint64(connections, handshakeLimit)
+	// Before authentication, one Goetty read may contain both a complete PROXY
+	// frame and the following MySQL login. After authentication, the retained
+	// login copy replaces that input. Reserve the larger pre-auth state per
+	// admitted connection so the independent wire limits still compose into a
+	// global memory bound.
+	proxyFrameBytes, ok := checkedAddUint64(ProxyHeaderLength, proxyBodyLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	preAuthBytes, ok := checkedAddUint64(proxyFrameBytes, handshakeLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	retainedLoginBytes, ok := checkedMulUint64(connections, preAuthBytes)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	backendSessions, ok := checkedAddUint64(connections, cachedSessions)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	retainedBackendResponseBytes, ok := checkedMulUint64(
+		backendSessions,
+		proxyBackendRetainedResponseLimit,
+	)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
 	steadyBytes, ok := checkedAddUint64(fixedBytes, retainedLoginBytes)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	steadyBytes, ok = checkedAddUint64(steadyBytes, retainedBackendResponseBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
@@ -110,6 +144,10 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
+	initialBytes, ok = checkedAddUint64(initialBytes, proxyBackendPacketLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
 	backendBytes, ok := checkedAddUint64(
 		proxyIOSessionBufferSize,
 		max(loginDynamicBytes, controlDynamicBytes),
@@ -117,7 +155,26 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}
-	transientBytes := max(initialBytes, backendBytes)
+	// frontend.Conn returns a payload allocation and packetToBytes builds the
+	// header-bearing response consumed by the event path. Account both while
+	// they overlap; successful authentication is covered by the smaller initial
+	// response cap and this is deliberately conservative for control results.
+	backendReadBytes, ok := checkedMulUint64(2, proxyBackendPacketLimit)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	backendBytes, ok = checkedAddUint64(backendBytes, backendReadBytes)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	criticalBytes := max(initialBytes, backendBytes)
+	// UPGRADE may legitimately run for the client lifetime. Reserve it a
+	// separate single-operation lane instead of imposing an arbitrary SQL
+	// timeout or allowing it to starve login, migration and kill operations.
+	transientBytes, ok := checkedAddUint64(criticalBytes, backendBytes)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
 	minimumBytes, ok := checkedAddUint64(steadyBytes, transientBytes)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
@@ -130,6 +187,7 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 		steadyBytes:       steadyBytes,
 		headroomBytes:     memoryLimit - steadyBytes,
 		transientBytes:    transientBytes,
+		backgroundBytes:   backendBytes,
 		initialBytes:      initialBytes,
 		backendBytes:      backendBytes,
 		loginDynamicBytes: loginDynamicBytes,
@@ -182,10 +240,20 @@ func roundUpUint64(value, unit uint64) (uint64, bool) {
 }
 
 type protocolMemoryLimiter struct {
-	weighted *semaphore.Weighted
-	budget   protocolMemoryBudget
-	used     atomic.Int64
+	critical           *semaphore.Weighted
+	criticalBytes      uint64
+	background         *semaphore.Weighted
+	backgroundCapacity uint64
+	budget             protocolMemoryBudget
+	used               atomic.Int64
 }
+
+type protocolMemoryLane uint8
+
+const (
+	protocolMemoryCritical protocolMemoryLane = iota
+	protocolMemoryBackground
+)
 
 func newProtocolMemoryLimiter(c *Config) (*protocolMemoryLimiter, error) {
 	budget, err := calculateProtocolMemoryBudget(c)
@@ -196,9 +264,14 @@ func newProtocolMemoryLimiter(c *Config) (*protocolMemoryLimiter, error) {
 }
 
 func newProtocolMemoryLimiterWithBudget(budget protocolMemoryBudget) *protocolMemoryLimiter {
+	backgroundBytes := min(budget.backgroundBytes, budget.headroomBytes)
+	criticalBytes := budget.headroomBytes - backgroundBytes
 	return &protocolMemoryLimiter{
-		weighted: semaphore.NewWeighted(int64(budget.headroomBytes)),
-		budget:   budget,
+		critical:           semaphore.NewWeighted(int64(criticalBytes)),
+		criticalBytes:      criticalBytes,
+		background:         semaphore.NewWeighted(int64(backgroundBytes)),
+		backgroundCapacity: backgroundBytes,
+		budget:             budget,
 	}
 }
 
@@ -208,29 +281,52 @@ func (l *protocolMemoryLimiter) acquire(
 	ctx context.Context,
 	bytes uint64,
 ) (*protocolMemoryLease, error) {
+	if l == nil {
+		return nil, nil
+	}
+	return l.acquireFrom(ctx, l.critical, l.criticalBytes, bytes)
+}
+
+func (l *protocolMemoryLimiter) acquireBackground(
+	ctx context.Context,
+	bytes uint64,
+) (*protocolMemoryLease, error) {
+	if l == nil {
+		return nil, nil
+	}
+	return l.acquireFrom(ctx, l.background, l.backgroundCapacity, bytes)
+}
+
+func (l *protocolMemoryLimiter) acquireFrom(
+	ctx context.Context,
+	weighted *semaphore.Weighted,
+	capacity uint64,
+	bytes uint64,
+) (*protocolMemoryLease, error) {
 	if l == nil || bytes == 0 {
 		return nil, nil
 	}
-	if bytes > l.budget.headroomBytes || bytes > math.MaxInt64 {
+	if weighted == nil || bytes > capacity || bytes > math.MaxInt64 {
 		return nil, errProxyConnectionLimit
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	amount := int64(bytes)
-	if err := l.weighted.Acquire(ctx, amount); err != nil {
+	if err := weighted.Acquire(ctx, amount); err != nil {
 		return nil, errors.Join(errProxyConnectionLimit, context.Cause(ctx))
 	}
 	l.used.Add(amount)
-	lease := &protocolMemoryLease{limiter: l, bytes: amount}
+	lease := &protocolMemoryLease{limiter: l, weighted: weighted, bytes: amount}
 	lease.refs.Store(1)
 	return lease, nil
 }
 
 type protocolMemoryLease struct {
-	limiter *protocolMemoryLimiter
-	bytes   int64
-	refs    atomic.Int32
+	limiter  *protocolMemoryLimiter
+	weighted *semaphore.Weighted
+	bytes    int64
+	refs     atomic.Int32
 }
 
 // retain adds another concrete owner (for example, a pipelined prefix whose
@@ -265,7 +361,7 @@ func (l *protocolMemoryLease) release() {
 		}
 		if refs == 1 {
 			l.limiter.used.Add(-l.bytes)
-			l.limiter.weighted.Release(l.bytes)
+			l.weighted.Release(l.bytes)
 		}
 		return
 	}
@@ -327,4 +423,21 @@ func acquireProtocolMemoryBefore(
 	acquireCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	return limiter.acquire(acquireCtx, bytes)
+}
+
+func acquireBackgroundProtocolMemoryBefore(
+	ctx context.Context,
+	limiter *protocolMemoryLimiter,
+	bytes uint64,
+	deadline time.Time,
+) (*protocolMemoryLease, error) {
+	if limiter == nil {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	acquireCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	return limiter.acquireBackground(acquireCtx, bytes)
 }

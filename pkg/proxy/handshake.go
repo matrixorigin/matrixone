@@ -244,6 +244,9 @@ func (s *serverConn) readInitialHandshake() error {
 	if err != nil {
 		return err
 	}
+	if len(r.Payload) > proxyBackendAuthResponseLimit {
+		return frontend.ErrPacketTooLarge
+	}
 	if err := s.parseConnID(r); err != nil {
 		return err
 	}
@@ -260,6 +263,9 @@ func (s *serverConn) writeHandshakeResp(handshakeResp *frontend.Packet) (*fronte
 	data, err := s.readPacket()
 	if err != nil {
 		return nil, err
+	}
+	if len(data.Payload) > proxyBackendAuthResponseLimit {
+		return nil, frontend.ErrPacketTooLarge
 	}
 	return data, nil
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/codec"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -118,9 +119,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
 		goetty.WithAppHandleSessionFunc(s.handler.handle),
 		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec(
-				frontend.WithSQLCodecMaxPayloadSize(int(config.ClientHandshakePacketLimit)),
-			), WithProxyProtocolMaxBodySize(int(config.ClientHandshakePacketLimit)))),
+			goetty.WithSessionCodec(newProxySessionCodec(config)),
 			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
 		),
 	)
@@ -129,6 +128,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 	s.app = app
 	return s, nil
+}
+
+func newProxySessionCodec(config Config) codec.Codec {
+	return WithProxyProtocolCodec(frontend.NewSqlCodec(
+		frontend.WithSQLCodecMaxPayloadSize(int(config.ClientHandshakePacketLimit)),
+	), WithProxyProtocolMaxBodySize(int(config.ProxyProtocolBodyLimit)))
 }
 
 func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) error {

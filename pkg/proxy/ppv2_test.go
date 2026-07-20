@@ -29,6 +29,28 @@ func TestProxyProtocolOptions(t *testing.T) {
 	require.NotNil(t, ret)
 }
 
+func TestProxyServerCodecAcceptsIPv6AtIndependentMinimum(t *testing.T) {
+	data := buf.NewByteBuf(ProxyHeaderLength + int(minimumProxyProtocolBodyLimit))
+	header := make([]byte, ProxyHeaderLength)
+	copy(header, ProxyProtocolV2Signature)
+	header[12] = 0x21
+	header[13] = tcpOverIPv6
+	binary.BigEndian.PutUint16(header[14:], uint16(minimumProxyProtocolBodyLimit))
+	_, err := data.Write(header)
+	require.NoError(t, err)
+	_, err = data.Write(make([]byte, minimumProxyProtocolBodyLimit))
+	require.NoError(t, err)
+
+	configured := Config{
+		ClientHandshakePacketLimit: minimumClientHandshakePacketLimit,
+		ProxyProtocolBodyLimit:     minimumProxyProtocolBodyLimit,
+	}
+	res, ok, err := newProxySessionCodec(configured).Decode(data)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.IsType(t, &ProxyAddr{}, res)
+}
+
 func TestProxyProtocolCodec_Decode(t *testing.T) {
 	t.Run("oversized body rejected from fixed header", func(t *testing.T) {
 		data := buf.NewByteBuf(ProxyHeaderLength)

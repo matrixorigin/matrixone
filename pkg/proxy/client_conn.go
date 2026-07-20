@@ -574,6 +574,7 @@ func (c *clientConn) connAndExec(
 	cn *CNServer,
 	stmt string,
 	resp chan<- []byte,
+	lane protocolMemoryLane,
 ) error {
 	if ctx == nil {
 		ctx = c.ctx
@@ -581,7 +582,13 @@ func (c *clientConn) connAndExec(
 			ctx = context.Background()
 		}
 	}
-	lease, err := c.acquireBackendProtocolMemory(ctx, defaultTransferTimeout)
+	var lease *protocolMemoryLease
+	var err error
+	if lane == protocolMemoryBackground {
+		lease, err = c.acquireBackgroundBackendProtocolMemory(ctx, defaultTransferTimeout)
+	} else {
+		lease, err = c.acquireBackendProtocolMemory(ctx, defaultTransferTimeout)
+	}
 	if err != nil {
 		if resp != nil {
 			c.sendErr(err, resp)
@@ -651,6 +658,28 @@ func (c *clientConn) acquireBackendProtocolMemory(
 	return c.acquireProtocolMemory(ctx, timeout, c.protocolMemoryLimiter.budget.backendBytes)
 }
 
+func (c *clientConn) acquireBackgroundBackendProtocolMemory(
+	ctx context.Context,
+	timeout time.Duration,
+) (*protocolMemoryLease, error) {
+	if c.protocolMemoryLimiter == nil {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = c.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+	}
+	deadline := time.Now().Add(timeout)
+	return acquireBackgroundProtocolMemoryBefore(
+		ctx,
+		c.protocolMemoryLimiter,
+		c.protocolMemoryLimiter.budget.backendBytes,
+		deadline,
+	)
+}
+
 // KillCurrentBackendConn implements the ClientConn interface.
 func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
 	if sc == nil {
@@ -682,7 +711,13 @@ func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 	defer cancel()
-	return c.connAndExec(ctx, tempCN, fmt.Sprintf("kill connection %d", c.ConnID()), nil)
+	return c.connAndExec(
+		ctx,
+		tempCN,
+		fmt.Sprintf("kill connection %d", c.ConnID()),
+		nil,
+		protocolMemoryCritical,
+	)
 }
 
 // handleKill handles the kill event.
@@ -719,7 +754,7 @@ func (c *clientConn) handleKill(
 	}
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 	defer cancel()
-	return c.connAndExec(ctx, cn, e.stmt, resp)
+	return c.connAndExec(ctx, cn, e.stmt, resp, protocolMemoryCritical)
 }
 
 // handleSetVar handles the set variable event.
@@ -815,7 +850,7 @@ func (c *clientConn) handleUpgradeEvent(
 
 		// In the loop, do not pass the resp, because it only receives response once.
 		// It everything is ok, send ok response at last out of the loop.
-		if err := c.connAndExec(ctx, cn, e.stmt, nil); err != nil {
+		if err := c.connAndExec(ctx, cn, e.stmt, nil, protocolMemoryBackground); err != nil {
 			c.log.Error("failed to execute upgrade query", zap.Error(err))
 			c.sendErr(err, resp)
 			return err

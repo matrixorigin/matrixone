@@ -308,6 +308,21 @@ func (s *killExecServerConn) CreateTime() time.Time    { return time.Now() }
 func (s *killExecServerConn) Quit() error              { return nil }
 func (s *killExecServerConn) Close() error             { return nil }
 
+type stalledContextServerConn struct {
+	killExecServerConn
+	entered chan struct{}
+}
+
+func (s *stalledContextServerConn) ExecStmtContext(
+	ctx context.Context,
+	_ internalStmt,
+	_ chan<- []byte,
+) (bool, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return false, context.Cause(ctx)
+}
+
 func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer) func() {
 	if cn.salt == nil || len(cn.salt) != 20 {
 		cn.salt = testSlat
@@ -370,6 +385,59 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
 	require.Equal(t, "kill connection 42", execSC.stmt.s)
+}
+
+func TestBackgroundExecDoesNotStarveCriticalProtocolAdmission(t *testing.T) {
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+		headroomBytes:   2,
+		backgroundBytes: 1,
+		backendBytes:    1,
+	})
+	stalled := &stalledContextServerConn{entered: make(chan struct{})}
+	router := &killTestRouter{
+		connectFn: func(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error) {
+			return stalled, makeOKPacket(8), nil
+		},
+	}
+	client := &clientConn{
+		ctx:                   context.Background(),
+		log:                   runtime.DefaultRuntime().Logger(),
+		router:                router,
+		protocolMemoryLimiter: limiter,
+		handshakePack:         &frontend.Packet{},
+	}
+
+	upgradeCtx, cancelUpgrade := context.WithCancel(context.Background())
+	upgradeDone := make(chan error, 1)
+	go func() {
+		upgradeDone <- client.connAndExec(
+			upgradeCtx,
+			&CNServer{},
+			"upgrade account all",
+			nil,
+			protocolMemoryBackground,
+		)
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(time.Second):
+		t.Fatal("background control statement did not start")
+	}
+
+	criticalCtx, cancelCritical := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCritical()
+	critical, err := limiter.acquire(criticalCtx, 1)
+	require.NoError(t, err, "stalled UPGRADE must not consume login and migration admission")
+	critical.release()
+
+	cancelUpgrade()
+	select {
+	case err := <-upgradeDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled background control statement did not release its lease")
+	}
+	require.Zero(t, limiter.used.Load())
 }
 
 func TestClientConn_HandleQuitEventMarksExpectedCacheQuit(t *testing.T) {

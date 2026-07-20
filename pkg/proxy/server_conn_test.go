@@ -636,10 +636,6 @@ func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
 	local, remote := net.Pipe()
 	defer remote.Close()
 	frontend.InitServerLevelVars("test")
-	transport := goetty.NewIOSession(
-		goetty.WithSessionConn(1, local),
-		goetty.WithSessionCodec(frontend.NewSqlCodec()),
-	)
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
@@ -653,13 +649,12 @@ func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
 	)
 	require.NoError(t, err)
 	sc := &serverConn{
-		conn:       transport,
+		conn:       local,
 		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
 	}
 	defer func() {
 		require.NoError(t, sc.Close())
 		require.True(t, allocator.CheckBalance())
-		require.NoError(t, transport.Close())
 	}()
 
 	requestRead := make(chan error, 1)
@@ -683,6 +678,53 @@ func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
 	require.Less(t, time.Since(started), time.Second,
 		"context must override frontend's default 24-hour session read timeout")
 	require.NoError(t, <-requestRead)
+}
+
+func TestServerConnRejectsOversizedBackendPacket(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		conn:       local,
+		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	peerDone := make(chan error, 1)
+	go func() {
+		header := []byte{
+			byte((proxyBackendPacketLimit + 1) & 0xff),
+			byte(((proxyBackendPacketLimit + 1) >> 8) & 0xff),
+			byte(((proxyBackendPacketLimit + 1) >> 16) & 0xff),
+			0,
+		}
+		packetPrefix := append(header, make([]byte, proxyIOSessionBufferSize-len(header))...)
+		if _, err := remote.Write(packetPrefix); err != nil {
+			peerDone <- err
+			return
+		}
+		peerDone <- nil
+	}()
+
+	_, err = sc.readPacket()
+	require.Error(t, err)
+	require.NoError(t, <-peerDone)
 }
 
 func TestInterruptConnectionOnDoneOwnershipHandoff(t *testing.T) {
@@ -797,18 +839,33 @@ func TestServerConn_HandleHandshakeTimeoutStopsWorker(t *testing.T) {
 	local, remote := net.Pipe()
 	defer remote.Close()
 	require.NoError(t, remote.SetWriteDeadline(time.Now().Add(time.Second)))
-	session := goetty.NewIOSession(
-		goetty.WithSessionConn(1, local),
-		goetty.WithSessionCodec(frontend.NewSqlCodec()),
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
 	)
-	defer session.Close()
+	require.NoError(t, err)
 	sc := &serverConn{
 		cnServer: &CNServer{addr: "pipe"},
-		conn:     session,
+		conn:     local,
 		connID:   1,
+		mysqlProto: frontend.NewMysqlClientProtocol(
+			"test", 1, ios, 0, &fp,
+		),
 	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
 
-	_, err := sc.HandleHandshake(
+	_, err = sc.HandleHandshake(
 		&frontend.Packet{Payload: []byte("auth")},
 		20*time.Millisecond,
 	)

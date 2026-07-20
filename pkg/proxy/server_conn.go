@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
@@ -77,7 +76,7 @@ type serverConn struct {
 	// cnServer is the backend CN server.
 	cnServer *CNServer
 	// conn is the raw TCP connection between proxy and server.
-	conn goetty.IOSession
+	conn net.Conn
 	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
 	// mysqlProto is used to build handshake info.
@@ -131,9 +130,21 @@ func execStmtWithContext(
 	return sc.ExecStmt(stmt, resp)
 }
 
-// Proxy only needs a small retained buffer for normal MySQL packets. Larger
-// packets use frontend.Conn's dynamic path and are released after use.
-const proxyIOSessionBufferSize = 16 * 1024
+const (
+	// Proxy only needs a small retained buffer for normal MySQL packets.
+	// Larger packets use frontend.Conn's dynamic path and are released after use.
+	proxyIOSessionBufferSize = 16 * 1024
+	// A backend connection is used only for authentication and bounded Proxy
+	// control statements before the raw tunnel owns it. It must not accept the
+	// general 16 MiB MySQL payload maximum: doing so lets one CN response create
+	// an unaccounted, connection-lifetime buffer in the Proxy.
+	proxyBackendPacketLimit = 64 * 1024
+	// A successful authentication response is retained for connection-cache
+	// reuse. Normal OK packets are tiny; cap this distinct lifetime class so a
+	// CN cannot turn the transient packet allowance into steady memory.
+	proxyBackendAuthResponseLimit     = 1024
+	proxyBackendRetainedResponseLimit = proxyBackendAuthResponseLimit + frontend.PacketHeaderLength
+)
 
 // newServerConn creates a connection to CN server.
 func newServerConn(
@@ -190,10 +201,11 @@ func newServerConnContext(
 		allocator = frontend.NewSessionAllocator(pu)
 	}
 	ios, err := frontend.NewIOSessionWithOptions(
-		c.RawConn(),
+		c,
 		pu,
 		cn.uuid,
 		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
 		frontend.WithIOSessionAllocator(allocator),
 	)
 	if err != nil {
@@ -227,16 +239,16 @@ func (s *serverConn) ConnID() uint32 {
 
 // RawConn implements the ServerConn interface.
 func (s *serverConn) RawConn() net.Conn {
-	if s != nil {
-		if s.cnServer != nil {
+	if s != nil && s.conn != nil {
+		if s.cnServer != nil && s.rebalancer != nil {
 			return &wrappedConn{
-				Conn: s.conn.RawConn(),
+				Conn: s.conn,
 				closeFn: func() {
 					s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
 				},
 			}
 		}
-		return s.conn.RawConn()
+		return s.conn
 	}
 	return nil
 }
@@ -261,7 +273,7 @@ func (s *serverConn) HandleHandshakeContext(
 	if s == nil || s.conn == nil {
 		return nil, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
 	}
-	raw := s.conn.RawConn()
+	raw := s.conn
 	if raw == nil {
 		return nil, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
 	}
@@ -394,7 +406,7 @@ func (s *serverConn) ExecStmtContext(
 	if s == nil || s.conn == nil {
 		return false, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
 	}
-	raw := s.conn.RawConn()
+	raw := s.conn
 	if raw == nil {
 		return false, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
 	}
@@ -454,6 +466,8 @@ func (s *serverConn) Close() error {
 				_ = tcpConn.Close()
 			}
 			s.mysqlProto.Close()
+		} else if s.conn != nil {
+			_ = s.conn.Close()
 		}
 	})
 	if s.rebalancer != nil {
@@ -465,15 +479,20 @@ func (s *serverConn) Close() error {
 
 // readPacket reads packet from CN server, usually used in handshake phase.
 func (s *serverConn) readPacket() (*frontend.Packet, error) {
-	msg, err := s.conn.Read(goetty.ReadOptions{})
+	if s == nil || s.mysqlProto == nil || s.mysqlProto.GetTcpConnection() == nil {
+		return nil, moerr.NewInternalErrorNoCtx("backend protocol is unavailable")
+	}
+	payload, err := s.mysqlProto.GetTcpConnection().Read()
 	if err != nil {
 		return nil, err
 	}
-	packet, ok := msg.(*frontend.Packet)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("message is not a Packet")
-	}
-	return packet, nil
+	// frontend.Conn advances the expected sequence after each successful read.
+	sequenceID := s.mysqlProto.GetTcpConnection().GetSequenceID() - 1
+	return &frontend.Packet{
+		Length:     int32(len(payload)),
+		SequenceID: int8(sequenceID),
+		Payload:    payload,
+	}, nil
 }
 
 // nextServerConnID increases baseConnID by 1 and returns the result.
@@ -506,16 +525,16 @@ type CNServer struct {
 	clientAddr string
 }
 
-// Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
+// Connect connects to a backend server and writes the Proxy ExtraInfo preface.
+func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (net.Conn, error) {
 	return s.ConnectContext(context.Background(), logger, timeout)
 }
 
 func (s *CNServer) ConnectContext(
 	parent context.Context,
-	logger *zap.Logger,
+	_ *zap.Logger,
 	timeout time.Duration,
-) (goetty.IOSession, error) {
+) (net.Conn, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -542,15 +561,10 @@ func (s *CNServer) ConnectContext(
 		}
 		return nil, newConnectErr(err)
 	}
-	c := goetty.NewIOSession(
-		goetty.WithSessionConn(0, raw),
-		goetty.WithSessionCodec(frontend.NewSqlCodec()),
-		goetty.WithSessionLogger(logger),
-	)
 	owned := true
 	defer func() {
 		if owned {
-			_ = c.Close()
+			_ = raw.Close()
 		}
 	}()
 	joinInterrupt := interruptConnectionOnDone(ctx, raw)
@@ -571,7 +585,7 @@ func (s *CNServer) ConnectContext(
 	}
 	// When build connection with backend server, proxy send its salt, request
 	// labels and other information to the backend server.
-	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
+	if err := writeAll(raw, data); err != nil {
 		joinInterrupt()
 		if cause := operationContextCause(ctx); cause != nil {
 			return nil, newTimeoutConnectErr(errors.Join(err, cause))
@@ -583,7 +597,21 @@ func (s *CNServer) ConnectContext(
 		return nil, newTimeoutConnectErr(cause)
 	}
 	owned = false
-	return c, nil
+	return raw, nil
+}
+
+func writeAll(conn net.Conn, data []byte) error {
+	for len(data) > 0 {
+		n, err := conn.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
 }
 
 func parseBackendAddress(address string) (string, string, error) {

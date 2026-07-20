@@ -26,44 +26,80 @@ import (
 )
 
 func TestCalculateProtocolMemoryBudget(t *testing.T) {
-	t.Run("small login needs one extra backend buffer", func(t *testing.T) {
-		transient := uint64(proxyIOSessionBufferSize)
-		steady := uint64(10 * (2*proxyIOSessionBufferSize + 64))
+	t.Run("small login reserves critical and background backend capacity", func(t *testing.T) {
+		const connections = 10
+		initial := uint64(64 + proxyBackendPacketLimit)
+		backend := uint64(proxyIOSessionBufferSize + 2*proxyBackendPacketLimit)
+		transient := backend + backend
+		steady := uint64(connections * (2*proxyIOSessionBufferSize +
+			64 + ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
+			proxyBackendRetainedResponseLimit))
 		cfg := Config{
-			MaxConnections:             10,
-			ProtocolMemoryLimit:        toml.ByteSize(steady),
+			MaxConnections:             connections,
+			ProtocolMemoryLimit:        toml.ByteSize(steady + transient - 1),
 			ClientHandshakePacketLimit: 64,
 		}
 		_, err := calculateProtocolMemoryBudget(&cfg)
 		require.Error(t, err)
 
-		cfg.ProtocolMemoryLimit += toml.ByteSize(transient)
+		cfg.ProtocolMemoryLimit++
 		budget, err := calculateProtocolMemoryBudget(&cfg)
 		require.NoError(t, err)
 		require.Equal(t, steady, budget.steadyBytes)
 		require.Equal(t, transient, budget.transientBytes)
 		require.Equal(t, transient, budget.headroomBytes)
-		require.Equal(t, uint64(64), budget.initialBytes)
-		require.Equal(t, uint64(proxyIOSessionBufferSize), budget.backendBytes)
+		require.Equal(t, backend, budget.backgroundBytes)
+		require.Equal(t, initial, budget.initialBytes)
+		require.Equal(t, backend, budget.backendBytes)
 	})
 
 	t.Run("large login includes rounded backend dynamic write", func(t *testing.T) {
 		const handshakeLimit = 64 << 10
-		steady := uint64(2*proxyIOSessionBufferSize + handshakeLimit)
-		transient := uint64(2 * handshakeLimit)
+		steady := uint64(2*proxyIOSessionBufferSize + handshakeLimit +
+			ProxyHeaderLength + int(defaultProxyProtocolBodyLimit) +
+			proxyBackendRetainedResponseLimit)
+		initial := uint64(3 * handshakeLimit)
+		backend := uint64(proxyIOSessionBufferSize + 3*handshakeLimit)
+		transient := backend + backend
 		cfg := Config{
 			MaxConnections:             1,
-			ProtocolMemoryLimit:        toml.ByteSize(steady + 2*transient),
+			ProtocolMemoryLimit:        toml.ByteSize(steady + transient),
 			ClientHandshakePacketLimit: handshakeLimit,
 		}
 		budget, err := calculateProtocolMemoryBudget(&cfg)
 		require.NoError(t, err)
 		require.Equal(t, steady, budget.steadyBytes)
 		require.Equal(t, transient, budget.transientBytes)
-		require.Equal(t, 2*transient, budget.headroomBytes)
-		require.Equal(t, uint64(2*handshakeLimit), budget.initialBytes)
-		require.Equal(t, uint64(proxyIOSessionBufferSize+handshakeLimit), budget.backendBytes)
+		require.Equal(t, transient, budget.headroomBytes)
+		require.Equal(t, backend, budget.backgroundBytes)
+		require.Equal(t, initial, budget.initialBytes)
+		require.Equal(t, backend, budget.backendBytes)
 	})
+}
+
+func TestProtocolMemoryLimiterSeparatesBackgroundAdmission(t *testing.T) {
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{
+		headroomBytes:   2,
+		backgroundBytes: 1,
+		backendBytes:    1,
+	})
+	upgrade, err := limiter.acquireBackground(context.Background(), 1)
+	require.NoError(t, err)
+
+	critical, err := limiter.acquire(context.Background(), 1)
+	require.NoError(t, err, "a stalled background operation must not starve login or migration")
+	critical.release()
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err = limiter.acquireBackground(waitCtx, 1)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	upgrade.release()
+	reused, err := limiter.acquireBackground(context.Background(), 1)
+	require.NoError(t, err)
+	reused.release()
+	require.Zero(t, limiter.used.Load())
 }
 
 func TestProtocolMemoryLimiterLifecycle(t *testing.T) {
