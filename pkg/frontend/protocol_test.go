@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -74,11 +76,13 @@ func Test_SendResponse(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
+		rawConn := &testConn{}
+		ioses, err := NewIOSession(rawConn, pu, "")
 		convey.ShouldBeNil(err)
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage
 		mp.tcpConn = ioses
+		mp.capability = CLIENT_PROTOCOL_41
 		resp := &Response{}
 		resp.category = EoFResponse
 		err = mp.SendResponse(ctx, resp)
@@ -88,6 +92,15 @@ func Test_SendResponse(t *testing.T) {
 		resp.category = ErrorResponse
 		err = mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldBeNil)
+
+		rawConn.data = nil
+		resp.SetData(errors.Join(moerr.NewInvalidInput(ctx, "bad numeric parameter"), errors.New("cleanup")))
+		err = mp.SendResponse(ctx, resp)
+		convey.So(err, convey.ShouldBeNil)
+		packets := splitProtocolPackets(t, rawConn.data)
+		convey.So(len(packets), convey.ShouldEqual, 1)
+		convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, moerr.ErrInvalidInput)
+		convey.So(string(packets[0][4:9]), convey.ShouldEqual, moerr.MySQLDefaultSqlState)
 
 		resp.category = -1
 		err = mp.SendResponse(ctx, resp)

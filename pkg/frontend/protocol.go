@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -249,8 +250,8 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		if err == nil {
 			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
-		switch myerr := err.(type) {
-		case *moerr.Error:
+		var myerr *moerr.Error
+		if errors.As(err, &myerr) {
 			var code uint16
 			if myerr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
 				code = myerr.MySQLCode()
