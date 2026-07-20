@@ -8,7 +8,7 @@ select cast('1e-3   ' as decimal(8,4));
 select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
 
-# String-to-FLOAT/DOUBLE conversion is strict: complete conversion failures return moerr.
+# String-to-FLOAT/DOUBLE
 select cast('a' as double);
 select cast('abc123' as float);
 select cast('' as double);

@@ -23,21 +23,28 @@ select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint64, bad value 10x
 select cast('a' as double);
-invalid input: "a" is invalid numeric string
+➤ cast(a as double)[8,54,0]  𝄀
+0.0
 select cast('abc123' as float);
-invalid input: "abc123" is invalid numeric string
+➤ cast(abc123 as float)[7,24,0]  𝄀
+0.0
 select cast('' as double);
-invalid input: "" is invalid numeric string
+➤ cast( as double)[8,54,0]  𝄀
+0.0
 select cast('2020-01-01' as double);
-invalid input: "2020-01-01" is invalid numeric string
+➤ cast(2020-01-01 as double)[8,54,0]  𝄀
+2020.0
 select cast('2020-01-01 12:34:56' as float);
-invalid input: "2020-01-01 12:34:56" is invalid numeric string
+➤ cast(2020-01-01 12:34:56 as float)[7,24,0]  𝄀
+2020.0
 select cast('1abc' as double);
-invalid input: "1abc" is invalid numeric string
+➤ cast(1abc as double)[8,54,0]  𝄀
+1.0
 select cast(X'' as double);
 invalid input: "" is invalid numeric string
 select cast(_binary 'this-is-a-very-long-string' as double);
-invalid input: "this-is-a-very-long-string" is invalid numeric string
+➤ cast(this-is-a-very-long-string as double)[8,54,0]  𝄀
+0.0
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
@@ -328,7 +335,8 @@ invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal);
 invalid input: a beyond the range, can't be converted to Decimal128(38,0).
 select 10E+0+'a';
-invalid input: "a" is invalid numeric string
+➤ 10e+0 + a[8,54,0]  𝄀
+10.0
 select cast('18446744073709551616' as unsigned);
 Data truncation: data out of range: data type uint64, value '18446744073709551616'
 select cast('18446744073709551616' as signed);

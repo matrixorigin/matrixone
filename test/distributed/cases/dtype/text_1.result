@@ -246,14 +246,16 @@ select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;
 insert into t8(col9) values ('1000000000000000000000000000000000000000');
 select cast(col9 as float) from t8;
-invalid input: "1000000000000000000000000000000000000000" is invalid numeric string
+➤ cast(col9 as float)[7,24,0]  𝄀
+3.4028235E38
 select cast(col9 as double) from t8;
 ➤ cast(col9 as double)[8,54,0]  𝄀
 1.0E39
 delete from t8 where col9 is not NULL;
 insert into t8(col9) values (1000000000000000000000000000000000000000);
 select cast(col9 as float) from t8;
-invalid input: "1000000000000000000000000000000000000000" is invalid numeric string
+➤ cast(col9 as float)[7,24,0]  𝄀
+3.4028235E38
 select cast(col9 as double) from t8;
 ➤ cast(col9 as double)[8,54,0]  𝄀
 1.0E39

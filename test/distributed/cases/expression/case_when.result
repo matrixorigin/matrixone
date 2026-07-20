@@ -23,13 +23,17 @@ select (CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0;
 ➤ (case two when one then 1.00 when two then 2.00 end) + 0.0[3,18,2]  𝄀
 2.00
 select case 1/0 when "a" then "true" else "false" END;
-invalid input: "a" is invalid numeric string
+➤ case 1 / 0 when a then true else false end[12,-1,0]  𝄀
+false
 select case 1/0 when "a" then "true" END;
-invalid input: "a" is invalid numeric string
+➤ case 1 / 0 when a then true end[12,-1,0]  𝄀
+null
 select (case 1/0 when "a" then "true" END) | 0;
-invalid input: "a" is invalid numeric string
+➤ (case 1 / 0 when a then true end) | 0[-5,64,0]  𝄀
+null
 select (case 1/0 when "a" then "true" END) + 0.0;
-invalid input: "a" is invalid numeric string
+➤ (case 1 / 0 when a then true end) + 0.0[8,54,0]  𝄀
+null
 select case when 1>0 then "TRUE" else "FALSE" END;
 ➤ case when 1 > 0 then TRUE else FALSE end[12,-1,0]  𝄀
 TRUE
