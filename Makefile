@@ -1095,19 +1095,19 @@ err-check:
 ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
  ifneq ("$(strip $(fmtErrs))", "")
 		$(warning 'fmt.Errorf()' is found.)
-		$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
+		$(warning One of 'fmt.Errorf()' is called at: $(firstword $(fmtErrs)))
  endif
  ifneq ("$(strip $(errNews))", "")
 		$(warning 'errors.New()' is found.)
-		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+		$(warning One of 'errors.New()' is called at: $(firstword $(errNews)))
  endif
  ifneq ("$(strip $(withTimeout))", "")
 		$(warning 'context.WithTimeout' is found.)
-		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(withTimeout) | head -1))
+		$(warning One of 'context.WithTimeout' is called at: $(firstword $(withTimeout)))
  endif
  ifneq ("$(strip $(withDeadline))", "")
 		$(warning 'context.WithDeadline' is found.)
-		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(withDeadline) | head -1))
+		$(warning One of 'context.WithDeadline' is called at: $(firstword $(withDeadline)))
  endif
 	$(error Use moerr instead.)
 else

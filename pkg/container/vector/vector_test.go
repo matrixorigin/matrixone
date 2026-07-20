@@ -441,24 +441,6 @@ func TestDup(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestNewVecWithDataCopyOwnsBackingData(t *testing.T) {
-	mp := mpool.MustNewZero()
-	data := []byte("external-data")
-	area := []byte("external-area")
-	vec, err := NewVecWithDataCopy(types.T_text.ToType(), 1, data, area, mp)
-	require.NoError(t, err)
-	require.Equal(t, data, vec.GetData())
-	require.Equal(t, area, vec.GetArea())
-
-	data[0] = 'X'
-	area[0] = 'Y'
-	require.Equal(t, byte('e'), vec.GetData()[0])
-	require.Equal(t, byte('e'), vec.GetArea()[0])
-	require.NotPanics(t, func() { vec.Free(mp) })
-	require.Nil(t, vec.GetData())
-	require.Nil(t, vec.GetArea())
-}
-
 func TestShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // Array Float32

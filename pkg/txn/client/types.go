@@ -72,9 +72,10 @@ type TxnClient interface {
 		options ...TxnOption,
 	) (TxnOperator, error)
 
-	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
-	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)
+	// NewWithSnapshot creates a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator. Before returning, it waits until
+	// the local CN has applied every logtail visible to the snapshot.
+	NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled

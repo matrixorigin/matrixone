@@ -1122,6 +1122,7 @@ func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
 			},
 		}},
 	}
+	defer vec.Release()
 	err = cache.Read(ctx, vec)
 	require.Nil(t, err)
 	require.Equal(t, 1, dataCache.ensureCalls)
