@@ -55,6 +55,12 @@ select cast(cast('9.223372036854776e18' as double) as signed);
 Data truncation: data out of range: data type int64, value '9.223372036854776e+18'
 select cast(cast('-1.8446744073709552e19' as double) as unsigned);
 Data truncation: data out of range: data type uint64, value '-1.8446744073709552e+19'
+select cast(cast(-1.4 as decimal(10,2)) as unsigned), cast(cast(-1.5 as decimal(10,2)) as unsigned), cast(cast(-1.6 as decimal(10,2)) as unsigned);
+➤ cast(cast(-1.4 as decimal(10, 2)) as unsigned)[-5,64,0]  ¦  cast(cast(-1.5 as decimal(10, 2)) as unsigned)[-5,64,0]  ¦  cast(cast(-1.6 as decimal(10, 2)) as unsigned)[-5,64,0]  𝄀
+18446744073709551615  ¦  18446744073709551614  ¦  18446744073709551614
+select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2)) as signed), cast(cast(1.6 as decimal(10,2)) as signed);
+➤ cast(cast(1.4 as decimal(10, 2)) as signed)[-5,64,0]  ¦  cast(cast(1.5 as decimal(10, 2)) as signed)[-5,64,0]  ¦  cast(cast(1.6 as decimal(10, 2)) as signed)[-5,64,0]  𝄀
+1  ¦  2  ¦  2
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123

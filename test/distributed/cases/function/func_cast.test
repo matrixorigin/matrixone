@@ -20,6 +20,8 @@ select cast('9999999999999999999999999999999999999999999999999999999999999999999
 select cast(cast(18446744073709551615 as decimal(20,0)) as signed);
 select cast(cast('9.223372036854776e18' as double) as signed);
 select cast(cast('-1.8446744073709552e19' as double) as unsigned);
+select cast(cast(-1.4 as decimal(10,2)) as unsigned), cast(cast(-1.5 as decimal(10,2)) as unsigned), cast(cast(-1.6 as decimal(10,2)) as unsigned);
+select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2)) as signed), cast(cast(1.6 as decimal(10,2)) as signed);
 
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.

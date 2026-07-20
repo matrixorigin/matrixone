@@ -197,6 +197,86 @@ func TestExplicitCastDecimalsToSigned(t *testing.T) {
 	}
 }
 
+func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := []string{"-1.4", "-1.5", "-1.6", "1.4", "1.5", "1.6"}
+	decimal64 := make([]types.Decimal64, len(values)+1)
+	decimal128 := make([]types.Decimal128, len(values)+1)
+	decimal256 := make([]types.Decimal256, len(values)+1)
+	for i, value := range values {
+		var err error
+		decimal64[i], err = types.ParseDecimal64(value, 10, 1)
+		require.NoError(t, err)
+		decimal128[i], err = types.ParseDecimal128(value, 20, 1)
+		require.NoError(t, err)
+		decimal256[i], err = types.ParseDecimal256(value, 40, 1)
+		require.NoError(t, err)
+	}
+	nulls := []bool{false, false, false, false, false, false, true}
+	tests := []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{name: "decimal64", input: NewFunctionTestInput(types.New(types.T_decimal64, 10, 1), decimal64, nulls)},
+		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), decimal128, nulls)},
+		{name: "decimal256", input: NewFunctionTestInput(types.New(types.T_decimal256, 40, 1), decimal256, nulls)},
+	}
+	for _, test := range tests {
+		t.Run(test.name+" to signed", func(t *testing.T) {
+			inputs := []FunctionTestInput{test.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}
+			expect := NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{-1, -2, -2, 1, 2, 2, 0}, nulls)
+			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+		t.Run(test.name+" to unsigned", func(t *testing.T) {
+			inputs := []FunctionTestInput{test.input, NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil)}
+			expect := NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, math.MaxUint64 - 1, 1, 2, 2, 0}, nulls)
+			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestExplicitCastDecimalRoundingAtSignedBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := []string{
+		"9223372036854775807.4",
+		"9223372036854775807.5",
+		"-9223372036854775808.4",
+		"-9223372036854775808.5",
+	}
+	decimal128 := make([]types.Decimal128, len(values))
+	decimal256 := make([]types.Decimal256, len(values))
+	for i, value := range values {
+		var err error
+		decimal128[i], err = types.ParseDecimal128(value, 20, 1)
+		require.NoError(t, err)
+		decimal256[i], err = types.ParseDecimal256(value, 40, 1)
+		require.NoError(t, err)
+	}
+	tests := []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), decimal128, nil)},
+		{name: "decimal256", input: NewFunctionTestInput(types.New(types.T_decimal256, 40, 1), decimal256, nil)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{test.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}
+			expect := NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{math.MaxInt64, math.MaxInt64, math.MinInt64, math.MinInt64}, nil)
+			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestExplicitCastDecimalPositiveOverflowToSigned(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimal128, err := types.ParseDecimal128("18446744073709551615", 20, 0)

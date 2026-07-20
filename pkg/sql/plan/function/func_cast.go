@@ -161,7 +161,7 @@ func floatToInt64Explicit[T constraints.Float](
 
 func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
 	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
-	length int, _ *FunctionSelectList, format func(T) string,
+	length int, _ *FunctionSelectList, roundToIntegerString func(T) string,
 ) error {
 	to := vector.MustFunctionResult[uint64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -172,10 +172,10 @@ func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
 			}
 			continue
 		}
-		integerPart := strings.SplitN(format(value), ".", 2)[0]
-		converted, err := explicitUint64FromIntegerString(integerPart)
+		rounded := roundToIntegerString(value)
+		converted, err := explicitUint64FromIntegerString(rounded)
 		if err != nil {
-			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", integerPart)
+			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", rounded)
 		}
 		if err = to.Append(converted, false); err != nil {
 			return err
@@ -186,7 +186,7 @@ func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
 
 func decimalToInt64Explicit[T types.FixedSizeTExceptStrType](
 	from vector.FunctionParameterWrapper[T], result vector.FunctionResultWrapper,
-	length int, _ *FunctionSelectList, format func(T) string,
+	length int, _ *FunctionSelectList, roundToIntegerString func(T) string,
 ) error {
 	to := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -197,10 +197,10 @@ func decimalToInt64Explicit[T types.FixedSizeTExceptStrType](
 			}
 			continue
 		}
-		integerPart := strings.SplitN(format(value), ".", 2)[0]
-		converted, err := decimalInt64Explicit(integerPart)
+		rounded := roundToIntegerString(value)
+		converted, err := decimalInt64Explicit(rounded)
 		if err != nil {
-			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", integerPart)
+			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", rounded)
 		}
 		if err = to.Append(converted, false); err != nil {
 			return err
@@ -663,13 +663,13 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return floatToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[float64](from), result, length, selectList)
 		case types.T_decimal64:
 			return decimalToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,
-				func(v types.Decimal64) string { return v.Format(fromType.Scale) })
+				func(v types.Decimal64) string { return v.Round(fromType.Scale, 0, true).Format(0) })
 		case types.T_decimal128:
 			return decimalToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), result, length, selectList,
-				func(v types.Decimal128) string { return v.Format(fromType.Scale) })
+				func(v types.Decimal128) string { return v.Round(fromType.Scale, 0, true).Format(0) })
 		case types.T_decimal256:
 			return decimalToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), result, length, selectList,
-				func(v types.Decimal256) string { return v.Format(fromType.Scale) })
+				func(v types.Decimal256) string { return v.Round(fromType.Scale, 0, true).Format(0) })
 		}
 	}
 	if mode == castModeExplicit && toType.Oid == types.T_int64 {
@@ -688,13 +688,13 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return floatToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[float64](from), result, length, selectList)
 		case types.T_decimal64:
 			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), result, length, selectList,
-				func(v types.Decimal64) string { return v.Format(fromType.Scale) })
+				func(v types.Decimal64) string { return v.Round(fromType.Scale, 0, true).Format(0) })
 		case types.T_decimal128:
 			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), result, length, selectList,
-				func(v types.Decimal128) string { return v.Format(fromType.Scale) })
+				func(v types.Decimal128) string { return v.Round(fromType.Scale, 0, true).Format(0) })
 		case types.T_decimal256:
 			return decimalToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), result, length, selectList,
-				func(v types.Decimal256) string { return v.Format(fromType.Scale) })
+				func(v types.Decimal256) string { return v.Round(fromType.Scale, 0, true).Format(0) })
 		}
 	}
 	strictStringWidth := mode.strictStringWidth()
