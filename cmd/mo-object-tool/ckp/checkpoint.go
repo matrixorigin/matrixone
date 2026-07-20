@@ -1487,8 +1487,18 @@ func isCreateViewSQL(ddl string) bool {
 }
 
 func isLocalInfileExternalTableDDL(ddl string) bool {
-	upper := strings.ToUpper(ddl)
-	return strings.Contains(upper, "CREATE EXTERNAL TABLE") && strings.Contains(upper, "INFILE")
+	if !hasSQLKeywordSequence(ddl, "CREATE", "EXTERNAL", "TABLE") {
+		return false
+	}
+	for _, keyword := range sqlKeywordsOutsideStrings(ddl) {
+		switch keyword {
+		case "INFILE":
+			return true
+		case "URL":
+			return false
+		}
+	}
+	return false
 }
 
 func packageExternalTableSource(
@@ -1622,6 +1632,83 @@ func readSQLStringOrBareValue(sql string, start int) (string, int, bool) {
 	}
 	value := strings.TrimSpace(sql[start:end])
 	return value, end, value != ""
+}
+
+func hasSQLKeywordSequence(sql string, sequence ...string) bool {
+	if len(sequence) == 0 {
+		return true
+	}
+	matched := 0
+	for _, keyword := range sqlKeywordsOutsideStrings(sql) {
+		if keyword == sequence[matched] {
+			matched++
+			if matched == len(sequence) {
+				return true
+			}
+			continue
+		}
+		if keyword == sequence[0] {
+			matched = 1
+		} else {
+			matched = 0
+		}
+	}
+	return false
+}
+
+func sqlKeywordsOutsideStrings(sql string) []string {
+	keywords := make([]string, 0, 16)
+	depth := 0
+	for i := 0; i < len(sql); {
+		ch := sql[i]
+		if ch == '\'' || ch == '"' || ch == '`' {
+			i = skipSQLQuoted(sql, i)
+			continue
+		}
+		switch ch {
+		case '(':
+			depth++
+			i++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			i++
+			continue
+		}
+		if isSQLIdentByte(ch) {
+			start := i
+			for i < len(sql) && isSQLIdentByte(sql[i]) {
+				i++
+			}
+			if depth == 0 {
+				keywords = append(keywords, strings.ToUpper(sql[start:i]))
+			}
+			continue
+		}
+		i++
+	}
+	return keywords
+}
+
+func skipSQLQuoted(sql string, start int) int {
+	quote := sql[start]
+	for i := start + 1; i < len(sql); i++ {
+		ch := sql[i]
+		if ch == '\\' && i+1 < len(sql) && quote != '`' {
+			i++
+			continue
+		}
+		if ch == quote {
+			if i+1 < len(sql) && sql[i+1] == quote {
+				i++
+				continue
+			}
+			return i + 1
+		}
+	}
+	return len(sql)
 }
 
 func summarizeSQLForError(sql string) string {

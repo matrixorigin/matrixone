@@ -29,6 +29,9 @@ const smallObjectThreshold = 64 * (1 << 20)
 const (
 	// defaultParallelMultipartPartSize defines the default per-part size for parallel multipart uploads.
 	defaultParallelMultipartPartSize = 64 * (1 << 20)
+	// parallelUploadBufferTokenSize is the accounting granularity for the shared
+	// multipart read-buffer budget.
+	parallelUploadBufferTokenSize = 1 << 20
 	// minMultipartPartSize is the minimum allowed part size for S3-compatible multipart uploads.
 	minMultipartPartSize = 5 * (1 << 20)
 	// maxMultipartPartSize is the maximum allowed part size for S3-compatible multipart uploads.
@@ -43,6 +46,9 @@ var (
 
 	parallelUploadSemaphoreOnce sync.Once
 	parallelUploadSemaphore     chan struct{}
+
+	parallelUploadBufferBudgetOnce sync.Once
+	parallelUploadBufferBudget     chan struct{}
 )
 
 func getParallelUploadPool() *ants.Pool {
@@ -61,6 +67,49 @@ func getParallelUploadSemaphore() chan struct{} {
 		parallelUploadSemaphore = make(chan struct{}, runtime.NumCPU())
 	})
 	return parallelUploadSemaphore
+}
+
+func getParallelUploadBufferBudget() chan struct{} {
+	parallelUploadBufferBudgetOnce.Do(func() {
+		tokens := runtime.NumCPU() * (defaultParallelMultipartPartSize / parallelUploadBufferTokenSize)
+		if tokens < 1 {
+			tokens = 1
+		}
+		parallelUploadBufferBudget = make(chan struct{}, tokens)
+	})
+	return parallelUploadBufferBudget
+}
+
+func acquireParallelUploadBufferBudget(ctx context.Context, bytes int64) (int, error) {
+	budget := getParallelUploadBufferBudget()
+	tokens := int((bytes + parallelUploadBufferTokenSize - 1) / parallelUploadBufferTokenSize)
+	if tokens < 1 {
+		tokens = 1
+	}
+	if tokens > cap(budget) {
+		tokens = cap(budget)
+	}
+	acquired := 0
+	for acquired < tokens {
+		select {
+		case budget <- struct{}{}:
+			acquired++
+		case <-ctx.Done():
+			releaseParallelUploadBufferBudget(acquired)
+			return 0, ctx.Err()
+		}
+	}
+	return acquired, nil
+}
+
+func releaseParallelUploadBufferBudget(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	budget := getParallelUploadBufferBudget()
+	for i := 0; i < tokens; i++ {
+		<-budget
+	}
 }
 
 func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOption {

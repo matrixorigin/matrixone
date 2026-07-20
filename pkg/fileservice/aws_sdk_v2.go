@@ -495,44 +495,52 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	bufPool := sync.Pool{
-		New: func() any {
-			buf := make([]byte, options.PartSize)
-			return &buf
-		},
+	type partBuffer struct {
+		buf    []byte
+		n      int
+		tokens int
 	}
 
-	readChunk := func() (bufPtr *[]byte, buf []byte, n int, err error) {
-		bufPtr = bufPool.Get().(*[]byte)
-		raw := *bufPtr
-		n, err = io.ReadFull(r, raw)
+	releasePartBuffer := func(part *partBuffer) {
+		if part == nil {
+			return
+		}
+		releaseParallelUploadBufferBudget(part.tokens)
+	}
+
+	readChunk := func() (*partBuffer, error) {
+		tokens, err := acquireParallelUploadBufferBudget(ctx, int64(options.PartSize))
+		if err != nil {
+			return nil, err
+		}
+		raw := make([]byte, options.PartSize)
+		n, err := io.ReadFull(r, raw)
 		switch {
 		case errors.Is(err, io.EOF):
-			bufPool.Put(bufPtr)
-			return nil, nil, 0, io.EOF
+			releaseParallelUploadBufferBudget(tokens)
+			return nil, io.EOF
 		case errors.Is(err, io.ErrUnexpectedEOF):
-			err = io.EOF
-			return bufPtr, raw, n, err
+			return &partBuffer{buf: raw, n: n, tokens: tokens}, io.EOF
 		case err != nil:
-			bufPool.Put(bufPtr)
-			return nil, nil, 0, err
+			releaseParallelUploadBufferBudget(tokens)
+			return nil, err
 		default:
-			return bufPtr, raw, n, nil
+			return &partBuffer{buf: raw, n: n, tokens: tokens}, nil
 		}
 	}
 
-	firstBufPtr, firstBuf, firstN, err := readChunk()
+	firstPart, err := readChunk()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	if firstN == 0 && errors.Is(err, io.EOF) {
+	if firstPart == nil && errors.Is(err, io.EOF) {
 		return nil
 	}
-	if errors.Is(err, io.EOF) && int64(firstN) < minMultipartPartSize {
-		data := make([]byte, firstN)
-		copy(data, firstBuf[:firstN])
-		bufPool.Put(firstBufPtr)
-		size := int64(firstN)
+	if errors.Is(err, io.EOF) && int64(firstPart.n) < minMultipartPartSize {
+		data := make([]byte, firstPart.n)
+		copy(data, firstPart.buf[:firstPart.n])
+		size := int64(firstPart.n)
+		releasePartBuffer(firstPart)
 		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
 	}
 
@@ -544,7 +552,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		})
 	}, maxRetryAttemps, IsRetryableError)
 	if createErr != nil {
-		bufPool.Put(firstBufPtr)
+		releasePartBuffer(firstPart)
 		return createErr
 	}
 
@@ -560,10 +568,8 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	}()
 
 	type partJob struct {
-		num    int32
-		buf    []byte
-		bufPtr *[]byte
-		n      int
+		num  int32
+		part *partBuffer
 	}
 
 	var (
@@ -590,9 +596,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		select {
 		case uploadSlots <- struct{}{}:
 		case <-ctx.Done():
-			if job.bufPtr != nil {
-				bufPool.Put(job.bufPtr)
-			}
+			releasePartBuffer(job.part)
 			setErr(ctx.Err())
 			return false
 		}
@@ -600,9 +604,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		case getParallelUploadSemaphore() <- struct{}{}:
 		case <-ctx.Done():
 			<-uploadSlots
-			if job.bufPtr != nil {
-				bufPool.Put(job.bufPtr)
-			}
+			releasePartBuffer(job.part)
 			setErr(ctx.Err())
 			return false
 		}
@@ -614,9 +616,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 				<-uploadSlots
 			}()
 			if ctx.Err() != nil {
-				if job.bufPtr != nil {
-					bufPool.Put(job.bufPtr)
-				}
+				releasePartBuffer(job.part)
 				return
 			}
 			uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
@@ -625,19 +625,15 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 					Key:        ptrTo(key),
 					PartNumber: &job.num,
 					UploadId:   output.UploadId,
-					Body:       bytes.NewReader(job.buf[:job.n]),
+					Body:       bytes.NewReader(job.part.buf[:job.part.n]),
 				})
 			}, maxRetryAttemps, IsRetryableError)
 			if uploadErr != nil {
 				setErr(uploadErr)
-				if job.bufPtr != nil {
-					bufPool.Put(job.bufPtr)
-				}
+				releasePartBuffer(job.part)
 				return
 			}
-			if job.bufPtr != nil {
-				bufPool.Put(job.bufPtr)
-			}
+			releasePartBuffer(job.part)
 			partsLock.Lock()
 			parts = append(parts, types.CompletedPart{
 				ETag:       uploadOutput.ETag,
@@ -648,97 +644,42 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		return true
 	}
 
-	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
+	sendJob := func(part *partBuffer) bool {
 		partNum++
 		if partNum > maxMultipartParts {
 			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
+			releasePartBuffer(part)
 			return false
 		}
 		job := partJob{
-			num:    partNum,
-			buf:    buf,
-			bufPtr: bufPtr,
-			n:      n,
+			num:  partNum,
+			part: part,
 		}
 		return startPartUpload(job)
 	}
 
-	pendingBufPtr := firstBufPtr
-	pendingBuf := firstBuf
-	pendingN := firstN
-
-	for {
-		nextBufPtr, nextBuf, nextN, readErr := readChunk()
-		if errors.Is(readErr, io.EOF) && nextN == 0 {
-			break
-		}
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			setErr(readErr)
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+	if sendJob(firstPart) {
+		for {
+			part, readErr := readChunk()
+			if errors.Is(readErr, io.EOF) && part == nil {
+				break
 			}
-			break
-		}
-		if nextN == 0 {
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				setErr(readErr)
+				releasePartBuffer(part)
+				break
 			}
-			break
-		}
-		if readErr != nil && errors.Is(readErr, io.EOF) {
-			if int64(pendingN)+int64(nextN) <= maxMultipartPartSize {
-				merged := make([]byte, pendingN+nextN)
-				copy(merged, pendingBuf[:pendingN])
-				copy(merged[pendingN:], nextBuf[:nextN])
-				bufPool.Put(pendingBufPtr)
-				bufPool.Put(nextBufPtr)
-				if !sendJob(nil, merged, len(merged)) {
-					pendingBufPtr = nil
-					pendingBuf = nil
-					pendingN = 0
-					break
-				}
-			} else {
-				if !sendJob(pendingBufPtr, pendingBuf, pendingN) {
-					if nextBufPtr != nil {
-						bufPool.Put(nextBufPtr)
-					}
-					pendingBufPtr = nil
-					pendingBuf = nil
-					pendingN = 0
-					break
-				}
-				pendingBufPtr = nil
-				pendingBuf = nil
-				pendingN = 0
-				if !sendJob(nextBufPtr, nextBuf, nextN) {
-					break
-				}
+			if part == nil || part.n == 0 {
+				releasePartBuffer(part)
+				break
 			}
-			pendingBufPtr = nil
-			pendingBuf = nil
-			pendingN = 0
-			break
-		}
-		if !sendJob(pendingBufPtr, pendingBuf, pendingN) {
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+			if !sendJob(part) {
+				break
 			}
-			pendingBufPtr = nil
-			pendingBuf = nil
-			pendingN = 0
-			break
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
 		}
-		pendingBufPtr = nextBufPtr
-		pendingBuf = nextBuf
-		pendingN = nextN
-	}
-
-	if pendingN > 0 {
-		_ = sendJob(pendingBufPtr, pendingBuf, pendingN)
 	}
 
 	wg.Wait()

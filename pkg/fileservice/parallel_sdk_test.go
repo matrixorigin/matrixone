@@ -107,6 +107,12 @@ func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServe
 		case r.Method == http.MethodPut && strings.Contains(r.URL.RawQuery, "partNumber"):
 			partStr := r.URL.Query().Get("partNumber")
 			pn, _ := strconv.Atoi(partStr)
+			if state.blockUploadPart != nil {
+				if state.uploadPartStarted != nil {
+					state.uploadPartStartOnce.Do(func() { close(state.uploadPartStarted) })
+				}
+				<-state.blockUploadPart
+			}
 			body, _ := io.ReadAll(r.Body)
 			if state.failPart > 0 && int32(pn) == state.failPart {
 				if state.failPartSeen != nil {
@@ -171,6 +177,9 @@ type awsServerState struct {
 	failPart                 int32
 	failPartSeen             chan struct{}
 	failPartOnce             sync.Once
+	blockUploadPart          chan struct{}
+	uploadPartStarted        chan struct{}
+	uploadPartStartOnce      sync.Once
 	failComplete             bool
 	failCreate               bool
 	uploadID                 string
@@ -234,11 +243,11 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write failed: %v, parts=%d, complete=%s", err, len(state.parts), string(state.completeBody))
 	}
-	if len(state.parts) != 1 {
-		t.Fatalf("expected merged final part, got %d parts", len(state.parts))
+	if len(state.parts) != 2 {
+		t.Fatalf("expected 2 multipart parts, got %d", len(state.parts))
 	}
-	if len(state.parts[1]) != len(data) {
-		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
+	if len(state.parts[1])+len(state.parts[2]) != len(data) {
+		t.Fatalf("expected total part size %d, got %d", len(data), len(state.parts[1])+len(state.parts[2]))
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
@@ -377,11 +386,11 @@ func TestAwsParallelMultipartUnknownSize(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if len(state.parts) != 1 {
-		t.Fatalf("expected multipart upload with merged final part, got %d parts", len(state.parts))
+	if len(state.parts) != 2 {
+		t.Fatalf("expected 2 multipart parts, got %d parts", len(state.parts))
 	}
-	if len(state.parts[1]) != len(data) {
-		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
+	if len(state.parts[1])+len(state.parts[2]) != len(data) {
+		t.Fatalf("expected total part size %d, got %d", len(data), len(state.parts[1])+len(state.parts[2]))
 	}
 }
 
@@ -439,11 +448,11 @@ func TestAwsWriteLargeNonSeekableFallsBackToMultipart(t *testing.T) {
 	if state.putCount != 0 {
 		t.Fatalf("expected multipart fallback instead of raw put, got %d put requests", state.putCount)
 	}
-	if len(state.parts) != 1 {
-		t.Fatalf("expected merged multipart part, got %d", len(state.parts))
+	if len(state.parts) != 2 {
+		t.Fatalf("expected multipart fallback to write 2 parts, got %d", len(state.parts))
 	}
-	if len(state.parts[1]) != len(data) {
-		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
+	if len(state.parts[1])+len(state.parts[2]) != len(data) {
+		t.Fatalf("expected total part size %d, got %d", len(data), len(state.parts[1])+len(state.parts[2]))
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("expected multipart complete request")
@@ -495,6 +504,77 @@ func TestAwsParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("expected multipart complete request")
+	}
+}
+
+func TestAwsParallelMultipartBufferBudgetBlocksBeforeRead(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "uid-buffer-budget"
+	state.blockUploadPart = make(chan struct{})
+	state.uploadPartStarted = make(chan struct{})
+
+	tokensPerPart := int(minMultipartPartSize / parallelUploadBufferTokenSize)
+	if tokensPerPart < 1 {
+		tokensPerPart = 1
+	}
+	oldBudgetOnce := parallelUploadBufferBudgetOnce
+	oldBudget := parallelUploadBufferBudget
+	parallelUploadBufferBudgetOnce = sync.Once{}
+	parallelUploadBufferBudget = make(chan struct{}, tokensPerPart*2)
+	parallelUploadBufferBudgetOnce.Do(func() {})
+	defer func() {
+		parallelUploadBufferBudgetOnce = oldBudgetOnce
+		parallelUploadBufferBudget = oldBudget
+	}()
+
+	sdk := newTestAWSClient(t, server)
+	data := bytes.Repeat([]byte("b"), int(minMultipartPartSize*3))
+	size := int64(len(data))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	firstErr := make(chan error, 1)
+	go func() {
+		var bytesRead atomic.Int64
+		firstErr <- sdk.WriteMultipartParallel(ctx, "first", &countingReader{
+			R: bytes.NewReader(data),
+			C: &bytesRead,
+		}, &size, &ParallelMultipartOption{
+			PartSize:    minMultipartPartSize,
+			Concurrency: 2,
+		})
+	}()
+
+	select {
+	case <-state.uploadPartStarted:
+	case <-ctx.Done():
+		t.Fatalf("first multipart upload did not start: %v", ctx.Err())
+	}
+
+	var secondBytesRead atomic.Int64
+	secondErr := make(chan error, 1)
+	go func() {
+		secondErr <- sdk.WriteMultipartParallel(ctx, "second", &countingReader{
+			R: bytes.NewReader(data),
+			C: &secondBytesRead,
+		}, &size, &ParallelMultipartOption{
+			PartSize:    minMultipartPartSize,
+			Concurrency: 2,
+		})
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	if got := secondBytesRead.Load(); got != 0 {
+		t.Fatalf("second upload read %d bytes before shared buffer budget was released", got)
+	}
+
+	close(state.blockUploadPart)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first write failed: %v", err)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatalf("second write failed: %v", err)
 	}
 }
 
@@ -684,11 +764,11 @@ func TestCOSParallelMultipartSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write failed: %v, parts=%d, complete=%s", err, len(state.parts), string(state.completeBody))
 	}
-	if len(state.parts) != 1 {
-		t.Fatalf("expected merged final part, got %d parts", len(state.parts))
+	if len(state.parts) != 2 {
+		t.Fatalf("expected 2 multipart parts, got %d parts", len(state.parts))
 	}
-	if len(state.parts[1]) != len(data) {
-		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
+	if len(state.parts[1])+len(state.parts[2]) != len(data) {
+		t.Fatalf("expected total part size %d, got %d", len(data), len(state.parts[1])+len(state.parts[2]))
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
@@ -886,11 +966,11 @@ func TestCOSParallelMultipartUnknownSize(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if len(state.parts) != 1 {
-		t.Fatalf("expected multipart upload with merged final part, got %d parts", len(state.parts))
+	if len(state.parts) != 2 {
+		t.Fatalf("expected 2 multipart parts, got %d parts", len(state.parts))
 	}
-	if len(state.parts[1]) != len(data) {
-		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
+	if len(state.parts[1])+len(state.parts[2]) != len(data) {
+		t.Fatalf("expected total part size %d, got %d", len(data), len(state.parts[1])+len(state.parts[2]))
 	}
 }
 
@@ -927,14 +1007,17 @@ func TestCOSParallelMultipartPipeSmallTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write failed: %v, parts=%d, complete=%s", err, len(state.parts), string(state.completeBody))
 	}
-	if len(state.parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(state.parts))
+	if len(state.parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(state.parts))
 	}
 	if len(state.parts[1]) != int(minMultipartPartSize) {
 		t.Fatalf("expected first part size %d, got %d", minMultipartPartSize, len(state.parts[1]))
 	}
-	if len(state.parts[2]) != int(minMultipartPartSize)+len("tail") {
-		t.Fatalf("expected merged final part size %d, got %d", int(minMultipartPartSize)+len("tail"), len(state.parts[2]))
+	if len(state.parts[2]) != int(minMultipartPartSize) {
+		t.Fatalf("expected second part size %d, got %d", minMultipartPartSize, len(state.parts[2]))
+	}
+	if len(state.parts[3]) != len("tail") {
+		t.Fatalf("expected final tail part size %d, got %d", len("tail"), len(state.parts[3]))
 	}
 }
 

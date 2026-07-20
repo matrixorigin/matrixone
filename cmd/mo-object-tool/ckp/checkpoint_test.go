@@ -771,10 +771,10 @@ func TestWriteRestoreScriptForS3ExternalTableKeepsURLSource(t *testing.T) {
 		ExParamConst: tree.ExParamConst{
 			ScanType: tree.S3,
 			Option: []string{
-				"endpoint", "https://s3.example",
+				"endpoint", "https://infile.s3.example",
 				"region", "us-west-2",
-				"bucket", "bucket-a",
-				"filepath", "objects/ext.csv",
+				"bucket", "infile-bucket",
+				"filepath", "objects/infile-ext.csv",
 				"format", "csv",
 			},
 		},
@@ -825,7 +825,9 @@ func TestWriteRestoreScriptForS3ExternalTableKeepsURLSource(t *testing.T) {
 	got := string(script)
 	require.Contains(t, got, "CREATE EXTERNAL TABLE `db`.`ext_s3`")
 	require.Contains(t, got, "URL s3option")
-	require.Contains(t, got, "'filepath'='objects/ext.csv'")
+	require.Contains(t, got, "'endpoint'='https://infile.s3.example'")
+	require.Contains(t, got, "'bucket'='infile-bucket'")
+	require.Contains(t, got, "'filepath'='objects/infile-ext.csv'")
 	require.NotContains(t, got, "external_sources")
 	require.NotContains(t, got, "LOAD DATA")
 }
@@ -1162,6 +1164,11 @@ func TestExternalTableFilepathValueRange(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "/tmp/a.csv", value)
 	assert.Equal(t, "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/new.csv'}", ddl[:start]+quoteSQLString("/new.csv")+ddl[end:])
+
+	assert.True(t, isLocalInfileExternalTableDDL(ddl))
+	assert.True(t, isLocalInfileExternalTableDDL("CREATE EXTERNAL TABLE t (url TEXT, id INT) INFILE {'filepath'='/tmp/a.csv'}"))
+	assert.False(t, isLocalInfileExternalTableDDL("CREATE EXTERNAL TABLE t (id INT) URL s3option {'endpoint'='https://infile.example', 'bucket'='infile-bucket', 'filepath'='object/infile.csv'}"))
+	assert.False(t, isLocalInfileExternalTableDDL("CREATE TABLE t (id INT) INFILE {'filepath'='/tmp/a.csv'}"))
 }
 
 func ckpMoTablesRow(t *testing.T, relID, relName, dbName, dbID, relKind, accountID string) []string {
