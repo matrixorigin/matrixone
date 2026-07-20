@@ -106,6 +106,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	c.setAffectedRows(0)
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -303,7 +304,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	return err
+	c.setAffectedRows(uint64(len(deleteTables)))
+	return nil
 }
 
 func logAndSkipMissingRelationByNameForDropDatabase(c *Compile, dbName, rel, msg string, err error) bool {

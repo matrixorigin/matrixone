@@ -428,6 +428,7 @@ message HashBuild {
   bool dedup_build_keep_last = 16;
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
+  bool track_null_keys = 19;
 }
 
 message Indexbuild {
@@ -561,6 +562,7 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
+  int64 affected_rows = 10;
 }
 
 message SessionInfo {

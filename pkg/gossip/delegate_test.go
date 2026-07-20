@@ -17,6 +17,7 @@ package gossip
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -54,6 +55,7 @@ func TestDelegate_DataCache_GetBroadcastsAndNotify(t *testing.T) {
 
 	data = d.GetBroadcasts(4, 32*1024)
 	assert.NotNil(t, data)
+	assert.Len(t, data, 10)
 
 	t.Run("self", func(t *testing.T) {
 		for _, single := range data {
@@ -113,6 +115,7 @@ func TestDelegate_StatsInfo_GetBroadcastsAndNotify(t *testing.T) {
 
 	data = d.GetBroadcasts(4, 32*1024)
 	assert.NotNil(t, data)
+	assert.Len(t, data, 10)
 
 	t.Run("self", func(t *testing.T) {
 		for _, single := range data {
@@ -148,6 +151,30 @@ func TestDelegate_StatsInfo_GetBroadcastsAndNotify(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestDelegateStatsInfoStateDoesNotUseDataCacheMutex(t *testing.T) {
+	d := newDelegate(&zap.Logger{}, "127.0.0.1:8889")
+	d.dataCacheKey.mu.Lock()
+	d.statsInfoKey.mu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.statsInfoState()
+	}()
+
+	d.statsInfoKey.mu.Unlock()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		d.dataCacheKey.mu.Unlock()
+	case <-timer.C:
+		d.dataCacheKey.mu.Unlock()
+		<-done
+		t.Fatal("statsInfoState blocked on dataCacheKey")
+	}
 }
 
 func TestDelegate_DataCache_LocalStateAndMergeRemoteState(t *testing.T) {

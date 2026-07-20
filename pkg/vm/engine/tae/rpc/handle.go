@@ -76,8 +76,7 @@ type Handle struct {
 
 	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
 
-	client           client.QueryClient
-	closeQueryClient bool
+	client client.QueryClient
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -109,8 +108,12 @@ func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *
 	return
 }
 
-func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) *Handle {
-	h, err := newTAEHandle(ctx, path, client, opt, true)
+func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) (*Handle, error) {
+	return newTAEHandle(ctx, path, client, opt)
+}
+
+func MustNewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) *Handle {
+	h, err := NewTAEHandle(ctx, path, client, opt)
 	if err != nil {
 		panic(err)
 	}
@@ -126,7 +129,7 @@ func NewTAEHandleWithError(
 	client client.QueryClient,
 	opt *options.Options,
 ) (*Handle, error) {
-	return newTAEHandle(ctx, path, client, opt, false)
+	return NewTAEHandle(ctx, path, client, opt)
 }
 
 func newTAEHandle(
@@ -134,7 +137,6 @@ func newTAEHandle(
 	path string,
 	client client.QueryClient,
 	opt *options.Options,
-	closeQueryClient bool,
 ) (*Handle, error) {
 	if path == "" {
 		path = "./store"
@@ -145,12 +147,9 @@ func newTAEHandle(
 	}
 
 	h := &Handle{
-		db:               tae,
-		client:           client,
-		closeQueryClient: closeQueryClient,
+		db:     tae,
+		client: client,
 	}
-
-	RegisterManifestHTTP(tae)
 
 	return h, nil
 }
@@ -697,10 +696,7 @@ func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//if h.GCJob != nil {
 	//	h.GCJob.Stop()
 	//}
-	if h.closeQueryClient && h.client != nil {
-		err = h.client.Close()
-	}
-	return errors.Join(err, h.db.Close())
+	return h.db.Close()
 }
 
 func (h *Handle) HandleDestroy(ctx context.Context) (err error) {

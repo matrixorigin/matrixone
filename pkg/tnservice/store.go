@@ -242,23 +242,32 @@ func (s *store) Close() error {
 	s.moCluster.Close()
 
 	var err error
-	if s.cfg.ShardService.Enable {
-		err = s.shardServer.Close()
+	// Reject new replica calls and cancel active call contexts before waiting
+	// for the RPC server to drain. Storage remains open until the drain ends.
+	s.replicas.Range(func(_, value any) bool {
+		value.(*replica).cancelStart(false)
+		return true
+	})
+	if s.queryService != nil {
+		err = errors.Join(err, s.queryService.Close())
 	}
-	err = errors.Join(
-		s.hakeeperClient.Close(),
-		s.sender.Close(),
-		s.server.Close(),
-		s.lockTableAllocator.Close(),
-	)
+	if s.cfg.ShardService.Enable {
+		err = errors.Join(err, s.shardServer.Close())
+	}
+	err = errors.Join(err, s.server.Close())
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
-		r.cancelStart(false)
 		if e := r.close(false); e != nil {
-			err = errors.Join(e, err)
+			err = errors.Join(err, e)
 		}
 		return true
 	})
+	err = errors.Join(
+		err,
+		s.hakeeperClient.Close(),
+		s.sender.Close(),
+		s.lockTableAllocator.Close(),
+	)
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())
 	}
@@ -301,6 +310,9 @@ func (s *store) getTNShardInfo() []logservicepb.TNShardInfo {
 	var shards []logservicepb.TNShardInfo
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
+		if !r.started() {
+			return true
+		}
 		shards = append(shards, logservicepb.TNShardInfo{
 			ShardID:   r.shard.ShardID,
 			ReplicaID: r.shard.ReplicaID,
