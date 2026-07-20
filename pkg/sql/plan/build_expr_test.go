@@ -402,6 +402,46 @@ func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error)
 	return pl, nil
 }
 
+func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{name: "hex hour", sql: "select cast(maketime(X'0102', 0, 0) as varchar)", want: "258:00:00"},
+		{name: "hex hour uint64 overflow", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
+		{name: "hex hour wider than uint64", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
+		{name: "hex minute", sql: "select cast(maketime(12, X'01', 0) as varchar)", want: "12:01:00"},
+		{name: "hex second", sql: "select cast(maketime(12, 0, X'01') as varchar)", want: "12:00:01"},
+		{name: "bit second", sql: "select cast(maketime(12, 0, B'00000001') as varchar)", want: "12:00:01"},
+		{name: "binary string second", sql: "select cast(maketime(12, 0, cast('01' as binary(2))) as varchar)", want: "12:00:01"},
+		{name: "plain strings", sql: "select cast(maketime('12.7', '15.8', '30.9') as varchar)", want: "12:15:30.900000"},
+		{name: "decimal second", sql: "select cast(maketime(12, 34, cast('56.789012' as decimal(20, 6))) as varchar)", want: "12:34:56.789012"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			query := pl.GetQuery()
+			require.NotNil(t, query)
+			expr := query.Nodes[1].ProjectList[0]
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.False(t, result.GetNulls().Contains(0))
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+}
+
 func makeTimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseTime(s, 0)
 	return &plan.Expr{
