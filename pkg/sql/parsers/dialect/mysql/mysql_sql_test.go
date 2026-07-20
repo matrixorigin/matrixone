@@ -170,6 +170,72 @@ func TestSQLModeParserModes(t *testing.T) {
 	})
 }
 
+// A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.
+// Under NO_BACKSLASH_ESCAPES a backslash is a literal char, so the formatter must NOT
+// re-escape it (WithNoBackslashEscape), otherwise every parse->format cycle doubles the
+// backslashes and the search pattern drifts (#24823 follow-up). Verify the pattern is
+// preserved across a mode-aware round-trip and that a second format is byte-identical.
+func TestFullTextMatchPatternRoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	matchPattern := func(t *testing.T, stmt tree.Statement) string {
+		t.Helper()
+		sel, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.NotNil(t, clause.Where)
+		m, ok := clause.Where.Expr.(*tree.FullTextMatchExpr)
+		require.True(t, ok)
+		return m.Pattern
+	}
+
+	// sql is the source; want is the parsed pattern value under NO_BACKSLASH_ESCAPES.
+	cases := []struct{ name, sql, want string }{
+		{"backslash-n literal", `select * from t where match(body) against('a\nb' in boolean mode)`, `a\nb`},
+		{"ordinary backslashes", `select * from t where match(body) against('c\\d' in boolean mode)`, `c\\d`},
+		{"trailing backslash", `select * from t where match(body) against('back\' in boolean mode)`, `back\`},
+		{"backslash next to quote", `select * from t where match(body) against('x\''y' in boolean mode)`, `x\'y`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s1, err := ParseOneWithSQLMode(ctx, c.sql, 1, "NO_BACKSLASH_ESCAPES")
+			require.NoError(t, err)
+			defer s1.Free()
+			require.Equal(t, c.want, matchPattern(t, s1))
+
+			f1 := tree.StringWithOpts(s1, dialect.MYSQL, tree.WithNoBackslashEscape())
+			s2, err := ParseOneWithSQLMode(ctx, f1, 1, "NO_BACKSLASH_ESCAPES")
+			require.NoError(t, err)
+			defer s2.Free()
+
+			// pattern survives the deparse->reparse unchanged (no drift)
+			require.Equal(t, c.want, matchPattern(t, s2))
+			// and a second format is byte-identical (no per-cycle growth)
+			f2 := tree.StringWithOpts(s2, dialect.MYSQL, tree.WithNoBackslashEscape())
+			require.Equal(t, f1, f2)
+		})
+	}
+
+	// Default mode (backslash IS an escape): tree.String keeps re-escaping and must stay
+	// idempotent — the mode-aware branch must not regress the default path.
+	t.Run("default mode idempotent", func(t *testing.T) {
+		sql := `select * from t where match(body) against('a\nb' in boolean mode)`
+		s1, err := ParseOneWithSQLMode(ctx, sql, 1, "")
+		require.NoError(t, err)
+		defer s1.Free()
+		require.Equal(t, "a\nb", matchPattern(t, s1)) // \n parsed as a newline
+
+		f1 := tree.String(s1, dialect.MYSQL)
+		s2, err := ParseOneWithSQLMode(ctx, f1, 1, "")
+		require.NoError(t, err)
+		defer s2.Free()
+		require.Equal(t, "a\nb", matchPattern(t, s2))
+		require.Equal(t, f1, tree.String(s2, dialect.MYSQL))
+	})
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}

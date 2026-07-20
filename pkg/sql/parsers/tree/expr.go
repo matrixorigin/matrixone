@@ -1937,7 +1937,16 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	// pattern is never a number/null/bool (unlike the polymorphic NumVal) — bare output is
 	// never valid SQL for this node.
 	ctx.WriteString("'")
-	ctx.WriteString(strings.ReplaceAll(FormatString(node.Pattern), "'", "''"))
+	if ctx.NoBackslashEscape() {
+		// Under NO_BACKSLASH_ESCAPES a backslash is a literal char and only '' escapes a
+		// quote. node.Pattern is the already-unescaped value, so routing it through
+		// FormatString (which escapes '\' -> '\\') would double the backslashes on every
+		// parse->format cycle. Emit it verbatim, quote-doubled only, to keep the
+		// format->parse contract idempotent under that mode (#24823 follow-up).
+		ctx.WriteString(strings.ReplaceAll(node.Pattern, "'", "''"))
+	} else {
+		ctx.WriteString(strings.ReplaceAll(FormatString(node.Pattern), "'", "''"))
+	}
 	ctx.WriteString("'")
 
 	if node.Mode != FULLTEXT_DEFAULT {
