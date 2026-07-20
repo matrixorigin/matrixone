@@ -46,10 +46,20 @@ var fulltext2_runSql = sqlexec.RunSql
 // fulltext2CreateState builds a positional fulltext2 index from the source rows.
 // argVecs: [0]=cfg(JSON const), [1]=pk, [2..]=indexed text columns.
 type fulltext2CreateState struct {
-	inited  bool
-	tblcfg  fulltext2.TableConfig
-	builder *fulltext2.Builder
-	batch   *batch.Batch
+	inited bool
+	tblcfg fulltext2.TableConfig
+	// Streaming base build: only ONE open segment is held in memory. It is sealed +
+	// persisted (and its postings freed) the moment it reaches `capacity` docs, so
+	// peak build memory is one capacity-bounded segment rather than the whole corpus.
+	cur          *fulltext2.Builder // current open segment (nil after a seal, recreated on the next row)
+	capacity     int64              // docs per sealed segment (floored to DefaultBuildCapacity)
+	pkType       int32
+	bopts        []fulltext2.BuildOpt
+	uid          string // per-build-unique sub-index id prefix (IndexTable:ts)
+	ts           int64
+	segIdx       int  // next sub-index id == count of segments sealed so far
+	basesCleared bool // DeleteAllBases run once, before the first sealed segment
+	batch        *batch.Batch
 }
 
 func (u *fulltext2CreateState) reset(tf *TableFunction, proc *process.Process) {
@@ -98,11 +108,21 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 			return err
 		}
 		pkVec := tf.ctr.argVecs[1]
-		var bopts []fulltext2.BuildOpt
+		u.pkType = int32(pkVec.GetType().Oid)
 		if u.tblcfg.PositionFree {
-			bopts = append(bopts, fulltext2.WithPositionFree())
+			u.bopts = append(u.bopts, fulltext2.WithPositionFree())
 		}
-		u.builder = fulltext2.NewBuilder(u.tblcfg.IndexTable, int32(pkVec.GetType().Oid), bopts...)
+		// Floor capacity so a segment is sealed+spilled every ~capacity docs even when
+		// max_index_capacity is unset (Capacity==0), keeping build memory bounded.
+		u.capacity = u.tblcfg.Capacity
+		if u.capacity <= 0 {
+			u.capacity = fulltext2.DefaultBuildCapacity
+		}
+		// A per-build-unique id prefix (index table + build ts) keeps concurrent /
+		// repeated builds from colliding on sub-index ids (mirrors bm25 / HNSW).
+		u.ts = time.Now().UnixMicro()
+		u.uid = fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.ts)
+		u.cur = fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -124,9 +144,60 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 	// (positional phrase queries match by byte offset), mirroring the base build.
 	pk := vector.GetAny(pkVec, nthRow, false)
 	for _, w := range terms {
-		if aerr := u.builder.Add(w.Word, w.Pos, pk); aerr != nil {
+		if aerr := u.cur.Add(w.Word, w.Pos, pk); aerr != nil {
 			return aerr
 		}
+	}
+	// A document's tokens are fed contiguously, so once the open segment reaches
+	// capacity DISTINCT docs the current doc is complete: seal + persist it as a
+	// tag=0 base and start a fresh segment, freeing the sealed one's postings.
+	if int64(u.cur.NumDocs()) >= u.capacity {
+		if err := u.sealSegment(proc); err != nil {
+			return err
+		}
+		u.cur = fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
+	}
+	return nil
+}
+
+// sealSegment finalizes the open builder into one tag=0 base sub-index and persists
+// it, then drops it so its postings are freed. Prior bases are cleared once, before
+// the first sealed segment, so a REBUILD reusing this TVF stays idempotent (the tag=1
+// tail is untouched). A no-op when the open segment holds no docs.
+func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
+	if u.cur == nil || u.cur.NumDocs() == 0 {
+		u.cur = nil
+		return nil
+	}
+	seg, err := u.cur.Finish()
+	u.cur = nil
+	if err != nil {
+		return err
+	}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	if !u.basesCleared {
+		for _, s := range fulltext2.DeleteAllBasesSqls(u.tblcfg) {
+			res, e := fulltext2_runSql(sqlproc, s)
+			if e != nil {
+				return e
+			}
+			res.Close()
+		}
+		u.basesCleared = true
+	}
+	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
+	u.segIdx++
+	sqls, cleanup, err := seg.ToInsertSqls(u.tblcfg, u.ts, 0 /* tag=0 base */)
+	if err != nil {
+		return err
+	}
+	defer cleanup() // remove the spill file once its INSERTs have run — bounds temp disk too
+	for _, s := range sqls {
+		res, e := fulltext2_runSql(sqlproc, s)
+		if e != nil {
+			return e
+		}
+		res.Close()
 	}
 	return nil
 }
@@ -225,58 +296,20 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 	return terms, nil
 }
 
-// end splits the accumulated corpus into capacity-bounded tag=0 base segments and
-// persists them (idempotent: existing tag=0 bases are cleared first).
+// end seals the final open segment (the trailing docs below capacity). Base
+// clearing and per-segment persistence already happened incrementally as segments
+// filled during the feed, so peak memory never exceeded one open segment.
 func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) error {
-	if !u.inited || u.builder == nil || u.builder.NumDocs() == 0 {
+	if !u.inited {
 		return nil
 	}
-	sqlproc := sqlexec.NewSqlProcess(proc)
-
-	// A per-build-unique id prefix (index table + build ts) keeps concurrent /
-	// repeated builds from colliding on sub-index ids (mirrors bm25 / HNSW).
-	segs, err := u.builder.FinishSegments(u.tblcfg.Capacity)
-	if err != nil {
+	if err := u.sealSegment(proc); err != nil {
 		return err
 	}
-	if len(segs) == 0 {
+	// Nothing was persisted (empty corpus): leave existing tag=0 bases untouched,
+	// mirroring the prior zero-doc no-op.
+	if u.segIdx == 0 {
 		return nil
-	}
-
-	// Clear any previous tag=0 bases so the build is idempotent (the tag=1 tail is
-	// untouched — CREATE has no tail yet).
-	for _, s := range fulltext2.DeleteAllBasesSqls(u.tblcfg) {
-		res, err := fulltext2_runSql(sqlproc, s)
-		if err != nil {
-			return err
-		}
-		res.Close()
-	}
-
-	// A per-build-unique id prefix (index table + build ts) keeps concurrent /
-	// repeated builds from colliding on sub-index ids (mirrors bm25_create / HNSW).
-	ts := time.Now().UnixMicro()
-	uid := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, ts)
-	cleanups := make([]func(), 0, len(segs))
-	defer func() {
-		for _, c := range cleanups {
-			c()
-		}
-	}()
-	for i, seg := range segs {
-		seg.Id = fulltext2.SubIndexId(uid, i)
-		sqls, cleanup, err := seg.ToInsertSqls(u.tblcfg, ts, 0 /* tag=0 base */)
-		if err != nil {
-			return err
-		}
-		cleanups = append(cleanups, cleanup)
-		for _, s := range sqls {
-			res, err := fulltext2_runSql(sqlproc, s)
-			if err != nil {
-				return err
-			}
-			res.Close()
-		}
 	}
 	// A fresh tag=0 was written (CREATE build, or a REBUILD reusing this TVF) — evict
 	// any cached search index so the next query reloads the new base(s) instead of the

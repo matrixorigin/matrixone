@@ -22,7 +22,7 @@ import (
 
 // defaultTailCapacity floors the streaming segment cap when a non-positive
 // capacity is passed (the sinker sources it from max_index_capacity, default 1M).
-const defaultTailCapacity int64 = 1000000
+const defaultTailCapacity int64 = DefaultBuildCapacity
 
 // TailSegment is one sealed CDC segment spilled to a temp file: the path to its
 // framed bytes (FrameSegment output) and the frame length (so persist can advance

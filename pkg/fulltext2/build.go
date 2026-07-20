@@ -194,6 +194,13 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc, opt
 	return s, nil
 }
 
+// DefaultBuildCapacity floors a non-positive segment capacity for the streaming
+// build paths (base CREATE build and the CDC tail), so a segment is sealed and
+// spilled every ~1M docs and peak build memory stays bounded to one segment even
+// when max_index_capacity is unset. Splitting a logically "unbounded" base into
+// 1M-doc sub-indexes is transparent to queries (the Index already spans segments).
+const DefaultBuildCapacity int64 = 1000000
+
 // Builder accumulates a token stream fed in (word, pk) order — the positional
 // analogue of bm25's wand.Builder, with the SAME API (NewBuilder / Add / Finish /
 // FinishSegments) so the two can share a core later. Each Add appends one token
