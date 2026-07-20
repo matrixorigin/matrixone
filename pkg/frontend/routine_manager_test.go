@@ -28,10 +28,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func Test_Closed(t *testing.T) {
@@ -467,6 +471,21 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.GetSessionInfo().Account = "acc"
 	proc.GetSessionInfo().ConnectionID = 1009
+	lockService := &userLockCloseTestLockService{}
+	proc.Base.LockService = lockService
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "disconnect_cleanup", Count: 1},
+	})
+
+	// Reproduce the next-statement SessionInfo refresh after the protocol's
+	// connection ID changed. The user-lock identity lives on BaseProcess and
+	// must survive this replacement until Session.Close releases the lock.
+	sessionID := proc.GetSessionInfo().SessionId
+	proc.Base.SessionInfo = process.SessionInfo{
+		Account:      "acc",
+		ConnectionID: 1010,
+		SessionId:    sessionID,
+	}
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
@@ -476,6 +495,29 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	}
 	ses.Close()
 	require.Empty(t, function.UserLevelLocksForMigration(proc))
+	require.Len(t, lockService.unlockedTxnIDs, 2)
+	for _, txnID := range lockService.unlockedTxnIDs {
+		require.Contains(t, string(txnID), "1009")
+		require.NotContains(t, string(txnID), "1010")
+	}
+	owner, connID := proc.GetUserLevelLockIdentity()
+	require.NotEmpty(t, owner)
+	require.Equal(t, uint64(1009), connID)
+}
+
+type userLockCloseTestLockService struct {
+	lockservice.LockService
+	unlockedTxnIDs [][]byte
+}
+
+func (s *userLockCloseTestLockService) Unlock(
+	_ context.Context,
+	txnID []byte,
+	_ timestamp.Timestamp,
+	_ ...lockpb.ExtraMutation,
+) error {
+	s.unlockedTxnIDs = append(s.unlockedTxnIDs, append([]byte(nil), txnID...))
+	return nil
 }
 
 func TestRoutineManagerContextAndConnectionInfoHelpers(t *testing.T) {

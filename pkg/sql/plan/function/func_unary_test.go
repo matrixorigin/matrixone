@@ -7645,24 +7645,34 @@ func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 	})
 }
 
-func TestUserLevelLockConnectionIDMutationKeepsPinnedOwnerForRelease(t *testing.T) {
+func TestUserLevelLockMultiCNExplicitReleaseSurvivesSessionInfoRefresh(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
 		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
 		proc1.GetSessionInfo().ConnectionID = 1001
 		proc2.GetSessionInfo().ConnectionID = 2002
+		executionProc := proc1.NewContextChildProc(0)
 
-		v, err := getUserLevelLock("conn_id_mutation_release", 0, proc1)
+		v, err := getUserLevelLock("conn_id_mutation_release", 0, executionProc)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		proc1.GetSessionInfo().ConnectionID = 3003
+		// doComQuery rebuilds SessionInfo before every statement. Replacing the
+		// whole value reproduces the boundary that used to discard the pinned
+		// owner after SET CONNECTION ID changed the protocol connection ID.
+		sessionID := proc1.GetSessionInfo().SessionId
+		proc1.Base.SessionInfo = process.SessionInfo{
+			Account:      "acc",
+			ConnectionID: 3003,
+			SessionId:    sessionID,
+		}
 		v, isNull, err := releaseUserLevelLock("conn_id_mutation_release", proc1)
 		require.NoError(t, err)
 		require.False(t, isNull)
 		require.Equal(t, int64(1), v)
-		require.Empty(t, proc1.GetSessionInfo().UserLevelLockOwner)
-		require.Zero(t, proc1.GetSessionInfo().UserLevelLockConnID)
+		owner, connID := proc1.GetUserLevelLockIdentity()
+		require.NotEmpty(t, owner)
+		require.Equal(t, uint64(1001), connID)
 
 		v, err = getUserLevelLock("conn_id_mutation_release", 0, proc2)
 		require.NoError(t, err)
@@ -7670,21 +7680,29 @@ func TestUserLevelLockConnectionIDMutationKeepsPinnedOwnerForRelease(t *testing.
 	})
 }
 
-func TestUserLevelLockConnectionIDMutationKeepsPinnedOwnerForCloseCleanup(t *testing.T) {
+func TestUserLevelLockMultiCNDisconnectCleanupSurvivesSessionInfoRefresh(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
 		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
 		proc1.GetSessionInfo().ConnectionID = 1001
 		proc2.GetSessionInfo().ConnectionID = 2002
+		executionProc := proc1.NewContextChildProc(0)
 
-		v, err := getUserLevelLock("conn_id_mutation_close", 0, proc1)
+		v, err := getUserLevelLock("conn_id_mutation_close", 0, executionProc)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		proc1.GetSessionInfo().ConnectionID = 3003
+		sessionID := proc1.GetSessionInfo().SessionId
+		proc1.Base.SessionInfo = process.SessionInfo{
+			Account:      "acc",
+			ConnectionID: 3003,
+			SessionId:    sessionID,
+		}
+		// Session.Close invokes this cleanup hook on the top session process.
 		ReleaseUserLevelLocks(proc1)
-		require.Empty(t, proc1.GetSessionInfo().UserLevelLockOwner)
-		require.Zero(t, proc1.GetSessionInfo().UserLevelLockConnID)
+		owner, connID := proc1.GetUserLevelLockIdentity()
+		require.NotEmpty(t, owner)
+		require.Equal(t, uint64(1001), connID)
 
 		v, err = getUserLevelLock("conn_id_mutation_close", 0, proc2)
 		require.NoError(t, err)
@@ -7843,8 +7861,9 @@ func TestUserLevelLockConcurrentSameSessionIdentity(t *testing.T) {
 		for err := range errCh {
 			require.NoError(t, err)
 		}
-		require.Empty(t, proc.GetSessionInfo().UserLevelLockOwner)
-		require.Zero(t, proc.GetSessionInfo().UserLevelLockConnID)
+		owner, connID := proc.GetUserLevelLockIdentity()
+		require.NotEmpty(t, owner)
+		require.Equal(t, uint64(1001), connID)
 	})
 }
 
