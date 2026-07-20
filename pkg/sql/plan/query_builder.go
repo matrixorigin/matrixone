@@ -584,7 +584,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -594,14 +594,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTableDef.Cols = append(newTableDef.Cols, col)
 		}
 
 		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
 			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{tag, int32(carrier)})
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+				newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[carrier])
 			}
 		}
 
@@ -708,7 +708,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		colTag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{colTag, int32(i)}
@@ -717,7 +717,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			internalRemapping.addColRef(globalRef)
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTableDef.Cols = append(newTableDef.Cols, col)
 		}
 
 		if len(node.BindingTags) > 1 {
@@ -730,7 +730,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{colTag, int32(carrier)})
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+				newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[carrier])
 			}
 		}
 
@@ -2625,7 +2625,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		ReCalcNodeStats(rootID, builder, true, true, true)
+		reCalcNodeStatsAfterSwap(rootID, builder, true, true, true)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
@@ -2645,12 +2645,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-		ReCalcNodeStats(rootID, builder, true, false, false)
+		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
 
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		ReCalcNodeStats(rootID, builder, true, false, false)
+		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -6830,7 +6830,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	case "unnest":
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
 	case "generate_series":
-		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, children)
+		nodeId, err = builder.buildGenerateSeries(tbl, ctx, exprs, children)
 	case "generate_random_int64":
 		nodeId = builder.buildGenerateRandomInt64(tbl, ctx, exprs, children)
 	case "generate_random_float64":
