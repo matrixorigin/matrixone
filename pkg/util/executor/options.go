@@ -249,7 +249,7 @@ func (opts Options) ExtraTxnOptions() []client.TxnOption {
 // resolver without changing other sessions.
 func (opts Options) WithLockWaitTimeout(timeout time.Duration) Options {
 	opts.lockWaitTimeout = timeout
-	opts.hasLockWaitTimeout = timeout > 0
+	opts.lockWaitTimeoutSet = true
 	// Txn options are applied in append order. Always append, including for
 	// zero, so a later WithLockWaitTimeout(0) intentionally clears an earlier
 	// value instead of leaving the first option effective.
@@ -257,10 +257,11 @@ func (opts Options) WithLockWaitTimeout(timeout time.Duration) Options {
 	return opts
 }
 
-// HasLockWaitTimeout reports whether this execution has a positive explicit
-// lock wait budget that should override background defaults.
+// HasLockWaitTimeout reports whether this execution explicitly supplied a lock
+// wait budget. A zero value is still explicit: it clears a previously supplied
+// value and lets timeout resolution fall back without reusing a stale txn value.
 func (opts Options) HasLockWaitTimeout() bool {
-	return opts.hasLockWaitTimeout
+	return opts.lockWaitTimeoutSet
 }
 
 // LockWaitTimeout returns the per-execution lock wait budget. Callers should

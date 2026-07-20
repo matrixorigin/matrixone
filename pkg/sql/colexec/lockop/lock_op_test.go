@@ -124,6 +124,14 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 	proc.GetSessionInfo().LockWaitTimeout = 4
 	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
 		"background process-level per-execution option must have highest priority")
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	proc.GetSessionInfo().LockWaitTimeoutSet = true
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp),
+		"clearing an existing transaction override must fall back to the resolver")
+	proc.SetResolveVariableFunc(nil)
+	require.Zero(t, lockWaitTimeout(proc, txnOp),
+		"clearing without a resolver must not resurrect the existing transaction timeout")
 }
 
 func TestLockOpHelpers(t *testing.T) {
