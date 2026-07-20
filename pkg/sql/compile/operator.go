@@ -2223,14 +2223,16 @@ func constructTableClone(
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 	dstTblDef := clonePlan.SrcTableDef
+	sameColumnIDSpace := true
 	metaCopy.Ctx.RequestedAutoIncrOffset = clonePlan.SrcTableDef.AutoIncrOffset
 	if createPlan := clonePlan.GetCreateTable(); createPlan != nil {
 		if createTable := createPlan.GetDdl().GetCreateTable(); createTable != nil && createTable.TableDef != nil {
 			dstTblDef = createTable.TableDef
+			sameColumnIDSpace = false
 			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
 		}
 	}
-	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef)
+	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef, sameColumnIDSpace)
 
 	var (
 		err error
@@ -2358,7 +2360,7 @@ func constructTableClone(
 // column names. ALTER COPY can reorder or rename columns while retaining their
 // planner column IDs, so a source index must never be used as a destination
 // index when restoring allocator state.
-func mapCloneAutoIncrColumns(src, dst *plan.TableDef) map[int32]string {
+func mapCloneAutoIncrColumns(src, dst *plan.TableDef, sameColumnIDSpace bool) map[int32]string {
 	result := make(map[int32]string)
 	if src == nil || dst == nil {
 		return result
@@ -2380,9 +2382,19 @@ func mapCloneAutoIncrColumns(src, dst *plan.TableDef) map[int32]string {
 			continue
 		}
 		var dstCol *plan.ColDef
-		if srcIDCounts[srcCol.ColId] == 1 && len(dstByID[srcCol.ColId]) == 1 {
-			dstCol = dstByID[srcCol.ColId][0]
+		if sameColumnIDSpace && srcIDCounts[srcCol.ColId] == 1 {
+			if len(dstByID[srcCol.ColId]) == 1 {
+				dstCol = dstByID[srcCol.ColId][0]
+			} else {
+				// A valid source ID absent from the destination means that the
+				// source column was dropped; a new column reusing its name must
+				// not inherit the old allocator.
+				continue
+			}
 		} else {
+			// Fresh CREATE plans use a different column-ID coordinate system,
+			// so only the cloned name is a stable identity. The duplicate-ID
+			// fallback also keeps synthetic test definitions deterministic.
 			dstCol = dstByName[strings.ToLower(srcCol.Name)]
 		}
 		if dstCol != nil && dstCol.Typ.AutoIncr {

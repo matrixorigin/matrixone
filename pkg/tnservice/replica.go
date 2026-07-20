@@ -150,6 +150,10 @@ func (r *replica) closeStorage(txnStorage storage.TxnStorage) error {
 	return txnStorage.Close(context.Background())
 }
 
+func (r *replica) waitStartCompleted() {
+	<-r.startedC
+}
+
 func (r *replica) close(destroy bool) error {
 	r.cancelStart(destroy)
 	r.closeOnce.Do(func() {

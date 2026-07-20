@@ -97,14 +97,14 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 		Name:           "t`name",
 		AutoIncrOffset: 999,
 		Cols: []*plan.ColDef{
-			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{ColId: 11, Name: "id`col", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
 		},
 	}
 	dstDef := &plan.TableDef{
 		AutoIncrOffset: 99,
 		Cols: []*plan.ColDef{
-			{ColId: 11, Name: "renamed_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 0, Name: "id`col", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
 			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
 		},
 	}
@@ -125,8 +125,8 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(tc.Release)
 	require.Equal(t, uint64(99), tc.Ctx.RequestedAutoIncrOffset)
-	require.Equal(t, map[string]uint64{"renamed_id": 40}, tc.Ctx.SrcAutoIncrMaxValues)
-	require.Equal(t, map[string]uint64{"renamed_id": 50}, tc.Ctx.SrcAutoIncrOffsets)
+	require.Equal(t, map[string]uint64{"id`col": 40}, tc.Ctx.SrcAutoIncrMaxValues)
+	require.Equal(t, map[string]uint64{"id`col": 50}, tc.Ctx.SrcAutoIncrOffsets)
 	require.True(t, exec.opts.HasAccountID())
 	require.Equal(t, uint32(17), exec.opts.AccountID())
 
@@ -139,23 +139,119 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 	)
 }
 
+func TestConstructTableCloneMapsFreshDestinationColumnIDsByName(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &tableCloneRecordingExecutor{}
+	exec.run = func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
+			return newTableCloneOffsetResult(t, proc.Mp(), 0, 50), nil
+		}
+		return newTableCloneResult(t, proc.Mp(), 40), nil
+	}
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	srcDef := &plan.TableDef{
+		TblId:  7,
+		DbName: "db",
+		Name:   "src",
+		Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 2, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	dstDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{ColId: 0, Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		{ColId: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	clonePlan := &plan.CloneTable{
+		SrcTableDef: srcDef,
+		SrcObjDef:   &plan.ObjectRef{},
+		CreateTable: &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{TableDef: dstDef}},
+		}}},
+	}
+
+	tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, clonePlan)
+	require.NoError(t, err)
+	t.Cleanup(tc.Release)
+	require.Equal(t, map[string]uint64{"id": 40}, tc.Ctx.SrcAutoIncrMaxValues)
+	require.Equal(t, map[string]uint64{"id": 50}, tc.Ctx.SrcAutoIncrOffsets)
+}
+
 func TestMapCloneAutoIncrColumnsAcrossCopySchemaChanges(t *testing.T) {
 	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
-	src := &plan.TableDef{Cols: []*plan.ColDef{
-		{ColId: 10, Name: "dropped", Typ: plan.Type{Id: int32(types.T_int64)}},
-		{ColId: 11, Name: "id", Typ: autoType},
-		{ColId: 12, Name: "__mo_fake_pk_col", Hidden: true, Typ: autoType},
-	}}
-	dst := &plan.TableDef{Cols: []*plan.ColDef{
-		{ColId: 13, Name: "added", Typ: plan.Type{Id: int32(types.T_int64)}},
-		{ColId: 12, Name: "__mo_fake_pk_col", Hidden: true, Typ: autoType},
-		{ColId: 11, Name: "renamed_id", Typ: autoType},
-	}}
+	t.Run("fresh clone uses names across id coordinate systems", func(t *testing.T) {
+		src := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Typ: autoType},
+			{ColId: 2, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		}}
+		dst := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 0, Name: "id", Typ: autoType},
+			{ColId: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		}}
 
-	require.Equal(t, map[int32]string{
-		1: "renamed_id",
-		2: "__mo_fake_pk_col",
-	}, mapCloneAutoIncrColumns(src, dst))
+		require.Equal(t, map[int32]string{0: "id"}, mapCloneAutoIncrColumns(src, dst, false))
+	})
+
+	t.Run("numeric id collision cannot shadow name fallback", func(t *testing.T) {
+		src := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Typ: autoType},
+			{ColId: 2, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		}}
+		dst := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 0, Name: "id", Typ: autoType},
+		}}
+
+		require.Equal(t, map[int32]string{0: "id"}, mapCloneAutoIncrColumns(src, dst, false))
+	})
+
+	t.Run("stable ids preserve rename reorder and hidden allocator", func(t *testing.T) {
+		src := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 10, Name: "dropped", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 11, Name: "id", Typ: autoType},
+			{ColId: 12, Name: "__mo_fake_pk_col", Hidden: true, Typ: autoType},
+		}}
+		dst := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 13, Name: "added", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 12, Name: "__mo_fake_pk_col", Hidden: true, Typ: autoType},
+			{ColId: 11, Name: "renamed_id", Typ: autoType},
+		}}
+
+		require.Equal(t, map[int32]string{
+			1: "renamed_id",
+			2: "__mo_fake_pk_col",
+		}, mapCloneAutoIncrColumns(src, dst, true))
+	})
+
+	t.Run("stable ids survive dropped name reused by a new column", func(t *testing.T) {
+		src := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 10, Name: "id", Typ: autoType},
+			{ColId: 11, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		}}
+		dst := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 12, Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 11, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 10, Name: "renamed_id", Typ: autoType},
+		}}
+
+		require.Equal(t, map[int32]string{0: "renamed_id"}, mapCloneAutoIncrColumns(src, dst, true))
+	})
+
+	t.Run("fresh reordered plan cannot infer id space from one numeric anchor", func(t *testing.T) {
+		src := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 2, Name: "id", Typ: autoType},
+			{ColId: 1, Name: "anchor", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 3, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		}}
+		dst := &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 0, Name: "id", Typ: autoType},
+			{ColId: 1, Name: "anchor", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 2, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		}}
+
+		require.Equal(t, map[int32]string{0: "id"}, mapCloneAutoIncrColumns(src, dst, false))
+	})
 }
 
 func TestConstructTableCloneDoesNotReadHiddenAutoIncrementMaximum(t *testing.T) {
