@@ -2499,13 +2499,91 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalTypeDrift(t *testing.T) 
 	targetDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
 			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
 		},
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
 	}
 
-	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a"})
+	_, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef, []string{"a", "c"}, []int{1},
+	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "historical data branch column a has a different type")
+}
+
+func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *testing.T) {
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+
+	mapping, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef, []string{"a", "c"}, []int{1},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, -1}, mapping)
+
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	baseline := mp.CurrNB()
+	tblStuff := tableStuff{}
+	tblStuff.def.colNames = []string{"a", "c"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(), types.New(types.T_varchar, 20, 0),
+	}
+	source := batch.NewWithSize(3)
+	source.SetAttributes([]string{catalog.Row_ID, "a", "c"})
+	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], buildHashDiffRowID(t, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[2], int32(70), false, mp))
+	source.SetRowCount(1)
+
+	projected := projectDataBranchBatchToTarget(source, &tblStuff, mapping, mp)
+	require.True(t, projected.Vecs[2].IsConstNull())
+	require.Equal(t, types.T_varchar, projected.Vecs[2].GetType().Oid)
+	projected.Clean(mp)
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestDataBranchSourceColToTargetIdxPreservesCompatibleAndReorderedColumns(t *testing.T) {
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "removed", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "extra", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "extra", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "renamed", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+
+	mapping, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef, []string{"a", "extra", "b", "renamed"}, []int{1, 3},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{-1, 2, 0, 1}, mapping,
+		"source-only/renamed columns are dropped while compatible target-only and reordered columns stay mapped")
 }
 
 func TestDataBranchSourceColToTargetIdxRejectsHistoricalPrimaryKeyDrift(t *testing.T) {
@@ -2522,7 +2600,7 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalPrimaryKeyDrift(t *testi
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
 	}
 
-	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"})
+	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "historical data branch primary key is incompatible")
 }
@@ -2546,7 +2624,7 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalFakePrimaryKeyDrift(t *t
 	}
 
 	_, err := dataBranchSourceColToTargetIdx(
-		sourceDef, targetDef, []string{"a", "b", catalog.FakePrimaryKeyColName},
+		sourceDef, targetDef, []string{"a", "b", catalog.FakePrimaryKeyColName}, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "historical data branch fake primary key schema differs")

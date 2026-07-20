@@ -183,4 +183,18 @@ select * from t0 order by a;
 drop table t0;
 drop table t1;
 
+-- =====================================================
+-- Case 9: MERGE ignores target-only historical type changes and values
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+alter table t1 add column c int default 7;
+update t1 set b=11, c=70 where a=1;
+alter table t1 modify column c varchar(20);
+data branch merge t1 into t0;
+select * from t0 order by a;
+drop table t1;
+drop table t0;
+
 drop database test;

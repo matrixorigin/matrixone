@@ -396,4 +396,29 @@ data branch diff t1 against t0;
 drop table t1;
 drop table t0;
 
+-- =====================================================
+-- Case 22: target-only historical type change with no writes is compatible
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+alter table t1 add column c int default 7;
+alter table t1 modify column c varchar(20);
+data branch diff t1 against t0;
+drop table t1;
+drop table t0;
+
+-- =====================================================
+-- Case 23: target-only historical values survive endpoint hydration
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+alter table t1 add column c int default 7;
+update t1 set b=11, c=70 where a=1;
+alter table t1 modify column c varchar(20);
+data branch diff t1 against t0;
+drop table t1;
+drop table t0;
+
 drop database test;

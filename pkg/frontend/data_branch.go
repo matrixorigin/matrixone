@@ -1631,6 +1631,7 @@ func constructChangeHandle(
 		if tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				tarRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
+				tables.def.tarOnlyIdxes,
 			); err != nil {
 				return
 			}
@@ -1682,6 +1683,7 @@ func constructChangeHandle(
 		if baseRange.rel[i].GetTableID(ctx) != tables.baseRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				baseRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
+				tables.def.tarOnlyIdxes,
 			); err != nil {
 				return
 			}

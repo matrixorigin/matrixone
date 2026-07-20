@@ -2610,6 +2610,7 @@ func projectBaseBatchToTargetIfNeeded(
 func dataBranchSourceColToTargetIdx(
 	sourceDef, targetDef *plan2.TableDef,
 	targetColNames []string,
+	targetOnlyIdxes []int,
 ) ([]int, error) {
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
@@ -2650,6 +2651,10 @@ func dataBranchSourceColToTargetIdx(
 	for _, col := range targetDef.Cols {
 		targetCols[strings.ToLower(col.Name)] = col
 	}
+	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
+	for _, idx := range targetOnlyIdxes {
+		targetOnly[idx] = struct{}{}
+	}
 	mapping := make([]int, 0, len(sourceDef.Cols))
 	for _, col := range sourceDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -2663,6 +2668,14 @@ func dataBranchSourceColToTargetIdx(
 		targetCol, ok := targetCols[strings.ToLower(col.Name)]
 		if !ok || col.Typ.Id != targetCol.Typ.Id ||
 			!dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) {
+			if _, isTargetOnly := targetOnly[targetIdx]; isTargetOnly {
+				// This column does not exist on the base endpoint and is excluded
+				// from comparison and MERGE apply. Its old physical representation
+				// cannot be moved into the endpoint-typed batch; project it as NULL
+				// and let endpoint hydration restore a current value when needed.
+				mapping[len(mapping)-1] = -1
+				continue
+			}
 			return nil, moerr.NewNotSupportedNoCtxf(
 				"historical data branch column %s has a different type from the endpoint schema",
 				col.Name,
