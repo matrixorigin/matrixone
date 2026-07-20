@@ -8113,6 +8113,33 @@ func TestReleaseAllUserLevelLocksWithContextKeepsStateAfterRemoteTimeout(t *test
 	})
 }
 
+func TestReleaseUserLevelLocksOnSessionCloseTimeoutDetachesLocalState(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock = true
+		service.unlockStarted = make(chan struct{}, 1)
+
+		for i := 0; i < 3; i++ {
+			proc := newUserLevelLockTestProcess(t, services[0], "acc")
+			name := fmt.Sprintf("close_timeout_detach_%d", i)
+
+			v, err := getUserLevelLock(name, 0, proc)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), v)
+			require.NotEmpty(t, UserLevelLocksForMigration(proc))
+
+			releaseUserLevelLocksOnSessionCloseWithTimeout(proc, 10*time.Millisecond)
+			require.Empty(t, UserLevelLocksForMigration(proc))
+		}
+
+		userLevelLocks.Lock()
+		require.Empty(t, userLevelLocks.counts)
+		require.Empty(t, userLevelLocks.byOwner)
+		require.Empty(t, userLevelLocks.ownerSessions)
+		userLevelLocks.Unlock()
+	})
+}
+
 func TestReleaseLockLegacyTxnIDCompatible(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")

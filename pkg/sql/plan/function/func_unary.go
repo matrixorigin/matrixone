@@ -7326,6 +7326,27 @@ func DiscardMigratedUserLevelLocks(proc *process.Process) {
 	delete(userLevelLocks.ownerSessions, owner)
 }
 
+func detachUserLevelLocksForOwner(owner, sessionID string) uint64 {
+	if owner == "" {
+		return 0
+	}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if current := userLevelLocks.ownerSessions[owner]; sessionID != "" && current != "" && current != sessionID {
+		return 0
+	}
+	var detached uint64
+	for name := range userLevelLocks.byOwner[owner] {
+		key := userLevelLockKey{owner: owner, name: name}
+		detached += userLevelLocks.counts[key]
+		delete(userLevelLocks.counts, key)
+	}
+	delete(userLevelLocks.byOwner, owner)
+	delete(userLevelLocks.ownerSessions, owner)
+	return detached
+}
+
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
 	name, err := validateUserLevelLockName(name)
 	if err != nil {
@@ -7515,9 +7536,24 @@ func ReleaseUserLevelLocks(proc *process.Process) {
 }
 
 func ReleaseUserLevelLocksOnSessionClose(proc *process.Process) {
-	ctx, cancel := context.WithTimeout(context.Background(), userLevelLockCloseTimeout)
+	releaseUserLevelLocksOnSessionCloseWithTimeout(proc, userLevelLockCloseTimeout)
+}
+
+func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	_, _ = releaseAllUserLevelLocksWithContext(ctx, proc)
+	if _, err := releaseAllUserLevelLocksWithContext(ctx, proc); err != nil && ctx.Err() != nil {
+		owner := userLevelLockOwner(proc)
+		detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
+		if detached > 0 {
+			logutil.Warn(fmt.Sprintf(
+				"ReleaseUserLevelLocksOnSessionClose detached local bookkeeping after timeout: owner=%s locks=%d err=%v",
+				owner,
+				detached,
+				err,
+			))
+		}
+	}
 }
 
 func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

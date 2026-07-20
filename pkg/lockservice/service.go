@@ -1318,20 +1318,28 @@ func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
 	if txn == nil || txn.txnKey == "" {
 		return false
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if v := h.mu.activeTxns[txn.txnKey]; v != nil && v != txn {
+	shard := h.getActiveTxnShard(txn.txnKey)
+	shard.Lock()
+	entry, ok := shard.txns[txn.txnKey]
+	if ok && entry.txn != txn {
+		shard.Unlock()
 		return false
 	}
-	h.mu.activeTxns[txn.txnKey] = txn
-	h.mu.activeTxnServices[txn.txnKey] = txn.remoteService
+	if !ok {
+		h.activeTxnCount.Add(1)
+	}
+	shard.txns[txn.txnKey] = activeTxnEntry{txn: txn, remoteService: txn.remoteService}
+	shard.Unlock()
+
 	if txn.remoteService != "" {
+		h.mu.Lock()
 		if _, ok := h.mu.remoteServices[txn.remoteService]; !ok {
 			h.mu.remoteServices[txn.remoteService] = h.mu.dequeue.PushBack(remote{
 				id:   txn.remoteService,
 				time: time.Now(),
 			})
 		}
+		h.mu.Unlock()
 	}
 	return true
 }

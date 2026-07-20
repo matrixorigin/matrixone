@@ -685,6 +685,38 @@ func TestMapBasedTxnHolderVisitsAndClosesAllShards(t *testing.T) {
 	})
 }
 
+func TestMapBasedTxnHolderRestoreActiveTxnUsesShardAndCount(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+		defer hold.close()
+
+		txnID := []byte("restore-sharded-txn")
+		txn := hold.getActiveTxn(txnID, true, "remote-1")
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+		require.Same(t, txn, hold.deleteActiveTxn(txnID))
+		require.Equal(t, int64(0), hold.activeTxnCount.Load())
+
+		require.True(t, hold.restoreActiveTxn(txn))
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+		require.Same(t, txn, hold.getActiveTxn(txnID, false, ""))
+
+		require.True(t, hold.restoreActiveTxn(txn))
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+
+		other := newActiveTxn(txnID, txn.txnKey, hold.fsp, "remote-2")
+		require.False(t, hold.restoreActiveTxn(other))
+		reuse.Free(other, nil)
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+	})
+}
+
 func BenchmarkMapBasedTxnHolderConcurrent(b *testing.B) {
 	hold := newMapBasedTxnHandler(
 		"s1",

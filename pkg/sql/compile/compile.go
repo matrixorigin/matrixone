@@ -1046,19 +1046,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-
-		// Embed all static filters directly into TableScan.
-		// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
-		// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
-		if len(node.FilterList) > 0 && !hasUserLevelLockFunction(node.FilterList) {
-			for i := range ss {
-				if ts, ok := ss[i].RootOp.(*table_scan.TableScan); ok {
-					ts.FilterExprs = plan2.DeepCopyExprList(node.FilterList)
-				}
-			}
-		}
-		ss = c.compileProjection(node, c.compileRestrict(node, ss))
+		ss = c.compileTableScanFiltersAndProjection(node, ss)
 
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)
@@ -3068,6 +3056,37 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
+}
+
+func (c *Compile) compileTableScanFiltersAndProjection(node *plan.Node, ss []*Scope) []*Scope {
+	ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+
+	hasUserLevelLockFilter := hasUserLevelLockFunction(node.FilterList)
+
+	// Embed ordinary static filters directly into TableScan.
+	// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
+	// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
+	embeddedStaticFilters := false
+	if len(node.FilterList) > 0 && !hasUserLevelLockFilter {
+		embeddedStaticFilters = true
+		for i := range ss {
+			if _, ok := ss[i].RootOp.(*table_scan.TableScan); !ok {
+				embeddedStaticFilters = false
+				break
+			}
+		}
+		if embeddedStaticFilters {
+			for i := range ss {
+				ss[i].RootOp.(*table_scan.TableScan).FilterExprs = plan2.DeepCopyExprList(node.FilterList)
+			}
+		}
+	}
+	if hasUserLevelLockFilter ||
+		runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) ||
+		(len(node.FilterList) > 0 && !embeddedStaticFilters) {
+		ss = c.compileRestrict(node, ss)
+	}
+	return c.compileProjection(node, ss)
 }
 
 func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {

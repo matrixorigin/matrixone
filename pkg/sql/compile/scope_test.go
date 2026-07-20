@@ -178,6 +178,73 @@ func TestCompileProjectionUserLevelLockSingleRemoteScopeMergesToCoordinator(t *t
 	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).ProjectList)
 }
 
+func TestCompileTableScanOrdinaryFilterIsInlineOnly(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+	scope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	node := makeOrdinaryTableScanFilterNode()
+
+	out := testCompile.compileTableScanFiltersAndProjection(node, []*Scope{scope})
+
+	require.Len(t, out, 1)
+	require.NoError(t, checkScopeWithExpectedList(out[0], []vm.OpType{vm.TableScan}))
+	ts := out[0].RootOp.(*table_scan.TableScan)
+	require.NotEmpty(t, ts.FilterExprs)
+	require.NotEmpty(t, ts.ProjectList)
+}
+
+func TestCompileTableScanOrdinaryFilterFallsBackWhenNotEmbedded(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+	scanScope := &Scope{
+		Magic:    Remote,
+		Proc:     testCompile.proc,
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+	node := makeOrdinaryTableScanFilterNode()
+	node.ProjectList = []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)}
+
+	out := testCompile.compileTableScanFiltersAndProjection(node, []*Scope{scanScope})
+
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &filter.Filter{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0).GetOperatorBase().GetChildren(0))
+	require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).FilterExprs)
+}
+
+func BenchmarkCompileTableScanOrdinaryFilterInlineOnly(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	node := makeOrdinaryTableScanFilterNode()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		c := &Compile{
+			proc: proc,
+			anal: &AnalyzeModule{curNodeIdx: 1, isFirst: true},
+		}
+		scope := generateScopeWithRootOperator(proc, []vm.OpType{vm.TableScan})
+		out := c.compileTableScanFiltersAndProjection(node, []*Scope{scope})
+		if len(out) != 1 {
+			b.Fatalf("expected one scope, got %d", len(out))
+		}
+		if _, ok := out[0].RootOp.(*table_scan.TableScan); !ok {
+			b.Fatalf("ordinary table scan filter should stay inline, got %T", out[0].RootOp)
+		}
+	}
+}
+
+func makeOrdinaryTableScanFilterNode() *plan.Node {
+	return &plan.Node{
+		FilterList: []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{Bval: true},
+		}}}},
+		ProjectList: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}}},
+	}
+}
+
 func makeUserLevelLockExpr(fid int64) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{F: &plan.Function{
