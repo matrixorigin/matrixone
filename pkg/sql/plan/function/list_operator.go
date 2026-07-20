@@ -20,39 +20,7 @@ import (
 )
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
-	if left.Oid == types.T_time && isTemporalComparisonCharacterString(right.Oid) {
-		target := types.T_varchar.ToType()
-		return true, target, target
-	}
-	if right.Oid == types.T_time && isTemporalComparisonCharacterString(left.Oid) {
-		target := types.T_varchar.ToType()
-		return true, target, target
-	}
 	return fixedTypeCastRule1(left, right)
-}
-
-func isTemporalComparisonCharacterString(t types.T) bool {
-	return t == types.T_char || t == types.T_varchar || t == types.T_text
-}
-
-func timeStringBetweenCastRule(inputs []types.Type) (bool, []types.Type) {
-	hasTime := false
-	hasString := false
-	for _, input := range inputs {
-		switch {
-		case input.Oid == types.T_time:
-			hasTime = true
-		case isTemporalComparisonCharacterString(input.Oid):
-			hasString = true
-		default:
-			return false, nil
-		}
-	}
-	if !hasTime || !hasString {
-		return false, nil
-	}
-	target := types.T_varchar.ToType()
-	return true, []types.Type{target, target, target}
 }
 
 var supportedOperators = []FuncNew{
@@ -319,10 +287,6 @@ var supportedOperators = []FuncNew{
 			if len(inputs) != 3 {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			if hasCast, targets := timeStringBetweenCastRule(inputs); hasCast {
-				return newCheckResultWithCast(0, targets)
-			}
-
 			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
 				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)

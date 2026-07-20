@@ -1,7 +1,8 @@
 -- @bvt:issue
 -- @bvt:parallel
 
--- TIME and a string use string comparison unless both operands are TIME values.
+-- Scalar TIME and a string use string comparison. A TIME column converts a
+-- constant string to the column's TIME(scale) before comparison.
 select cast('03:04:05.123456' as time(6)) = '030405.123456' as time_eq_compact_string,
        cast('03:04:05.123456' as time(6)) = '03:04:05.123456' as time_eq_formatted_string;
 select '030405.123456' = cast('03:04:05.123456' as time(6)) as compact_string_eq_time;

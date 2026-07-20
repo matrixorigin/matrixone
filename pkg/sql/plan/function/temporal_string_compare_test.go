@@ -22,17 +22,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestComparisonTypeCastRuleUsesStringForTimeAndString(t *testing.T) {
+func TestComparisonTypeCastRuleKeepsDefaultTimeCoercion(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		left       types.Type
 		right      types.Type
 		targetType types.T
 	}{
-		{name: "time varchar", left: types.T_time.ToTypeWithScale(6), right: types.T_varchar.ToType(), targetType: types.T_varchar},
-		{name: "varchar time", left: types.T_varchar.ToType(), right: types.T_time.ToTypeWithScale(6), targetType: types.T_varchar},
-		{name: "time char", left: types.T_time.ToTypeWithScale(6), right: types.T_char.ToType(), targetType: types.T_varchar},
-		{name: "text time", left: types.T_text.ToType(), right: types.T_time.ToTypeWithScale(6), targetType: types.T_varchar},
+		{name: "time varchar", left: types.T_time.ToTypeWithScale(6), right: types.T_varchar.ToType(), targetType: types.T_time},
+		{name: "varchar time", left: types.T_varchar.ToType(), right: types.T_time.ToTypeWithScale(6), targetType: types.T_time},
+		{name: "time char", left: types.T_time.ToTypeWithScale(6), right: types.T_char.ToType(), targetType: types.T_time},
+		{name: "text time", left: types.T_text.ToType(), right: types.T_time.ToTypeWithScale(6), targetType: types.T_time},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hasCast, left, right := comparisonTypeCastRule(tc.left, tc.right)
@@ -57,7 +57,7 @@ func TestComparisonTypeCastRuleDoesNotChangeTimeArithmeticCoercion(t *testing.T)
 	require.Equal(t, types.T_time, right.Oid)
 }
 
-func TestTimeStringComparisonOperatorsRequestStringCasts(t *testing.T) {
+func TestTimeStringComparisonOperatorsRequestDefaultTimeCasts(t *testing.T) {
 	ctx := context.Background()
 	timeType := types.T_time.ToTypeWithScale(6)
 	varcharType := types.T_varchar.ToType()
@@ -68,7 +68,7 @@ func TestTimeStringComparisonOperatorsRequestStringCasts(t *testing.T) {
 			require.NoError(t, err)
 			targets, shouldCast := get.ShouldDoImplicitTypeCast()
 			require.True(t, shouldCast)
-			require.Equal(t, []types.Type{varcharType, varcharType}, targets)
+			require.Equal(t, []types.Type{timeType, timeType}, targets)
 		})
 	}
 
@@ -76,23 +76,17 @@ func TestTimeStringComparisonOperatorsRequestStringCasts(t *testing.T) {
 	require.NoError(t, err)
 	targets, shouldCast := get.ShouldDoImplicitTypeCast()
 	require.True(t, shouldCast)
-	require.Equal(t, []types.Type{varcharType, varcharType, varcharType}, targets)
+	require.Equal(t, []types.Type{timeType, timeType, timeType}, targets)
 }
 
-func TestTimeStringBetweenUsesOneComparisonTypeForAllArguments(t *testing.T) {
+func TestTimeStringBetweenUsesDefaultTimeType(t *testing.T) {
 	ctx := context.Background()
 	timeType := types.T_time.ToTypeWithScale(6)
 	varcharType := types.T_varchar.ToType()
 
-	for _, inputs := range [][]types.Type{
-		{timeType, varcharType, timeType},
-		{timeType, timeType, varcharType},
-		{varcharType, timeType, varcharType},
-	} {
-		get, err := GetFunctionByName(ctx, "between", inputs)
-		require.NoError(t, err)
-		targets, shouldCast := get.ShouldDoImplicitTypeCast()
-		require.True(t, shouldCast)
-		require.Equal(t, []types.Type{varcharType, varcharType, varcharType}, targets)
-	}
+	get, err := GetFunctionByName(ctx, "between", []types.Type{timeType, varcharType, varcharType})
+	require.NoError(t, err)
+	targets, shouldCast := get.ShouldDoImplicitTypeCast()
+	require.True(t, shouldCast)
+	require.Equal(t, []types.Type{timeType, timeType, timeType}, targets)
 }
