@@ -222,6 +222,32 @@ func TestBucketReaderAccountedLifecycle(t *testing.T) {
 	require.Zero(t, generation.SpillFDUsed())
 }
 
+func TestReconcileReadReservation(t *testing.T) {
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	t.Run("shrink", func(t *testing.T) {
+		token, err := generation.Reserve(1024)
+		require.NoError(t, err)
+		require.NoError(t, reconcileReadReservation(token, 256))
+		require.Equal(t, uint64(256), generation.Used())
+		require.True(t, token.Release())
+		require.Zero(t, generation.Used())
+	})
+
+	t.Run("underestimated-retained-bytes", func(t *testing.T) {
+		token, err := generation.Reserve(256)
+		require.NoError(t, err)
+		require.ErrorIs(t, reconcileReadReservation(token, 257), process.ErrHashBuildBudgetInvalid)
+		// Failed upward reconciliation keeps the original token live so both
+		// reader cleanup paths can release the complete reservation exactly once.
+		require.Equal(t, uint64(256), generation.Used())
+		require.True(t, token.Release())
+		require.Zero(t, generation.Used())
+	})
+}
+
 func TestPredictMergedRetainedBytesMatchesUnionBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -132,10 +132,10 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		next.Clean(proc.Mp())
 		if mergeToken != nil {
 			actual, ok := batchRetainedBytes(reuseBat)
-			if !ok || actual > mergeToken.Size() {
+			if !ok {
 				return nil, r.mergeReadError(proc, reuseBat, nil, nextToken, process.ErrHashBuildBudgetInvalid, mergeToken)
 			}
-			if _, err := mergeToken.ReconcileDown(actual); err != nil {
+			if err := reconcileReadReservation(mergeToken, actual); err != nil {
 				return nil, r.mergeReadError(proc, reuseBat, nil, nextToken, err, mergeToken)
 			}
 			if r.batchToken != nil {
@@ -199,6 +199,23 @@ func batchRetainedBytes(bat *batch.Batch) (uint64, bool) {
 		return 0, false
 	}
 	return addUint64(actual, rows*metadata)
+}
+
+// reconcileReadReservation shrinks a conservative read reservation to the
+// retained batch size. ReconcileDown already validates that actual does not
+// exceed the reservation, so callers do not need a separate Size call (and a
+// second acquisition of the shared hash-build budget mutex).
+func reconcileReadReservation(token *process.HashBuildReservation, actual uint64) error {
+	if token == nil {
+		return nil
+	}
+	if _, err := token.ReconcileDown(actual); err != nil {
+		if errors.Is(err, process.ErrHashBuildReservationUpward) {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		return err
+	}
+	return nil
 }
 
 // predictMergedRetainedBytes computes the retained upper bound after the exact
@@ -410,10 +427,10 @@ func (r *BucketReader) readBatchRecord(proc *process.Process, reuseBat *batch.Ba
 	}
 	if token != nil {
 		actual, ok := batchRetainedBytes(reuseBat)
-		if !ok || actual > token.Size() {
+		if !ok {
 			return nil, token, process.ErrHashBuildBudgetInvalid
 		}
-		if _, err := token.ReconcileDown(actual); err != nil {
+		if err := reconcileReadReservation(token, actual); err != nil {
 			return nil, token, err
 		}
 	}
