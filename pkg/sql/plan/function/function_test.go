@@ -470,6 +470,27 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 	}
 }
 
+func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binaryTypes := []types.T{types.T_binary, types.T_varbinary, types.T_blob}
+
+	for _, binaryType := range binaryTypes {
+		for position := range 3 {
+			inputs := []types.Type{
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+			}
+			inputs[position] = binaryType.ToType()
+
+			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
+			require.NoError(t, err)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+		}
+	}
+}
+
 func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

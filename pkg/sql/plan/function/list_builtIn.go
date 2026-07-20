@@ -10787,20 +10787,31 @@ func makeTimeReturnType(parameters []types.Type) types.Type {
 	return types.T_time.ToTypeWithScale(scale)
 }
 
+func isMakeTimeTextType(oid types.T) bool {
+	// Binary inputs must take the numeric cast path so hex/bit literal byte
+	// semantics are consumed before function-expression evaluation clears IsBin.
+	switch oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return false
+	default:
+		return oid.IsMySQLString()
+	}
+}
+
 func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 3 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	exactSecond := inputs[2].Oid.IsMySQLString() || inputs[2].Oid.IsDecimal()
-	if !inputs[0].Oid.IsMySQLString() && !inputs[1].Oid.IsMySQLString() && !exactSecond {
+	exactSecond := isMakeTimeTextType(inputs[2].Oid) || inputs[2].Oid.IsDecimal()
+	if !isMakeTimeTextType(inputs[0].Oid) && !isMakeTimeTextType(inputs[1].Oid) && !exactSecond {
 		return fixedTypeMatch(overloads, inputs)
 	}
 
 	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
-	if inputs[0].Oid.IsMySQLString() {
+	if isMakeTimeTextType(inputs[0].Oid) {
 		targetOids[0] = types.T_varchar
 	}
-	if inputs[1].Oid.IsMySQLString() {
+	if isMakeTimeTextType(inputs[1].Oid) {
 		targetOids[1] = types.T_varchar
 	}
 	if exactSecond {

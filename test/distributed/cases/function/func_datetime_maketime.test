@@ -49,6 +49,10 @@ SELECT CAST(MAKETIME(12, 59, '59.99999949999999999') AS VARCHAR) AS varchar_belo
 SELECT CAST(MAKETIME(12, 59, '59.9999995') AS VARCHAR) AS varchar_at_half_microsecond;
 SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS VARCHAR) AS decimal_below_half_microsecond;
 
+# Binary literals retain numeric byte semantics instead of being parsed as text
+SELECT CAST(MAKETIME(X'0102', 0, 0) AS VARCHAR) AS binary_hour;
+SELECT CAST(MAKETIME(12, 0, X'01') AS VARCHAR) AS binary_second;
+
 # Default DOUBLE column retains microseconds
 CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
 INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);

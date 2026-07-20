@@ -100,6 +100,12 @@ varchar_at_half_microsecond
 SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS VARCHAR) AS decimal_below_half_microsecond;
 decimal_below_half_microsecond
 12:59:59.999999
+SELECT CAST(MAKETIME(X'0102', 0, 0) AS VARCHAR) AS binary_hour;
+binary_hour
+258:00:00
+SELECT CAST(MAKETIME(12, 0, X'01') AS VARCHAR) AS binary_second;
+binary_second
+12:00:01
 CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
 INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);
 SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM maketime_double_seconds;
