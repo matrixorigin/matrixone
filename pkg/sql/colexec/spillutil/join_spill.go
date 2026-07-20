@@ -66,6 +66,7 @@ type BucketReader struct {
 	budget       *process.HashBuildBudgetGeneration
 	reservation  *process.HashBuildReservation
 	batchToken   *process.HashBuildReservation
+	batchCharge  uint64
 	spillFile    *message.SpillFile
 	mergeRecords bool
 }
@@ -77,14 +78,15 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 	if r.reader == nil {
 		r.reader = bufio.NewReaderSize(r.fd, 4*1024*1024)
 	}
-	_, token, err := r.readBatchRecord(proc, reuseBat)
+	_, token, charge, err := r.readBatchRecord(proc, reuseBat, r.batchToken, r.batchCharge, true)
 	if err != nil {
 		r.releaseReadBatch(proc, reuseBat, token)
 		return nil, err
 	}
 	oldToken := r.batchToken
 	r.batchToken = token
-	if oldToken != nil {
+	r.batchCharge = charge
+	if oldToken != nil && oldToken != token {
 		oldToken.Release()
 	}
 	if !r.mergeRecords {
@@ -101,7 +103,7 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
 		}
 		next := batch.NewOffHeapWithSize(0)
-		_, nextToken, err := r.readBatchRecord(proc, next)
+		_, nextToken, _, err := r.readBatchRecord(proc, next, nil, 0, false)
 		if err != nil {
 			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
 		}
@@ -141,11 +143,13 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 			if r.batchToken != nil {
 				r.batchToken.Release()
 				r.batchToken = nil
+				r.batchCharge = 0
 			}
 			if nextToken != nil {
 				nextToken.Release()
 			}
 			r.batchToken = mergeToken
+			r.batchCharge = actual
 		}
 	}
 	return reuseBat, nil
@@ -173,6 +177,7 @@ func (r *BucketReader) mergeReadError(proc *process.Process, dst, src *batch.Bat
 	if r.batchToken != nil {
 		r.batchToken.Release()
 		r.batchToken = nil
+		r.batchCharge = 0
 	}
 	return err
 }
@@ -373,32 +378,46 @@ func (r *BucketReader) releaseReadBatch(proc *process.Process, bat *batch.Batch,
 	if r.batchToken != nil {
 		r.batchToken.Release()
 		r.batchToken = nil
+		r.batchCharge = 0
 	}
 }
 
-func (r *BucketReader) readBatchRecord(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, *process.HashBuildReservation, error) {
+func (r *BucketReader) readBatchRecord(
+	proc *process.Process,
+	reuseBat *batch.Batch,
+	token *process.HashBuildReservation,
+	charge uint64,
+	retainLease bool,
+) (*batch.Batch, *process.HashBuildReservation, uint64, error) {
 	if _, err := io.ReadFull(r.reader, r.buf[:]); err != nil {
 		if err == io.EOF {
-			return nil, nil, io.EOF
+			return nil, token, charge, io.EOF
 		}
-		return nil, nil, err
+		return nil, token, charge, err
 	}
 	cnt := types.DecodeInt64(r.buf[:8])
 	batchSize := types.DecodeInt64(r.buf[8:16])
 	if cnt < 0 || batchSize < 0 {
-		return nil, nil, moerr.NewInternalError(proc.Ctx, "negative spill batch header")
+		return nil, token, charge, moerr.NewInternalError(proc.Ctx, "negative spill batch header")
 	}
-	var token *process.HashBuildReservation
 	if r.budget != nil {
 		payload := uint64(batchSize)
 		if payload > (math.MaxUint64-(64<<10))/4 {
-			return nil, nil, process.ErrHashBuildBudgetInvalid
+			return nil, token, charge, process.ErrHashBuildBudgetInvalid
 		}
 		projected := payload*4 + 64<<10
-		var err error
-		token, err = r.budget.Reserve(projected)
-		if err != nil {
-			return nil, nil, err
+		if token == nil {
+			var err error
+			token, err = r.budget.Reserve(projected)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			charge = projected
+		} else if projected > charge {
+			if err := token.Grow(projected - charge); err != nil {
+				return nil, token, charge, err
+			}
+			charge = projected
 		}
 	}
 
@@ -406,35 +425,38 @@ func (r *BucketReader) readBatchRecord(proc *process.Process, reuseBat *batch.Ba
 
 	limitReader := io.LimitedReader{R: r.reader, N: batchSize}
 	if err := reuseBat.UnmarshalFromReader(&limitReader, proc.Mp()); err != nil {
-		return nil, token, err
+		return nil, token, charge, err
 	}
 
 	// Verify the batch unmarshal consumed exactly batchSize bytes.
 	if limitReader.N > 0 {
-		return nil, token, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", limitReader.N)
+		return nil, token, charge, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", limitReader.N)
 	}
 
 	// Read magic (8 bytes)
 	if _, err := io.ReadFull(r.reader, r.buf[:8]); err != nil {
-		return nil, token, err
+		return nil, token, charge, err
 	}
 	if types.DecodeUint64(r.buf[:8]) != SpillMagic {
-		return nil, token, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
+		return nil, token, charge, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
 	}
 
 	if reuseBat.RowCount() != int(cnt) {
-		return nil, token, moerr.NewInternalError(proc.Ctx, "row count mismatch")
+		return nil, token, charge, moerr.NewInternalError(proc.Ctx, "row count mismatch")
 	}
 	if token != nil {
 		actual, ok := batchRetainedBytes(reuseBat)
-		if !ok {
-			return nil, token, process.ErrHashBuildBudgetInvalid
+		if !ok || actual > charge {
+			return nil, token, charge, process.ErrHashBuildBudgetInvalid
 		}
-		if err := reconcileReadReservation(token, actual); err != nil {
-			return nil, token, err
+		if !retainLease {
+			if err := reconcileReadReservation(token, actual); err != nil {
+				return nil, token, charge, err
+			}
+			charge = actual
 		}
 	}
-	return reuseBat, token, nil
+	return reuseBat, token, charge, nil
 }
 
 func (r *BucketReader) ResetForFd(fd *os.File) {
@@ -500,6 +522,7 @@ func (r *BucketReader) Close() {
 	if r.batchToken != nil {
 		r.batchToken.Release()
 		r.batchToken = nil
+		r.batchCharge = 0
 	}
 	if r.reservation != nil {
 		r.reservation.Release()

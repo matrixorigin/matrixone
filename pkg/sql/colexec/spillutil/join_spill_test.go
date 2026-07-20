@@ -452,6 +452,9 @@ func TestBucketReaderEOF(t *testing.T) {
 func TestBucketReaderCorruptedMagic(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
 
 	spillfs, err := proc.GetSpillFileService()
 	require.NoError(t, err)
@@ -474,12 +477,15 @@ func TestBucketReaderCorruptedMagic(t *testing.T) {
 	f.Seek(0, io.SeekStart)
 
 	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
 	reader.ResetForFd(f)
 	reuseBat := batch.NewOffHeapWithSize(0)
 	_, err = reader.ReadBatch(proc, reuseBat)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "corrupted")
+	require.Equal(t, uint64(64<<10), generation.Used(), "failed read must release its decoded-batch lease")
 	reader.Close()
+	require.Zero(t, generation.Used())
 	f.Close()
 }
 
@@ -1010,6 +1016,9 @@ func TestScatterBatchWithNulls(t *testing.T) {
 func TestReaderBatchReuse(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
 
 	spillfs, err := proc.GetSpillFileService()
 	require.NoError(t, err)
@@ -1031,19 +1040,127 @@ func TestReaderBatchReuse(t *testing.T) {
 
 	fd := w.HandOffFd()
 	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
 	reader.ResetForFd(fd)
 	reuseBat := batch.NewOffHeapWithSize(0)
+	before := generation.Snapshot()
 
-	// Read with same reuseBat - vector allocations should be reused.
+	// Read with the same reuseBat and one high-water reservation. The second,
+	// smaller record must not acquire or reconcile the shared budget mutex.
 	got, err := reader.ReadBatch(proc, reuseBat)
 	require.NoError(t, err)
 	require.Equal(t, 5, got.RowCount())
+	afterFirst := generation.Snapshot()
+	require.Equal(t, before.ReserveCount+1, afterFirst.ReserveCount)
+	require.Equal(t, before.ReconcileCount, afterFirst.ReconcileCount)
 
 	got, err = reader.ReadBatch(proc, reuseBat)
 	require.NoError(t, err)
 	require.Equal(t, 2, got.RowCount())
+	afterSecond := generation.Snapshot()
+	require.Equal(t, afterFirst.ReserveCount, afterSecond.ReserveCount)
+	require.Equal(t, afterFirst.ReconcileCount, afterSecond.ReconcileCount)
+	require.Equal(t, afterFirst.ReleaseCount, afterSecond.ReleaseCount)
+
+	reuseBat.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+}
+
+func TestReaderBatchLeaseGrowsForLargerRecord(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	f, err := spillfs.CreateAndRemoveFile(context.Background(), "test_read_lease_grow")
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_read_lease_grow", Fd: f}
+	for _, size := range []int{2, 1_000} {
+		vals := make([]int32, size)
+		bat := makeInt32Batch(proc, vals)
+		require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+		bat.Clean(proc.Mp())
+	}
+
+	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForFd(w.HandOffFd())
+	reuseBat := batch.NewOffHeapWithSize(0)
+	before := generation.Snapshot()
+
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 2, got.RowCount())
+	afterFirst := generation.Snapshot()
+	require.Equal(t, before.ReserveCount+1, afterFirst.ReserveCount)
+
+	got, err = reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 1_000, got.RowCount())
+	afterSecond := generation.Snapshot()
+	require.Equal(t, afterFirst.ReserveCount+1, afterSecond.ReserveCount, "larger record should grow the existing lease once")
+	require.Greater(t, afterSecond.Used, afterFirst.Used)
+	require.Equal(t, afterFirst.ReconcileCount, afterSecond.ReconcileCount)
+
+	reuseBat.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+}
+
+func TestReaderBatchLeaseGrowRejectionReleasesToken(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	f, err := spillfs.CreateAndRemoveFile(context.Background(), "test_read_lease_reject")
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_read_lease_reject", Fd: f}
+	for _, size := range []int{2, 1_000} {
+		bat := makeInt32Batch(proc, make([]int32, size))
+		require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+		bat.Clean(proc.Mp())
+	}
+	fd := w.HandOffFd()
+
+	var header [16]byte
+	_, err = io.ReadFull(fd, header[:])
+	require.NoError(t, err)
+	firstPayload := types.DecodeInt64(header[8:])
+	_, err = fd.Seek(firstPayload+8, io.SeekCurrent)
+	require.NoError(t, err)
+	_, err = io.ReadFull(fd, header[:])
+	require.NoError(t, err)
+	secondPayload := types.DecodeInt64(header[8:])
+	require.Greater(t, secondPayload, firstPayload)
+	_, err = fd.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	firstProjected := uint64(firstPayload)*4 + 64<<10
+	secondProjected := uint64(secondPayload)*4 + 64<<10
+	cap := uint64(64<<10) + firstProjected + (secondProjected-firstProjected)/2
+	budget := process.MustNewHashBuildBudget(cap, cap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForFd(fd)
+	reuseBat := batch.NewOffHeapWithSize(0)
+
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 2, got.RowCount())
+	_, err = reader.ReadBatch(proc, reuseBat)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, uint64(64<<10), generation.Used(), "grow rejection must release the existing decoded-batch lease")
 
 	reader.Close()
+	require.Zero(t, generation.Used())
 }
 
 func TestScatterWithMultiColumn(t *testing.T) {
