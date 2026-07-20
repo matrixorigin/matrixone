@@ -78,6 +78,10 @@ type container struct {
 	// between linPre and the next non-NULL.
 	linPre []fillCoord
 	linRun [][]fillCoord
+	// linSeed carries the last original non-NULL value across a completed spill
+	// segment without pinning the segment's final output batch in memory.
+	linSeed      []*vector.Vector
+	linSeedValid []bool
 
 	buf *batch.Batch
 
@@ -140,6 +144,7 @@ func (fill *Fill) Release() {
 func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
 	ctr.cleanupSpill(proc)
+	ctr.clearLinearSeeds(proc.Mp())
 	ctr.resetCtrParma()
 	ctr.resetExes()
 	if ctr.buf != nil {
@@ -207,6 +212,19 @@ func (ctr *container) freeVectors(mp *mpool.MPool) {
 		}
 	}
 	ctr.prevVecs = nil
+	ctr.clearLinearSeeds(mp)
+}
+
+func (ctr *container) clearLinearSeeds(mp *mpool.MPool) {
+	for i, vec := range ctr.linSeed {
+		if vec != nil {
+			vec.Free(mp)
+			ctr.linSeed[i] = nil
+		}
+	}
+	for i := range ctr.linSeedValid {
+		ctr.linSeedValid[i] = false
+	}
 }
 
 func (ctr *container) freeExes() {

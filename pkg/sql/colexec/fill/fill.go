@@ -89,6 +89,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		if len(ctr.linRun) < fill.ColLen {
 			ctr.linRun = make([][]fillCoord, fill.ColLen)
 			ctr.linPre = make([]fillCoord, fill.ColLen)
+			ctr.linSeed = make([]*vector.Vector, fill.ColLen)
+			ctr.linSeedValid = make([]bool, fill.ColLen)
 			for i := range ctr.linPre {
 				ctr.linPre[i] = fillCoord{seq: -1, row: -1}
 			}
@@ -437,6 +439,7 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 	rows := bat.RowCount()
 	for r := 0; r < rows; r++ {
 		if ctr.isNewSegment(ap, bat, r) {
+			ctr.clearLinearSeeds(proc.Mp())
 			for c := 0; c < ap.ColLen; c++ {
 				ctr.linRun[c] = ctr.linRun[c][:0]
 				ctr.linPre[c] = fillCoord{seq: -1, row: -1}
@@ -445,7 +448,8 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 		for c := 0; c < ap.ColLen; c++ {
 			vec := bat.Vecs[c]
 			if vec.IsNull(uint64(r)) {
-				if ctr.linPre[c].seq >= 0 {
+				seedValid := c < len(ctr.linSeedValid) && ctr.linSeedValid[c]
+				if ctr.linPre[c].seq >= 0 || seedValid {
 					ctr.linRun[c] = append(ctr.linRun[c], fillCoord{seq: seq, row: r})
 				}
 				continue
@@ -455,6 +459,13 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 					return err
 				}
 				ctr.linRun[c] = ctr.linRun[c][:0]
+			}
+			if c < len(ctr.linSeed) && ctr.linSeed[c] != nil {
+				ctr.linSeed[c].Free(proc.Mp())
+				ctr.linSeed[c] = nil
+			}
+			if c < len(ctr.linSeedValid) {
+				ctr.linSeedValid[c] = false
 			}
 			ctr.linPre[c] = fillCoord{seq: seq, row: r}
 		}
@@ -469,7 +480,17 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 // interpolateRun writes the midpoint of the pre and cur values into every row
 // of column col's pending run.
 func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int, proc *process.Process) error {
-	valVec, owned, err := linearFillValue(ctr, proc, col, ctr.batAt(pre.seq), pre.row, ctr.batAt(curSeq), curRow)
+	var preBatch *batch.Batch
+	preRow := pre.row
+	if pre.seq >= 0 {
+		preBatch = ctr.batAt(pre.seq)
+	} else {
+		preBatch = batch.NewWithSize(col + 1)
+		preBatch.SetVector(int32(col), ctr.linSeed[col])
+		preBatch.SetRowCount(1)
+		preRow = 0
+	}
+	valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, ctr.batAt(curSeq), curRow)
 	if err != nil {
 		return err
 	}
@@ -583,10 +604,10 @@ func (ctr *container) driveFill(
 		}
 		bat, err := ctr.spill.replayNext(ctr, ap, proc)
 		if err == io.EOF {
-			ctr.cleanupSpill(proc)
-			result := vm.NewCallResult()
-			result.Status = vm.ExecStop
-			return result, nil
+			if err = ctr.finishSpillReplay(ap, proc, consume); err != nil {
+				return vm.NewCallResult(), err
+			}
+			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)
 		}
 		if err != nil {
 			ctr.cleanupSpill(proc)

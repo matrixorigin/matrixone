@@ -223,6 +223,72 @@ func TestFillNextLongGapSpillsPendingSuffix(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestFillNextSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bats := []*batch.Batch{
+		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{40, 50, 60}, nil, []int64{1, 1, 1}),
+	}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_NEXT, PartitionColIdx: []int32{1}, SpillThreshold: 2}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{val: 10}}, readCol(first.Batch, 0))
+	require.Equal(t, 1, child.calls)
+
+	second, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{val: 40}}, readCol(second.Batch, 0))
+	require.Equal(t, 4, child.calls, "closed segment must replay before the carry tail or EOF is pulled")
+
+	all := append(readCol(second.Batch, 0), drainCol(t, arg, proc, 0)...)
+	require.Equal(t, []cell{{val: 40}, {val: 40}, {val: 40}, {val: 50}, {val: 60}}, all)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillNextSpillPartitionBoundaryClosesSegment(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bats := []*batch.Batch{
+		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{20, 30}, nil, []int64{2, 2}),
+	}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_NEXT, PartitionColIdx: []int32{1}, SpillThreshold: 1}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{val: 10}}, readCol(first.Batch, 0))
+
+	second, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{null: true}}, readCol(second.Batch, 0))
+	require.Equal(t, 3, child.calls, "partition boundary must close the old segment before its carry rows")
+
+	all := append(readCol(second.Batch, 0), drainCol(t, arg, proc, 0)...)
+	require.Equal(t, []cell{{null: true}, {val: 20}, {val: 30}}, all)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // Trailing NULLs with no following value in the stream stay NULL at EOF rather
 // than being dropped or hanging the operator.
 func TestFillNextEOFTail(t *testing.T) {
@@ -321,12 +387,16 @@ func TestFillNextSpillMultiColumnAndPartitionBoundary(t *testing.T) {
 		makeBatch([]int64{0}, []int64{0}, []uint64{0}, []uint64{0}, []int64{2}),
 		makeBatch([]int64{8}, []int64{80}, nil, nil, []int64{2}),
 	}
-	child := colexec.NewMockOperator().WithBatchs(bats)
-	arg := &Fill{ColLen: 2, FillType: plan.Node_NEXT, PartitionColIdx: []int32{2}, SpillThreshold: 2}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 2, FillType: plan.Node_NEXT, PartitionColIdx: []int32{2}, SpillThreshold: 1}
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
 
-	var col0, col1 []cell
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 3, child.calls, "both fill columns must close before the first segment replays")
+	col0 := readCol(first.Batch, 0)
+	col1 := readCol(first.Batch, 1)
 	for {
 		res, err := arg.Call(proc)
 		require.NoError(t, err)
@@ -472,12 +542,82 @@ func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bats := []*batch.Batch{
+		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{40, 50, 60}, nil, []int64{1, 1, 1}),
+	}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{
+		ColLen:          1,
+		FillType:        plan.Node_LINEAR,
+		PartitionColIdx: []int32{1},
+		SpillThreshold:  2,
+	}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	midpoint := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(midpoint, int64(25), false, proc.Mp()))
+	arg.ctr.exes = []colexec.ExpressionExecutor{&fillStubExpressionExecutor{result: midpoint}}
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{val: 10}}, readCol(first.Batch, 0))
+	require.Equal(t, 4, child.calls, "right endpoint must close the segment before carry tail or EOF")
+
+	all := append(readCol(first.Batch, 0), drainCol(t, arg, proc, 0)...)
+	require.Equal(t, []cell{{val: 10}, {val: 25}, {val: 25}, {val: 40}, {val: 50}, {val: 60}}, all)
+
+	arg.Free(proc, false, nil)
+	midpoint.Free(proc.Mp())
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestFillLinearSpillSeedStopsAtPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bats := []*batch.Batch{
+		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{0, 20}, []uint64{0}, []int64{2, 2}),
+	}
+	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}, SpillThreshold: 1}
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	first, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{val: 10}}, readCol(first.Batch, 0))
+
+	second, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []cell{{null: true}}, readCol(second.Batch, 0))
+	require.Equal(t, 3, child.calls)
+
+	all := append(readCol(second.Batch, 0), drainCol(t, arg, proc, 0)...)
+	require.Equal(t, []cell{{null: true}, {null: true}, {val: 20}}, all)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestFillSpillResetReleasesState(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
-		partitionedBatch(proc.Mp(), []int64{90}, nil, []int64{1}),
+		partitionedBatch(proc.Mp(), []int64{90, 100}, nil, []int64{1, 1}),
 	}
 	arg := &Fill{ColLen: 1, FillType: plan.Node_NEXT, PartitionColIdx: []int32{1}, SpillThreshold: 2}
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
