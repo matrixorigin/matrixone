@@ -390,23 +390,34 @@ func (l *localLockTable) unlock(
 }
 
 func (l *localLockTable) getLock(
+	ctx context.Context,
 	key []byte,
 	txn pb.WaitTxn,
-	fn func(Lock)) {
+	fn func(Lock)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if l.mu.closed {
-		return
+		return nil
 	}
 	lock, ok := l.mu.store.Get(key)
 	if ok {
 		fn(lock)
 	}
+	return nil
 }
 
 func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return pb.WaitTxn{}, false, err
+	}
 	if l.mu.closed {
 		return pb.WaitTxn{}, false, nil
 	}
@@ -453,6 +464,9 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 
 	if l.mu.closed {
 		return moerr.NewInvalidStateNoCtx("local lock table closed")
+	}
+	if err := c.ctx.Err(); err != nil {
+		return err
 	}
 
 	switch c.opts.Granularity {

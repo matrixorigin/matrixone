@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -78,6 +79,35 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 		assert.NoError(t, w.wait(ctx, getLogger("")).err)
 	})
 
+}
+
+func TestWaitCancellationAfterNotifyClaimConsumesNotification(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
+		w.setStatus(notified)
+
+		beforeReceive := make(chan struct{})
+		allowReceive := make(chan struct{})
+		w.beforeWaitNotificationReceiveFunc = func() {
+			close(beforeReceive)
+			<-allowReceive
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		expected := errors.New("notification won")
+		done := make(chan notifyValue, 1)
+		go func() {
+			done <- w.wait(ctx, getLogger(""))
+		}()
+
+		<-beforeReceive
+		close(allowReceive)
+		w.c <- notifyValue{err: expected}
+		require.ErrorIs(t, (<-done).err, expected)
+		require.Empty(t, w.c)
+	})
 }
 
 func TestWaitMultiTimes(t *testing.T) {

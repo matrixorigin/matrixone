@@ -66,7 +66,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 				require.NoError(t, err, err)
 				require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
-				lt, err := s1.getLockTable(0, table)
+				lt, err := s1.getLockTable(context.Background(), 0, table)
 				require.NoError(t, err)
 				require.Equal(t, table, lt.getBind().Table)
 				require.Equal(t, table, lt.getBind().OriginTable)
@@ -1682,10 +1682,6 @@ func TestIssue3654(t *testing.T) {
 			l1 := s[0]
 			l2 := s[1]
 
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				time.Nanosecond)
-			defer cancel()
 			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
@@ -1694,12 +1690,17 @@ func TestIssue3654(t *testing.T) {
 			}
 
 			_, err := l1.Lock(
-				ctx,
+				context.Background(),
 				0,
 				[][]byte{{1}},
 				[]byte("txn1"),
 				option)
 			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Nanosecond)
+			defer cancel()
 
 			_, err = l2.Lock(
 				ctx,
@@ -2634,7 +2635,7 @@ func TestLockResultWithNoConflict(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, res.Timestamp.IsEmpty())
 
-			lb, err := l.getLockTable(0, 0)
+			lb, err := l.getLockTable(context.Background(), 0, 0)
 			require.NoError(t, err)
 			assert.Equal(t, lb.getBind(), res.LockedOn)
 		},
@@ -3011,7 +3012,8 @@ func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
 				}
 			}
 			// get bind
-			_, _, err = getLockTableBind(
+			_, _, err = getLockTableBindWithContext(
+				ctx,
 				l.remote.client,
 				0,
 				0,
@@ -3503,7 +3505,7 @@ func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *tes
 			restartedAllocatorID := alloc.allocatorID
 			alloc.mu.Unlock()
 
-			_, err = l1.getLockTableWithCreate(0, freshTable, newTestRows(2), pb.Sharding_None)
+			_, err = l1.getLockTableWithCreate(context.Background(), 0, freshTable, newTestRows(2), pb.Sharding_None)
 			require.NoError(t, err)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
 			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
@@ -3784,6 +3786,7 @@ func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
 
 			lt, err := l1.publishLockTableBindFromAllocator(
+				context.Background(),
 				"allocator-publish-race-old",
 				staleBind.Group,
 				staleBind.Table,
@@ -3829,6 +3832,7 @@ func TestAllocatorPublishRejectsOverwriteAfterConcurrentBindChanged(t *testing.T
 			l1.handleBindChanged(freshBind)
 
 			lt, err := l1.publishLockTableBindFromAllocator(
+				context.Background(),
 				"allocator-publish-current-race",
 				delayedBind.Group,
 				delayedBind.Table,
@@ -4927,14 +4931,14 @@ func TestMultiGroupWithSameTableID(t *testing.T) {
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows, txn1, option1)
 					require.NoError(t, err)
-					lt1, err := s.getLockTable(g1, table)
+					lt1, err := s.getLockTable(context.Background(), g1, table)
 					assert.NoError(t, err)
 					checkLock(t, lt1.(*localLockTable), rows[0], [][]byte{txn1}, nil, nil)
 
 					// txn2 get lock, shared
 					_, err = s.Lock(ctx, table, rows, txn2, option2)
 					require.NoError(t, err)
-					lt2, err := s.getLockTable(g2, table)
+					lt2, err := s.getLockTable(context.Background(), g2, table)
 					assert.NoError(t, err)
 					checkLock(t, lt2.(*localLockTable), rows[0], [][]byte{txn2}, nil, nil)
 
@@ -5073,7 +5077,7 @@ func TestIssue2128(t *testing.T) {
 				option)
 			require.NoError(t, err)
 
-			lb, err := l.getLockTable(0, 0)
+			lb, err := l.getLockTable(context.Background(), 0, 0)
 			require.NoError(t, err)
 			b := lb.getBind()
 			b.ServiceID = "1705661824807004000s3"
@@ -5234,7 +5238,7 @@ func TestLeakWaiterForErr(t *testing.T) {
 			txn3 := []byte("rt3")
 			txn4 := []byte("rt4")
 
-			ll, err := l1.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			ll, err := l1.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := ll.(*localLockTable)
 			lt.options.afterWait = func(c *lockContext) func() {
@@ -5313,7 +5317,7 @@ func TestIssue14008(t *testing.T) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					_, err := s1.getLockTableWithCreate(0, 10, nil, pb.Sharding_None)
+					_, err := s1.getLockTableWithCreate(context.Background(), 0, 10, nil, pb.Sharding_None)
 					require.Error(t, err)
 				}()
 			}
@@ -5462,7 +5466,7 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			}()
 
 			hasWaiter := func() bool {
-				v, err := l.getLockTable(0, 0)
+				v, err := l.getLockTable(context.Background(), 0, 0)
 				require.NoError(t, err)
 				lt := v.(*localLockTable)
 				lt.mu.Lock()
@@ -5856,4 +5860,124 @@ func mustAddTestLock(t *testing.T,
 		txnID,
 		lock,
 		granularity)
+}
+
+type doneObservedContext struct {
+	context.Context
+	doneObserved chan struct{}
+	once         sync.Once
+}
+
+func (c *doneObservedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.doneObserved) })
+	return c.Context.Done()
+}
+
+func TestLockDoesNotAcquireAfterContextAlreadyCanceled(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			table := uint64(25790)
+			rows := newTestRows(1)
+
+			warmupTxn := []byte("warm-bind")
+			_, err := s.Lock(context.Background(), table, rows, warmupTxn,
+				newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, s.Unlock(context.Background(), warmupTxn,
+				timestamp.Timestamp{}))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			canceledTxn := []byte("already-canceled")
+			_, lockErr := s.Lock(ctx, table, rows, canceledTxn,
+				newTestRowExclusiveOptions())
+			if lockErr == nil {
+				require.NoError(t, s.Unlock(context.Background(), canceledTxn,
+					timestamp.Timestamp{}))
+			}
+			require.ErrorIs(t, lockErr, context.Canceled)
+			require.Nil(t, s.activeTxnHolder.getActiveTxn(canceledTxn, false, ""))
+		})
+}
+
+func TestLockReturnsWhenCanceledDuringBindAllocationWait(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			group := uint32(0)
+			table := uint64(257902)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			s.mu.allocating[group] = map[uint64]chan struct{}{table: waitC}
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], table)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			baseCtx, cancel := context.WithCancel(context.Background())
+			ctx := &doneObservedContext{
+				Context:      baseCtx,
+				doneObserved: make(chan struct{}),
+			}
+			txnID := []byte("canceled-bind-wait")
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, newTestRows(1), txnID,
+					newTestRowExclusiveOptions())
+				done <- err
+			}()
+
+			<-ctx.doneObserved
+			s.checkCanMoveGroupTables()
+			require.True(t, s.isStatus(pb.Status_ServiceLockEnable),
+				"drain advanced while a lock admission was waiting for its bind")
+			cancel()
+			var lockErr error
+			select {
+			case lockErr = <-done:
+			case <-time.After(time.Second):
+				t.Fatal("Lock did not return after bind-allocation wait was canceled")
+			}
+
+			require.ErrorIs(t, lockErr, context.Canceled)
+			require.Nil(t, s.activeTxnHolder.getActiveTxn(txnID, false, ""))
+			s.mu.RLock()
+			require.Zero(t, s.mu.lockAdmissions)
+			s.mu.RUnlock()
+			s.checkCanMoveGroupTables()
+			require.True(t, s.isStatus(pb.Status_ServiceLockWaiting))
+		})
+}
+
+func TestLockReturnsWhenServiceReadinessWaitIsCanceled(t *testing.T) {
+	started := make(chan struct{})
+	var once sync.Once
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, 257903, newTestRows(1), []byte("readiness-wait"),
+					newTestRowExclusiveOptions())
+				done <- err
+			}()
+			<-started
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("Lock did not return after the service-readiness wait was canceled")
+			}
+		},
+		WithWait(func(ctx context.Context) error {
+			once.Do(func() { close(started) })
+			<-ctx.Done()
+			return ctx.Err()
+		}))
 }

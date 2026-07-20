@@ -54,6 +54,7 @@ func acquireWaiter(
 		panic("BUG: invalid ref count")
 	}
 	w.beforeSwapStatusAdjustFunc = func() {}
+	w.beforeWaitNotificationReceiveFunc = func() {}
 	return w
 }
 
@@ -114,7 +115,8 @@ type waiter struct {
 	isRemoteSnapshot bool
 
 	// just used for testing
-	beforeSwapStatusAdjustFunc func()
+	beforeSwapStatusAdjustFunc        func()
+	beforeWaitNotificationReceiveFunc func()
 }
 
 // String implement Stringer
@@ -185,16 +187,11 @@ func (w *waiter) casStatus(
 }
 
 func (w *waiter) mustRecvNotification(
-	ctx context.Context,
 	logger *log.MOLogger,
 ) notifyValue {
-	select {
-	case v := <-w.c:
-		logWaiterGetNotify(logger, w, v)
-		return v
-	case <-ctx.Done():
-		return notifyValue{err: ctx.Err()}
-	}
+	v := <-w.c
+	logWaiterGetNotify(logger, w, v)
+	return v
 }
 
 func (w *waiter) mustSendNotification(
@@ -253,14 +250,17 @@ func (w *waiter) wait(
 
 	w.beforeSwapStatusAdjustFunc()
 
-	// context is timeout, and status not changed, no concurrent happen
-	if w.casStatus(status, completed, logger) {
+	// Cancellation only owns the waiter if it can complete a still-blocking
+	// wait. Once a notifier has published notified, it owns completion and its
+	// channel value must be consumed even though ctx is already done.
+	if w.casStatus(blocking, completed, logger) {
 		return notifyValue{err: ctx.Err()}
 	}
-	// notify and timeout are concurrently issued, we use real result to replace
-	// timeout error
+	// Notification and cancellation raced; notification won the status claim.
+	w.beforeWaitNotificationReceiveFunc()
+	v := w.mustRecvNotification(logger)
 	w.setStatus(completed)
-	return w.mustRecvNotification(ctx, logger)
+	return v
 }
 
 func (w *waiter) disableNotify() {
@@ -330,6 +330,8 @@ func (w *waiter) reset() {
 	w.lockWaitGranularity = pb.Granularity_Row
 	w.lockWaitMode = pb.LockMode_Exclusive
 	w.isRemoteSnapshot = false
+	w.beforeSwapStatusAdjustFunc = func() {}
+	w.beforeWaitNotificationReceiveFunc = func() {}
 	w.stopLockWaitTimer()
 }
 

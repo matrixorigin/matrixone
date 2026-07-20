@@ -137,7 +137,7 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 			// test. Keep it bounded so an unexpected routing failure produces a
 			// useful failure instead of consuming the package's 40-minute timeout.
 			require.Eventually(t, func() bool {
-				lt, err := owner.getLockTable(0, tableID)
+				lt, err := owner.getLockTable(context.Background(), 0, tableID)
 				if err != nil {
 					return false
 				}
@@ -150,7 +150,7 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 				lock, ok := local.mu.store.Get(row)
 				return ok && lock.waiters.size() == 1
 			}, 10*time.Second, 10*time.Millisecond, "active remote waiter did not reach owner queue")
-			lt, err := owner.getLockTable(0, tableID)
+			lt, err := owner.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			local := lt.(*localLockTable)
 			logger := getLogger("")
@@ -185,7 +185,8 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 			txn := holderService.activeTxnHolder.getActiveTxn(holderTxn, false, "")
 			require.NotNil(t, txn)
 			var waitingTxnIDs [][]byte
-			require.True(t, txn.fetchWhoWaitingMe(
+			ok, err = txn.fetchWhoWaitingMe(
+				context.Background(),
 				holderService.serviceID,
 				holderTxn,
 				func(waitTxn pb.WaitTxn, waiterAddress string) bool {
@@ -193,8 +194,12 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 					require.Equal(t, owner.serviceID, waiterAddress)
 					return true
 				},
-				holderService.getLockTable,
-			))
+				func(ctx context.Context, group uint32, table uint64) (lockTable, error) {
+					return holderService.getLockTable(ctx, group, table)
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
 			require.Equal(t, [][]byte{activeWaiterTxn}, waitingTxnIDs)
 
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -239,7 +244,7 @@ func TestWaitLocalWaitersIsBounded(t *testing.T) {
 			txnID := []byte("holder")
 			mustAddTestLock(t, ctx, s[0], tableID, txnID, [][]byte{row}, pb.Granularity_Row)
 
-			lt, err := s[0].getLockTable(0, tableID)
+			lt, err := s[0].getLockTable(ctx, 0, tableID)
 			require.NoError(t, err)
 			err = waitLocalWaitersWithTimeout(lt.(*localLockTable), row, 1, 20*time.Millisecond)
 			require.EqualError(t, err, "internal error: timed out waiting for 1 local lock waiters, observed 0")
@@ -267,7 +272,7 @@ func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
 			req.GetLockHolder.Sharding = pb.Sharding_ByRow
 			resp := &pb.Response{}
 
-			lt, err := l.getLocalLockTable(req, resp)
+			lt, err := l.getLocalLockTable(context.Background(), req, resp)
 			require.NoError(t, err)
 			require.NotNil(t, lt)
 			require.Equal(t, bind, lt.getBind())
@@ -1054,9 +1059,9 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(0, table)
+			lt, err := l2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
+			_ = lt.getLock(context.Background(), txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
@@ -1151,9 +1156,9 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 			waitBindDisabled(t, alloc, l1.serviceID)
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(0, table)
+			lt, err := l2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
+			_ = lt.getLock(context.Background(), txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 			// l2 get the bind
 			l := l2.tableGroups.get(0, table)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
@@ -1261,9 +1266,9 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 			})
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(0, table)
+			lt, err := l2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
+			_ = lt.getLock(context.Background(), txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
@@ -1386,7 +1391,7 @@ func TestIssue14346(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("timeout waiting for bind removal on s2")
 				default:
-					v, err := s2.getLockTable(0, table)
+					v, err := s2.getLockTable(context.Background(), 0, table)
 					require.NoError(t, err)
 					if v == nil {
 						return
@@ -1425,14 +1430,14 @@ func runBindChangedTests(
 
 			// l2 get the table1's bind
 			mustAddTestLock(t, ctx, l2, table1, txnID2, [][]byte{{2}}, pb.Granularity_Row)
-			v, err := l2.getLockTable(0, table1)
+			v, err := l2.getLockTable(context.Background(), 0, table1)
 			require.NoError(t, err)
 			require.Equal(t, l1.serviceID, v.getBind().ServiceID)
 
 			if makeBindChanged {
 				// stop l1 keep lock bind
 				skip.Store(true)
-				lt, err := l1.getLockTable(0, table1)
+				lt, err := l1.getLockTable(context.Background(), 0, table1)
 				require.NoError(t, err)
 				old := lt.getBind()
 				waitBindDisabled(t, alloc, l1.serviceID)
@@ -1476,7 +1481,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTableWithCreate(0, old.Table, nil, pb.Sharding_None)
+		lt, err := l.getLockTableWithCreate(context.Background(), 0, old.Table, nil, pb.Sharding_None)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {
