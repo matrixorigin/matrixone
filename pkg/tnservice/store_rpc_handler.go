@@ -75,7 +75,20 @@ func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *t
 	}
 	defer lease.release()
 	prepareResponse(request, response)
-	return lease.service.Read(lease.ctx, request, response)
+	if err := lease.service.Read(lease.ctx, request, response); err != nil {
+		if ctxErr := context.Cause(ctx); ctxErr != nil {
+			return ctxErr
+		}
+		if context.Cause(lease.ctx) != nil {
+			response.TxnError = txn.WrapError(
+				moerr.NewTNShardNotFound(ctx, s.cfg.UUID, request.GetTargetTN().ShardID),
+				0,
+			)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
