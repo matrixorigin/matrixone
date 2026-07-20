@@ -25,7 +25,32 @@ select count(*) from ivf3;
 
 create index idx3 using ivfflat on ivf3(b) op_type "vector_l2_ops" LISTS=100 ASYNC;
 
-select case when count(*) = 0 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 then sleep(5) else 0 end as wait_for_async_ivf3_seed_sync from mo_catalog.mo_iscp_log where job_name = 'index_idx3' and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf3');
+-- Job state can be idle before its CDC watermark reaches this write. Wait on the
+-- committed entries payload so the next load exercises incremental sync.
+set @ivf3_entries = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx3' and algo = 'ivfflat' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf3')
+    limit 1
+);
+set @wait_ivf3_seed_sql = concat(
+    'select case when (select count(*) from `', database(), '`.`', @ivf3_entries,
+    '`) < 10000 then sleep(5) else 0 end as wait_for_async_ivf3_seed_sync'
+);
+prepare wait_ivf3_seed from @wait_ivf3_seed_sql;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+execute wait_ivf3_seed;
+deallocate prepare wait_ivf3_seed;
 
 load data infile {'filepath'='$resources/vector/sift128_base_10k_2.csv.gz', 'compression'='gzip'} into table ivf3 fields terminated by ':' parallel 'true';
 
@@ -48,18 +73,40 @@ create index idx01 using ivfflat on ivf4(c) op_type "vector_l2_ops" LISTS=1 ASYN
 
 -- end create table
 
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
-select case when count(distinct table_id) < 3 or coalesce(min(cast(json_extract(job_status, '$.Stage') as signed)), 0) = 0 or sum(case when job_state in (1, 2) then 1 else 0 end) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and drop_at is null and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname in ('ivf1_async', 'ivf3', 'ivf4'));
+-- Poll committed payload counts instead of scheduler state; the latter only
+-- describes the current iteration and can report completed between writes.
+set @ivf1_entries = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx01' and algo = 'ivfflat' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf1_async')
+    limit 1
+);
+set @ivf4_entries = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx01' and algo = 'ivfflat' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf4')
+    limit 1
+);
+set @wait_ivf_sync_sql = concat(
+    'select case when (select count(*) from `', database(), '`.`', @ivf1_entries, '`) < 6',
+    ' or (select count(*) from `', database(), '`.`', @ivf3_entries, '`) < 20000',
+    ' or (select count(*) from `', database(), '`.`', @ivf4_entries, '`) < 5',
+    ' then sleep(10) else 0 end as wait_for_async_ivf_index_sync'
+);
+prepare wait_ivf_sync from @wait_ivf_sync_sql;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+execute wait_ivf_sync;
+deallocate prepare wait_ivf_sync;
 
 
 -- start SELECT
