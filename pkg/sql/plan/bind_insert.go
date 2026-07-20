@@ -617,7 +617,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 		}
 		scanCols = append(scanCols, col)
 	}
-	scanTableDef := DeepCopyTableDef(entriesTableDef, false)
+	scanTableDef := CloneTableDefForPlan(entriesTableDef, false)
 	scanTableDef.Cols = scanCols
 	ivfScanID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
@@ -703,7 +703,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 		}
 		scanCols = append(scanCols, col)
 	}
-	scanTableDef := DeepCopyTableDef(indexTableDef, false)
+	scanTableDef := CloneTableDefForPlan(indexTableDef, false)
 	scanTableDef.Cols = scanCols
 	idxScanID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
@@ -782,7 +782,7 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 		}
 		scanCols = append(scanCols, col)
 	}
-	scanTableDef := DeepCopyTableDef(indexTableDef, false)
+	scanTableDef := CloneTableDefForPlan(indexTableDef, false)
 	scanTableDef.Cols = scanCols
 	idxScanID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,

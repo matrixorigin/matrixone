@@ -209,6 +209,13 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	return nil
 }
 
+func (Hooks) HiddenTableDropPriority(algoTableType string) int {
+	if catalog.ToLower(algoTableType) == catalog.Hnsw_TblType_Storage {
+		return 1
+	}
+	return 0
+}
+
 // IdxcronMetadata: HNSW has no idxcron action (SyncDescriptor().IdxcronAction=="").
 // This method is never called for HNSW.
 func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {

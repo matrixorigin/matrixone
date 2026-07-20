@@ -187,6 +187,10 @@ func NewISCPTaskExecutor(
 		tableMu:     sync.RWMutex{},
 		option:      option,
 		mp:          mp,
+		fencedJobs:  make(map[JobRuntimeKey]JobFence),
+		runningConsumers: make(
+			map[JobRuntimeKey]map[uint64]*RunningJobConsumer,
+		),
 	}
 	return exec, nil
 }
@@ -341,9 +345,10 @@ func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error
 
 	// Publish a fully initialized generation only after replay and state repair
 	// have both succeeded. NewWorker seals all worker goroutines before return.
-	exec.worker = NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
+	exec.worker = NewWorker(exec, exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
 	exec.wg.Add(1)
 	exec.running = true
+	RegisterExecutorRuntime(exec.cnUUID, exec)
 	logutil.Info(
 		"ISCP-Task Start",
 	)
@@ -367,6 +372,7 @@ func (exec *ISCPTaskExecutor) stopLocked() {
 	exec.cancel()
 	exec.worker.Stop()
 	exec.wg.Wait()
+	UnregisterExecutorRuntime(exec.cnUUID, exec)
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
 }
@@ -529,6 +535,12 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 						// generation; the next Start repairs and rebuilds its state.
 						go exec.Cancel()
 						return
+					}
+					if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterSubmit) {
+						logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelAfterSubmit)
+					}
+					if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-submit" {
+						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
 					table.UpdateWatermark(iter)
@@ -960,6 +972,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	notPrint bool,
 ) error {
 	var newCreate bool
+	fenceKey := NewJobRuntimeKey(accountID, tableID, jobName, jobID)
 
 	var watermark types.TS
 	defer func() {
@@ -990,6 +1003,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
 		if dropAt != 0 {
+			exec.RemoveJobFence(fenceKey)
 			return nil
 		}
 		table = NewTableEntry(
@@ -1003,6 +1017,9 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		exec.setTable(table)
 	}
 	newCreate = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	if dropAt != 0 {
+		exec.RemoveJobFence(fenceKey)
+	}
 	return nil
 }
 
@@ -1018,6 +1035,7 @@ func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
 	tids := make([]uint64, 0, len(tablesToDelete))
 	for _, table := range tablesToDelete {
 		exec.deleteTableEntry(table)
+		exec.RemoveTableJobFences(table.accountID, table.tableID)
 		tids = append(tids, table.tableID)
 	}
 	logutil.Infof("ISCP-Task delete table %v", tids)
