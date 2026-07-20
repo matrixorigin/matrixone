@@ -1235,17 +1235,41 @@ func TestPKCheckSnapshotRefreshesAfterPendingApply(t *testing.T) {
 		"the readiness proof must return the state that observed the applied update")
 	staleApplied := stale.GetAppliedTo()
 	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
+	require.Positive(t, e.pClient.subscribed.m[42].lastTs.Load(),
+		"PK checks must keep write-only subscriptions active for GC")
+}
+
+type waitReadyObservedContext struct {
+	context.Context
+	checked chan struct{}
+	once    sync.Once
+}
+
+func (c *waitReadyObservedContext) Err() error {
+	err := c.Context.Err()
+	if err == nil {
+		c.once.Do(func() { close(c.checked) })
+	}
+	return err
 }
 
 func TestLogTailSubscriberWaitReadyReturnsOnContextCancel(t *testing.T) {
 	subscriber := newLogTailSubscriber()
-	ctx, cancel := context.WithCancel(context.Background())
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &waitReadyObservedContext{
+		Context: base,
+		checked: make(chan struct{}),
+	}
 	done := make(chan error, 1)
 	go func() {
 		done <- subscriber.waitReady(ctx)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-ctx.checked:
+	case <-time.After(time.Second):
+		t.Fatal("waitReady did not reach its wait loop")
+	}
 	cancel()
 	select {
 	case err := <-done:
