@@ -106,6 +106,15 @@ binary_hour
 SELECT CAST(MAKETIME(12, 0, X'01') AS VARCHAR) AS binary_second;
 binary_second
 12:00:01
+SELECT CAST(MAKETIME(12, 0, X'000000000000000001') AS VARCHAR) AS binary_second_wide_leading_zeros;
+binary_second_wide_leading_zeros
+12:00:01
+SELECT CAST(MAKETIME(12, 34, '') AS VARCHAR) AS empty_string_second;
+empty_string_second
+12:34:00.000000
+SELECT CAST(MAKETIME(12, 34, 'foo') AS VARCHAR) AS nonnumeric_string_second;
+nonnumeric_string_second
+12:34:00.000000
 CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
 INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);
 SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM maketime_double_seconds;

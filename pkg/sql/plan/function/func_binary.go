@@ -7397,7 +7397,7 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 
 	value = strings.TrimSpace(value)
 	if len(value) == 0 {
-		return 0, 0, true
+		return 0, 0, false
 	}
 
 	end := 0
@@ -7417,7 +7417,7 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		}
 	}
 	if digits == 0 {
-		return 0, 0, true
+		return 0, 0, false
 	}
 
 	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
@@ -7473,17 +7473,7 @@ func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32,
 			return 0, 0, true
 		}
 		if isBinary {
-			if len(value) > 8 {
-				return 0, 0, true
-			}
-			var result uint64
-			for _, b := range value {
-				result = result<<8 | uint64(b)
-			}
-			if result > math.MaxInt64 {
-				return 0, 0, true
-			}
-			return makeTimeIntegerSecond(int64(result), false)
+			return makeTimeIntegerSecond(makeTimeBinaryInteger(value), false)
 		}
 		return makeTimeExactSecond(functionUtil.QuickBytesToStr(value))
 	}

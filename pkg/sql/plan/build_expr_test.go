@@ -420,8 +420,13 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 		{name: "hex minute overflow", sql: "select cast(maketime(12, X'FFFFFFFFFFFFFFFFFF', 0) as varchar)", wantNull: true},
 		{name: "hex minute wide leading zeros", sql: "select cast(maketime(12, X'000000000000000001', 0) as varchar)", want: "12:01:00"},
 		{name: "hex second", sql: "select cast(maketime(12, 0, X'01') as varchar)", want: "12:00:01"},
+		{name: "hex second wide leading zeros", sql: "select cast(maketime(12, 0, X'000000000000000001') as varchar)", want: "12:00:01"},
+		{name: "hex second wide leading zero max", sql: "select cast(maketime(12, 0, X'00000000000000003B') as varchar)", want: "12:00:59"},
+		{name: "hex second wider overflow", sql: "select cast(maketime(12, 0, X'010000000000000000') as varchar)", wantNull: true},
 		{name: "bit second", sql: "select cast(maketime(12, 0, B'00000001') as varchar)", want: "12:00:01"},
 		{name: "binary string second", sql: "select cast(maketime(12, 0, cast('01' as binary(2))) as varchar)", want: "12:00:01"},
+		{name: "empty string second coerces to zero", sql: "select cast(maketime(12, 34, '') as varchar)", want: "12:34:00.000000"},
+		{name: "nonnumeric string second coerces to zero", sql: "select cast(maketime(12, 34, 'foo') as varchar)", want: "12:34:00.000000"},
 		{name: "plain strings", sql: "select cast(maketime('12.7', '15.8', '30.9') as varchar)", want: "12:15:30.900000"},
 		{name: "decimal second", sql: "select cast(maketime(12, 34, cast('56.789012' as decimal(20, 6))) as varchar)", want: "12:34:56.789012"},
 	}

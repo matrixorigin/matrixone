@@ -9715,14 +9715,16 @@ func TestMakeTimeExactStringSecondRounding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{12, 12, 12, 12}, []bool{false, false, false, false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{59, 59, 59, 0}, []bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{12, 12, 12, 12, 12, 12}, []bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{59, 59, 59, 0, 34, 34}, []bool{false, false, false, false, false, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{
 				"59.99999949999999999",
 				"59.9999995",
 				"59.99999950000000001",
 				"5.9e1",
-			}, []bool{false, false, false, false}),
+				"",
+				"foo",
+			}, []bool{false, false, false, false, false, false}),
 		},
 		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
 			[]types.Time{
@@ -9730,8 +9732,10 @@ func TestMakeTimeExactStringSecondRounding(t *testing.T) {
 				types.TimeFromClock(false, 13, 0, 0, 0),
 				types.TimeFromClock(false, 13, 0, 0, 0),
 				types.TimeFromClock(false, 12, 0, 59, 0),
+				types.TimeFromClock(false, 12, 34, 0, 0),
+				types.TimeFromClock(false, 12, 34, 0, 0),
 			},
-			[]bool{false, false, false, false}),
+			[]bool{false, false, false, false, false, false}),
 		MakeTime)
 
 	s, info := fcTC.Run()

@@ -52,6 +52,11 @@ SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS 
 # Binary literals retain numeric byte semantics instead of being parsed as text
 SELECT CAST(MAKETIME(X'0102', 0, 0) AS VARCHAR) AS binary_hour;
 SELECT CAST(MAKETIME(12, 0, X'01') AS VARCHAR) AS binary_second;
+SELECT CAST(MAKETIME(12, 0, X'000000000000000001') AS VARCHAR) AS binary_second_wide_leading_zeros;
+
+# Exact VARCHAR seconds use MySQL numeric coercion for empty and nonnumeric text
+SELECT CAST(MAKETIME(12, 34, '') AS VARCHAR) AS empty_string_second;
+SELECT CAST(MAKETIME(12, 34, 'foo') AS VARCHAR) AS nonnumeric_string_second;
 
 # Default DOUBLE column retains microseconds
 CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
