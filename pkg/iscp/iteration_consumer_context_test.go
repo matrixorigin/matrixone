@@ -161,6 +161,53 @@ func runIterationConsumersWithStatusesForTest(
 	return done, statuses
 }
 
+func TestRunInitSQLWithRuntimeCancelInFlightInitSQL(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	iterCtx := testIterationContext("index_idx01")
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- runInitSQLWithRuntime(context.Background(), exec, iterCtx, func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("init sql did not start")
+	}
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
+	require.True(t, exec.IsJobFenced(key))
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("init sql was not drained")
+	}
+}
+
+func TestRunInitSQLWithRuntimeSkipsFencedInitSQL(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	iterCtx := testIterationContext("index_idx01")
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(time.Minute)}
+
+	called := false
+	err := runInitSQLWithRuntime(context.Background(), exec, iterCtx, func(context.Context) error {
+		called = true
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.False(t, called)
+}
+
 func TestRunISCPTaskIterationConsumersCancelSnapshotInFlightConsumer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithCancel(context.Background())

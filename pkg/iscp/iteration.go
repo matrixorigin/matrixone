@@ -156,15 +156,25 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 	if needInit {
-		ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
-		err = ProcessInitSQL(
-			ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
-			jobSpecs[0].ConsumerInfo.InitSQL,
-			jobSpecs[0].ConsumerInfo.SrcTable.DBName,
-			jobSpecs[0].ConsumerInfo.SrcTable.TableName,
-			jobSpecs[0].ConsumerInfo.IndexName,
+		err = runInitSQLWithRuntime(
+			ctx,
+			runtime,
+			iterCtx,
+			func(initCtx context.Context) error {
+				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
+				return ProcessInitSQL(
+					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
+					jobSpecs[0].ConsumerInfo.InitSQL,
+					jobSpecs[0].ConsumerInfo.SrcTable.DBName,
+					jobSpecs[0].ConsumerInfo.SrcTable.TableName,
+					jobSpecs[0].ConsumerInfo.IndexName,
+				)
+			},
 		)
 		if err != nil {
+			if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])) {
+				return nil
+			}
 			return
 		}
 		statuses[0] = prevStatus[0]
@@ -959,6 +969,35 @@ func initSQLResolver(sessionVars []byte) (func(string, bool, bool) (interface{},
 		}
 		return nil, nil
 	}, nil
+}
+
+func runInitSQLWithRuntime(
+	ctx context.Context,
+	runtime *ISCPTaskExecutor,
+	iterCtx *IterationContext,
+	run func(context.Context) error,
+) error {
+	if run == nil {
+		return nil
+	}
+	if runtime == nil {
+		return run(ctx)
+	}
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	initCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	handle, ok := runtime.RegisterRunningConsumer(
+		key,
+		iterCtx.jobIDs[0],
+		iterCtx.lsn[0],
+		cancel,
+		nil,
+	)
+	if !ok {
+		return nil
+	}
+	defer runtime.UnregisterRunningConsumer(handle)
+	return run(initCtx)
 }
 
 func ProcessInitSQL(
