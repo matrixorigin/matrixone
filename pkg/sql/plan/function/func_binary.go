@@ -4019,12 +4019,11 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
-	emptyFormat := len(fmt) == 0
 
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		t, null1 := times.GetValue(i)
-		if null1 || null2 || emptyFormat {
+		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4045,7 +4044,7 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // Only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
 func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buffer) error {
 	hour, minute, sec, msec, isNeg := t.ClockFormat()
-	if isNeg {
+	if isNeg && len(format) > 0 {
 		buf.WriteByte('-')
 	}
 	inPatternMatch := false

@@ -9440,7 +9440,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
-			info: "test time_format - empty format returns null",
+			info: "test time_format - empty format returns empty string",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
 					[]types.Time{t1, t6},
@@ -9449,7 +9449,7 @@ func initTimeFormatTestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"", ""},
-				[]bool{true, true}),
+				[]bool{false, false}),
 		},
 		{
 			info: "test time_format - %h:%i:%s %p",
