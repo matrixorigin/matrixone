@@ -99,10 +99,10 @@ func (CatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) {
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
 		UsesCDC:              true,
-		SinkerType:          catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:         true,
-		IdxcronAction:       "fulltext2_reindex",
-		IdxcronAlgoToken:    "FULLTEXT2",
+		SinkerType:           catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:          true,
+		IdxcronAction:        "fulltext2_reindex",
+		IdxcronAlgoToken:     "FULLTEXT2",
 		IdxcronReindexOption: "MERGE",
 	}
 }

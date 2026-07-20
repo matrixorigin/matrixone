@@ -133,6 +133,36 @@ func TestSegmentRoundtripDatetimePK(t *testing.T) {
 	require.Equal(t, []any{types.Datetime(1234567890)}, loaded.pks)
 }
 
+// Narrow integer PKs (TINYINT/SMALLINT, signed + unsigned) must round-trip: the
+// build path (vector.GetAny) delivers them natively and no DDL guard rejects them,
+// so the pk codec has to handle T_int8/T_int16/T_uint8/T_uint16 or CREATE FULLTEXT2
+// crashes with "unsupported pk type". Regression cover for the codec gap.
+func TestSegmentRoundtripNarrowIntPK(t *testing.T) {
+	terms := map[string]*termPostings{
+		"n": {docIDs: []int64{0, 1}, tfs: []uint8{1, 1}, positions: [][]int32{{0}, {0}}},
+	}
+	cases := []struct {
+		typ types.T
+		pks []any
+	}{
+		{types.T_int8, []any{int8(-128), int8(127)}},
+		{types.T_uint8, []any{uint8(0), uint8(255)}},
+		{types.T_int16, []any{int16(-32768), int16(32767)}},
+		{types.T_uint16, []any{uint16(0), uint16(65535)}},
+	}
+	for _, c := range cases {
+		t.Run(c.typ.String(), func(t *testing.T) {
+			orig := buildSegment(int32(c.typ), c.pks, []int32{1, 1}, terms)
+			loaded := roundtrip(t, orig)
+			require.Equal(t, int32(c.typ), loaded.PkType)
+			require.Equal(t, c.pks, loaded.pks)
+			got, ok := loaded.LookupLoaded("n")
+			require.True(t, ok)
+			assertPostingsEqual(t, terms["n"], got)
+		})
+	}
+}
+
 func TestSegmentRoundtripEmpty(t *testing.T) {
 	orig := buildSegment(int32(types.T_int64), []any{}, []int32{}, map[string]*termPostings{})
 	loaded := roundtrip(t, orig)

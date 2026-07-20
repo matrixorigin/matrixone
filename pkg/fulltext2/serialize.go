@@ -411,8 +411,8 @@ func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
 	tp.blockLastDoc = make([]int64, nblk)
 	tp.blockMaxTf = make([]uint8, nblk)
 	tp.blockMinDocLn = make([]int32, nblk)
-	tp.blockOff = make([]int32, nblk+1)   // byte offsets RELATIVE to this term's blockData
-	tp.blockPosOff = make([]int32, nblk+1) // byte offsets RELATIVE to this term's posRaw
+	tp.blockOff = make([]int64, nblk+1)    // byte offsets RELATIVE to this term's blockData
+	tp.blockPosOff = make([]int64, nblk+1) // byte offsets RELATIVE to this term's posRaw
 	var prevLast, cb, cpos int64
 	for b := 0; b < nblk; b++ {
 		gap, ok := uv()
@@ -435,17 +435,17 @@ func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
 		if !ok || blkLen > uint64(len(s.blocks)) {
 			return nil, false
 		}
-		tp.blockOff[b] = int32(cb)
+		tp.blockOff[b] = cb
 		cb += int64(blkLen)
 		posLen, ok := uv()
 		if !ok || posLen > uint64(len(s.positions)) {
 			return nil, false
 		}
-		tp.blockPosOff[b] = int32(cpos)
+		tp.blockPosOff[b] = cpos
 		cpos += int64(posLen)
 	}
-	tp.blockOff[nblk] = int32(cb)
-	tp.blockPosOff[nblk] = int32(cpos)
+	tp.blockOff[nblk] = cb
+	tp.blockPosOff[nblk] = cpos
 	// blockData/posRaw are views into the mmap sections at this term's stored bases.
 	if int64(baseB)+cb > int64(len(s.blocks)) || int64(baseP)+cpos > int64(len(s.positions)) {
 		return nil, false
@@ -568,6 +568,14 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 		return packUint32(uint32(v.(int32))), nil
 	case types.T_uint32:
 		return packUint32(v.(uint32)), nil
+	case types.T_int16:
+		return packUint16(uint16(v.(int16))), nil
+	case types.T_uint16:
+		return packUint16(v.(uint16)), nil
+	case types.T_int8:
+		return []byte{byte(v.(int8))}, nil
+	case types.T_uint8:
+		return []byte{v.(uint8)}, nil
 	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		return asBytes(v), nil
@@ -613,6 +621,14 @@ func decodePk(pkType int32, b []byte) (any, error) {
 		return int32(binary.LittleEndian.Uint32(b)), nil
 	case types.T_uint32:
 		return binary.LittleEndian.Uint32(b), nil
+	case types.T_int16:
+		return int16(binary.LittleEndian.Uint16(b)), nil
+	case types.T_uint16:
+		return binary.LittleEndian.Uint16(b), nil
+	case types.T_int8:
+		return int8(b[0]), nil
+	case types.T_uint8:
+		return b[0], nil
 	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		return append([]byte(nil), b...), nil
@@ -651,6 +667,12 @@ func packUint64(v uint64) []byte {
 func packUint32(v uint32) []byte {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, v)
+	return b
+}
+
+func packUint16(v uint16) []byte {
+	b := make([]byte, 2)
+	binary.LittleEndian.PutUint16(b, v)
 	return b
 }
 

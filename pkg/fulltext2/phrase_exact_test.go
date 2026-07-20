@@ -39,14 +39,14 @@ import (
 //     segment (so a query works the same after a restart/merge).
 func TestExactPhraseSemantics(t *testing.T) {
 	docs := []Doc{
-		{int64(1), []byte("全文 索引")},        // in order, adjacent
-		{int64(2), []byte("索引 全文")},        // reversed
-		{int64(3), []byte("全文 系统 索引")},   // in order but NOT adjacent
-		{int64(4), []byte("中文學習教材")},     // superset of 中文學習
+		{int64(1), []byte("全文 索引")},           // in order, adjacent
+		{int64(2), []byte("索引 全文")},           // reversed
+		{int64(3), []byte("全文 系统 索引")},        // in order but NOT adjacent
+		{int64(4), []byte("中文學習教材")},          // superset of 中文學習
 		{int64(5), []byte("quick brown fox")}, // English, in order
 		{int64(6), []byte("brown quick")},     // English, reversed
-		{int64(7), []byte("中文學校")},         // shares trigram 中文學 with 中文學習, NOT a superset
-		{int64(8), []byte("語文學習")},         // shares trigram 文學習 with 中文學習, NOT a superset
+		{int64(7), []byte("中文學校")},            // shares trigram 中文學 with 中文學習, NOT a superset
+		{int64(8), []byte("語文學習")},            // shares trigram 文學習 with 中文學習, NOT a superset
 	}
 
 	run := func(t *testing.T, idx *Index) {

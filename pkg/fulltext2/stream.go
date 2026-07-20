@@ -134,16 +134,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 
 	if haveQ {
 		if terms, ok := disjunctiveTerms(q); ok {
-			gs := idx.newGlobalStats()
-			for si, seg := range idx.segments {
-				allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
-				seg.streamWAND(terms, algo, gs, allow, sink)
-				if sink.err != nil {
-					return sink.err
-				}
-			}
-			sink.flush()
-			return sink.err
+			return idx.streamDisjunction(terms, algo, filter, sink)
 		}
 	}
 
@@ -180,7 +171,14 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	if !ok {
 		return nil // no resolvable tokens → nothing to stream
 	}
-	sink := &streamSink{emit: emit}
+	return idx.streamDisjunction(terms, algo, filter, &streamSink{emit: emit})
+}
+
+// streamDisjunction streams a pure OR of terms heap-free across all segments (global
+// corpus stats + per-segment liveness), pushing every (pk, score) into sink and
+// flushing at the end. Shared by StreamQuery's boolean disjunctive branch and
+// StreamBagOfWords' IN BM25 MODE path — a change to the disjunctive walk lands once.
+func (idx *Index) streamDisjunction(terms []clause, algo ScoreAlgo, filter docfilter.MembershipFilter, sink *streamSink) error {
 	gs := idx.newGlobalStats()
 	for si, seg := range idx.segments {
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})

@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This file holds the small, domain-neutral helpers shared by BOTH the classic
-// fulltext MATCH path (apply_indices_fulltext.go) and the bm25 MATCH path
-// (apply_indices_bm25.go). They operate purely on the shared fulltext_match()
-// function ABI (Args[0]=pattern, Args[1]=mode, Args[2:]=index columns) and the
-// generic node-context table — no classic-fulltext- or bm25-specific behavior —
-// so sharing them avoids duplication without coupling the two index semantics.
+// This file holds the small, domain-neutral helpers for the MATCH path
+// (apply_indices_fulltext.go), used by both classic fulltext and fulltext2 indexes.
+// They operate purely on the shared fulltext_match() function ABI (Args[0]=pattern,
+// Args[1]=mode, Args[2:]=index columns) and the generic node-context table — no
+// algo-specific behavior — so the per-match TVF dispatch stays out of these helpers.
 package plan
 
 import (
@@ -27,8 +26,7 @@ import (
 )
 
 // equalsMatchFunc reports whether two match functions are equivalent: same function
-// (a bm25_match and a fulltext_match are never equal, even on the same column/pattern),
-// same pattern, same mode, and the same set of index column names.
+// name, same pattern, same mode, and the same set of index column names.
 func (builder *QueryBuilder) equalsMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	if fn1.Func.ObjName != fn2.Func.ObjName {

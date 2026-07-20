@@ -292,7 +292,8 @@ type WordPos struct {
 
 // tokenizeWords flattens a tokenizer stream into ordered (word, byte-position) pairs.
 func tokenizeWords(tok tokenizer.Tokenizer, text []byte) []WordPos {
-	var words []WordPos
+	// token count is unknown up front; estimate from input length to avoid regrowth.
+	words := make([]WordPos, 0, len(text)/4)
 	for tk, err := range tok.Tokenize(text) {
 		if err != nil {
 			break

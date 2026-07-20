@@ -27,9 +27,10 @@ import (
 )
 
 func wsTokenize(s string) []WordPos {
-	var out []WordPos
+	fields := strings.Fields(s)
+	out := make([]WordPos, 0, len(fields))
 	i := 0
-	for _, f := range strings.Fields(s) {
+	for _, f := range fields {
 		pos := i + strings.Index(s[i:], f)
 		out = append(out, WordPos{Word: f, Pos: int32(pos)})
 		i = pos + len(f)

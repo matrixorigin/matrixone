@@ -61,7 +61,7 @@ type termPostings struct {
 	// transiently (materializeDocIDs/materializeTfs). blockOff[b] is block b's byte
 	// offset within blockData (len nblk+1, cumulative). nil on a build-side segment.
 	blockData []byte
-	blockOff  []int32
+	blockOff  []int64
 
 	// LOADED-side positions (Deserialize): this term's positions kept COMPRESSED
 	// (delta+varint, per doc: pc + position gaps), a view into the segment's
@@ -74,7 +74,7 @@ type termPostings struct {
 	// blockPosOff[b] is block b's byte offset within posRaw (len nblk+1, cumulative),
 	// so a block's positions are seekable without decoding the prior blocks — the
 	// position analogue of blockOff. nil on a build-side segment (positions is flat there).
-	blockPosOff []int32
+	blockPosOff []int64
 
 	// Term-level score-UB inputs (raw, scorer-agnostic).
 	maxTf     uint8 // max tf over all postings
@@ -295,7 +295,7 @@ type Segment struct {
 	// `blocks`/`positions` — so the resident directory heap is O(the current query), not
 	// O(vocabulary). `ranking`/`blocks`/`positions` are views into the mmap/blob (kept
 	// alive by mmapData or GC). The build-side `terms` map is left nil.
-	dict                      *termDict
+	dict                       *termDict
 	ranking, blocks, positions []byte
 
 	// mmapData is the shared read-only mmap of a base segment's on-disk file: the

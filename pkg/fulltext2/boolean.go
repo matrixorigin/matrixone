@@ -82,8 +82,8 @@ type clause struct {
 	kind     clauseKind
 	terms    []string     // leaf (term / prefix)
 	phrase   []phraseSlot // clausePhrase: positional (byte-offset) slots
-	children []clause      // group
-	weight   float64       // impact multiplier (1.0 default; > < ~ change it)
+	children []clause     // group
+	weight   float64      // impact multiplier (1.0 default; > < ~ change it)
 }
 
 // BoolQuery is a parsed boolean-mode query. adjust holds the ~ clauses, which

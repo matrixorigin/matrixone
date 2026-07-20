@@ -213,7 +213,8 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		tok = t
 	}
 
-	var terms []fulltext2.WordPos
+	// token count is unknown up front; estimate from input length to avoid regrowth.
+	terms := make([]fulltext2.WordPos, 0, content.Len()/4)
 	for t, terr := range tok.Tokenize(content.Bytes()) {
 		if terr != nil {
 			return nil, terr

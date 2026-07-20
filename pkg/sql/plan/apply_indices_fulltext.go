@@ -279,11 +279,17 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			alias_name = fmt.Sprintf("mo_fulltext_alias_%d_%d", scanNode.NodeId, i)
 		}
 
-		// One unified loop over ALL match predicates on this scan, so a mix of
-		// BM25(...) (bm25_match -> bm25_search) and MATCH(...) (fulltext_match ->
-		// fulltext_index_scan) on the same query chains into ONE join structure with
-		// ONE combined score sort. Dispatch the per-match TVF by the resolved index's
-		// algo; both TVFs emit the same (doc_id, score) shape so the rest is identical.
+		// One unified loop over ALL MATCH predicates on this scan, so multiple MATCH(...)
+		// (fulltext_match) predicates on the same query chain into ONE join structure with
+		// ONE combined score sort. Dispatch the per-match TVF by the resolved index's algo:
+		// fulltext2 -> fulltext2_search, classic fulltext -> fulltext_index_scan; both emit
+		// the same (doc_id, score) shape so the rest is identical.
+		//
+		// This 2-way branch stays inline rather than routing through an index-plugin hook
+		// on purpose: building the search TVF needs QueryBuilder internals and pkg/sql/plan
+		// tree types, which a plugin sub-package must NOT import (that is the plan import
+		// cycle the plugin framework forbids). The classic-fulltext/fulltext2 family shares
+		// one MATCH ABI, so this dispatch is closed at these two members.
 		var tmpTableFunc *tree.AliasedTableExpr
 		if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
 			var berr error
@@ -745,7 +751,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		}
 		// A classic fulltext index (single def), or a fulltext2 index — for which
 		// we match only the storage def as the representative (its metadata sibling
-		// is resolved later in buildFulltext2SearchTableFunc, mirroring bm25).
+		// is resolved later in buildFulltext2SearchTableFunc).
 		if catalog.IsFullText2IndexAlgo(idx.IndexAlgo) {
 			if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
 				continue
@@ -776,9 +782,11 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 	return nil
 }
 
-// Get the match filters in ScanNode — both fulltext_match (classic MATCH) and
-// bm25_match (BM25). Collecting both here lets applyJoinFullTextIndices chain a mix
-// of the two into one join structure with one combined score sort.
+// Get the MATCH filters (fulltext_match) in ScanNode. The same fulltext_match ABI
+// serves both classic fulltext and fulltext2 indexes; the per-match TVF is dispatched
+// later by the resolved index's algo. Collecting them here lets applyJoinFullTextIndices
+// chain multiple MATCH predicates on the same scan into one join structure with one
+// combined score sort.
 func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node) ([]int32, []*plan.IndexDef) {
 
 	filterids := make([]int32, 0)
@@ -786,17 +794,10 @@ func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node
 
 	for i, expr := range node.FilterList {
 		fn := expr.GetF()
-		if fn == nil {
+		if fn == nil || fn.Func.ObjName != "fulltext_match" {
 			continue
 		}
-
-		var idx *plan.IndexDef
-		switch fn.Func.ObjName {
-		case "fulltext_match":
-			idx = builder.findMatchFullTextIndex(fn, node)
-		default:
-		}
-		if idx != nil {
+		if idx := builder.findMatchFullTextIndex(fn, node); idx != nil {
 			ftidxs = append(ftidxs, idx)
 			filterids = append(filterids, int32(i))
 		}
@@ -805,10 +806,9 @@ func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node
 	return filterids, ftidxs
 }
 
-// Get the match projections in ProjectList — both fulltext_match (classic MATCH) and
-// bm25_match (BM25). An unmatched classic fulltext_match is rewritten to
-// fulltext_match_score (float32); an unmatched bm25_match is left as-is (BM25 requires
-// a bm25 index — it errors at execution rather than silently scoring).
+// Get the MATCH projections (fulltext_match) in ProjectList. An unmatched
+// fulltext_match is rewritten to fulltext_match_score (float32). The same ABI serves
+// both classic fulltext and fulltext2 indexes.
 func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, scanNode *plan.Node) ([]int32, []*plan.IndexDef) {
 	projids := make([]int32, 0)
 	ftidxs := make([]*plan.IndexDef, 0)

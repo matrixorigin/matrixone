@@ -306,7 +306,8 @@ func builderCopyPk(pk any) any {
 // tokenizeToTerms flattens a tokenizer stream into the ordered term slice a
 // phrase query needs.
 func tokenizeToTerms(text []byte, tok tokenizer.Tokenizer) ([]string, error) {
-	var terms []string
+	// token count is unknown up front; estimate from input length to avoid regrowth.
+	terms := make([]string, 0, len(text)/4)
 	for tk, err := range tok.Tokenize(text) {
 		if err != nil {
 			return nil, err
