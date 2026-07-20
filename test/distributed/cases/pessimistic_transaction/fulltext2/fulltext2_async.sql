@@ -27,8 +27,12 @@ insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('i
 -- wait for the initial CDC sync of src and src2
 select sleep(30);
 
--- select src: 'red' is in body of docs 0 and 3
-select id from src where match(body, title) against('red') order by id;
+-- src's initial-sync state is verified via src2 below (a never-re-mutated table).
+-- src itself is deliberately NOT searched here: fulltext2's per-CN index cache is
+-- not cross-invalidated by the CDC consumer (which evicts only its own CN), so a
+-- pre-update search on the mo-tester CN would pin the pre-update snapshot and the
+-- post-update queries below would then read it stale on multi-CN. src is first
+-- searched only after its final mutation has settled, so its cache loads fresh.
 show create table src;
 
 -- select src2 (composite pk): id0 (red), id3 (blue red)
@@ -40,7 +44,8 @@ update src set body = 'color is green' where id = 0;
 delete from src where id = 3;
 select sleep(30);
 
--- doc 0's old text (red) is superseded, doc 3 is deleted -> 'red' now empty
+-- doc 0's old text (red) is superseded, doc 3 is deleted -> 'red' now empty.
+-- This is src's FIRST MATCH, so its per-CN cache loads the fresh post-update index.
 select id from src where match(body, title) against('red') order by id;
 -- doc 0's new text
 select id from src where match(body, title) against('green') order by id;

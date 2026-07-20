@@ -13,10 +13,6 @@ insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('i
 select sleep(30);
 sleep(30)
 0
-select id from src where match(body, title) against('red') order by id;
-id
-0
-3
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)

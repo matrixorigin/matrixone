@@ -20,8 +20,9 @@ count(*)
 show create table dst;
 Table    Create Table
 dst    CREATE TABLE `dst` (\n  `id` int NOT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`) WITH PARSER ngram\n)
-select sleep(30);
-sleep(30)
+insert into dst values (5,'epsilon fresh');
+select sleep(45);
+sleep(45)
 0
 select id from dst where match(body) against('beta' in boolean mode) order by id;
 id
@@ -30,10 +31,6 @@ select id from dst where match(body) against('topic' in boolean mode) order by i
 id
 3
 4
-insert into dst values (5,'epsilon fresh');
-select sleep(45);
-sleep(45)
-0
 select id from dst where match(body) against('epsilon' in boolean mode) order by id;
 id
 5

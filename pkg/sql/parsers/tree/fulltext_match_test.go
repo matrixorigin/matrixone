@@ -25,29 +25,30 @@ import (
 func TestFullTextMatchFuncExpressionFormat(t *testing.T) {
 	cols := []*KeyPart{{ColName: NewUnresolvedColName("body")}}
 
-	// classic MATCH deparses as MATCH and carries its mode.
-	ft, err := NewFullTextMatchFuncExpression(cols, "apple", FULLTEXT_BOOLEAN)
+	// classic MATCH deparses as MATCH and carries its mode. The pattern is an Expr
+	// (a string literal here; #24796 made it an expression so prepared '?' works).
+	ft, err := NewFullTextMatchFuncExpression(cols, NewNumVal("apple", "apple", false, P_char), FULLTEXT_BOOLEAN)
 	require.NoError(t, err)
 
 	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	ft.Format(ctx)
-	require.Equal(t, "MATCH (body) AGAINST (apple IN BOOLEAN MODE)", ctx.String())
+	require.Equal(t, `MATCH (body) AGAINST ("apple" IN BOOLEAN MODE)`, ctx.String())
 
 	// default mode omits the mode clause.
-	def, _ := NewFullTextMatchFuncExpression(cols, "apple", FULLTEXT_DEFAULT)
+	def, _ := NewFullTextMatchFuncExpression(cols, NewNumVal("apple", "apple", false, P_char), FULLTEXT_DEFAULT)
 	ctx2 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	def.Format(ctx2)
-	require.Equal(t, "MATCH (body) AGAINST (apple)", ctx2.String())
+	require.Equal(t, `MATCH (body) AGAINST ("apple")`, ctx2.String())
 }
 
 func TestFullTextMatchExprValid(t *testing.T) {
 	cols := []*KeyPart{{ColName: NewUnresolvedColName("body")}}
 
 	// empty column list is rejected
-	_, err := NewFullTextMatchFuncExpression(nil, "apple", FULLTEXT_DEFAULT)
+	_, err := NewFullTextMatchFuncExpression(nil, NewNumVal("apple", "apple", false, P_char), FULLTEXT_DEFAULT)
 	require.Error(t, err)
 
 	// empty pattern is rejected
-	_, err = NewFullTextMatchFuncExpression(cols, "", FULLTEXT_DEFAULT)
+	_, err = NewFullTextMatchFuncExpression(cols, NewNumVal("", "", false, P_char), FULLTEXT_DEFAULT)
 	require.Error(t, err)
 }

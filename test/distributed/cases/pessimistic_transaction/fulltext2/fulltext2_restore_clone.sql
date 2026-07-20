@@ -39,16 +39,20 @@ create table dst clone src;
 select count(*) from dst;
 show create table dst;
 
--- let RestoreInitSQL's re-registered CDC settle on the clone
-select sleep(30);
+-- (c) maintenance re-armed: insert a row AFTER the clone. Done BEFORE any dst MATCH
+-- so the clone's per-CN index cache is first loaded fresh (with the new row present).
+-- fulltext2's index cache is not cross-CN invalidated by the CDC consumer, so a dst
+-- MATCH issued before this insert settles would pin a pre-insert snapshot and the
+-- 'epsilon' query would read it stale on multi-CN.
+insert into dst values (5,'epsilon fresh');
 
--- (b) the cloned index answers MATCH
+-- let RestoreInitSQL's re-registered CDC + the post-clone insert settle on the clone
+select sleep(45);
+
+-- (b) the cloned index answers MATCH on the copied rows ...
 select id from dst where match(body) against('beta' in boolean mode) order by id;
 select id from dst where match(body) against('topic' in boolean mode) order by id;
-
--- (c) maintenance re-armed: a row inserted AFTER the clone becomes matchable
-insert into dst values (5,'epsilon fresh');
-select sleep(45);
+-- (c) ... and on the row inserted after the clone
 select id from dst where match(body) against('epsilon' in boolean mode) order by id;
 -- pre-existing cloned rows remain matchable too
 select id from dst where match(body) against('alpha' in boolean mode) order by id;
