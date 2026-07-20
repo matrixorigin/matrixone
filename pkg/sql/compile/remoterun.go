@@ -613,6 +613,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
+			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
 		}
@@ -722,6 +723,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			HashOnPk:                  t.HashOnPK,
 			NeedBatches:               t.NeedBatches,
 			NeedAllocateSels:          t.NeedAllocateSels,
+			TrackNullKeys:             t.TrackNullKeys,
 			IsShuffle:                 t.IsShuffle,
 			Conditions:                t.Conditions,
 			JoinMapTag:                t.JoinMapTag,
@@ -1088,6 +1090,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
+		arg.VectorOpType = t.VectorOpType
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1106,7 +1109,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Intersect:
 		op = intersect.NewArgument()
 	case vm.IntersectAll:
-		op = intersect.NewArgument()
+		op = intersectall.NewArgument()
 	case vm.Minus:
 		op = minus.NewArgument()
 	case vm.Connector:
@@ -1211,6 +1214,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HashOnPK = t.HashOnPk
 		arg.NeedBatches = t.NeedBatches
 		arg.NeedAllocateSels = t.NeedAllocateSels
+		arg.TrackNullKeys = t.TrackNullKeys
 		arg.IsShuffle = t.IsShuffle
 		arg.Conditions = t.Conditions
 		arg.JoinMapTag = t.JoinMapTag
