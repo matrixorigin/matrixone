@@ -26,6 +26,13 @@ import (
 
 const defaultFSName = "SHARED"
 
+var (
+	newToolFileService = func(ctx context.Context, cfg fileservice.Config) (fileservice.FileService, error) {
+		return fileservice.NewFileService(ctx, cfg, nil)
+	}
+	newToolLazyCacheFS = newLazyCacheFS
+)
+
 // StorageOptions describes a fileservice backend requested by a tool command.
 type StorageOptions struct {
 	FSConfig string
@@ -57,7 +64,7 @@ func Open(ctx context.Context, opts StorageOptions) (fileservice.FileService, st
 		return nil, "", moerr.NewInvalidInputNoCtxf("unsupported backend %q, use S3 or MINIO", opts.Backend)
 	}
 	if opts.S3 == "" {
-		return nil, "", moerr.NewInvalidInputNoCtx("missing --s3 arguments")
+		return nil, "", moerr.NewInvalidInputNoCtx("missing --remote-s3 arguments")
 	}
 
 	args, err := ParseS3Arguments(opts.S3, opts.FSName)
@@ -70,13 +77,15 @@ func Open(ctx context.Context, opts StorageOptions) (fileservice.FileService, st
 		S3:      args,
 		Cache:   fileservice.DisabledCacheConfig,
 	}
-	fs, err := fileservice.NewFileService(ctx, cfg, nil)
+	fs, err := newToolFileService(ctx, cfg)
 	if err != nil {
 		return nil, "", err
 	}
 	if backend == "S3" || backend == "MINIO" {
-		fs, _, err = newLazyCacheFS(ctx, fs)
+		remote := fs
+		fs, _, err = newToolLazyCacheFS(ctx, remote)
 		if err != nil {
+			remote.Close(ctx)
 			return nil, "", err
 		}
 	}
@@ -96,9 +105,40 @@ type launchConfig struct {
 }
 
 func openFromConfig(ctx context.Context, path string, fsName string) (fileservice.FileService, string, error) {
+	fsCfg, err := ResolveConfig(path, fsName)
+	if err != nil {
+		return nil, "", err
+	}
+	fs, err := newToolFileService(ctx, fsCfg)
+	if err != nil {
+		return nil, "", err
+	}
+	backend := strings.ToUpper(fsCfg.Backend)
+	if backend == "S3" || backend == "MINIO" {
+		remote := fs
+		fs, _, err = newToolLazyCacheFS(ctx, remote)
+		if err != nil {
+			remote.Close(ctx)
+			return nil, "", err
+		}
+	}
+	displayTarget := fsCfg.Name
+	if fsCfg.DataDir != "" {
+		displayTarget += ":" + fsCfg.DataDir
+	}
+	return fs, fmt.Sprintf("%s:%s", path, displayTarget), nil
+}
+
+// ResolveConfig selects and returns a fileservice configuration without
+// constructing the service. Tooling uses this to keep generated restore paths
+// consistent with the backend that receives the dump files.
+func ResolveConfig(path string, fsName string) (fileservice.Config, error) {
 	var cfg launchConfig
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return nil, "", err
+		return fileservice.Config{}, err
+	}
+	if fsName == "" {
+		fsName = defaultFSName
 	}
 
 	if cfg.TN.Txn.Storage.FileService != "" && fsName == defaultFSName {
@@ -106,18 +146,7 @@ func openFromConfig(ctx context.Context, path string, fsName string) (fileservic
 	}
 	for _, fsCfg := range cfg.FileService {
 		if strings.EqualFold(fsCfg.Name, fsName) {
-			fs, err := fileservice.NewFileService(ctx, fsCfg, nil)
-			if err != nil {
-				return nil, "", err
-			}
-			backend := strings.ToUpper(fsCfg.Backend)
-			if backend == "S3" || backend == "MINIO" {
-				fs, _, err = newLazyCacheFS(ctx, fs)
-				if err != nil {
-					return nil, "", err
-				}
-			}
-			return fs, fmt.Sprintf("%s:%s", path, fsCfg.Name), nil
+			return fsCfg, nil
 		}
 	}
 
@@ -128,18 +157,14 @@ func openFromConfig(ctx context.Context, path string, fsName string) (fileservic
 			DataDir: cfg.DataDir,
 			Cache:   fileservice.DisabledCacheConfig,
 		}
-		fs, err := fileservice.NewFileService(ctx, fsCfg, nil)
-		if err != nil {
-			return nil, "", err
-		}
-		return fs, fmt.Sprintf("%s:%s", path, cfg.DataDir), nil
+		return fsCfg, nil
 	}
 
 	names := make([]string, 0, len(cfg.FileService))
 	for _, fsCfg := range cfg.FileService {
 		names = append(names, fsCfg.Name)
 	}
-	return nil, "", moerr.NewInvalidInputNoCtxf(
+	return fileservice.Config{}, moerr.NewInvalidInputNoCtxf(
 		"fileservice %q not found in %s; available: %s",
 		fsName, path, strings.Join(names, ","),
 	)

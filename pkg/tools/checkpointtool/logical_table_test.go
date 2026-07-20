@@ -15,6 +15,7 @@
 package checkpointtool
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -107,6 +108,85 @@ func TestColumnSeqNumsAndAlignRowValues(t *testing.T) {
 	require.Equal(t, []bool{true, false}, nulls)
 
 	debugLogicalObjectColumns(objectio.ObjectStats{}, nil)
+}
+
+func TestLogicalTableUsesColumnsFromAllSchemaVersions(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewFileService(ctx, fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: t.TempDir(),
+		Cache:   fileservice.DisabledCacheConfig,
+	}, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	oldStats := writeLogicalSchemaObject(t, fs, types.Uuid{1}, []uint16{0, 1}, int32(1), "old", "")
+	newStats := writeLogicalSchemaObject(t, fs, types.Uuid{2}, []uint16{0, 1, 2}, int32(2), "new", "added")
+	entries := []*ObjectEntryInfo{
+		{ObjectStats: oldStats, CreateTime: types.BuildTS(1, 0)},
+		{ObjectStats: newStats, CreateTime: types.BuildTS(2, 0)},
+	}
+	reader := &CheckpointReader{ctx: ctx, fs: fs, mp: mpool.MustNewZero()}
+
+	view, err := reader.BuildLogicalTableView(ctx, types.BuildTS(10, 0), entries, nil)
+	require.NoError(t, err)
+	require.Equal(t, []uint16{0, 1, 2}, view.ColSeqNums)
+	require.Len(t, view.Rows, 2)
+	require.Equal(t, []string{"1", "old", ""}, view.DataRow(view.Rows[0]))
+	require.Equal(t, []string{"2", "new", "added"}, view.DataRow(view.Rows[1]))
+
+	var csv bytes.Buffer
+	err = reader.streamTableCSV(ctx, &csv, &TableSchema{Columns: []TableColumn{
+		{Name: "id", SQLType: "INT", PhysicalPosition: 0},
+		{Name: "name", SQLType: "VARCHAR", PhysicalPosition: 1},
+		{Name: "added", SQLType: "VARCHAR", PhysicalPosition: 2},
+	}}, types.BuildTS(10, 0), entries, nil, CSVExportOptions{
+		IncludeMetadata: true,
+		RowOrder:        CSVRowOrderLexical,
+	})
+	require.NoError(t, err)
+	require.Contains(t, csv.String(), "1,\"old\",\\N\n")
+	require.Contains(t, csv.String(), "2,\"new\",\"added\"\n")
+}
+
+func writeLogicalSchemaObject(
+	t *testing.T,
+	fs fileservice.FileService,
+	uuid types.Uuid,
+	seqNums []uint16,
+	id int32,
+	name string,
+	added string,
+) objectio.ObjectStats {
+	t.Helper()
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	objectName := objectio.BuildObjectName(&uuid, 1)
+	writer, err := objectio.NewObjectWriter(objectName, fs, 0, seqNums, nil)
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(len(seqNums))
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(name), false, mp))
+	if len(seqNums) == 3 {
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte(added), false, mp))
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx, objectio.WriteOptions{Type: objectio.WriteTS, Val: time.Unix(100, 0)})
+	require.NoError(t, err)
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectName))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	return *stats
 }
 
 func TestVisibleObjectEntriesEmptyAndSorted(t *testing.T) {

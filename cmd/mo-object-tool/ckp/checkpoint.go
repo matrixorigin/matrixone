@@ -46,19 +46,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
-// --local2 must be set, else it returns an error.
+// kindFromFlags resolves the offline fs kind. Legacy local DISK is the default;
+// explicit format selectors remain mutually exclusive.
 func kindFromFlags(cmd *cobra.Command) (string, error) {
 	local, _ := cmd.Flags().GetBool("local")
+	s3, _ := cmd.Flags().GetBool("s3")
 	local2, _ := cmd.Flags().GetBool("local2")
-	if local && local2 {
-		_, err := objectio.OfflineKindStrict(true, false, true)
-		return "", err
+	if !local && !s3 && !local2 {
+		return objectio.OfflineKindLocal, nil
 	}
-	if local2 {
-		return objectio.OfflineKindLocal2, nil
-	}
-	return objectio.OfflineKindLocal, nil
+	return objectio.OfflineKindStrict(local, s3, local2)
 }
 
 func PrepareCommand() *cobra.Command {
@@ -83,6 +80,7 @@ func PrepareCommand() *cobra.Command {
 	addStorageFlags(cmd, &storage)
 
 	cmd.PersistentFlags().Bool("local", false, "local DISK (CRC) format")
+	cmd.PersistentFlags().Bool("s3", false, "local S3FS-on-disk (raw) format")
 	cmd.PersistentFlags().Bool("local2", false, "local DISK-V2 (raw) format")
 
 	cmd.AddCommand(infoCommand(&storage))
@@ -97,8 +95,8 @@ func PrepareCommand() *cobra.Command {
 func addStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
 	cmd.PersistentFlags().StringVar(&storage.FSConfig, "fs-config", "", "MO config TOML containing fileservice settings")
 	cmd.PersistentFlags().StringVar(&storage.FSName, "fs-name", "SHARED", "fileservice name to use from --fs-config")
-	cmd.PersistentFlags().StringVar(&storage.S3, "s3", "", "S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
-	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --s3: S3 or MINIO")
+	cmd.PersistentFlags().StringVar(&storage.S3, "remote-s3", "", "remote S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
+	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --remote-s3: S3 or MINIO")
 }
 
 func addOutputStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
@@ -2177,18 +2175,40 @@ func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) stri
 type loadDataPathResolver struct {
 	s3Args    fileservice.ObjectStorageArguments
 	s3Backend string
+	localRoot string
 }
 
 func newLoadDataPathResolver(storage toolfs.StorageOptions) (loadDataPathResolver, error) {
-	if storage.S3 == "" {
+	if storage.S3 == "" && storage.FSConfig == "" {
 		return loadDataPathResolver{}, nil
+	}
+	if storage.FSConfig != "" {
+		cfg, err := toolfs.ResolveConfig(storage.FSConfig, storage.FSName)
+		if err != nil {
+			return loadDataPathResolver{}, fmt.Errorf("resolve output fileservice config: %w", err)
+		}
+		backend := strings.ToUpper(cfg.Backend)
+		switch backend {
+		case "S3", "MINIO":
+			if cfg.S3.Bucket == "" {
+				return loadDataPathResolver{}, fmt.Errorf("resolve output fileservice config: missing bucket")
+			}
+			return loadDataPathResolver{s3Args: cfg.S3, s3Backend: backend}, nil
+		case "DISK", "DISK-V2":
+			if cfg.DataDir == "" {
+				return loadDataPathResolver{}, fmt.Errorf("resolve output fileservice config: missing data-dir")
+			}
+			return loadDataPathResolver{localRoot: cfg.DataDir}, nil
+		default:
+			return loadDataPathResolver{}, fmt.Errorf("output fileservice backend %q cannot be used by LOAD DATA", cfg.Backend)
+		}
 	}
 	backend := strings.ToUpper(storage.Backend)
 	if backend == "" {
 		backend = "S3"
 	}
 	if backend != "S3" && backend != "MINIO" {
-		return loadDataPathResolver{}, nil
+		return loadDataPathResolver{}, fmt.Errorf("output backend %q cannot be used by LOAD DATA", storage.Backend)
 	}
 	args, err := toolfs.ParseS3Arguments(storage.S3, storage.FSName)
 	if err != nil {
@@ -2203,6 +2223,9 @@ func newLoadDataPathResolver(storage toolfs.StorageOptions) (loadDataPathResolve
 func (r loadDataPathResolver) loadDataSource(outputDir string, table checkpointtool.TableCatalogEntry) string {
 	csvPath := tableCSVPath(outputDir, table)
 	if r.s3Args.Bucket == "" {
+		if r.localRoot != "" {
+			csvPath = filepath.Join(r.localRoot, filepath.FromSlash(strings.TrimLeft(csvPath, "/")))
+		}
 		if absPath, err := filepath.Abs(csvPath); err == nil {
 			csvPath = absPath
 		}

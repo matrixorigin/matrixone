@@ -55,8 +55,8 @@ func PrepareCommand() *cobra.Command {
 func addStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
 	cmd.PersistentFlags().StringVar(&storage.FSConfig, "fs-config", "", "MO config TOML containing fileservice settings")
 	cmd.PersistentFlags().StringVar(&storage.FSName, "fs-name", "SHARED", "fileservice name to use from --fs-config")
-	cmd.PersistentFlags().StringVar(&storage.S3, "s3", "", "S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
-	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --s3: S3 or MINIO")
+	cmd.PersistentFlags().StringVar(&storage.S3, "remote-s3", "", "remote S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
+	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --remote-s3: S3 or MINIO")
 }
 
 func runObjectView(ctx context.Context, path string, storage toolfs.StorageOptions, kind string) error {
@@ -71,25 +71,23 @@ func runObjectView(ctx context.Context, path string, storage toolfs.StorageOptio
 	return interactive.RunWithFS(ctx, fs, path)
 }
 
-// addOfflineKindFlags registers the --local / --s3 / --local2 format flags as
-// persistent flags so subcommands inherit them. Exactly one must be set.
+// addOfflineKindFlags registers the local on-disk format selectors as
+// persistent flags so subcommands inherit them.
 func addOfflineKindFlags(cmd *cobra.Command) {
 	fs := cmd.PersistentFlags()
 	fs.Bool("local", false, "local DISK (CRC) format")
+	fs.Bool("s3", false, "local S3FS-on-disk (raw) format")
 	fs.Bool("local2", false, "local DISK-V2 (raw) format")
 }
 
-// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
-// --local2 must be set, else it returns an error.
+// kindFromFlags resolves the offline fs kind. Legacy local DISK is the default;
+// explicit format selectors remain mutually exclusive.
 func kindFromFlags(cmd *cobra.Command) (string, error) {
 	local, _ := cmd.Flags().GetBool("local")
+	s3, _ := cmd.Flags().GetBool("s3")
 	local2, _ := cmd.Flags().GetBool("local2")
-	if local && local2 {
-		_, err := objectio.OfflineKindStrict(true, false, true)
-		return "", err
+	if !local && !s3 && !local2 {
+		return objectio.OfflineKindLocal, nil
 	}
-	if local2 {
-		return objectio.OfflineKindLocal2, nil
-	}
-	return objectio.OfflineKindLocal, nil
+	return objectio.OfflineKindStrict(local, s3, local2)
 }

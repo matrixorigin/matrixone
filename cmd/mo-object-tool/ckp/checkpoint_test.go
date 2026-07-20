@@ -486,7 +486,7 @@ func TestOpenReaderResolveSnapshotAndFileServiceWriteCloser(t *testing.T) {
 	_, err = openReader(ctx, ".", toolfs.StorageOptions{Backend: "GCS"}, objectio.OfflineKindLocal)
 	require.ErrorContains(t, err, "unsupported backend")
 	_, err = openReader(ctx, ".", toolfs.StorageOptions{Backend: "S3"}, objectio.OfflineKindLocal)
-	require.ErrorContains(t, err, "missing --s3 arguments")
+	require.ErrorContains(t, err, "missing --remote-s3 arguments")
 	_, err = openReader(ctx, ".", toolfs.StorageOptions{FSConfig: filepath.Join(t.TempDir(), "missing.toml")}, objectio.OfflineKindLocal)
 	require.Error(t, err)
 
@@ -494,7 +494,7 @@ func TestOpenReaderResolveSnapshotAndFileServiceWriteCloser(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported backend")
 
 	_, err = openDumpOutput(ctx, toolfs.StorageOptions{Backend: "S3"})
-	require.ErrorContains(t, err, "missing --s3 arguments")
+	require.ErrorContains(t, err, "missing --remote-s3 arguments")
 	_, err = openDumpOutput(ctx, toolfs.StorageOptions{FSConfig: filepath.Join(t.TempDir(), "missing.toml")})
 	require.Error(t, err)
 }
@@ -513,8 +513,8 @@ func TestSetupLogFileReportsMkdirError(t *testing.T) {
 }
 
 func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
-	parent := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "parent", TableID: 1}
-	child := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "child", TableID: 2}
+	parent := checkpointtool.TableCatalogEntry{DatabaseName: "parent_db", TableName: "parent", TableID: 1}
+	child := checkpointtool.TableCatalogEntry{DatabaseName: "child_db", TableName: "child", TableID: 2}
 	other := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "other", TableID: 3}
 	base := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "z_table", TableID: 4, RelKind: "r"}
 	view := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "a_view", TableID: 5, RelKind: "v"}
@@ -564,8 +564,8 @@ func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	dumpOut := &dumpOutput{}
 	scriptDir := filepath.Join(t.TempDir(), "scripts")
-	parent := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "parent", TableID: 1}
-	child := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "child", TableID: 2}
+	parent := checkpointtool.TableCatalogEntry{DatabaseName: "parent_db", TableName: "parent", TableID: 1}
+	child := checkpointtool.TableCatalogEntry{DatabaseName: "child_db", TableName: "child", TableID: 2}
 	columns := []checkpointtool.TableColumn{
 		{Name: "id", SQLType: "BIGINT", Position: 1},
 		{Name: "other_id", SQLType: "BIGINT", Position: 2},
@@ -579,7 +579,7 @@ func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 				ForeignKeys: []checkpointtool.TableForeignKey{{
 					Name:          "fk_parent_child",
 					Columns:       []string{"other_id"},
-					ReferDatabase: "db",
+					ReferDatabase: "child_db",
 					ReferTable:    "child",
 					ReferColumns:  []string{"id"},
 				}},
@@ -593,7 +593,7 @@ func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 				ForeignKeys: []checkpointtool.TableForeignKey{{
 					Name:          "fk_child_parent",
 					Columns:       []string{"other_id"},
-					ReferDatabase: "db",
+					ReferDatabase: "parent_db",
 					ReferTable:    "parent",
 					ReferColumns:  []string{"id"},
 				}},
@@ -622,8 +622,8 @@ func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	sql := string(data)
-	parentCreate := strings.Index(sql, "CREATE TABLE `db`.`parent`")
-	childCreate := strings.Index(sql, "CREATE TABLE `db`.`child`")
+	parentCreate := strings.Index(sql, "CREATE TABLE `parent_db`.`parent`")
+	childCreate := strings.Index(sql, "CREATE TABLE `child_db`.`child`")
 	parentLoad := strings.Index(sql, "INTO TABLE `parent`")
 	childLoad := strings.Index(sql, "INTO TABLE `child`")
 	parentAlter := strings.Index(sql, "ALTER TABLE `parent` ADD CONSTRAINT `fk_parent_child`")
@@ -640,6 +640,8 @@ func TestWriteRestoreScriptDefersCyclicForeignKeys(t *testing.T) {
 	require.Greater(t, childAlter, childLoad)
 	require.NotContains(t, sql[parentCreate:parentAlter], "CONSTRAINT `fk_parent_child`")
 	require.NotContains(t, sql[childCreate:childAlter], "CONSTRAINT `fk_child_parent`")
+	require.Contains(t, sql, "REFERENCES `child_db`.`child` (`id`)")
+	require.Contains(t, sql, "REFERENCES `parent_db`.`parent` (`id`)")
 }
 
 func TestWriteRestoreScriptForViewAndErrors(t *testing.T) {
@@ -762,8 +764,8 @@ func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 		AccountID:    1,
 		DatabaseID:   2,
 		TableID:      3,
-		DatabaseName: "db",
-		TableName:    "t1",
+		DatabaseName: "child_db",
+		TableName:    "child",
 		RelKind:      "r",
 	}
 	reader := &checkpointtool.CheckpointReader{}
@@ -774,7 +776,7 @@ func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 		return &checkpointtool.LogicalTableView{
 			Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
 			Rows: [][]string{
-				ckpMoTablesRow(t, "3", "t1", "db", "2", "r", "1"),
+				ckpMoTablesRow(t, "3", "child", "child_db", "2", "r", "1"),
 			},
 		}, nil
 	})
@@ -792,6 +794,16 @@ func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 					DatabaseName: "old_db",
 					Columns: []checkpointtool.TableColumn{
 						{Name: "id", SQLType: "INT", Position: 1},
+						{Name: "parent_id", SQLType: "INT", Position: 2},
+					},
+					ForeignKeys: []checkpointtool.TableForeignKey{
+						{
+							Name:          "fk_child_parent",
+							Columns:       []string{"parent_id"},
+							ReferDatabase: "parent_db",
+							ReferTable:    "parent",
+							ReferColumns:  []string{"id"},
+						},
 					},
 				},
 			},
@@ -807,7 +819,8 @@ func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 	script, err := os.ReadFile(path)
 	require.NoError(t, err)
 	got := string(script)
-	require.Contains(t, got, "CREATE TABLE `db`.`t1`")
+	require.Contains(t, got, "CREATE TABLE `child_db`.`child`")
+	require.Contains(t, got, "REFERENCES `parent_db`.`parent` (`id`)")
 	require.Contains(t, got, "LOAD DATA INFILE")
 	require.Contains(t, got, "IGNORE 1 LINES")
 	require.Contains(t, got, "parallel 'true'")
@@ -841,14 +854,52 @@ func TestDumpTablesConcurrentlySkipsViews(t *testing.T) {
 
 func TestNewLoadDataPathResolverErrors(t *testing.T) {
 	_, err := newLoadDataPathResolver(toolfs.StorageOptions{S3: "bucket=b", Backend: "GCS"})
-	require.NoError(t, err)
-	// Unknown backend falls back to local load-data path because it is not S3 output.
+	require.ErrorContains(t, err, "cannot be used by LOAD DATA")
 	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{})
 	require.NoError(t, err)
 	require.Contains(t, resolver.loadDataSource("out", checkpointtool.TableCatalogEntry{AccountID: 1, DatabaseID: 2, TableID: 3, TableName: "t"}), "LOAD DATA INFILE")
 
 	_, err = newLoadDataPathResolver(toolfs.StorageOptions{S3: "endpoint=http://minio", Backend: "S3"})
 	require.ErrorContains(t, err, "missing bucket")
+}
+
+func TestLoadDataPathResolverFromFSConfig(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{AccountID: 1, DatabaseID: 2, TableID: 3, TableName: "t"}
+	s3Config := filepath.Join(t.TempDir(), "s3.toml")
+	require.NoError(t, os.WriteFile(s3Config, []byte(`
+[[fileservice]]
+backend = "MINIO"
+name = "DUMP"
+[fileservice.s3]
+bucket = "bucket-a"
+endpoint = "http://minio:9000"
+region = "us-east-1"
+key-prefix = "restore-prefix"
+key-id = "key"
+key-secret = "secret"
+`), 0o644))
+	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{FSConfig: s3Config, FSName: "DUMP"})
+	require.NoError(t, err)
+	load := resolver.loadDataSource("dump", table)
+	require.Contains(t, load, "LOAD DATA URL s3option")
+	require.Contains(t, load, "'bucket'='bucket-a'")
+	require.Contains(t, load, "'filepath'='restore-prefix/dump/account_1/db_2/t_3.csv'")
+	require.Contains(t, load, "'provider'='minio'")
+
+	dataDir := t.TempDir()
+	diskConfig := filepath.Join(t.TempDir(), "disk.toml")
+	require.NoError(t, os.WriteFile(diskConfig, []byte(fmt.Sprintf(`
+[[fileservice]]
+backend = "DISK-V2"
+name = "DUMP"
+data-dir = %q
+`, dataDir)), 0o644))
+	resolver, err = newLoadDataPathResolver(toolfs.StorageOptions{FSConfig: diskConfig, FSName: "DUMP"})
+	require.NoError(t, err)
+	require.Equal(t,
+		"LOAD DATA INFILE "+quoteSQLString(filepath.Join(dataDir, "dump/account_1/db_2/t_3.csv")),
+		resolver.loadDataSource("/dump", table),
+	)
 }
 
 func TestDumpOneTableAndConcurrentDumpUsePreparedData(t *testing.T) {
@@ -1648,12 +1699,11 @@ func TestLoadDataPathResolverS3(t *testing.T) {
 	)
 }
 
-// TestCkpOfflineKindFlags checks the ckp command exposes the local format flags.
-// The branch keeps --s3 as remote storage arguments, so local DISK remains the
-// default and DISK-V2 is selected explicitly with --local2.
+// TestCkpOfflineKindFlags checks the ckp command preserves all local format
+// selectors while remote S3 arguments use the non-conflicting --remote-s3.
 func TestCkpOfflineKindFlags(t *testing.T) {
 	cmd := PrepareCommand()
-	for _, name := range []string{"local", "local2"} {
+	for _, name := range []string{"local", "s3", "local2", "remote-s3"} {
 		require.NotNilf(t, cmd.PersistentFlags().Lookup(name), "ckp --%s", name)
 	}
 
@@ -1667,6 +1717,12 @@ func TestCkpOfflineKindFlags(t *testing.T) {
 	kind, err = kindFromFlags(c2)
 	require.NoError(t, err)
 	require.Equal(t, objectio.OfflineKindLocal2, kind)
+
+	s3Cmd := PrepareCommand()
+	require.NoError(t, s3Cmd.ParseFlags([]string{"--s3"}))
+	kind, err = kindFromFlags(s3Cmd)
+	require.NoError(t, err)
+	require.Equal(t, objectio.OfflineKindS3, kind)
 
 	c3 := PrepareCommand()
 	require.NoError(t, c3.ParseFlags([]string{"--local", "--local2"}))

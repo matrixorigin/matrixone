@@ -87,8 +87,16 @@ func (r *CheckpointReader) scanLogicalTable(
 	visibleDataEntries := visibleObjectEntries(dataEntries, snapshotTS)
 	visibleTombEntries := visibleObjectEntries(tombEntries, snapshotTS)
 	tombstoneStats := dedupeObjectStats(visibleTombEntries)
-	columnsSent := false
-	var canonicalSeqNums []uint16
+	canonicalCols, err := r.logicalTableColumns(ctx, visibleDataEntries)
+	if err != nil {
+		return stats, err
+	}
+	canonicalSeqNums := columnSeqNums(canonicalCols)
+	if len(canonicalCols) > 0 && onColumns != nil {
+		if err := onColumns(canonicalCols); err != nil {
+			return stats, err
+		}
+	}
 
 	for _, entry := range visibleDataEntries {
 		objName := entry.ObjectStats.ObjectName().String()
@@ -105,15 +113,6 @@ func (r *CheckpointReader) scanLogicalTable(
 		}
 		debugLogicalObjectColumns(entry.ObjectStats, reader)
 		cols := reader.Columns()
-
-		if !columnsSent && onColumns != nil {
-			canonicalSeqNums = columnSeqNums(cols)
-			if err := onColumns(cols); err != nil {
-				_ = reader.Close()
-				return stats, err
-			}
-			columnsSent = true
-		}
 
 		relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
 		if err != nil {
@@ -206,6 +205,53 @@ func (r *CheckpointReader) scanLogicalTable(
 	}
 
 	return stats, nil
+}
+
+func (r *CheckpointReader) logicalTableColumns(
+	ctx context.Context,
+	entries []*ObjectEntryInfo,
+) ([]objecttool.ColInfo, error) {
+	type versionedColumn struct {
+		col        objecttool.ColInfo
+		createTime types.TS
+	}
+	bySeqNum := make(map[uint16]versionedColumn)
+	for _, entry := range entries {
+		objName := entry.ObjectStats.ObjectName().String()
+		reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
+		if err != nil {
+			if isDataFileNotFound(err) {
+				return nil, moerr.NewFileNotFoundErrorf(
+					ctx,
+					"visible data object not found (checkpoint snapshot is incomplete): %s",
+					objName,
+				)
+			}
+			return nil, err
+		}
+		for _, col := range reader.Columns() {
+			current, ok := bySeqNum[col.SeqNum]
+			if !ok || current.createTime.LT(&entry.CreateTime) {
+				bySeqNum[col.SeqNum] = versionedColumn{col: col, createTime: entry.CreateTime}
+			}
+		}
+		if err := reader.Close(); err != nil {
+			return nil, err
+		}
+	}
+
+	seqNums := make([]int, 0, len(bySeqNum))
+	for seqNum := range bySeqNum {
+		seqNums = append(seqNums, int(seqNum))
+	}
+	sort.Ints(seqNums)
+	cols := make([]objecttool.ColInfo, 0, len(seqNums))
+	for idx, seqNum := range seqNums {
+		col := bySeqNum[uint16(seqNum)].col
+		col.Idx = uint16(idx)
+		cols = append(cols, col)
+	}
+	return cols, nil
 }
 
 func columnSeqNums(cols []objecttool.ColInfo) []uint16 {

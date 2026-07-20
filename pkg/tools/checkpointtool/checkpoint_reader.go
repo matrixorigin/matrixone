@@ -36,6 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+var (
+	newCheckpointOfflineFS = objectio.NewOfflineFS
+	loadCheckpointEntries  = (*CheckpointReader).loadEntries
+)
+
 // CheckpointReader reads checkpoint data from a directory
 type CheckpointReader struct {
 	ctx     context.Context
@@ -116,10 +121,16 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 		opt(r)
 	}
 
-	fs, err := objectio.NewOfflineFS(ctx, dir, r.kind)
+	fs, err := newCheckpointOfflineFS(ctx, dir, r.kind)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			fs.Close(ctx)
+		}
+	}()
 
 	r.fs = fs
 	r.closeFS = true
@@ -128,9 +139,10 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 		r.mp = mpool.MustNewZero()
 	}
 
-	if err := r.loadEntries(); err != nil {
+	if err := loadCheckpointEntries(r); err != nil {
 		return nil, err
 	}
+	initialized = true
 	return r, nil
 }
 
@@ -146,14 +158,21 @@ func OpenWithFS(ctx context.Context, fs fileservice.FileService, dir string, opt
 	}
 
 	r.fs = fs
+	initialized := false
+	defer func() {
+		if !initialized && r.closeFS && fs != nil {
+			fs.Close(ctx)
+		}
+	}()
 
 	if r.mp == nil {
 		r.mp = mpool.MustNewZero()
 	}
 
-	if err := r.loadEntries(); err != nil {
+	if err := loadCheckpointEntries(r); err != nil {
 		return nil, err
 	}
+	initialized = true
 	return r, nil
 }
 
@@ -654,7 +673,10 @@ func isDataFileNotFound(err error) bool {
 func (r *CheckpointReader) Close() error {
 	r.entries = nil
 	if r.closeFS && r.fs != nil {
-		r.fs.Close(r.ctx)
+		fs := r.fs
+		r.fs = nil
+		r.closeFS = false
+		fs.Close(r.ctx)
 	}
 	return nil
 }

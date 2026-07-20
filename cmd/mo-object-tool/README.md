@@ -176,13 +176,15 @@ The same remote options work for schema lookup and CSV export:
 ## Remote S3 Or MinIO With Inline Arguments
 
 You can also provide object storage settings directly on the command line.
+`--s3` remains the local S3FS-on-disk format selector; remote connection
+arguments use `--remote-s3`.
 
 MinIO example:
 
 ```bash
 ./mo-tool ckp view \
   --backend MINIO \
-  --s3 bucket=mo-test,endpoint=http://127.0.0.1:9000,key-prefix=server/data,key-id=minio,key-secret=minio123
+  --remote-s3 bucket=mo-test,endpoint=http://127.0.0.1:9000,key-prefix=server/data,key-id=minio,key-secret=minio123
 ```
 
 AWS S3 example:
@@ -190,7 +192,7 @@ AWS S3 example:
 ```bash
 ./mo-tool ckp info \
   --backend S3 \
-  --s3 bucket=my-mo-bucket,region=us-east-1,key-prefix=prod/mo-data
+  --remote-s3 bucket=my-mo-bucket,region=us-east-1,key-prefix=prod/mo-data
 ```
 
 Object viewer with inline S3 arguments:
@@ -198,10 +200,10 @@ Object viewer with inline S3 arguments:
 ```bash
 ./mo-tool object view <object-name> \
   --backend S3 \
-  --s3 bucket=my-mo-bucket,region=us-east-1,key-prefix=prod/mo-data
+  --remote-s3 bucket=my-mo-bucket,region=us-east-1,key-prefix=prod/mo-data
 ```
 
-Supported `--s3` keys include:
+Supported `--remote-s3` keys include:
 
 - `bucket`
 - `endpoint`
@@ -281,13 +283,13 @@ s3://my-bucket/prod/mo-data/
 Use:
 
 ```bash
---s3 bucket=my-bucket,key-prefix=prod/mo-data,...
+--remote-s3 bucket=my-bucket,key-prefix=prod/mo-data,...
 ```
 
 Do not use:
 
 ```bash
---s3 bucket=my-bucket,key-prefix=prod/mo-data/ckp,...
+--remote-s3 bucket=my-bucket,key-prefix=prod/mo-data/ckp,...
 ```
 
 Checkpoint metadata stores object names relative to the fileservice root. If the
@@ -303,10 +305,10 @@ Checkpoint commands:
 ./mo-tool ckp view [directory] [--fs-config FILE] [--fs-name NAME]
 ./mo-tool ckp dump --table-id ID [directory] [--ts PHYSICAL:LOGICAL] [-o FILE] [--header] [--meta-comments] [--row-order storage|lexical]
 ./mo-tool ckp show-create-table --table-id ID [directory] [--ts PHYSICAL:LOGICAL]
-./mo-tool ckp info --backend S3 --s3 key=value,...
-./mo-tool ckp view --backend MINIO --s3 key=value,...
-./mo-tool ckp dump --table-id ID --backend S3 --s3 key=value,... [--header] [--meta-comments] [--row-order storage|lexical]
-./mo-tool ckp show-create-table --table-id ID --backend S3 --s3 key=value,...
+./mo-tool ckp info --backend S3 --remote-s3 key=value,...
+./mo-tool ckp view --backend MINIO --remote-s3 key=value,...
+./mo-tool ckp dump --table-id ID --backend S3 --remote-s3 key=value,... [--header] [--meta-comments] [--row-order storage|lexical]
+./mo-tool ckp show-create-table --table-id ID --backend S3 --remote-s3 key=value,...
 ```
 
 Object commands:
@@ -314,8 +316,8 @@ Object commands:
 ```bash
 ./mo-tool object info <object-file> [--fs-config FILE] [--fs-name NAME]
 ./mo-tool object view <object-file> [--fs-config FILE] [--fs-name NAME]
-./mo-tool object info <object-name> --backend S3 --s3 key=value,...
-./mo-tool object view <object-name> --backend MINIO --s3 key=value,...
+./mo-tool object info <object-name> --backend S3 --remote-s3 key=value,...
+./mo-tool object view <object-name> --backend MINIO --remote-s3 key=value,...
 ```
 
 Local mode treats paths as local filesystem paths. Remote mode treats object

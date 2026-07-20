@@ -16,13 +16,95 @@ package toolfs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type closeCountingFileService struct {
+	fileservice.FileService
+	closes int
+}
+
+func (f *closeCountingFileService) Close(ctx context.Context) {
+	f.closes++
+	f.FileService.Close(ctx)
+}
+
+func TestOpenRollsBackRemoteFileServiceWhenLazyCacheConstructionFails(t *testing.T) {
+	oldNewFS := newToolFileService
+	oldNewLazy := newToolLazyCacheFS
+	t.Cleanup(func() {
+		newToolFileService = oldNewFS
+		newToolLazyCacheFS = oldNewLazy
+	})
+
+	ctx := context.Background()
+	newCounter := func() *closeCountingFileService {
+		memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		return &closeCountingFileService{FileService: memory}
+	}
+	var created []*closeCountingFileService
+	newToolFileService = func(context.Context, fileservice.Config) (fileservice.FileService, error) {
+		counter := newCounter()
+		created = append(created, counter)
+		return counter, nil
+	}
+	cacheErr := errors.New("cache init failed")
+	newToolLazyCacheFS = func(context.Context, fileservice.FileService) (fileservice.FileService, string, error) {
+		return nil, "", cacheErr
+	}
+
+	_, _, err := Open(ctx, StorageOptions{
+		S3: "bucket=b,no-bucket-validation=true",
+	})
+	require.ErrorIs(t, err, cacheErr)
+	require.Equal(t, 1, created[0].closes)
+
+	cfgPath := writeConfig(t, `
+[[fileservice]]
+backend = "S3"
+name = "SHARED"
+[fileservice.s3]
+bucket = "b"
+no-bucket-validation = true
+`)
+	_, _, err = Open(ctx, StorageOptions{FSConfig: cfgPath})
+	require.ErrorIs(t, err, cacheErr)
+	require.Equal(t, 1, created[1].closes)
+}
+
+func TestOpenTransfersRemoteFileServiceOwnershipOnSuccess(t *testing.T) {
+	oldNewFS := newToolFileService
+	oldNewLazy := newToolLazyCacheFS
+	t.Cleanup(func() {
+		newToolFileService = oldNewFS
+		newToolLazyCacheFS = oldNewLazy
+	})
+
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	counter := &closeCountingFileService{FileService: memory}
+	newToolFileService = func(context.Context, fileservice.Config) (fileservice.FileService, error) {
+		return counter, nil
+	}
+	newToolLazyCacheFS = func(_ context.Context, remote fileservice.FileService) (fileservice.FileService, string, error) {
+		return remote, "", nil
+	}
+
+	fs, _, err := Open(ctx, StorageOptions{S3: "bucket=b,no-bucket-validation=true"})
+	require.NoError(t, err)
+	require.Zero(t, counter.closes)
+	fs.Close(ctx)
+	require.Equal(t, 1, counter.closes)
+}
 
 func TestOpenFromConfigSelectsRequestedFileService(t *testing.T) {
 	dir := t.TempDir()
@@ -91,7 +173,7 @@ func TestOpenRejectsInvalidRemoteOptions(t *testing.T) {
 
 	_, _, err = Open(ctx, StorageOptions{Backend: "s3"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing --s3")
+	assert.Contains(t, err.Error(), "missing --remote-s3")
 
 	_, _, err = Open(ctx, StorageOptions{S3: "not-an-argument"})
 	require.Error(t, err)

@@ -16,6 +16,7 @@ package toolfs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"iter"
 	"os"
@@ -31,10 +32,17 @@ import (
 
 const defaultLazyCacheMaxBytes int64 = 8 << 30
 
+var errLazyCacheFillInvalidated = moerr.NewInternalErrorNoCtx("lazy cache fill invalidated")
+
 type lazyCacheEntry struct {
 	path       string
 	size       int64
 	lastAccess uint64
+}
+
+type lazyCacheFill struct {
+	done chan struct{}
+	err  error
 }
 
 type lazyCacheFS struct {
@@ -44,12 +52,14 @@ type lazyCacheFS struct {
 	root   string
 
 	mu            sync.Mutex
-	caching       map[string]*sync.Once
+	caching       map[string]*lazyCacheFill
 	entries       map[string]lazyCacheEntry
 	reservations  map[string]int64
 	usedBytes     int64
 	maxBytes      int64
 	accessCounter uint64
+
+	waitForCacheFillForTest func()
 }
 
 func newLazyCacheFS(ctx context.Context, remote fileservice.FileService) (fileservice.FileService, string, error) {
@@ -67,7 +77,7 @@ func newLazyCacheFS(ctx context.Context, remote fileservice.FileService) (filese
 		remote:       remote,
 		local:        local,
 		root:         root,
-		caching:      make(map[string]*sync.Once),
+		caching:      make(map[string]*lazyCacheFill),
 		entries:      make(map[string]lazyCacheEntry),
 		reservations: make(map[string]int64),
 		maxBytes:     lazyCacheMaxBytesFromEnv(),
@@ -81,9 +91,9 @@ func (l *lazyCacheFS) Write(ctx context.Context, vector fileservice.IOVector) er
 		return err
 	}
 	normalized := stripServiceName(vector.FilePath, l.name)
-	_ = os.Remove(filepath.Join(l.root, filepath.FromSlash(normalized)))
 	l.mu.Lock()
 	delete(l.caching, normalized)
+	_ = os.Remove(filepath.Join(l.root, filepath.FromSlash(normalized)))
 	l.removeCacheEntryLocked(normalized)
 	l.mu.Unlock()
 	return nil
@@ -108,15 +118,18 @@ func (l *lazyCacheFS) List(ctx context.Context, dirPath string) iter.Seq2[*files
 }
 
 func (l *lazyCacheFS) Delete(ctx context.Context, filePaths ...string) error {
-	_ = l.local.Delete(ctx, filePaths...)
+	if err := l.remote.Delete(ctx, filePaths...); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	for _, filePath := range filePaths {
 		normalized := stripServiceName(filePath, l.name)
 		delete(l.caching, normalized)
+		_ = os.Remove(filepath.Join(l.root, filepath.FromSlash(normalized)))
 		l.removeCacheEntryLocked(normalized)
 	}
 	l.mu.Unlock()
-	return l.remote.Delete(ctx, filePaths...)
+	return nil
 }
 
 func (l *lazyCacheFS) StatFile(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
@@ -138,6 +151,16 @@ func (l *lazyCacheFS) Close(ctx context.Context) {
 }
 
 func (l *lazyCacheFS) ensureCached(ctx context.Context, filePath string) error {
+	for {
+		err := l.ensureCachedOnce(ctx, filePath)
+		if errors.Is(err, errLazyCacheFillInvalidated) {
+			continue
+		}
+		return err
+	}
+}
+
+func (l *lazyCacheFS) ensureCachedOnce(ctx context.Context, filePath string) error {
 	normalized := stripServiceName(filePath, l.name)
 	localPath := filepath.Join(l.root, filepath.FromSlash(normalized))
 	if stat, err := os.Stat(localPath); err == nil {
@@ -145,31 +168,43 @@ func (l *lazyCacheFS) ensureCached(ctx context.Context, filePath string) error {
 		return nil
 	}
 
-	once := l.getOnce(normalized)
-	var cacheErr error
-	once.Do(func() {
-		cacheErr = l.cacheFile(ctx, normalized, localPath)
-		if cacheErr != nil {
-			l.mu.Lock()
-			delete(l.caching, normalized)
-			l.mu.Unlock()
+	fill, owner := l.getCacheFill(normalized)
+	if !owner {
+		if l.waitForCacheFillForTest != nil {
+			l.waitForCacheFillForTest()
 		}
-	})
-	return cacheErr
+		<-fill.done
+		return fill.err
+	}
+
+	err := l.cacheFile(ctx, normalized, localPath, fill)
+	l.mu.Lock()
+	fill.err = err
+	if err != nil && l.caching[normalized] == fill {
+		delete(l.caching, normalized)
+	}
+	close(fill.done)
+	l.mu.Unlock()
+	return err
 }
 
-func (l *lazyCacheFS) getOnce(path string) *sync.Once {
+func (l *lazyCacheFS) getCacheFill(path string) (*lazyCacheFill, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if once, ok := l.caching[path]; ok {
-		return once
+	if fill, ok := l.caching[path]; ok {
+		return fill, false
 	}
-	once := &sync.Once{}
-	l.caching[path] = once
-	return once
+	fill := &lazyCacheFill{done: make(chan struct{})}
+	l.caching[path] = fill
+	return fill, true
 }
 
-func (l *lazyCacheFS) cacheFile(ctx context.Context, normalized string, localPath string) error {
+func (l *lazyCacheFS) cacheFile(
+	ctx context.Context,
+	normalized string,
+	localPath string,
+	fill *lazyCacheFill,
+) error {
 	committed := false
 	defer func() {
 		if !committed {
@@ -211,10 +246,15 @@ func (l *lazyCacheFS) cacheFile(ctx context.Context, normalized string, localPat
 		return err
 	}
 	l.reserveCacheSpace(stat.Size(), normalized)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.caching[normalized] != fill {
+		return errLazyCacheFillInvalidated
+	}
 	if err := os.Rename(tmpName, localPath); err != nil {
 		return err
 	}
-	l.touchCacheEntry(normalized, localPath, stat.Size())
+	l.touchCacheEntryLocked(normalized, localPath, stat.Size())
 	committed = true
 	return nil
 }
@@ -275,6 +315,10 @@ func (l *lazyCacheFS) readCachedFile(ctx context.Context, vector *fileservice.IO
 func (l *lazyCacheFS) touchCacheEntry(normalized string, localPath string, size int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.touchCacheEntryLocked(normalized, localPath, size)
+}
+
+func (l *lazyCacheFS) touchCacheEntryLocked(normalized string, localPath string, size int64) {
 	l.accessCounter++
 	if reservation, ok := l.reservations[normalized]; ok {
 		l.usedBytes -= reservation

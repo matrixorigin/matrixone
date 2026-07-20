@@ -619,14 +619,27 @@ func TestNormalizeKeysAndRenderForeignKeyBranches(t *testing.T) {
 	require.Equal(t, []string{"id"}, foreign[0].ReferColumns)
 
 	clause := renderForeignKeyClause(TableForeignKey{
-		Name:         "fk",
-		Columns:      []string{"child"},
-		ReferTable:   "parent",
-		ReferColumns: []string{"id"},
-		OnDelete:     plan.ForeignKeyDef_SET_NULL,
-		OnUpdate:     plan.ForeignKeyDef_NO_ACTION,
+		Name:          "fk",
+		Columns:       []string{"child"},
+		ReferDatabase: "parent_db",
+		ReferTable:    "parent",
+		ReferColumns:  []string{"id"},
+		OnDelete:      plan.ForeignKeyDef_SET_NULL,
+		OnUpdate:      plan.ForeignKeyDef_NO_ACTION,
 	})
-	require.Equal(t, "CONSTRAINT `fk` FOREIGN KEY (`child`) REFERENCES `parent` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION", clause)
+	require.Equal(t, "CONSTRAINT `fk` FOREIGN KEY (`child`) REFERENCES `parent_db`.`parent` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION", clause)
+	require.Equal(t,
+		"ALTER TABLE `child` ADD CONSTRAINT `fk` FOREIGN KEY (`child`) REFERENCES `parent_db`.`parent` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION;",
+		RenderAddForeignKeyDDL("child", TableForeignKey{
+			Name:          "fk",
+			Columns:       []string{"child"},
+			ReferDatabase: "parent_db",
+			ReferTable:    "parent",
+			ReferColumns:  []string{"id"},
+			OnDelete:      plan.ForeignKeyDef_SET_NULL,
+			OnUpdate:      plan.ForeignKeyDef_NO_ACTION,
+		}),
+	)
 
 	require.Equal(t, "CASCADE", renderFKAction(plan.ForeignKeyDef_CASCADE))
 	require.Equal(t, "SET DEFAULT", renderFKAction(plan.ForeignKeyDef_SET_DEFAULT))
@@ -1774,7 +1787,7 @@ func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
 	}
 
 	ddl := createTableDDLFromCatalogViews(101, moTablesView, moColumnsView)
-	assert.Contains(t, ddl, "CONSTRAINT `fk_child_cascade_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT")
+	assert.Contains(t, ddl, "CONSTRAINT `fk_child_cascade_parent` FOREIGN KEY (`parent_id`) REFERENCES `ckp_constraints`.`parent` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT")
 }
 
 func TestCloneTableSchemaCopiesForeignKeys(t *testing.T) {

@@ -35,6 +35,72 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type closeCountingCheckpointFS struct {
+	fileservice.FileService
+	closes int
+}
+
+func (f *closeCountingCheckpointFS) Close(ctx context.Context) {
+	f.closes++
+	f.FileService.Close(ctx)
+}
+
+func TestOpenOwnsFileServiceTransactionally(t *testing.T) {
+	oldNewFS := newCheckpointOfflineFS
+	oldLoadEntries := loadCheckpointEntries
+	t.Cleanup(func() {
+		newCheckpointOfflineFS = oldNewFS
+		loadCheckpointEntries = oldLoadEntries
+	})
+
+	ctx := context.Background()
+	newCounter := func() *closeCountingCheckpointFS {
+		memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		return &closeCountingCheckpointFS{FileService: memory}
+	}
+	var counter *closeCountingCheckpointFS
+	newCheckpointOfflineFS = func(context.Context, string, string) (fileservice.FileService, error) {
+		counter = newCounter()
+		return counter, nil
+	}
+
+	loadCheckpointEntries = func(*CheckpointReader) error { return assert.AnError }
+	_, err := Open(ctx, "/display")
+	require.ErrorIs(t, err, assert.AnError)
+	require.Equal(t, 1, counter.closes)
+
+	loadCheckpointEntries = func(*CheckpointReader) error { return nil }
+	reader, err := Open(ctx, "/display")
+	require.NoError(t, err)
+	require.Zero(t, counter.closes)
+	require.NoError(t, reader.Close())
+	require.NoError(t, reader.Close())
+	require.Equal(t, 1, counter.closes)
+}
+
+func TestOpenWithFSCloseOwnershipRollsBackOnlyWhenTransferred(t *testing.T) {
+	oldLoadEntries := loadCheckpointEntries
+	t.Cleanup(func() { loadCheckpointEntries = oldLoadEntries })
+	loadCheckpointEntries = func(*CheckpointReader) error { return assert.AnError }
+	ctx := context.Background()
+
+	ownedMemory, err := fileservice.NewMemoryFS("OWNED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	owned := &closeCountingCheckpointFS{FileService: ownedMemory}
+	_, err = OpenWithFS(ctx, owned, "/display", WithCloseFS())
+	require.ErrorIs(t, err, assert.AnError)
+	require.Equal(t, 1, owned.closes)
+
+	borrowedMemory, err := fileservice.NewMemoryFS("BORROWED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	borrowed := &closeCountingCheckpointFS{FileService: borrowedMemory}
+	_, err = OpenWithFS(ctx, borrowed, "/display")
+	require.ErrorIs(t, err, assert.AnError)
+	require.Zero(t, borrowed.closes)
+	borrowed.Close(ctx)
+}
+
 func TestVecValueToString_SQLLikeFormatting(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {

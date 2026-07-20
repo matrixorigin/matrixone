@@ -25,13 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOfflineKindFlags verifies the object command tree builds without a cobra
-// flag conflict and exposes the --local / --local2 format flags. This branch
-// keeps --s3 as remote storage arguments, so local DISK remains the default.
+// TestOfflineKindFlags verifies the object command preserves --s3 as the local
+// S3FS-on-disk format selector and exposes remote storage as --remote-s3.
 func TestOfflineKindFlags(t *testing.T) {
 	cmd := PrepareCommand()
 
-	for _, name := range []string{"local", "local2"} {
+	for _, name := range []string{"local", "s3", "local2", "remote-s3"} {
 		require.NotNilf(t, cmd.PersistentFlags().Lookup(name), "object --%s", name)
 	}
 
@@ -41,14 +40,16 @@ func TestOfflineKindFlags(t *testing.T) {
 
 	// resolver: local/local2 map to their kind; both together -> error
 	for _, tc := range []struct {
-		local, local2 bool
-		want          string
-		wantErr       bool
+		local, s3, local2 bool
+		want              string
+		wantErr           bool
 	}{
-		{true, false, objectio.OfflineKindLocal, false},
-		{false, true, objectio.OfflineKindLocal2, false},
-		{false, false, objectio.OfflineKindLocal, false},
-		{true, true, "", true},
+		{true, false, false, objectio.OfflineKindLocal, false},
+		{false, true, false, objectio.OfflineKindS3, false},
+		{false, false, true, objectio.OfflineKindLocal2, false},
+		{false, false, false, objectio.OfflineKindLocal, false},
+		{true, true, false, "", true},
+		{true, false, true, "", true},
 	} {
 		c := PrepareCommand()
 		if tc.local {
@@ -56,6 +57,9 @@ func TestOfflineKindFlags(t *testing.T) {
 		}
 		if tc.local2 {
 			require.NoError(t, c.ParseFlags([]string{"--local2"}))
+		}
+		if tc.s3 {
+			require.NoError(t, c.ParseFlags([]string{"--s3"}))
 		}
 		got, err := kindFromFlags(c)
 		if tc.wantErr {

@@ -20,13 +20,149 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const objectIOMagic = 0xFFFFFFFF
+
+type readHookFileService struct {
+	fileservice.FileService
+	read func(context.Context, *fileservice.IOVector) error
+}
+
+func (f *readHookFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	return f.read(ctx, vector)
+}
+
+func TestLazyCacheFSConcurrentFailureIsSharedAndRetryable(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}},
+	}))
+
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var reads atomic.Int32
+	remote := &readHookFileService{FileService: memory}
+	remote.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+		if reads.Add(1) == 1 {
+			close(readStarted)
+			<-releaseRead
+			return assert.AnError
+		}
+		return memory.Read(ctx, vector)
+	}
+
+	fs, _, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	lazy := fs.(*lazyCacheFS)
+	waiterReached := make(chan struct{})
+	lazy.waitForCacheFillForTest = func() { close(waiterReached) }
+
+	results := make(chan error, 2)
+	go func() { results <- fs.PrefetchFile(ctx, "dir/file") }()
+	<-readStarted
+	go func() { results <- fs.PrefetchFile(ctx, "dir/file") }()
+	<-waiterReached
+	close(releaseRead)
+
+	require.ErrorIs(t, <-results, assert.AnError)
+	require.ErrorIs(t, <-results, assert.AnError)
+	require.Equal(t, int32(1), reads.Load())
+
+	lazy.waitForCacheFillForTest = nil
+	require.NoError(t, fs.PrefetchFile(ctx, "dir/file"))
+	require.Equal(t, int32(2), reads.Load())
+}
+
+func TestLazyCacheFSInvalidatedFillCannotPublishStaleData(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 3, Data: []byte("old")}},
+	}))
+
+	oldReadReady := make(chan struct{})
+	releaseOldRead := make(chan struct{})
+	var reads atomic.Int32
+	remote := &readHookFileService{FileService: memory}
+	remote.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+		if reads.Add(1) == 1 {
+			_, err := vector.Entries[0].WriterForRead.Write([]byte("old"))
+			close(oldReadReady)
+			<-releaseOldRead
+			return err
+		}
+		return memory.Read(ctx, vector)
+	}
+
+	fs, _, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	prefetchDone := make(chan error, 1)
+	go func() { prefetchDone <- fs.PrefetchFile(ctx, "dir/file") }()
+	<-oldReadReady
+
+	require.NoError(t, memory.Delete(ctx, "dir/file"))
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 3, Data: []byte("new")}},
+	}))
+	close(releaseOldRead)
+	require.NoError(t, <-prefetchDone)
+	require.Equal(t, int32(2), reads.Load())
+
+	vec := &fileservice.IOVector{FilePath: "dir/file", Entries: []fileservice.IOEntry{{Offset: 0, Size: -1}}}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, []byte("new"), vec.Entries[0].Data)
+}
+
+func TestLazyCacheFSDeleteInvalidatesInFlightFill(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 3, Data: []byte("old")}},
+	}))
+
+	oldReadReady := make(chan struct{})
+	releaseOldRead := make(chan struct{})
+	var reads atomic.Int32
+	remote := &readHookFileService{FileService: memory}
+	remote.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+		if reads.Add(1) == 1 {
+			_, err := vector.Entries[0].WriterForRead.Write([]byte("old"))
+			close(oldReadReady)
+			<-releaseOldRead
+			return err
+		}
+		return memory.Read(ctx, vector)
+	}
+
+	fs, root, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	prefetchDone := make(chan error, 1)
+	go func() { prefetchDone <- fs.PrefetchFile(ctx, "dir/file") }()
+	<-oldReadReady
+	require.NoError(t, fs.Delete(ctx, "dir/file"))
+	close(releaseOldRead)
+	require.Error(t, <-prefetchDone)
+	require.Equal(t, int32(2), reads.Load())
+	require.NoFileExists(t, filepath.Join(root, "dir/file"))
+}
 
 func TestLazyCacheFSReadsMagicPrefixedRemoteObjectsWithoutLocalChecksum(t *testing.T) {
 	ctx := context.Background()

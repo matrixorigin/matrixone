@@ -863,6 +863,10 @@ func renderForeignKeyClause(key TableForeignKey) string {
 	sb.WriteString(" FOREIGN KEY (")
 	appendDDLIdentList(&sb, key.Columns)
 	sb.WriteString(") REFERENCES ")
+	if database := strings.TrimSpace(key.ReferDatabase); database != "" {
+		sb.WriteString(quoteDDLIdent(database))
+		sb.WriteString(".")
+	}
 	sb.WriteString(quoteDDLIdent(key.ReferTable))
 	sb.WriteString(" (")
 	appendDDLIdentList(&sb, key.ReferColumns)
