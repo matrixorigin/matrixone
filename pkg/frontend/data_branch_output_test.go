@@ -90,18 +90,29 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 	defer ctrl.Finish()
 
 	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
 	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
 		DbName: "base_db",
 		Name:   "base_t",
 		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
-			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
-			{Name: "__mo_diff_source", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
-			{Name: "__mo_diff_flag", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_source", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_flag", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+		},
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "target_db",
+		Name:   "target_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_source", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_flag", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
 		},
 	}).AnyTimes()
 
-	tblStuff := tableStuff{baseRel: baseRel}
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
 	tblStuff.def.colNames = []string{"id", "name", "__mo_diff_source", "__mo_diff_flag"}
 	tblStuff.def.colTypes = []types.Type{
 		types.T_int64.ToType(),
@@ -165,6 +176,24 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.Equal(t, []int{1, 0}, output.projectedIdxes)
 		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
 	})
+
+	t.Run("renamed target column retains target name and base type", func(t *testing.T) {
+		renamedTargetDef := tblStuff.tarRel.GetTableDef(ctx)
+		renamedTargetDef.Cols[1].Name = "display_name"
+		renamedTblStuff := tblStuff
+		renamedTblStuff.def.colNames = []string{"id", "display_name", "__mo_diff_source", "__mo_diff_flag"}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+			Columns:   tree.IdentifierList{tree.Identifier("display_name")},
+		}, renamedTblStuff)
+		require.NoError(t, err)
+
+		sql, err := output.createSQL(ctx, renamedTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`display_name` VARCHAR(20) default null")
+		require.NotContains(t, sql, "`name` VARCHAR(20) default null")
+	})
 }
 
 func TestDataBranchDiffCanExecuteInUncommittedTransaction(t *testing.T) {
@@ -185,15 +214,23 @@ func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T
 	defer ctrl.Finish()
 
 	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
 	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
 		DbName: "base_db",
 		Name:   "base_t",
 		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		},
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "target_db",
+		Name:   "target_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
 		},
 	}).AnyTimes()
 
-	tblStuff := tableStuff{baseRel: baseRel}
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
 	tblStuff.def.colNames = []string{"id"}
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
 	tblStuff.def.visibleIdxes = []int{0}

@@ -404,19 +404,26 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 	if baseTableDef == nil {
 		return "", moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS base table definition is unavailable")
 	}
+	targetTableDef := tblStuff.tarRel.GetTableDef(ctx)
+	if targetTableDef == nil {
+		return "", moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS target table definition is unavailable")
+	}
+
+	projectedNames := make([]string, len(output.projectedIdxes))
+	for i, idx := range output.projectedIdxes {
+		projectedNames[i] = tblStuff.def.colNames[idx]
+	}
+	baseColDefs, err := dataBranchColumnsByIdentity(targetTableDef, baseTableDef, projectedNames)
+	if err != nil {
+		return "", err
+	}
 
 	columnDefs := []string{
 		fmt.Sprintf("%s varchar(255) default null", quoteIdentifierForSQL(output.columnNames[0])),
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
-	for _, idx := range output.projectedIdxes {
-		name := tblStuff.def.colNames[idx]
-		colDef := dataBranchOutputColumnDef(baseTableDef, name)
-		if colDef == nil {
-			return "", moerr.NewInternalErrorNoCtxf(
-				"DATA BRANCH DIFF OUTPUT AS base column %q is unavailable", name,
-			)
-		}
+	for i, name := range projectedNames {
+		colDef := baseColDefs[i]
 
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
 		if colDef.Typ.NotNullable {
@@ -434,13 +441,56 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 	return fmt.Sprintf("create table %s (%s)", output.qualifiedName(), strings.Join(columnDefs, ",")), nil
 }
 
-func dataBranchOutputColumnDef(tableDef *plan2.TableDef, name string) *plan2.ColDef {
+func dataBranchColumnDefByName(tableDef *plan2.TableDef, name string) *plan2.ColDef {
 	for _, colDef := range tableDef.Cols {
 		if colDef != nil && strings.EqualFold(colDef.Name, name) {
 			return colDef
 		}
 	}
 	return nil
+}
+
+func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil &&
+			colDef.ColId == sourceColDef.ColId &&
+			colDef.Seqnum == sourceColDef.Seqnum {
+			return colDef
+		}
+	}
+	return nil
+}
+
+// dataBranchColumnsByIdentity maps each source column name to the column with
+// the same stable identity in the destination definition. Column names are
+// intentionally not part of schema equivalence: a branch may rename a column
+// without changing its identity, so physical reads from another branch or an
+// ancestor must resolve that branch's local name through ColId and Seqnum.
+func dataBranchColumnsByIdentity(
+	sourceTableDef *plan2.TableDef,
+	destinationTableDef *plan2.TableDef,
+	sourceColumnNames []string,
+) ([]*plan2.ColDef, error) {
+	if sourceTableDef == nil || destinationTableDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+	}
+
+	destinationColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	for i, sourceColumnName := range sourceColumnNames {
+		sourceColDef := dataBranchColumnDefByName(sourceTableDef, sourceColumnName)
+		if sourceColDef == nil {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH source column %q is unavailable", sourceColumnName,
+			)
+		}
+		destinationColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
+		if destinationColDefs[i] == nil {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
+			)
+		}
+	}
+	return destinationColDefs, nil
 }
 
 func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
