@@ -179,12 +179,7 @@ func (f *CbitmapFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) [
 	if data != nil {
 		C.mo_cbitmap_test_fixed(f.ptr, data, dataLen, elemsz, nitem, nullPtr, nullLen, unsafe.Pointer(&res[0]))
 	}
-	if cb != nil {
-		nulls := v.GetNulls()
-		for i := 0; i < length; i++ {
-			cb(res[i] != 0, nulls.Contains(uint64(i)), i)
-		}
-	}
+	finalizeVecResults(v, res, cb)
 	return res
 }
 

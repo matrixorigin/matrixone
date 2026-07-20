@@ -4165,6 +4165,119 @@ func TestSubQuery(t *testing.T) {
 	}
 }
 
+func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
+	tests := []string{
+		`SELECT AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		 FROM NATION n`,
+		`SELECT n.N_REGIONKEY,
+		        COUNT(*),
+		        AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		 FROM NATION n
+		 GROUP BY n.N_REGIONKEY`,
+		`WITH stats AS (
+		     SELECT n.N_REGIONKEY,
+		            SUM((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY)) AS total_regions
+		     FROM NATION n
+		     GROUP BY n.N_REGIONKEY
+		 )
+		 SELECT * FROM stats`,
+	}
+
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, sql)
+
+		foundAgg := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType != plan.Node_AGG {
+				continue
+			}
+			foundAgg = true
+			for _, agg := range node.AggList {
+				require.False(t, hasSubquery(agg), "AGG contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundAgg, sql)
+	}
+}
+
+func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testing.T) {
+	sql := `SELECT n.N_REGIONKEY,
+	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
+	               AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+	        FROM NATION n
+	        GROUP BY n.N_REGIONKEY`
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+	require.NoError(t, err)
+
+	foundGroupConcatAgg := false
+	query := logicPlan.GetQuery()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+
+		hasGroupConcat := false
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == NameGroupConcat {
+				hasGroupConcat = true
+				break
+			}
+		}
+		if !hasGroupConcat {
+			continue
+		}
+
+		foundGroupConcatAgg = true
+		require.Len(t, node.Children, 1)
+		sortNode := query.Nodes[node.Children[0]]
+		require.Equal(t, plan.Node_SORT, sortNode.NodeType, "GROUP_CONCAT input must be sorted after subquery joins")
+		for _, orderBy := range sortNode.OrderBy {
+			require.False(t, hasSubquery(orderBy.Expr), "SORT contains an executable Expr_Sub")
+		}
+		require.Len(t, sortNode.Children, 1)
+		require.Equal(t, plan.Node_JOIN, query.Nodes[sortNode.Children[0]].NodeType)
+	}
+	require.True(t, foundGroupConcatAgg)
+}
+
+func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
+	tests := map[string]string{
+		"positional": `SELECT n.N_REGIONKEY,
+		                     GROUP_CONCAT(
+		                         (SELECT r.R_NAME
+		                            FROM REGION r
+		                           WHERE r.R_REGIONKEY = n.N_NATIONKEY)
+		                         ORDER BY 1)
+		              FROM NATION n
+		              GROUP BY n.N_REGIONKEY`,
+		"wrapped positional": `SELECT n.N_REGIONKEY,
+		                             GROUP_CONCAT(
+		                                 COALESCE((SELECT r.R_NAME
+		                                             FROM REGION r
+		                                            WHERE r.R_REGIONKEY = n.N_NATIONKEY), '')
+		                                 ORDER BY 1)
+		                      FROM NATION n
+		                      GROUP BY n.N_REGIONKEY`,
+		"wrapped explicit": `SELECT n.N_REGIONKEY,
+		                           GROUP_CONCAT(
+		                               n.N_NAME
+		                               ORDER BY COALESCE((SELECT r.R_NAME
+		                                                    FROM REGION r
+		                                                   WHERE r.R_REGIONKEY = n.N_NATIONKEY), ''))
+		                    FROM NATION n
+		                    GROUP BY n.N_REGIONKEY`,
+	}
+
+	for name, sql := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
+		})
+	}
+}
+
 func TestMysqlCompatibilityMode(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
