@@ -4019,11 +4019,12 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
+	emptyFormat := len(fmt) == 0
 
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		t, null1 := times.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || emptyFormat {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -7381,6 +7382,103 @@ func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) 
 	}
 }
 
+func makeTimeExactSecond(value string) (int64, uint32, bool) {
+	const maxExactSecondDigits = 4096
+
+	value = strings.TrimSpace(value)
+	if len(value) == 0 {
+		return 0, 0, true
+	}
+
+	end := 0
+	if value[end] == '+' || value[end] == '-' {
+		end++
+	}
+	digits := 0
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+		digits++
+	}
+	if end < len(value) && value[end] == '.' {
+		end++
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			end++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return 0, 0, true
+	}
+
+	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
+		exponentStart := end
+		end++
+		if end < len(value) && (value[end] == '+' || value[end] == '-') {
+			end++
+		}
+		exponentDigits := end
+		exponentMagnitude := 0
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			if exponentMagnitude <= maxExactSecondDigits {
+				exponentMagnitude = exponentMagnitude*10 + int(value[end]-'0')
+			}
+			end++
+		}
+		if end == exponentDigits {
+			end = exponentStart
+		} else if exponentMagnitude > maxExactSecondDigits {
+			return 0, 0, true
+		}
+	}
+	if end > maxExactSecondDigits {
+		return 0, 0, true
+	}
+
+	second, ok := new(big.Rat).SetString(value[:end])
+	if !ok || second.Sign() < 0 || second.Cmp(big.NewRat(60, 1)) >= 0 {
+		return 0, 0, true
+	}
+
+	scaledNumerator := new(big.Int).Mul(second.Num(), big.NewInt(types.MicroSecsPerSec))
+	totalMicroseconds, remainder := new(big.Int), new(big.Int)
+	totalMicroseconds.QuoRem(scaledNumerator, second.Denom(), remainder)
+	twiceRemainder := new(big.Int).Lsh(remainder, 1)
+	if twiceRemainder.Cmp(second.Denom()) >= 0 {
+		totalMicroseconds.Add(totalMicroseconds, big.NewInt(1))
+	}
+	if !totalMicroseconds.IsInt64() {
+		return 0, 0, true
+	}
+
+	total := totalMicroseconds.Int64()
+	return total / types.MicroSecsPerSec, uint32(total % types.MicroSecsPerSec), false
+}
+
+func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {
+	param := vector.GenerateFunctionStrParameter(vec)
+	isBinary := vec.GetIsBin()
+	return func(i uint64) (int64, uint32, bool) {
+		value, null := param.GetStrValue(i)
+		if null {
+			return 0, 0, true
+		}
+		if isBinary {
+			if len(value) > 8 {
+				return 0, 0, true
+			}
+			var result uint64
+			for _, b := range value {
+				result = result<<8 | uint64(b)
+			}
+			if result > math.MaxInt64 {
+				return 0, 0, true
+			}
+			return makeTimeIntegerSecond(int64(result), false)
+		}
+		return makeTimeExactSecond(functionUtil.QuickBytesToStr(value))
+	}
+}
+
 // MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
 func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
@@ -7408,7 +7506,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			if null || math.IsNaN(value) || math.IsInf(value, 0) {
 				return 0, true
 			}
-			rounded := math.RoundToEven(value)
+			rounded := math.Round(value)
 			if rounded >= float64(math.MaxInt64) {
 				return math.MaxInt64, false
 			}
@@ -7438,7 +7536,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			if null || math.IsNaN(value) || math.IsInf(value, 0) {
 				return 0, true
 			}
-			rounded := math.RoundToEven(value)
+			rounded := math.Round(value)
 			if rounded < 0 || rounded >= 60 {
 				return 0, true
 			}
@@ -7446,7 +7544,9 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		}
 	}
 
-	if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
+	if ivecs[2].GetType().Oid.IsMySQLString() {
+		getSecondValue = makeTimeStringSecondGetter(ivecs[2])
+	} else if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			value, null := getter(i)
 			return makeTimeIntegerSecond(value, null)

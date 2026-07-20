@@ -76,6 +76,12 @@ null
 SELECT TIME_FORMAT('15:30:45', NULL) AS null_format;
 null_format
 null
+SELECT TIME_FORMAT('15:30:45', '') AS empty_positive_format;
+empty_positive_format
+null
+SELECT TIME_FORMAT('-15:30:45', '') AS empty_negative_format;
+empty_negative_format
+null
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
 SELECT t, TIME_FORMAT(t, '%H:%i:%s') AS formatted FROM t1;

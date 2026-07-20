@@ -9440,6 +9440,18 @@ func initTimeFormatTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
+			info: "test time_format - empty format returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1, t6},
+					[]bool{false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", ""},
+				[]bool{true, true}),
+		},
+		{
 			info: "test time_format - %h:%i:%s %p",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
@@ -9630,9 +9642,9 @@ func TestMakeTimeFloatHourRounding(t *testing.T) {
 		NewFunctionTestResult(types.T_time.ToType(), false,
 			[]types.Time{
 				types.TimeFromClock(false, 13, 0, 0, 0),
-				types.TimeFromClock(false, 12, 0, 0, 0),
+				types.TimeFromClock(false, 13, 0, 0, 0),
 				types.TimeFromClock(false, 14, 0, 0, 0),
-				types.TimeFromClock(true, 12, 0, 0, 0),
+				types.TimeFromClock(true, 13, 0, 0, 0),
 				types.TimeFromClock(true, 14, 0, 0, 0),
 				types.TimeFromClock(false, 838, 59, 59, 0),
 			},
@@ -9660,20 +9672,50 @@ func TestMakeTimeFloatMinuteRange(t *testing.T) {
 		NewFunctionTestResult(types.T_time.ToType(), false,
 			[]types.Time{
 				types.TimeFromClock(false, 12, 16, 0, 0),
-				types.TimeFromClock(false, 12, 58, 0, 0),
+				types.TimeFromClock(false, 12, 59, 0, 0),
 				0,
 				0,
-				types.TimeFromClock(false, 12, 0, 0, 0),
+				0,
 				0,
 				0,
 				0,
 				0,
 			},
-			[]bool{false, false, true, true, false, true, true, true, true}),
+			[]bool{false, false, true, true, true, true, true, true, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
 	require.True(t, s, "MAKETIME float minute range failed: %s", info)
+}
+
+func TestMakeTimeExactStringSecondRounding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{12, 12, 12, 12}, []bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{59, 59, 59, 0}, []bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"59.99999949999999999",
+				"59.9999995",
+				"59.99999950000000001",
+				"5.9e1",
+			}, []bool{false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+			[]types.Time{
+				types.TimeFromClock(false, 12, 59, 59, 999999),
+				types.TimeFromClock(false, 13, 0, 0, 0),
+				types.TimeFromClock(false, 13, 0, 0, 0),
+				types.TimeFromClock(false, 12, 0, 59, 0),
+			},
+			[]bool{false, false, false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME exact string-second rounding failed: %s", info)
+
+	_, _, null := makeTimeExactSecond("1e999999999")
+	require.True(t, null, "MAKETIME must reject an unbounded exponent without allocating it")
 }
 
 func TestMakeTimeStringHourMinuteSemantics(t *testing.T) {

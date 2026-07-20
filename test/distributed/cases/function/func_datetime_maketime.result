@@ -55,6 +55,15 @@ null
 SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 float_values
 13:16:30.9
+SELECT CAST(MAKETIME(12.5, 58.5, 0) AS VARCHAR) AS positive_half_values;
+positive_half_values
+13:59:00
+SELECT CAST(MAKETIME(-12.5, 0, 0) AS VARCHAR) AS negative_half_hour;
+negative_half_hour
+-13:00:00
+SELECT MAKETIME(12, -0.5, 0) AS negative_half_minute;
+negative_half_minute
+null
 SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
 fractional_seconds
 12:34:56.789012
@@ -82,6 +91,15 @@ positive_rounded_endpoint
 SELECT CAST(MAKETIME(-838, 59, 59.9999996) AS VARCHAR) AS negative_rounded_endpoint;
 negative_rounded_endpoint
 -838:59:59.000000
+SELECT CAST(MAKETIME(12, 59, '59.99999949999999999') AS VARCHAR) AS varchar_below_half_microsecond;
+varchar_below_half_microsecond
+12:59:59.999999
+SELECT CAST(MAKETIME(12, 59, '59.9999995') AS VARCHAR) AS varchar_at_half_microsecond;
+varchar_at_half_microsecond
+13:00:00.000000
+SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS VARCHAR) AS decimal_below_half_microsecond;
+decimal_below_half_microsecond
+12:59:59.999999
 CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
 INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);
 SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM maketime_double_seconds;

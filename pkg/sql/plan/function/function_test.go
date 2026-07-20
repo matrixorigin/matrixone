@@ -372,6 +372,8 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, fractionalResult.needCast)
+	require.Equal(t, types.T_varchar, fractionalResult.targetTypes[2].Oid)
+	require.Equal(t, int32(6), fractionalResult.targetTypes[2].Scale)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), fractionalResult.retType)
 
 	defaultFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
@@ -383,7 +385,7 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
 }
 
-func TestMakeTimeStringSecondUsesFloatOverload(t *testing.T) {
+func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
@@ -394,9 +396,9 @@ func TestMakeTimeStringSecondUsesFloatOverload(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.needCast)
 	require.Len(t, result.targetTypes, 3)
-	for _, target := range result.targetTypes {
-		require.Equal(t, types.T_float64, target.Oid)
-	}
+	require.Equal(t, types.T_float64, result.targetTypes[0].Oid)
+	require.Equal(t, types.T_float64, result.targetTypes[1].Oid)
+	require.Equal(t, types.T_varchar, result.targetTypes[2].Oid)
 	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
 }
@@ -428,10 +430,10 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 			inputs: []types.Type{
 				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
 			},
-			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 			needCast:     true,
 			targets: []types.Type{
-				types.T_varchar.ToType(), types.T_varchar.ToType(), defaultFloat,
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToTypeWithScale(-1),
 			},
 			returnType: types.T_time.ToTypeWithScale(6),
 		},

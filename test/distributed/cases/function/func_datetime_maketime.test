@@ -29,8 +29,11 @@ SELECT MAKETIME(12, NULL, 30) AS null_minute;
 SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
-# Float hour and minute values round to nearest-even; fractional seconds are preserved
+# Float hour and minute values round half away from zero; fractional seconds are preserved
 SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
+SELECT CAST(MAKETIME(12.5, 58.5, 0) AS VARCHAR) AS positive_half_values;
+SELECT CAST(MAKETIME(-12.5, 0, 0) AS VARCHAR) AS negative_half_hour;
+SELECT MAKETIME(12, -0.5, 0) AS negative_half_minute;
 SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
 SELECT CAST(MAKETIME(12, 34, '56.789012') AS VARCHAR) AS string_fractional_seconds;
 SELECT CAST(MAKETIME('12.7', '15.8', '30.9') AS VARCHAR) AS all_string_values;
@@ -40,6 +43,11 @@ SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
 SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
 SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
 SELECT CAST(MAKETIME(-838, 59, 59.9999996) AS VARCHAR) AS negative_rounded_endpoint;
+
+# Exact VARCHAR/DECIMAL seconds do not cross the microsecond boundary through FLOAT64
+SELECT CAST(MAKETIME(12, 59, '59.99999949999999999') AS VARCHAR) AS varchar_below_half_microsecond;
+SELECT CAST(MAKETIME(12, 59, '59.9999995') AS VARCHAR) AS varchar_at_half_microsecond;
+SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS VARCHAR) AS decimal_below_half_microsecond;
 
 # Default DOUBLE column retains microseconds
 CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
