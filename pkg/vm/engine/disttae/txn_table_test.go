@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/assert"
@@ -556,6 +557,85 @@ func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, changed,
 		"a table created in this transaction has no committed remote history even during reconnect")
+}
+
+func TestPKCheckHistoricalSnapshotFallbackIsTerminal(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	tbl.db.op.AddWorkspace(&Transaction{engine: eng})
+	snapshot := types.BuildTS(15, 0)
+	to := types.BuildTS(20, 0)
+	tbl.db.op.SetSnapshotTS(snapshot.ToTimestamp())
+
+	eng.snapshotMgr = NewSnapshotManager()
+	eng.snapshotMgr.Init()
+	historical := logtailreplay.NewPartition(
+		eng.service,
+		eng.GetLatestCatalogCache(),
+		uint64(tbl.accountId),
+		tbl.db.databaseId,
+		tbl.tableId,
+		nil,
+	)
+	state, done := historical.MutateState()
+	state.UpdateDuration(types.TS{}, to)
+	done()
+	expected := eng.snapshotMgr.Add(
+		tbl.db.databaseId,
+		tbl.tableId,
+		historical,
+		tbl.tableName,
+		snapshot,
+	)
+
+	oldSnapshotRead := RequestSnapshotRead
+	snapshotReads := 0
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		snapshotReads++
+		start := types.TS{}.ToTimestamp()
+		end := to.ToTimestamp()
+		return &cmd_util.SnapshotReadResp{
+			Succeed: true,
+			Entries: []*cmd_util.CheckpointEntryResp{
+				{
+					Start: &start,
+					End:   &end,
+				},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { RequestSnapshotRead = oldSnapshotRead })
+	subscribeAttempts := 0
+	eng.pClient.subscriber = newLogTailSubscriber()
+	eng.pClient.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+		subscribeAttempts++
+		return nil
+	}
+	eng.pClient.subscriber.setReady()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eng.pClient.SetSubscribeState(10, 42, SubRspTableNotExist)
+	ps, ready, err := tbl.getPartitionStateForPKCheck(ctx, to)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Same(t, expected, ps)
+	require.Equal(t, 1, snapshotReads,
+		"a successful historical fallback must not start another subscription cycle")
+	require.Zero(t, subscribeAttempts)
+
+	eng.pClient.SetSubscribeState(10, 42, SubRspTableNotExist)
+	ps, ready, err = tbl.getPartitionStateForPKCheck(ctx, to.Next())
+	require.NoError(t, err)
+	require.False(t, ready,
+		"a historical fallback outside its physical range must remain conservative")
+	require.Same(t, expected, ps)
+	require.Equal(t, 2, snapshotReads,
+		"an out-of-range fallback must also terminate after one snapshot read")
+	require.Zero(t, subscribeAttempts)
 }
 
 // func TestPrimaryKeyCheck(t *testing.T) {

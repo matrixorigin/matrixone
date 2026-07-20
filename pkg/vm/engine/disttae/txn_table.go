@@ -3018,8 +3018,18 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 		// recapture both the pending marker and partition snapshot atomically with
 		// respect to reconnect/unsubscribe generation changes. Do not use the
 		// returned state directly: reconnect may replace its generation meanwhile.
-		if _, err := tbl.getPartitionState(ctx); err != nil {
+		loaded, err := tbl.getPartitionState(ctx)
+		if err != nil {
 			return nil, false, err
+		}
+		if loaded != nil {
+			_, end := loaded.GetDuration()
+			if end != types.MaxTs() {
+				// SubRspTableNotExist can still produce a finite historical
+				// partition for an old-table snapshot. It is a terminal fallback:
+				// use it only when it physically covers the PK-check upper bound.
+				return loaded, loaded.CanServe(to), nil
+			}
 		}
 	}
 }
