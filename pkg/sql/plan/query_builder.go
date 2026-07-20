@@ -3768,10 +3768,6 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 	if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
 		return
 	}
-	if numericProjectionHasUnqualifiedStar(clause.Exprs) &&
-		numericProjectionHasMergedJoinColumns(clause.From.Tables[0]) {
-		return
-	}
 	sources := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
 	for i := range sources {
 		if sources[i].source == nil {
@@ -3809,11 +3805,21 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			for i := range sources {
-				if !sources[i].outputKnown {
-					return
+			cursor := 0
+			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
+			if !ok || cursor != len(sources) {
+				return
+			}
+			for _, output := range outputs {
+				if targetPos >= len(ctx.numericProjectionTypes) {
+					break
 				}
-				targetPos = seedNumericStarTargets(&sources[i], ctx.numericProjectionTypes, targetPos)
+				for _, ref := range output.refs {
+					if ref.pos < len(sources[ref.source].targets) {
+						sources[ref.source].targets[ref.pos] = ctx.numericProjectionTypes[targetPos]
+					}
+				}
+				targetPos++
 			}
 		case *tree.UnresolvedName:
 			if expr.Star {
@@ -3847,31 +3853,125 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 	}
 }
 
-func numericProjectionHasUnqualifiedStar(exprs tree.SelectExprs) bool {
-	for _, expr := range exprs {
-		if _, ok := expr.Expr.(tree.UnqualifiedStar); ok {
-			return true
-		}
-	}
-	return false
+type numericProjectionStarRef struct {
+	source int
+	pos    int
 }
 
-func numericProjectionHasMergedJoinColumns(tableExpr tree.TableExpr) bool {
+type numericProjectionStarOutput struct {
+	name string
+	refs []numericProjectionStarRef
+}
+
+func numericProjectionStarOutputs(
+	tableExpr tree.TableExpr,
+	sources []numericProjectionSourceInfo,
+	cursor *int,
+) ([]numericProjectionStarOutput, bool) {
 	switch expr := tableExpr.(type) {
 	case *tree.JoinTableExpr:
-		switch expr.Cond.(type) {
-		case *tree.UsingJoinCond, *tree.NaturalJoinCond:
-			return true
+		left, ok := numericProjectionStarOutputs(expr.Left, sources, cursor)
+		if !ok {
+			return nil, false
 		}
-		return numericProjectionHasMergedJoinColumns(expr.Left) ||
-			numericProjectionHasMergedJoinColumns(expr.Right)
+		right, ok := numericProjectionStarOutputs(expr.Right, sources, cursor)
+		if !ok {
+			return nil, false
+		}
+		using, ok := numericProjectionUsingColumns(expr, left, right)
+		if !ok {
+			return nil, false
+		}
+		if len(using) == 0 {
+			return append(left, right...), true
+		}
+		merged := make([]numericProjectionStarOutput, 0, len(left)+len(right))
+		usingSet := make(map[string]bool, len(using))
+		for _, name := range using {
+			leftPos, leftOK := uniqueNumericStarOutput(left, name)
+			rightPos, rightOK := uniqueNumericStarOutput(right, name)
+			if !leftOK || !rightOK {
+				return nil, false
+			}
+			usingSet[name] = true
+			refs := left[leftPos].refs
+			switch expr.JoinType {
+			case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
+				refs = right[rightPos].refs
+			case tree.JOIN_TYPE_FULL, tree.JOIN_TYPE_NATURAL_FULL:
+				refs = append(append([]numericProjectionStarRef(nil), refs...), right[rightPos].refs...)
+			}
+			merged = append(merged, numericProjectionStarOutput{name: name, refs: refs})
+		}
+		for _, output := range append(left, right...) {
+			if !usingSet[output.name] {
+				merged = append(merged, output)
+			}
+		}
+		return merged, true
 	case *tree.AliasedTableExpr:
-		return numericProjectionHasMergedJoinColumns(expr.Expr)
+		return numericProjectionStarOutputs(expr.Expr, sources, cursor)
 	case *tree.ParenTableExpr:
-		return numericProjectionHasMergedJoinColumns(expr.Expr)
+		return numericProjectionStarOutputs(expr.Expr, sources, cursor)
 	default:
-		return false
+		if *cursor >= len(sources) || !sources[*cursor].outputKnown {
+			return nil, false
+		}
+		source := *cursor
+		*cursor++
+		outputs := make([]numericProjectionStarOutput, len(sources[source].outputNames))
+		for pos, name := range sources[source].outputNames {
+			outputs[pos] = numericProjectionStarOutput{
+				name: name,
+				refs: []numericProjectionStarRef{{source: source, pos: pos}},
+			}
+		}
+		return outputs, true
 	}
+}
+
+func numericProjectionUsingColumns(
+	join *tree.JoinTableExpr,
+	left []numericProjectionStarOutput,
+	right []numericProjectionStarOutput,
+) ([]string, bool) {
+	if cond, ok := join.Cond.(*tree.UsingJoinCond); ok {
+		columns := make([]string, len(cond.Cols))
+		for i, col := range cond.Cols {
+			columns[i] = strings.ToLower(string(col))
+		}
+		return columns, true
+	}
+	if join.JoinType != tree.JOIN_TYPE_NATURAL && join.JoinType != tree.JOIN_TYPE_NATURAL_LEFT &&
+		join.JoinType != tree.JOIN_TYPE_NATURAL_RIGHT && join.JoinType != tree.JOIN_TYPE_NATURAL_FULL {
+		return nil, true
+	}
+	columns := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, output := range right {
+		if output.name == "" || seen[output.name] {
+			continue
+		}
+		if _, ok := uniqueNumericStarOutput(left, output.name); ok {
+			columns = append(columns, output.name)
+			seen[output.name] = true
+		}
+	}
+	return columns, true
+}
+
+func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string) (int, bool) {
+	matched := -1
+	for i, output := range outputs {
+		if output.name != name {
+			continue
+		}
+		if matched >= 0 {
+			return -1, false
+		}
+		matched = i
+	}
+	return matched, matched >= 0
 }
 
 func storeNumericTableProjectionTargets(targetsByTable map[string][]Type, table string, targets []Type) {

@@ -222,23 +222,24 @@ func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
 	}
 }
 
-func TestPreparedNumericContextHandlesMergedJoinStarColumnsConservatively(t *testing.T) {
+func TestPreparedNumericContextHandlesMergedJoinStarColumns(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
-		want types.T
+		name       string
+		sql        string
+		want       types.T
+		paramCount int
 	}{
 		{
 			name: "using join unqualified star",
 			sql: "insert into constraint_test.emp (empno, sal) select * " +
 				"from (select 1 as a) x join (select 1 as a, ? + ? as v) y using (a)",
-			want: types.T_float64,
+			want: types.T_decimal64,
 		},
 		{
 			name: "natural join unqualified star",
 			sql: "insert into constraint_test.emp (empno, sal) select * " +
 				"from (select 1 as a) x natural join (select 1 as a, ? + ? as v) y",
-			want: types.T_float64,
+			want: types.T_decimal64,
 		},
 		{
 			name: "using join qualified star",
@@ -250,6 +251,26 @@ func TestPreparedNumericContextHandlesMergedJoinStarColumnsConservatively(t *tes
 			name: "on join unqualified star",
 			sql: "insert into constraint_test.emp (empno, mgr, sal) select * " +
 				"from (select 1 as a) x join (select 1 as b, ? + ? as v) y on x.a = y.b",
+			want: types.T_decimal64,
+		},
+		{
+			name: "right using join chooses right merged column",
+			sql: "insert into constraint_test.emp (sal, empno) select * " +
+				"from (select 1 as a) x right join (select ? + ? as a, 1 as v) y using (a)",
+			want: types.T_decimal64,
+		},
+		{
+			name: "full using join propagates both merged arms",
+			sql: "insert into constraint_test.emp (sal, empno) select * " +
+				"from (select ? + ? as a) x full join (select ? + ? as a, 1 as v) y using (a)",
+			want:       types.T_decimal64,
+			paramCount: 4,
+		},
+		{
+			name: "nested using joins preserve star order",
+			sql: "insert into constraint_test.emp (empno, mgr, sal) select * from " +
+				"((select 1 as a) x join (select 1 as a, 1 as b) y using (a)) " +
+				"join (select 1 as b, ? + ? as v) z using (b)",
 			want: types.T_decimal64,
 		},
 	}
@@ -264,7 +285,11 @@ func TestPreparedNumericContextHandlesMergedJoinStarColumnsConservatively(t *tes
 			require.NoError(t, err)
 
 			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
-			require.Len(t, paramTypes, 2)
+			paramCount := test.paramCount
+			if paramCount == 0 {
+				paramCount = 2
+			}
+			require.Len(t, paramTypes, paramCount)
 			for _, typ := range paramTypes {
 				require.Equal(t, int32(test.want), typ.Id)
 				if test.want == types.T_decimal64 {
@@ -543,6 +568,12 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
+			name: "on duplicate key update scalar subquery with from",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = (select ? + ? from nation limit 1)",
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+		},
+		{
 			name: "update from derived source",
 			sql: "update constraint_test.emp set sal = d.x " +
 				"from (select ? + ? as x) d where emp.empno = 1",
@@ -568,7 +599,8 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 					require.Equal(t, test.want.Scale, typ.Scale)
 				}
 			}
-			if test.name == "on duplicate key update scalar subquery" {
+			if test.name == "on duplicate key update scalar subquery" ||
+				test.name == "on duplicate key update scalar subquery with from" {
 				dedupCount := 0
 				updateExprCount := 0
 				for _, node := range queryPlan.GetQuery().Nodes {

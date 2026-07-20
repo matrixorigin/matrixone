@@ -873,6 +873,7 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	selectTag int32,
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
+	incomingProjectList []*plan.Expr,
 ) (int32, int32, int32, error) {
 	objRef := dmlCtx.objRefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -880,7 +881,6 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	pkTyp := tableDef.Cols[pkColIdx].Typ
 	incomingPkPos := colName2Idx[tableDef.Name+"."+pkName]
 
-	selectNode := builder.qry.Nodes[lastNodeID]
 	candExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 
 	// cand0: primary-key existence probe. A lightweight LEFT JOIN against the main
@@ -954,14 +954,14 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			incomingValPos := colName2Idx[tableDef.Name+"."+partName]
 			incomingValExpr, err = builder.makeIndexPartExpr(selectTag, incomingValPos, partName,
-				selectNode.ProjectList[incomingValPos].Typ, prefixLengths)
+				incomingProjectList[incomingValPos].Typ, prefixLengths)
 			if err != nil {
 				return 0, 0, 0, err
 			}
 		} else {
 			incomingValPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
 			incomingValExpr = &plan.Expr{
-				Typ:  selectNode.ProjectList[incomingValPos].Typ,
+				Typ:  incomingProjectList[incomingValPos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: incomingValPos}},
 			}
 		}
@@ -986,8 +986,8 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	// append target_pk = coalesce(cand0, cand1, ...). Positions [0, len) are
 	// preserved so colName2Idx stays valid; target_pk lands at len.
 	newTag := builder.genNewBindTag()
-	newProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+1)
-	for i, expr := range selectNode.ProjectList {
+	newProjList := make([]*plan.Expr, 0, len(incomingProjectList)+1)
+	for i, expr := range incomingProjectList {
 		newProjList = append(newProjList, &plan.Expr{
 			Typ:  expr.Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}},
@@ -1519,7 +1519,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	if useTargetPk {
 		oldSelectTag := selectTag
 		lastNodeID, selectTag, targetPkPos, err = builder.buildOnDupTargetPkResolution(
-			bindCtx, dmlCtx, tableDef, lastNodeID, selectTag, colName2Idx, skipUniqueIdx)
+			bindCtx, dmlCtx, tableDef, lastNodeID, selectTag, colName2Idx, skipUniqueIdx, selectNode.ProjectList)
 		if err != nil {
 			return 0, err
 		}
