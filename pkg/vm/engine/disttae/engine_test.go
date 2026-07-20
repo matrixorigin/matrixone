@@ -182,10 +182,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -379,15 +384,25 @@ func TestPreparedBinarySchedulingExcludesMixedVersionCN(t *testing.T) {
 		{name: "peer is newer", peerCommit: "newer-than-" + version.CommitID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Snapshot().Return(txnpb.CNTxnSnapshot{}, nil)
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			proc.Base.TxnOperator = txnOp
+			binaryValue := []byte{'A', 'B', 0, 0}
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, binaryValue, false, proc.Mp()))
+			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+			t.Cleanup(proc.Free)
+
 			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{CNStores: []logpb.CNStore{
 				newEngineNodesCNStore("compatible-cn", "compatible:6001", nil, metadata.WorkState_Working, version.CommitID),
 				newEngineNodesCNStore("mixed-version-cn", "mixed-version:6001", nil, metadata.WorkState_Working, tc.peerCommit),
 			}})
 
-			// Prepared parameters are encoded only after scheduling has selected a
-			// query worker. Keep this boundary ahead of ProcessInfo serialization so
-			// a peer that does not understand PrepareParamInfo.is_bin cannot silently
-			// reinterpret a binary parameter.
 			candidates, err := e.DiscoverQueryCandidates(context.Background())
 			require.NoError(t, err)
 			require.Len(t, candidates, 1)
@@ -400,6 +415,36 @@ func TestPreparedBinarySchedulingExcludesMixedVersionCN(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []string{"compatible:6001"}, nodeAddresses(nodes))
 			require.True(t, nodes[0].HasMixedCommit)
+
+			// Remote ProcessInfo is built only for the workers that survived
+			// discovery and pool resolution. This models the coordinator send
+			// boundary and proves that an incompatible worker never receives an
+			// is_bin field it might silently ignore.
+			deliveries := make(map[string]pipeline.ProcessInfo, len(nodes))
+			for _, node := range nodes {
+				info, buildErr := proc.BuildProcessInfo("select ?")
+				require.NoError(t, buildErr)
+				payload, marshalErr := info.Marshal()
+				require.NoError(t, marshalErr)
+				decoded := pipeline.ProcessInfo{}
+				require.NoError(t, decoded.Unmarshal(payload))
+				deliveries[node.Addr] = decoded
+			}
+			require.NotContains(t, deliveries, "mixed-version:6001")
+			delivered, ok := deliveries["compatible:6001"]
+			require.True(t, ok)
+			require.Equal(t, []bool{true}, delivered.PrepareParams.IsBin)
+
+			decodedParams, err := vector.NewVecWithDataCopy(
+				types.T_text.ToType(),
+				int(delivered.PrepareParams.Length),
+				delivered.PrepareParams.Data,
+				delivered.PrepareParams.Area,
+				proc.Mp(),
+			)
+			require.NoError(t, err)
+			require.Equal(t, binaryValue, decodedParams.GetRawBytesAt(0))
+			decodedParams.Free(proc.Mp())
 		})
 	}
 }
