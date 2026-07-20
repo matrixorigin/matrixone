@@ -1161,6 +1161,102 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 	assert.True(t, applied.EQ(&expectedApplied))
 }
 
+func TestPKCheckSnapshotRejectsResetSubscriptionGeneration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, snapshot.Prev())
+	stale := part.Snapshot()
+
+	// Reconnect resets the subscription generation before replacing partitions.
+	e.pClient.subscribed.rw.Lock()
+	e.pClient.subscribed.m = make(map[uint64]*subEntry)
+	e.pClient.subscribed.rw.Unlock()
+
+	ps, ok, subState, pending := e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.Nil(t, ps)
+	require.False(t, ok, "a snapshot from a reset subscription generation is not ready")
+	require.Equal(t, Unsubscribed, subState)
+	require.False(t, pending)
+
+	// The stale snapshot itself still covers the timestamp. The generation
+	// check above is what prevents the PK path from treating it as current.
+	canServe, _ := canServeTableSnapshotWithPending(stale, snapshot, false)
+	require.True(t, canServe)
+}
+
+func TestPKCheckSnapshotRefreshesAfterPendingApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, snapshot.Prev())
+	stale := part.Snapshot()
+
+	state, done = part.MutateState()
+	state.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+	done()
+	e.pClient.subscribed.clearTablePendingUpdate(10, 42, snapshot.Prev())
+
+	ps, ok, subState, pending := e.pClient.getSubscribedSnapshotForPKCheck(ctx, 0, 10, 42)
+	require.True(t, ok)
+	require.Equal(t, Subscribed, subState)
+	require.False(t, pending)
+	applied := ps.GetAppliedTo()
+	expected := types.TimestampToTS(snapshot.Prev())
+	require.True(t, applied.GE(&expected),
+		"the readiness proof must return the state that observed the applied update")
+	staleApplied := stale.GetAppliedTo()
+	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
+}
+
+func TestLogTailSubscriberWaitReadyReturnsOnContextCancel(t *testing.T) {
+	subscriber := newLogTailSubscriber()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- subscriber.waitReady(ctx)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		// Release the waiter so a failed assertion does not leak the goroutine.
+		subscriber.setReady()
+		t.Fatal("waitReady did not observe context cancellation")
+	}
+}
+
 func newTestRoutineControllers(buffer int) []*routineController {
 	recRoutines := make([]*routineController, consumerNumber)
 	for i := range recRoutines {

@@ -415,6 +415,18 @@ func (c *PushClient) canServeTableSnapshotNoWait(
 	ps *logtailreplay.PartitionState,
 	snapshot timestamp.Timestamp,
 ) (canServe bool, needWait bool) {
+	return canServeTableSnapshotWithPending(
+		ps,
+		snapshot,
+		c.subscribed.hasPendingUpdate(dbId, tblId),
+	)
+}
+
+func canServeTableSnapshotWithPending(
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+	pending bool,
+) (canServe bool, needWait bool) {
 	snapshotTS := types.TimestampToTS(snapshot)
 	if ps == nil || !ps.CanServe(snapshotTS) {
 		return false, false
@@ -434,7 +446,7 @@ func (c *PushClient) canServeTableSnapshotNoWait(
 	// waterline. Only block the latest-state fast path when this table has a
 	// known pending update and the current state has not applied up to the
 	// statement snapshot yet.
-	if c.subscribed.hasPendingUpdate(dbId, tblId) {
+	if pending {
 		return false, true
 	}
 	return true, false
@@ -1301,6 +1313,37 @@ func (c *PushClient) isSubscribed(
 	return ps, true, Subscribed
 }
 
+// getSubscribedSnapshotForPKCheck captures the pending marker before the
+// immutable partition snapshot while holding the subscription generation.
+// If there is no pending update, the later snapshot includes every table
+// update known when the global logtail waterline reached the lock timestamp.
+func (c *PushClient) getSubscribedSnapshotForPKCheck(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
+	s := &c.subscribed
+	s.rw.RLock()
+	ent, exist := s.m[tId]
+	if !exist {
+		s.rw.RUnlock()
+		return nil, false, Unsubscribed, false
+	}
+	if ent.dbID != dbId || ent.state != Subscribed {
+		state := ent.state
+		s.rw.RUnlock()
+		return nil, false, state, false
+	}
+
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
+	}
+	pending := ent.pendingTo.Load() != nil
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	s.rw.RUnlock()
+	return ps, true, Subscribed, pending
+}
+
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
 	c.subscribed.rw.Lock()
 	defer c.subscribed.rw.Unlock()
@@ -1817,6 +1860,12 @@ func (s *logTailSubscriber) ready() bool {
 func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stop := context.AfterFunc(ctx, func() {
+		s.mu.Lock()
+		s.mu.cond.Broadcast()
+		s.mu.Unlock()
+	})
+	defer stop()
 	for !s.mu.ready {
 		if ctx.Err() != nil {
 			return ctx.Err()

@@ -2940,16 +2940,47 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 	to types.TS,
 ) (*logtailreplay.PartitionState, bool, error) {
 	eng := tbl.eng.(*Engine)
-	ps, subscribed, _ := eng.PushClient().isSubscribed(
-		ctx,
-		uint64(tbl.accountId),
-		tbl.db.databaseId,
-		tbl.tableId,
-	)
-	if !subscribed {
-		createdInTxn, err := tbl.isCreatedInTxn(ctx)
-		if err != nil {
+	var checkedCreatedInTxn bool
+	var createdInTxn bool
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if err := ctx.Err(); err != nil {
 			return nil, false, err
+		}
+
+		ps, subscribed, _, pending := eng.PushClient().getSubscribedSnapshotForPKCheck(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.db.databaseId,
+			tbl.tableId,
+		)
+		if subscribed {
+			canServe, needWait := canServeTableSnapshotWithPending(
+				ps,
+				to.ToTimestamp(),
+				pending,
+			)
+			if canServe || !needWait {
+				return ps, canServe, nil
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			case <-ticker.C:
+			}
+			continue
+		}
+
+		if !checkedCreatedInTxn {
+			var err error
+			createdInTxn, err = tbl.isCreatedInTxn(ctx)
+			if err != nil {
+				return nil, false, err
+			}
+			checkedCreatedInTxn = true
 		}
 		if createdInTxn {
 			// A table created by this transaction has no committed remote history.
@@ -2969,28 +3000,14 @@ func (tbl *txnTable) getPartitionStateForPKCheck(
 			return part.Snapshot(), true, nil
 		}
 
-		// A first write can race the table's initial subscription, and reconnect
-		// rebuilds use the same states. Wait for the existing subscription state
-		// machine instead of retrying the whole statement: statement retries may
-		// have non-transactional side effects such as consuming auto-increment
-		// values.
-		ps, err = tbl.getPartitionState(ctx)
-		if err != nil {
+		// Drive the existing subscription state machine to completion, then
+		// recapture both the pending marker and partition snapshot atomically with
+		// respect to reconnect/unsubscribe generation changes. Do not use the
+		// returned state directly: reconnect may replace its generation meanwhile.
+		if _, err := tbl.getPartitionState(ctx); err != nil {
 			return nil, false, err
 		}
 	}
-
-	// The global logtail waterline can advance before this table's queued
-	// update is applied. Wait only in that exceptional window; subscribed
-	// tables with no pending update return immediately.
-	return eng.PushClient().waitCanServeTableSnapshot(
-		ctx,
-		uint64(tbl.accountId),
-		tbl.db.databaseId,
-		tbl.tableId,
-		ps,
-		to.ToTimestamp(),
-	)
 }
 
 func (tbl *txnTable) primaryKeysMayBeChanged(
