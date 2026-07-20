@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -97,47 +98,34 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 			if err == io.EOF {
 				break
 			}
-			return nil, err
+			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
 		}
 		next := batch.NewOffHeapWithSize(0)
 		_, nextToken, err := r.readBatchRecord(proc, next)
 		if err != nil {
-			next.Clean(proc.Mp())
-			if nextToken != nil {
-				nextToken.Release()
-			}
-			return nil, err
+			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
 		}
 		var mergeToken *process.HashBuildReservation
 		if r.budget != nil {
-			projected, ok := addUint64(r.batchToken.Size(), nextToken.Size())
+			// Keep the current destination (O) and the source record (N) live
+			// while admitting the final destination (D). UnionBatch may retain
+			// rounded capacities larger than O+N, so reserving O+N here is not a
+			// safe admission bound.
+			predicted, ok := predictMergedRetainedBytes(reuseBat, next)
 			if !ok {
-				next.Clean(proc.Mp())
-				nextToken.Release()
-				return nil, process.ErrHashBuildBudgetInvalid
+				return nil, r.mergeReadError(proc, reuseBat, next, nextToken, process.ErrHashBuildBudgetInvalid)
 			}
-			mergeToken, err = r.budget.Reserve(projected)
+			mergeToken, err = r.budget.Reserve(predicted)
 			if err != nil {
-				next.Clean(proc.Mp())
-				nextToken.Release()
-				return nil, err
+				return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
 			}
+		}
+		if len(reuseBat.Vecs) != len(next.Vecs) {
+			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, process.ErrHashBuildBudgetInvalid, mergeToken)
 		}
 		for i := range next.Vecs {
 			if err := reuseBat.Vecs[i].UnionBatch(next.Vecs[i], 0, next.RowCount(), nil, proc.Mp()); err != nil {
-				next.Clean(proc.Mp())
-				if nextToken != nil {
-					nextToken.Release()
-				}
-				if mergeToken != nil {
-					mergeToken.Release()
-				}
-				reuseBat.Clean(proc.Mp())
-				if r.batchToken != nil {
-					r.batchToken.Release()
-					r.batchToken = nil
-				}
-				return nil, err
+				return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err, mergeToken)
 			}
 		}
 		reuseBat.SetRowCount(reuseBat.RowCount() + next.RowCount())
@@ -145,27 +133,48 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		if mergeToken != nil {
 			actual, ok := batchRetainedBytes(reuseBat)
 			if !ok || actual > mergeToken.Size() {
-				mergeToken.Release()
-				nextToken.Release()
-				reuseBat.Clean(proc.Mp())
-				r.batchToken.Release()
-				r.batchToken = nil
-				return nil, process.ErrHashBuildBudgetInvalid
+				return nil, r.mergeReadError(proc, reuseBat, nil, nextToken, process.ErrHashBuildBudgetInvalid, mergeToken)
 			}
 			if _, err := mergeToken.ReconcileDown(actual); err != nil {
-				mergeToken.Release()
-				nextToken.Release()
-				reuseBat.Clean(proc.Mp())
+				return nil, r.mergeReadError(proc, reuseBat, nil, nextToken, err, mergeToken)
+			}
+			if r.batchToken != nil {
 				r.batchToken.Release()
 				r.batchToken = nil
-				return nil, err
 			}
-			r.batchToken.Release()
-			nextToken.Release()
+			if nextToken != nil {
+				nextToken.Release()
+			}
 			r.batchToken = mergeToken
 		}
 	}
 	return reuseBat, nil
+}
+
+// mergeReadError unwinds all ownership acquired while appending a source
+// record. The destination may have been partially mutated by UnionBatch, so it
+// is cleaned as well. Reservations are exactly-once tokens; releasing an
+// already released token is harmless and keeps every error path symmetric.
+func (r *BucketReader) mergeReadError(proc *process.Process, dst, src *batch.Batch, srcToken *process.HashBuildReservation, err error, extra ...*process.HashBuildReservation) error {
+	if src != nil {
+		src.Clean(proc.Mp())
+	}
+	if srcToken != nil {
+		srcToken.Release()
+	}
+	for _, token := range extra {
+		if token != nil {
+			token.Release()
+		}
+	}
+	if dst != nil {
+		dst.Clean(proc.Mp())
+	}
+	if r.batchToken != nil {
+		r.batchToken.Release()
+		r.batchToken = nil
+	}
+	return err
 }
 
 func addUint64(a, b uint64) (uint64, bool) {
@@ -190,6 +199,151 @@ func batchRetainedBytes(bat *batch.Batch) (uint64, bool) {
 		return 0, false
 	}
 	return addUint64(actual, rows*metadata)
+}
+
+// predictMergedRetainedBytes computes the retained upper bound after the exact
+// full-record UnionBatch append used by ReadBatch. It mirrors Vector.extend's
+// data-cap growth and UnionBatch's varlen fast path (which appends a complete
+// non-const source area in one operation). No destination mutation is performed.
+func predictMergedRetainedBytes(dst, src *batch.Batch) (uint64, bool) {
+	if dst == nil || src == nil || dst.RowCount() < 0 || src.RowCount() < 0 || len(dst.Vecs) != len(src.Vecs) {
+		return 0, false
+	}
+	oldRows, ok := intToUint64(dst.RowCount())
+	if !ok {
+		return 0, false
+	}
+	srcRows, ok := intToUint64(src.RowCount())
+	if !ok {
+		return 0, false
+	}
+	mergedRows, ok := addUint64(oldRows, srcRows)
+	if !ok || mergedRows > uint64(maxIntValue()) {
+		return 0, false
+	}
+
+	var allocated uint64
+	for i := range dst.Vecs {
+		dv, sv := dst.Vecs[i], src.Vecs[i]
+		if dv == nil || sv == nil || *dv.GetType() != *sv.GetType() || dv.Length() != dst.RowCount() || sv.Length() != src.RowCount() {
+			return 0, false
+		}
+		typeSize := dv.GetType().TypeSize()
+		if typeSize < 0 {
+			return 0, false
+		}
+		dataRequired, ok := mulUint64(mergedRows, uint64(typeSize))
+		if !ok || dataRequired > uint64(math.MaxInt64) {
+			return 0, false
+		}
+		dataCap, ok := predictedCapacity(cap(dv.GetData()), dataRequired)
+		if !ok {
+			return 0, false
+		}
+		if allocated, ok = addUint64(allocated, dataCap); !ok {
+			return 0, false
+		}
+
+		if !dv.GetType().IsVarlen() {
+			continue
+		}
+		areaAdd, ok := mergedVarlenAreaAdd(sv, srcRows)
+		if !ok {
+			return 0, false
+		}
+		areaRequired, ok := addUint64(uint64(len(dv.GetArea())), areaAdd)
+		if !ok || areaRequired > uint64(math.MaxInt64) {
+			return 0, false
+		}
+		areaCap, ok := predictedCapacity(cap(dv.GetArea()), areaRequired)
+		if !ok {
+			return 0, false
+		}
+		if allocated, ok = addUint64(allocated, areaCap); !ok {
+			return 0, false
+		}
+	}
+
+	cols := uint64(len(dst.Vecs))
+	if cols > (math.MaxUint64-16)/8 {
+		return 0, false
+	}
+	metadata := 16 + cols*8
+	rowMetadata, ok := mulUint64(mergedRows, metadata)
+	if !ok {
+		return 0, false
+	}
+	return addUint64(allocated, rowMetadata)
+}
+
+func mergedVarlenAreaAdd(src *vector.Vector, rows uint64) (uint64, bool) {
+	if src == nil || !src.GetType().IsVarlen() {
+		return 0, false
+	}
+	if rows == 0 {
+		return 0, true
+	}
+	if src.IsConst() {
+		if src.IsConstNull() {
+			return 0, true
+		}
+		// UnionBatch materializes one const value and broadcasts its header. An
+		// inline value needs no area; a non-inline value appends exactly once.
+		if len(src.GetData()) < src.GetType().TypeSize() {
+			return 0, false
+		}
+		values := vector.MustFixedColNoTypeCheck[types.Varlena](src)
+		if len(values) != 1 {
+			return 0, false
+		}
+		value := &values[0]
+		if value.IsSmall() {
+			return 0, true
+		}
+		off, length := value.OffsetLen()
+		end, ok := addUint64(uint64(off), uint64(length))
+		if !ok || end > uint64(len(src.GetArea())) {
+			return 0, false
+		}
+		return uint64(length), true
+	}
+
+	// The full-record fast path copies the complete source area once, including
+	// stale bytes. Header validation remains UnionBatch's responsibility; avoid
+	// adding another per-row scan on the spill rebuild hot path.
+	return uint64(len(src.GetArea())), true
+}
+
+func predictedCapacity(oldCap int, required uint64) (uint64, bool) {
+	if oldCap < 0 || uint64(oldCap) > uint64(math.MaxInt64) || required > uint64(math.MaxInt64) {
+		return 0, false
+	}
+	if required <= uint64(oldCap) {
+		return uint64(oldCap), true
+	}
+	cap, ok := mpool.GrowCapacity(int64(oldCap), int64(required))
+	if !ok || cap < 0 {
+		return 0, false
+	}
+	return uint64(cap), true
+}
+
+func intToUint64(v int) (uint64, bool) {
+	if v < 0 {
+		return 0, false
+	}
+	return uint64(v), true
+}
+
+func mulUint64(a, b uint64) (uint64, bool) {
+	if a != 0 && b > math.MaxUint64/a {
+		return 0, false
+	}
+	return a * b, true
+}
+
+func maxIntValue() int {
+	return int(^uint(0) >> 1)
 }
 
 func (r *BucketReader) releaseReadBatch(proc *process.Process, bat *batch.Batch, token *process.HashBuildReservation) {

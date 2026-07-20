@@ -16,6 +16,7 @@ package mpool
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -313,6 +314,73 @@ func TestMpoolReAllocate(t *testing.T) {
 	}
 	m.Free(d4)
 	require.Equal(t, int64(0), m.CurrNB())
+}
+
+func TestGrowCapacityMatchesGrow(t *testing.T) {
+	tests := []struct {
+		oldCap   int
+		required int
+	}{
+		{0, 1},
+		{1, 2},
+		{8, 9},
+		{63, 64},
+		{64, 65},
+		{1024, 2049},
+		{4095, 4096},
+		{4096, 4097},
+		{8192, 8193},
+		{32768, 65537},
+		{1 << 20, 1<<20 + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d_to_%d", tt.oldCap, tt.required), func(t *testing.T) {
+			predicted, ok := GrowCapacity(int64(tt.oldCap), int64(tt.required))
+			require.True(t, ok)
+
+			m := MustNewZero()
+			var old []byte
+			var err error
+			if tt.oldCap > 0 {
+				old, err = m.Alloc(tt.oldCap, false)
+				require.NoError(t, err)
+			}
+			grown, err := m.Grow(old, tt.required, false)
+			require.NoError(t, err)
+			require.Equal(t, predicted, int64(cap(grown)))
+			m.Free(grown)
+			require.Zero(t, m.CurrNB())
+		})
+	}
+}
+
+func TestGrowCapacityMatchesGrow2(t *testing.T) {
+	m := MustNewZero()
+	old, err := m.Alloc(4096, false)
+	require.NoError(t, err)
+	source := bytes.Repeat([]byte{0x5a}, 257)
+	required := len(old) + len(source)
+	predicted, ok := GrowCapacity(int64(cap(old)), int64(required))
+	require.True(t, ok)
+
+	grown, err := m.Grow2(old, source, required, false)
+	require.NoError(t, err)
+	require.Equal(t, predicted, int64(cap(grown)))
+	require.Equal(t, source, grown[len(old):required])
+	m.Free(grown)
+	require.Zero(t, m.CurrNB())
+}
+
+func TestGrowCapacityValidation(t *testing.T) {
+	_, ok := GrowCapacity(-1, 1)
+	require.False(t, ok)
+	_, ok = GrowCapacity(1, -1)
+	require.False(t, ok)
+
+	capacity, ok := GrowCapacity(128, 64)
+	require.True(t, ok)
+	require.Equal(t, int64(128), capacity)
 }
 
 func TestUseMalloc(t *testing.T) {

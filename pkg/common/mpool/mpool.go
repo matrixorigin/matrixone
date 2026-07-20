@@ -807,7 +807,11 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 
 	newSz := sz
 	if bufferMore {
-		newSz = calculateNewCap(int64(cap(old)), sz)
+		var ok bool
+		newSz, ok = GrowCapacity(int64(cap(old)), sz)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid mpool grow capacity, old %d, required %d", cap(old), sz)
+		}
 	}
 
 	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
@@ -1126,9 +1130,21 @@ func roundupsize(size int64) int64 {
 }
 
 // copy-paste from go slice grow strategy.
-func calculateNewCap(oldCap int64, requiredSize int64) int64 {
+// GrowCapacity returns the capacity that Grow and Grow2 will allocate for a
+// request. Callers which must reserve memory before growing a slice use this
+// helper so admission and allocation share the same growth calculation.
+func GrowCapacity(oldCap int64, requiredSize int64) (int64, bool) {
+	if oldCap < 0 || requiredSize < 0 {
+		return 0, false
+	}
+	if requiredSize <= oldCap {
+		return oldCap, true
+	}
 	newcap := oldCap
 	doublecap := newcap + newcap
+	if doublecap < newcap {
+		doublecap = requiredSize
+	}
 	if requiredSize > doublecap {
 		newcap = requiredSize
 	} else {
@@ -1146,8 +1162,11 @@ func calculateNewCap(oldCap int64, requiredSize int64) int64 {
 		}
 	}
 	newcap = roundupsize(newcap)
+	if newcap < requiredSize {
+		return 0, false
+	}
 	if newcap > int64(CapLimit) && requiredSize <= int64(CapLimit) {
 		newcap = int64(CapLimit)
 	}
-	return newcap
+	return newcap, true
 }

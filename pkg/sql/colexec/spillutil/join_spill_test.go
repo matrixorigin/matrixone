@@ -222,6 +222,154 @@ func TestBucketReaderAccountedLifecycle(t *testing.T) {
 	require.Zero(t, generation.SpillFDUsed())
 }
 
+func TestPredictMergedRetainedBytesMatchesUnionBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	tests := []struct {
+		name string
+		dst  func() (*batch.Batch, *batch.Batch)
+	}{
+		{
+			name: "fixed-and-varlen-multi-column",
+			dst: func() (*batch.Batch, *batch.Batch) {
+				dst := batch.NewWithSize(2)
+				dst.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+				dst.Vecs[1] = testutil.MakeVarcharVector([]string{"left", "side"}, nil, proc.Mp())
+				dst.SetRowCount(2)
+				src := batch.NewWithSize(2)
+				src.Vecs[0] = testutil.MakeInt32Vector([]int32{3, 4, 5}, nil, proc.Mp())
+				src.Vecs[1] = testutil.MakeVarcharVector([]string{"right", "hand", "rows"}, nil, proc.Mp())
+				src.SetRowCount(3)
+				return dst, src
+			},
+		},
+		{
+			name: "const-fixed",
+			dst: func() (*batch.Batch, *batch.Batch) {
+				dst := makeInt32Batch(proc, []int32{1, 2})
+				src := batch.NewWithSize(1)
+				var err error
+				src.Vecs[0], err = vector.NewConstFixed(types.T_int32.ToType(), int32(9), 3, proc.Mp())
+				require.NoError(t, err)
+				src.SetRowCount(3)
+				return dst, src
+			},
+		},
+		{
+			name: "const-inline-varlen",
+			dst: func() (*batch.Batch, *batch.Batch) {
+				dst := batch.NewWithSize(1)
+				dst.Vecs[0] = testutil.MakeVarcharVector([]string{"left", "side"}, nil, proc.Mp())
+				dst.SetRowCount(2)
+				src := batch.NewWithSize(1)
+				var err error
+				src.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("inline"), 3, proc.Mp())
+				require.NoError(t, err)
+				src.SetRowCount(3)
+				return dst, src
+			},
+		},
+		{
+			name: "const-non-inline",
+			dst: func() (*batch.Batch, *batch.Batch) {
+				dst := batch.NewWithSize(1)
+				dst.Vecs[0] = testutil.MakeVarcharVector([]string{"left", "side"}, nil, proc.Mp())
+				dst.SetRowCount(2)
+				src := batch.NewWithSize(1)
+				var err error
+				src.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("a sufficiently long constant value"), 3, proc.Mp())
+				require.NoError(t, err)
+				src.SetRowCount(3)
+				return dst, src
+			},
+		},
+		{
+			name: "const-null",
+			dst: func() (*batch.Batch, *batch.Batch) {
+				dst := batch.NewWithSize(1)
+				dst.Vecs[0] = testutil.MakeVarcharVector([]string{"left", "side"}, nil, proc.Mp())
+				dst.SetRowCount(2)
+				src := batch.NewWithSize(1)
+				src.Vecs[0] = vector.NewConstNull(types.T_varchar.ToType(), 3, proc.Mp())
+				src.SetRowCount(3)
+				return dst, src
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dst, src := tc.dst()
+			defer dst.Clean(proc.Mp())
+			defer src.Clean(proc.Mp())
+			predicted, ok := predictMergedRetainedBytes(dst, src)
+			require.True(t, ok)
+			require.NoError(t, dst.UnionWindow(src, 0, src.RowCount(), proc.Mp()))
+			actual, ok := batchRetainedBytes(dst)
+			require.True(t, ok)
+			require.LessOrEqual(t, actual, predicted)
+			require.Equal(t, src.RowCount()+2, dst.RowCount())
+		})
+	}
+}
+
+func TestPredictMergedRetainedBytesAdmissionBudget(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	dstVals := make([]int32, 100)
+	srcVals := make([]int32, 100)
+	for i := range dstVals {
+		dstVals[i] = int32(i)
+		srcVals[i] = int32(i + len(dstVals))
+	}
+	dst := makeInt32Batch(proc, dstVals)
+	src := makeInt32Batch(proc, srcVals)
+	defer dst.Clean(proc.Mp())
+	defer src.Clean(proc.Mp())
+	old, ok := batchRetainedBytes(dst)
+	require.True(t, ok)
+	next, ok := batchRetainedBytes(src)
+	require.True(t, ok)
+	predicted, ok := predictMergedRetainedBytes(dst, src)
+	require.True(t, ok)
+	require.Greater(t, predicted, old+next, "rounded destination growth must be admitted independently")
+
+	reserveAll := func(t *testing.T, cap uint64) {
+		budget := process.MustNewHashBuildBudget(cap, cap)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		o, err := generation.Reserve(old)
+		require.NoError(t, err)
+		n, err := generation.Reserve(next)
+		require.NoError(t, err)
+		d, err := generation.Reserve(predicted)
+		require.NoError(t, err)
+		o.Release()
+		n.Release()
+		d.Release()
+		require.Zero(t, generation.Used())
+	}
+	reserveAll(t, old+next+predicted)
+
+	budget := process.MustNewHashBuildBudget(old+next+predicted-1, old+next+predicted-1)
+	generation, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	o, err := generation.Reserve(old)
+	require.NoError(t, err)
+	n, err := generation.Reserve(next)
+	require.NoError(t, err)
+	_, err = generation.Reserve(predicted)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	// Admission happens before UnionBatch, so the destination remains intact.
+	require.Equal(t, len(dstVals), dst.RowCount())
+	require.Equal(t, dstVals[0], vector.GetFixedAtNoTypeCheck[int32](dst.Vecs[0], 0))
+	o.Release()
+	n.Release()
+	require.Zero(t, generation.Used())
+}
+
 func TestBucketWriterAggregatesDiskAccountingPerFile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
