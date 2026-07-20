@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -206,6 +207,55 @@ func TestRunInitSQLWithRuntimeSkipsFencedInitSQL(t *testing.T) {
 
 	require.ErrorIs(t, err, errInitSQLJobFenced)
 	require.False(t, called)
+}
+
+type initSQLTxnForTest struct {
+	client.TxnOperator
+	commitErr         error
+	rollbackErr       error
+	committed         bool
+	rolledBack        bool
+	commitCtx         context.Context
+	rollbackCtx       context.Context
+	rollbackErrAtCall error
+}
+
+func (t *initSQLTxnForTest) Commit(ctx context.Context) error {
+	t.committed = true
+	t.commitCtx = ctx
+	return t.commitErr
+}
+
+func (t *initSQLTxnForTest) Rollback(ctx context.Context) error {
+	t.rolledBack = true
+	t.rollbackCtx = ctx
+	t.rollbackErrAtCall = ctx.Err()
+	return t.rollbackErr
+}
+
+func TestFinishInitSQLTxnReturnsCommitError(t *testing.T) {
+	commitErr := errors.New("commit failed")
+	txn := &initSQLTxnForTest{commitErr: commitErr}
+
+	err := finishInitSQLTxn(context.Background(), txn, nil)
+
+	require.ErrorIs(t, err, commitErr)
+	require.True(t, txn.committed)
+	require.False(t, txn.rolledBack)
+}
+
+func TestFinishInitSQLTxnRollsBackWithIndependentContext(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	txn := &initSQLTxnForTest{}
+
+	err := finishInitSQLTxn(parent, txn, context.Canceled)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, txn.rolledBack)
+	require.False(t, txn.committed)
+	require.NotNil(t, txn.rollbackCtx)
+	require.NoError(t, txn.rollbackErrAtCall)
 }
 
 func TestRunISCPTaskIterationConsumersCancelSnapshotInFlightConsumer(t *testing.T) {
