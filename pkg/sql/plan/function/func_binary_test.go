@@ -9582,6 +9582,29 @@ func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
 	require.True(t, s, "MAKETIME unsigned hour overflow case failed: %s", info)
 }
 
+func TestMakeTimeBinaryIntegerBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		value []byte
+		want  int64
+	}{
+		{name: "empty", value: nil, want: 0},
+		{name: "zero", value: []byte{0}, want: 0},
+		{name: "max int64", value: []byte{0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, want: math.MaxInt64},
+		{name: "max int64 plus one", value: []byte{0x80, 0, 0, 0, 0, 0, 0, 0}, want: math.MaxInt64},
+		{name: "max uint64", value: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, want: math.MaxInt64},
+		{name: "wider than uint64", value: []byte{1, 0, 0, 0, 0, 0, 0, 0, 0}, want: math.MaxInt64},
+		{name: "wide leading zeros", value: []byte{0, 0, 0, 0, 0, 0, 0, 0, 1}, want: 1},
+		{name: "wide leading zero max int64", value: []byte{0, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, want: math.MaxInt64},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, makeTimeBinaryInteger(test.value))
+		})
+	}
+}
+
 func TestMakeTimeSignedHourOverflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,

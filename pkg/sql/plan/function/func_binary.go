@@ -7351,6 +7351,24 @@ func makeTimeIntegerGetter(vec *vector.Vector) (func(uint64) (int64, bool), bool
 	}
 }
 
+func makeTimeBinaryInteger(value []byte) int64 {
+	for len(value) > 0 && value[0] == 0 {
+		value = value[1:]
+	}
+	if len(value) > 8 {
+		return math.MaxInt64
+	}
+
+	var result uint64
+	for _, b := range value {
+		result = result<<8 | uint64(b)
+	}
+	if result > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(result)
+}
+
 func makeTimeFloatGetter[T constraints.Float](vec *vector.Vector) func(uint64) (float64, bool) {
 	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
 	return func(i uint64) (float64, bool) {
@@ -7368,14 +7386,7 @@ func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) 
 			return 0, true
 		}
 		if isBinary {
-			if len(value) > 8 {
-				return 0, false
-			}
-			var result uint64
-			for _, b := range value {
-				result = result<<8 | uint64(b)
-			}
-			return int64(result), false
+			return makeTimeBinaryInteger(value), false
 		}
 		result, _ := parseLeadingInteger(strings.TrimSpace(functionUtil.QuickBytesToStr(value)))
 		return result, false

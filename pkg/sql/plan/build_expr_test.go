@@ -404,14 +404,21 @@ func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error)
 
 func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
-		want string
+		name     string
+		sql      string
+		want     string
+		wantNull bool
 	}{
 		{name: "hex hour", sql: "select cast(maketime(X'0102', 0, 0) as varchar)", want: "258:00:00"},
+		{name: "hex hour empty", sql: "select cast(maketime(X'', 0, 0) as varchar)", want: "00:00:00"},
+		{name: "hex hour max int64", sql: "select cast(maketime(X'7FFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
+		{name: "hex hour max int64 plus one", sql: "select cast(maketime(X'8000000000000000', 0, 0) as varchar)", want: "838:59:59"},
 		{name: "hex hour uint64 overflow", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
 		{name: "hex hour wider than uint64", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
+		{name: "hex hour wide leading zeros", sql: "select cast(maketime(X'000000000000000001', 0, 0) as varchar)", want: "01:00:00"},
 		{name: "hex minute", sql: "select cast(maketime(12, X'01', 0) as varchar)", want: "12:01:00"},
+		{name: "hex minute overflow", sql: "select cast(maketime(12, X'FFFFFFFFFFFFFFFFFF', 0) as varchar)", wantNull: true},
+		{name: "hex minute wide leading zeros", sql: "select cast(maketime(12, X'000000000000000001', 0) as varchar)", want: "12:01:00"},
 		{name: "hex second", sql: "select cast(maketime(12, 0, X'01') as varchar)", want: "12:00:01"},
 		{name: "bit second", sql: "select cast(maketime(12, 0, B'00000001') as varchar)", want: "12:00:01"},
 		{name: "binary string second", sql: "select cast(maketime(12, 0, cast('01' as binary(2))) as varchar)", want: "12:00:01"},
@@ -436,6 +443,10 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 
 			result, err := executor.Eval(proc, nil, nil)
 			require.NoError(t, err)
+			if test.wantNull {
+				require.True(t, result.GetNulls().Contains(0))
+				return
+			}
 			require.False(t, result.GetNulls().Contains(0))
 			require.Equal(t, test.want, result.GetStringAt(0))
 		})
