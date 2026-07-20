@@ -97,7 +97,7 @@ const (
 	LockOp
 
 	Shuffle
-	ShuffleV2
+	_ // reserved: former ShuffleV2 opcode; keep later wire values stable
 
 	Sample
 	ProductL2

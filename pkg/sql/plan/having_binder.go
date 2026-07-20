@@ -366,7 +366,7 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			}
 		}
 
-		if _, ok := order.Expr.(*tree.Subquery); ok {
+		if _, ok := orderExpr.(*tree.Subquery); ok {
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 
@@ -376,6 +376,9 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 
 		if err != nil {
 			return err
+		}
+		if hasSubquery(expr) {
+			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 
 		orderBy := &plan.OrderBySpec{

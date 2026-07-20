@@ -641,7 +641,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								update t1 set a = NULL where a = 4;
 								--> ERROR 20101 (HY000): internal error: unexpected input batch for column expression
 						*/
-						copiedTableDef := DeepCopyTableDef(childTableDef, true)
+						copiedTableDef := CloneTableDefForPlan(childTableDef, true)
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
@@ -692,7 +692,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
-							TableDef:    DeepCopyTableDef(childTableDef, true),
+							TableDef:    CloneTableDefForPlan(childTableDef, true),
 							ProjectList: childProjectList,
 						}, bindCtx)
 						lastNodeId = builder.appendNode(&plan.Node{
@@ -772,7 +772,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 								upPlanCtx := getDmlPlanCtx()
 								upPlanCtx.objRef = childObjRef
-								upPlanCtx.tableDef = DeepCopyTableDef(childTableDef, true)
+								upPlanCtx.tableDef = CloneTableDefForPlan(childTableDef, true)
 								upPlanCtx.updateColLength = len(rightConds)
 								upPlanCtx.isMulti = false
 								upPlanCtx.rowIdPos = childRowIdPos
@@ -1570,12 +1570,12 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		if parentTableDef == nil {
 			return -1, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
-		newTableDef := DeepCopyTableDef(parentTableDef, false)
+		newTableDef := CloneTableDefForPlan(parentTableDef, false)
 		joinConds := make([]*plan.Expr, 0)
 		for _, col := range parentTableDef.Cols {
 			if fkIdx, ok := fkeyId2Idx[col.ColId]; ok {
 				rightPos := len(newTableDef.Cols)
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+				newTableDef.Cols = append(newTableDef.Cols, col)
 
 				parentColumnName := col.Name
 				childColumnName := id2name[fk.Cols[fkIdx]]
@@ -1790,7 +1790,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		ProjectList: preInsertProjection,
 		PreInsertCtx: &plan.PreInsertCtx{
 			Ref:           objRef,
-			TableDef:      DeepCopyTableDef(tableDef, true),
+			TableDef:      CloneTableDefForPlan(tableDef, true),
 			HasAutoCol:    hashAutoCol,
 			IsOldUpdate:   isUpdate,
 			CompPkeyExpr:  makeCompPkeyExpr(tableDef, name2ColIndex),
@@ -2766,7 +2766,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 
-	newEntriesTableDef := DeepCopyTableDef(entriesTableDef, false)
+	newEntriesTableDef := CloneTableDefForPlan(entriesTableDef, false)
 	newEntriesTableDef.Cols = neededCols
 
 	ivfScanId := builder.appendNode(&plan.Node{
@@ -3858,10 +3858,10 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 						return err
 					}
 
-					insertEntriesTableDef := DeepCopyTableDef(entriesTableDef, false)
+					insertEntriesTableDef := CloneTableDefForPlan(entriesTableDef, false)
 					for _, col := range entriesTableDef.Cols {
 						if col.Name != catalog.Row_ID {
-							insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
+							insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, col)
 						}
 					}
 					updateColLength := 1
@@ -4140,10 +4140,10 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 				return err
 			}
 
-			insertUniqueTableDef := DeepCopyTableDef(uniqueTableDef, false)
+			insertUniqueTableDef := CloneTableDefForPlan(uniqueTableDef, false)
 			for _, col := range uniqueTableDef.Cols {
 				if col.Name != catalog.Row_ID {
-					insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols, DeepCopyColDef(col))
+					insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols, col)
 				}
 			}
 			_checkPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
@@ -4275,10 +4275,10 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 				return err
 			}
 
-			insertEntriesTableDef := DeepCopyTableDef(masterTableDef, false)
+			insertEntriesTableDef := CloneTableDefForPlan(masterTableDef, false)
 			for _, col := range masterTableDef.Cols {
 				if col.Name != catalog.Row_ID {
-					insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
+					insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, col)
 				}
 			}
 			updateColLength := 1
@@ -4642,10 +4642,10 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}
 
-	insertEntriesTableDef := DeepCopyTableDef(indexTableDef, false)
+	insertEntriesTableDef := CloneTableDefForPlan(indexTableDef, false)
 	for _, col := range indexTableDef.Cols {
 		if col.Name != catalog.Row_ID {
-			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
+			insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, col)
 		}
 	}
 
@@ -4655,7 +4655,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		ProjectList: project,
 		PreInsertCtx: &plan.PreInsertCtx{
 			Ref:           indexObjRef,
-			TableDef:      DeepCopyTableDef(indexTableDef, true),
+			TableDef:      CloneTableDefForPlan(indexTableDef, true),
 			HasAutoCol:    true,
 			IsOldUpdate:   false,
 			CompPkeyExpr:  nil,
@@ -4780,7 +4780,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			}
 		}
 
-		newIndexTableDef := DeepCopyTableDef(indexTableDef, false)
+		newIndexTableDef := CloneTableDefForPlan(indexTableDef, false)
 		newIndexTableDef.Cols = neededCols
 
 		probeExpr := &plan.Expr{
