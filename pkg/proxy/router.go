@@ -403,14 +403,25 @@ func (r *router) RouteForTransfer(
 	return s, nil
 }
 
-// CanReuseCachedCN implements cacheReuseChecker. Cached connections must only
-// be reused when the breaker is closed/absent; otherwise they would bypass the
-// new-session health gate.
+// CanReuseCachedCN implements cacheReuseChecker. Cached connections must pass
+// the same cluster-eligibility and health gates as a newly routed session.
 func (r *router) CanReuseCachedCN(cn *CNServer) bool {
 	if cn == nil {
 		return true
 	}
-	return r.health.canReuseCachedCN(cn.uuid)
+	if !r.health.canReuseCachedCN(cn.uuid) || r.moCluster == nil {
+		return false
+	}
+
+	eligible := false
+	r.moCluster.GetCNService(
+		clusterservice.NewServiceIDSelector(cn.uuid),
+		func(metadata.CNService) bool {
+			eligible = true
+			return false
+		},
+	)
+	return eligible
 }
 
 func (r *router) connect(

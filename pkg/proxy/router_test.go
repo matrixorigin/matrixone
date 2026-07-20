@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -767,6 +768,41 @@ func TestRouteWithCNHealthChecker(t *testing.T) {
 	// A successful connect on that probe restores the CN to healthy.
 	ru.health.reportSuccess(cn.uuid, cn.addr)
 	require.Equal(t, 2, ru.health.unhealthyCount())
+}
+
+func TestCanReuseCachedCNRequiresCurrentRouteEligibility(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx := context.Background()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+
+	hc := &mockHAKeeperClient{}
+	hc.updateCN("cn1", "cn1-addr", nil)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	mc.ForceRefresh(true)
+
+	ru := newRouter(mc, testRebalancer(t, st, rt.Logger(), mc), newMockSQLWorker(), true).(*router)
+	cn := &CNServer{uuid: "cn1"}
+	require.True(t, ru.CanReuseCachedCN(nil))
+	require.True(t, ru.CanReuseCachedCN(cn))
+	ru.health = newCNHealthChecker(withCNHealthFailThreshold(1))
+	ru.health.reportFailure(cn.uuid, "cn1-addr")
+	require.False(t, ru.CanReuseCachedCN(cn), "unhealthy CN must not receive cached sessions")
+	ru.health.reportSuccess(cn.uuid, "cn1-addr")
+	require.True(t, ru.CanReuseCachedCN(cn))
+
+	require.NoError(t, hc.updateCNWorkState(ctx, logpb.CNWorkState{
+		UUID:  cn.uuid,
+		State: metadata.WorkState_Draining,
+	}))
+	mc.ForceRefresh(true)
+	require.False(t, ru.CanReuseCachedCN(cn), "draining CN must not receive cached sessions")
+	require.False(t, ru.CanReuseCachedCN(&CNServer{uuid: "removed"}),
+		"CN missing from the current cluster view must not receive cached sessions")
 }
 
 // TestRouteConnectTripsBreakerEndToEnd verifies the full chain: a real
