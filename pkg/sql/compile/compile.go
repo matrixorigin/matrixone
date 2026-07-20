@@ -1508,12 +1508,7 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 	if err != nil {
 		return err, false
 	}
-	if modeStr, ok := mode.(string); ok {
-		if strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES") {
-			return nil, true
-		}
-	}
-	return nil, false
+	return nil, process.IsStrictMode(mode)
 }
 
 func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam, strict bool) bool {

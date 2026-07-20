@@ -16,15 +16,34 @@ package process
 
 import "strings"
 
-func IsStrictNoZeroDateMode(mode any) bool {
+func parseStrictSQLMode(mode any) (strict, noZeroDate bool) {
 	modeStr, ok := mode.(string)
 	if !ok {
-		return false
+		return false, false
 	}
 
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	return hasStrictMode && strings.Contains(modeStr, "NO_ZERO_DATE")
+	for token := range strings.SplitSeq(modeStr, ",") {
+		switch strings.ToUpper(strings.TrimSpace(token)) {
+		case "TRADITIONAL":
+			strict = true
+			noZeroDate = true
+		case "STRICT_TRANS_TABLES", "STRICT_ALL_TABLES":
+			strict = true
+		case "NO_ZERO_DATE":
+			noZeroDate = true
+		}
+	}
+	return strict, noZeroDate
+}
+
+func IsStrictMode(mode any) bool {
+	strict, _ := parseStrictSQLMode(mode)
+	return strict
+}
+
+func IsStrictNoZeroDateMode(mode any) bool {
+	strict, noZeroDate := parseStrictSQLMode(mode)
+	return strict && noZeroDate
 }
 
 func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {

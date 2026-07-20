@@ -52,6 +52,7 @@ func TestIsStrictNoZeroDateMode(t *testing.T) {
 	}{
 		{name: "strict trans tables", mode: "STRICT_TRANS_TABLES,NO_ZERO_DATE", want: true},
 		{name: "strict all tables lowercase", mode: "strict_all_tables,no_zero_date", want: true},
+		{name: "traditional", mode: "TRADITIONAL", want: true},
 		{name: "missing strict", mode: "NO_ZERO_DATE"},
 		{name: "missing no zero date", mode: "STRICT_TRANS_TABLES"},
 		{name: "non string", mode: 1},

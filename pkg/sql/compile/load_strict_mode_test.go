@@ -40,3 +40,14 @@ func TestEffectiveExternalStrictModeForLoadDataIgnore(t *testing.T) {
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Load", tree.QueryTypeDML, false)
 	require.True(t, effectiveExternalStrictMode(proc, loadParam, true))
 }
+
+func TestStrictSqlModeTraditional(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
+		return "TRADITIONAL", nil
+	})
+
+	err, strict := StrictSqlMode(proc)
+	require.NoError(t, err)
+	require.True(t, strict)
+}

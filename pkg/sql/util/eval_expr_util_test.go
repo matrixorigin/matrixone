@@ -338,6 +338,13 @@ func TestRejectZeroTemporalWritePolicy(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "traditional rejects",
+			resolve: func(string, bool, bool) (any, error) {
+				return "TRADITIONAL", nil
+			},
+			want: true,
+		},
+		{
 			name: "ignore disables rejection",
 			resolve: func(string, bool, bool) (any, error) {
 				return "STRICT_ALL_TABLES,NO_ZERO_DATE", nil

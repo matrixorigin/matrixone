@@ -165,6 +165,18 @@ func TestExplicitCastZeroTemporalStringsHonorStrictNoZeroDate(t *testing.T) {
 			},
 		},
 		{
+			name:     "traditional returns null for date",
+			input:    "0000-00-00",
+			target:   types.T_date.ToType(),
+			wantNull: true,
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", varName)
+					return "TRADITIONAL", nil
+				})
+			},
+		},
+		{
 			name:     "remote strict no zero date policy returns null without resolver",
 			input:    "0000-00-00",
 			target:   types.T_date.ToType(),
