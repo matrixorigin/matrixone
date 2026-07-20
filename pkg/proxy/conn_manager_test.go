@@ -182,6 +182,37 @@ func TestConnManagerConnection(t *testing.T) {
 	require.Equal(t, 0, cm.getCNTunnels("hash2").count())
 }
 
+func TestConnManagerTemporaryConnectionDoesNotTrackNilTunnel(t *testing.T) {
+	cm := newConnManager()
+	activeTunnel := newTunnel(context.Background(), nil, nil)
+	activeCN := &CNServer{
+		uuid:   "cn1",
+		connID: 100,
+		hash:   "tenant",
+	}
+	temporaryCN := &CNServer{
+		uuid:   "cn1",
+		connID: 200,
+	}
+
+	cm.connect(activeCN, activeTunnel)
+	cm.connect(temporaryCN, nil)
+
+	require.Equal(t, []*tunnel{activeTunnel}, cm.getTunnelsByCNID("cn1"))
+	selected, err := cm.GetCNServerByConnID(temporaryCN.connID)
+	require.NoError(t, err)
+	require.Same(t, temporaryCN, selected)
+
+	cm.disconnect(temporaryCN, nil)
+	require.Equal(t, []*tunnel{activeTunnel}, cm.getTunnelsByCNID("cn1"))
+	selected, err = cm.GetCNServerByConnID(temporaryCN.connID)
+	require.NoError(t, err)
+	require.Nil(t, selected)
+	selected, err = cm.GetCNServerByConnID(activeCN.connID)
+	require.NoError(t, err)
+	require.Same(t, activeCN, selected)
+}
+
 func TestConnManagerConnectionConcurrency(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 

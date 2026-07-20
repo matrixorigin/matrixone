@@ -233,24 +233,26 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 func (m *connManager) connect(cn *CNServer, t *tunnel) {
 	m.Lock()
 	defer m.Unlock()
-	ci, ok := m.conns[cn.hash]
-	if !ok {
-		// This should not happen if selectOne was called first, but handle it gracefully.
-		m.conns[cn.hash] = newConnInfo(cn.reqLabel)
-		ci = m.conns[cn.hash]
-		ci.cnTunnels.add(cn.uuid, t)
-	} else {
-		// Remove one placeholder tunnel and add the real tunnel.
-		// The placeholder was added in selectOne to reserve the connection slot.
-		ci.cnTunnels.delOnePlaceholder(cn.uuid)
-		ci.cnTunnels.add(cn.uuid, t)
+	if t != nil {
+		ci, ok := m.conns[cn.hash]
+		if !ok {
+			// This should not happen if selectOne was called first, but handle it gracefully.
+			m.conns[cn.hash] = newConnInfo(cn.reqLabel)
+			ci = m.conns[cn.hash]
+			ci.cnTunnels.add(cn.uuid, t)
+		} else {
+			// Remove one placeholder tunnel and add the real tunnel.
+			// The placeholder was added in selectOne to reserve the connection slot.
+			ci.cnTunnels.delOnePlaceholder(cn.uuid)
+			ci.cnTunnels.add(cn.uuid, t)
+		}
+
+		if _, ok := m.cnTunnels[cn.uuid]; !ok {
+			m.cnTunnels[cn.uuid] = make(tunnelSet)
+		}
+		m.cnTunnels[cn.uuid][t] = struct{}{}
 	}
 	m.connIDServers[cn.connID] = cn
-
-	if _, ok := m.cnTunnels[cn.uuid]; !ok {
-		m.cnTunnels[cn.uuid] = make(tunnelSet)
-	}
-	m.cnTunnels[cn.uuid][t] = struct{}{}
 	logutil.Infof("connect to CN server %s, the conn ID is %d", cn.uuid, cn.connID)
 }
 
@@ -271,11 +273,13 @@ func (m *connManager) selectOneFailed(hash LabelHash, cnUUID string) {
 func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 	m.Lock()
 	defer m.Unlock()
-	ci, ok := m.conns[cn.hash]
-	if ok {
-		ci.cnTunnels.del(cn.uuid, t)
+	if t != nil {
+		ci, ok := m.conns[cn.hash]
+		if ok {
+			ci.cnTunnels.del(cn.uuid, t)
+		}
+		delete(m.cnTunnels[cn.uuid], t)
 	}
-	delete(m.cnTunnels[cn.uuid], t)
 	delete(m.connIDServers, cn.connID)
 	logutil.Infof("disconnect from CN server %s, the conn ID is %d", cn.uuid, cn.connID)
 }
