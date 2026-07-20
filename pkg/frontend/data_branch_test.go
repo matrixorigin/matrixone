@@ -195,8 +195,11 @@ func TestFormatValIntoString_DataBranchSpecialTypes(t *testing.T) {
 		{"uuid value", types.Uuid{0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12}, types.T_uuid.ToType(), "'12345678-1234-1234-1234-123456789012'"},
 		{"enum", types.Enum(2), types.T_enum.ToType(), "2"},
 		{"datalink", []byte("file:///tmp/a.csv"), types.T_datalink.ToType(), "cast('file:///tmp/a.csv' as datalink)"},
-		{"geometry", []byte("POINT(1 2)"), types.T_geometry.ToType(), "cast(st_geomfromtext('POINT(1 2)') as geometry)"},
-		{"geometry32", []byte("POINT(1 2)"), types.T_geometry32.ToType(), "cast(st_geomfromtext('POINT(1 2)') as geometry32)"},
+		{"geometry", []byte("POINT(1 2)"), types.T_geometry.ToType(), "st_geomfromtext('POINT(1 2)')"},
+		{"geometry32", []byte("POINT(1 2)"), types.T_geometry32.ToType(), "st_geomfromtext('POINT(1 2)')"},
+		{"geometry SRID", []byte("POINT(1 2)"), types.New(types.T_geometry, 4327, 0), "st_geomfromtext('POINT(1 2)', 4326)"},
+		{"geometry32 SRID", []byte("POINT(1 2)"), types.New(types.T_geometry32, 4327, 0), "st_geomfromtext('POINT(1 2)', 4326)"},
+		{"geometry SRID zero", []byte("POINT(1 2)"), types.New(types.T_geometry, 1, 0), "st_geomfromtext('POINT(1 2)', 0)"},
 	}
 
 	for _, tt := range tests {

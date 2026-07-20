@@ -510,7 +510,11 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		}
 		buf.WriteString(" as datalink)")
 	case types.T_geometry, types.T_geometry32:
-		buf.WriteString("cast(st_geomfromtext(")
+		// Geometry cells hold bare WKB; an explicitly declared SRID is carried
+		// by the expression type in Width as srid+1. Reconstruct it with the
+		// two-argument constructor. Casting to generic geometry/geometry32 would
+		// replace that type with an unspecified-SRID type before INSERT.
+		buf.WriteString("st_geomfromtext(")
 		switch x := val.(type) {
 		case []byte:
 			writeEscapedSQLString(buf, x)
@@ -519,12 +523,11 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected geometry type %T", val)
 		}
-		buf.WriteByte(')')
-		if t.Oid == types.T_geometry32 {
-			buf.WriteString(" as geometry32)")
-		} else {
-			buf.WriteString(" as geometry)")
+		if t.Width > 0 {
+			buf.WriteString(", ")
+			writeInt(int64(t.Width - 1))
 		}
+		buf.WriteByte(')')
 	case types.T_uuid:
 		var uuid string
 		switch x := val.(type) {
