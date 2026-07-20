@@ -85,7 +85,7 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 	exec := &tableCloneRecordingExecutor{}
 	exec.run = func(sql string) (executor.Result, error) {
 		if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
-			return newTableCloneOffsetResult(t, proc.Mp(), 0, 50), nil
+			return newTableCloneOffsetResult(t, proc.Mp(), 1, 50), nil
 		}
 		return newTableCloneResult(t, proc.Mp(), 40), nil
 	}
@@ -96,12 +96,18 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 		DbName:         "db-name",
 		Name:           "t`name",
 		AutoIncrOffset: 999,
-		Cols: []*plan.ColDef{{
-			Name: "id`col",
-			Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
-		}},
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 11, Name: "id`col", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
 	}
-	dstDef := &plan.TableDef{AutoIncrOffset: 99}
+	dstDef := &plan.TableDef{
+		AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{
+			{ColId: 11, Name: "renamed_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
 	snapshot := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: 123},
 		Tenant: &plan.SnapshotTenant{TenantID: 17},
@@ -119,18 +125,37 @@ func TestConstructTableCloneReadsMaximumFromCloneSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(tc.Release)
 	require.Equal(t, uint64(99), tc.Ctx.RequestedAutoIncrOffset)
-	require.Equal(t, map[int32]uint64{0: 40}, tc.Ctx.SrcAutoIncrMaxValues)
-	require.Equal(t, map[int32]uint64{0: 50}, tc.Ctx.SrcAutoIncrOffsets)
+	require.Equal(t, map[string]uint64{"renamed_id": 40}, tc.Ctx.SrcAutoIncrMaxValues)
+	require.Equal(t, map[string]uint64{"renamed_id": 50}, tc.Ctx.SrcAutoIncrOffsets)
 	require.True(t, exec.opts.HasAccountID())
 	require.Equal(t, uint32(17), exec.opts.AccountID())
 
-	col := sqlquote.Ident(srcDef.Cols[0].Name)
+	col := sqlquote.Ident(srcDef.Cols[1].Name)
 	table := sqlquote.QualifiedIdent(srcDef.DbName, srcDef.Name)
 	require.Equal(t,
 		"select cast(coalesce(max(case when "+col+" > 0 then "+col+" else 0 end), 0) as unsigned) from "+
 			table+" {MO_TS = 123}",
 		exec.sql,
 	)
+}
+
+func TestMapCloneAutoIncrColumnsAcrossCopySchemaChanges(t *testing.T) {
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	src := &plan.TableDef{Cols: []*plan.ColDef{
+		{ColId: 10, Name: "dropped", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{ColId: 11, Name: "id", Typ: autoType},
+		{ColId: 12, Name: "__mo_fake_pk_col", Hidden: true, Typ: autoType},
+	}}
+	dst := &plan.TableDef{Cols: []*plan.ColDef{
+		{ColId: 13, Name: "added", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{ColId: 12, Name: "__mo_fake_pk_col", Hidden: true, Typ: autoType},
+		{ColId: 11, Name: "renamed_id", Typ: autoType},
+	}}
+
+	require.Equal(t, map[int32]string{
+		1: "renamed_id",
+		2: "__mo_fake_pk_col",
+	}, mapCloneAutoIncrColumns(src, dst))
 }
 
 func TestConstructTableCloneDoesNotReadHiddenAutoIncrementMaximum(t *testing.T) {
@@ -162,7 +187,7 @@ func TestConstructTableCloneDoesNotReadHiddenAutoIncrementMaximum(t *testing.T) 
 	t.Cleanup(tc.Release)
 	require.Len(t, exec.sqls, 1)
 	require.Contains(t, exec.sqls[0], "mo_catalog.mo_increment_columns")
-	require.Equal(t, map[int32]uint64{0: 40}, tc.Ctx.SrcAutoIncrOffsets)
+	require.Equal(t, map[string]uint64{"__mo_fake_pk_col": 40}, tc.Ctx.SrcAutoIncrOffsets)
 }
 
 func TestConstructTableCloneHonorsCanceledContextBeforeMaximumRead(t *testing.T) {

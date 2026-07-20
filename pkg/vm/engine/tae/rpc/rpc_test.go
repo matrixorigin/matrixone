@@ -81,16 +81,16 @@ func TestAutoIncrEpochFenceAtTNConvergence(t *testing.T) {
 	_, err = h.HandleCommit(ctx, meta, nil, commitReq)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 
-	// Rolling-upgrade compatibility boundary: the same raw V0 from a legacy CN
-	// has no presence bit and remains accepted after ALTER. Strict fencing
-	// requires all CN writers to send Known=true.
+	// A legacy CN has no presence bit. Once the table enters the fenced epoch
+	// regime, its epoch-zero write must fail closed instead of bypassing the
+	// allocator dependency.
 	entry.AutoIncrEpochKnown = false
 	payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
 	require.NoError(t, err)
 	commitReq.Payload[0].CNRequest.Payload = payload
 	meta = mock1PCTxn(h.db)
 	_, err = h.HandleCommit(ctx, meta, nil, commitReq)
-	require.NoError(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 }
 
 func TestReplaceDefAdvancesTableVersionAtTN(t *testing.T) {

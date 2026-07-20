@@ -80,7 +80,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesRequestedOffsetWithCopiedMaximum(t *t
 			tc := &TableClone{
 				Ctx: &TableCloneCtx{
 					RequestedAutoIncrOffset: tt.requested,
-					SrcAutoIncrMaxValues:    map[int32]uint64{0: tt.copiedMax},
+					SrcAutoIncrMaxValues:    map[string]uint64{"id": tt.copiedMax},
 				},
 				dstMasterRel: rel,
 			}
@@ -121,8 +121,8 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 	tc := &TableClone{
 		Ctx: &TableCloneCtx{
 			RequestedAutoIncrOffset: 999,
-			SrcAutoIncrMaxValues:    map[int32]uint64{0: 40},
-			SrcAutoIncrOffsets:      map[int32]uint64{1: 40},
+			SrcAutoIncrMaxValues:    map[string]uint64{"id": 40},
+			SrcAutoIncrOffsets:      map[string]uint64{"__mo_fake_pk_col": 40},
 		},
 		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
 	}
@@ -152,8 +152,8 @@ func TestUpdateDstAutoIncrColumnsUsesSourceAllocatorOffset(t *testing.T) {
 	}
 	tc := &TableClone{
 		Ctx: &TableCloneCtx{
-			SrcAutoIncrMaxValues: map[int32]uint64{0: 40},
-			SrcAutoIncrOffsets:   map[int32]uint64{0: 50},
+			SrcAutoIncrMaxValues: map[string]uint64{"id": 40},
+			SrcAutoIncrOffsets:   map[string]uint64{"id": 50},
 		},
 		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
 	}
@@ -199,7 +199,7 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeEffectiveOffset(t *testing.T) 
 			tc := &TableClone{
 				Ctx: &TableCloneCtx{
 					RequestedAutoIncrOffset: tt.value,
-					SrcAutoIncrMaxValues:    map[int32]uint64{0: 0},
+					SrcAutoIncrMaxValues:    map[string]uint64{"id": 0},
 				},
 				dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
 			}

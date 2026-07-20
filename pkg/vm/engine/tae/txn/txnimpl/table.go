@@ -119,9 +119,10 @@ type txnTable struct {
 
 	idx int
 
-	// expectedAutoIncrEpochs are the known allocator epochs used by this
-	// transaction's user-table writes. A transaction can legitimately use both
-	// the committed epoch and the epoch created by its own AUTO_INCREMENT alter.
+	// expectedAutoIncrEpochs are the allocator epochs used by this transaction's
+	// user-table writes. Legacy writers without an epoch are recorded as epoch
+	// zero. A transaction can legitimately use both the committed epoch and the
+	// epoch created by its own AUTO_INCREMENT alter.
 	expectedAutoIncrEpochs map[uint32]struct{}
 	autoIncrementAlter     bool
 }
@@ -196,8 +197,7 @@ func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
 		return nil
 	}
 
-	// SetAutoIncrEpoch is registered only for epoch-aware user writes. Publish
-	// after the epoch fence accepts the write; rejected stale writes
+	// Publish after the epoch fence accepts the write; rejected stale writes
 	// must not force a later ALTER retry.
 	if len(tbl.expectedAutoIncrEpochs) > 0 {
 		tbl.entry.RecordKnownDMLPrepare(tbl.store.txn.GetPrepareTS())

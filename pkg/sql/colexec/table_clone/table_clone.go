@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -540,17 +541,22 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	}
 
 	for _, col := range userIncrCols {
+		name := strings.ToLower(col.ColName)
 		offset := max(
 			tc.Ctx.RequestedAutoIncrOffset,
-			tc.Ctx.SrcAutoIncrMaxValues[int32(col.ColIndex)],
-			tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)],
+			tc.Ctx.SrcAutoIncrMaxValues[name],
+			tc.Ctx.SrcAutoIncrOffsets[name],
 		)
 		if err := setOffset(col, offset); err != nil {
 			return err
 		}
 	}
 	for _, col := range internalIncrCols {
-		if err := setOffset(col, tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)]); err != nil {
+		offset, ok := tc.Ctx.SrcAutoIncrOffsets[strings.ToLower(col.ColName)]
+		if !ok {
+			continue
+		}
+		if err := setOffset(col, offset); err != nil {
 			return err
 		}
 	}

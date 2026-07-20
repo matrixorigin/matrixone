@@ -417,20 +417,20 @@ type autoIncrEpochRecorder interface {
 }
 
 func setAutoIncrEpochDependency(rel handle.Relation, epoch uint32, known bool) error {
-	if !known {
-		return nil
-	}
 	recorder, ok := rel.(autoIncrEpochRecorder)
 	if !ok {
 		return moerr.NewInternalErrorNoCtxf("relation %T cannot record AUTO_INCREMENT epoch", rel)
+	}
+	if !known {
+		// Legacy CNs have no presence bit. Treat their writes as epoch zero:
+		// they remain valid before the first fenced ALTER, but fail closed once
+		// the table's AUTO_INCREMENT epoch advances.
+		epoch = 0
 	}
 	return recorder.SetAutoIncrEpoch(epoch)
 }
 
 func (h *Handle) registerWriteAutoIncrEpoch(txn txnif.AsyncTxn, req *cmd_util.WriteReq) error {
-	if !req.AutoIncrEpochKnown {
-		return nil
-	}
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
 		return err

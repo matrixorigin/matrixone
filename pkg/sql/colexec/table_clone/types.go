@@ -39,8 +39,8 @@ type TableCloneCtx struct {
 	ScanSnapshot *plan.Snapshot
 
 	RequestedAutoIncrOffset uint64
-	SrcAutoIncrMaxValues    map[int32]uint64
-	SrcAutoIncrOffsets      map[int32]uint64
+	SrcAutoIncrMaxValues    map[string]uint64
+	SrcAutoIncrOffsets      map[string]uint64
 }
 
 type TableClone struct {

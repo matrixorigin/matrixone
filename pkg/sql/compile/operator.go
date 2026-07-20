@@ -2219,12 +2219,15 @@ func constructTableClone(
 		DstTblName:      clonePlan.DstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
+	dstTblDef := clonePlan.SrcTableDef
 	metaCopy.Ctx.RequestedAutoIncrOffset = clonePlan.SrcTableDef.AutoIncrOffset
 	if createPlan := clonePlan.GetCreateTable(); createPlan != nil {
 		if createTable := createPlan.GetDdl().GetCreateTable(); createTable != nil && createTable.TableDef != nil {
+			dstTblDef = createTable.TableDef
 			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
 		}
 	}
+	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef)
 
 	var (
 		err error
@@ -2232,8 +2235,8 @@ func constructTableClone(
 		sql string
 
 		account         = uint32(math.MaxUint32)
-		colMaxValue     map[int32]uint64
-		autoIncrOffsets map[int32]uint64
+		colMaxValue     map[string]uint64
+		autoIncrOffsets map[string]uint64
 		hasAutoIncr     bool
 	)
 
@@ -2282,7 +2285,7 @@ func constructTableClone(
 			ret.Close()
 			return nil, err
 		}
-		autoIncrOffsets = make(map[int32]uint64)
+		autoIncrOffsets = make(map[string]uint64)
 		func() {
 			defer ret.Close()
 			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -2290,9 +2293,8 @@ func constructTableClone(
 				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 				for i := 0; i < rows; i++ {
 					idx := colIdxes[i]
-					if idx >= 0 && int(idx) < len(clonePlan.SrcTableDef.Cols) &&
-						clonePlan.SrcTableDef.Cols[idx].Typ.AutoIncr {
-						autoIncrOffsets[idx] = offsets[i]
+					if dstName, ok := dstAutoIncrNames[idx]; ok {
+						autoIncrOffsets[dstName] = offsets[i]
 					}
 				}
 				return true
@@ -2300,7 +2302,7 @@ func constructTableClone(
 		}()
 	}
 
-	colMaxValue = make(map[int32]uint64)
+	colMaxValue = make(map[string]uint64)
 	for colIdx, colDef := range clonePlan.SrcTableDef.Cols {
 		if !colDef.Typ.AutoIncr || colDef.Hidden {
 			continue
@@ -2333,7 +2335,9 @@ func constructTableClone(
 			defer ret.Close()
 			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
-					colMaxValue[int32(colIdx)] = executor.GetFixedRows[uint64](cols[0])[0]
+					if dstName, ok := dstAutoIncrNames[int32(colIdx)]; ok {
+						colMaxValue[dstName] = executor.GetFixedRows[uint64](cols[0])[0]
+					}
 				}
 				return false
 			})
@@ -2345,4 +2349,42 @@ func constructTableClone(
 
 	success = true
 	return metaCopy, nil
+}
+
+// mapCloneAutoIncrColumns translates source catalog indexes to destination
+// column names. ALTER COPY can reorder or rename columns while retaining their
+// planner column IDs, so a source index must never be used as a destination
+// index when restoring allocator state.
+func mapCloneAutoIncrColumns(src, dst *plan.TableDef) map[int32]string {
+	result := make(map[int32]string)
+	if src == nil || dst == nil {
+		return result
+	}
+
+	srcIDCounts := make(map[uint64]int, len(src.Cols))
+	dstByID := make(map[uint64][]*plan.ColDef, len(dst.Cols))
+	dstByName := make(map[string]*plan.ColDef, len(dst.Cols))
+	for _, col := range src.Cols {
+		srcIDCounts[col.ColId]++
+	}
+	for _, col := range dst.Cols {
+		dstByID[col.ColId] = append(dstByID[col.ColId], col)
+		dstByName[strings.ToLower(col.Name)] = col
+	}
+
+	for idx, srcCol := range src.Cols {
+		if !srcCol.Typ.AutoIncr {
+			continue
+		}
+		var dstCol *plan.ColDef
+		if srcIDCounts[srcCol.ColId] == 1 && len(dstByID[srcCol.ColId]) == 1 {
+			dstCol = dstByID[srcCol.ColId][0]
+		} else {
+			dstCol = dstByName[strings.ToLower(srcCol.Name)]
+		}
+		if dstCol != nil && dstCol.Typ.AutoIncr {
+			result[int32(idx)] = strings.ToLower(dstCol.Name)
+		}
+	}
+	return result
 }
