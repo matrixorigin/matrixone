@@ -544,6 +544,13 @@ func TestDumpDataByTableIDAndOrderTablesForRestore(t *testing.T) {
 	require.Nil(t, dumpDataByTableID(nil))
 	require.Equal(t, []checkpointtool.TableCatalogEntry{child, parent, other, base, view, view2}, tablesFromDumpPlans(plans))
 	require.Nil(t, tablesFromDumpPlans(nil))
+	catalogOnly := checkpointtool.TableCatalogEntry{DatabaseName: "db", TableName: "catalog_only", TableID: 273094}
+	catalogTables := append(tablesFromDumpPlans(plans), catalogOnly)
+	scriptTables, skipped := filterAccountRestoreScriptTables(tablesFromDumpPlans(plans), false)
+	require.Zero(t, skipped)
+	require.Equal(t, []checkpointtool.TableCatalogEntry{child, parent, other, base, view, view2}, scriptTables)
+	require.NotEqual(t, catalogTables, scriptTables)
+	require.NotContains(t, scriptTables, catalogOnly)
 
 	ordered := orderTablesForRestore([]checkpointtool.TableCatalogEntry{child, other, parent}, byID)
 	require.Equal(t, []uint64{1, 2, 3}, []uint64{ordered[0].TableID, ordered[1].TableID, ordered[2].TableID})

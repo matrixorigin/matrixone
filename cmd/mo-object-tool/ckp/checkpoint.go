@@ -641,13 +641,13 @@ Examples:
 					if jobs < 1 {
 						jobs = 1
 					}
-					if jobs > len(tables) {
-						jobs = len(tables)
+					if jobs > len(dumpPlans) {
+						jobs = len(dumpPlans)
 					}
 					if err := dumpTablesConcurrently(ctx, reader, dumpOut, dumpPlans, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
 						return err
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
+					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(dumpPlans), outputDir)
 				}
 				if loadScript {
 					scriptTables, skippedSystemTables := filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
