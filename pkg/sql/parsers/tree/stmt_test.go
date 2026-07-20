@@ -137,6 +137,8 @@ func TestQueryType(t *testing.T) {
 					&ShowSubscriptions{}:             QueryTypeOth,
 					&ShowCcprSubscriptions{}:         QueryTypeOth,
 					&ShowBackendServers{}:            QueryTypeOth,
+					&CheckTableStmt{}:                QueryTypeOth,
+					&ShowProfileStmt{}:               QueryTypeOth,
 				},
 			},
 		},

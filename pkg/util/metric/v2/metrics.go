@@ -279,6 +279,8 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamTeardownCounter)
 	registry.MustRegister(PipelineStreamLifecycleGauge)
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
+	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
+	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initLogServiceMetrics() {
