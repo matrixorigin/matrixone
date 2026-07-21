@@ -582,6 +582,57 @@ func TestQuoteIdentifer(t *testing.T) {
 	}
 }
 
+func TestQuoteSelectAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "reserved table alias",
+			sql:  "select `order`.col from tbl as `order`",
+			want: "select `order`.`col` from `tbl` as `order`",
+		},
+		{
+			name: "cte name and column aliases",
+			sql:  "with `select` (`from`, `中文 列`) as (select col1, col2 from tbl) select `from` from `select`",
+			want: "with `select`(`from`, `中文 列`) as (select `col1`, `col2` from `tbl`) select `from` from `select`",
+		},
+		{
+			name: "derived alias columns and join using",
+			sql:  "select `left`.`a b` from (select col as `a b` from tbl) as `left` (`a b`) join other as `right` using (`a b`)",
+			want: "select `left`.`a b` from (select `col` as `a b` from `tbl`) as `left`(`a b`) inner join `other` as `right` using (`a b`)",
+		},
+		{
+			name: "embedded backticks",
+			sql:  "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+			want: "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+		},
+		{
+			name: "quoted index hints",
+			sql:  "select * from tbl force index (`select`, `a b`, `x``y`)",
+			want: "select * from `tbl` force index(`select`, `a b`, `x``y`)",
+		},
+		{
+			name: "quoted user variables",
+			sql:  "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@session.autocommit, @@autocommit",
+			want: "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@autocommit, @@autocommit",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.sql, 1)
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				test.want,
+				tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
+			)
+		})
+	}
+}
+
 var (
 	pitrSQLs = []struct {
 		input  string
@@ -1436,10 +1487,10 @@ var (
 			output: "select @@tx_isolation",
 		}, {
 			input:  "select @@global.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "select @@GLOBAL.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 			output: "show variables",
