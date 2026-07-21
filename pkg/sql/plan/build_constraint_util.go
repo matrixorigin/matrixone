@@ -447,6 +447,16 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx, tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			if op == "insert" {
+				return nil
+			}
+			return moerr.NewInvalidInput(ctx, "cannot update/delete from Iceberg table mapping in P1 append phase")
+		}
 		// A writable external table (created with WRITE_FILE_PATTERN) accepts
 		// INSERT/LOAD; everything else on an external table is rejected.
 		if op == "insert" {

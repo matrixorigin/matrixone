@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -849,6 +850,13 @@ func buildCreateTable(
 		}
 		// TODO WHY?
 		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+			if err != nil {
+				return nil, err
+			}
+			if isIceberg {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
+			}
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
@@ -1014,7 +1022,32 @@ func buildCreateTable(
 	}
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
-	if stmt.Param != nil {
+	if stmt.IcebergParam != nil {
+		if err := ensureIcebergTableSurfaceEnabled(ctx.GetContext(), "CREATE EXTERNAL TABLE ENGINE=ICEBERG"); err != nil {
+			return nil, err
+		}
+		spec, err := sqliceberg.ParseTableMappingSpec(ctx.GetContext(), stmt.IcebergParam)
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemExternalRel,
+			},
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: sqliceberg.BuildCreateSQLEnvelope(spec.Mapping, spec.CatalogName),
+			},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
 			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", ExternalWriteFilePatternKey, CSVCommentKey:
@@ -1151,7 +1184,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
 
-	if stmt.Param != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
@@ -2796,6 +2829,13 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		// the user would expect TRUNCATE to remove — reject rather than report
 		// success while the stage files survive.
 		if tableDef.TableType == catalog.SystemExternalRel {
+			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+			if err != nil {
+				return nil, err
+			}
+			if isIceberg {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "truncate Iceberg table mapping '%v'", truncateTable.Table)
+			}
 			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(),
 					"truncate writable external table '%v'; its files in the stage are not managed by the table", truncateTable.Table)
@@ -3284,6 +3324,13 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 
 func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
 	if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx, tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			return moerr.NewInvalidInput(ctx, "cannot create index on Iceberg table mapping")
+		}
 		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
 	}
 	return nil
