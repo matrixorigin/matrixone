@@ -461,7 +461,7 @@ func TestConnCachePopContextCancelsBackendValidation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	popDone := make(chan ServerConn, 1)
 	go func() {
-		popDone <- cache.(*connCache).PopContext(ctx, "tenant-a", 1, nil, nil)
+		popDone <- cache.(*connCache).PopContext(ctx, "tenant-a", 1, nil, nil, clientInfo{})
 	}()
 	select {
 	case <-blocked.entered:
@@ -544,7 +544,7 @@ func TestConnCachePopWaitsForOriginGenerationCleanup(t *testing.T) {
 	result := make(chan ServerConn, 1)
 	go func() {
 		result <- cache.(*connCache).PopContext(
-			context.Background(), "tenant-a", 1, nil, nil,
+			context.Background(), "tenant-a", 1, nil, nil, clientInfo{},
 		)
 	}()
 	select {
@@ -574,7 +574,7 @@ func TestConnCachePopWaitsForOriginGenerationCleanup(t *testing.T) {
 	canceledResult := make(chan ServerConn, 1)
 	go func() {
 		canceledResult <- cache.(*connCache).PopContext(
-			cancelCtx, "tenant-b", 2, nil, nil,
+			cancelCtx, "tenant-b", 2, nil, nil, clientInfo{},
 		)
 	}()
 	select {
