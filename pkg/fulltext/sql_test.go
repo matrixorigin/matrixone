@@ -29,6 +29,14 @@ func TestEscape(t *testing.T) {
 	assert.Equal(t, `normal`, escape("normal"))
 }
 
+func TestPatternToSqlRejectsEmptyPattern(t *testing.T) {
+	var err error
+	require.NotPanics(t, func() {
+		_, err = PatternToSql(nil, int64(tree.FULLTEXT_BOOLEAN), "idx", "", ALGO_TFIDF)
+	})
+	require.ErrorContains(t, err, "fulltext search pattern must not be empty")
+}
+
 func TestSqlPhraseBM25(t *testing.T) {
 	tests := []TestCase{
 		{

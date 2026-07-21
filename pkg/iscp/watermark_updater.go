@@ -327,6 +327,41 @@ func UnregisterJob(
 	)
 }
 
+func LookupJobLog(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	jobID *JobID,
+) (accountID uint32, tableID uint64, internalJobID uint64, exists bool, dropped bool, err error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
+	accountID, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+	tableID, _, err = getTableID(
+		ctxWithSysAccount,
+		cnUUID,
+		txn,
+		accountID,
+		jobID.DBName,
+		jobID.TableName,
+	)
+	if err != nil {
+		return
+	}
+	exists, dropped, internalJobID, err = queryIndexLog(
+		ctxWithSysAccount,
+		cnUUID,
+		txn,
+		accountID,
+		tableID,
+		jobID.JobName,
+	)
+	return
+}
+
 func RenameSrcTable(
 	ctx context.Context,
 	cnUUID string,
