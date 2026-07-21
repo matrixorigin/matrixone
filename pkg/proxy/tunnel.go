@@ -148,9 +148,20 @@ type tunnel struct {
 	// the conn-cache path above and the non-cache path where COM_QUIT is
 	// forwarded to CN.
 	expectedClientQuit atomic.Bool
-	// clientRequestInFlight indicates a client request has been forwarded to
-	// the backend and no terminal OK/ERR response has been observed yet.
-	clientRequestInFlight atomic.Bool
+	// requestBoundary is the authoritative request/response ownership state.
+	// It deliberately becomes permanently unsafe for this tunnel generation if
+	// a client pipelines commands: the MySQL command protocol is sequential and
+	// retaining a queue here would let an unauthenticated peer grow proxy memory.
+	requestBoundary struct {
+		sync.Mutex
+		inFlight                 bool
+		ambiguous                bool
+		command                  frontend.CommandType
+		phase                    responsePhase
+		legacyResultEOFSeen      bool
+		prepareMetadataRemaining uint32
+	}
+	clientDeprecatesEOF bool
 
 	mu struct {
 		sync.Mutex
@@ -207,6 +218,9 @@ func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet, opts .
 
 // run starts the tunnel, make the data between client and server flow in it.
 func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
+	if provider, ok := cc.(interface{ GetCapability() uint32 }); ok {
+		t.clientDeprecatesEOF = provider.GetCapability()&frontend.CLIENT_DEPRECATE_EOF != 0
+	}
 	digThrough := func() error {
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -325,36 +339,157 @@ func (t *tunnel) markCacheReuseReady() {
 	})
 }
 
-func (t *tunnel) markClientRequestInFlight() {
-	if t != nil {
-		t.clientRequestInFlight.Store(true)
-	}
+type responsePhase uint8
+
+const (
+	responsePhaseFirst responsePhase = iota
+	responsePhaseResult
+	responsePhaseLocalInfile
+	responsePhasePrepareMetadata
+)
+
+func commandHasNoResponse(cmd frontend.CommandType) bool {
+	return cmd == frontend.COM_QUIT ||
+		cmd == frontend.COM_STMT_SEND_LONG_DATA ||
+		cmd == frontend.COM_STMT_CLOSE
 }
 
-func (t *tunnel) clearClientRequestInFlight() {
-	if t != nil {
-		t.clientRequestInFlight.Store(false)
+func (t *tunnel) trackClientRequest(msg []byte) {
+	msg = firstMySQLPacketPrefix(msg)
+	if t == nil || len(msg) < preRecvLen || msg[3] != 0 {
+		return
 	}
+	cmd := frontend.CommandType(msg[4])
+	if commandHasNoResponse(cmd) {
+		return
+	}
+
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.inFlight {
+		// MySQL commands are sequential. Once a peer pipelines two commands we
+		// keep this generation non-cacheable instead of retaining an unbounded
+		// command queue or guessing which response belongs to which request.
+		t.requestBoundary.ambiguous = true
+		return
+	}
+	t.requestBoundary.inFlight = true
+	t.requestBoundary.command = cmd
+	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.legacyResultEOFSeen = false
+	t.requestBoundary.prepareMetadataRemaining = 0
 }
 
 func (t *tunnel) hasInFlightClientRequest() bool {
 	if t == nil {
 		return false
 	}
-	if t.clientRequestInFlight.Load() {
-		return true
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	return t.requestBoundary.inFlight
+}
+
+func (t *tunnel) finishTrackedResponseLocked(status uint16) {
+	if status&frontend.SERVER_MORE_RESULTS_EXISTS != 0 {
+		t.requestBoundary.phase = responsePhaseFirst
+		t.requestBoundary.legacyResultEOFSeen = false
+		return
 	}
-	t.mu.Lock()
-	csp, scp := t.mu.csp, t.mu.scp
-	t.mu.Unlock()
-	if csp == nil || scp == nil {
-		return false
+	t.requestBoundary.inFlight = false
+	t.requestBoundary.command = 0
+	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.legacyResultEOFSeen = false
+	t.requestBoundary.prepareMetadataRemaining = 0
+}
+
+func (t *tunnel) trackServerResponse(msg []byte) {
+	if t == nil {
+		return
 	}
-	csp.mu.Lock()
-	defer csp.mu.Unlock()
-	scp.mu.Lock()
-	defer scp.mu.Unlock()
-	return scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime)
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < preRecvLen {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if !s.inFlight || s.ambiguous {
+		return
+	}
+	if isErrPacket(msg) {
+		t.finishTrackedResponseLocked(0)
+		return
+	}
+
+	switch s.phase {
+	case responsePhasePrepareMetadata:
+		if s.prepareMetadataRemaining > 0 {
+			s.prepareMetadataRemaining--
+		}
+		if s.prepareMetadataRemaining == 0 {
+			t.finishTrackedResponseLocked(0)
+		}
+		return
+	case responsePhaseLocalInfile:
+		if status, ok := okPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status)
+		}
+		return
+	case responsePhaseResult:
+		if t.clientDeprecatesEOF {
+			if status, ok := eofOKPacketStatus(msg); ok {
+				t.finishTrackedResponseLocked(status)
+			}
+			return
+		}
+		status, ok := legacyEOFPacketStatus(msg)
+		if !ok {
+			return
+		}
+		if !s.legacyResultEOFSeen {
+			s.legacyResultEOFSeen = true
+			return
+		}
+		t.finishTrackedResponseLocked(status)
+		return
+	}
+
+	if s.command == frontend.COM_STMT_PREPARE && len(msg) > 4 && msg[4] == 0 {
+		remaining, ok := prepareMetadataPacketCount(msg, t.clientDeprecatesEOF)
+		if !ok {
+			return
+		}
+		if remaining == 0 {
+			t.finishTrackedResponseLocked(0)
+		} else {
+			s.phase = responsePhasePrepareMetadata
+			s.prepareMetadataRemaining = remaining
+		}
+		return
+	}
+	if status, ok := okPacketStatus(msg); ok {
+		t.finishTrackedResponseLocked(status)
+		return
+	}
+	if s.command == frontend.COM_STATISTICS {
+		t.finishTrackedResponseLocked(0)
+		return
+	}
+	if s.command == frontend.COM_FIELD_LIST || s.command == frontend.COM_STMT_FETCH {
+		if status, ok := legacyEOFPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status)
+		} else if status, ok := eofOKPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status)
+		}
+		return
+	}
+	if isLoadDataLocalInfileRespPacket(msg) {
+		s.phase = responsePhaseLocalInfile
+		return
+	}
+	// All other first packets begin a result set. Its terminal packet depends
+	// on CLIENT_DEPRECATE_EOF; row packets cannot release request ownership.
+	s.phase = responsePhaseResult
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -843,11 +978,18 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			return true, nil
 		}
 		packetSize, re := p.src.preRecv()
-		// A fragmented one-byte command may leave only its four-byte header in
-		// the buffer. Read the command byte before event detection so COM_QUIT is
-		// always intercepted and made terminal, independent of TCP framing.
-		if re == nil && p.name == pipeClientToServer && packetSize >= preRecvLen {
-			re = p.src.receiveAtLeast(preRecvLen)
+		// A fragmented packet may leave only its four-byte header in the buffer.
+		// c2s needs the command byte for event detection. s2c needs a bounded
+		// prefix containing both length-encoded OK fields and its status flags;
+		// otherwise a fragmented terminal response would never release request
+		// ownership and every later clean QUIT would unnecessarily miss cache.
+		if re == nil && packetSize >= preRecvLen {
+			prefixLen := preRecvLen
+			if p.name == pipeServerToClient {
+				const responseTrackingPrefixLen = mysqlHeadLen + 1 + 9 + 9 + 2
+				prefixLen = min(packetSize, responseTrackingPrefixLen)
+			}
+			re = p.src.receiveAtLeast(prefixLen)
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -911,9 +1053,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if ok {
 				p.mu.inTxn = inTxn
 			}
-			if isOKPacket(tempBuf) || isErrPacket(tempBuf) {
-				p.tun.clearClientRequestInFlight()
-			}
+			p.tun.trackServerResponse(tempBuf)
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
@@ -932,7 +1072,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			}
 			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
 				if !isCmdQuit(tempBuf) {
-					p.tun.markClientRequestInFlight()
+					p.tun.trackClientRequest(tempBuf)
 				}
 				p.mu.lastCmdTime = time.Now()
 			}
@@ -1149,25 +1289,101 @@ func txnStatus(status uint16) bool {
 
 // handleOKPacket handles the OK packet from server to update the txn state.
 func handleOKPacket(msg []byte, mustOK bool) bool {
-	var mp *frontend.MysqlProtocolImpl
 	// if the mustOK is false, then the sequence ID should be 1 for OK packet.
 	if !mustOK && msg[3] != 1 {
 		return txnStatus(0)
 	}
+	status, ok := okPacketStatus(msg)
+	if !ok {
+		return txnStatus(0)
+	}
+	return txnStatus(status)
+}
+
+func okPacketStatus(msg []byte) (uint16, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	if !isOKPacket(msg) {
+		return 0, false
+	}
+	var mp *frontend.MysqlProtocolImpl
 	pos := 5
 	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
 	if !ok {
-		return txnStatus(0)
+		return 0, false
 	}
 	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
 	if !ok {
-		return txnStatus(0)
+		return 0, false
 	}
 	if len(msg[pos:]) < 2 {
-		return txnStatus(0)
+		return 0, false
 	}
-	status := binary.LittleEndian.Uint16(msg[pos:])
-	return txnStatus(status)
+	return binary.LittleEndian.Uint16(msg[pos:]), true
+}
+
+func eofOKPacketStatus(msg []byte) (uint16, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	payloadLen := mysqlPacketPayloadLength(msg)
+	if len(msg) < 5 || msg[4] != 0xfe || payloadLen < 7 || payloadLen >= 9 {
+		return 0, false
+	}
+	var mp *frontend.MysqlProtocolImpl
+	pos := 5
+	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return 0, false
+	}
+	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
+	if !ok || len(msg[pos:]) < 2 {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint16(msg[pos:]), true
+}
+
+func legacyEOFPacketStatus(msg []byte) (uint16, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < 9 || mysqlPacketPayloadLength(msg) != 5 || msg[4] != 0xfe {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint16(msg[7:9]), true
+}
+
+func mysqlPacketPayloadLength(msg []byte) int {
+	if len(msg) < mysqlHeadLen {
+		return -1
+	}
+	return int(uint32(msg[0]) | uint32(msg[1])<<8 | uint32(msg[2])<<16)
+}
+
+func firstMySQLPacketPrefix(msg []byte) []byte {
+	payloadLen := mysqlPacketPayloadLength(msg)
+	if payloadLen < 0 {
+		return nil
+	}
+	packetLen := mysqlHeadLen + payloadLen
+	if packetLen < len(msg) {
+		return msg[:packetLen]
+	}
+	return msg
+}
+
+func prepareMetadataPacketCount(msg []byte, deprecateEOF bool) (uint32, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < 16 || mysqlPacketPayloadLength(msg) < 12 || msg[4] != 0 {
+		return 0, false
+	}
+	columns := uint32(binary.LittleEndian.Uint16(msg[9:11]))
+	params := uint32(binary.LittleEndian.Uint16(msg[11:13]))
+	remaining := columns + params
+	if !deprecateEOF {
+		if params > 0 {
+			remaining++
+		}
+		if columns > 0 {
+			remaining++
+		}
+	}
+	return remaining, true
 }
 
 // handleEOFPacket handles the EOF packet from server to update the txn state.

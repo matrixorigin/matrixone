@@ -158,6 +158,7 @@ func newMockClientConn(
 func (c *mockClientConn) ConnID() uint32                     { return 0 }
 func (c *mockClientConn) GetSalt() []byte                    { return nil }
 func (c *mockClientConn) GetHandshakePack() *frontend.Packet { return nil }
+func (c *mockClientConn) GetCapability() uint32              { return frontend.DefaultCapability }
 func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(err error)          {}
@@ -262,6 +263,7 @@ func (r *killTestRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t 
 type killCurrentServerConn struct {
 	cn      *CNServer
 	closeFn func() error
+	quitFn  func() error
 }
 
 func (s *killCurrentServerConn) ConnID() uint32 { return s.cn.connID }
@@ -278,7 +280,12 @@ func (s *killCurrentServerConn) GetCNServer() *CNServer   { return s.cn }
 func (s *killCurrentServerConn) SetConnResponse(_ []byte) {}
 func (s *killCurrentServerConn) GetConnResponse() []byte  { return nil }
 func (s *killCurrentServerConn) CreateTime() time.Time    { return time.Now() }
-func (s *killCurrentServerConn) Quit() error              { return nil }
+func (s *killCurrentServerConn) Quit() error {
+	if s.quitFn != nil {
+		return s.quitFn()
+	}
+	return nil
+}
 func (s *killCurrentServerConn) Close() error {
 	if s.closeFn != nil {
 		return s.closeFn()
@@ -463,6 +470,77 @@ func TestClientConn_HandleQuitEventMarksExpectedCacheQuit(t *testing.T) {
 	e.wait()
 	require.NoError(t, <-errC)
 	require.True(t, tun.hasExpectedCacheQuit())
+}
+
+func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.csp = &pipe{}
+	tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+	tun.trackClientRequest(makeSimplePacket("select 1"))
+
+	var pushed, closed, quit int
+	c := &clientConn{
+		log: runtime.DefaultRuntime().Logger(),
+		tun: tun,
+		sc: &killCurrentServerConn{
+			cn: &CNServer{connID: 11, uuid: "cn1"},
+			closeFn: func() error {
+				closed++
+				return nil
+			},
+			quitFn: func() error {
+				quit++
+				return nil
+			},
+		},
+		connCache: &mockConnCache{
+			pushFn: func(cacheKey, ServerConn) bool {
+				pushed++
+				return true
+			},
+		},
+	}
+
+	require.NoError(t, c.handleQuitCommand(context.Background()))
+	require.Zero(t, pushed, "an outstanding response must keep the backend out of the cache")
+	require.Equal(t, 1, closed)
+	require.Zero(t, quit, "discard cleanup must not wait for a protocol-level QUIT response")
+	require.False(t, c.isConnCached())
+}
+
+func TestClientConn_HandleQuitEventClosesRejectedCacheEntry(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.csp = &pipe{}
+	tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+
+	var closed, quit int
+	c := &clientConn{
+		log: runtime.DefaultRuntime().Logger(),
+		tun: tun,
+		sc: &killCurrentServerConn{
+			cn: &CNServer{connID: 11, uuid: "cn1"},
+			closeFn: func() error {
+				closed++
+				return nil
+			},
+			quitFn: func() error {
+				quit++
+				return nil
+			},
+		},
+		connCache: &mockConnCache{
+			pushFn: func(cacheKey, ServerConn) bool { return false },
+		},
+	}
+
+	require.NoError(t, c.handleQuitCommand(context.Background()))
+	require.Equal(t, 1, closed)
+	require.Zero(t, quit, "cache rejection must not add an unbounded backend read")
+	require.False(t, c.isConnCached())
 }
 
 func copyCNServer(dst, src *CNServer) {

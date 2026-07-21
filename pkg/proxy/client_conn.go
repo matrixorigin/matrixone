@@ -390,6 +390,11 @@ func (c *clientConn) GetHandshakePack() *frontend.Packet {
 	return &pack
 }
 
+// GetCapability returns the negotiated MySQL client capabilities.
+func (c *clientConn) GetCapability() uint32 {
+	return c.mysqlProto.GetCapability()
+}
+
 // RawConn implements the ClientConn interface.
 func (c *clientConn) RawConn() net.Conn {
 	if c != nil {
@@ -790,10 +795,19 @@ func (c *clientConn) handleQuitCommand(ctx context.Context) error {
 func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe bool) error {
 	c.quit.once.Do(func() {
 		csp, scp := c.tun.getPipes()
-		abort := func(cause error) {
-			if err := c.sc.Quit(); err != nil {
-				c.log.Error("failed to quit from cn server", zap.Error(err))
+		discardBackend := func() {
+			if c.sc == nil {
+				return
 			}
+			// This backend is no longer reusable. Close the transport directly:
+			// sending COM_QUIT and waiting for EOF here can hang forever on an
+			// unhealthy CN and retain the handler, admission slot and cache barrier.
+			if err := c.sc.Close(); err != nil {
+				c.log.Error("failed to close cn server connection", zap.Error(err))
+			}
+		}
+		abort := func(cause error) {
+			discardBackend()
 			c.quit.err = cause
 		}
 		// Bound pipe shutdown to avoid hanging the close path if either
@@ -822,12 +836,19 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 				return
 			}
 		}
+		// COM_QUIT is cacheable only at a clean request/response boundary. A
+		// client can pipeline QUIT behind an outstanding query; pausing s2c then
+		// publishing that backend would leave the old response in the socket for
+		// the next generation's SET CONNECTION ID to consume. With c2s sealed and
+		// s2c stopped this state can no longer change, so discard conservatively.
+		if c.tun.hasInFlightClientRequest() {
+			discardBackend()
+			return
+		}
 		// c2s is terminal and s2c is paused, so no pipe from the originating
 		// generation can issue a command or consume a reset response after Push.
 		if !c.connCache.Push(c.clientInfo.hash, c.sc) {
-			if err := c.sc.Quit(); err != nil {
-				c.log.Error("failed to quit from cn server", zap.Error(err))
-			}
+			discardBackend()
 		} else {
 			c.quit.cached = true
 		}

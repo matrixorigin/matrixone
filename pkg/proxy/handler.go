@@ -323,9 +323,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 			serverC = sc
 		}
 		if serverC != nil {
-			if err := serverC.Quit(); err != nil {
-				_ = serverC.Close()
-			}
+			// This connection was not admitted to the cache. A protocol QUIT can
+			// wait indefinitely for a broken CN to close its side; direct Close is
+			// the terminal ownership edge and also removes connManager state.
+			_ = serverC.Close()
 		}
 	}()
 

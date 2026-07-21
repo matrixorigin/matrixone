@@ -1188,6 +1188,254 @@ func TestCheckTxnStatus(t *testing.T) {
 	})
 }
 
+func makeLegacyEOFPacket(status uint16) []byte {
+	msg := make([]byte, 9)
+	msg[0] = 5
+	msg[3] = 1
+	msg[4] = 0xfe
+	binary.LittleEndian.PutUint16(msg[7:9], status)
+	return msg
+}
+
+func makeDeprecatedEOFPacket(status uint16) []byte {
+	msg := make([]byte, 12)
+	msg[0] = 8
+	msg[3] = 1
+	msg[4] = 0xfe
+	// affected rows and last insert ID are both zero-length-encoded integers.
+	binary.LittleEndian.PutUint16(msg[7:9], status)
+	return msg
+}
+
+func makePrepareOKPacket(columns, params uint16) []byte {
+	msg := make([]byte, 16)
+	msg[0] = 12
+	msg[3] = 1
+	msg[4] = 0
+	binary.LittleEndian.PutUint32(msg[5:9], 1)
+	binary.LittleEndian.PutUint16(msg[9:11], columns)
+	binary.LittleEndian.PutUint16(msg[11:13], params)
+	return msg
+}
+
+func TestTunnelRequestBoundaryTracker(t *testing.T) {
+	t.Run("invalid and response-free packets", func(t *testing.T) {
+		var nilTunnel *tunnel
+		nilTunnel.trackClientRequest(nil)
+		nilTunnel.trackServerResponse(nil)
+
+		tun := &tunnel{}
+		tun.trackClientRequest(nil)
+		nonCommand := makeSimplePacket("continuation")
+		nonCommand[3] = 1
+		tun.trackClientRequest(nonCommand)
+		for _, cmd := range []frontend.CommandType{
+			frontend.COM_QUIT,
+			frontend.COM_STMT_SEND_LONG_DATA,
+			frontend.COM_STMT_CLOSE,
+		} {
+			packet := makeSimplePacket("no response")
+			packet[4] = byte(cmd)
+			tun.trackClientRequest(packet)
+		}
+		require.False(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("error response", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("select invalid"))
+		tun.trackServerResponse(makeErrPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("simple OK", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("insert into t values (1)"))
+		require.True(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("multi-result OK", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("call p()"))
+		intermediate := makeOKPacket(8)
+		binary.LittleEndian.PutUint16(intermediate[7:9], frontend.SERVER_MORE_RESULTS_EXISTS)
+		tun.trackServerResponse(intermediate)
+		require.True(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("legacy result EOF", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("select 1"))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.True(t, tun.hasInFlightClientRequest(), "the column EOF is not terminal")
+		tun.trackServerResponse(makeSimplePacket("row"))
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("deprecated EOF result", func(t *testing.T) {
+		tun := &tunnel{clientDeprecatesEOF: true}
+		tun.trackClientRequest(makeSimplePacket("select 1"))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("row"))
+		tun.trackServerResponse(makeDeprecatedEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("prepared statement metadata", func(t *testing.T) {
+		tun := &tunnel{}
+		prepare := makeSimplePacket("select ?")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		tun.trackClientRequest(prepare)
+		tun.trackServerResponse(makePrepareOKPacket(1, 1))
+		for i := 0; i < 3; i++ {
+			tun.trackServerResponse(makeSimplePacket("metadata"))
+			require.True(t, tun.hasInFlightClientRequest())
+		}
+		tun.trackServerResponse(makeSimplePacket("metadata"))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("prepared statement without metadata", func(t *testing.T) {
+		tun := &tunnel{}
+		prepare := makeSimplePacket("do 1")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		tun.trackClientRequest(prepare)
+		tun.trackServerResponse(makePrepareOKPacket(0, 0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("deprecated prepared metadata", func(t *testing.T) {
+		tun := &tunnel{clientDeprecatesEOF: true}
+		prepare := makeSimplePacket("select ?")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		tun.trackClientRequest(prepare)
+		tun.trackServerResponse(makePrepareOKPacket(1, 1))
+		tun.trackServerResponse(makeSimplePacket("parameter"))
+		require.True(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeSimplePacket("column"))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("local infile", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("load data local infile"))
+		request := makeSimplePacket("file name")
+		request[4] = 0xfb
+		tun.trackServerResponse(request)
+		tun.trackServerResponse(makeSimplePacket("not terminal"))
+		require.True(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("single-packet and EOF commands", func(t *testing.T) {
+		statistics := makeSimplePacket("statistics")
+		statistics[4] = byte(frontend.COM_STATISTICS)
+		tun := &tunnel{}
+		tun.trackClientRequest(statistics)
+		tun.trackServerResponse(makeSimplePacket("uptime"))
+		require.False(t, tun.hasInFlightClientRequest())
+
+		fieldList := makeSimplePacket("fields")
+		fieldList[4] = byte(frontend.COM_FIELD_LIST)
+		tun.trackClientRequest(fieldList)
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+
+		tun.clientDeprecatesEOF = true
+		tun.trackClientRequest(fieldList)
+		tun.trackServerResponse(makeDeprecatedEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("pipelined commands stay non-cacheable", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("select 1"))
+		tun.trackClientRequest(makeSimplePacket("select 2"))
+		tun.trackServerResponse(makeOKPacket(8))
+		tun.trackServerResponse(makeOKPacket(8))
+		require.True(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("malformed OK stays conservative", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("insert"))
+		tun.trackServerResponse(makeOKPacket(1))
+		require.True(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("coalesced packets cannot borrow framing", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("insert"))
+		coalesced := append([]byte{0, 0, 0, 1}, makeErrPacket(8)...)
+		tun.trackServerResponse(coalesced)
+		require.True(t, tun.hasInFlightClientRequest(),
+			"an empty first packet must not borrow the next packet's type byte")
+
+		coalesced = append(makeOKPacket(8), makeErrPacket(8)...)
+		tun.trackServerResponse(coalesced)
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+}
+
+func TestPipeTracksFragmentedTerminalResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backendProxy, backend := net.Pipe()
+	defer backendProxy.Close()
+	defer backend.Close()
+	clientProxy, client := net.Pipe()
+	defer clientProxy.Close()
+	defer client.Close()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	tun := newTunnel(ctx, rt.Logger(), newCounterSet())
+	backendConn := newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 1)
+	clientConn := newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 2)
+	scp := tun.newPipe(pipeServerToClient, backendConn, clientConn)
+	csp := tun.newPipe(pipeClientToServer, clientConn, backendConn)
+	tun.trackClientRequest(makeSimplePacket("insert"))
+
+	pipeDone := make(chan error, 1)
+	go func() { pipeDone <- scp.kickoff(ctx, csp) }()
+	require.NoError(t, scp.waitReady(ctx))
+
+	ok := makeOKPacket(8)
+	writeDone := make(chan error, 1)
+	go func() {
+		if _, err := backend.Write(ok[:mysqlHeadLen]); err != nil {
+			writeDone <- err
+			return
+		}
+		_, err := backend.Write(ok[mysqlHeadLen:])
+		writeDone <- err
+	}()
+	got := make([]byte, len(ok))
+	_, err := io.ReadFull(client, got)
+	require.NoError(t, err)
+	require.Equal(t, ok, got)
+	require.NoError(t, <-writeDone)
+	require.False(t, tun.hasInFlightClientRequest(),
+		"a response split immediately after its header must still close the request boundary")
+
+	require.NoError(t, backend.Close())
+	select {
+	case err := <-pipeDone:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(time.Second):
+		t.Fatal("server-to-client pipe did not stop")
+	}
+}
+
 func Test_transfer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
