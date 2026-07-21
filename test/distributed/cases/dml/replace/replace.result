@@ -337,6 +337,23 @@ id    pid
 10    null
 drop table fk_sc;
 drop table fk_sp;
+drop table if exists fk_dup_sc;
+drop table if exists fk_dup_sp;
+create table fk_dup_sp(id int primary key);
+create table fk_dup_sc(pid1 int, pid2 int, note int,
+foreign key(pid1) references fk_dup_sp(id) on delete set null,
+foreign key(pid2) references fk_dup_sp(id) on delete set null);
+insert into fk_dup_sp values (1);
+insert into fk_dup_sc values (1,1,7),(1,1,7);
+replace into fk_dup_sp values (1);
+select count(*) from fk_dup_sc where pid1 is null and pid2 is null and note = 7;
+count(*)
+2
+select count(*) from fk_dup_sc where pid1 = 1 or pid2 = 1;
+count(*)
+0
+drop table fk_dup_sc;
+drop table fk_dup_sp;
 drop table if exists fk_dc;
 drop table if exists fk_dp;
 create table fk_dp(id int primary key, v varchar(20));

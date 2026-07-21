@@ -4114,7 +4114,8 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 
 func TestReplaceParentSideFKCombinesSetNullActions(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	child := mock.ctxt.tables["replace_fk_sc"]
+	child := DeepCopyTableDef(mock.ctxt.tables["replace_fk_sc"], true)
+	mock.ctxt.tables["replace_fk_sc"] = child
 	if child.Name2ColIndex == nil {
 		child.Name2ColIndex = make(map[string]int32)
 		for i, col := range child.Cols {
@@ -4138,14 +4139,145 @@ func TestReplaceParentSideFKCombinesSetNullActions(t *testing.T) {
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	updates := 0
+	foundPhysicalRowGrouping := false
 	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_AGG && len(node.GroupBy) == len(child.Cols) {
+			rowIDGroup := node.GroupBy[child.Name2ColIndex[catalog.Row_ID]].GetCol()
+			if rowIDGroup != nil && rowIDGroup.Name == catalog.Row_ID {
+				foundPhysicalRowGrouping = true
+			}
+		}
 		if node.NodeType == plan.Node_INSERT && node.InsertCtx != nil &&
 			node.InsertCtx.TableDef != nil && node.InsertCtx.TableDef.Name == "replace_fk_sc" {
 			updates++
 		}
 	}
+	assert.True(t, foundPhysicalRowGrouping,
+		"combined SET NULL actions must group by Row_ID so physically distinct duplicate rows remain distinct")
 	require.Equal(t, 1, updates,
 		"all SET NULL columns for one child row must be emitted by one base-table update")
+}
+
+func TestReplaceRecursiveCascadeLocksReferencedUniqueIndexKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	cascadeChild := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cc"], true)
+	mock.ctxt.tables["replace_fk_cc"] = cascadeChild
+	rootObj := mock.ctxt.objects["replace_fk_cp"]
+
+	if cascadeChild.Name2ColIndex == nil {
+		cascadeChild.Name2ColIndex = make(map[string]int32, len(cascadeChild.Cols)+1)
+	}
+	rowIDPos := int32(-1)
+	for i, col := range cascadeChild.Cols {
+		cascadeChild.Name2ColIndex[col.Name] = int32(i)
+		if col.Name == catalog.Row_ID {
+			rowIDPos = int32(i)
+		}
+	}
+	require.GreaterOrEqual(t, rowIDPos, int32(0))
+	cascadeChild.Cols = append(cascadeChild.Cols, nil)
+	copy(cascadeChild.Cols[rowIDPos+1:], cascadeChild.Cols[rowIDPos:])
+	cascadeChild.Cols[rowIDPos] = &plan.ColDef{
+		Name: "u", ColId: 10, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20},
+	}
+	for i, col := range cascadeChild.Cols {
+		cascadeChild.Name2ColIndex[col.Name] = int32(i)
+	}
+	const (
+		indexTableID = uint64(77911)
+		grandchildID = uint64(77912)
+	)
+	indexTableName := "__mo_index_replace_fk_cc_u"
+	cascadeChild.Indexes = append(cascadeChild.Indexes, &plan.IndexDef{
+		IndexName: "uk_u", IndexTableName: indexTableName, Parts: []string{"u"},
+		Unique: true, TableExist: true, IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+	})
+	cascadeChild.RefChildTbls = []uint64{grandchildID}
+
+	indexTable := &plan.TableDef{
+		TblId: indexTableID, Name: indexTableName,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, ColId: 0,
+				Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: catalog.Row_ID, ColId: 1, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_Rowid), Width: 16}},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.IndexTableIndexColName},
+			PkeyColName: catalog.IndexTableIndexColName},
+		Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.Row_ID: 1},
+	}
+	grandchild := &plan.TableDef{
+		TblId: grandchildID, Name: "replace_fk_gc",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 0, Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
+			{Name: "cu", ColId: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: catalog.Row_ID, ColId: 2, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid), Width: 16}},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name: "fk_replace_gc", Cols: []uint64{1}, ForeignTbl: cascadeChild.TblId,
+			ForeignCols: []uint64{10}, OnDelete: plan.ForeignKeyDef_RESTRICT,
+			OnUpdate: plan.ForeignKeyDef_RESTRICT,
+		}},
+		Name2ColIndex: map[string]int32{"id": 0, "cu": 1, catalog.Row_ID: 2},
+	}
+	registerTable := func(tableDef *plan.TableDef) {
+		mock.ctxt.tables[tableDef.Name] = tableDef
+		mock.ctxt.objects[tableDef.Name] = &plan.ObjectRef{
+			Obj: int64(tableDef.TblId), SchemaName: rootObj.SchemaName, ObjName: tableDef.Name,
+		}
+		mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
+	}
+	registerTable(indexTable)
+	registerTable(grandchild)
+
+	builder := NewQueryBuilder(plan.Query_DELETE, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	sourceTag := builder.genNewBindTag()
+	sourceProject := make([]*plan.Expr, len(cascadeChild.Cols))
+	for i, col := range cascadeChild.Cols {
+		sourceProject[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: sourceTag, ColPos: int32(i), Name: col.Name,
+		}}}
+	}
+	sourceNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[cascadeChild.Name],
+		TableDef: cascadeChild, ProjectList: sourceProject, BindingTags: []int32{sourceTag},
+	}, bindCtx)
+	delCtx := &dmlPlanCtx{
+		objRef: mock.ctxt.objects[cascadeChild.Name], tableDef: cascadeChild, sourceTag: sourceTag,
+	}
+	outputNodeID, err := appendRecursiveCascadeLockNode(builder, bindCtx, delCtx, sourceNodeID)
+	require.NoError(t, err)
+	builder.appendStep(outputNodeID)
+	query, err := builder.createQuery()
+	require.NoError(t, err)
+	foundBaseLock := false
+	foundUniqueLock := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+		for _, target := range node.LockTargets {
+			if target.Mode != lockpb.LockMode_Exclusive {
+				continue
+			}
+			if target.TableId == cascadeChild.TblId {
+				foundBaseLock = true
+			}
+			if target.TableId == indexTableID {
+				foundUniqueLock = true
+				require.Len(t, node.Children, 1)
+				lockInput := query.Nodes[node.Children[0]]
+				require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
+				assert.Equal(t, target.PrimaryColTyp.Id,
+					lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
+			}
+		}
+	}
+	assert.True(t, foundBaseLock, "recursive cascade must lock the current table primary key")
+	assert.True(t, foundUniqueLock,
+		"recursive cascade must lock the hidden UNIQUE namespace referenced by the grandchild")
 }
 
 func TestReplaceParentSideFKNonLiteralSkip(t *testing.T) {

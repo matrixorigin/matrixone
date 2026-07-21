@@ -346,6 +346,227 @@ func checkDeleteOptToTruncate(ctx CompilerContext) (bool, error) {
 	}
 }
 
+func appendRecursiveCascadeLockNode(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	delCtx *dmlPlanCtx,
+	sourceNodeID int32,
+) (int32, error) {
+	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
+	if pkPos < 0 {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "cascade lock key is unavailable for table %s", delCtx.tableDef.Name)
+	}
+
+	lockTag := delCtx.sourceTag
+	var rowProject []*plan.Expr
+	if lockTag != 0 {
+		rowProject = getProjectionByLastNodeWithTag(builder, sourceNodeID, lockTag)
+	} else {
+		rowProject = getProjectionByLastNode(builder, sourceNodeID)
+	}
+	lockProject := slices.Clone(rowProject)
+	lockTargets := []*plan.LockTarget{{
+		TableId: delCtx.tableDef.TblId, ObjRef: delCtx.objRef,
+		PrimaryColIdxInBat: int32(pkPos), PrimaryColRelPos: lockTag,
+		PrimaryColTyp: pkTyp, Mode: lockpb.LockMode_Exclusive,
+	}}
+	targetTables := map[uint64]struct{}{delCtx.tableDef.TblId: {}}
+	baseTableLock := false
+
+	parentColName := make(map[uint64]string, len(delCtx.tableDef.Cols))
+	parentColPos := make(map[string]int32, len(delCtx.tableDef.Cols))
+	for i, col := range delCtx.tableDef.Cols {
+		parentColName[col.ColId] = col.Name
+		parentColPos[col.Name] = int32(i)
+	}
+	var pkeyNames []string
+	if delCtx.tableDef.Pkey != nil {
+		pkeyNames = delCtx.tableDef.Pkey.Names
+		if len(pkeyNames) == 0 && delCtx.tableDef.Pkey.PkeyColName != "" {
+			pkeyNames = []string{delCtx.tableDef.Pkey.PkeyColName}
+		}
+	}
+	partsEqual := func(parts, names []string) bool {
+		if len(parts) != len(names) {
+			return false
+		}
+		for i := range parts {
+			if catalog.ResolveAlias(parts[i]) != catalog.ResolveAlias(names[i]) {
+				return false
+			}
+		}
+		return true
+	}
+
+	seenChild := make(map[uint64]struct{}, len(delCtx.tableDef.RefChildTbls))
+	for _, childTableID := range delCtx.tableDef.RefChildTbls {
+		if _, ok := seenChild[childTableID]; ok {
+			continue
+		}
+		seenChild[childTableID] = struct{}{}
+		var childTableDef *plan.TableDef
+		var err error
+		if childTableID == 0 {
+			childTableDef = delCtx.tableDef
+		} else {
+			_, childTableDef, err = builder.compCtx.ResolveById(childTableID, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if childTableDef == nil {
+			return 0, moerr.NewInternalErrorf(
+				builder.GetContext(), "cascade child table %d is unavailable", childTableID)
+		}
+		for _, fk := range childTableDef.Fkeys {
+			selfRefer := fk.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
+			if fk.ForeignTbl != delCtx.tableDef.TblId && !selfRefer {
+				continue
+			}
+			referencedNames := make([]string, len(fk.ForeignCols))
+			for i, colID := range fk.ForeignCols {
+				name, ok := parentColName[colID]
+				if !ok {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(),
+						"foreign-key referenced column %d is unavailable in table %s", colID, delCtx.tableDef.Name)
+				}
+				referencedNames[i] = name
+			}
+			if partsEqual(pkeyNames, referencedNames) {
+				continue
+			}
+
+			var matchedIndex *plan.IndexDef
+			for _, idxDef := range delCtx.tableDef.Indexes {
+				if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+					matchedIndex = idxDef
+					break
+				}
+			}
+			if matchedIndex == nil {
+				if !baseTableLock {
+					lockTargets = append(lockTargets, &plan.LockTarget{
+						TableId: delCtx.tableDef.TblId, ObjRef: delCtx.objRef,
+						PrimaryColIdxInBat: int32(pkPos), PrimaryColRelPos: lockTag,
+						PrimaryColTyp: pkTyp, Mode: lockpb.LockMode_Exclusive, LockTable: true,
+					})
+					baseTableLock = true
+				}
+				continue
+			}
+
+			indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(
+				delCtx.objRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
+			if _, ok := targetTables[indexTableDef.TblId]; ok {
+				continue
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(matchedIndex.IndexAlgoParams)
+			if err != nil {
+				return 0, err
+			}
+			keyParts := make([]*plan.Expr, len(referencedNames))
+			for i, name := range referencedNames {
+				pos, ok := parentColPos[name]
+				if !ok {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(),
+						"foreign-key referenced column %s is unavailable in table %s", name, delCtx.tableDef.Name)
+				}
+				inputExpr := &plan.Expr{Typ: delCtx.tableDef.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: lockTag, ColPos: pos, Name: name,
+				}}}
+				keyParts[i], err = builder.makeIndexPartExprFromInputExpr(inputExpr, name, prefixLengths)
+				if err != nil {
+					return 0, err
+				}
+			}
+			var keyExpr *plan.Expr
+			if indexTableStoresSerializedKey(matchedIndex) {
+				keyExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				keyExpr = keyParts[0]
+			}
+			indexPkPos, indexPkTyp := getPkPos(indexTableDef, false)
+			if indexPkPos < 0 {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(),
+					"cascade lock index table %s has no primary key", indexTableDef.Name)
+			}
+			lockProject = append(lockProject, keyExpr)
+			lockTargets = append(lockTargets, &plan.LockTarget{
+				TableId: indexTableDef.TblId, ObjRef: indexObjRef,
+				PrimaryColIdxInBat: int32(len(lockProject) - 1), PrimaryColRelPos: lockTag,
+				PrimaryColTyp: indexPkTyp, Mode: lockpb.LockMode_Exclusive,
+			})
+			targetTables[indexTableDef.TblId] = struct{}{}
+		}
+	}
+
+	slices.SortStableFunc(lockTargets, func(left, right *plan.LockTarget) int {
+		if left.TableId < right.TableId {
+			return -1
+		}
+		if left.TableId > right.TableId {
+			return 1
+		}
+		if !left.LockTable && right.LockTable {
+			return -1
+		}
+		if left.LockTable && !right.LockTable {
+			return 1
+		}
+		return 0
+	})
+	if len(lockProject) > len(rowProject) {
+		sourceNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{sourceNodeID},
+			ProjectList: lockProject, BindingTags: func() []int32 {
+				if lockTag == 0 {
+					return nil
+				}
+				return []int32{lockTag}
+			}(),
+		}, bindCtx)
+	}
+	lockedNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_LOCK_OP, Children: []int32{sourceNodeID},
+		TableDef: delCtx.tableDef, BindingTags: func() []int32 {
+			if lockTag == 0 {
+				return nil
+			}
+			return []int32{lockTag}
+		}(),
+		LockTargets: lockTargets,
+	}, bindCtx)
+	if builder.preserveLockProjection == nil {
+		builder.preserveLockProjection = make(map[int32]struct{})
+	}
+	builder.preserveLockProjection[lockedNodeID] = struct{}{}
+	if len(lockProject) > len(rowProject) {
+		var lockedProject []*plan.Expr
+		if lockTag != 0 {
+			lockedProject = getProjectionByLastNodeWithTag(builder, lockedNodeID, lockTag)
+		} else {
+			lockedProject = getProjectionByLastNode(builder, lockedNodeID)
+		}
+		lockedNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lockedNodeID},
+			ProjectList: slices.Clone(lockedProject[:len(rowProject)]), BindingTags: func() []int32 {
+				if lockTag == 0 {
+					return nil
+				}
+				return []int32{lockTag}
+			}(),
+		}, bindCtx)
+	}
+	return lockedNodeID, nil
+}
+
 // buildDeletePlans  build preinsert plan.
 /*
 	[o1]sink_scan -> join[u1] -> sink
@@ -383,28 +604,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	if delCtx.isFkRecursionCall && len(delCtx.tableDef.RefChildTbls) > 0 {
 		lockedSourceID := appendDeleteSourceScan()
-		pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
-		if pkPos < 0 {
-			return moerr.NewInternalErrorf(
-				builder.GetContext(), "cascade lock key is unavailable for table %s", delCtx.tableDef.Name)
-		}
 		lockTag := delCtx.sourceTag
-		lockedSourceID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_LOCK_OP,
-			Children: []int32{lockedSourceID},
-			TableDef: delCtx.tableDef,
-			BindingTags: func() []int32 {
-				if lockTag == 0 {
-					return nil
-				}
-				return []int32{lockTag}
-			}(),
-			LockTargets: []*plan.LockTarget{{
-				TableId: delCtx.tableDef.TblId, ObjRef: delCtx.objRef,
-				PrimaryColIdxInBat: int32(pkPos), PrimaryColRelPos: lockTag,
-				PrimaryColTyp: pkTyp, Mode: lockpb.LockMode_Exclusive,
-			}},
-		}, bindCtx)
+		var err error
+		lockedSourceID, err = appendRecursiveCascadeLockNode(builder, bindCtx, delCtx, lockedSourceID)
+		if err != nil {
+			return err
+		}
 		if builder.preserveLockProjection == nil {
 			builder.preserveLockProjection = make(map[int32]struct{})
 		}
@@ -678,34 +883,27 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						})
 					}
 					joinProjection = append(joinProjection, DeepCopyExprList(fkMatches)...)
+					combinedTag := builder.genNewBindTag()
 					combinedNodeID := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN, Children: []int32{childNodeID, parentNodeID},
 						JoinType: plan.Node_INNER, OnList: []*Expr{anyMatch},
 						ProjectList: joinProjection,
 					}, bindCtx)
+					combinedNodeID = builder.appendNode(&plan.Node{
+						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
+						ProjectList: getProjectionByLastNode(builder, combinedNodeID), BindingTags: []int32{combinedTag},
+					}, bindCtx)
 					groupTag := builder.genNewBindTag()
-					aggTag := builder.genNewBindTag()
-					groupBy := make([]*Expr, 0, len(childTableDef.Cols)-1)
+					groupBy := make([]*Expr, 0, len(childTableDef.Cols))
 					for i, col := range childTableDef.Cols {
-						if col.Name == catalog.Row_ID {
-							continue
-						}
 						groupBy = append(groupBy, &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: 0, ColPos: int32(i), Name: col.Name,
+							RelPos: combinedTag, ColPos: int32(i), Name: col.Name,
 						}}})
 					}
-					rowIDExpr := &Expr{Typ: childTableDef.Cols[childRowIdPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-						RelPos: 0, ColPos: int32(childRowIdPos), Name: catalog.Row_ID,
-					}}}
-					rowIDAgg, bindErr := BindFuncExprImplByPlanExpr(
-						builder.GetContext(), "any_value", []*Expr{rowIDExpr})
-					if bindErr != nil {
-						return bindErr
-					}
-					aggList := []*Expr{rowIDAgg}
+					aggList := make([]*Expr, 0, len(fkMatches))
 					for i := range fkMatches {
 						marker := &Expr{Typ: fkMatches[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: 0, ColPos: int32(len(childTableDef.Cols) + i),
+							RelPos: combinedTag, ColPos: int32(len(childTableDef.Cols) + i),
 						}}}
 						markerAgg, bindErr := BindFuncExprImplByPlanExpr(
 							builder.GetContext(), "max", []*Expr{marker})
@@ -714,10 +912,25 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 						aggList = append(aggList, markerAgg)
 					}
+					aggProject := make([]*Expr, 0, len(groupBy)+len(aggList))
+					for i, expr := range groupBy {
+						aggProject = append(aggProject, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: -2, ColPos: int32(i),
+						}}})
+					}
+					for i, expr := range aggList {
+						aggProject = append(aggProject, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: -2, ColPos: int32(len(groupBy) + i),
+						}}})
+					}
 					combinedNodeID = builder.appendNode(&plan.Node{
 						NodeType: plan.Node_AGG, Children: []int32{combinedNodeID},
-						GroupBy: groupBy, AggList: aggList, BindingTags: []int32{groupTag, aggTag},
+						GroupBy: groupBy, AggList: aggList, ProjectList: aggProject,
 						SpillMem: builder.aggSpillMem,
+					}, bindCtx)
+					combinedNodeID = builder.appendNode(&plan.Node{
+						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
+						ProjectList: getProjectionByLastNode(builder, combinedNodeID), BindingTags: []int32{groupTag},
 					}, bindCtx)
 
 					updateMap := make(map[string]int)
@@ -726,7 +939,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					for i, col := range childTableDef.Cols {
 						if col.Name == catalog.Row_ID {
 							projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: aggTag, ColPos: 0, Name: col.Name,
+								RelPos: groupTag, ColPos: int32(i), Name: col.Name,
 							}}}
 						} else {
 							projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
@@ -738,7 +951,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						var matched *Expr
 						for _, markerIdx := range markers {
 							marker := &Expr{Typ: fkMatches[markerIdx].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: aggTag, ColPos: int32(markerIdx + 1),
+								RelPos: groupTag, ColPos: int32(len(childTableDef.Cols) + markerIdx),
 							}}}
 							if matched == nil {
 								matched = marker
