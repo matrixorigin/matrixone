@@ -65,7 +65,6 @@ func TestCloseCNServiceStepsAttemptsAllAndAggregatesErrors(t *testing.T) {
 
 	closeSteps := make([]func() error, 0, len(steps))
 	for _, step := range steps {
-		step := step
 		closeSteps = append(closeSteps, func() error {
 			calls = append(calls, step.name)
 			return step.err
