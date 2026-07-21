@@ -629,17 +629,26 @@ func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameCla
 }
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
+	partitionStart, partitionEnd := start, end
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
 		start = rowIdx
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
 			pre := frame.Start.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			start = rowIdx - int(pre)
+			if pre >= uint64(rowIdx-partitionStart) {
+				start = partitionStart
+			} else {
+				start = rowIdx - int(pre)
+			}
 		}
 	case plan.FrameBound_FOLLOWING:
 		fol := frame.Start.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-		start = rowIdx + int(fol)
+		if fol >= uint64(partitionEnd-rowIdx) {
+			start = partitionEnd
+		} else {
+			start = rowIdx + int(fol)
+		}
 	}
 
 	switch frame.End.Type {
@@ -647,11 +656,19 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 		end = rowIdx + 1
 	case plan.FrameBound_PRECEDING:
 		pre := frame.End.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-		end = rowIdx - int(pre) + 1
+		if pre >= uint64(rowIdx-partitionStart+1) {
+			end = partitionStart
+		} else {
+			end = rowIdx - int(pre) + 1
+		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
 			fol := frame.End.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			end = rowIdx + int(fol) + 1
+			if fol >= uint64(partitionEnd-rowIdx) {
+				end = partitionEnd
+			} else {
+				end = rowIdx + int(fol) + 1
+			}
 		}
 	}
 	return start, end
