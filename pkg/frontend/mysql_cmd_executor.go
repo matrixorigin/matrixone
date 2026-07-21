@@ -159,6 +159,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		envStmt = redactStatementTextForLogging(statement, envStmt)
 
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
@@ -269,6 +270,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	switch statement.(type) {
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog:
+		return tree.String(statement, dialect.MYSQL)
+	default:
+		return text
+	}
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {

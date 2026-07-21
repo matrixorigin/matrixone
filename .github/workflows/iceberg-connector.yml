@@ -1,0 +1,72 @@
+name: Iceberg Connector E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/iceberg-connector.yml'
+      - 'Makefile'
+      - 'optools/iceberg_ci.bash'
+      - 'optools/iceberg_external_runner.py'
+      - 'etc/launch-minio-local/**'
+      - 'test/iceberg/**'
+      - 'pkg/iceberg/**'
+      - 'pkg/sql/iceberg/**'
+      - 'pkg/sql/plan/**'
+      - 'pkg/sql/compile/**'
+      - 'pkg/frontend/**'
+      - 'pkg/sql/parsers/**'
+      - 'pkg/config/**'
+      - 'pkg/bootstrap/**'
+      - 'pkg/sql/colexec/external/**'
+      - 'pkg/sql/colexec/icebergdelete/**'
+      - 'pkg/sql/colexec/icebergwrite/**'
+      - 'pkg/embed/**'
+      - 'cmd/mo-service/**'
+      - 'pkg/cnservice/**'
+      - 'proto/pipeline.proto'
+      - 'pkg/pb/pipeline/**'
+
+permissions:
+  contents: read
+
+jobs:
+  iceberg-e2e-local:
+    name: Iceberg E2E Local
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      MO_ICEBERG_REPORT_DIR: test/iceberg/reports/iceberg-e2e-local-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run local Nessie/MinIO/MO Iceberg E2E
+        run: make test-iceberg-e2e-local
+
+      - name: Summarize Iceberg E2E
+        if: always()
+        run: |
+          {
+            echo "## Iceberg E2E local"
+            echo ""
+            echo "Mode: advisory / non-blocking"
+            echo "Artifact: \`iceberg-e2e-local-${{ github.sha }}-${{ github.run_id }}\`"
+            echo ""
+            if [ -f "${MO_ICEBERG_REPORT_DIR}/summary.md" ]; then
+              cat "${MO_ICEBERG_REPORT_DIR}/summary.md"
+            else
+              echo "No summary was created."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iceberg-e2e-local-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            test/iceberg/reports/**

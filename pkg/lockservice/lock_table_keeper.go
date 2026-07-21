@@ -266,10 +266,7 @@ func (k *lockTableKeeper) invalidateRemoteBind(
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
-	if k.service.isStatus(pb.Status_ServiceLockWaiting) &&
-		k.service.activeTxnHolder.empty() {
-		k.service.setStatus(pb.Status_ServiceUnLockSucc)
-	}
+	k.service.tryCompleteDrain()
 
 	req := acquireRequest()
 	defer releaseRequest(req)
