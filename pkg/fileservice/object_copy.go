@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const DefaultObjectCopyConcurrency = 16
+const DefaultObjectCopyConcurrency = 32
 
 type ObjectCopy struct {
 	SourcePath      string

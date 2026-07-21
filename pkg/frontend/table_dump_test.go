@@ -258,6 +258,84 @@ func TestCopyTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
 	}
 }
 
+func TestInstallTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
+	ctx := context.Background()
+	fixture, err := fileservice.NewLocalETLFS("fixture", t.TempDir())
+	require.NoError(t, err)
+	dst, err := fileservice.NewLocalETLFS("dst", t.TempDir())
+	require.NoError(t, err)
+	content := []byte("provider-side object bytes")
+	objects := make([]tableDumpObject, fileservice.DefaultObjectCopyConcurrency*2)
+	for i := range objects {
+		name := fmt.Sprintf("obj-%d", i)
+		fixturePath := path.Join("objects", name)
+		require.NoError(t, fixture.Write(ctx, fileservice.IOVector{
+			FilePath: fixturePath,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
+		}))
+		objects[i] = tableDumpObject{Name: name, FixturePath: fixturePath, Size: int64(len(content))}
+	}
+	copier := &testConcurrentTableDumpObjectCopier{
+		FileService: dst,
+		data:        content,
+		release:     make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(copier.release)
+		}
+	}()
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects)
+	}()
+	require.Eventually(t, func() bool {
+		return copier.maximum.Load() == fileservice.DefaultObjectCopyConcurrency
+	}, 5*time.Second, 10*time.Millisecond)
+	close(copier.release)
+	released = true
+	require.NoError(t, <-resultCh)
+	require.Equal(t, int32(fileservice.DefaultObjectCopyConcurrency), copier.maximum.Load())
+	for i := range objects {
+		require.NoError(t, verifyTableDumpObject(ctx, copier, objects[i].Name, objects[i].Size, ""))
+	}
+}
+
+func TestInstallTableDumpObjectsCancelsWorkers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fixture, err := fileservice.NewLocalETLFS("fixture", t.TempDir())
+	require.NoError(t, err)
+	dst, err := fileservice.NewLocalETLFS("dst", t.TempDir())
+	require.NoError(t, err)
+	content := []byte("provider-side object bytes")
+	objects := make([]tableDumpObject, fileservice.DefaultObjectCopyConcurrency*2)
+	for i := range objects {
+		name := fmt.Sprintf("obj-%d", i)
+		fixturePath := path.Join("objects", name)
+		require.NoError(t, fixture.Write(ctx, fileservice.IOVector{
+			FilePath: fixturePath,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
+		}))
+		objects[i] = tableDumpObject{Name: name, FixturePath: fixturePath, Size: int64(len(content))}
+	}
+	copier := &testConcurrentTableDumpObjectCopier{
+		FileService: dst,
+		data:        content,
+		release:     make(chan struct{}),
+	}
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects)
+	}()
+	require.Eventually(t, func() bool {
+		return copier.maximum.Load() == fileservice.DefaultObjectCopyConcurrency
+	}, 5*time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-resultCh, context.Canceled)
+}
+
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {
 	left := &plan.TableDef{TblId: 1, DbId: 2, DbName: "a", Name: "t", Createsql: "create table a.t(a int)", Cols: []*plan.ColDef{{Name: "a"}}}
 	right := &plan.TableDef{TblId: 9, DbId: 8, DbName: "b", Name: "t2", Createsql: "create table b.t2(a int)", Cols: []*plan.ColDef{{Name: "a"}}}

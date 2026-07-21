@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,6 +43,7 @@ import (
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -634,6 +636,36 @@ func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.Fi
 	return nil
 }
 
+func installTableDumpObjects(
+	ctx context.Context,
+	dumpFS, targetFS fileservice.FileService,
+	items []tableDumpObject,
+) error {
+	if len(items) == 0 {
+		return nil
+	}
+	concurrency := min(fileservice.DefaultObjectCopyConcurrency, len(items))
+	var next atomic.Uint64
+	group, copyCtx := errgroup.WithContext(ctx)
+	for range concurrency {
+		group.Go(func() error {
+			for {
+				if err := copyCtx.Err(); err != nil {
+					return err
+				}
+				i := int(next.Add(1) - 1)
+				if i >= len(items) {
+					return nil
+				}
+				if err := installTableDumpObject(copyCtx, dumpFS, targetFS, items[i]); err != nil {
+					return err
+				}
+			}
+		})
+	}
+	return group.Wait()
+}
+
 func setTableDumpObjectFlags(stats *objectio.ObjectStats, tombstone, hasFakePK bool) {
 	level := stats.GetLevel()
 	flags := stats.Marshal()
@@ -806,15 +838,16 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 				if _, err = targetFS.StatFile(ctx, item.Name); err != nil {
 					return moerr.NewInvalidInputNoCtxf("metadata-only object %s is not present in target storage", item.Name)
 				}
-			} else {
-				if err = installTableDumpObject(ctx, dumpFS, targetFS, item); err != nil {
-					return err
-				}
 			}
 			// Object creation has no cross-CN ownership token. Protect every
 			// installed or reused name from transaction rollback and let the
 			// reference-aware object GC reclaim files left by a failed LOAD.
 			sharedObjects = append(sharedObjects, item.Name)
+		}
+		if !manifest.MetadataOnly {
+			if err = installTableDumpObjects(ctx, dumpFS, targetFS, relationDump.Objects); err != nil {
+				return err
+			}
 		}
 	}
 	if len(sharedObjects) != 0 {
