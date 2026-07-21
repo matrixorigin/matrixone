@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
@@ -524,6 +525,176 @@ func TestDiffDataHelperClosesMigratedHashmaps(t *testing.T) {
 	require.Equal(t, 1, tarMigratedHashmap.closeCalls)
 }
 
+func TestDiffDataHelperFakePKUsesCommonVisibleColumnsAsKey(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.def.colNames = []string{"a", "c", "b", catalog.FakePrimaryKeyColName}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 2}
+	tblStuff.def.commonVisibleIdxes = []int{0, 2}
+	tblStuff.def.tarOnlyIdxes = []int{1}
+	tblStuff.def.pkColIdxes = []int{0, 2}
+
+	// Rows differ only in target-only column c. Fake-PK matching must use the
+	// common visible columns [a,b], otherwise schema evolution turns a no-op
+	// target-only update into one target INSERT plus one base INSERT.
+	rowColTypes := append([]types.Type{types.T_Rowid.ToType()}, tblStuff.def.colTypes...)
+	tarHashmap := buildTestBranchHashmap(
+		t, mp, rowColTypes,
+		[][]any{{buildHashDiffRowID(t, 1), int64(1), int64(99), int64(1), uint64(11)}},
+	)
+	defer func() {
+		require.NoError(t, tarHashmap.Close())
+	}()
+	baseHashmap := buildTestBranchHashmap(
+		t, mp, rowColTypes,
+		[][]any{{buildHashDiffRowID(t, 2), int64(1), nil, int64(1), uint64(22)}},
+	)
+	defer func() {
+		require.NoError(t, baseHashmap.Close())
+	}()
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err := diffDataHelper(
+		context.Background(),
+		ses,
+		compositeOption{},
+		tblStuff,
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		tarHashmap,
+		baseHashmap,
+	)
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "b", "c"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.baseColToTarIdx = []int{0, 1}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+
+	baseRowID := buildHashDiffRowID(t, 1)
+	baseBat := buildIntDataBatch(
+		t, ses.proc.Mp(), []string{catalog.Row_ID, "a", "b"},
+		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		[][]any{{baseRowID, int64(1), int64(1)}},
+	)
+	baseDataHashmap, baseTombstoneHashmap, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: baseBat}},
+		}},
+		"base",
+		nil,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, baseDataHashmap.Close())
+		require.NoError(t, baseTombstoneHashmap.Close())
+	}()
+
+	targetRowID := buildHashDiffRowID(t, 2)
+	targetBat := buildIntDataBatch(
+		t, ses.proc.Mp(), []string{catalog.Row_ID, "a", "b", "c"},
+		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		[][]any{{targetRowID, int64(1), int64(99), int64(0)}},
+	)
+	targetDataHashmap, targetTombstoneHashmap, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: targetBat}},
+		}},
+		"target",
+		nil,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, targetDataHashmap.Close())
+		require.NoError(t, targetTombstoneHashmap.Close())
+	}()
+
+	require.NoError(t, targetDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
+			ret, err := baseDataHashmap.PopByEncodedKey(key, false)
+			require.NoError(t, err)
+			require.True(t, ret.Exists)
+			require.Len(t, ret.Rows, 1)
+			baseTuple, _, err := baseDataHashmap.DecodeRow(ret.Rows[0])
+			require.NoError(t, err)
+			require.Len(t, baseTuple, 4)
+			return nil
+		})
+	}, -1))
+}
+
+func TestDataBranchLineageTableIDReportsLegacyLogicalFallback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	dag := databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+		{TableID: 10, PTableID: 1, CloneTS: 100},
+	})
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		TblId:     20,
+		LogicalId: 10,
+	}).AnyTimes()
+
+	tableID, legacyFallback := dataBranchLineageTableID(context.Background(), dag, rel)
+	require.Equal(t, uint64(10), tableID)
+	require.True(t, legacyFallback)
+}
+
 func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
@@ -575,6 +746,73 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "after", "target"}}, got["INSERT-1"])
 	require.Equal(t, [][]any{{int64(7), "before", "base"}}, got["DELETE-2"])
+}
+
+func TestDiffDataHelper_ConflictAcceptExpandUpdateWithSparseCommonIdxes(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"id", "target_only", "name"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 2}
+	tblStuff.def.commonVisibleIdxes = []int{0, 2}
+	tblStuff.def.tarOnlyIdxes = []int{1}
+
+	// Both sides changed the same PK after branching. The target-only value is
+	// identical, while the trailing common column differs; conflict detection
+	// must therefore compare target physical index 2, not dense ordinal 1.
+	tarHashmap := buildTestBranchHashmap(
+		t, mp, tblStuff.def.colTypes,
+		[][]any{{int64(7), "same-extra", "target-update"}},
+	)
+	defer func() {
+		require.NoError(t, tarHashmap.Close())
+	}()
+	baseHashmap := buildTestBranchHashmap(
+		t, mp, tblStuff.def.colTypes,
+		[][]any{{int64(7), "same-extra", "base-update"}},
+	)
+	defer func() {
+		require.NoError(t, baseHashmap.Close())
+	}()
+
+	got := make(map[string][][]any)
+	var mu sync.Mutex
+	err := diffDataHelper(
+		context.Background(),
+		ses,
+		compositeOption{
+			conflictOpt:  &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT},
+			expandUpdate: true,
+		},
+		tblStuff,
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			if len(rows) == 0 {
+				return false, nil
+			}
+
+			mu.Lock()
+			key := fmt.Sprintf("%s-%d", w.kind, w.side)
+			got[key] = append(got[key], rows...)
+			mu.Unlock()
+			return false, nil
+		},
+		tarHashmap,
+		baseHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, [][]any{{int64(7), "same-extra", "target-update"}}, got["INSERT-1"])
+	require.Equal(t, [][]any{{int64(7), "same-extra", "base-update"}}, got["DELETE-2"])
 }
 
 type closeTrackingBranchHashmap struct {
@@ -854,6 +1092,39 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	return tblStuff
 }
 
+func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+	}}
+
+	layout := lcaProbeColumnLayout(
+		lcaDef,
+		[]string{"id", "name", "added"},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
+	)
+
+	require.Equal(t, []string{"id", "name"}, layout.attrs)
+	require.Equal(t, []int{0, 1}, layout.targetIdxes)
+	require.Equal(t, []types.T{types.T_int64, types.T_varchar}, []types.T{layout.types[0].Oid, layout.types[1].Oid})
+}
+
+func TestLCAProbeResultTargetIndexes(t *testing.T) {
+	layout := lcaProbeLayout{targetIdxes: []int{1, 2}}
+
+	got, err := lcaProbeResultTargetIndexes(layout, 3, 2, false)
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2}, got, "SQL probe returns only LCA/common columns")
+
+	got, err = lcaProbeResultTargetIndexes(layout, 3, 3, true)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2}, got, "reader fallback returns the full target layout")
+
+	_, err = lcaProbeResultTargetIndexes(layout, 3, 1, false)
+	require.ErrorContains(t, err, "unexpected LCA probe result width")
+}
+
 func makeTestBranchTableStuffFakePK(tblStuff *tableStuff) {
 	tblStuff.def.pkKind = fakeKind
 	tblStuff.def.pkColIdxes = []int{0, 1}
@@ -893,6 +1164,10 @@ func appendTestVectorValue(vec *vector.Vector, val any, mp *mpool.MPool) error {
 	switch x := val.(type) {
 	case int64:
 		return vector.AppendFixed(vec, x, false, mp)
+	case uint64:
+		return vector.AppendFixed(vec, x, false, mp)
+	case types.Rowid:
+		return vector.AppendFixed(vec, x, false, mp)
 	case string:
 		return vector.AppendBytes(vec, []byte(x), false, mp)
 	case []byte:
@@ -930,6 +1205,77 @@ func decodeCapturedRows(t *testing.T, bat *batch.Batch, colTypes []types.Type) [
 
 func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 	ses := newValidateSession(t)
+
+	t.Run("target-only first column preserves LCA delete", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.colNames = []string{"added", "id", "name"}
+		tblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+		}
+		tblStuff.def.visibleIdxes = []int{0, 1, 2}
+		tblStuff.def.pkColIdx = 1
+		tblStuff.def.pkColIdxes = []int{1}
+		tblStuff.retPool = &retBatchList{}
+		lcaDef := &plan.TableDef{
+			DbName: "db1",
+			Name:   "lca_tbl",
+			Pkey: &plan.PrimaryKeyDef{
+				Names:       []string{"id"},
+				PkeyColName: "id",
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			},
+		}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+
+		mrs := &MysqlResultSet{}
+		for _, col := range []struct {
+			name string
+			typ  defines.MysqlType
+		}{
+			{name: "__idx_", typ: defines.MYSQL_TYPE_LONGLONG},
+			{name: "id", typ: defines.MYSQL_TYPE_LONGLONG},
+			{name: "name", typ: defines.MYSQL_TYPE_VARCHAR},
+		} {
+			mysqlCol := &MysqlColumn{}
+			mysqlCol.SetName(col.name)
+			mysqlCol.SetColumnType(col.typ)
+			mrs.AddColumn(mysqlCol)
+		}
+		mrs.AddRow([]interface{}{int64(0), int64(1), "alice"})
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs}).Times(1)
+		bh.EXPECT().ClearExecResultSet().Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		dBat, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, dBat.RowCount())
+		require.True(t, dBat.Vecs[0].IsNull(0))
+		require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](dBat.Vecs[1]))
+		require.Equal(t, "alice", string(dBat.Vecs[2].GetBytesAt(0)))
+		require.Zero(t, tBat.RowCount())
+		tblStuff.retPool.releaseRetBatch(dBat, false)
+	})
 
 	t.Run("sql result keeps hits and leaves misses in tombstone batch", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -1251,6 +1597,66 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	require.Equal(t, [][]any{{int64(3), "base-only", "hb"}}, got[1].rows)
 }
 
+func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	updateTS := types.BuildTS(15, 0)
+	tarData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), "bounded", "h1", commitTSBytes(updateTS)},
+	})
+	tarTombstone := buildHashDiffTombstoneBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), commitTSBytes(updateTS)},
+	})
+	baseData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), "destination", "h1", commitTSBytes(types.BuildTS(5, 0))},
+	})
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(), ses, nil, tblStuff, branchMetaInfo{},
+		compositeOption{
+			conflictOpt:  &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT},
+			expandUpdate: true,
+		},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) > 0 {
+				got = append(got, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{
+			data: tarData, tombstone: tarTombstone,
+		}}}},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{
+			data: baseData,
+		}}}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, diffDelete, got[0].kind)
+	require.Equal(t, diffSideBase, got[0].side)
+	require.Equal(t, [][]any{{int64(1), "destination", "h1"}}, got[0].rows)
+	require.Equal(t, diffInsert, got[1].kind)
+	require.Equal(t, diffSideTarget, got[1].side)
+	require.Equal(t, [][]any{{int64(1), "bounded", "h1"}}, got[1].rows)
+}
+
 func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -1387,6 +1793,107 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 			require.Equal(t, tt.wantRows, got[0].rows)
 		})
 	}
+}
+
+func TestHashDiff_HasLCAUpdateIgnoresTargetOnlyColumns(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{
+		txnOp: txnOp,
+	}
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.commonIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.baseColToTarIdx = []int{0, 1}
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	lcaRel := mock_frontend.NewMockRelation(ctrl)
+	lcaDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "lca_tbl",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+	tblStuff.lcaRel = lcaRel
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "before", nil}),
+	}).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	oldRowID := buildHashDiffRowID(t, 0)
+	newRowID := buildHashDiffRowID(t, 1)
+	tarData := buildHashDiffDataBatchWithRowIDs(
+		t, ses.proc.Mp(), []types.Rowid{newRowID},
+		[][]any{{int64(1), "after", "target-only", commitTSBytes(types.BuildTS(15, 0))}},
+	)
+	tarTombstone := buildHashDiffTombstoneBatchWithRowIDs(
+		t, ses.proc.Mp(), []types.Rowid{oldRowID},
+		[][]any{{int64(1), commitTSBytes(types.BuildTS(12, 0))}},
+	)
+
+	dagInfo := branchMetaInfo{
+		lcaTableId:          77,
+		pathFromLCAToTar:    []uint64{77, 88},
+		pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+		pathFromLCAToBase:   []uint64{77},
+		pathFromLCAToBaseTS: []types.TS{{}},
+	}
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		dagInfo,
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{
+				data:      tarData,
+				tombstone: tarTombstone,
+			}},
+		}},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, diffUpdate, got[0].kind)
+	require.Equal(t, diffSideTarget, got[0].side)
+	require.Equal(t, [][]any{{int64(1), "after", "target-only"}}, got[0].rows)
 }
 
 func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
@@ -1544,6 +2051,25 @@ func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 		require.Len(t, row, 2)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row[0].(int64), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(row[1].(string)), false, mp))
+	}
+	bat.SetRowCount(len(rows))
+	return bat
+}
+
+func buildIntDataBatch(t *testing.T, mp *mpool.MPool, attrs []string, colTypes []types.Type, rows [][]any) *batch.Batch {
+	t.Helper()
+
+	require.Len(t, attrs, len(colTypes))
+	bat := batch.NewWithSize(len(colTypes))
+	bat.SetAttributes(attrs)
+	for i, typ := range colTypes {
+		bat.Vecs[i] = vector.NewVec(typ)
+	}
+	for _, row := range rows {
+		require.Len(t, row, len(colTypes))
+		for i, val := range row {
+			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
+		}
 	}
 	bat.SetRowCount(len(rows))
 	return bat
@@ -1813,4 +2339,415 @@ func TestValidateLeadingRowID(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
 		require.NoError(t, validateLeadingRowID("base", "t", false, bat))
 	})
+}
+
+func TestProjectBaseBatchToTarget(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+
+	// Simulate target having [a, c, b], base has [a, b].
+	tblStuff.def.colNames = []string{"a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	// base has [a, b] only. baseColToTarIdx says:
+	// base col 0 (a) -> target idx 0
+	// base col 1 (b) -> target idx 2
+	// c is target-only and sits between the common columns
+	tblStuff.def.baseColToTarIdx = []int{0, 2}
+	tblStuff.def.tarOnlyIdxes = []int{1}
+
+	mp := ses.proc.Mp()
+
+	// Build a base-side data batch with 1 RowID + 2 columns [a, b]
+	baseBat := batch.NewWithSize(3)
+	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+
+	uid, err := types.BuildUuid()
+	require.NoError(t, err)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[1], int64(42), false, mp))
+	require.NoError(t, vector.AppendBytes(baseBat.Vecs[2], []byte("hello"), false, mp))
+	baseBat.SetRowCount(1)
+
+	rowIDVec := baseBat.Vecs[0]
+	aVec := baseBat.Vecs[1]
+	bVec := baseBat.Vecs[2]
+	projected := projectBaseBatchToTarget(baseBat, &tblStuff, mp)
+
+	// Should have 4 vectors: RowID + [a, c, b]
+	require.Equal(t, 4, projected.VectorCount())
+	require.Equal(t, 1, projected.RowCount())
+
+	// Moved vectors transfer ownership to projected.
+	require.Same(t, rowIDVec, projected.Vecs[0])
+	require.Same(t, aVec, projected.Vecs[1])
+	require.Same(t, bVec, projected.Vecs[3])
+
+	// RowID should be preserved
+	require.Equal(t, types.T_Rowid, projected.Vecs[0].GetType().Oid)
+
+	// Col a (index 1): should be int64(42)
+	require.Equal(t, types.T_int64, projected.Vecs[1].GetType().Oid)
+	require.Equal(t, int64(42), vector.MustFixedColWithTypeCheck[int64](projected.Vecs[1])[0])
+
+	// Col c (index 2): should be constant NULL (target-only)
+	require.Equal(t, types.T_int64, projected.Vecs[2].GetType().Oid)
+	require.True(t, projected.Vecs[2].IsConst())
+	require.True(t, projected.Vecs[2].IsConstNull(), "target-only column should be const NULL")
+
+	// Col b (index 3): should be "hello"
+	require.Equal(t, types.T_varchar, projected.Vecs[3].GetType().Oid)
+	require.Equal(t, "hello", string(projected.Vecs[3].GetBytesAt(0)))
+
+	projected.Clean(mp)
+}
+
+func TestProjectBaseBatchToTargetPreservesTrailingCommitTS(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.baseColToTarIdx = []int{0, 2}
+	tblStuff.def.tarOnlyIdxes = []int{1}
+
+	mp := ses.proc.Mp()
+	baseline := mp.CurrNB()
+	baseBat := batch.NewWithSize(4)
+	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	baseBat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+
+	uid, err := types.BuildUuid()
+	require.NoError(t, err)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	commitTS := types.BuildTS(42, 7)
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[1], int64(11), false, mp))
+	require.NoError(t, vector.AppendBytes(baseBat.Vecs[2], []byte("base"), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[3], commitTS, false, mp))
+	baseBat.SetRowCount(1)
+
+	rowIDVec := baseBat.Vecs[0]
+	aVec := baseBat.Vecs[1]
+	bVec := baseBat.Vecs[2]
+	commitTSVec := baseBat.Vecs[3]
+	projected := projectBaseBatchToTarget(baseBat, &tblStuff, mp)
+
+	// CollectChanges data batches are [RowID, data..., commit_ts]. Projection
+	// changes only the data-column layout and retains both boundary vectors.
+	require.Equal(t, 5, projected.VectorCount())
+	require.True(t, dataBranchBatchHasTargetLayout(projected, &tblStuff))
+	require.Same(t, rowIDVec, projected.Vecs[0])
+	require.Same(t, aVec, projected.Vecs[1])
+	require.True(t, projected.Vecs[2].IsConstNull())
+	require.Same(t, bVec, projected.Vecs[3])
+	require.Same(t, commitTSVec, projected.Vecs[4])
+	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](projected.Vecs[4], 0))
+
+	projected.Clean(mp)
+	require.Equal(t, baseline, mp.CurrNB(), "projection must transfer or clean every input vector")
+}
+
+func TestDataBranchSourceColToTargetIdxRejectsHistoricalTypeDrift(t *testing.T) {
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+
+	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "historical data branch column a has a different type")
+}
+
+func TestDataBranchSourceColToTargetIdxRejectsHistoricalPrimaryKeyDrift(t *testing.T) {
+	cols := []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}
+	sourceDef := &plan.TableDef{
+		Cols: cols,
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "b", Names: []string{"b"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: cols,
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+
+	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "historical data branch primary key is incompatible")
+}
+
+func TestDataBranchSourceColToTargetIdxRejectsHistoricalFakePrimaryKeyDrift(t *testing.T) {
+	fakePK := &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.FakePrimaryKeyColName, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey: fakePK,
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.FakePrimaryKeyColName, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey: fakePK,
+	}
+
+	_, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef, []string{"a", "b", catalog.FakePrimaryKeyColName},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "historical data branch fake primary key schema differs")
+}
+
+func TestDataBranchNeedsHistoricalProjection(t *testing.T) {
+	require.False(t, dataBranchNeedsHistoricalProjection([]int{0, 1}, 2),
+		"a lineage ancestor with the endpoint layout must keep its raw change rows")
+	require.True(t, dataBranchNeedsHistoricalProjection([]int{0, 2}, 3),
+		"a target-only column requires projection and endpoint hydration")
+	require.True(t, dataBranchNeedsHistoricalProjection([]int{1, 0}, 2),
+		"a reordered layout requires projection")
+}
+
+func TestHistoricalDataBranchChangesHandleSkipsHydrationAtBoundedGeneration(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+
+	source := batch.NewWithSize(4)
+	source.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
+	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], buildHashDiffRowID(t, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[2], int64(15), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[3], types.BuildTS(20, 0), false, mp))
+	source.SetRowCount(1)
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colNames = []string{"a", "b", "c"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+	}
+	h := historicalDataBranchChangesHandle{
+		inner:         &stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: source}}},
+		sourceMapping: []int{0, 1},
+		tblStuff:      tblStuff,
+		hydrate:       false,
+	}
+
+	got, tombstone, _, err := h.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Nil(t, tombstone)
+	require.NotNil(t, got)
+	defer got.Clean(mp)
+	require.Equal(t, 1, got.RowCount())
+	require.Equal(t, int64(15), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[2], 0))
+	require.True(t, got.Vecs[3].IsNull(0), "column added after the upper bound must stay NULL")
+}
+
+func TestOverlayDataBranchProbeResultHydratesTargetDefaults(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+
+	projected := batch.NewWithSize(5)
+	projected.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	projected.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	projected.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	projected.Vecs[3] = vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+	projected.Vecs[4] = vector.NewVec(types.T_TS.ToType())
+	rowID := buildHashDiffRowID(t, 1)
+	require.NoError(t, vector.AppendFixed(projected.Vecs[0], rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(projected.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(projected.Vecs[2], int64(11), false, mp))
+	commitTS := types.BuildTS(20, 1)
+	require.NoError(t, vector.AppendFixed(projected.Vecs[4], commitTS, false, mp))
+	projected.SetRowCount(1)
+	defer projected.Clean(mp)
+
+	probeBatch := batch.NewWithSize(4)
+	probeBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	probeBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	probeBatch.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	probeBatch.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[0], int64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[2], int64(11), false, mp))
+	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[3], int64(0), false, mp))
+	probeBatch.SetRowCount(1)
+	probe := executor.Result{Mp: mp, Batches: []*batch.Batch{probeBatch}}
+	defer probe.Close()
+
+	require.NoError(t, overlayDataBranchProbeResult(projected, probe, 0, mp))
+	require.Equal(t, []int64{0}, vector.MustFixedColWithTypeCheck[int64](projected.Vecs[3]))
+	require.Equal(t, []types.TS{commitTS}, vector.MustFixedColWithTypeCheck[types.TS](projected.Vecs[4]))
+}
+
+func TestProjectBaseBatchToTargetMovesHiddenKeyColumns(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "b", "d", catalog.CPrimaryKeyColName}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.baseColToTarIdx = []int{0, 1, 3}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.pkColIdx = 3
+	tblStuff.def.pkColIdxes = []int{0, 1}
+
+	mp := ses.proc.Mp()
+	baseBat := batch.NewWithSize(4)
+	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b", catalog.CPrimaryKeyColName})
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+
+	uid, err := types.BuildUuid()
+	require.NoError(t, err)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[2], int64(2), false, mp))
+	require.NoError(t, vector.AppendBytes(baseBat.Vecs[3], []byte("cpk-1-2"), false, mp))
+	baseBat.SetRowCount(1)
+
+	cpkVec := baseBat.Vecs[3]
+	projected := projectBaseBatchToTarget(baseBat, &tblStuff, mp)
+	defer projected.Clean(mp)
+
+	require.Equal(t, 5, projected.VectorCount())
+	require.Same(t, cpkVec, projected.Vecs[4])
+	require.False(t, projected.Vecs[4].IsConstNull())
+	require.Equal(t, "cpk-1-2", string(projected.Vecs[4].GetBytesAt(0)))
+	require.True(t, projected.Vecs[3].IsConstNull())
+}
+
+func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+
+	// Set up: target has [id(0), extra(1), name(2)]
+	// commonIdxes = [0, 2] (only id and name are common, extra is target-only)
+	tblStuff.def.colNames = []string{"id", "extra", "name"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 2} // only compare id and name
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	mp := ses.proc.Mp()
+
+	// Batch1: [id=1, extra=999, name="same"]
+	bat1 := batch.NewWithSize(3)
+	bat1.SetAttributes([]string{"id", "extra", "name"})
+	bat1.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat1.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat1.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat1.Vecs[1], int64(999), false, mp))
+	require.NoError(t, vector.AppendBytes(bat1.Vecs[2], []byte("same"), false, mp))
+	bat1.SetRowCount(1)
+
+	// Batch2: [id=1, extra=0, name="same"] (extra differs but is target-only)
+	bat2 := batch.NewWithSize(3)
+	bat2.SetAttributes([]string{"id", "extra", "name"})
+	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat2.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat2.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat2.Vecs[1], int64(0), false, mp))
+	require.NoError(t, vector.AppendBytes(bat2.Vecs[2], []byte("same"), false, mp))
+	bat2.SetRowCount(1)
+
+	wrapped1 := batchWithKind{kind: diffInsert, batch: bat1}
+	wrapped2 := batchWithKind{kind: diffInsert, batch: bat2}
+
+	// Rows should be considered equal because extra (index 1) is NOT in commonIdxes
+	cmp, err := compareRowInWrappedBatches(
+		context.Background(),
+		ses,
+		tblStuff,
+		0, 0,
+		true, // skipPKCols
+		wrapped1,
+		wrapped2,
+	)
+	require.NoError(t, err)
+	require.Zero(t, cmp, "rows should be considered equal when only non-common columns differ")
+
+	// Now test with a difference in a common column (name)
+	bat3 := batch.NewWithSize(3)
+	bat3.SetAttributes([]string{"id", "extra", "name"})
+	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat3.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat3.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat3.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat3.Vecs[1], int64(999), false, mp))
+	require.NoError(t, vector.AppendBytes(bat3.Vecs[2], []byte("different"), false, mp))
+	bat3.SetRowCount(1)
+
+	wrapped3 := batchWithKind{kind: diffInsert, batch: bat3}
+
+	// Rows should differ because name differs and name IS in commonIdxes
+	cmp, err = compareRowInWrappedBatches(
+		context.Background(),
+		ses,
+		tblStuff,
+		0, 0,
+		false, // do NOT skip PK
+		wrapped1,
+		wrapped3,
+	)
+	require.NoError(t, err)
+	require.NotZero(t, cmp, "rows should differ when a common column differs")
+
+	bat1.Clean(mp)
+	bat2.Clean(mp)
+	bat3.Clean(mp)
 }

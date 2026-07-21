@@ -17,21 +17,29 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -68,6 +76,144 @@ type cloneReceipt struct {
 	srcTableID     uint64
 	dstTableID     uint64
 	srcAccountName string
+}
+
+type dataBranchCloneLockCtxKey struct{}
+
+func withDataBranchCloneLockContext(
+	proc *process.Process,
+	ctx context.Context,
+	lockRows func() error,
+) error {
+	oldCtx := proc.Ctx
+	proc.Ctx = ctx
+	defer func() {
+		proc.Ctx = oldCtx
+	}()
+	return lockRows()
+}
+
+func lockDataBranchCloneSource(
+	ctx context.Context,
+	ses *Session,
+	fromAccountID uint32,
+	databaseName, tableName string,
+) error {
+	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
+		return nil
+	}
+	txnOp := ses.proc.GetTxnOperator()
+	if !txnOp.Txn().IsPessimistic() {
+		// LockRows is intentionally a no-op for optimistic transactions.
+		// Keep DATA BRANCH available in that mode; ALTER records the lineage
+		// from its statement snapshot, and a missing edge caused by a true
+		// concurrent copy-and-swap is detected by the legacy-lineage guard
+		// before DIFF/MERGE can return an incorrect result.
+		return nil
+	}
+	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
+	eng := ses.proc.GetSessionInfo().StorageEngine
+	db, err := eng.Database(sourceCtx, catalog.MO_CATALOG, txnOp)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(sourceCtx, catalog.MO_TABLES, nil)
+	if err != nil {
+		return err
+	}
+	lockBat, err := dataBranchCloneCatalogLockBatch(
+		ses.proc, fromAccountID, databaseName, tableName,
+	)
+	if err != nil {
+		return err
+	}
+	defer lockBat.Vecs[0].Free(ses.proc.Mp())
+	// ALTER locks this exact mo_tables composite key exclusively. A shared
+	// catalog-row lock serializes source-ID/snapshot selection with ALTER while
+	// allowing source-table DML and sibling branch clones to continue.
+	return withDataBranchCloneLockContext(ses.proc, sourceCtx, func() error {
+		return lockop.LockRows(
+			eng,
+			ses.proc,
+			rel,
+			rel.GetTableID(sourceCtx),
+			lockBat,
+			0,
+			*lockBat.Vecs[0].GetType(),
+			lock.LockMode_Shared,
+			lock.Sharding_None,
+			fromAccountID,
+		)
+	})
+}
+
+func dataBranchCloneCatalogLockBatch(
+	proc *process.Process,
+	accountID uint32,
+	databaseName, tableName string,
+) (*batch.Batch, error) {
+	inputs := make([]*vector.Vector, 3)
+	defer func() {
+		for _, input := range inputs {
+			if input != nil {
+				input.Free(proc.GetMPool())
+			}
+		}
+	}()
+	inputs[0] = vector.NewVec(types.T_uint32.ToType())
+	if err := vector.AppendFixed(inputs[0], accountID, false, proc.GetMPool()); err != nil {
+		return nil, err
+	}
+	for i, name := range []string{databaseName, tableName} {
+		inputs[i+1] = vector.NewVec(types.T_varchar.ToType())
+		if err := vector.AppendBytes(inputs[i+1], []byte(name), false, proc.GetMPool()); err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := function.RunFunctionDirectly(
+		proc, function.SerialFunctionEncodeID, inputs, 1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, encoded)
+	return bat, nil
+}
+
+func lockDataBranchCloneDatabaseSources(
+	ctx context.Context,
+	ses *Session,
+	source cloneDatabaseSource,
+) error {
+	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
+		return nil
+	}
+	if source.snapshot != nil && source.snapshot.TS != nil {
+		return nil
+	}
+	fromAccountID := source.opAccountId
+	if source.snapshot != nil && source.snapshot.Tenant != nil {
+		fromAccountID = source.snapshot.Tenant.TenantID
+	}
+	tables := append([]*tableInfo(nil), source.srcTblInfos...)
+	sort.Slice(tables, func(i, j int) bool {
+		if tables[i].dbName != tables[j].dbName {
+			return tables[i].dbName < tables[j].dbName
+		}
+		return tables[i].tblName < tables[j].tblName
+	})
+	for _, table := range tables {
+		if table.typ == view {
+			continue
+		}
+		if err := lockDataBranchCloneSource(
+			ctx, ses, fromAccountID, table.dbName, table.tblName,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func getBackExecutor(
@@ -317,6 +463,17 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
+	if snapshot == nil || snapshot.TS == nil {
+		if err = lockDataBranchCloneSource(
+			reqCtx,
+			ses,
+			fromAccountId,
+			stmt.SrcTable.SchemaName.String(),
+			stmt.SrcTable.ObjectName.String(),
+		); err != nil {
+			return
+		}
+	}
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
@@ -440,6 +597,9 @@ func handleCloneDatabaseWithSource(
 		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
 			return
 		}
+	}
+	if err = lockDataBranchCloneDatabaseSources(reqCtx, ses, source); err != nil {
+		return
 	}
 
 	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
@@ -675,7 +835,10 @@ func updateBranchMetaTable(
 	tcc.SetContext(srcCtx)
 	defer tcc.SetContext(origCtx)
 
-	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, nil); err != nil {
+	// The metadata parent must be the physical generation that supplied the
+	// clone data. For snapshot clones that can differ from the table currently
+	// reachable by name after one or more copy-and-swap ALTERs.
+	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, receipt.snapshot); err != nil {
 		return err
 	}
 	if srcTblDef == nil {

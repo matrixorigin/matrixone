@@ -467,7 +467,7 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	row := []any{int64(7), "alice"}
 
 	insertBuf := &bytes.Buffer{}
-	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf))
+	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf, tblStuff.def.visibleIdxes))
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
@@ -980,6 +980,31 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 
 	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
 	require.Error(t, err)
+}
+
+func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "__mo_cbkey_001a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.commonIdxes = []int{0, 1, 3}
+	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"a"}, info.deleteKeyNames)
+	require.Equal(t, []string{"a", "b"}, info.visibleNames)
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {

@@ -832,6 +832,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				return err
 			}
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -902,6 +905,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
+			return err
+		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
 			return err
 		}
 	}

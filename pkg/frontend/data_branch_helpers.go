@@ -325,6 +325,29 @@ func scanSnapshotRelationByID(
 	scanParallelism int,
 	onBatch func(*batch.Batch) error,
 ) error {
+	return scanSnapshotRelationByIDWithFallback(
+		ctx, caller, ses, tableID, snapshotTS, nil,
+		attrs, colTypes, filterExpr, scanParallelism, onBatch,
+	)
+}
+
+// scanSnapshotRelationByIDWithFallback prefers current-view ranges, but can
+// fall back to a relation that was already opened at snapshotTS. ALTER drops
+// replaced physical generations from the current catalog, while bounded data
+// branch operations may still need to hydrate rows from such a generation.
+func scanSnapshotRelationByIDWithFallback(
+	ctx context.Context,
+	caller string,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+	fallbackRangeRel engine.Relation,
+	attrs []string,
+	colTypes []types.Type,
+	filterExpr *plan.Expr,
+	scanParallelism int,
+	onBatch func(*batch.Batch) error,
+) error {
 	if len(attrs) == 0 {
 		return nil
 	}
@@ -350,15 +373,26 @@ func scanSnapshotRelationByID(
 		zap.Int("scan-parallelism", scanParallelism),
 	)
 
-	_, _, rangeRel, err := storage.GetRelationById(ctx, baseTxnOp, tableID)
-	if err != nil {
-		return err
-	}
-	if rangeRel == nil {
-		return moerr.NewInternalErrorNoCtxf(
-			"scanSnapshotRelationByID: cannot resolve range relation by id %d at current txn view",
-			tableID,
+	_, _, rangeRel, resolveErr := storage.GetRelationById(ctx, baseTxnOp, tableID)
+	if resolveErr != nil || rangeRel == nil {
+		if fallbackRangeRel == nil {
+			if resolveErr != nil {
+				return resolveErr
+			}
+			return moerr.NewInternalErrorNoCtxf(
+				"scanSnapshotRelationByID: cannot resolve range relation by id %d at current txn view",
+				tableID,
+			)
+		}
+		logutil.Info(
+			"DataBranch-SnapshotScan-HistoricalRangeFallback",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Error(resolveErr),
 		)
+		rangeRel = fallbackRangeRel
+		rangeTS = snapshotTS
 	}
 
 	rangesParam := engine.DefaultRangesParam

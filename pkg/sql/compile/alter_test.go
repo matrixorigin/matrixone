@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -53,6 +54,88 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.False(t, shouldEnableAlterCopyPipelineFlush(nil))
 	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: false}))
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
+}
+
+func TestBuildAlterDataBranchLineageSQL(t *testing.T) {
+	metadataSQL, snapshotSQL := buildAlterDataBranchLineageSQL(
+		11, 22, 123456, 7,
+		"alter:table", "tenant'o", "db'x", "tbl'y", "snapshot-id",
+	)
+
+	require.Equal(t,
+		"insert into mo_catalog.mo_branch_metadata values(22, 123456, 11, 7, 'alter:table', false)",
+		metadataSQL,
+	)
+	require.Contains(t, snapshotSQL, "insert into mo_catalog.mo_snapshots")
+	require.Contains(t, snapshotSQL, "'snapshot-id', '__mo_branch_22', 123456")
+	require.Contains(t, snapshotSQL, "'tenant''o', 'db''x', 'tbl''y', 11, 'branch'")
+}
+
+func TestAlterDataBranchHistoricalSourceSQL(t *testing.T) {
+	for _, sql := range []string{
+		alterDataBranchHistoricalSnapshotSourceSQL("tenant'o", "db'x", "tbl'y", 42),
+		alterDataBranchHistoricalPitrSourceSQL("tenant'o", "db'x", "tbl'y", 42),
+	} {
+		require.Contains(t, sql, "account_name = 'tenant''o'")
+		require.Contains(t, sql, "database_name = 'db''x'")
+		require.Contains(t, sql, "table_name = 'tbl''y'")
+		require.Contains(t, sql, "obj_id = 42")
+		require.Contains(t, sql, "limit 1 for update")
+	}
+}
+
+func TestAlterDataBranchLineageMetadata(t *testing.T) {
+	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 9, Level: "table", TableDeleted: false},
+	})
+
+	creator, level := alterDataBranchLineageMetadata(dag, 2)
+	require.Equal(t, uint32(9), creator)
+	require.Equal(t, "alter:table", level)
+
+	creator, level = alterDataBranchLineageMetadata(dag, 1)
+	require.Equal(t, uint32(catalog.System_Account), creator)
+	require.Equal(t, "alter", level)
+}
+
+func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
+	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, true))
+	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, false))
+
+	for _, tc := range []struct {
+		name        string
+		byBegin     bool
+		autocommit  bool
+		pessimistic bool
+		want        string
+	}{
+		{
+			name:        "explicit begin",
+			byBegin:     true,
+			autocommit:  true,
+			pessimistic: true,
+			want:        "not supported inside an explicit transaction",
+		},
+		{
+			name:        "autocommit disabled",
+			autocommit:  false,
+			pessimistic: true,
+			want:        "not supported inside an explicit transaction",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAlterDataBranchLineageTxn(tc.byBegin, tc.autocommit, tc.pessimistic)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
+	require.True(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, true))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, false))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, true))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, false))
 }
 
 type alterCopyInsertSpyExecutor struct {
@@ -446,6 +529,9 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
+		alterDataBranchParticipationSQL(1),
+		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
+		alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1),
 		alterTable.CreateTmpTableSql,
 		alterCopyTestPkNullCheckSQL,
 		alterCopyTestPkDuplicateCheckSQL,
@@ -607,6 +693,157 @@ func newAlterCopyFixedResult[T any](t *testing.T, mp *mpool.MPool, typ types.Typ
 	memRes := executor.NewMemResult([]types.Type{typ}, mp)
 	memRes.NewBatchWithRowCount(len(values))
 	require.NoError(t, executor.AppendFixedRows(memRes, 0, values))
+	return memRes.GetResult()
+}
+
+func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	const (
+		metadataSQL = "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata for update"
+		edgeSQL     = "select sname, ts, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where kind = 'branch'"
+		snapshotSQL = "select ts, level, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where kind = 'user'"
+		pitrSQL     = "select level, account_name, database_name, table_name, obj_id, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_status = 1"
+	)
+
+	for _, tc := range []struct {
+		name          string
+		pitrLength    int64
+		wantDeletes   bool
+		wantSQLSuffix []string
+	}{
+		{
+			name:        "expired PITR releases ALTER edge",
+			pitrLength:  24,
+			wantDeletes: true,
+			wantSQLSuffix: []string{
+				"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
+				"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+			},
+		},
+		{
+			name:        "active PITR retains ALTER edge",
+			pitrLength:  72,
+			wantDeletes: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			mp := c.proc.Mp()
+
+			spyExec.results[metadataSQL] = newAlterLineageMetadataResult(
+				t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+				[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+			)
+			spyExec.results[edgeSQL] = newAlterLineageEdgeResult(
+				t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+				[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
+			)
+			spyExec.results[snapshotSQL] = newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil)
+			spyExec.results[pitrSQL] = newAlterLineagePitrSourceResult(
+				t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+				[]uint64{1}, []int64{tc.pitrLength}, []string{"h"},
+			)
+
+			require.NoError(t, c.compactExpiredAlterDataBranchLineage(now))
+			want := []string{metadataSQL, edgeSQL, snapshotSQL, pitrSQL}
+			if tc.wantDeletes {
+				want = append(want, tc.wantSQLSuffix...)
+			}
+			require.Equal(t, want, spyExec.executedSQLs)
+		})
+	}
+}
+
+func newAlterLineageMetadataResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	tableIDs, parentIDs []uint64,
+	cloneTSs []int64,
+	creators []uint64,
+	levels []string,
+	deleted []bool,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_int64.ToType(),
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_bool.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(tableIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, tableIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, parentIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 2, cloneTSs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 3, creators))
+	require.NoError(t, executor.AppendStringRows(memRes, 4, levels))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, deleted))
+	return memRes.GetResult()
+}
+
+func newAlterLineageEdgeResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	names []string,
+	cloneTSs []int64,
+	accounts, databases, tables []string,
+	objectIDs []uint64,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(names))
+	require.NoError(t, executor.AppendStringRows(memRes, 0, names))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, cloneTSs))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, accounts))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, databases))
+	require.NoError(t, executor.AppendStringRows(memRes, 4, tables))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, objectIDs))
+	return memRes.GetResult()
+}
+
+func newAlterLineageSnapshotSourceResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	cloneTSs []int64,
+	levels, accounts, databases, tables []string,
+	objectIDs []uint64,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(cloneTSs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, cloneTSs))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, levels))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, accounts))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, databases))
+	require.NoError(t, executor.AppendStringRows(memRes, 4, tables))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, objectIDs))
+	return memRes.GetResult()
+}
+
+func newAlterLineagePitrSourceResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	levels, accounts, databases, tables []string,
+	objectIDs []uint64,
+	lengths []int64,
+	units []string,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(levels))
+	require.NoError(t, executor.AppendStringRows(memRes, 0, levels))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, accounts))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, databases))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, tables))
+	require.NoError(t, executor.AppendFixedRows(memRes, 4, objectIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, lengths))
+	require.NoError(t, executor.AppendStringRows(memRes, 6, units))
 	return memRes.GetResult()
 }
 

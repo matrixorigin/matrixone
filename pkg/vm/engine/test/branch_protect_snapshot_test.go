@@ -171,7 +171,7 @@ func (e *bpsEnv) querySnapshotsByPrefix(t *testing.T, prefix string) []string {
 func (e *bpsEnv) loadBranchDAG(t *testing.T) databranchutils.BranchReclaimDag {
 	t.Helper()
 	sql := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, table_deleted from %s.%s",
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	res, err := e.execSQL(e.sysCtx, sql)
@@ -185,13 +185,17 @@ func (e *bpsEnv) loadBranchDAG(t *testing.T) databranchutils.BranchReclaimDag {
 		tids := vector.MustFixedColWithTypeCheck[uint64](cols[0])
 		pids := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 		cts := vector.MustFixedColWithTypeCheck[int64](cols[2])
+		creators := vector.MustFixedColWithTypeCheck[uint64](cols[3])
+		levels := executor.GetStringRows(cols[4])
 		for i := 0; i < n; i++ {
-			deleted := !cols[3].IsNull(uint64(i)) &&
-				vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
+			deleted := !cols[5].IsNull(uint64(i)) &&
+				vector.GetFixedAtWithTypeCheck[bool](cols[5], i)
 			rows = append(rows, databranchutils.DataBranchMetadata{
 				TableID:      tids[i],
 				CloneTS:      cts[i],
 				PTableID:     pids[i],
+				Creator:      creators[i],
+				Level:        levels[i],
 				TableDeleted: deleted,
 			})
 		}
@@ -212,12 +216,37 @@ func (e *bpsEnv) simulateBranchCreate(
 	parentAccount, parentDB, parentTbl string,
 	parentTableID uint64,
 ) {
+	e.simulateLineageCreate(
+		t, childTID, parentTID, cloneTS, "table",
+		parentAccount, parentDB, parentTbl, parentTableID,
+	)
+}
+
+func (e *bpsEnv) simulateAlterLineage(
+	t *testing.T,
+	childTID, parentTID uint64,
+	cloneTS int64,
+	parentAccount, parentDB, parentTbl string,
+) {
+	e.simulateLineageCreate(
+		t, childTID, parentTID, cloneTS, databranchutils.AlterLineageLevel,
+		parentAccount, parentDB, parentTbl, parentTID,
+	)
+}
+
+func (e *bpsEnv) simulateLineageCreate(
+	t *testing.T,
+	childTID, parentTID uint64,
+	cloneTS int64,
+	metadataLevel, parentAccount, parentDB, parentTbl string,
+	parentTableID uint64,
+) {
 	t.Helper()
 	require.NoError(t, exec_sql(e.disttae, e.sysCtx,
 		fmt.Sprintf(
-			"insert into %s.%s values(%d, %d, %d, %d, 'table', false)",
+			"insert into %s.%s values(%d, %d, %d, %d, '%s', false)",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-			childTID, cloneTS, parentTID, 0,
+			childTID, cloneTS, parentTID, 0, metadataLevel,
 		),
 	))
 
@@ -235,6 +264,64 @@ func (e *bpsEnv) simulateBranchCreate(
 			parentTableID, databranchutils.BranchSnapshotKind,
 		),
 	))
+}
+
+func (e *bpsEnv) loadHistoricalLineageEdges(
+	t *testing.T,
+) map[uint64]databranchutils.HistoricalLineageEdge {
+	t.Helper()
+	res, err := e.execSQL(e.sysCtx, fmt.Sprintf(
+		"select sname, ts, account_name, database_name, table_name, obj_id from %s.%s where kind = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, databranchutils.BranchSnapshotKind,
+	))
+	require.NoError(t, err)
+	defer res.Close()
+	edges := make(map[uint64]databranchutils.HistoricalLineageEdge)
+	res.ReadRows(func(n int, cols []*vector.Vector) bool {
+		if n == 0 {
+			return true
+		}
+		names := executor.GetStringRows(cols[0])
+		cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[1])
+		accounts := executor.GetStringRows(cols[2])
+		databases := executor.GetStringRows(cols[3])
+		tables := executor.GetStringRows(cols[4])
+		parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[5])
+		for i, name := range names {
+			childID, ok := databranchutils.ParseBranchSnapshotName(name)
+			if !ok {
+				continue
+			}
+			edges[childID] = databranchutils.HistoricalLineageEdge{
+				ChildTableID:  childID,
+				ParentTableID: parentIDs[i],
+				CloneTS:       cloneTSs[i],
+				AccountName:   accounts[i],
+				DatabaseName:  databases[i],
+				TableName:     tables[i],
+			}
+		}
+		return true
+	})
+	return edges
+}
+
+func (e *bpsEnv) compactHistoricalLineage(
+	t *testing.T,
+	sources []databranchutils.HistoricalSource,
+) databranchutils.AlterLineageCompactionPlan {
+	t.Helper()
+	plan := databranchutils.ComputeAlterLineageCompactionPlan(
+		e.loadBranchDAG(t), e.loadHistoricalLineageEdges(t), sources,
+	)
+	if len(plan.TableIDs) == 0 {
+		return plan
+	}
+	require.NoError(t, exec_sql(e.disttae, e.sysCtx,
+		databranchutils.BuildAlterLineageSnapshotDeleteSQL(plan.SnapshotNames)))
+	require.NoError(t, exec_sql(e.disttae, e.sysCtx,
+		databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs)))
+	return plan
 }
 
 // markBranchDeleted flips `table_deleted=true` for a given child tid.
@@ -552,4 +639,103 @@ func TestBranchProtectSnapshot_CreateFailedRollsBack(t *testing.T) {
 			strings.HasSuffix(s, fmt.Sprintf("%d", childTID)),
 			"no branch-snapshot row must remain for the rolled-back child")
 	}
+}
+
+func TestBranchProtectSnapshot_HistoricalAlterLineageSourceLifecycle(t *testing.T) {
+	env := setupBranchProtectSnapshotEnv(t)
+	defer env.close(t)
+
+	const (
+		parentTID = uint64(9001)
+		childTID  = uint64(9002)
+		cloneTS   = int64(900_000)
+	)
+	env.simulateAlterLineage(t, childTID, parentTID, cloneTS, "sys", "history_db", "history_tbl")
+
+	coveringSource := []databranchutils.HistoricalSource{{
+		Level:        "table",
+		AccountName:  "sys",
+		DatabaseName: "history_db",
+		TableName:    "history_tbl",
+		ObjectID:     parentTID,
+		OldestTS:     cloneTS - 1,
+	}}
+	require.Empty(t, env.compactHistoricalLineage(t, coveringSource))
+	require.Equal(t,
+		[]string{databranchutils.BranchSnapshotName(childTID)},
+		env.querySnapshotsByPrefix(t, databranchutils.BranchSnapshotSnamePrefix),
+	)
+	require.Contains(t, env.loadBranchDAG(t).Info, childTID)
+
+	plan := env.compactHistoricalLineage(t, nil)
+	require.Equal(t, []uint64{childTID}, plan.TableIDs)
+	require.Empty(t, env.querySnapshotsByPrefix(t, databranchutils.BranchSnapshotSnamePrefix))
+	require.Empty(t, env.loadBranchDAG(t).Info)
+}
+
+func TestBranchProtectSnapshot_HistoricalAlterLineageLiveBranchLifecycle(t *testing.T) {
+	env := setupBranchProtectSnapshotEnv(t)
+	defer env.close(t)
+
+	const (
+		rootTID   = uint64(9101)
+		alterTID  = uint64(9102)
+		branchTID = uint64(9103)
+	)
+	env.simulateAlterLineage(t, alterTID, rootTID, 910_000, "sys", "history_db", "history_tbl")
+	env.simulateBranchCreate(t, branchTID, rootTID, 910_001, "sys", "history_db", "history_tbl", rootTID)
+
+	require.Empty(t, env.compactHistoricalLineage(t, nil),
+		"a live logical branch owns the connected ALTER lineage")
+	require.ElementsMatch(t,
+		[]string{
+			databranchutils.BranchSnapshotName(alterTID),
+			databranchutils.BranchSnapshotName(branchTID),
+		},
+		env.querySnapshotsByPrefix(t, databranchutils.BranchSnapshotSnamePrefix),
+	)
+
+	env.markBranchDeleted(t, branchTID)
+	require.Equal(t,
+		[]string{databranchutils.BranchSnapshotName(alterTID)},
+		env.runReclaim(t, []uint64{branchTID}),
+	)
+	plan := env.compactHistoricalLineage(t, nil)
+	require.Equal(t, []uint64{alterTID}, plan.TableIDs)
+	require.Empty(t, env.querySnapshotsByPrefix(t, databranchutils.BranchSnapshotSnamePrefix))
+	dag := env.loadBranchDAG(t)
+	require.NotContains(t, dag.Info, alterTID)
+	require.True(t, dag.Info[branchTID].Deleted)
+}
+
+func TestBranchProtectSnapshot_AlterInheritsLiveBranchOwnership(t *testing.T) {
+	env := setupBranchProtectSnapshotEnv(t)
+	defer env.close(t)
+
+	const (
+		rootTID    = uint64(9201)
+		oldTID     = uint64(9202)
+		currentTID = uint64(9203)
+	)
+	env.simulateBranchCreate(t, oldTID, rootTID, 920_000,
+		"sys", "history_db", "history_tbl", rootTID)
+	env.simulateLineageCreate(t, currentTID, oldTID, 920_001,
+		"alter:table", "sys", "history_db", "history_tbl", oldTID)
+
+	// ALTER's internal DROP retires the old physical generation, but the
+	// replacement still owns the logical branch and both protection snapshots.
+	env.markBranchDeleted(t, oldTID)
+	require.ElementsMatch(t,
+		[]string{
+			databranchutils.BranchSnapshotName(oldTID),
+			databranchutils.BranchSnapshotName(currentTID),
+		},
+		env.runReclaim(t, []uint64{oldTID}),
+	)
+	require.Empty(t, env.compactHistoricalLineage(t, nil))
+
+	// Once the replacement is dropped, ordinary reclaim removes the complete
+	// snapshot chain; retaining alter:table above must not introduce a leak.
+	env.markBranchDeleted(t, currentTID)
+	require.Empty(t, env.runReclaim(t, []uint64{currentTID}))
 }

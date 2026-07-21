@@ -60,9 +60,9 @@ insert into base values (1, 10), (2, 20), (3, 30);
 data branch create table left_add from base;
 data branch create table right_add from base;
 alter table left_add add column c varchar(20) default 'left-only';
-update left_add set b = 11, c = 'changed' where a = 1;
 insert into right_add values (4, 40);
-data branch diff left_add against right_add columns (a, b) output summary;
+-- Target-only column c must not produce false diffs; only a=4 (base-only) appears.
+data branch diff left_add against right_add;
 
 data branch create table both_add_left from base;
 data branch create table both_add_right from base;
@@ -70,23 +70,79 @@ alter table both_add_left add column c varchar(20) default 'same';
 alter table both_add_right add column c varchar(20) default 'same';
 update both_add_left set c = 'left' where a = 2;
 update both_add_right set c = 'right' where a = 3;
+-- ALTER preserves branch lineage: changes to inherited rows remain UPDATEs,
+-- and only the side that changed each row is emitted.
 data branch diff both_add_left against both_add_right columns (a, c);
 
-data branch create table drop_left from base;
-data branch create table drop_right from base;
-alter table drop_left drop column b;
--- Divergent schemas are rejected with a schema-equivalence error.
-data branch diff drop_left against drop_right;
+data branch create table type_left from base;
+data branch create table type_right from base;
+alter table type_left add column c int default 0;
+alter table type_right add column c varchar(20) default 'x';
+-- Type mismatch on a common column is rejected.
+-- @regex("schema compatibility check: column 'c' exists in both schemas but has different types",true)
+data branch diff type_left against type_right;
 
 data branch create table rename_left from base;
 data branch create table rename_right from base;
 alter table rename_left rename column b to bb;
--- A rename on one branch keeps the renamed table queryable for diff.
+-- A one-sided rename removes base-visible column b from the target schema.
+-- @regex("schema compatibility check: base column 'b' is not present in target schema",true)
 data branch diff rename_left against rename_right;
+
+-- Case 3: historical ALTER lineage has explicit owners and is reclaimed
+-- synchronously when the last owner disappears.
+drop snapshot if exists history_owner_s;
+create table history_owner_base(a int primary key, b int);
+create snapshot history_owner_s for table br_schema_drift history_owner_base;
+alter table history_owner_base add column c int default 0;
+set @history_owner_tid = (
+  select rel_id from mo_catalog.mo_tables
+   where reldatabase = 'br_schema_drift' and relname = 'history_owner_base'
+);
+select count(*) as lineage_before_source_drop
+  from mo_catalog.mo_branch_metadata
+ where table_id = @history_owner_tid and level = 'alter';
+drop snapshot history_owner_s;
+select count(*) as snapshots_after_source_drop
+  from mo_catalog.mo_snapshots
+ where kind = 'branch' and table_name = 'history_owner_base';
+select count(*) as lineage_after_source_drop
+  from mo_catalog.mo_branch_metadata
+ where table_id = @history_owner_tid and level = 'alter';
+alter table history_owner_base add column d int default 0;
+set @history_owner_second_tid = (
+  select rel_id from mo_catalog.mo_tables
+   where reldatabase = 'br_schema_drift' and relname = 'history_owner_base'
+);
+select count(*) as lineage_after_second_alter
+  from mo_catalog.mo_branch_metadata
+ where table_id = @history_owner_second_tid and level = 'alter';
+drop table history_owner_base;
+
+-- A live logical branch owns the connected ALTER component. Deleting the
+-- final branch releases both its protect snapshot and the ALTER-only edge.
+create table history_live_base(a int primary key, b int);
+data branch create table history_live_child from history_live_base;
+alter table history_live_base add column c int default 0;
+set @history_live_tid = (
+  select rel_id from mo_catalog.mo_tables
+   where reldatabase = 'br_schema_drift' and relname = 'history_live_base'
+);
+select count(*) as lineage_with_live_branch
+  from mo_catalog.mo_branch_metadata
+ where table_id = @history_live_tid and level = 'alter';
+data branch delete table history_live_child;
+select count(*) as snapshots_after_branch_drop
+  from mo_catalog.mo_snapshots
+ where kind = 'branch' and table_name = 'history_live_base';
+select count(*) as lineage_after_branch_drop
+  from mo_catalog.mo_branch_metadata
+ where table_id = @history_live_tid and level = 'alter';
+drop table history_live_base;
 
 drop database br_schema_drift;
 
--- Case 3: transaction behavior.
+-- Case 4: transaction behavior.
 drop database if exists br_txn_src;
 drop database if exists br_txn_dst;
 create database br_txn_src;
