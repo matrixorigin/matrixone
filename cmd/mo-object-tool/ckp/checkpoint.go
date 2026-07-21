@@ -886,7 +886,7 @@ func writeRestoreScript(
 		if omitForeignKeys {
 			deferredFKs = append(deferredFKs, deferredForeignKeyDDLsForTable(table, dumpData)...)
 		}
-		if isLocalInfileExternalTableDDL(ddl) {
+		if includeLoad && isLocalInfileExternalTableDDL(ddl) {
 			ddl, err = packageExternalTableSource(ctx, dumpOut, csvRoot, table, ddl)
 			if err != nil {
 				return "", err

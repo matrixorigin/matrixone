@@ -832,6 +832,73 @@ func TestWriteRestoreScriptForS3ExternalTableKeepsURLSource(t *testing.T) {
 	require.NotContains(t, got, "LOAD DATA")
 }
 
+func TestWriteRestoreScriptNoLoadKeepsLocalExternalSourceWithoutPackaging(t *testing.T) {
+	ctx := context.Background()
+	missingSource := filepath.Join(t.TempDir(), "missing.csv")
+	paramJSON, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"filepath", missingSource, "format", "csv", "compression", "none"},
+		},
+	})
+	require.NoError(t, err)
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    1,
+		DatabaseID:   2,
+		TableID:      3,
+		DatabaseName: "db",
+		TableName:    "ext_local",
+		RelKind:      "e",
+	}
+	dumpData := map[uint64]*checkpointtool.TableDumpData{
+		table.TableID: {
+			TableID: table.TableID,
+			Schema: &checkpointtool.TableSchema{
+				TableName: "old_ext",
+				CreateSQL: string(paramJSON),
+				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+			},
+		},
+	}
+	newReader := func() *checkpointtool.CheckpointReader {
+		reader := &checkpointtool.CheckpointReader{}
+		reader.SetGetLogicalViewForTest(func(_ *checkpointtool.CheckpointReader, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+			require.Equal(t, uint64(catalog.MO_TABLES_ID), tableID)
+			return &checkpointtool.LogicalTableView{Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...)}, nil
+		})
+		return reader
+	}
+	assertDDLOnly := func(script string) {
+		require.Contains(t, script, "CREATE EXTERNAL TABLE `db`.`ext_local`")
+		require.Contains(t, script, quoteSQLString(missingSource))
+		require.NotContains(t, script, "external_sources")
+		require.NotContains(t, script, "LOAD DATA")
+	}
+
+	t.Run("local output", func(t *testing.T) {
+		root := t.TempDir()
+		path, err := writeRestoreScript(ctx, newReader(), &dumpOutput{}, []checkpointtool.TableCatalogEntry{table}, dumpData,
+			types.BuildTS(1, 0), filepath.Join(root, "scripts"), filepath.Join(root, "csv"), loadDataPathResolver{}, false, true)
+		require.NoError(t, err)
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assertDDLOnly(string(data))
+	})
+
+	t.Run("remote output", func(t *testing.T) {
+		fs, err := fileservice.NewMemoryFS("dump", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		defer fs.Close(ctx)
+		out := &dumpOutput{fs: fs, remote: true}
+		path, err := writeRestoreScript(ctx, newReader(), out, []checkpointtool.TableCatalogEntry{table}, dumpData,
+			types.BuildTS(1, 0), "scripts", "csv", loadDataPathResolver{}, false, true)
+		require.NoError(t, err)
+		var data bytes.Buffer
+		vec := fileservice.IOVector{FilePath: path, Entries: []fileservice.IOEntry{{Offset: 0, Size: -1, WriterForRead: &data}}}
+		require.NoError(t, fs.Read(ctx, &vec))
+		assertDDLOnly(data.String())
+	})
+}
+
 func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()
