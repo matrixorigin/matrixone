@@ -275,12 +275,12 @@ func (s *service) handleRemoteLock(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	logFields := remoteLockResponseLogFields(req)
-	admitted, preDrain := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows)
+	admission, admitted := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows)
 	if !admitted {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	defer s.endLockAdmission(preDrain)
+	defer func() { s.endLockAdmission(admission) }()
 
 	l, err := s.getLocalLockTable(ctx, req, resp)
 	if err != nil ||
@@ -334,7 +334,9 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) && bind.ServiceID == s.serviceID {
+	if txn.lockTableBindTouched(bind) &&
+		bind.ServiceID == s.serviceID &&
+		!admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
 	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
@@ -369,12 +371,12 @@ func (s *service) handleForwardLock(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	logFields := remoteLockResponseLogFields(req)
-	admitted, preDrain := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows)
+	admission, admitted := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows)
 	if !admitted {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	defer s.endLockAdmission(preDrain)
+	defer func() { s.endLockAdmission(admission) }()
 
 	l, err := s.getLockTable(
 		ctx,
@@ -426,7 +428,9 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) && bind.ServiceID == s.serviceID {
+	if txn.lockTableBindTouched(bind) &&
+		bind.ServiceID == s.serviceID &&
+		!admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
 	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)

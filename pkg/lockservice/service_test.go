@@ -6052,15 +6052,15 @@ func TestPostGateAdmissionsDoNotBlockDrainSnapshot(t *testing.T) {
 			_, err := s.Lock(context.Background(), table, newTestRows(1), txnID, options)
 			require.NoError(t, err)
 
-			admitted, preDrain := s.beginLockAdmission(txnID, options, table, newTestRows(1))
+			preDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1))
 			require.True(t, admitted)
-			require.True(t, preDrain)
+			require.True(t, preDrain.preDrain)
 			s.checkCanMoveGroupTables()
 
 			for range 100 {
-				admitted, postDrain := s.beginLockAdmission(txnID, options, table, newTestRows(1))
+				postDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1))
 				require.True(t, admitted)
-				require.False(t, postDrain)
+				require.False(t, postDrain.preDrain)
 				s.endLockAdmission(postDrain)
 			}
 			s.mu.RLock()
@@ -6074,6 +6074,46 @@ func TestPostGateAdmissionsDoNotBlockDrainSnapshot(t *testing.T) {
 			require.Zero(t, s.mu.preDrainAdmissions)
 			s.mu.RUnlock()
 			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		})
+}
+
+func TestLongLockWaitDoesNotRetainCompletedTxnRefs(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			options := newTestRowExclusiveOptions()
+			waitTable := uint64(257910)
+			row := []byte{1}
+			holderTxn := []byte("long-wait-holder")
+			waiterTxn := []byte("long-wait-waiter")
+
+			_, err := s.Lock(ctx, waitTable, [][]byte{row}, holderTxn, options)
+			require.NoError(t, err)
+			waitDone := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, waitTable, [][]byte{row}, waiterTxn, options)
+				waitDone <- err
+			}()
+			waitWaiters(t, s, waitTable, row, 1)
+
+			for i := range 100 {
+				table := uint64(258000 + i)
+				txnID := []byte(fmt.Sprintf("completed-during-wait-%d", i))
+				_, err := s.Lock(ctx, table, newTestRows(1), txnID, options)
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				require.False(t, s.validGroupTable(0, table),
+					"completed transaction ref must be released immediately")
+			}
+			s.mu.RLock()
+			require.Len(t, s.mu.lockTableRef[0], 1)
+			s.mu.RUnlock()
+
+			require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			require.NoError(t, <-waitDone)
+			require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
 		})
 }
 

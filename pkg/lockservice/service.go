@@ -85,7 +85,6 @@ type service struct {
 		drainSnapshotReady bool
 		groupTables        [][]pb.LockTable
 		lockTableRef       map[uint32]map[uint64]uint64
-		pendingRefReleases []pb.LockTable
 		allocating         map[uint32]map[uint64]chan struct{}
 	}
 
@@ -166,11 +165,11 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 
-	admitted, preDrain := s.beginLockAdmission(txnID, options, tableID, rows)
+	admission, admitted := s.beginLockAdmission(txnID, options, tableID, rows)
 	if !admitted {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
 	}
-	defer s.endLockAdmission(preDrain)
+	defer func() { s.endLockAdmission(admission) }()
 
 	v2.TxnLockTotalCounter.Inc()
 	options.Validate(rows)
@@ -238,7 +237,9 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	if txn.lockTableBindTouched(bind) && bind.ServiceID == s.serviceID {
+	if txn.lockTableBindTouched(bind) &&
+		bind.ServiceID == s.serviceID &&
+		!admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
 	}
 	s.bindChangeMu.RUnlock()
@@ -438,10 +439,6 @@ func (s *service) reduceCanMoveGroupTables(binds []pb.LockTable) {
 		if bind.ServiceID != s.serviceID {
 			continue
 		}
-		if s.mu.lockAdmissions != 0 {
-			s.mu.pendingRefReleases = append(s.mu.pendingRefReleases, bind)
-			continue
-		}
 		s.releaseBindRefLocked(bind.Group, bind.Table, bind, s.mu.drainSnapshotReady)
 	}
 }
@@ -463,21 +460,6 @@ func (s *service) releaseBindRefLocked(
 	if addMovable {
 		s.mu.groupTables = append(s.mu.groupTables, []pb.LockTable{bind})
 	}
-}
-
-func (s *service) applyPendingRefReleasesLocked() {
-	if s.mu.lockAdmissions != 0 || len(s.mu.pendingRefReleases) == 0 {
-		return
-	}
-	for _, bind := range s.mu.pendingRefReleases {
-		s.releaseBindRefLocked(
-			bind.Group,
-			bind.Table,
-			bind,
-			s.mu.drainSnapshotReady,
-		)
-	}
-	s.mu.pendingRefReleases = s.mu.pendingRefReleases[:0]
 }
 
 func (s *service) checkCanMoveGroupTables() {
@@ -556,36 +538,74 @@ func (s *service) canLockOnServiceStatusLocked(
 	return false
 }
 
+type lockAdmission struct {
+	preDrain     bool
+	reservedBind pb.LockTable
+	reserved     bool
+}
+
+func (a *lockAdmission) consume(bind pb.LockTable) bool {
+	if !a.reserved ||
+		a.reservedBind.Group != bind.Group ||
+		a.reservedBind.Table != bind.Table {
+		return false
+	}
+	a.reserved = false
+	return true
+}
+
 func (s *service) beginLockAdmission(
 	txnID []byte,
 	opts pb.LockOptions,
 	tableID uint64,
 	rows [][]byte,
-) (bool, bool) {
+) (lockAdmission, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.canLockOnServiceStatusLocked(txnID, opts, tableID, rows) {
-		return false, false
+		return lockAdmission{}, false
 	}
-	preDrain := s.mu.status == pb.Status_ServiceLockEnable
+	admission := lockAdmission{
+		preDrain: s.mu.status == pb.Status_ServiceLockEnable,
+	}
+	if !admission.preDrain {
+		if opts.Sharding == pb.Sharding_ByRow {
+			tableID = ShardingByRow(rows[0])
+		}
+		l := s.tableGroups.get(opts.Group, tableID)
+		if l == nil {
+			return lockAdmission{}, false
+		}
+		admission.reservedBind = l.getBind()
+		admission.reserved = true
+		s.mu.lockTableRef[opts.Group][tableID]++
+	}
 	s.mu.lockAdmissions++
-	return true, preDrain
+	return admission, true
 }
 
-func (s *service) endLockAdmission(preDrain bool) {
+func (s *service) endLockAdmission(admission lockAdmission) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.lockAdmissions == 0 {
 		panic("lock admission underflow")
 	}
 	s.mu.lockAdmissions--
-	if preDrain && s.mu.status == pb.Status_ServiceLockWaiting {
+	if admission.preDrain && s.mu.status == pb.Status_ServiceLockWaiting {
 		if s.mu.preDrainAdmissions == 0 {
 			panic("pre-drain lock admission underflow")
 		}
 		s.mu.preDrainAdmissions--
 	}
-	s.applyPendingRefReleasesLocked()
+	if admission.reserved {
+		bind := admission.reservedBind
+		s.releaseBindRefLocked(
+			bind.Group,
+			bind.Table,
+			bind,
+			s.mu.drainSnapshotReady,
+		)
+	}
 	s.prepareDrainSnapshotLocked()
 	s.tryCompleteDrainLocked()
 }
@@ -593,7 +613,6 @@ func (s *service) endLockAdmission(preDrain bool) {
 func (s *service) tryCompleteDrain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.applyPendingRefReleasesLocked()
 	s.prepareDrainSnapshotLocked()
 	s.tryCompleteDrainLocked()
 }
