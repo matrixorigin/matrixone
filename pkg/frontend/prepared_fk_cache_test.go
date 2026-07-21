@@ -50,3 +50,15 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
 	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
 }
+
+func TestShouldCachePrepareCompileRejectsIcebergScan(t *testing.T) {
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{},
+		},
+	}}}}}
+
+	require.False(t, shouldCachePrepareCompile(p))
+}

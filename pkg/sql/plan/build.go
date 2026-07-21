@@ -152,8 +152,13 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		// map the resolver's external-table fallback sentinel (raised for
 		// writable external tables) to the user-facing error every other DML
 		// kind produces, instead of leaking the internal signal to the client.
-		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && err.Error() == externalTableUnsupportedDMLMsg {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
+			switch err.Error() {
+			case icebergRowLevelDMLUnsupportedMsg:
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "Iceberg row-level DML is not implemented")
+			case externalTableUnsupportedDMLMsg:
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+			}
 		}
 		return nil, err
 	}
@@ -293,6 +298,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
 		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
+				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
+			}
 			return buildDelete(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -327,6 +335,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
 		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
+				return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+			}
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -409,6 +420,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
+	case *tree.Merge:
+		return bindAndOptimizeMergeQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
 	case *tree.CommitTransaction:
@@ -507,6 +520,11 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
+	case *tree.CallStmt:
+		if isIcebergBuiltinCall(stmt) {
+			return buildIcebergBuiltinCall(stmt, ctx)
+		}
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
