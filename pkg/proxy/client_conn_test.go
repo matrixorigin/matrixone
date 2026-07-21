@@ -771,6 +771,52 @@ func TestClientConnHandshakePhases(t *testing.T) {
 		require.True(t, allocator.CheckBalance())
 	})
 
+	t.Run("reject PROXY header after TLS request", func(t *testing.T) {
+		client, session, remote, allocator := newClient(t)
+		t.Cleanup(func() {
+			_ = client.Close()
+			_ = session.Close()
+			_ = remote.Close()
+		})
+		cert, err := certGen(t.TempDir())
+		require.NoError(t, err)
+		client.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.Background(), cert.caFile, cert.certFile, cert.keyFile)
+		require.NoError(t, err)
+		client.tlsConnectTimeout = time.Second
+
+		capabilities := uint32(frontend.CLIENT_PROTOCOL_41 |
+			frontend.CLIENT_SECURE_CONNECTION |
+			frontend.CLIENT_SSL)
+		proxyHeader := make([]byte, ProxyHeaderLength)
+		copy(proxyHeader, ProxyProtocolV2Signature)
+		proxyHeader[12] = 0x20
+		proxyHeader[13] = unspec
+
+		clientDone := make(chan error, 1)
+		go func() {
+			defer remote.Close()
+			if _, err := remote.Write(makeClientSSLRequest(1, capabilities)); err != nil {
+				clientDone <- err
+				return
+			}
+			tlsClient := tls.Client(remote, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec
+			if err := tlsClient.Handshake(); err != nil {
+				clientDone <- err
+				return
+			}
+			_, err := tlsClient.Write(proxyHeader)
+			clientDone <- err
+		}()
+
+		require.ErrorContains(t, handleHandshakeRespForTest(client),
+			"PROXY protocol header after MySQL packet")
+		require.NoError(t, <-clientDone)
+		require.False(t, client.proxyHeaderReceived)
+		require.NoError(t, client.Close())
+		require.True(t, allocator.CheckBalance())
+	})
+
 	t.Run("reject duplicate TLS request", func(t *testing.T) {
 		client, session, remote, allocator := newClient(t)
 		cert, err := certGen(t.TempDir())

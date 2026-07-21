@@ -201,6 +201,10 @@ type clientConn struct {
 	// proxyHeaderReceived prevents repeated PROXY headers from resetting the
 	// handshake read path or growing its recursion depth.
 	proxyHeaderReceived bool
+	// mysqlPacketReceived closes the PROXY framing phase permanently. A PROXY
+	// header is valid only at the start of the transport; in particular, it must
+	// not be accepted from the decrypted stream after an SSLRequest.
+	mysqlPacketReceived bool
 	// haKeeperClient is the client of HAKeeper.
 	haKeeperClient logservice.ClusterHAKeeperClient
 	// moCluster is the CN server cache, which used to filter CN servers
@@ -1194,6 +1198,9 @@ func (c *clientConn) readPacketBefore(deadline time.Time) (*frontend.Packet, err
 			return nil, err
 		}
 		if proxyAddr, ok := msg.(*ProxyAddr); ok {
+			if c.mysqlPacketReceived {
+				return nil, moerr.NewInvalidInputNoCtx("PROXY protocol header after MySQL packet")
+			}
 			if c.proxyHeaderReceived {
 				return nil, moerr.NewInvalidInputNoCtx("duplicate PROXY protocol header")
 			}
@@ -1208,6 +1215,7 @@ func (c *clientConn) readPacketBefore(deadline time.Time) (*frontend.Packet, err
 		if !ok {
 			return nil, moerr.NewInternalError(c.ctx, "message is not a Packet")
 		}
+		c.mysqlPacketReceived = true
 		return packet, nil
 	}
 }

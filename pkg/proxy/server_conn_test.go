@@ -838,6 +838,7 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 func TestServerConn_HandleHandshakeTimeoutStopsWorker(t *testing.T) {
 	local, remote := net.Pipe()
 	defer remote.Close()
+	frontend.InitServerLevelVars("test")
 	require.NoError(t, remote.SetWriteDeadline(time.Now().Add(time.Second)))
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
