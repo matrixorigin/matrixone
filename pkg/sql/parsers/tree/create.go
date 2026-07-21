@@ -942,6 +942,7 @@ type CreateTable struct {
 	PartitionOption    *PartitionOption
 	ClusterByOption    *ClusterByOption
 	Param              *ExternParam
+	IcebergParam       *IcebergTableParam
 	AsSource           *Select
 	IsDynamicTable     bool
 	DTOptions          []TableOption
@@ -963,7 +964,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil {
+	if node.Param != nil || node.IcebergParam != nil {
 		ctx.WriteString(" external")
 	}
 	if node.IsDynamicTable {
@@ -1002,7 +1003,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	} else {
 
-		if !node.IsAsSelect {
+		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1026,6 +1027,11 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			ctx.WriteString(prefix)
 			t.Format(ctx)
 		}
+	}
+
+	if node.IcebergParam != nil {
+		ctx.WriteByte(' ')
+		node.IcebergParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
