@@ -61,6 +61,16 @@ func assertPostingsEqual(t *testing.T, want, got *termPostings) {
 	}
 }
 
+// allPks materializes a loaded segment's pks via the on-demand accessor (loaded
+// segments hold no resident []any — pk(ord) decodes from the mmap-backed docmap).
+func allPks(s *Segment) []any {
+	out := make([]any, s.numDocs())
+	for i := range out {
+		out[i] = s.pk(int64(i))
+	}
+	return out
+}
+
 func TestSegmentRoundtripInt64PK(t *testing.T) {
 	terms := map[string]*termPostings{
 		"apple": {
@@ -86,7 +96,7 @@ func TestSegmentRoundtripInt64PK(t *testing.T) {
 
 	require.Equal(t, int32(types.T_int64), loaded.PkType)
 	require.Equal(t, int64(3), loaded.N)
-	require.Equal(t, []any{int64(100), int64(200), int64(300)}, loaded.pks)
+	require.Equal(t, []any{int64(100), int64(200), int64(300)}, allPks(loaded))
 	require.Equal(t, []int32{5, 7, 3}, loaded.docLen)
 
 	for term, want := range terms {
@@ -115,7 +125,7 @@ func TestSegmentRoundtripVarcharPK(t *testing.T) {
 
 	loaded := roundtrip(t, orig)
 	require.Equal(t, int32(types.T_varchar), loaded.PkType)
-	require.Equal(t, []any{[]byte("alpha"), []byte("beta")}, loaded.pks)
+	require.Equal(t, []any{[]byte("alpha"), []byte("beta")}, allPks(loaded))
 	require.Equal(t, []int32{2, 9}, loaded.docLen)
 	got, ok := loaded.LookupLoaded("x")
 	require.True(t, ok)
@@ -130,7 +140,7 @@ func TestSegmentRoundtripDatetimePK(t *testing.T) {
 		[]any{types.Datetime(1234567890)}, []int32{1}, terms)
 
 	loaded := roundtrip(t, orig)
-	require.Equal(t, []any{types.Datetime(1234567890)}, loaded.pks)
+	require.Equal(t, []any{types.Datetime(1234567890)}, allPks(loaded))
 }
 
 // Narrow integer PKs (TINYINT/SMALLINT, signed + unsigned) must round-trip: the
@@ -155,7 +165,7 @@ func TestSegmentRoundtripNarrowIntPK(t *testing.T) {
 			orig := buildSegment(int32(c.typ), c.pks, []int32{1, 1}, terms)
 			loaded := roundtrip(t, orig)
 			require.Equal(t, int32(c.typ), loaded.PkType)
-			require.Equal(t, c.pks, loaded.pks)
+			require.Equal(t, c.pks, allPks(loaded))
 			got, ok := loaded.LookupLoaded("n")
 			require.True(t, ok)
 			assertPostingsEqual(t, terms["n"], got)

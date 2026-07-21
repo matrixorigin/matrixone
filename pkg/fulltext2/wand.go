@@ -378,7 +378,7 @@ func heapToResults(s *Segment, h *topKHeap) []Result {
 	results := make([]Result, n)
 	for i := n - 1; i >= 0; i-- {
 		ord, negScore, _ := h.Pop()
-		results[i] = Result{Pk: s.pks[ord], Score: -negScore}
+		results[i] = Result{Pk: s.pk(ord), Score: -negScore}
 	}
 	return results
 }

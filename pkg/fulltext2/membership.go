@@ -46,10 +46,13 @@ type docFilterMembership struct {
 }
 
 func (d *docFilterMembership) Contains(ord int64) bool {
-	if ord < 0 || ord >= int64(len(d.seg.pks)) {
+	if ord < 0 || ord >= int64(d.seg.numDocs()) {
 		return false
 	}
-	v := d.seg.pks[ord]
+	// pk(ord) decodes on demand on a loaded segment (a small box on this WHERE-prefilter
+	// hot path); the docmap pk encoding differs from the docfilter probe encoding for some
+	// types (uuid raw vs canonical), so the decoded value must be re-encoded below.
+	v := d.seg.pk(ord)
 	// Contains runs once per WAND candidate on the block-max walk hot path. For the
 	// common integer PKs, encode straight into the reused scratch buffer (byte-identical
 	// to packUint*) rather than allocating via encodePk per call; Test reads the bytes
@@ -109,7 +112,7 @@ type livenessMembership struct {
 func (l *livenessMembership) Contains(ord int64) bool {
 	// Bounds-check on BOTH paths: never admit an out-of-range ord (the scoring that
 	// follows indexes seg.pks[ord] and would panic).
-	if ord < 0 || ord >= int64(len(l.idx.segments[l.si].pks)) {
+	if ord < 0 || ord >= int64(l.idx.segments[l.si].numDocs()) {
 		return false
 	}
 	b := l.idx.liveOrd[l.si]

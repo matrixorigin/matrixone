@@ -90,7 +90,7 @@ func (s *Segment) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int) []Resu
 	results := make([]Result, len(hits))
 	for i, h := range hits {
 		results[i] = Result{
-			Pk:    s.pks[h.ord],
+			Pk:    s.pk(h.ord),
 			Score: s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen),
 		}
 	}

@@ -77,8 +77,9 @@ func (idx *Index) resolve() {
 	}
 	top := make(map[any]best)
 	for si, seg := range idx.segments {
-		for ord := range seg.pks {
-			key := normalizeKey(seg.pks[ord])
+		nd := seg.numDocs()
+		for ord := 0; ord < nd; ord++ {
+			key := normalizeKey(seg.pk(int64(ord)))
 			cand := best{seg.Recency, docLoc{si, int64(ord)}}
 			if cur, ok := top[key]; !ok || cand.rec > cur.rec {
 				top[key] = cand
@@ -116,8 +117,8 @@ func (idx *Index) resolve() {
 		liveCount[loc.si]++
 	}
 	for si, seg := range idx.segments {
-		if liveCount[si] < len(seg.pks) { // some dead ord in this segment → need the bitmap
-			idx.liveOrd[si] = make([]bool, len(seg.pks))
+		if liveCount[si] < seg.numDocs() { // some dead ord in this segment → need the bitmap
+			idx.liveOrd[si] = make([]bool, seg.numDocs())
 		}
 	}
 	for _, loc := range liveLoc {
@@ -141,7 +142,8 @@ func (idx *Index) isLive(si int, ord int64) bool {
 func (idx *Index) forEachLive(fn func(si int, ord int64)) {
 	for si, seg := range idx.segments {
 		b := idx.liveOrd[si]
-		for ord := 0; ord < len(seg.pks); ord++ {
+		nd := seg.numDocs()
+		for ord := 0; ord < nd; ord++ {
 			if b == nil || b[ord] {
 				fn(si, int64(ord))
 			}
@@ -176,7 +178,7 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 			df++ // distinct live phrase match (filter-independent, matches the old dfSet)
 			if allowed(allow, h.ord) {
 				partial := seg.scoreTerm(algo, float64(h.tf), 1.0, h.ord, idx.globalAvgDocLen)
-				tk.push(seg.pks[h.ord], partial)
+				tk.push(seg.pk(h.ord), partial)
 			}
 		}
 	}
@@ -510,7 +512,7 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 		}
 		keys := make([]keyed, 0, idx.globalN)
 		idx.forEachLive(func(si int, ord int64) {
-			keys = append(keys, keyed{sortKey(normalizeKey(idx.segments[si].pks[ord])), docLoc{si, ord}})
+			keys = append(keys, keyed{sortKey(normalizeKey(idx.segments[si].pk(ord))), docLoc{si, ord}})
 		})
 		sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk }) // deterministic output
 		for _, kd := range keys {
@@ -524,7 +526,7 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 				positions[i] = pt.pos // byte position, carried through MERGE
 			}
 			buckets[l] = nil // this doc's postings are copied out — let GC reclaim them
-			if !yield(TokenizedDoc{Pk: idx.segments[l.si].pks[l.ord], Terms: terms, Positions: positions}, nil) {
+			if !yield(TokenizedDoc{Pk: idx.segments[l.si].pk(l.ord), Terms: terms, Positions: positions}, nil) {
 				return
 			}
 		}

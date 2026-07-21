@@ -153,7 +153,7 @@ func (s *Segment) decodeSegment(data []byte) error {
 		return err
 	}
 	s.dict = dict
-	s.N = int64(len(s.pks))
+	// s.N is set by decodeDocmap (loaded segments have pks==nil, so len(s.pks) is 0).
 	return nil
 }
 
@@ -200,34 +200,54 @@ func (s *Segment) encodeDocmap() ([]byte, error) {
 }
 
 func (s *Segment) decodeDocmap(data []byte) error {
-	r := bytes.NewReader(data)
-	if err := binary.Read(r, binary.LittleEndian, &s.PkType); err != nil {
-		return err
+	if len(data) < 12 {
+		return moerr.NewInternalErrorNoCtx("fulltext2: docmap too short")
 	}
-	var n int64
-	if err := binary.Read(r, binary.LittleEndian, &n); err != nil {
-		return err
+	s.PkType = int32(binary.LittleEndian.Uint32(data[0:4]))
+	n := int64(binary.LittleEndian.Uint64(data[4:12]))
+	if n < 0 {
+		return moerr.NewInternalErrorNoCtx("fulltext2: docmap negative N")
 	}
-	s.pks = make([]any, n)
+	s.N = n
+	// Build a pk offset table into the (view) docmap bytes rather than materializing N
+	// boxed `any` pks — pk(ord) decodes on demand from pkRaw. pkOffsets[i] is the byte
+	// offset of pk i's u32 length prefix within data; pkRaw retains the view so the pk
+	// bytes stay mmap-backed (base) / GC-alive (tail). This is the O(docs) resident-heap
+	// reduction: 4 B/doc (offset) instead of ~24 B/doc (interface + boxed value).
+	offs := make([]int32, n)
+	pos := 12
 	for i := int64(0); i < n; i++ {
-		var l uint32
-		if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
-			return err
+		if pos+4 > len(data) {
+			return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated pk length")
 		}
-		raw := make([]byte, l)
-		if _, err := io.ReadFull(r, raw); err != nil {
-			return err
+		offs[i] = int32(pos)
+		l := int(binary.LittleEndian.Uint32(data[pos:]))
+		pos += 4 + l
+		if pos < 0 || pos > len(data) {
+			return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated pk data")
 		}
-		v, err := decodePk(s.PkType, raw)
-		if err != nil {
-			return err
-		}
-		s.pks[i] = v
 	}
-	s.docLen = make([]int32, n)
-	if err := binary.Read(r, binary.LittleEndian, s.docLen); err != nil {
-		return err
+	// Validate pkType ONCE (decodePk rejects unsupported types) so pk(ord) can trust it.
+	if n > 0 {
+		off := int(offs[0])
+		l := int(binary.LittleEndian.Uint32(data[off:]))
+		if _, err := decodePk(s.PkType, data[off+4:off+4+l]); err != nil {
+			return err
+		}
 	}
+	s.pks = nil
+	s.pkOffsets = offs
+	s.pkRaw = data // pkOffsets are absolute offsets into data
+
+	// docLen: N contiguous little-endian int32 after the pk section.
+	if pos+int(n)*4 > len(data) {
+		return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated docLen")
+	}
+	dl := make([]int32, n)
+	for i := int64(0); i < n; i++ {
+		dl[i] = int32(binary.LittleEndian.Uint32(data[pos+int(i)*4:]))
+	}
+	s.docLen = dl
 	return nil
 }
 

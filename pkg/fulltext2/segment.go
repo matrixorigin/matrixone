@@ -275,8 +275,15 @@ type Segment struct {
 	// tail delta, metadata.recency for a tag=0 base).
 	Recency int64
 
-	pks    []any   // ord -> original pk value (for output)
-	docLen []int32 // ord -> document length (token count), for BM25
+	// pks is the BUILD-side ord->pk slice (set while building an in-memory segment).
+	// On a LOADED segment it is nil: instead of materializing N boxed `any` pks (~24 B
+	// each — the O(docs) resident floor after the liveLoc removal), decodeDocmap keeps
+	// pkOffsets (4 B/doc, the byte offset of each pk in the docmap bytes) + pkRaw (a
+	// VIEW into those bytes, mmap-backed for a base), and pk(ord) decodes on demand.
+	pks       []any
+	pkOffsets []int32 // loaded-side: ord -> offset of pk's length prefix in pkRaw
+	pkRaw     []byte  // loaded-side: the docmap bytes (view; pks live here len-prefixed)
+	docLen    []int32 // ord -> document length (token count), for BM25
 
 	// term dict, BUILD-side representation — dictionary-free, keyed by the
 	// indexed term string. `terms` accumulates postings during build and gives
@@ -307,6 +314,24 @@ type Segment struct {
 	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
+}
+
+// numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
+// and a loaded segment (== N, where pks is nil and pk(ord) decodes from pkRaw).
+func (s *Segment) numDocs() int { return int(s.N) }
+
+// pk returns the original pk value at ord. Build-side segments read the resident pks
+// slice; loaded segments decode on demand from pkRaw at pkOffsets[ord] (a length-prefixed
+// pk), so no O(docs) []any is held resident. pkType is validated once at decodeDocmap, so
+// decodePk cannot fail here for a well-formed segment.
+func (s *Segment) pk(ord int64) any {
+	if s.pks != nil {
+		return s.pks[ord]
+	}
+	off := int(s.pkOffsets[ord])
+	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:]))
+	v, _ := decodePk(s.PkType, s.pkRaw[off+4:off+4+l])
+	return v
 }
 
 // Free releases a loaded segment's mmap (and its backing file, if linked). Safe on

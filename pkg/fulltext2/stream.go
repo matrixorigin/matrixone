@@ -91,7 +91,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 					score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, minDoc, avgDocLen)
 				}
 			}
-			sink.push(s.pks[minDoc], score)
+			sink.push(s.pk(minDoc), score)
 		}
 		for _, it := range iters {
 			if it.doc() == minDoc {
