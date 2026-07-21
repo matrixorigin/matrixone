@@ -1802,6 +1802,8 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected decimal128 value")
 		}
 		p.EncodeDecimal128(val)
+	case types.T_decimal256:
+		return encodeDecodedDecimal256(p, v)
 	case types.T_uuid:
 		val, ok := v.(types.Uuid)
 		if !ok {
@@ -1817,9 +1819,9 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 	case types.T_enum:
 		switch val := v.(type) {
 		case types.Enum:
-			p.EncodeUint16(uint16(val))
+			p.EncodeEnum(val)
 		case uint16:
-			p.EncodeUint16(val)
+			p.EncodeEnum(types.Enum(val))
 		default:
 			return moerr.NewInvalidInputNoCtx("expected enum value")
 		}
@@ -1837,6 +1839,21 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected byte slice value")
 		}
 		p.EncodeStringType(bytesVal)
+	}
+	return nil
+}
+
+func encodeDecodedDecimal256(p *types.Packer, v any) error {
+	switch val := v.(type) {
+	case types.Decimal256:
+		p.EncodeStringType(types.EncodeDecimal256(&val))
+	case []byte:
+		if len(val) != types.Decimal256Size {
+			return moerr.NewInvalidInputNoCtxf("expected decimal256 raw bytes length %d, got %d", types.Decimal256Size, len(val))
+		}
+		p.EncodeStringType(val)
+	default:
+		return moerr.NewInvalidInputNoCtx("expected decimal256 value")
 	}
 	return nil
 }
@@ -1897,6 +1914,11 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 	case types.T_decimal128:
 		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row)
 		p.EncodeDecimal128(v)
+	case types.T_decimal256:
+		raw := vec.GetRawBytesAt(row)
+		tmp := make([]byte, len(raw))
+		copy(tmp, raw)
+		p.EncodeStringType(tmp)
 	case types.T_uuid:
 		v := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row)
 		p.EncodeUuid(v)
@@ -1905,7 +1927,7 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 		p.EncodeBit(v)
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, row)
-		p.EncodeUint16(uint16(v))
+		p.EncodeEnum(v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:

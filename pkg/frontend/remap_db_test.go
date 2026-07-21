@@ -32,7 +32,7 @@ func applyRemapDbToSQL(t *testing.T, sql string, remap map[string]string) string
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	applyRemapDb(stmts, remap)
-	return tree.String(stmts[0], dialect.MYSQL)
+	return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
 func TestApplyRemapDb(t *testing.T) {
@@ -242,6 +242,100 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Contains(t, out, "dbxxx")
 		require.NotContains(t, out, "dbyyy")
 	})
+}
+
+func TestApplyRemapDbExpressionContainers(t *testing.T) {
+	remap := map[string]string{"src": "dst"}
+	tests := []struct {
+		name     string
+		sql      string
+		contains []string
+		absent   []string
+	}{
+		{
+			name:     "qualified column in view body",
+			sql:      "create view src.v as select src.t.a from src.t",
+			contains: []string{"create view dst.v", "dst.t.a", "from dst.t"},
+			absent:   []string{"src.t.a", "from src.t"},
+		},
+		{
+			name:     "top level order by subquery",
+			sql:      "create view src.v as select a from src.t order by (select max(b) from src.u)",
+			contains: []string{"from dst.t", "from dst.u"},
+			absent:   []string{"from src.t", "from src.u"},
+		},
+		{
+			name:     "aggregate order by subquery",
+			sql:      "create view src.v as select group_concat(a order by (select max(b) from src.u)) from src.t",
+			contains: []string{"from dst.t", "from dst.u"},
+			absent:   []string{"from src.t", "from src.u"},
+		},
+		{
+			name:     "window order by subquery",
+			sql:      "create view src.v as select row_number() over (order by (select max(b) from src.u)) from src.t",
+			contains: []string{"from dst.t", "from dst.u"},
+			absent:   []string{"from src.t", "from src.u"},
+		},
+		{
+			name:     "cte union nested select and join",
+			sql:      "create view src.v as with c as (select src.cte_t.a from src.cte_t) select a from c union select x.a from (select src.nested_t.a from src.nested_t) x join src.join_t j on x.a = j.a",
+			contains: []string{"dst.cte_t.a", "from dst.cte_t", "dst.nested_t.a", "from dst.nested_t", "join dst.join_t"},
+			absent:   []string{"src.cte_t.a", "from src.cte_t", "src.nested_t.a", "from src.nested_t", "join src.join_t"},
+		},
+		{
+			name:     "aliases and string literals are unchanged",
+			sql:      "create view src.v as select src.a, 'src.t.a' as literal from src.t as src",
+			contains: []string{"src.a", "'src.t.a'", "from dst.t as src"},
+			absent:   []string{"from src.t"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := applyRemapDbToSQL(t, tt.sql, remap)
+			for _, expected := range tt.contains {
+				require.Contains(t, out, expected)
+			}
+			for _, unexpected := range tt.absent {
+				require.NotContains(t, out, unexpected)
+			}
+		})
+	}
+}
+
+func TestApplyRemapDbDMLExpressionContainers(t *testing.T) {
+	remap := map[string]string{"src": "dst"}
+	tests := []struct {
+		name     string
+		sql      string
+		contains []string
+		absent   []string
+	}{
+		{
+			name:     "update order by subquery",
+			sql:      "update src.t set a = (select max(b) from src.u) order by (select max(c) from src.o) limit 1",
+			contains: []string{"update dst.t", "from dst.u", "from dst.o"},
+			absent:   []string{"update src.t", "from src.u", "from src.o"},
+		},
+		{
+			name:     "delete order by subquery",
+			sql:      "delete from src.t order by (select max(b) from src.u) limit 1",
+			contains: []string{"delete from dst.t", "from dst.u"},
+			absent:   []string{"delete from src.t", "from src.u"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := applyRemapDbToSQL(t, tt.sql, remap)
+			for _, expected := range tt.contains {
+				require.Contains(t, out, expected)
+			}
+			for _, unexpected := range tt.absent {
+				require.NotContains(t, out, unexpected)
+			}
+		})
+	}
 }
 
 func TestApplyRemapDbByStatementKeepsPolicyBoundaries(t *testing.T) {

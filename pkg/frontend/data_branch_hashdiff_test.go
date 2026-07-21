@@ -175,6 +175,17 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 		require.Zero(t, cmp)
 	})
 
+	t.Run("geometry32 accepts raw bytes", func(t *testing.T) {
+		vec := vector.NewVec(types.T_geometry32.ToType())
+		defer vec.Free(mp)
+		geometry32WKB := []byte{0x01, 0x02, 0x03, 0x04}
+		require.NoError(t, vector.AppendBytes(vec, geometry32WKB, false, mp))
+
+		cmp, err := compareTupleValueWithVector(geometry32WKB, vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
 	t.Run("array accepts raw bytes", func(t *testing.T) {
 		vec := vector.NewVec(types.T_array_float32.ToType())
 		defer vec.Free(mp)
@@ -321,6 +332,11 @@ func TestNormalizeCompareValueSupportedForms(t *testing.T) {
 	got, err = normalizeCompareValue(types.T_varchar.ToType(), []byte("alice"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("alice"), got)
+
+	geometry32WKB := []byte{0x01, 0x02, 0x03, 0x04}
+	got, err = normalizeCompareValue(types.T_geometry32.ToType(), geometry32WKB)
+	require.NoError(t, err)
+	require.Equal(t, geometry32WKB, got)
 
 	array32 := []float32{1, 2}
 	got, err = normalizeCompareValue(types.T_array_float32.ToType(), array32)

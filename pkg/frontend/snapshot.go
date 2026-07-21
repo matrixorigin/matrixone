@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -2249,9 +2250,9 @@ func getFkDeps(
 	}
 
 	if len(dbName) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", dbName)
+		sql += fmt.Sprintf(" where db_name = '%s'", sqlquote.EscapeString(dbName))
 		if len(tblName) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+			sql += fmt.Sprintf(" and table_name = '%s'", sqlquote.EscapeString(tblName))
 		}
 	}
 

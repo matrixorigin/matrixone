@@ -37,12 +37,12 @@ func TestDataBranchCreateTableLifecycle(t *testing.T) {
 	require.Nil(t, stmt.ToAccountOpt)
 	require.False(t, stmt.CreateTable.IfNotExists)
 
-	require.Panics(t, func() {
-		stmt.Format(nil)
-	})
-	require.Panics(t, func() {
-		stmt.TypeName()
-	})
+	stmt.CreateTable.Table.ObjectName = Identifier("quote'dst")
+	stmt.SrcTable.ObjectName = Identifier("quote'src")
+	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteIdentifier())
+	stmt.Format(ctx)
+	require.Equal(t, "data branch create table `quote'dst` from `quote'src`", ctx.String())
+	require.Equal(t, "data branch create table", stmt.TypeName())
 
 	stmt.Free()
 }

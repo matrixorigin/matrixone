@@ -3558,6 +3558,23 @@ func Test_StatementClassify(t *testing.T) {
 	}
 }
 
+func TestDataBranchDiffAndMergeAllowExplicitTransaction(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			txnHandler: &TxnHandler{optionBits: OPTION_BEGIN},
+		},
+	}
+
+	for _, stmt := range []tree.Statement{
+		&tree.DataBranchDiff{},
+		&tree.DataBranchMerge{},
+	} {
+		allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, allowed)
+	}
+}
+
 func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

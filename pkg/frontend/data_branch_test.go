@@ -98,6 +98,39 @@ func TestFormatValIntoString_Time(t *testing.T) {
 	require.Equal(t, `'12:34:56.123456'`, buf.String())
 }
 
+func TestFormatValIntoString_Bit(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	require.NoError(t, formatValIntoString(ses, uint64(7), types.New(types.T_bit, 0, 0), &buf))
+	require.Equal(t, "7", buf.String())
+}
+
+func TestFormatValIntoString_UUID(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+	uuidValue := types.Uuid{0x1b, 0x50, 0xc1, 0x37, 0x2d, 0xba, 0x11, 0xed, 0x94, 0x0f, 0x00, 0x0c, 0x29, 0x84, 0x79, 0x04}
+
+	require.NoError(t, formatValIntoString(ses, uuidValue, types.New(types.T_uuid, 0, 0), &buf))
+	require.Equal(t, "'1b50c137-2dba-11ed-940f-000c29847904'", buf.String())
+}
+
+func TestFormatValIntoString_GeometryText(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry, 0, 0), &buf))
+	require.Equal(t, "'POINT(2 2)'", buf.String())
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 0, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)')", buf.String())
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 4326+1, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)',4326)", buf.String())
+}
+
 func TestFormatValIntoString_JSONEscaping(t *testing.T) {
 	var buf bytes.Buffer
 	ses := &Session{}
@@ -215,18 +248,24 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.Equal(t, 2, varcharVec.Length())
 	require.True(t, varcharVec.GetNulls().Contains(1))
 
+	decimalVec := vector.NewVec(types.New(types.T_decimal256, 65, 30))
+	decimalValue, err := types.ParseDecimal256("42.000000000000000000000000000000", 65, 30)
+	require.NoError(t, err)
+	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalValue), mp))
+	require.Equal(t, decimalValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+
 	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
-	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
+	err = appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
 
 	decimalTyp := types.New(types.T_decimal256, 39, 4)
-	decimalVec := vector.NewVec(decimalTyp)
+	wideDecimalVec := vector.NewVec(decimalTyp)
 	decimalVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", decimalTyp.Width, decimalTyp.Scale)
 	require.NoError(t, err)
-	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalVal), mp))
-	require.Equal(t, 1, decimalVec.Length())
-	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+	require.NoError(t, appendTupleValueToVector(wideDecimalVec, types.EncodeDecimal256(&decimalVal), mp))
+	require.Equal(t, 1, wideDecimalVec.Length())
+	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](wideDecimalVec, 0))
 
 	yearVec := vector.NewVec(types.T_year.ToType())
 	yearVal := types.MoYear(2024)
@@ -483,6 +522,16 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
 				typ := types.T_datalink.ToType()
 				leftVal, rightVal := []byte("link-a"), []byte("link-b")
+				leftVec := buildBytesVector(t, mp, typ, leftVal)
+				rightVec := buildBytesVector(t, mp, typ, rightVal)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
+			},
+		},
+		{
+			name: "geometry32",
+			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
+				typ := types.T_geometry32.ToType()
+				leftVal, rightVal := []byte{0x01, 0x02, 0x03}, []byte{0x01, 0x02, 0x04}
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
 				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)

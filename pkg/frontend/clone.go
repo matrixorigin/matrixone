@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -547,9 +548,18 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 
-		rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(
-			source.viewMap, sortedViews, source.srcResolveDBName, stmt.DstDatabase.String(),
+		var rewrittenViewMap map[string]*tableInfo
+		var rewrittenViews []string
+		rewrittenViewMap, rewrittenViews, err = rewriteCloneViewInfos(
+			source.viewMap,
+			sortedViews,
+			source.srcResolveDBName,
+			stmt.DstDatabase.String(),
+			parserLowerCaseTableNames(ses),
 		)
+		if err != nil {
+			return
+		}
 
 		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
@@ -579,7 +589,8 @@ func rewriteCloneViewInfos(
 	sortedViews []string,
 	srcDBName string,
 	dstDBName string,
-) (map[string]*tableInfo, []string) {
+	lowerCaseTableNames int64,
+) (map[string]*tableInfo, []string, error) {
 	rewrittenViews := make([]string, 0, len(sortedViews))
 	for _, key := range sortedViews {
 		dbName, tblName := splitKey(key)
@@ -601,14 +612,47 @@ func rewriteCloneViewInfos(
 		} else if dbName == srcDBName {
 			key = genKey(dstDBName, tblName)
 		}
+		createSQL, err := rewriteCloneCreateSQL(
+			info.createSql,
+			srcDBName,
+			dstDBName,
+			lowerCaseTableNames,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		clonedInfo := *info
 		clonedInfo.dbName = dstDBName
-		clonedInfo.createSql = strings.ReplaceAll(info.createSql, srcDBName, dstDBName)
+		clonedInfo.createSql = createSQL
 		rewrittenViewMap[key] = &clonedInfo
 	}
 
-	return rewrittenViewMap, rewrittenViews
+	return rewrittenViewMap, rewrittenViews, nil
+}
+
+func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames int64) (string, error) {
+	if srcDBName == "" || srcDBName == dstDBName {
+		return sql, nil
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
+	if err != nil {
+		return "", err
+	}
+	createView, ok := stmt.(*tree.CreateView)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtxf("clone view SQL is %T, expected *tree.CreateView", stmt)
+	}
+
+	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
+
+	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
+	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+	if !strings.HasSuffix(strings.TrimSpace(rewritten), ";") {
+		rewritten += ";"
+	}
+	return rewritten, nil
 }
 
 func tryToIncreaseTxnPhysicalTS(

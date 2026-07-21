@@ -811,6 +811,24 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
 }
 
+func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
+	assert.Contains(
+		t,
+		getSqlForCheckPitrExists("pi'tr\\name", 7),
+		"pitr_name = 'pi''tr\\\\name'",
+	)
+
+	p := &plan2.CreatePitr{
+		Level:            int32(tree.PITRLEVELTABLE),
+		CurrentAccountId: 1,
+		DatabaseName:     "db'name",
+		TableName:        "tb\\name",
+	}
+	sql := getSqlForCheckPitrDup(p)
+	assert.Contains(t, sql, "database_name = 'db''name'")
+	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
+}
+
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ctx := context.Background()
@@ -963,6 +981,21 @@ func Test_toHours(t *testing.T) {
 			t.Fatalf("toHours(%d,%q)=%d, want %d", c.val, c.unit, got, c.want)
 		}
 	}
+}
+
+func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
+	dbWithAccount := getPitrDatabaseGranularitySql("db'name", 7, true)
+	require.Contains(t, dbWithAccount, "lower(database_name) = 'db''name'")
+	require.Contains(t, dbWithAccount, "account_id = 7")
+
+	dbWithoutAccount := getPitrDatabaseGranularitySql("db\\name", 7, false)
+	require.Contains(t, dbWithoutAccount, "lower(database_name) = 'db\\\\name'")
+	require.NotContains(t, dbWithoutAccount, "account_id")
+
+	tbl := getPitrTableGranularitySql("db'name", "tbl\\name", 9)
+	require.Contains(t, tbl, "lower(database_name)='db''name'")
+	require.Contains(t, tbl, "lower(table_name)='tbl\\\\name'")
+	require.Contains(t, tbl, "account_id = 9")
 }
 
 // TestDropDatabase_SnapshotAdvance verifies that DropDatabase safely advances
