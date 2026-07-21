@@ -17,11 +17,13 @@ package shardservice
 import (
 	"context"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -29,6 +31,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/stretchr/testify/require"
 )
+
+type countingMethodBasedClient struct {
+	morpc.MethodBasedClient[*shard.Request, *shard.Response]
+	asyncCalls atomic.Int32
+}
+
+func (c *countingMethodBasedClient) AsyncSend(
+	ctx context.Context,
+	req *shard.Request,
+) (*morpc.Future, error) {
+	c.asyncCalls.Add(1)
+	return c.MethodBasedClient.AsyncSend(ctx, req)
+}
 
 func TestValidateRemoteReadCompatibility(t *testing.T) {
 	cns, _ := initTestCluster("target")
@@ -55,6 +70,75 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	unknown := target
 	unknown.Replicas[0].CN = "unknown"
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
+}
+
+func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2,cn3",
+		func(ctx context.Context, _ *server, services []*service) {
+			s := services[0]
+			table := uint64(1)
+			mustAddTestShards(t, ctx, s, table, 3, 1, services[1:]...)
+			for _, service := range services {
+				waitReplicaCount(table, service, 1)
+			}
+
+			cache, err := s.getShards(table)
+			require.NoError(t, err)
+			var remoteTargets []string
+			cache.selectReplicas(
+				table,
+				func(_ shard.ShardsMetadata, _ shard.TableShard, replica shard.ShardReplica) bool {
+					if !s.isLocalReplica(replica) {
+						remoteTargets = append(remoteTargets, replica.CN)
+					}
+					return true
+				},
+			)
+			require.GreaterOrEqual(t, len(remoteTargets), 2)
+
+			cns := make(map[string]metadata.CNService)
+			s.remote.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewSelector(),
+				func(cn metadata.CNService) bool {
+					cns[cn.ServiceID] = cn
+					return true
+				},
+			)
+			for _, target := range remoteTargets {
+				cn := cns[target]
+				cn.CommitID = version.CommitID
+				s.remote.cluster.UpdateCN(cn)
+			}
+			incompatible := cns[remoteTargets[len(remoteTargets)-1]]
+			incompatible.CommitID = "older-commit"
+			s.remote.cluster.UpdateCN(incompatible)
+
+			client := &countingMethodBasedClient{MethodBasedClient: s.remote.client}
+			s.remote.client = client
+			adjustCalls := make(map[uint64]int)
+			err = s.Read(
+				ctx,
+				ReadRequest{
+					TableID: table,
+					Param: shard.ReadParam{Process: pipeline.ProcessInfo{
+						PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
+					}},
+				},
+				DefaultOptions.Adjust(func(target *shard.TableShard) {
+					adjustCalls[target.ShardID]++
+				}),
+			)
+			require.Error(t, err)
+			require.Zero(t, client.asyncCalls.Load())
+			require.Len(t, adjustCalls, len(remoteTargets))
+			for _, calls := range adjustCalls {
+				require.Equal(t, 1, calls)
+			}
+		},
+		nil,
+	)
 }
 
 func TestRead(t *testing.T) {
