@@ -500,6 +500,7 @@ func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionRe
 	// reset the new session in other instances.
 	rt.getProtocol().Reset(newSession)
 	rt.setSession(newSession)
+	newSession.getRoutineManager().sessionManager.AddSession(newSession)
 
 	// update the password filed in response.
 	resp.AuthString = []byte(rt.getProtocol().GetStr(AuthString))
