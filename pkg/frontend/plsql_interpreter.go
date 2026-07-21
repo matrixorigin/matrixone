@@ -216,6 +216,9 @@ func (interpreter *Interpreter) MatchExpr(expr tree.Expr) (tree.Expr, error) {
 
 // Evaluate condition by sending it to bh with a select
 func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
+	savedAffectedRows := interpreter.lastAffectedRows
+	defer interpreter.setAffectedRows(savedAffectedRows)
+
 	interpreter.bh.ClearExecResultSet()
 	interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
 	interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)

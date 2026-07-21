@@ -15,6 +15,8 @@
 package frontend
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -163,4 +165,80 @@ func TestInterpreterBackgroundAffectedRows(t *testing.T) {
 	back.SetLastAffectedRows(-1)
 	interpreter.recordAffectedRows()
 	require.Equal(t, int64(-1), interpreter.lastAffectedRows)
+}
+
+type evalCondBackgroundExec struct {
+	BackgroundExec
+	rows    int64
+	result  []interface{}
+	execErr error
+}
+
+func (e *evalCondBackgroundExec) ClearExecResultSet() {
+	e.result = nil
+}
+
+func (e *evalCondBackgroundExec) Exec(context.Context, string) error {
+	e.rows = -1
+	if e.execErr == nil {
+		e.result = []interface{}{&evalCondResult{value: 1}}
+	}
+	return e.execErr
+}
+
+func (e *evalCondBackgroundExec) GetExecResultSet() []interface{} {
+	return e.result
+}
+
+func (e *evalCondBackgroundExec) GetLastAffectedRows() int64 {
+	return e.rows
+}
+
+func (e *evalCondBackgroundExec) SetLastAffectedRows(rows int64) {
+	e.rows = rows
+}
+
+type evalCondResult struct {
+	ExecResult
+	value int64
+}
+
+func (e *evalCondResult) GetRowCount() uint64 {
+	return 1
+}
+
+func (e *evalCondResult) GetInt64(context.Context, uint64, uint64) (int64, error) {
+	return e.value, nil
+}
+
+func TestEvalCondRestoresAffectedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		execErr error
+	}{
+		{name: "success"},
+		{name: "failure", execErr: errors.New("condition failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			back := &evalCondBackgroundExec{execErr: tc.execErr}
+			varScope := []map[string]interface{}{}
+			interpreter := &Interpreter{
+				ctx:              context.Background(),
+				bh:               back,
+				varScope:         &varScope,
+				lastAffectedRows: 7,
+			}
+			back.SetLastAffectedRows(7)
+
+			cond, err := interpreter.EvalCond("1 = 1")
+			if tc.execErr != nil {
+				require.ErrorIs(t, err, tc.execErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, cond)
+			}
+			require.Equal(t, int64(7), interpreter.lastAffectedRows)
+			require.Equal(t, int64(7), back.GetLastAffectedRows())
+		})
+	}
 }

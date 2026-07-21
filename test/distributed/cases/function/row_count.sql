@@ -169,4 +169,55 @@ begin
 end';
 call proc_ddl_count();
 
+create procedure proc_if_count() '
+begin
+    insert into proc_t values (7, 70), (8, 80);
+    if 1 = 1 then
+        select row_count();
+    end if;
+end';
+call proc_if_count();
+
+create procedure proc_elseif_count() '
+begin
+    insert into proc_t values (9, 90), (10, 100), (11, 110);
+    if 1 = 0 then
+        select 0;
+    elseif 1 = 1 then
+        select row_count();
+    end if;
+end';
+call proc_elseif_count();
+
+create procedure proc_while_count() '
+begin
+    declare keep_going int default 1;
+    insert into proc_t values (12, 120), (13, 130), (14, 140), (15, 150);
+    while keep_going = 1 do
+        select row_count();
+        set keep_going = 0;
+    end while;
+end';
+call proc_while_count();
+
+create procedure proc_repeat_count() '
+begin
+    repeat
+        insert into proc_t values (16, 160), (17, 170), (18, 180), (19, 190), (20, 200);
+    until 1 = 1
+    end repeat;
+    select row_count();
+end';
+call proc_repeat_count();
+
+create procedure proc_case_count() '
+begin
+    insert into proc_t values (21, 210), (22, 220), (23, 230), (24, 240), (25, 250), (26, 260);
+    case 1
+        when 1 then select row_count();
+        else select 0;
+    end case;
+end';
+call proc_case_count();
+
 drop database row_count_procedure_db;
