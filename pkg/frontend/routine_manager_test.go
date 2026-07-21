@@ -19,6 +19,8 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -496,8 +498,8 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	ses.Close()
 	require.Empty(t, function.UserLevelLocksForMigration(proc))
 	require.Len(t, lockService.unlockedTxnIDs, 2)
+	require.Equal(t, uint64(1009), lockService.unlockedConnectionID(t, 0))
 	for _, txnID := range lockService.unlockedTxnIDs {
-		require.Contains(t, string(txnID), "1009")
 		require.NotContains(t, string(txnID), "1010")
 	}
 	owner, connID := proc.GetUserLevelLockIdentity()
@@ -518,6 +520,15 @@ func (s *userLockCloseTestLockService) Unlock(
 ) error {
 	s.unlockedTxnIDs = append(s.unlockedTxnIDs, append([]byte(nil), txnID...))
 	return nil
+}
+
+func (s *userLockCloseTestLockService) unlockedConnectionID(t *testing.T, idx int) uint64 {
+	t.Helper()
+	parts := strings.Split(string(s.unlockedTxnIDs[idx]), "\x00")
+	require.Len(t, parts, 4)
+	connID, err := strconv.ParseUint(parts[3], 10, 64)
+	require.NoError(t, err)
+	return connID
 }
 
 func TestRoutineManagerContextAndConnectionInfoHelpers(t *testing.T) {

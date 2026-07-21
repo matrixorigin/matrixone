@@ -7057,10 +7057,10 @@ func deriveUserLevelLockOwner(proc *process.Process) string {
 	if sessionID := si.SessionId.String(); sessionID != "" && sessionID != "00000000-0000-0000-0000-000000000000" {
 		return fmt.Sprintf("%s:%s", si.Account, sessionID)
 	}
-	if proc.GetLockService() != nil {
-		return fmt.Sprintf("%s:%s:%s", si.Account, proc.GetLockService().GetServiceID(), si.SessionId.String())
+	if si.GetConnectionID() != 0 {
+		return fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID())
 	}
-	return fmt.Sprintf("%s:%s", si.Account, si.SessionId.String())
+	return si.Account
 }
 
 func userLevelLockConnectionID(proc *process.Process) uint64 {
