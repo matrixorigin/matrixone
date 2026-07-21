@@ -1755,6 +1755,43 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
 }
 
+func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE"))
+
+	backSes := &backSession{}
+	backSes.upstream = ses
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	refreshStatementScopedSessionInfo(backSes, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestBackgroundExplicitSQLModeOverridesUpstream(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "MATRIXONE_NATIVE"))
+
+	backSes := &backSession{}
+	backSes.upstream = ses
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "ANSI_QUOTES",
+	}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "ANSI_QUOTES,MATRIXONE_NATIVE",
+	}, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
 func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

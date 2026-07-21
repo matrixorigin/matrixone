@@ -452,17 +452,17 @@ select cast(1.1 as float(255, 3));
 drop table if exists t1;
 create table t1(a float(5, 2));
 insert into t1 values("999.995");
+Data truncation: data out of range: data type float, value '999.995'
 insert into t1 values("1000");
 Data truncation: data out of range: data type float, value '1000'
 insert into t1 values("-999.995");
+Data truncation: data out of range: data type float, value '-999.995'
 insert into t1 values("-1000");
 Data truncation: data out of range: data type float, value '-1000'
 insert into t1 values("999.994"), ("-999.994"),(null);
 insert into t1 values("90.004"), ("90.005"), ("-90.004"), ("-90.005"), ("90.006"), ("90.007");
 select * from t1;
 ➤ a[7,5,2]  𝄀
-999.99  𝄀
--999.99  𝄀
 999.99  𝄀
 -999.99  𝄀
 null  𝄀

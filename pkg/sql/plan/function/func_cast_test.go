@@ -95,6 +95,53 @@ func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	targetType := types.New(types.T_float32, 5, 2)
+
+	for _, mode := range []SQLCompatibilityMode{SQLCompatibilityMySQL, SQLCompatibilityMatrixOne} {
+		for _, input := range []string{"999.995", "-999.995"} {
+			t.Run(fmt.Sprintf("mode_%d_%s", mode, input), func(t *testing.T) {
+				inputVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{input}, nil)
+				defer inputVec.Free(proc.Mp())
+
+				result := vector.NewFunctionResultWrapper(targetType, proc.Mp()).(*vector.FunctionResult[float32])
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(1))
+
+				err := strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1, nil)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			})
+		}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		mode  SQLCompatibilityMode
+		input string
+		want  float32
+	}{
+		{name: "mysql_positive_boundary", mode: SQLCompatibilityMySQL, input: "999.994suffix", want: 999.99},
+		{name: "mysql_negative_boundary", mode: SQLCompatibilityMySQL, input: "-999.994suffix", want: -999.99},
+		{name: "native_positive_boundary", mode: SQLCompatibilityMatrixOne, input: "999.994", want: 999.99},
+		{name: "native_negative_boundary", mode: SQLCompatibilityMatrixOne, input: "-999.994", want: -999.99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{tc.input}, nil)
+			defer inputVec.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp()).(*vector.FunctionResult[float32])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			err := strToFloat(context.Background(), tc.mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[float32](result.GetResultVector(), 0))
+		})
+	}
+}
+
 func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"1.5", "invalid"}, nil)

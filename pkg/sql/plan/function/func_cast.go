@@ -5593,7 +5593,11 @@ func strToFloat[T constraints.Float](
 				return err
 			}
 		} else {
-			r2, tErr = parseBytesToFloat(v, isBinary, bitSize, mode)
+			parseBitSize := bitSize
+			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
+				parseBitSize = 64
+			}
+			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
 			if tErr != nil {
 				return tErr
 			}

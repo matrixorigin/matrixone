@@ -2914,10 +2914,14 @@ func sessionSQLModeForParser(ses FeSession) string {
 }
 
 func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithSQLMode(sessionSQLMode(ses), proc)
+}
+
+func refreshStatementScopedSessionInfoWithSQLMode(sqlMode string, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
-	proc.Base.SessionInfo.MatrixOneNativeMode = mysql.HasMatrixOneNativeSQLMode(sessionSQLMode(ses))
+	proc.Base.SessionInfo.MatrixOneNativeMode = mysql.HasMatrixOneNativeSQLMode(sqlMode)
 }
 
 func parserLowerCaseTableNames(ses FeSession) int64 {

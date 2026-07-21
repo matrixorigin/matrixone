@@ -382,7 +382,7 @@ func doComQueryInBack(
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
-	refreshStatementScopedSessionInfo(backSes, proc)
+	refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
 
 	// Frontend back-exec — session-bound resolver. backSession is a
 	// frontend session without a client connection (NOT a system
@@ -516,6 +516,14 @@ func doComQueryInBack(
 	} // end of for
 
 	return nil
+}
+
+func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *UserInput, proc *process.Process) {
+	mode := sessionSQLMode(backSes)
+	if input != nil && input.useParserSQLMode {
+		mode = input.parserSQLMode
+	}
+	refreshStatementScopedSessionInfoWithSQLMode(mode, proc)
 }
 
 func executeStmtInBack(backSes *backSession,
@@ -1197,6 +1205,11 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return int64(0), nil
 		}
 		return int64(1), nil
+	case "sql_mode":
+		if backSes.upstream == nil {
+			return "", nil
+		}
+		return backSes.upstream.GetSessionSysVar(name)
 	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
