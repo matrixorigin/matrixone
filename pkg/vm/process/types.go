@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -347,6 +348,7 @@ type BaseProcess struct {
 	userLevelLockIdentityMu sync.Mutex
 	userLevelLockOwner      string
 	userLevelLockConnID     uint64
+	userLevelLockGeneration string
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -612,6 +614,12 @@ func (proc *Process) PinUserLevelLockIdentity(owner string, connID uint64) (stri
 	proc.Base.userLevelLockIdentityMu.Lock()
 	defer proc.Base.userLevelLockIdentityMu.Unlock()
 	if proc.Base.userLevelLockOwner == "" {
+		if proc.Base.userLevelLockGeneration == "" {
+			proc.Base.userLevelLockGeneration = uuid.New().String()
+		}
+		if proc.Base.userLevelLockGeneration != "" && strings.Count(owner, ":") < 2 {
+			owner = owner + ":" + proc.Base.userLevelLockGeneration
+		}
 		proc.Base.userLevelLockOwner = owner
 		proc.Base.userLevelLockConnID = connID
 	}

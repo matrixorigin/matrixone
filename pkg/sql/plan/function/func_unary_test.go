@@ -7215,6 +7215,7 @@ type userLevelLockTestState struct {
 type userLevelLockTestService struct {
 	id               string
 	state            *userLevelLockTestState
+	lockErrAfterHold error
 	unlockErr        error
 	unlockErrByTxnID map[string]error
 	blockUnlock      atomic.Bool
@@ -7246,6 +7247,9 @@ func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, row
 		if holder == "" || holder == owner {
 			s.state.locks[key] = owner
 			s.state.Unlock()
+			if s.lockErrAfterHold != nil {
+				return lockpb.Result{}, s.lockErrAfterHold
+			}
 			return lockpb.Result{}, nil
 		}
 		s.state.Unlock()
@@ -8066,8 +8070,6 @@ func TestReleaseAllUserLevelLocksStopsAtFirstUnlockFailure(t *testing.T) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
 		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
 		service := services[0].(*userLevelLockTestService)
-		owner := userLevelLockOwner(proc1)
-		connID := userLevelLockConnectionID(proc1)
 
 		v, err := getUserLevelLock("release_all_partial_a", 0, proc1)
 		require.NoError(t, err)
@@ -8079,6 +8081,8 @@ func TestReleaseAllUserLevelLocksStopsAtFirstUnlockFailure(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
+		owner := userLevelLockOwner(proc1)
+		connID := userLevelLockConnectionID(proc1)
 		service.unlockErrByTxnID = map[string]error{
 			string(userLevelLockTxnID(owner, connID, "release_all_partial_b")): moerr.NewInternalErrorNoCtx("unlock failed"),
 		}
@@ -8134,6 +8138,36 @@ func TestReleaseAllUserLevelLocksWithContextKeepsStateAfterRemoteTimeout(t *test
 		require.NoError(t, err)
 		require.Equal(t, int64(1), released)
 		v, err = getUserLevelLock("close_timeout_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestGetLockTimeoutTransfersExactTxnCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.lockErrAfterHold = context.DeadlineExceeded
+
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
+		lockName := "get_lock_timeout_cleanup"
+
+		v, err := getUserLevelLock(lockName, 0.01, holder)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+		require.Empty(t, UserLevelLocksForMigration(holder))
+		require.Equal(t, 1, detachedUserLevelLockCleanupCount())
+
+		v, err = getUserLevelLock(lockName, 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		service.lockErrAfterHold = nil
+		require.Eventually(t, func() bool {
+			return detachedUserLevelLockCleanupCount() == 0
+		}, 3*time.Second, 10*time.Millisecond)
+
+		v, err = getUserLevelLock(lockName, 0, contender)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 	})
@@ -8258,6 +8292,7 @@ func TestReleaseUserLevelLocksOnSessionCloseFencesReusedConnectionGeneration(t *
 
 		reusedConnProc := newUserLevelLockTestProcess(t, services[0], "acc")
 		reusedConnProc.GetSessionInfo().ConnectionID = 1001
+		reusedConnProc.GetSessionInfo().SessionId = oldProc.GetSessionInfo().SessionId
 		v, err = getUserLevelLock(lockName, 0, reusedConnProc)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v, "new session reusing the connection id must not be treated as reentrant")

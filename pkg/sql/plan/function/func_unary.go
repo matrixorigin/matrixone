@@ -7245,17 +7245,11 @@ func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key deta
 	defer detachedUserLevelLockCleanups.Unlock()
 	if entry, ok := detachedUserLevelLockCleanups.entries[key]; ok {
 		if !entry.queued {
-			if len(detachedUserLevelLockCleanups.queue) >= cap(detachedUserLevelLockCleanups.queue) {
-				return false
-			}
-			return enqueueDetachedUserLevelLockCleanupLocked(entry)
+			_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
 		}
 		return true
 	}
 	if len(detachedUserLevelLockCleanups.entries) >= userLevelLockDetachedCleanupMaxEntries {
-		return false
-	}
-	if len(detachedUserLevelLockCleanups.queue) >= cap(detachedUserLevelLockCleanups.queue) {
 		return false
 	}
 	entry := &detachedUserLevelLockCleanupEntry{
@@ -7264,9 +7258,7 @@ func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key deta
 		txnIDs:  txnIDs,
 		backoff: userLevelLockDetachedCleanupInitialBackoff,
 	}
-	if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
-		return false
-	}
+	_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
 	detachedUserLevelLockCleanups.entries[key] = entry
 	return true
 }
@@ -7314,22 +7306,12 @@ func enqueueDetachedUserLevelLockCleanups(ls lockservice.LockService, owner stri
 	detachedUserLevelLockCleanups.Lock()
 	defer detachedUserLevelLockCleanups.Unlock()
 	newEntries := 0
-	neededQueueSlots := 0
 	for _, item := range pending {
-		entry, ok := detachedUserLevelLockCleanups.entries[item.key]
-		if !ok {
+		if _, ok := detachedUserLevelLockCleanups.entries[item.key]; !ok {
 			newEntries++
-			neededQueueSlots++
-			continue
-		}
-		if !entry.queued {
-			neededQueueSlots++
 		}
 	}
 	if len(detachedUserLevelLockCleanups.entries)+newEntries > userLevelLockDetachedCleanupMaxEntries {
-		return false
-	}
-	if len(detachedUserLevelLockCleanups.queue)+neededQueueSlots > cap(detachedUserLevelLockCleanups.queue) {
 		return false
 	}
 	for _, item := range pending {
@@ -7346,9 +7328,7 @@ func enqueueDetachedUserLevelLockCleanups(ls lockservice.LockService, owner stri
 		if entry.queued {
 			continue
 		}
-		if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
-			return false
-		}
+		_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
 	}
 	return true
 }
@@ -7418,7 +7398,19 @@ func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey)
 		}
 		_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
 	}
+	queueDetachedUserLevelLockCleanupLocked()
 	detachedUserLevelLockCleanups.Unlock()
+}
+
+func queueDetachedUserLevelLockCleanupLocked() {
+	for _, entry := range detachedUserLevelLockCleanups.entries {
+		if entry.queued {
+			continue
+		}
+		if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
+			return
+		}
+	}
 }
 
 func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string) error {
@@ -7428,7 +7420,9 @@ func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, o
 		return nil
 	}
 	if ctx != nil && ctx.Err() != nil {
-		_ = enqueueDetachedUserLevelLockProbeCleanup(ls, owner, connID, name, probeType, txnID)
+		if !enqueueDetachedUserLevelLockProbeCleanup(ls, owner, connID, name, probeType, txnID) {
+			return moerr.NewInternalErrorNoCtxf("user-level lock probe cleanup queue is full for %s", name)
+		}
 	}
 	return err
 }
@@ -7460,6 +7454,10 @@ func userLevelLockConflictOrTimeout(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
 		errors.Is(err, lockservice.ErrLockConflict) ||
 		errors.Is(err, context.DeadlineExceeded)
+}
+
+func userLevelLockTimedOut(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func trackUserLevelLock(owner, name string) {
@@ -7669,14 +7667,31 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	ctx, cancel, policy := userLevelLockContext(proc, timeout)
 	defer cancel()
 
+	txnID := userLevelLockTxnID(owner, connID, name)
 	_, err = ls.Lock(
 		ctx,
 		userLevelLockTableID,
 		[][]byte{userLevelLockRow(proc, name)},
-		userLevelLockTxnID(owner, connID, name),
+		txnID,
 		userLevelLockOptions(policy))
 	if err != nil {
-		if userLevelLockConflictOrTimeout(err) {
+		if userLevelLockTimedOut(err) {
+			if !enqueueDetachedUserLevelLockTxnCleanup(
+				ls,
+				detachedUserLevelLockCleanupKey{
+					serviceID: ls.GetServiceID(),
+					owner:     owner,
+					name:      name,
+					connID:    connID,
+					kind:      "get_lock_timeout",
+				},
+				[][]byte{txnID},
+			) {
+				return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup queue is full for %s", name)
+			}
+			return 0, nil
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrLockConflict) || errors.Is(err, lockservice.ErrLockConflict) {
 			return 0, nil
 		}
 		return 0, err
