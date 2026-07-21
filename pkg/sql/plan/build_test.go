@@ -3593,6 +3593,14 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 		"CASCADE self-ref FK must build a descendant delete branch")
 	assert.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE),
 		"CASCADE self-ref FK must recursively collect the full descendant chain")
+	oldRowExclusions := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
+			oldRowExclusions++
+		}
+	}
+	assert.GreaterOrEqual(t, oldRowExclusions, 2,
+		"initial and recursive cascade sources must exclude main REPLACE old rows")
 }
 
 func TestReplaceDetectSqls(t *testing.T) {

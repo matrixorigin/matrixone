@@ -707,6 +707,26 @@ id    parent_id
 3    2
 10    null
 delete from t_replace_self_cascade;
+insert into t_replace_self_cascade values (1, null);
+update t_replace_self_cascade set parent_id = 1 where id = 1;
+replace into t_replace_self_cascade values (1, 1);
+select row_count();
+row_count()
+2
+select * from t_replace_self_cascade order by id;
+id    parent_id
+1    1
+delete from t_replace_self_cascade;
+insert into t_replace_self_cascade values (1, null), (2, 1);
+replace into t_replace_self_cascade values (1, null), (2, 1);
+select row_count();
+row_count()
+4
+select * from t_replace_self_cascade order by id;
+id    parent_id
+1    null
+2    1
+delete from t_replace_self_cascade;
 insert into t_replace_self_cascade values (1, null), (2, 1);
 update t_replace_self_cascade set parent_id = 2 where id = 1;
 replace into t_replace_self_cascade values (1, null);
