@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -88,6 +89,83 @@ func TestParquetDecimalMappingRegression(t *testing.T) {
 		types.Decimal64(int64(12345)),
 		types.Decimal64(neg),
 	}, got)
+}
+
+func TestParquetOpenFileUsesIcebergObjectIORef(t *testing.T) {
+	ctx := context.Background()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("orders", parquet.Group{
+		"id": parquet.FieldID(parquet.Leaf(parquet.Int32Type), 1),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{{
+		parquet.Int32Value(7).Level(0, 0, 0),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	fs, err := fileservice.NewMemoryFS("iceberg-data-file-reader", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	readPath := "data/orders.parquet"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(buf.Len()),
+			Data:   append([]byte(nil), buf.Bytes()...),
+		}},
+	}))
+
+	ref, err := icebergio.RegisterObjectIOProvider(ctx, icebergio.ScopedProvider{FileService: fs}, func(location string) icebergio.ObjectScope {
+		return icebergio.ObjectScope{
+			AccountID:       42,
+			CatalogID:       7,
+			StorageLocation: readPath,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "ksa-analytics",
+		}
+	}, time.Minute)
+	require.NoError(t, err)
+	defer icebergio.ReleaseObjectIORef(ref)
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:                ctx,
+			FileSize:           []int64{int64(buf.Len())},
+			IcebergObjectIORef: ref,
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{
+					MoColIndex:        0,
+					IcebergFieldId:    1,
+					SnapshotFieldName: "id",
+					CurrentFieldName:  "id",
+				},
+			},
+			IcebergSnapshot: &pipeline.IcebergSnapshotRuntime{SnapshotId: 123},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: tree.S3, Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_ICEBERG_TB)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{
+			FileIndex: 1,
+			FileCnt:   1,
+			Filepath:  "s3://warehouse/orders.parquet",
+		}},
+	}
+
+	h, err := newParquetHandler(param)
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.Equal(t, int64(1), h.file.NumRows())
 }
 
 func TestParquetStringToDecimalMapping(t *testing.T) {
@@ -3811,6 +3889,45 @@ func TestParquet_EmptyFile_ColumnCountMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, h)
 	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+func TestParquet_IcebergEmptyFile_SkipsColumnCountMismatch(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id": parquet.FieldID(parquet.Leaf(parquet.Int64Type), 1),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "new_optional", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+				{MoColIndex: 1, IcebergFieldId: 2, CurrentFieldName: "new_optional", DefaultNullFill: true},
+			},
+			IcebergSnapshot: &pipeline.IcebergSnapshotRuntime{SnapshotId: 123},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_ICEBERG_TB)},
+			},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	h, err := newParquetHandler(param)
+	require.NoError(t, err)
+	require.Nil(t, h, "empty iceberg parquet file should be skipped")
 }
 
 // TestParquet_EmptyFile_ExtraParquetColumns tests that empty parquet files

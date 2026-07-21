@@ -112,6 +112,10 @@ func sqlTaskInt64(v any) int64 {
     tailParam *tree.TailParameter
     connectorOption *tree.ConnectorOption
     connectorOptions []*tree.ConnectorOption
+    icebergOption *tree.IcebergOption
+    icebergOptions tree.IcebergOptions
+    icebergTableParam *tree.IcebergTableParam
+    icebergRefSpec *tree.IcebergRefSpec
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -167,7 +171,12 @@ func sqlTaskInt64(v any) int64 {
     selectOption uint64
 
     insert *tree.Insert
+    insertPartition *tree.InsertPartitionClause
+    partitionValues tree.PartitionValues
     replace *tree.Replace
+    merge *tree.Merge
+    mergeClause *tree.MergeClause
+    mergeClauses tree.MergeClauses
     createOption tree.CreateOption
     createOptions []tree.CreateOption
     indexType tree.IndexType
@@ -336,7 +345,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -568,6 +577,9 @@ func sqlTaskInt64(v any) int64 {
 // CDC
 %token <str> CDC
 
+// Iceberg
+%token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
+
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
 
@@ -576,20 +588,25 @@ func sqlTaskInt64(v any) int64 {
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
+%type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt merge_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt
+%type <merge> merge_no_with_stmt
+%type <mergeClauses> merge_when_list
+%type <mergeClause> merge_when_clause
+%type <expr> merge_search_condition_opt
+%type <str> matched_keyword
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
@@ -638,6 +655,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
+%type <str> iceberg_namespace_value iceberg_option_key iceberg_option_value iceberg_ref_name
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
@@ -667,6 +685,8 @@ func sqlTaskInt64(v any) int64 {
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
+%type <insertPartition> insert_partition_clause_opt
+%type <partitionValues> insert_partition_value_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
@@ -690,6 +710,7 @@ func sqlTaskInt64(v any) int64 {
 %type <procArgType> proc_arg_in_out_type
 
 %type <atTimeStamp> table_snapshot_opt
+%type <icebergRefSpec> iceberg_ref_opt
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
@@ -701,6 +722,9 @@ func sqlTaskInt64(v any) int64 {
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
+%type <icebergTableParam> iceberg_table_param
+%type <icebergOptions> iceberg_option_list_opt iceberg_option_list
+%type <icebergOption> iceberg_option
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -1019,6 +1043,7 @@ normal_stmt:
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
+|   merge_stmt
 |   drop_stmt
 |   remove_stage_files_stmt
 |   truncate_table_stmt
@@ -3646,8 +3671,25 @@ alter_stmt:
 |   alter_pitr_stmt
 |   alter_role_stmt
 |   alter_sql_task_stmt
+|   alter_iceberg_catalog_stmt
 |   rename_stmt
 // |    alter_ddl_stmt
+
+alter_iceberg_catalog_stmt:
+    ALTER ICEBERG CATALOG ident SET iceberg_option_list
+    {
+        $$ = &tree.AlterIcebergCatalog{
+            Name: tree.Identifier($4.Compare()),
+            Options: $6,
+        }
+    }
+|   ALTER ICEBERG CATALOG ident SET '(' iceberg_option_list ')'
+    {
+        $$ = &tree.AlterIcebergCatalog{
+            Name: tree.Identifier($4.Compare()),
+            Options: $7,
+        }
+    }
 
 alter_sequence_stmt:
     ALTER SEQUENCE exists_opt table_name alter_as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt alter_cycle_opt
@@ -4605,6 +4647,7 @@ show_stmt:
 |   show_rules_on_role_stmt
 |   show_sql_tasks_stmt
 |   show_sql_task_runs_stmt
+|   show_iceberg_stmt
 
 show_sql_tasks_stmt:
     SHOW TASKS
@@ -4643,6 +4686,93 @@ sql_task_runs_limit_opt:
 |   LIMIT INTEGRAL
     {
         $$ = sqlTaskInt64($2)
+    }
+
+show_iceberg_stmt:
+    SHOW ICEBERG CATALOGS like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergCatalogs{
+            Like: $4,
+            Where: $5,
+        }
+    }
+|   SHOW ICEBERG NAMESPACES FROM ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergNamespaces{
+            Catalog: tree.Identifier($5.Compare()),
+            Like: $6,
+            Where: $7,
+        }
+    }
+|   SHOW ICEBERG NAMESPACES IN CATALOG ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergNamespaces{
+            Catalog: tree.Identifier($6.Compare()),
+            Like: $7,
+            Where: $8,
+        }
+    }
+|   SHOW ICEBERG NAMESPACES like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergNamespaces{
+            Like: $4,
+            Where: $5,
+        }
+    }
+|   SHOW ICEBERG TABLES like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Like: $4,
+            Where: $5,
+        }
+    }
+|   SHOW ICEBERG TABLES FROM ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Catalog: tree.Identifier($5.Compare()),
+            Like: $6,
+            Where: $7,
+        }
+    }
+|   SHOW ICEBERG TABLES FROM ident '.' iceberg_namespace_value like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Catalog: tree.Identifier($5.Compare()),
+            Namespace: $7,
+            Like: $8,
+            Where: $9,
+        }
+    }
+|   SHOW ICEBERG TABLES IN CATALOG ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Catalog: tree.Identifier($6.Compare()),
+            Like: $7,
+            Where: $8,
+        }
+    }
+|   SHOW ICEBERG TABLES IN NAMESPACE iceberg_namespace_value like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Namespace: $6,
+            Like: $7,
+            Where: $8,
+        }
+    }
+|   SHOW ICEBERG TABLES IN NAMESPACE iceberg_namespace_value IN CATALOG ident like_opt where_expression_opt
+    {
+        $$ = &tree.ShowIcebergTables{
+            Namespace: $6,
+            Catalog: tree.Identifier($9.Compare()),
+            Like: $10,
+            Where: $11,
+        }
+    }
+
+iceberg_namespace_value:
+    iceberg_option_value
+    {
+        $$ = $1
     }
 
 show_logservice_replicas_stmt:
@@ -5220,6 +5350,7 @@ drop_ddl_stmt:
 |   drop_pitr_stmt
 |   drop_cdc_stmt
 |   drop_sql_task_stmt
+|   drop_iceberg_catalog_stmt
 
 drop_sql_task_stmt:
     DROP TASK exists_opt ident
@@ -5227,6 +5358,15 @@ drop_sql_task_stmt:
         $$ = &tree.DropSQLTask{
             IfExists: $3,
             Name: tree.Identifier($4.Compare()),
+        }
+    }
+
+drop_iceberg_catalog_stmt:
+    DROP ICEBERG CATALOG exists_opt ident
+    {
+        $$ = &tree.DropIcebergCatalog{
+            IfExists: $4,
+            Name: tree.Identifier($5.Compare()),
         }
     }
 
@@ -5574,21 +5714,127 @@ insert_stmt:
     }
 
 insert_no_with_stmt:
-    INSERT into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
+    INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt
     {
         ins := $4
         ins.Table = $2
-        ins.PartitionNames = $3
+        if $3 != nil {
+            ins.PartitionNames = $3.Names
+            ins.PartitionValues = $3.Values
+        }
         ins.OnDuplicateUpdate = $5
         $$ = ins
     }
-|   INSERT IGNORE into_table_name partition_clause_opt insert_data
+|   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data
     {
         ins := $5
         ins.Table = $3
-        ins.PartitionNames = $4
+        if $4 != nil {
+            ins.PartitionNames = $4.Names
+            ins.PartitionValues = $4.Values
+        }
+        ins.Overwrite = true
+        $$ = ins
+    }
+|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data
+    {
+        ins := $5
+        ins.Table = $3
+        if $4 != nil {
+            ins.PartitionNames = $4.Names
+            ins.PartitionValues = $4.Values
+        }
         ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
         $$ = ins
+    }
+
+merge_stmt:
+    merge_no_with_stmt
+    {
+        $$ = $1
+    }
+|   with_clause merge_no_with_stmt
+    {
+        $2.With = $1
+        $$ = $2
+    }
+
+merge_no_with_stmt:
+    MERGE INTO table_reference USING table_reference ON expression merge_when_list
+    {
+        $$ = &tree.Merge{
+            Target: $3,
+            Source: $5,
+            On: $7,
+            Clauses: $8,
+        }
+    }
+
+merge_when_list:
+    merge_when_clause
+    {
+        $$ = tree.MergeClauses{$1}
+    }
+|   merge_when_list merge_when_clause
+    {
+        $$ = append($1, $2)
+    }
+
+merge_when_clause:
+    WHEN matched_keyword merge_search_condition_opt THEN UPDATE SET update_list
+    {
+        $$ = &tree.MergeClause{
+            Matched: true,
+            Condition: $3,
+            Action: tree.MergeActionUpdate,
+            UpdateExprs: $7,
+        }
+    }
+|   WHEN matched_keyword merge_search_condition_opt THEN DELETE
+    {
+        $$ = &tree.MergeClause{
+            Matched: true,
+            Condition: $3,
+            Action: tree.MergeActionDelete,
+        }
+    }
+|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT '(' insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertColumns: $8,
+            InsertValues: $12,
+        }
+    }
+|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertValues: $9,
+        }
+    }
+
+matched_keyword:
+    ident
+    {
+        if !strings.EqualFold($1.Origin(), "matched") {
+            yylex.Error("expected MATCHED")
+            goto ret1
+        }
+        $$ = $1.Origin()
+    }
+
+merge_search_condition_opt:
+    {
+        $$ = nil
+    }
+|   AND expression
+    {
+        $$ = $2
     }
 
 accounts_list:
@@ -5761,6 +6007,29 @@ partition_clause_opt:
 |   PARTITION '(' partition_id_list ')'
     {
         $$ = $3
+    }
+
+insert_partition_clause_opt:
+    {
+        $$ = nil
+    }
+|   PARTITION '(' partition_id_list ')'
+    {
+        $$ = &tree.InsertPartitionClause{Names: $3}
+    }
+|   PARTITION '(' insert_partition_value_list ')'
+    {
+        $$ = &tree.InsertPartitionClause{Values: $3}
+    }
+
+insert_partition_value_list:
+    ident '=' expression
+    {
+        $$ = tree.PartitionValues{{Name: tree.Identifier($1.Compare()), Expr: $3}}
+    }
+|   insert_partition_value_list ',' ident '=' expression
+    {
+        $$ = append($1, tree.PartitionValue{Name: tree.Identifier($3.Compare()), Expr: $5})
     }
 
 partition_id_list:
@@ -7137,9 +7406,20 @@ create_ddl_stmt:
 |   create_procedure_stmt
 |   create_source_stmt
 |   create_connector_stmt
+|   create_iceberg_catalog_stmt
 |   pause_daemon_task_stmt
 |   cancel_daemon_task_stmt
 |   resume_daemon_task_stmt
+
+create_iceberg_catalog_stmt:
+    CREATE ICEBERG CATALOG not_exists_opt ident iceberg_option_list_opt
+    {
+        $$ = &tree.CreateIcebergCatalog{
+            IfNotExists: $4,
+            Name: tree.Identifier($5.Compare()),
+            Options: $6,
+        }
+    }
 
 create_sql_task_stmt:
     CREATE TASK not_exists_opt ident sql_task_schedule_opt sql_task_when_opt sql_task_retry_opt sql_task_timeout_opt AS block_stmt
@@ -9254,6 +9534,23 @@ create_table_stmt:
         t.Param = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' iceberg_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.IcebergParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.IcebergParam = $6
+        $$ = t
+    }
 |   CREATE CLUSTER TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
         t := tree.NewCreateTable()
@@ -10036,6 +10333,57 @@ source_option:
         )
     }
 
+iceberg_table_param:
+    ENGINE equal_opt ICEBERG iceberg_option_list_opt
+    {
+        $$ = tree.NewIcebergTableParam($4)
+    }
+
+iceberg_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' iceberg_option_list ')'
+    {
+        $$ = $3
+    }
+
+iceberg_option_list:
+    iceberg_option
+    {
+        $$ = tree.IcebergOptions{$1}
+    }
+|   iceberg_option_list ',' iceberg_option
+    {
+        $$ = append($1, $3)
+    }
+
+iceberg_option:
+    iceberg_option_key '=' iceberg_option_value
+    {
+        $$ = tree.NewIcebergOption(tree.Identifier($1), $3)
+    }
+
+iceberg_option_key:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+iceberg_option_value:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
 table_option_list_opt:
     {
         $$ = nil
@@ -10298,19 +10646,62 @@ table_name_list:
 // <table>
 // <schema>.<table>
 table_name:
-    ident table_snapshot_opt
+    ident table_snapshot_opt iceberg_ref_opt
     {
         tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
+        $$.IcebergRef = $3
     }
-|   ident '.' ident table_snapshot_opt
+|   ident '.' ident table_snapshot_opt iceberg_ref_opt
     {
         dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
+        $$.IcebergRef = $5
     }
+
+iceberg_ref_opt:
+    {
+        $$ = nil
+    }
+|   FOR_ICEBERG SNAPSHOT INTEGRAL
+    {
+        raw := fmt.Sprintf("%v", $3)
+        $$ = tree.NewIcebergSnapshotRef(tree.NewNumVal(raw, raw, false, tree.P_int64))
+    }
+|   FOR_ICEBERG SNAPSHOT STRING
+    {
+        $$ = tree.NewIcebergSnapshotRef(tree.NewNumVal($3, $3, false, tree.P_char))
+    }
+|   FOR_ICEBERG TIMESTAMP AS OF TIMESTAMP STRING
+    {
+        $$ = tree.NewIcebergTimestampRef(tree.NewNumVal($6, $6, false, tree.P_char))
+    }
+|   FOR_ICEBERG TIMESTAMP AS OF STRING
+    {
+        $$ = tree.NewIcebergTimestampRef(tree.NewNumVal($5, $5, false, tree.P_char))
+    }
+|   FOR_ICEBERG REF iceberg_ref_name
+    {
+        $$ = tree.NewIcebergNamedRef(tree.Identifier($3))
+    }
+
+iceberg_ref_name:
+    ID
+    {
+        $$ = $1
+    }
+|   QUOTE_ID
+    {
+        $$ = $1
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
 table_snapshot_opt:
     {
         $$ = nil
@@ -14331,6 +14722,8 @@ non_reserved_keyword:
 |   BOOL
 |   BITS_PER_CODE
 |   BRANCH
+|   CATALOG
+|   CATALOGS
 |   CLONE
 |   CANCEL
 |   CHAIN
@@ -14413,6 +14806,7 @@ non_reserved_keyword:
 |   INT
 |   INTEGER
 |   INDEXES
+|   ICEBERG
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION
 |   ITOPK_SIZE
@@ -14458,6 +14852,8 @@ non_reserved_keyword:
 |   MIN_ROWS
 |   MONTH
 |   NAMES
+|   NAMESPACE
+|   NAMESPACES
 |   NCHAR
 |   NUMERIC
 |   NEVER
@@ -14468,6 +14864,7 @@ non_reserved_keyword:
 |   OPEN
 |   OPTION
 |   OUTPUT
+|   OVERWRITE
 |   SUMMARY
 |   PACK_KEYS
 |   PARTIAL
@@ -14494,6 +14891,7 @@ non_reserved_keyword:
 |   REPAIR
 |   REPEATABLE
 |   REPLICAS
+|   REF
 |   RELEASE
 |   RESUME
 |   REVOKE

@@ -119,6 +119,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		param.Fileparam.FileCnt = 1
 	}
 	param.Ctx = proc.Ctx
+	param.addParquetProfile(icebergParquetProfileStats(param))
 
 	// Filter public preprocessing
 	if param.Filter == nil {
@@ -160,6 +161,9 @@ func (external *External) Prepare(proc *process.Process) error {
 			return err
 		}
 		external.reader = r
+	}
+	if err := external.prepareIcebergDeleteApply(proc); err != nil {
+		return err
 	}
 
 	// Projection init
@@ -273,6 +277,14 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		external.fileOpened = false
 		param.Fileparam.End = true
 		return result, err
+	}
+	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
+		if err := external.applyIcebergDeletes(ctx, external.ctr.buf, proc); err != nil {
+			external.reader.Close()
+			external.fileOpened = false
+			param.Fileparam.End = true
+			return result, err
+		}
 	}
 
 	if fileFinished {
