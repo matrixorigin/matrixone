@@ -1150,13 +1150,13 @@ public:
         // The quantizer is only a scale + offset derived from the value range
         // ([min,max] -> 8-bit codes), so training just needs a representative
         // sample of the population of element values, not every row. We therefore
-        // sample quantizer_train_limit_ rows (default 1000) spread by a fixed
+        // sample quantizer_train_limit_ rows (default 100000 = 100k) spread by a fixed
         // STRIDE across all `total` buffered rows, rather than copying every row
         // into one contiguous training buffer.
         //
         // Two reasons it must be strided, not the first-N rows:
         //   * Statistics: a range/quantile estimate converges like 1/sqrt(n) and
-        //     the unit is the ELEMENT (1000 rows x dim=768 ~ 7.7e5 values), so a
+        //     the unit is the ELEMENT (even 1000 rows x dim=768 ~ 7.7e5 values), so a
         //     strided sample pins [min,max] as well as the full set — cuVS clips
         //     the extreme 1% via a 0.99 quantile anyway. Standard practice: FAISS
         //     trains ScalarQuantizer/PQ on a subset; cuVS's kmeans_trainset_fraction

@@ -152,7 +152,7 @@ typedef struct {
 
 #ifdef __cplusplus
 static inline cagra_build_params_t cagra_build_params_default() {
-    return {128, 64, true};
+    return {128, 64, true, 0};
 }
 
 static inline cagra_search_params_t cagra_search_params_default() {
@@ -172,7 +172,7 @@ static inline ivf_flat_search_params_t ivf_flat_search_params_default() {
 }
 
 static inline ivf_pq_build_params_t ivf_pq_build_params_default() {
-    return {1024, 16, 8, true, 0.5};
+    return {1024, 16, 8, true, 0.5, 0};
 }
 
 static inline ivf_pq_search_params_t ivf_pq_search_params_default() {
