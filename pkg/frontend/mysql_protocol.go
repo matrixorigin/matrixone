@@ -723,6 +723,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		if err != nil {
 			return err
 		}
+		setCharacter(column)
 
 		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,12 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -310,6 +314,328 @@ func TestReusableRelationHandleRejectsNonDisttaeWorkspace(t *testing.T) {
 	op.EXPECT().Status().Return(txn.TxnStatus_Active)
 
 	require.ErrorContains(t, handle.Reset(op), "disttae transaction workspace")
+}
+
+func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
+	t.Helper()
+
+	eng := &Engine{
+		partitions: make(map[[2]uint64]*logtailreplay.Partition),
+		packerPool: fileservice.NewPool(
+			8,
+			func() *types.Packer { return types.NewPacker() },
+			func(packer *types.Packer) { packer.Reset() },
+			func(packer *types.Packer) { packer.Close() },
+		),
+	}
+	eng.catalog.Store(cache.NewCatalog())
+	eng.pClient.eng = eng
+	eng.pClient.subscribed = subscribedTable{
+		eng: eng,
+		m:   make(map[uint64]*subEntry),
+	}
+	eng.pClient.receivedLogTailTime.ready.Store(true)
+
+	op, closeFn := client.NewTestTxnOperator(context.Background())
+	t.Cleanup(closeFn)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+
+	tbl := &txnTable{
+		accountId: 1,
+		tableId:   42,
+		tableName: "t",
+		db: &txnDatabase{
+			databaseId:   10,
+			databaseName: "db",
+			op:           op,
+		},
+		eng:  eng,
+		fake: true,
+	}
+	tbl.proc.Store(proc)
+
+	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	return tbl, eng
+}
+
+func TestPrimaryKeysMayBeModifiedRequiresReadySubscription(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	}()
+	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.False(t, changed, "the PK check must use the completed subscription instead of retrying the statement")
+
+	eng.pClient.SetSubscribeState(10, 42, SubRspReceived)
+	changed, err = tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.False(t, changed, "the PK check must finish loading the subscription response before checking")
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	changed, err = tbl.PrimaryKeysMayBeUpserted(context.Background(), from, to, bat, 0)
+	require.NoError(t, err)
+	require.False(t, changed, "the auto-increment recheck keeps its existing lazy-state semantics")
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	changed, err = tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.False(t, changed, "a complete subscribed state with no matching key should keep the fast path")
+}
+
+func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	defer rowIDVec.Free(mp)
+	defer tsVec.Free(mp)
+	defer pkVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(rowIDVec, types.RandomRowid(), false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(15, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+	insert := &api.Batch{
+		Attrs: []string{"rowid", "time", "pk"},
+		Vecs: []api.Vector{
+			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, pkVec),
+		},
+	}
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
+	doneC := make(chan struct{})
+	defer func() { <-doneC }()
+	go func() {
+		defer close(doneC)
+		time.Sleep(10 * time.Millisecond)
+		packer := types.NewPacker()
+		defer packer.Close()
+		state, done := part.MutateState()
+		state.HandleRowsInsert(context.Background(), insert, 0, packer, mp)
+		done()
+		eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	}()
+
+	changed, err := tbl.PrimaryKeysMayBeModified(
+		context.Background(),
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.NoError(t, err)
+	require.True(t, changed, "the PK check must inspect versions loaded by the completed subscription")
+}
+
+func TestPrimaryKeysMayBeModifiedStopsWaitingWhenSubscriptionContextEnds(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := tbl.PrimaryKeysMayBeModified(
+		ctx,
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestPrimaryKeysMayBeModifiedFailsFastWhenPushClientIsNotReady(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	eng.pClient.receivedLogTailTime.ready.Store(false)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := tbl.PrimaryKeysMayBeModified(
+		ctx,
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+}
+
+func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp)
+	defer bat.Clean(mp)
+
+	eng.pClient.SetSubscribeState(10, 42, Subscribing)
+	changed, err := tbl.PrimaryKeysMayBeModified(
+		context.Background(),
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.NoError(t, err)
+	require.False(t, changed, "an empty key set cannot conflict even while the table is rebuilding")
+}
+
+func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+	eng.pClient.SetSubscribeState(10, 42, Subscribed)
+	eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+
+	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		state, done := part.MutateState()
+		state.UpdateAppliedTo(to.Prev())
+		done()
+	}()
+
+	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
+	require.NoError(t, err)
+	require.False(t, changed, "the PK check must wait for the pending table update before proving no change")
+}
+
+func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	tbl.fake = false
+	tbl.remoteWorkspace = true
+	tbl.createdInTxn = true
+	eng.pClient.receivedLogTailTime.ready.Store(false)
+
+	mp := tbl.proc.Load().Mp()
+	bat := makeBatchForTest(mp, 7)
+	defer bat.Clean(mp)
+
+	changed, err := tbl.PrimaryKeysMayBeModified(
+		context.Background(),
+		types.BuildTS(10, 0),
+		types.BuildTS(20, 0),
+		bat,
+		0,
+		-1,
+	)
+	require.NoError(t, err)
+	require.False(t, changed,
+		"a table created in this transaction has no committed remote history even during reconnect")
+}
+
+func TestPKCheckHistoricalSnapshotFallbackIsTerminal(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	tbl.db.op.AddWorkspace(&Transaction{engine: eng})
+	snapshot := types.BuildTS(15, 0)
+	to := types.BuildTS(20, 0)
+	tbl.db.op.SetSnapshotTS(snapshot.ToTimestamp())
+
+	eng.snapshotMgr = NewSnapshotManager()
+	eng.snapshotMgr.Init()
+	historical := logtailreplay.NewPartition(
+		eng.service,
+		eng.GetLatestCatalogCache(),
+		uint64(tbl.accountId),
+		tbl.db.databaseId,
+		tbl.tableId,
+		nil,
+	)
+	state, done := historical.MutateState()
+	state.UpdateDuration(types.TS{}, to)
+	done()
+	expected := eng.snapshotMgr.Add(
+		tbl.db.databaseId,
+		tbl.tableId,
+		historical,
+		tbl.tableName,
+		snapshot,
+	)
+
+	oldSnapshotRead := RequestSnapshotRead
+	snapshotReads := 0
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		snapshotReads++
+		start := types.TS{}.ToTimestamp()
+		end := to.ToTimestamp()
+		return &cmd_util.SnapshotReadResp{
+			Succeed: true,
+			Entries: []*cmd_util.CheckpointEntryResp{
+				{
+					Start: &start,
+					End:   &end,
+				},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { RequestSnapshotRead = oldSnapshotRead })
+	subscribeAttempts := 0
+	eng.pClient.subscriber = newLogTailSubscriber()
+	eng.pClient.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+		subscribeAttempts++
+		return nil
+	}
+	eng.pClient.subscriber.setReady()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eng.pClient.SetSubscribeState(10, 42, SubRspTableNotExist)
+	ps, ready, err := tbl.getPartitionStateForPKCheck(ctx, to)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Same(t, expected, ps)
+	require.Equal(t, 1, snapshotReads,
+		"a successful historical fallback must not start another subscription cycle")
+	require.Zero(t, subscribeAttempts)
+
+	eng.pClient.SetSubscribeState(10, 42, SubRspTableNotExist)
+	ps, ready, err = tbl.getPartitionStateForPKCheck(ctx, to.Next())
+	require.NoError(t, err)
+	require.False(t, ready,
+		"a historical fallback outside its physical range must remain conservative")
+	require.Same(t, expected, ps)
+	require.Equal(t, 2, snapshotReads,
+		"an out-of-range fallback must also terminate after one snapshot read")
+	require.Zero(t, subscribeAttempts)
 }
 
 // func TestPrimaryKeyCheck(t *testing.T) {
