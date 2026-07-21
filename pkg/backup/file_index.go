@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -83,6 +85,23 @@ func parseFileIndexTS(name string) string {
 	return ts
 }
 
+func parseFileIndexTimestamp(name string) (types.TS, bool) {
+	parts := strings.Split(parseFileIndexTS(name), "-")
+	if len(parts) != 2 {
+		return types.TS{}, false
+	}
+	physical, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return types.TS{}, false
+	}
+	logical, err := strconv.ParseUint(parts[1], 10, 32)
+	if err != nil {
+		return types.TS{}, false
+	}
+	ts := types.BuildTS(physical, uint32(logical))
+	return ts, ts.Valid()
+}
+
 // LoadGlobalFileIndex loads the latest global file index from the backup root directory
 // rootFs should be the file service pointing to the backup root directory (parent of current backup)
 func LoadGlobalFileIndex(ctx context.Context, rootFs fileservice.FileService) (*GlobalFileIndex, error) {
@@ -99,16 +118,21 @@ func LoadGlobalFileIndex(ctx context.Context, rootFs fileservice.FileService) (*
 
 	// Find all index files and get the latest one
 	var latestIndexName string
-	var latestTS string
+	var latestTS types.TS
+	foundLatest := false
 	for _, entry := range entries {
 		if entry.IsDir {
 			continue
 		}
 		if isFileIndexName(entry.Name) {
-			ts := parseFileIndexTS(entry.Name)
-			if ts > latestTS { // String comparison works for timestamp format
+			ts, ok := parseFileIndexTimestamp(entry.Name)
+			if !ok {
+				continue
+			}
+			if !foundLatest || latestTS.LT(&ts) {
 				latestTS = ts
 				latestIndexName = entry.Name
+				foundLatest = true
 			}
 		}
 	}
