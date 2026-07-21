@@ -132,6 +132,29 @@ func (d *termDict) prefixTerms(prefix string) ([]string, error) {
 	return out, nil
 }
 
+// forEachTerm streams every term (ascending) through fn WITHOUT materializing the whole
+// vocabulary as a []string the way prefixTerms("") does — so a large high-cardinality
+// index's MERGE reconstruction (forEachPosting) doesn't spike O(vocabulary) of strings.
+func (d *termDict) forEachTerm(fn func(term string) error) error {
+	it, ok, err := d.prefixIter("")
+	if err != nil || !ok {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	for {
+		term, _ := it.Current()
+		if err := fn(string(term)); err != nil {
+			return err
+		}
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			break
+		} else if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Close releases the FST. Safe on a nil dict.
 func (d *termDict) Close() error {
 	if d == nil || d.fst == nil {

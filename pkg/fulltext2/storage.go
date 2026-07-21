@@ -401,6 +401,14 @@ func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 		}
 		need = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
 	}
+	// LoadTailSegments holds SEVERAL full copies of the tail bytes at once — the raw
+	// per-chunk []byte copies, the reassembled per-frame buffers, and the Deserialized
+	// segments — so the real peak is a multiple of the stored bytes, not 1x. Scale the
+	// estimate up so the guard fails BEFORE that peak OOM-kills the CN rather than after
+	// the SUM passes. Conservative (may reject a borderline load that would just fit); a
+	// clear "compact/add memory" error beats a node-killing OOM.
+	const tailLoadPeakFactor = 3
+	need *= tailLoadPeakFactor
 	avail := int64(system.MemoryTotal())*8/10 - int64(system.MemoryGolang())
 	if need > avail {
 		return moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf(

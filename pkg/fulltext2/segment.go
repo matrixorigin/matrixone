@@ -395,16 +395,15 @@ func (s *Segment) forEachPosting(fn func(term string, tp *termPostings)) error {
 		}
 		return nil
 	}
-	terms, err := s.dict.prefixTerms("") // every term, ascending
-	if err != nil {
-		return err
-	}
-	for _, term := range terms {
+	// Stream the FST (every term, ascending) instead of materializing the whole
+	// vocabulary as a []string — MERGE reconstruction over a large index must not add an
+	// O(vocabulary) string spike on top of the reconstruction buckets.
+	return s.dict.forEachTerm(func(term string) error {
 		if tp, ok := s.LookupLoaded(term); ok {
 			fn(term, tp)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // PrefixRange returns the sorted terms of this segment that start with prefix,

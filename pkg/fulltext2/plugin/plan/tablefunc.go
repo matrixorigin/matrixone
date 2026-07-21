@@ -27,9 +27,14 @@ import (
 // vector plugins' *_search. Args: [param, TableConfig(JSON), pattern].
 const FullText2SearchFuncName = "fulltext2_search"
 
+// Must match the executor (fulltext2_search.go): doc_id via AppendAny (the pk's own
+// type — int/varchar/uuid/…, so T_any, NOT T_int64), score via AppendFixed[float32]
+// (T_float32/Width 4, NOT T_float64 — an 8-byte score column read 4-byte writes as
+// garbage). Same shape as the MATCH-rewrite path's ftIndexColdefs; a direct
+// `FROM fulltext2_search(...)` call uses THESE defs, so they must be correct too.
 var fulltext2SearchColDefs = []*plan.ColDef{
-	{Name: "doc_id", Typ: plan.Type{Id: int32(types.T_int64), Width: 8}},
-	{Name: "score", Typ: plan.Type{Id: int32(types.T_float64), Width: 8}},
+	{Name: "doc_id", Typ: plan.Type{Id: int32(types.T_any)}},
+	{Name: "score", Typ: plan.Type{Id: int32(types.T_float32), Width: 4}},
 }
 
 // FullText2CreateFuncName is the build TVF: CROSS APPLY'd over the source table

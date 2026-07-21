@@ -160,7 +160,12 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 	if k <= 0 || idx.globalN == 0 || len(slots) == 0 {
 		return nil
 	}
-	// Single pass, O(k) memory (was O(matches): a matched map + a full results slice,
+	// A phrase can match at most globalN live docs, so cap k to it: a huge pushed LIMIT
+	// (clamped to MaxInt32 upstream) must never size the top-k beyond the live corpus.
+	if int64(k) > idx.globalN {
+		k = int(idx.globalN)
+	}
+	// Single pass, O(min(k, #matches)) memory (was O(matches): a matched map + a full results slice,
 	// which OOMs on a low-selectivity phrase that hits most of the corpus). A lone
 	// phrase has ONE idf² (idfSquared over its live df), and scoreTerm multiplies the
 	// per-doc factor by that constant, so idf² does not change the top-k order — rank on
@@ -204,7 +209,11 @@ type boundedTopK struct {
 	h []topKItem
 }
 
-func newBoundedTopK(k int) *boundedTopK { return &boundedTopK{k: k, h: make([]topKItem, 0, k)} }
+// newBoundedTopK does NOT pre-allocate a cap-k backing array: push grows h lazily and
+// never past k items, so the heap is bounded by min(k, #matches) — an absurd pushed
+// LIMIT (e.g. 5e8) on a query matching a handful of docs costs a handful of slots, not
+// a k-sized (multi-GB) allocation.
+func newBoundedTopK(k int) *boundedTopK { return &boundedTopK{k: k} }
 
 func (b *boundedTopK) len() int { return len(b.h) }
 
@@ -445,29 +454,37 @@ func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo 
 // ReconstructLiveDocs yields each LIVE document as (pk, ordered terms) from the
 // positional postings across all loaded segments — the input to a MERGE compaction
 // that folds base + tail into a fresh dead-doc-free base WITHOUT re-tokenizing the
-// source. Per-doc term order is recovered from token positions; docs are yielded in
-// ascending pk-key order (deterministic output).
+// source. Per-doc term order is recovered from token positions.
 //
-// It is an iterator so the compaction consumer can stream one doc at a time into a
-// capacity-bounded builder (sealing + spilling each segment as it fills) instead of
-// materializing the whole live corpus as a []TokenizedDoc and then a second full
-// copy inside the builder. Peak extra memory is thus one open segment rather than
-// N× the corpus. (The per-doc posting `buckets` are still built up front — a doc is
-// only complete once every term/segment is scanned — but each is freed the moment
-// its doc is yielded, so the map drains as iteration proceeds.) On a posting-decode
-// error the iterator yields once with a non-nil error and stops.
+// Reconstruction is done ONE SEGMENT AT A TIME: a live doc's postings live entirely
+// within its own (live) segment, so `buckets` only ever holds the CURRENT segment's
+// live docs and is freed before the next — peak Go heap is O(one segment's postings)
+// (≤ max_index_capacity), NOT O(the whole live corpus). This matters because MERGE
+// (CompactSegments) is deliberately exempt from checkBaseLoadBudget, so an all-at-once
+// reconstruction would OOM-kill the CN on exactly the operation meant to reclaim it.
+// Docs are yielded in load-order across segments, pk-sorted WITHIN each segment (so the
+// output is still deterministic; the fresh base's per-segment doc grouping differs but
+// its contents and the resulting query answers do not). On a posting-decode error the
+// iterator yields once with a non-nil error and stops.
 func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc, error] {
 	return func(yield func(TokenizedDoc, error) bool) {
 		type posTerm struct {
 			pos  int32
 			term string
 		}
-		// Bucket postings only for LIVE (si, ord) locations.
-		buckets := make(map[docLoc][]posTerm, idx.globalN)
-		idx.forEachLive(func(si int, ord int64) {
-			buckets[docLoc{si, ord}] = nil
-		})
 		for si, seg := range idx.segments {
+			live := idx.liveOrd[si]
+			nd := seg.numDocs()
+			// Bucket ONLY this segment's live ords (keyed by ord, unique within the segment).
+			buckets := make(map[int64][]posTerm)
+			for ord := 0; ord < nd; ord++ {
+				if live == nil || live[ord] {
+					buckets[int64(ord)] = nil
+				}
+			}
+			if len(buckets) == 0 {
+				continue
+			}
 			err := seg.forEachPosting(func(term string, tp *termPostings) {
 				docs := tp.materializeDocIDs() // docIDs (block-compressed on load)
 				if positionFree {
@@ -477,24 +494,22 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 					// but tf is preserved so BM25 ranking is unchanged.
 					tfs := tp.materializeTfs()
 					for i, ord := range docs {
-						l := docLoc{si, ord}
-						if _, live := buckets[l]; !live {
+						if _, ok := buckets[ord]; !ok {
 							continue
 						}
 						for t := int32(0); t < int32(tfs[i]); t++ {
-							buckets[l] = append(buckets[l], posTerm{t, term})
+							buckets[ord] = append(buckets[ord], posTerm{t, term})
 						}
 					}
 					return
 				}
 				mat := tp.materializePositions() // decode this term's positions once
 				for i, ord := range docs {
-					l := docLoc{si, ord}
-					if _, live := buckets[l]; !live {
+					if _, ok := buckets[ord]; !ok {
 						continue
 					}
 					for _, pos := range mat[i] {
-						buckets[l] = append(buckets[l], posTerm{pos, term})
+						buckets[ord] = append(buckets[ord], posTerm{pos, term})
 					}
 				}
 			})
@@ -502,33 +517,32 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 				yield(TokenizedDoc{}, err)
 				return
 			}
-		}
 
-		// Decorate-sort-undecorate: compute each pk's sortKey ONCE (O(n)) rather than per
-		// comparison (O(n log n) Sprintf/allocs), which matters at MERGE over a large index.
-		type keyed struct {
-			sk  string
-			loc docLoc
-		}
-		keys := make([]keyed, 0, idx.globalN)
-		idx.forEachLive(func(si int, ord int64) {
-			keys = append(keys, keyed{sortKey(normalizeKey(idx.segments[si].pk(ord))), docLoc{si, ord}})
-		})
-		sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk }) // deterministic output
-		for _, kd := range keys {
-			l := kd.loc
-			b := buckets[l]
-			sort.SliceStable(b, func(i, j int) bool { return b[i].pos < b[j].pos })
-			terms := make([]string, len(b))
-			positions := make([]int32, len(b))
-			for i, pt := range b {
-				terms[i] = pt.term
-				positions[i] = pt.pos // byte position, carried through MERGE
+			// Yield this segment's live docs pk-sorted (sortKey computed once each).
+			type keyed struct {
+				sk  string
+				ord int64
 			}
-			buckets[l] = nil // this doc's postings are copied out — let GC reclaim them
-			if !yield(TokenizedDoc{Pk: idx.segments[l.si].pk(l.ord), Terms: terms, Positions: positions}, nil) {
-				return
+			keys := make([]keyed, 0, len(buckets))
+			for ord := range buckets {
+				keys = append(keys, keyed{sortKey(normalizeKey(seg.pk(ord))), ord})
 			}
+			sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk })
+			for _, kd := range keys {
+				pl := buckets[kd.ord]
+				sort.SliceStable(pl, func(i, j int) bool { return pl[i].pos < pl[j].pos })
+				terms := make([]string, len(pl))
+				positions := make([]int32, len(pl))
+				for i, pt := range pl {
+					terms[i] = pt.term
+					positions[i] = pt.pos // byte position, carried through MERGE
+				}
+				buckets[kd.ord] = nil // copied out — let GC reclaim it
+				if !yield(TokenizedDoc{Pk: seg.pk(kd.ord), Terms: terms, Positions: positions}, nil) {
+					return
+				}
+			}
+			// buckets goes out of scope → freed before the next segment.
 		}
 	}
 }

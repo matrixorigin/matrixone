@@ -220,6 +220,12 @@ func (s *Segment) decodeDocmap(data []byte) error {
 		if pos+4 > len(data) {
 			return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated pk length")
 		}
+		if pos > math.MaxInt32 {
+			// pkOffsets is []int32; a >2GB docmap (e.g. huge blob pks) would wrap the offset
+			// negative and panic in pk(ord). Fail loudly instead. Bounded by max_index_capacity
+			// docs, so this only trips with very large per-pk payloads.
+			return moerr.NewInternalErrorNoCtx("fulltext2: docmap pk section exceeds 2GB")
+		}
 		offs[i] = int32(pos)
 		l := int(binary.LittleEndian.Uint32(data[pos:]))
 		pos += 4 + l
