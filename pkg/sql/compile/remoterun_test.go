@@ -740,6 +740,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, mockEng, restoredOp.Engine)
 	})
 }
+
+func TestShuffleSerializationRoundtrip(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	op := shuffle.NewArgument()
+	defer op.Release()
+	op.ShuffleColIdx = 2
+	op.ShuffleType = int32(planpb.ShuffleType_Range)
+	op.ShuffleColMin = -10
+	op.ShuffleColMax = 100
+	op.BucketNum = 8
+	op.ShuffleRangeInt64 = []int64{0, 10, 20}
+	op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{Tag: 42}
+	op.ShuffleExpr = plan.MakePlan2Int64ConstExprWithType(7)
+	op.DrainAllBuckets = true
+
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.Shuffle.DrainAllBuckets)
+
+	restored, err := convertToVmOperator(instruction, ctx, nil)
+	require.NoError(t, err)
+	restoredShuffle := restored.(*shuffle.Shuffle)
+	defer restoredShuffle.Release()
+	require.Equal(t, op.ShuffleColIdx, restoredShuffle.ShuffleColIdx)
+	require.Equal(t, op.ShuffleType, restoredShuffle.ShuffleType)
+	require.Equal(t, op.ShuffleColMin, restoredShuffle.ShuffleColMin)
+	require.Equal(t, op.ShuffleColMax, restoredShuffle.ShuffleColMax)
+	require.Equal(t, op.BucketNum, restoredShuffle.BucketNum)
+	require.Equal(t, op.ShuffleRangeInt64, restoredShuffle.ShuffleRangeInt64)
+	require.Equal(t, op.RuntimeFilterSpec, restoredShuffle.RuntimeFilterSpec)
+	require.Equal(t, op.ShuffleExpr, restoredShuffle.ShuffleExpr)
+	require.True(t, restoredShuffle.DrainAllBuckets)
+}
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,
