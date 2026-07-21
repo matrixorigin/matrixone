@@ -130,6 +130,7 @@ func (s *service) Read(
 
 		local := 0
 		remote := 0
+		remoteShards := make([]int, 0, len(selected.values))
 		for i := range selected.values {
 			shard := &selected.values[i]
 			if s.isLocalReplica(shard.Replicas[0]) {
@@ -139,6 +140,7 @@ func (s *service) Read(
 			}
 
 			remote++
+			remoteShards = append(remoteShards, i)
 			if opts.adjust != nil {
 				opts.adjust(shard)
 			}
@@ -147,10 +149,8 @@ func (s *service) Read(
 			}
 		}
 
-		for i, shard := range selected.values {
-			if s.isLocalReplica(shard.Replicas[0]) {
-				continue
-			}
+		for _, i := range remoteShards {
+			shard := selected.values[i]
 			f, e := s.remote.client.AsyncSend(
 				ctx,
 				s.newReadRequest(
