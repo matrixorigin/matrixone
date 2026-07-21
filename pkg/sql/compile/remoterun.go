@@ -91,6 +91,44 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
+	if stats.Empty() {
+		return nil
+	}
+	return &pipeline.IcebergPlanningStats{
+		MetadataBytes:         stats.IcebergMetadataBytes,
+		ManifestListBytes:     stats.IcebergManifestListBytes,
+		ManifestBytes:         stats.IcebergManifestBytes,
+		ManifestsSelected:     stats.IcebergManifestsSelected,
+		ManifestsPruned:       stats.IcebergManifestsPruned,
+		DataFilesSelected:     stats.IcebergDataFilesSelected,
+		DataFilesPruned:       stats.IcebergDataFilesPruned,
+		DataFileBytesSelected: stats.IcebergDataFileBytesSelected,
+		DataFileBytesPruned:   stats.IcebergDataFileBytesPruned,
+		PlanningCacheHits:     stats.IcebergPlanningCacheHits,
+		PlanningCacheMiss:     stats.IcebergPlanningCacheMiss,
+	}
+}
+
+func icebergPlanningStatsFromPipeline(stats *pipeline.IcebergPlanningStats) process.ParquetProfileStats {
+	if stats == nil {
+		return process.ParquetProfileStats{}
+	}
+	return process.ParquetProfileStats{
+		IcebergMetadataBytes:         stats.GetMetadataBytes(),
+		IcebergManifestListBytes:     stats.GetManifestListBytes(),
+		IcebergManifestBytes:         stats.GetManifestBytes(),
+		IcebergManifestsSelected:     stats.GetManifestsSelected(),
+		IcebergManifestsPruned:       stats.GetManifestsPruned(),
+		IcebergDataFilesSelected:     stats.GetDataFilesSelected(),
+		IcebergDataFilesPruned:       stats.GetDataFilesPruned(),
+		IcebergDataFileBytesSelected: stats.GetDataFileBytesSelected(),
+		IcebergDataFileBytesPruned:   stats.GetDataFileBytesPruned(),
+		IcebergPlanningCacheHits:     stats.GetPlanningCacheHits(),
+		IcebergPlanningCacheMiss:     stats.GetPlanningCacheMiss(),
+	}
+}
+
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
 func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
 	if isRemote && proc != nil {
@@ -522,6 +560,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
+		in.Shuffle.DrainAllBuckets = t.DrainAllBuckets
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -675,18 +714,28 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:                  t.Es.Attrs,
-			ColumnListLen:          t.Es.ColumnListLen,
-			Cols:                   t.Es.Cols,
-			FileSize:               t.Es.FileSize,
-			FileOffsetTotal:        t.Es.FileOffsetTotal,
-			CreateSql:              t.Es.CreateSql,
-			FileList:               t.Es.FileList,
-			Filter:                 t.Es.Filter.FilterExpr,
-			StrictSqlMode:          t.Es.StrictSqlMode,
-			ParallelLoad:           t.Es.ParallelLoad,
-			LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
-			ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+			Attrs:                       t.Es.Attrs,
+			ColumnListLen:               t.Es.ColumnListLen,
+			Cols:                        t.Es.Cols,
+			FileSize:                    t.Es.FileSize,
+			FileOffsetTotal:             t.Es.FileOffsetTotal,
+			CreateSql:                   t.Es.CreateSql,
+			FileList:                    t.Es.FileList,
+			Filter:                      t.Es.Filter.FilterExpr,
+			StrictSqlMode:               t.Es.StrictSqlMode,
+			ParallelLoad:                t.Es.ParallelLoad,
+			LoadEmptyNumericAsZero:      t.Es.LoadEmptyNumericAsZero,
+			ParquetRowGroupShards:       t.Es.ParquetRowGroupShards,
+			IcebergDataTasks:            t.Es.IcebergDataTasks,
+			IcebergDeleteTasks:          t.Es.IcebergDeleteTasks,
+			IcebergColumns:              t.Es.IcebergColumns,
+			IcebergSnapshot:             t.Es.IcebergSnapshot,
+			IcebergObjectIoRef:          t.Es.IcebergObjectIORef,
+			IcebergHiddenReadColumns:    t.Es.IcebergHiddenReadCols,
+			NeedRowOrdinal:              t.Es.NeedRowOrdinal,
+			IcebergPlanningStats:        icebergPlanningStatsToPipeline(t.Es.IcebergPlanningStats),
+			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
+			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -982,6 +1031,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.ShuffleExpr = t.ShuffleExpr
+		arg.DrainAllBuckets = t.DrainAllBuckets
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1161,17 +1211,27 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:                  t.Attrs,
-					ColumnListLen:          t.ColumnListLen,
-					FileSize:               t.FileSize,
-					FileOffsetTotal:        t.FileOffsetTotal,
-					Cols:                   t.Cols,
-					CreateSql:              t.CreateSql,
-					FileList:               t.FileList,
-					StrictSqlMode:          t.StrictSqlMode,
-					ParallelLoad:           t.ParallelLoad,
-					LoadEmptyNumericAsZero: t.LoadEmptyNumericAsZero,
-					ParquetRowGroupShards:  t.ParquetRowGroupShards,
+					Attrs:                       t.Attrs,
+					ColumnListLen:               t.ColumnListLen,
+					FileSize:                    t.FileSize,
+					FileOffsetTotal:             t.FileOffsetTotal,
+					Cols:                        t.Cols,
+					CreateSql:                   t.CreateSql,
+					FileList:                    t.FileList,
+					StrictSqlMode:               t.StrictSqlMode,
+					ParallelLoad:                t.ParallelLoad,
+					LoadEmptyNumericAsZero:      t.LoadEmptyNumericAsZero,
+					ParquetRowGroupShards:       t.ParquetRowGroupShards,
+					IcebergDataTasks:            t.IcebergDataTasks,
+					IcebergDeleteTasks:          t.IcebergDeleteTasks,
+					IcebergColumns:              t.IcebergColumns,
+					IcebergSnapshot:             t.IcebergSnapshot,
+					IcebergObjectIORef:          t.IcebergObjectIoRef,
+					IcebergHiddenReadCols:       t.IcebergHiddenReadColumns,
+					NeedRowOrdinal:              t.NeedRowOrdinal,
+					IcebergPlanningStats:        icebergPlanningStatsFromPipeline(t.IcebergPlanningStats),
+					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
+					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
