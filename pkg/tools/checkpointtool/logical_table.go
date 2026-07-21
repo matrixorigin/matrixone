@@ -34,7 +34,7 @@ const (
 	DefaultInteractiveLogicalViewMaxBytes = 64 << 20
 )
 
-var errLogicalTableViewLimit = errors.New("logical table view materialization limit reached")
+var errLogicalTableViewLimit = moerr.NewInternalErrorNoCtx("logical table view materialization limit reached")
 
 type logicalTableStats struct {
 	PhysicalRows int

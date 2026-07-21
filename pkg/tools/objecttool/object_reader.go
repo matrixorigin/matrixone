@@ -16,7 +16,6 @@ package objecttool
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -257,7 +256,7 @@ func decodeObjectColumn(data []byte) (obj any, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			obj = nil
-			err = fmt.Errorf("decode object column: %v", recovered)
+			err = moerr.NewInternalErrorNoCtxf("decode object column: %v", recovered)
 		}
 	}()
 	return objectio.Decode(data)
