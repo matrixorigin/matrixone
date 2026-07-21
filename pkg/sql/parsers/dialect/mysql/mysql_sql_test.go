@@ -272,6 +272,11 @@ func TestQuoteSelectAlias(t *testing.T) {
 			sql:  "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
 			want: "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
 		},
+		{
+			name: "quoted index hints",
+			sql:  "select * from tbl force index (`select`, `a b`, `x``y`)",
+			want: "select * from `tbl` force index(`select`, `a b`, `x``y`)",
+		},
 	}
 
 	for _, test := range tests {

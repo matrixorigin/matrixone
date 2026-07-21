@@ -1139,6 +1139,29 @@ create table `dst``table` as select `s``x`.`a``b` as `x``y` from `src``table` as
 select `x``y` from `dst``table` order by `x``y`;
 drop table `dst``table`;
 drop table `src``table`;
+drop table if exists ctas_index_hint_src;
+drop table if exists ctas_index_hint_dst;
+create table ctas_index_hint_src (
+    col1 int,
+    index `select` (col1),
+    index `a b` (col1),
+    index `x``y` (col1)
+);
+insert into ctas_index_hint_src values (1), (2);
+create table ctas_index_hint_dst as
+select * from ctas_index_hint_src force index (`select`, `a b`, `x``y`);
+select * from ctas_index_hint_dst order by col1;
+drop table ctas_index_hint_dst;
+drop table ctas_index_hint_src;
+drop table if exists ctas_interval_identifier_src;
+drop table if exists ctas_interval_identifier_dst;
+create table ctas_interval_identifier_src (`interval(x,day)` int);
+insert into ctas_interval_identifier_src values (1), (2);
+create table ctas_interval_identifier_dst as
+select `interval(x,day)` from ctas_interval_identifier_src;
+select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
+drop table ctas_interval_identifier_dst;
+drop table ctas_interval_identifier_src;
 drop table alias01;
 -- @session
 drop database test;
