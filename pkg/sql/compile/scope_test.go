@@ -1144,6 +1144,228 @@ func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
+func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
+	tasks := []*pipeline.IcebergDataFileTask{
+		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
+		{FilePath: "warehouse/iceberg/part-1.parquet", FileSize: 60, RecordCount: 6},
+		{FilePath: "warehouse/iceberg/part-2.parquet", FileSize: 40, RecordCount: 4},
+		{FilePath: "warehouse/iceberg/part-3.parquet", FileSize: 20, RecordCount: 2},
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards := splitIcebergDataFileShards(tasks, nodes)
+	require.Len(t, shards, 2)
+
+	seen := make(map[string]bool)
+	loads := make(map[string]int64)
+	for _, shard := range shards {
+		require.NotEmpty(t, shard.dataTasks)
+		require.Len(t, shard.fileList, len(shard.dataTasks))
+		require.Len(t, shard.fileSize, len(shard.dataTasks))
+		for i, task := range shard.dataTasks {
+			require.Equal(t, task.FilePath, shard.fileList[i])
+			require.Equal(t, task.FileSize, shard.fileSize[i])
+			seen[task.FilePath] = true
+			loads[shard.node.Addr] += task.FileSize
+		}
+	}
+	require.Equal(t, map[string]bool{
+		"warehouse/iceberg/part-0.parquet": true,
+		"warehouse/iceberg/part-1.parquet": true,
+		"warehouse/iceberg/part-2.parquet": true,
+		"warehouse/iceberg/part-3.parquet": true,
+	}, seen)
+	require.Equal(t, int64(120), loads["cn1:6001"])
+	require.Equal(t, int64(100), loads["cn2:6001"])
+}
+
+func TestCompileExternScanIcebergFileFanout(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	enableProtectedIcebergCNToCNForTest(t, testCompile)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/iceberg/orders",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_ICEBERG_TB),
+			Parallel:   true,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_ICEBERG_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	dataTasks := []*pipeline.IcebergDataFileTask{
+		{FilePath: "warehouse/iceberg/orders/part-0.parquet", FileSize: 100, RecordCount: 10, RowGroupStart: 0, RowGroupEnd: 1, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part0"},
+		{FilePath: "warehouse/iceberg/orders/part-1.parquet", FileSize: 60, RecordCount: 6, RowGroupStart: 1, RowGroupEnd: 2, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part1"},
+		{FilePath: "warehouse/iceberg/orders/part-2.parquet", FileSize: 40, RecordCount: 4, RowGroupStart: 2, RowGroupEnd: 3, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part2"},
+	}
+	deleteTasks := []*pipeline.IcebergDeleteFileTask{
+		{DeleteType: "position", DeleteFilePath: "warehouse/iceberg/orders/delete-0.parquet", ReferencedDataFile: dataTasks[0].FilePath},
+		{DeleteType: "equality", DeleteFilePath: "warehouse/iceberg/orders/delete-all.parquet"},
+		{DeleteType: "position", DeleteFilePath: "warehouse/iceberg/orders/delete-other.parquet", ReferencedDataFile: "warehouse/iceberg/orders/other.parquet"},
+	}
+	columns := []*pipeline.IcebergColumnMapping{{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "order_id"}}
+	snapshot := &pipeline.IcebergSnapshotRuntime{SnapshotId: 42, SchemaId: 7}
+	runtime := icebergExternalScanRuntime{
+		dataTasks:      dataTasks,
+		deleteTasks:    deleteTasks,
+		columns:        columns,
+		snapshot:       snapshot,
+		objectIORef:    registerCompileTestObjectIO(t),
+		hiddenReadCols: []int32{3},
+		needRowOrdinal: true,
+	}
+
+	ss, err := testCompile.compileExternScanIcebergFileFanout(n, param, runtime, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 1)
+	require.True(t, param.Parallel)
+
+	seen := make(map[string]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, "cn1:6001", scope.NodeInfo.Addr)
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.True(t, scope.IsLoad)
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, int32(plan.ExternType_ICEBERG_TB), ext.Es.Extern.ExternType)
+		require.Len(t, ext.Es.FileList, len(ext.Es.IcebergDataTasks))
+		require.Len(t, ext.Es.FileSize, len(ext.Es.IcebergDataTasks))
+		require.Len(t, ext.Es.FileOffsetTotal, len(ext.Es.IcebergDataTasks))
+		require.Equal(t, columns, ext.Es.IcebergColumns)
+		require.Equal(t, snapshot, ext.Es.IcebergSnapshot)
+		require.Equal(t, runtime.objectIORef, ext.Es.IcebergObjectIORef)
+		require.Equal(t, []int32{3}, ext.Es.IcebergHiddenReadCols)
+		require.True(t, ext.Es.NeedRowOrdinal)
+		for i, task := range ext.Es.IcebergDataTasks {
+			require.Equal(t, task.FilePath, ext.Es.FileList[i])
+			require.Equal(t, task.FileSize, ext.Es.FileSize[i])
+			require.Equal(t, []int64{0, -1}, ext.Es.FileOffsetTotal[i].Offset)
+			require.True(t, task.HasResidualFilter)
+			require.NotEmpty(t, task.ResidualFilterHash)
+			require.Greater(t, task.RowGroupEnd, task.RowGroupStart)
+			seen[task.FilePath] = true
+		}
+		deletePaths := make(map[string]bool)
+		for _, task := range ext.Es.IcebergDeleteTasks {
+			deletePaths[task.DeleteFilePath] = true
+		}
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-all.parquet"])
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-0.parquet"])
+		require.False(t, deletePaths["warehouse/iceberg/orders/delete-other.parquet"])
+	}
+	require.Equal(t, map[string]bool{
+		"warehouse/iceberg/orders/part-0.parquet": true,
+		"warehouse/iceberg/orders/part-1.parquet": true,
+		"warehouse/iceberg/orders/part-2.parquet": true,
+	}, seen)
+}
+
+func TestIcebergProjectedAttrsKeepsMappedAndHiddenReadColumns(t *testing.T) {
+	attrs := []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "__mo_iceberg_data_file_path", ColIndex: 1},
+		{ColName: "__mo_iceberg_row_ordinal", ColIndex: 2},
+		{ColName: "new_optional", ColIndex: 3},
+		{ColName: "__mo_iceberg_delete_key", ColIndex: 4},
+		{ColName: "unused", ColIndex: 5},
+	}
+	got := icebergProjectedAttrs(attrs, []*pipeline.IcebergColumnMapping{
+		{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+		{MoColIndex: 3, IcebergFieldId: 5, CurrentFieldName: "new_optional", DefaultNullFill: true},
+	}, []int32{4})
+
+	require.Equal(t, []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "__mo_iceberg_data_file_path", ColIndex: 1},
+		{ColName: "__mo_iceberg_row_ordinal", ColIndex: 2},
+		{ColName: "new_optional", ColIndex: 3},
+		{ColName: "__mo_iceberg_delete_key", ColIndex: 4},
+	}, got)
+}
+
+func TestEnsureIcebergHiddenReadColumnsAddsSyntheticScanInput(t *testing.T) {
+	param := &external.ExternalParam{
+		ExParamConst: external.ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "amount", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "amount"},
+			},
+		},
+	}
+	ensureIcebergHiddenReadColumns(param, []*pipeline.IcebergColumnMapping{
+		{MoColIndex: 0, CurrentFieldName: "id"},
+		{MoColIndex: 2, CurrentFieldName: "hidden_key", IsHidden: true},
+		{MoColIndex: 1, CurrentFieldName: "amount"},
+	})
+
+	require.Len(t, param.Cols, 3)
+	require.Equal(t, "hidden_key", param.Cols[2].Name)
+	require.Equal(t, []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "amount", ColIndex: 1},
+		{ColName: "hidden_key", ColIndex: 2},
+	}, param.Attrs)
+}
+
+func TestConstructExternalLegacyPathDoesNotSetIcebergRuntime(t *testing.T) {
+	node := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/plain/*.parquet",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_EXTERNAL_TB),
+		},
+	}
+
+	op := constructExternal(
+		node, param, context.Background(),
+		[]string{"warehouse/plain/part-0.parquet"},
+		[]int64{128},
+		makeWholeFileOffsets(1),
+		true,
+	)
+
+	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), op.Es.Extern.ExternType)
+	require.Nil(t, op.Es.IcebergDataTasks)
+	require.Nil(t, op.Es.IcebergDeleteTasks)
+	require.Nil(t, op.Es.IcebergColumns)
+	require.Nil(t, op.Es.IcebergSnapshot)
+	require.Empty(t, op.Es.IcebergObjectIORef)
+	require.Empty(t, op.Es.IcebergHiddenReadCols)
+	require.False(t, op.Es.NeedRowOrdinal)
+	require.Equal(t, []string{"warehouse/plain/part-0.parquet"}, op.Es.FileList)
+	require.Equal(t, []int64{128}, op.Es.FileSize)
+}
+
 func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
 	fileList := []string{"warehouse/load/part-000.parquet", "warehouse/load/part-001.parquet"}
 	fileSize := []int64{190, 30}

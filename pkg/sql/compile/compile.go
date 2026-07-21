@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -308,6 +309,7 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
+	c.icebergScanPlanner = nil
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -964,7 +966,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	}
 
 	switch qry.StmtType {
-	case plan.Query_DELETE, plan.Query_INSERT, plan.Query_UPDATE:
+	case plan.Query_DELETE, plan.Query_INSERT, plan.Query_UPDATE, plan.Query_MERGE:
 		updateScopesLastFlag(ss)
 		return ss, nil
 	default:
@@ -1045,7 +1047,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		nodeCopy := plan2.DeepCopyNode(node)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileExternScan(nodeCopy)
+		ss, err = c.compileExternScanWithPlanNodeID(nodeCopy, curNodeIdx)
 		if err != nil {
 			return nil, err
 		}
@@ -1835,6 +1837,10 @@ func toLowerSet(cols []string) map[string]bool {
 }
 
 func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
+	return c.compileExternScanWithPlanNodeID(node, -1)
+}
+
+func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID int32) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
 	}
@@ -1847,15 +1853,24 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 		}
 	}()
 
+	err, strictSqlMode := StrictSqlMode(c.proc)
+	if err != nil {
+		return nil, err
+	}
+
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
+		access, err := c.checkIcebergScanAccess(node)
+		if err != nil {
+			return nil, err
+		}
+		return c.compileIcebergScanWithAccessForPlanNode(planNodeID, node, strictSqlMode, access)
+	}
+
 	param, err := c.getExternParam(c.proc, node.ExternScan, node.TableDef.Createsql)
 	if err != nil {
 		return nil, err
 	}
 
-	err, strictSqlMode := StrictSqlMode(c.proc)
-	if err != nil {
-		return nil, err
-	}
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(node, param, strictSqlMode)
 	}
@@ -2030,6 +2045,26 @@ type parquetRowGroupScopeShard struct {
 	originalToLocal map[int32]int32
 }
 
+type icebergDataFileScopeShard struct {
+	node      engine.Node
+	fileList  []string
+	fileSize  []int64
+	dataTasks []*pipeline.IcebergDataFileTask
+}
+
+type icebergExternalScanRuntime struct {
+	dataTasks            []*pipeline.IcebergDataFileTask
+	deleteTasks          []*pipeline.IcebergDeleteFileTask
+	columns              []*pipeline.IcebergColumnMapping
+	snapshot             *pipeline.IcebergSnapshotRuntime
+	objectIORef          string
+	hiddenReadCols       []int32
+	planningStats        process.ParquetProfileStats
+	needRowOrdinal       bool
+	deleteMaxMemoryBytes int64
+	deleteSpillEnabled   bool
+}
+
 func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
 }
@@ -2073,6 +2108,53 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 		scope.setRootOperator(op)
 		ss = append(ss, scope)
 	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileExternScanIcebergFileFanout(
+	node *plan.Node,
+	param *tree.ExternParam,
+	runtime icebergExternalScanRuntime,
+	strictSqlMode bool,
+) ([]*Scope, error) {
+	runtime.dataTasks = compactIcebergDataTasks(runtime.dataTasks)
+	fileList, fileSize := icebergDataTaskFiles(runtime.dataTasks)
+	shardParam := new(tree.ExternParam)
+	*shardParam = *param
+	shardParam.Parallel = false
+	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
+		node:      engine.Node{Addr: c.addr, Mcpu: 1},
+		fileList:  fileList,
+		fileSize:  fileSize,
+		dataTasks: runtime.dataTasks,
+	}, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanIcebergShard(
+	node *plan.Node,
+	param *tree.ExternParam,
+	runtime icebergExternalScanRuntime,
+	shard icebergDataFileScopeShard,
+	strictSqlMode bool,
+) ([]*Scope, error) {
+	ss := make([]*Scope, 1)
+	ss[0] = c.constructScopeForExternal(shard.node.Addr, param.Parallel)
+	ss[0].NodeInfo.Mcpu = 1
+	ss[0].IsLoad = true
+
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(
+		node, param, c.proc.Ctx,
+		shard.fileList, shard.fileSize,
+		makeWholeFileOffsets(len(shard.fileList)),
+		strictSqlMode,
+	)
+	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
+		return nil, err
+	}
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ss[0].setRootOperator(op)
 	c.anal.isFirst = false
 	return ss, nil
 }
@@ -2393,6 +2475,246 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 		}
 	}
 	return nonEmpty
+}
+
+func splitIcebergDataFileShards(tasks []*pipeline.IcebergDataFileTask, nodes []engine.Node) []icebergDataFileScopeShard {
+	if len(tasks) == 0 || len(nodes) == 0 {
+		return nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(tasks) {
+		shardCount = len(tasks)
+	}
+	shards := make([]icebergDataFileScopeShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+	}
+
+	indices := make([]int, len(tasks))
+	for i := range indices {
+		indices[i] = i
+	}
+	slices.SortStableFunc(indices, func(leftIdx, rightIdx int) int {
+		left := icebergDataTaskLoad(tasks[leftIdx])
+		right := icebergDataTaskLoad(tasks[rightIdx])
+		if left != right {
+			return cmp.Compare(right, left)
+		}
+		return cmp.Compare(tasks[leftIdx].FilePath, tasks[rightIdx].FilePath)
+	})
+
+	for _, taskIdx := range indices {
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].dataTasks) < len(shards[shardIdx].dataTasks)) {
+				shardIdx = i
+			}
+		}
+		task := tasks[taskIdx]
+		shards[shardIdx].dataTasks = append(shards[shardIdx].dataTasks, task)
+		shards[shardIdx].fileList = append(shards[shardIdx].fileList, task.FilePath)
+		size := task.FileSize
+		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
+		loads[shardIdx] += icebergDataTaskLoad(task)
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.dataTasks) > 0 {
+			nonEmpty = append(nonEmpty, shard)
+		}
+	}
+	return nonEmpty
+}
+
+func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.IcebergDataFileTask {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := tasks[:0]
+	for _, task := range tasks {
+		if task != nil {
+			out = append(out, task)
+		}
+	}
+	return out
+}
+
+func icebergDataTaskLoad(task *pipeline.IcebergDataFileTask) int64 {
+	if task == nil {
+		return 1
+	}
+	if task.FileSize > 0 {
+		return task.FileSize
+	}
+	if task.RecordCount > 0 {
+		return task.RecordCount
+	}
+	return 1
+}
+
+func icebergDataTaskFiles(tasks []*pipeline.IcebergDataFileTask) ([]string, []int64) {
+	fileList := make([]string, 0, len(tasks))
+	fileSize := make([]int64, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		fileList = append(fileList, task.FilePath)
+		fileSize = append(fileSize, task.FileSize)
+	}
+	return fileList, fileSize
+}
+
+func attachIcebergRuntimeToExternal(
+	ctx context.Context,
+	op *external.External,
+	runtime icebergExternalScanRuntime,
+	dataTasks []*pipeline.IcebergDataFileTask,
+) error {
+	if ref := strings.TrimSpace(runtime.objectIORef); ref != "" && !icebergio.RetainObjectIORef(ref) {
+		return moerr.NewInternalError(ctx, "Iceberg object IO ref is not registered or expired")
+	}
+	ensureIcebergHiddenReadColumns(op.Es, runtime.columns)
+	op.Es.Attrs = icebergProjectedAttrs(op.Es.Attrs, runtime.columns, runtime.hiddenReadCols)
+	op.Es.IcebergDataTasks = dataTasks
+	op.Es.IcebergDeleteTasks = filterIcebergDeleteTasksForDataFiles(runtime.deleteTasks, dataTasks)
+	op.Es.IcebergColumns = runtime.columns
+	op.Es.IcebergSnapshot = runtime.snapshot
+	op.Es.IcebergObjectIORef = runtime.objectIORef
+	op.Es.IcebergHiddenReadCols = runtime.hiddenReadCols
+	op.Es.IcebergPlanningStats = runtime.planningStats
+	op.Es.NeedRowOrdinal = runtime.needRowOrdinal
+	op.Es.IcebergDeleteMaxMemoryBytes = runtime.deleteMaxMemoryBytes
+	op.Es.IcebergDeleteSpillEnabled = runtime.deleteSpillEnabled
+	op.Es.ParquetRowGroupShards = icebergDataTaskRowGroupShards(dataTasks)
+	return nil
+}
+
+func ensureIcebergHiddenReadColumns(
+	param *external.ExternalParam,
+	columns []*pipeline.IcebergColumnMapping,
+) {
+	if param == nil || len(columns) == 0 {
+		return
+	}
+	attrByIndex := make(map[int32]struct{}, len(param.Attrs))
+	for _, attr := range param.Attrs {
+		attrByIndex[attr.ColIndex] = struct{}{}
+	}
+	for _, column := range columns {
+		if column == nil || !column.IsHidden || column.MoColIndex < 0 {
+			continue
+		}
+		idx := int(column.MoColIndex)
+		for len(param.Cols) <= idx {
+			param.Cols = append(param.Cols, nil)
+		}
+		if param.Cols[idx] == nil {
+			moType := plan.Type{}
+			if column.MoType != nil {
+				moType = *column.MoType
+			}
+			param.Cols[idx] = &plan.ColDef{
+				Name: icebergFirstNonEmpty(column.CurrentFieldName, column.SnapshotFieldName),
+				Typ:  moType,
+			}
+		}
+		if _, ok := attrByIndex[column.MoColIndex]; ok {
+			continue
+		}
+		param.Attrs = append(param.Attrs, plan.ExternAttr{
+			ColName:  icebergFirstNonEmpty(column.CurrentFieldName, column.SnapshotFieldName),
+			ColIndex: column.MoColIndex,
+		})
+		attrByIndex[column.MoColIndex] = struct{}{}
+	}
+}
+
+func icebergFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func icebergDataTaskRowGroupShards(tasks []*pipeline.IcebergDataFileTask) []*pipeline.ParquetRowGroupShard {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := make([]*pipeline.ParquetRowGroupShard, 0, len(tasks))
+	for idx, task := range tasks {
+		if task == nil || task.RowGroupEnd <= task.RowGroupStart {
+			continue
+		}
+		out = append(out, &pipeline.ParquetRowGroupShard{
+			FileIndex:     int32(idx),
+			RowGroupStart: task.RowGroupStart,
+			RowGroupEnd:   task.RowGroupEnd,
+			NumRows:       task.RecordCount,
+			Bytes:         task.FileSize,
+		})
+	}
+	return out
+}
+
+func icebergProjectedAttrs(
+	attrs []plan.ExternAttr,
+	columns []*pipeline.IcebergColumnMapping,
+	hiddenReadCols []int32,
+) []plan.ExternAttr {
+	if len(attrs) == 0 || (len(columns) == 0 && len(hiddenReadCols) == 0) {
+		return attrs
+	}
+	needed := make(map[int32]struct{}, len(columns)+len(hiddenReadCols))
+	for _, mapping := range columns {
+		if mapping == nil {
+			continue
+		}
+		needed[mapping.MoColIndex] = struct{}{}
+	}
+	for _, colIdx := range hiddenReadCols {
+		needed[colIdx] = struct{}{}
+	}
+	if len(needed) == 0 {
+		return attrs
+	}
+	out := attrs[:0]
+	for _, attr := range attrs {
+		if _, ok := needed[attr.ColIndex]; ok || isIcebergDMLMetadataColumnName(attr.ColName) {
+			out = append(out, attr)
+		}
+	}
+	return out
+}
+
+func filterIcebergDeleteTasksForDataFiles(
+	deleteTasks []*pipeline.IcebergDeleteFileTask,
+	dataTasks []*pipeline.IcebergDataFileTask,
+) []*pipeline.IcebergDeleteFileTask {
+	if len(deleteTasks) == 0 || len(dataTasks) == 0 {
+		return nil
+	}
+	dataFiles := make(map[string]bool, len(dataTasks))
+	for _, task := range dataTasks {
+		if task != nil && task.FilePath != "" {
+			dataFiles[task.FilePath] = true
+		}
+	}
+	filtered := make([]*pipeline.IcebergDeleteFileTask, 0, len(deleteTasks))
+	for _, task := range deleteTasks {
+		if task == nil {
+			continue
+		}
+		if task.ReferencedDataFile == "" || dataFiles[task.ReferencedDataFile] {
+			filtered = append(filtered, task)
+		}
+	}
+	return filtered
 }
 
 func splitParquetRowGroupShards(
@@ -4457,6 +4779,31 @@ func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Sc
 }
 
 func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	if ok, err := isIcebergAppendInsert(c.proc.Ctx, node); err != nil {
+		return nil, err
+	} else if ok {
+		currentFirstFlag := c.anal.isFirst
+		// A single Iceberg writer is a correctness boundary, not only a layout
+		// optimization. The coordinator owns one commit generation and publishes
+		// only after its input reaches terminal state; splitting it across remote
+		// or parallel scopes would require explicit scope registration and a
+		// failure-aware barrier before any scope may commit.
+		if icebergInsertNeedsSingleWriterMerge(ss, toEngineNode(c.currentCNWorker())) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+		for i := range ss {
+			insertArg, err := c.constructIcebergInsert(nodes, node)
+			if err != nil {
+				return nil, err
+			}
+			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(insertArg)
+			ss[i].NodeInfo.Mcpu = 1
+		}
+		c.anal.isFirst = false
+		return ss, nil
+	}
+
 	// Writable external table: each parallel pipeline owns one writer/file.
 	// Reuse the simple (non-S3, no merge-block) layout: one insert operator per
 	// source scope, with no shuffle.
@@ -4628,6 +4975,16 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 	rs.setRootOperator(mergeInsertArg)
 	ss = []*Scope{rs}
 	return ss, nil
+}
+
+func icebergInsertNeedsSingleWriterMerge(ss []*Scope, currentCN engine.Node) bool {
+	if len(ss) != 1 {
+		return len(ss) > 1
+	}
+	if ss[0] == nil {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu > 1 || !sameExecutionNode(ss[0].NodeInfo, currentCN)
 }
 
 func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, error) {
