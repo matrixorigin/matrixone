@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -914,7 +915,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 	}
 
-	for i, idxDef := range tableDef.Indexes {
+	orderedIndexPos := make([]int, len(tableDef.Indexes))
+	for i := range orderedIndexPos {
+		orderedIndexPos[i] = i
+	}
+	slices.SortStableFunc(orderedIndexPos, func(left, right int) int {
+		return strings.Compare(
+			tableDef.Indexes[left].IndexTableName,
+			tableDef.Indexes[right].IndexTableName,
+		)
+	})
+	for _, i := range orderedIndexPos {
+		idxDef := tableDef.Indexes[i]
 		// A unique index whose key is statically NULL for this statement is not stored
 		// (serial(...) is NULL), matching the INSERT path which skips index maintenance
 		// for a NULL key. Nothing to insert into or delete from its index table.

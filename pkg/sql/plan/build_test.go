@@ -4613,7 +4613,7 @@ func TestChildInsertLocksReferencedUniqueIndexKey(t *testing.T) {
 	t.Fatal("referenced unique-index shared lock not found")
 }
 
-func TestChildInsertUsesCanonicalForeignKeyLockOrder(t *testing.T) {
+func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	parent := mock.ctxt.tables["replace_fk_p"]
 	child := mock.ctxt.tables["replace_fk_c"]
@@ -4701,6 +4701,21 @@ func TestChildInsertUsesCanonicalForeignKeyLockOrder(t *testing.T) {
 	}
 	assert.True(t, contains(lockNode[77911], lockNode[77912]),
 		"z lock must depend on the lexically earlier a lock regardless of FK declaration order")
+
+	replacePlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (1, 'x', 'y')")
+	require.NoError(t, err)
+	var replaceLockOrder []uint64
+	for _, node := range replacePlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_LOCK_OP || len(node.LockTargets) == 0 {
+			continue
+		}
+		for _, target := range node.LockTargets {
+			replaceLockOrder = append(replaceLockOrder, target.TableId)
+		}
+		break
+	}
+	require.Equal(t, []uint64{parent.TblId, parent.TblId, 77912, 77912, 77911, 77911}, replaceLockOrder,
+		"REPLACE must lock the base table first and hidden unique indexes by physical table name")
 }
 
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
