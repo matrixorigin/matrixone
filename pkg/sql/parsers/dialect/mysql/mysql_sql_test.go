@@ -563,8 +563,8 @@ func TestQuoteSelectAlias(t *testing.T) {
 		},
 		{
 			name: "quoted user variables",
-			sql:  "select @`a b`, @`select`, @`x``y`, @@autocommit",
-			want: "select @`a b`, @`select`, @`x``y`, @@autocommit",
+			sql:  "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@session.autocommit, @@autocommit",
+			want: "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@autocommit, @@autocommit",
 		},
 	}
 
@@ -1435,10 +1435,10 @@ var (
 			output: "select @@tx_isolation",
 		}, {
 			input:  "select @@global.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "select @@GLOBAL.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 			output: "show variables",

@@ -1178,6 +1178,15 @@ select * from ctas_user_variable;
 drop table ctas_user_variable;
 drop table alias01;
 -- @session
+set global autocommit = off;
+set session autocommit = on;
+select @@global.autocommit, @@session.autocommit;
+drop table if exists ctas_system_variable_scope;
+create table ctas_system_variable_scope as
+select @@global.autocommit as global_value, @@session.autocommit as session_value;
+select * from ctas_system_variable_scope;
+drop table ctas_system_variable_scope;
+set global autocommit = on;
 drop database test;
 
 -- privilege
