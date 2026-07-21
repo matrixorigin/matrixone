@@ -389,6 +389,98 @@ func TestStoreCloseCancelsRecoveryBeforeStoppingReplicaTask(t *testing.T) {
 	}
 }
 
+type blockingCancelRecoveryTxnService struct {
+	service.TxnService
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingCancelRecoveryTxnService) Start() error {
+	return nil
+}
+
+func (s *blockingCancelRecoveryTxnService) CancelRecovery() {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+}
+
+func (s *blockingCancelRecoveryTxnService) Close(bool) error {
+	return nil
+}
+
+func TestStoreCloseCancelsLateReplicaRecoveryFromStopper(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
+	fsFactory := func(name string) (*fileservice.FileServices, error) {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, fs)
+	}
+	s := newTestStore(
+		t,
+		"u1",
+		fsFactory,
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
+			return newTestHAKeeperClient(), nil
+		}),
+		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+			return mem.NewMemLog(), nil
+		}),
+		WithConfigAdjust(func(c *Config) {
+			c.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+			c.Txn.Storage.Backend = StorageMEMKV
+		}),
+	)
+	require.NoError(t, s.Start())
+
+	shard := newTestTNShard(1, 2, 3)
+	barrierService := &blockingCancelRecoveryTxnService{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	initial := newReplica(shard, s.rt)
+	require.NoError(t, initial.start(barrierService))
+	s.replicas.Store(shard.ShardID, initial)
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case <-barrierService.entered:
+	case <-time.After(time.Second):
+		t.Fatal("store Close did not enter the initial replica cancellation")
+	}
+
+	lateService := &closeUnblocksStartTxnService{
+		started: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	late := newReplica(shard, s.rt)
+	require.True(t, s.replicas.CompareAndSwap(shard.ShardID, initial, late))
+	require.NoError(t, s.stopper.RunTask(func(stopperCtx context.Context) {
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, late)
+		defer stopCancelPropagation()
+		_ = late.start(lateService)
+	}))
+	select {
+	case <-lateService.started:
+	case <-time.After(time.Second):
+		t.Fatal("late replica did not block in Start")
+	}
+
+	close(barrierService.release)
+	select {
+	case err := <-closed:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		late.cancelRecovery()
+		require.ErrorIs(t, <-closed, context.Canceled)
+		t.Fatal("store Close did not cancel recovery for a replica registered after its initial Range")
+	}
+}
+
 func TestHeartbeatOnlyReportsStartedReplicas(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		r := newReplica(newTestTNShard(1, 2, 3), s.rt)

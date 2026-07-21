@@ -337,9 +337,7 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	}
 
 	err := s.stopper.RunTask(func(stopperCtx context.Context) {
-		stopCancelPropagation := context.AfterFunc(stopperCtx, func() {
-			r.cancelStart(false)
-		})
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, r)
 		defer stopCancelPropagation()
 
 		for {
@@ -405,6 +403,16 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 
 	s.addTNShardLocked(shard)
 	return nil
+}
+
+func propagateReplicaStopperCancellation(
+	stopperCtx context.Context,
+	r *replica,
+) func() bool {
+	return context.AfterFunc(stopperCtx, func() {
+		r.cancelStart(false)
+		r.cancelRecovery()
+	})
 }
 
 func waitCreateRetry(stopperCtx, createCtx context.Context) error {
