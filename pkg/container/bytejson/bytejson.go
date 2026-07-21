@@ -983,9 +983,12 @@ func (p *parser) do() (Node, error) {
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
+				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 			}
 			return p.top, nil

@@ -17,6 +17,8 @@ package function
 import (
 	"bytes"
 	"math"
+	"math/big"
+	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -41,6 +43,30 @@ type jsonOverlapWorkspace struct {
 	indexes []uint32
 }
 
+type jsonOverlapPreparedArray struct {
+	indexes     []uint32
+	numericKeys map[uint32]*jsonOverlapPreparedNumericKey
+	ready       bool
+}
+
+type jsonOverlapNumericKeyState uint8
+
+const (
+	jsonOverlapNumericKeyUninitialized jsonOverlapNumericKeyState = iota
+	jsonOverlapNumericKeyValid
+	jsonOverlapNumericKeyInvalid
+)
+
+type jsonOverlapPreparedNumericKey struct {
+	state jsonOverlapNumericKeyState
+	key   jsonOverlapNumericKey
+}
+
+type jsonOverlapValueView struct {
+	document bytejson.ByteJson
+	prepared *jsonOverlapPreparedArray
+}
+
 type jsonOverlapOperand struct {
 	parameter *vector.Vector
 	wrapper   vector.FunctionParameterWrapper[types.Varlena]
@@ -48,6 +74,7 @@ type jsonOverlapOperand struct {
 	document  bytejson.ByteJson
 	isNull    bool
 	err       error
+	prepared  jsonOverlapPreparedArray
 }
 
 func jsonOverlapsCheckFn(_ []overload, inputs []types.Type) checkResult {
@@ -102,6 +129,9 @@ func jsonOverlaps(
 	}
 	var workspace jsonOverlapWorkspace
 	defer workspace.clear()
+	defer left.prepared.clear()
+	defer right.prepared.clear()
+	evaluableRows := jsonOverlapEvaluableRows(&left, &right, length, selectList)
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
@@ -134,7 +164,7 @@ func jsonOverlaps(
 		}
 
 		value := int64(0)
-		if workspace.overlaps(leftDocument, rightDocument) {
+		if workspace.overlapsViews(left.valueView(leftDocument), right.valueView(rightDocument), evaluableRows) {
 			value = 1
 		}
 		if err := rs.Append(value, false); err != nil {
@@ -142,6 +172,24 @@ func jsonOverlaps(
 		}
 	}
 	return nil
+}
+
+func jsonOverlapEvaluableRows(left, right *jsonOverlapOperand, length int, selectList *FunctionSelectList) int {
+	count := 0
+	for row := uint64(0); row < uint64(length); row++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
+			continue
+		}
+		_, leftNull := left.wrapper.GetStrValue(row)
+		if leftNull {
+			continue
+		}
+		_, rightNull := right.wrapper.GetStrValue(row)
+		if !rightNull {
+			count++
+		}
+	}
+	return count
 }
 
 func (operand *jsonOverlapOperand) documentAt(
@@ -179,26 +227,152 @@ func (operand *jsonOverlapOperand) documentAt(
 	return document, isNull, err
 }
 
+func (operand *jsonOverlapOperand) valueView(document bytejson.ByteJson) jsonOverlapValueView {
+	view := jsonOverlapValueView{document: document}
+	if operand.parameter.IsConst() && document.Type == bytejson.TpCodeArray {
+		view.prepared = &operand.prepared
+	}
+	return view
+}
+
 func (w *jsonOverlapWorkspace) clear() {
 	w.indexes = nil
 }
 
+func (prepared *jsonOverlapPreparedArray) clear() {
+	prepared.indexes = nil
+	prepared.numericKeys = nil
+	prepared.ready = false
+}
+
+func (prepared *jsonOverlapPreparedArray) ensure(array bytejson.ByteJson) {
+	if prepared.ready {
+		return
+	}
+	count := array.GetElemCnt()
+	prepared.indexes = make([]uint32, count)
+	for index := range prepared.indexes {
+		prepared.indexes[index] = uint32(index)
+	}
+	slices.SortFunc(prepared.indexes, func(a, b uint32) int {
+		return prepared.compareElements(array, a, b)
+	})
+	prepared.ready = true
+}
+
+func (prepared *jsonOverlapPreparedArray) numericKey(index uint32) *jsonOverlapPreparedNumericKey {
+	if prepared.numericKeys == nil {
+		prepared.numericKeys = make(map[uint32]*jsonOverlapPreparedNumericKey)
+	}
+	key := prepared.numericKeys[index]
+	if key == nil {
+		key = &jsonOverlapPreparedNumericKey{}
+		prepared.numericKeys[index] = key
+	}
+	return key
+}
+
+func (prepared *jsonOverlapPreparedArray) compareElements(array bytejson.ByteJson, leftIndex, rightIndex uint32) int {
+	left := array.GetArrayElem(int(leftIndex))
+	right := array.GetArrayElem(int(rightIndex))
+	if !jsonOverlapNumericType(left.Type) || !jsonOverlapNumericType(right.Type) {
+		return compareJSONOverlapExact(left, right)
+	}
+	leftDecimal, rightDecimal, fast := jsonOverlapNumericFastValues(left, right)
+	if fast {
+		return compareJSONOverlapNumericFast(left, right, leftDecimal, rightDecimal)
+	}
+	return compareJSONOverlapNumericKeys(left, right, prepared.numericKey(leftIndex), prepared.numericKey(rightIndex))
+}
+
+func (prepared *jsonOverlapPreparedArray) compareElementWithValue(
+	array bytejson.ByteJson,
+	arrayIndex uint32,
+	value bytejson.ByteJson,
+	valueKey *jsonOverlapPreparedNumericKey,
+) int {
+	arrayValue := array.GetArrayElem(int(arrayIndex))
+	if !jsonOverlapNumericType(arrayValue.Type) || !jsonOverlapNumericType(value.Type) {
+		return compareJSONOverlapExact(arrayValue, value)
+	}
+	arrayDecimal, valueDecimal, fast := jsonOverlapNumericFastValues(arrayValue, value)
+	if fast {
+		return compareJSONOverlapNumericFast(arrayValue, value, arrayDecimal, valueDecimal)
+	}
+	return compareJSONOverlapNumericKeys(arrayValue, value, prepared.numericKey(arrayIndex), valueKey)
+}
+
 func (w *jsonOverlapWorkspace) overlaps(left, right bytejson.ByteJson) bool {
-	if left.Type != bytejson.TpCodeArray && right.Type == bytejson.TpCodeArray {
+	return w.overlapsViews(jsonOverlapValueView{document: left}, jsonOverlapValueView{document: right}, 1)
+}
+
+func (w *jsonOverlapWorkspace) overlapsViews(left, right jsonOverlapValueView, evaluableRows int) bool {
+	if left.document.Type != bytejson.TpCodeArray && right.document.Type == bytejson.TpCodeArray {
 		left, right = right, left
 	}
 
-	switch left.Type {
+	switch left.document.Type {
 	case bytejson.TpCodeArray:
-		if right.Type == bytejson.TpCodeArray {
-			return w.arraysOverlap(left, right)
+		if right.document.Type == bytejson.TpCodeArray {
+			return w.arraysOverlapViews(left, right)
 		}
-		return jsonOverlapArrayContains(left, right)
+		if left.prepared != nil && jsonOverlapShouldPrepareScalar(left.document.GetElemCnt(), evaluableRows) {
+			left.prepared.ensure(left.document)
+			return jsonOverlapPreparedArrayContains(left.document, left.prepared, right.document)
+		}
+		return jsonOverlapArrayContains(left.document, right.document)
 	case bytejson.TpCodeObject:
-		return right.Type == bytejson.TpCodeObject && jsonOverlapObjects(left, right)
+		return right.document.Type == bytejson.TpCodeObject && jsonOverlapObjects(left.document, right.document)
 	default:
-		return equalJSONOverlapExact(left, right)
+		return equalJSONOverlapExact(left.document, right.document)
 	}
+}
+
+func (w *jsonOverlapWorkspace) arraysOverlapViews(left, right jsonOverlapValueView) bool {
+	if left.document.GetElemCnt() > right.document.GetElemCnt() {
+		left, right = right, left
+	}
+	if left.document.GetElemCnt() == 0 || right.document.GetElemCnt() == 0 {
+		return false
+	}
+	if left.document.GetElemCnt() <= jsonOverlapLinearCompareBudget/right.document.GetElemCnt() {
+		return w.arraysOverlap(left.document, right.document)
+	}
+	if left.prepared != nil {
+		left.prepared.ensure(left.document)
+		return jsonOverlapPreparedArrayOverlaps(left.document, left.prepared, right.document)
+	}
+	return w.arraysOverlap(left.document, right.document)
+}
+
+func jsonOverlapShouldPrepareScalar(count, evaluableRows int) bool {
+	if count <= jsonOverlapLinearCompareBudget || evaluableRows <= 1 {
+		return false
+	}
+	logCount := bits.Len(uint(count))
+	return int64(evaluableRows)*int64(count) > int64(count)*int64(logCount)+int64(evaluableRows)*int64(logCount)
+}
+
+func jsonOverlapPreparedArrayOverlaps(array bytejson.ByteJson, prepared *jsonOverlapPreparedArray, probe bytejson.ByteJson) bool {
+	for index := 0; index < probe.GetElemCnt(); index++ {
+		if jsonOverlapPreparedArrayContains(array, prepared, probe.GetArrayElem(index)) {
+			return true
+		}
+	}
+	return false
+}
+
+func jsonOverlapPreparedArrayContains(array bytejson.ByteJson, prepared *jsonOverlapPreparedArray, value bytejson.ByteJson) bool {
+	var probeKey jsonOverlapPreparedNumericKey
+	position := sort.Search(len(prepared.indexes), func(index int) bool {
+		arrayIndex := prepared.indexes[index]
+		return prepared.compareElementWithValue(array, arrayIndex, value, &probeKey) >= 0
+	})
+	if position == len(prepared.indexes) {
+		return false
+	}
+	arrayIndex := prepared.indexes[position]
+	return prepared.compareElementWithValue(array, arrayIndex, value, &probeKey) == 0
 }
 
 func (w *jsonOverlapWorkspace) arraysOverlap(left, right bytejson.ByteJson) bool {
@@ -382,86 +556,359 @@ func jsonOverlapTypeRank(valueType bytejson.TpCode) int {
 }
 
 func compareJSONOverlapNumeric(left, right bytejson.ByteJson) int {
+	return compareJSONOverlapNumericWithKeys(left, right, nil, nil)
+}
+
+func compareJSONOverlapNumericWithKeys(
+	left, right bytejson.ByteJson,
+	leftKey, rightKey *jsonOverlapPreparedNumericKey,
+) int {
+	leftDecimal, rightDecimal, fast := jsonOverlapNumericFastValues(left, right)
+	if !fast {
+		return compareJSONOverlapNumericKeys(left, right, leftKey, rightKey)
+	}
+	return compareJSONOverlapNumericFast(left, right, leftDecimal, rightDecimal)
+}
+
+func jsonOverlapNumericFastValues(
+	left, right bytejson.ByteJson,
+) (jsonOverlapDecimalValue, jsonOverlapDecimalValue, bool) {
+	if left.Type != bytejson.TpCodeDecimal && right.Type != bytejson.TpCodeDecimal {
+		return jsonOverlapDecimalValue{}, jsonOverlapDecimalValue{}, true
+	}
+	leftDecimal, leftFast := jsonOverlapParseDecimalFast(left)
+	rightDecimal, rightFast := jsonOverlapParseDecimalFast(right)
+	if !leftFast || !rightFast || !jsonOverlapCanFastAlign(left, right, leftDecimal, rightDecimal) {
+		return jsonOverlapDecimalValue{}, jsonOverlapDecimalValue{}, false
+	}
+	return leftDecimal, rightDecimal, true
+}
+
+func compareJSONOverlapNumericFast(
+	left, right bytejson.ByteJson,
+	leftDecimal, rightDecimal jsonOverlapDecimalValue,
+) int {
 	switch left.Type {
 	case bytejson.TpCodeInt64:
-		return compareJSONOverlapInt64(left.GetInt64(), right)
-	case bytejson.TpCodeUint64:
-		return compareJSONOverlapUint64(left.GetUint64(), right)
-	case bytejson.TpCodeFloat64:
-		return compareJSONOverlapFloat64(left.GetFloat64(), right)
-	case bytejson.TpCodeDecimal:
-		return compareJSONOverlapDecimal(left, right)
-	default:
-		return 0
-	}
-}
-
-func compareJSONOverlapInt64(left int64, right bytejson.ByteJson) int {
-	switch right.Type {
-	case bytejson.TpCodeInt64:
-		return compareInt64(left, right.GetInt64())
-	case bytejson.TpCodeUint64:
-		if left < 0 {
-			return -1
+		switch right.Type {
+		case bytejson.TpCodeInt64:
+			return compareInt64(left.GetInt64(), right.GetInt64())
+		case bytejson.TpCodeUint64:
+			if left.GetInt64() < 0 {
+				return -1
+			}
+			return compareUint64(uint64(left.GetInt64()), right.GetUint64())
+		case bytejson.TpCodeFloat64:
+			return -compareJSONOverlapFloat64Int64(right.GetFloat64(), left.GetInt64())
+		case bytejson.TpCodeDecimal:
+			return compareJSONOverlapDecimalValues(jsonOverlapDecimalFromInt64(left.GetInt64()), rightDecimal)
 		}
-		return compareUint64(uint64(left), right.GetUint64())
+	case bytejson.TpCodeUint64:
+		switch right.Type {
+		case bytejson.TpCodeInt64:
+			if right.GetInt64() < 0 {
+				return 1
+			}
+			return compareUint64(left.GetUint64(), uint64(right.GetInt64()))
+		case bytejson.TpCodeUint64:
+			return compareUint64(left.GetUint64(), right.GetUint64())
+		case bytejson.TpCodeFloat64:
+			return -compareJSONOverlapFloat64Uint64(right.GetFloat64(), left.GetUint64())
+		case bytejson.TpCodeDecimal:
+			return compareJSONOverlapDecimalValues(jsonOverlapDecimalFromUint64(left.GetUint64()), rightDecimal)
+		}
 	case bytejson.TpCodeFloat64:
-		return -compareJSONOverlapFloat64Int64(right.GetFloat64(), left)
+		switch right.Type {
+		case bytejson.TpCodeInt64:
+			return compareJSONOverlapFloat64Int64(left.GetFloat64(), right.GetInt64())
+		case bytejson.TpCodeUint64:
+			return compareJSONOverlapFloat64Uint64(left.GetFloat64(), right.GetUint64())
+		case bytejson.TpCodeFloat64:
+			return compareFloat64Total(left.GetFloat64(), right.GetFloat64())
+		case bytejson.TpCodeDecimal:
+			return compareJSONOverlapFloat64Decimal(left.GetFloat64(), rightDecimal)
+		}
 	case bytejson.TpCodeDecimal:
-		return compareJSONOverlapDecimalValues(jsonOverlapDecimalFromInt64(left), mustJSONOverlapDecimal(right))
+		switch right.Type {
+		case bytejson.TpCodeInt64:
+			return compareJSONOverlapDecimalValues(leftDecimal, jsonOverlapDecimalFromInt64(right.GetInt64()))
+		case bytejson.TpCodeUint64:
+			return compareJSONOverlapDecimalValues(leftDecimal, jsonOverlapDecimalFromUint64(right.GetUint64()))
+		case bytejson.TpCodeFloat64:
+			return -compareJSONOverlapFloat64Decimal(right.GetFloat64(), leftDecimal)
+		case bytejson.TpCodeDecimal:
+			return compareJSONOverlapDecimalValues(leftDecimal, rightDecimal)
+		}
 	default:
 		return 0
 	}
+	return 0
 }
 
-func compareJSONOverlapUint64(left uint64, right bytejson.ByteJson) int {
-	switch right.Type {
-	case bytejson.TpCodeInt64:
-		rightValue := right.GetInt64()
-		if rightValue < 0 {
+func jsonOverlapParseDecimalFast(value bytejson.ByteJson) (jsonOverlapDecimalValue, bool) {
+	if value.Type != bytejson.TpCodeDecimal {
+		return jsonOverlapDecimalValue{}, true
+	}
+	if !jsonOverlapDecimalFitsFastPath(value.GetString()) {
+		return jsonOverlapDecimalValue{}, false
+	}
+	parsed, scale, err := types.Parse256(string(value.GetString()))
+	if err != nil {
+		return jsonOverlapDecimalValue{}, false
+	}
+	return jsonOverlapDecimalValue{value: parsed, scale: scale}, true
+}
+
+func jsonOverlapDecimalFitsFastPath(text []byte) bool {
+	digits := 0
+	for _, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			break
+		}
+		if ch >= '0' && ch <= '9' {
+			digits++
+		}
+	}
+	return digits <= 76
+}
+
+func jsonOverlapCanFastAlign(left, right bytejson.ByteJson, leftDecimal, rightDecimal jsonOverlapDecimalValue) bool {
+	if left.Type == bytejson.TpCodeFloat64 || right.Type == bytejson.TpCodeFloat64 {
+		return true
+	}
+	leftValue := leftDecimal
+	if left.Type == bytejson.TpCodeInt64 {
+		leftValue = jsonOverlapDecimalFromInt64(left.GetInt64())
+	} else if left.Type == bytejson.TpCodeUint64 {
+		leftValue = jsonOverlapDecimalFromUint64(left.GetUint64())
+	}
+	rightValue := rightDecimal
+	if right.Type == bytejson.TpCodeInt64 {
+		rightValue = jsonOverlapDecimalFromInt64(right.GetInt64())
+	} else if right.Type == bytejson.TpCodeUint64 {
+		rightValue = jsonOverlapDecimalFromUint64(right.GetUint64())
+	}
+	if leftValue.value.Sign() == false && rightValue.value.Sign() == false &&
+		leftValue.value == (types.Decimal256{}) && rightValue.value == (types.Decimal256{}) {
+		return true
+	}
+	delta := int64(leftValue.scale) - int64(rightValue.scale)
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > 76 {
+		return false
+	}
+	if leftValue.scale < rightValue.scale {
+		_, err := leftValue.value.Scale(rightValue.scale - leftValue.scale)
+		return err == nil
+	}
+	if leftValue.scale > rightValue.scale {
+		_, err := rightValue.value.Scale(leftValue.scale - rightValue.scale)
+		return err == nil
+	}
+	return true
+}
+
+type jsonOverlapNumericKey struct {
+	sign     int8
+	digits   string
+	exponent big.Int
+	adjusted big.Int
+}
+
+func compareJSONOverlapNumericKeys(
+	left, right bytejson.ByteJson,
+	leftCache, rightCache *jsonOverlapPreparedNumericKey,
+) int {
+	if result, handled := compareJSONOverlapNonFiniteFloat64(left, right); handled {
+		return result
+	}
+	leftKey, leftOK := jsonOverlapNumericKeyFromByteJSONCached(left, leftCache)
+	rightKey, rightOK := jsonOverlapNumericKeyFromByteJSONCached(right, rightCache)
+	if !leftOK || !rightOK {
+		if leftOK != rightOK {
+			if leftOK {
+				return -1
+			}
 			return 1
 		}
-		return compareUint64(left, uint64(rightValue))
+		if result := compareInt(int(left.Type), int(right.Type)); result != 0 {
+			return result
+		}
+		return bytes.Compare(left.Data, right.Data)
+	}
+	return compareJSONOverlapNumericKey(leftKey, rightKey)
+}
+
+func compareJSONOverlapNonFiniteFloat64(left, right bytejson.ByteJson) (int, bool) {
+	leftFloat, leftNonFinite := jsonOverlapNonFiniteFloat64(left)
+	rightFloat, rightNonFinite := jsonOverlapNonFiniteFloat64(right)
+	if !leftNonFinite && !rightNonFinite {
+		return 0, false
+	}
+	if leftNonFinite && rightNonFinite {
+		return compareFloat64Total(leftFloat, rightFloat), true
+	}
+	if leftNonFinite {
+		if math.IsInf(leftFloat, -1) {
+			return -1, true
+		}
+		return 1, true
+	}
+	if math.IsInf(rightFloat, -1) {
+		return 1, true
+	}
+	return -1, true
+}
+
+func jsonOverlapNonFiniteFloat64(value bytejson.ByteJson) (float64, bool) {
+	if value.Type != bytejson.TpCodeFloat64 {
+		return 0, false
+	}
+	floatValue := value.GetFloat64()
+	return floatValue, math.IsNaN(floatValue) || math.IsInf(floatValue, 0)
+}
+
+func jsonOverlapNumericKeyFromByteJSONCached(
+	value bytejson.ByteJson,
+	cache *jsonOverlapPreparedNumericKey,
+) (jsonOverlapNumericKey, bool) {
+	if cache != nil {
+		switch cache.state {
+		case jsonOverlapNumericKeyValid:
+			return cache.key, true
+		case jsonOverlapNumericKeyInvalid:
+			return jsonOverlapNumericKey{}, false
+		}
+	}
+	key, ok := jsonOverlapNumericKeyFromByteJSON(value)
+	if cache != nil {
+		if ok {
+			cache.state = jsonOverlapNumericKeyValid
+			cache.key = key
+		} else {
+			cache.state = jsonOverlapNumericKeyInvalid
+		}
+	}
+	return key, ok
+}
+
+func jsonOverlapNumericKeyFromByteJSON(value bytejson.ByteJson) (jsonOverlapNumericKey, bool) {
+	switch value.Type {
+	case bytejson.TpCodeInt64:
+		return jsonOverlapParseNumericKey(strconv.FormatInt(value.GetInt64(), 10))
 	case bytejson.TpCodeUint64:
-		return compareUint64(left, right.GetUint64())
+		return jsonOverlapParseNumericKey(strconv.FormatUint(value.GetUint64(), 10))
 	case bytejson.TpCodeFloat64:
-		return -compareJSONOverlapFloat64Uint64(right.GetFloat64(), left)
+		floatValue := value.GetFloat64()
+		if math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
+			return jsonOverlapNumericKey{}, false
+		}
+		return jsonOverlapParseNumericKey(strconv.FormatFloat(floatValue, 'g', -1, 64))
 	case bytejson.TpCodeDecimal:
-		return compareJSONOverlapDecimalValues(jsonOverlapDecimalFromUint64(left), mustJSONOverlapDecimal(right))
+		return jsonOverlapParseNumericKey(string(value.GetString()))
 	default:
-		return 0
+		return jsonOverlapNumericKey{}, false
 	}
 }
 
-func compareJSONOverlapFloat64(left float64, right bytejson.ByteJson) int {
-	switch right.Type {
-	case bytejson.TpCodeInt64:
-		return compareJSONOverlapFloat64Int64(left, right.GetInt64())
-	case bytejson.TpCodeUint64:
-		return compareJSONOverlapFloat64Uint64(left, right.GetUint64())
-	case bytejson.TpCodeFloat64:
-		return compareFloat64Total(left, right.GetFloat64())
-	case bytejson.TpCodeDecimal:
-		return compareJSONOverlapFloat64Decimal(left, mustJSONOverlapDecimal(right))
-	default:
-		return 0
+func jsonOverlapParseNumericKey(text string) (jsonOverlapNumericKey, bool) {
+	var key jsonOverlapNumericKey
+	if text == "" {
+		return key, false
 	}
+	index := 0
+	if text[index] == '-' {
+		key.sign = -1
+		index++
+	} else {
+		key.sign = 1
+	}
+	if index == len(text) {
+		return jsonOverlapNumericKey{}, false
+	}
+	digits := make([]byte, 0, len(text))
+	fractionDigits := 0
+	hasDot := false
+	for index < len(text) && text[index] != 'e' && text[index] != 'E' {
+		ch := text[index]
+		switch {
+		case ch >= '0' && ch <= '9':
+			digits = append(digits, ch)
+			if hasDot {
+				fractionDigits++
+			}
+		case ch == '.' && !hasDot:
+			hasDot = true
+		default:
+			return jsonOverlapNumericKey{}, false
+		}
+		index++
+	}
+	if len(digits) == 0 {
+		return jsonOverlapNumericKey{}, false
+	}
+	exponentText := "0"
+	if index < len(text) {
+		index++
+		if index == len(text) {
+			return jsonOverlapNumericKey{}, false
+		}
+		exponentText = text[index:]
+	}
+	if _, ok := key.exponent.SetString(exponentText, 10); !ok {
+		return jsonOverlapNumericKey{}, false
+	}
+	first := 0
+	for first < len(digits) && digits[first] == '0' {
+		first++
+	}
+	if first == len(digits) {
+		key.sign = 0
+		key.digits = "0"
+		return key, true
+	}
+	last := len(digits) - 1
+	for last >= first && digits[last] == '0' {
+		last--
+	}
+	trailingZeros := len(digits) - 1 - last
+	key.digits = string(digits[first : last+1])
+	key.exponent.Add(&key.exponent, big.NewInt(int64(trailingZeros-fractionDigits)))
+	key.adjusted.Set(&key.exponent)
+	key.adjusted.Add(&key.adjusted, big.NewInt(int64(len(key.digits)-1)))
+	return key, true
 }
 
-func compareJSONOverlapDecimal(left, right bytejson.ByteJson) int {
-	leftValue := mustJSONOverlapDecimal(left)
-	switch right.Type {
-	case bytejson.TpCodeInt64:
-		return compareJSONOverlapDecimalValues(leftValue, jsonOverlapDecimalFromInt64(right.GetInt64()))
-	case bytejson.TpCodeUint64:
-		return compareJSONOverlapDecimalValues(leftValue, jsonOverlapDecimalFromUint64(right.GetUint64()))
-	case bytejson.TpCodeFloat64:
-		return -compareJSONOverlapFloat64Decimal(right.GetFloat64(), leftValue)
-	case bytejson.TpCodeDecimal:
-		return compareJSONOverlapDecimalValues(leftValue, mustJSONOverlapDecimal(right))
-	default:
+func compareJSONOverlapNumericKey(left, right jsonOverlapNumericKey) int {
+	if left.sign != right.sign {
+		return compareInt(int(left.sign), int(right.sign))
+	}
+	if left.sign == 0 {
 		return 0
 	}
+	result := left.adjusted.Cmp(&right.adjusted)
+	if result == 0 {
+		length := max(len(left.digits), len(right.digits))
+		for index := 0; index < length; index++ {
+			leftDigit, rightDigit := byte('0'), byte('0')
+			if index < len(left.digits) {
+				leftDigit = left.digits[index]
+			}
+			if index < len(right.digits) {
+				rightDigit = right.digits[index]
+			}
+			if leftDigit != rightDigit {
+				result = compareInt(int(leftDigit), int(rightDigit))
+				break
+			}
+		}
+	}
+	if left.sign < 0 {
+		return -result
+	}
+	return result
 }
 
 func compareJSONOverlapFloat64Int64(left float64, right int64) int {
@@ -492,14 +939,6 @@ func compareJSONOverlapFloat64Uint64(left float64, right uint64) int {
 type jsonOverlapDecimalValue struct {
 	value types.Decimal256
 	scale int32
-}
-
-func mustJSONOverlapDecimal(value bytejson.ByteJson) jsonOverlapDecimalValue {
-	parsed, scale, err := types.Parse256(string(value.GetString()))
-	if err != nil {
-		return jsonOverlapDecimalValue{}
-	}
-	return jsonOverlapDecimalValue{value: parsed, scale: scale}
 }
 
 func jsonOverlapDecimalFromInt64(value int64) jsonOverlapDecimalValue {

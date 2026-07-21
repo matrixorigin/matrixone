@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,22 @@ func TestLiteral(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, x, bj.String())
 	}
+}
+
+func TestParserFreesCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
+	p := parser{src: []byte(`{}x`)}
+	_, err := p.do()
+	require.Error(t, err)
+	require.Empty(t, p.stack)
+	require.Nil(t, p.top.V)
+}
+
+func TestParserFreesWideCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
+	p := parser{src: []byte(`{"values":[` + strings.Repeat(`0,`, 1024) + `0]}x`)}
+	_, err := p.do()
+	require.Error(t, err)
+	require.Empty(t, p.stack)
+	require.Nil(t, p.top.V)
 }
 
 func TestNumber(t *testing.T) {

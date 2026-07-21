@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -128,6 +129,76 @@ func TestJSONOverlapComparatorDecimalAndDouble(t *testing.T) {
 	}
 }
 
+func TestJSONOverlapComparatorLargeInternalDecimalsDoNotPanicOrEqualZero(t *testing.T) {
+	zero := mustParseJSONOverlap(t, `0`)
+	positive := newTypedByteJson(bytejson.TpCodeDecimal, "1e100")
+	negative := newTypedByteJson(bytejson.TpCodeDecimal, "-1e100")
+	larger := newTypedByteJson(bytejson.TpCodeDecimal, "1e200")
+
+	require.NotPanics(t, func() {
+		require.Greater(t, compareJSONOverlapExact(positive, zero), 0)
+		require.Less(t, compareJSONOverlapExact(negative, zero), 0)
+		require.Less(t, compareJSONOverlapExact(positive, larger), 0)
+	})
+}
+
+func TestJSONOverlapComparatorFallbackPreservesLongDecimalAndExtremeScaleOrder(t *testing.T) {
+	longPrefix := strings.Repeat("1", 76)
+	left := newTypedByteJson(bytejson.TpCodeDecimal, "0."+longPrefix+"1")
+	right := newTypedByteJson(bytejson.TpCodeDecimal, "0."+longPrefix+"2")
+	require.Less(t, compareJSONOverlapExact(left, right), 0)
+
+	tooWideInteger := newTypedByteJson(bytejson.TpCodeDecimal, "1"+strings.Repeat("0", 76))
+	largestFastInteger := newTypedByteJson(bytejson.TpCodeDecimal, strings.Repeat("9", 76))
+	require.Greater(t, compareJSONOverlapExact(tooWideInteger, largestFastInteger), 0)
+
+	extremeZero := newTypedByteJson(bytejson.TpCodeDecimal, "0e-2147483647")
+	one := mustParseJSONOverlap(t, `1`)
+	require.Less(t, compareJSONOverlapExact(extremeZero, one), 0)
+}
+
+func TestJSONOverlapComparatorFallbackNormalizesEquivalentNumbers(t *testing.T) {
+	tests := []struct {
+		left  bytejson.ByteJson
+		right bytejson.ByteJson
+	}{
+		{
+			left:  newTypedByteJson(bytejson.TpCodeDecimal, "1e100"),
+			right: newTypedByteJson(bytejson.TpCodeDecimal, "10e99"),
+		},
+		{
+			left:  newTypedByteJson(bytejson.TpCodeDecimal, "1E0"),
+			right: newTypedByteJson(bytejson.TpCodeDecimal, "1.0"),
+		},
+		{
+			left:  newTypedByteJson(bytejson.TpCodeDecimal, "-0e999"),
+			right: mustParseJSONOverlap(t, `0`),
+		},
+	}
+
+	for _, tt := range tests {
+		require.Zero(t, compareJSONOverlapExact(tt.left, tt.right))
+		require.Zero(t, compareJSONOverlapExact(tt.right, tt.left))
+	}
+}
+
+func TestJSONOverlapComparatorFallbackPreservesNonFiniteFloatOrder(t *testing.T) {
+	negativeInfinity, err := bytejson.CreateByteJSON(math.Inf(-1))
+	require.NoError(t, err)
+	positiveInfinity, err := bytejson.CreateByteJSON(math.Inf(1))
+	require.NoError(t, err)
+	notANumber, err := bytejson.CreateByteJSON(math.NaN())
+	require.NoError(t, err)
+	finite := newTypedByteJson(bytejson.TpCodeDecimal, "1")
+	fallback := newTypedByteJson(bytejson.TpCodeDecimal, "1e100")
+
+	require.Less(t, compareJSONOverlapExact(negativeInfinity, finite), 0)
+	require.Less(t, compareJSONOverlapExact(finite, fallback), 0)
+	require.Less(t, compareJSONOverlapExact(negativeInfinity, fallback), 0)
+	require.Greater(t, compareJSONOverlapExact(positiveInfinity, fallback), 0)
+	require.Greater(t, compareJSONOverlapExact(notANumber, fallback), 0)
+}
+
 func TestJSONOverlapComparatorTemporalNormalizesScale(t *testing.T) {
 	left := newTypedByteJson(bytejson.TpCodeTime, "12:00:00")
 	right := newTypedByteJson(bytejson.TpCodeTime, "12:00:00.000000")
@@ -194,6 +265,100 @@ func TestJSONOverlapKernelUsesIndexedPath(t *testing.T) {
 	var workspace jsonOverlapWorkspace
 	require.True(t, workspace.overlaps(left, right))
 	require.Len(t, workspace.indexes, 40)
+}
+
+func TestJSONOverlapPreparedConstArrayIndexIsBuiltOnce(t *testing.T) {
+	array := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 512))
+	probe := mustParseJSONOverlap(t, `1000`)
+	prepared := jsonOverlapPreparedArray{}
+	constView := jsonOverlapValueView{document: array, prepared: &prepared}
+	probeView := jsonOverlapValueView{document: probe}
+	var workspace jsonOverlapWorkspace
+
+	require.False(t, workspace.overlapsViews(constView, probeView, 8192))
+	require.True(t, prepared.ready)
+	require.Len(t, prepared.indexes, 512)
+	require.Nil(t, prepared.numericKeys)
+	firstIndexAddress := &prepared.indexes[0]
+
+	require.False(t, workspace.overlapsViews(constView, probeView, 8192))
+	require.Same(t, firstIndexAddress, &prepared.indexes[0])
+}
+
+func TestJSONOverlapPreparedConstArrayStaysLinearForOneEffectiveScalarRow(t *testing.T) {
+	array := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 512))
+	probe := mustParseJSONOverlap(t, `1000`)
+	prepared := jsonOverlapPreparedArray{}
+	var workspace jsonOverlapWorkspace
+
+	require.False(t, workspace.overlapsViews(
+		jsonOverlapValueView{document: array, prepared: &prepared},
+		jsonOverlapValueView{document: probe},
+		1,
+	))
+	require.False(t, prepared.ready)
+}
+
+func TestJSONOverlapPreparedConstArrayCachesFallbackNumericKeys(t *testing.T) {
+	array := makeJSONOverlapArray(t, []bytejson.ByteJson{
+		newTypedByteJson(bytejson.TpCodeDecimal, "1e100"),
+		newTypedByteJson(bytejson.TpCodeDecimal, "1e200"),
+	})
+	prepared := jsonOverlapPreparedArray{}
+	prepared.ensure(array)
+
+	require.Len(t, prepared.numericKeys, 2)
+	for _, key := range prepared.numericKeys {
+		require.Equal(t, jsonOverlapNumericKeyValid, key.state)
+	}
+
+	probe := newTypedByteJson(bytejson.TpCodeDecimal, "10e99")
+	var workspace jsonOverlapWorkspace
+	require.True(t, workspace.overlapsViews(
+		jsonOverlapValueView{document: array, prepared: &prepared},
+		jsonOverlapValueView{document: probe},
+		8192,
+	))
+}
+
+func TestJSONOverlapPreparedConstArrayOrdersMixedFastAndFallbackDecimals(t *testing.T) {
+	array := makeJSONOverlapArray(t, []bytejson.ByteJson{
+		newTypedByteJson(bytejson.TpCodeDecimal, "-1e100"),
+		newTypedByteJson(bytejson.TpCodeDecimal, "1E0"),
+		newTypedByteJson(bytejson.TpCodeDecimal, strings.Repeat("9", 76)),
+		newTypedByteJson(bytejson.TpCodeDecimal, "1"+strings.Repeat("0", 76)),
+	})
+	prepared := jsonOverlapPreparedArray{}
+	prepared.ensure(array)
+
+	for _, probe := range []bytejson.ByteJson{
+		newTypedByteJson(bytejson.TpCodeDecimal, "-1e100"),
+		mustParseJSONOverlap(t, `1`),
+		newTypedByteJson(bytejson.TpCodeDecimal, strings.Repeat("9", 76)),
+		newTypedByteJson(bytejson.TpCodeDecimal, "1e76"),
+	} {
+		require.True(t, jsonOverlapPreparedArrayContains(array, &prepared, probe))
+	}
+}
+
+func TestJSONOverlapPreparedConstArrayOrdersNonFiniteFloatAndFallbackDecimal(t *testing.T) {
+	negativeInfinity, err := bytejson.CreateByteJSON(math.Inf(-1))
+	require.NoError(t, err)
+	positiveInfinity, err := bytejson.CreateByteJSON(math.Inf(1))
+	require.NoError(t, err)
+	fallback := newTypedByteJson(bytejson.TpCodeDecimal, "1e100")
+	array := makeJSONOverlapArray(t, []bytejson.ByteJson{
+		positiveInfinity,
+		fallback,
+		negativeInfinity,
+		mustParseJSONOverlap(t, `1`),
+	})
+	prepared := jsonOverlapPreparedArray{}
+	prepared.ensure(array)
+
+	for _, probe := range []bytejson.ByteJson{negativeInfinity, mustParseJSONOverlap(t, `1`), fallback, positiveInfinity} {
+		require.True(t, jsonOverlapPreparedArrayContains(array, &prepared, probe))
+	}
 }
 
 func TestJSONOverlapIndexedArraysMatchNaiveComparison(t *testing.T) {
@@ -485,6 +650,30 @@ func BenchmarkJSONOverlapIndexedArrays(b *testing.B) {
 	for b.Loop() {
 		if workspace.overlaps(left, right) {
 			b.Fatal("unexpected overlap")
+		}
+	}
+}
+
+func BenchmarkJSONOverlapPreparedConstArrayVectorBatch(b *testing.B) {
+	array, err := types.ParseSliceToByteJson([]byte(jsonOverlapIntegerArray(0, 8192)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	probe, err := types.ParseSliceToByteJson([]byte(`16384`))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		prepared := jsonOverlapPreparedArray{}
+		constView := jsonOverlapValueView{document: array, prepared: &prepared}
+		probeView := jsonOverlapValueView{document: probe}
+		var workspace jsonOverlapWorkspace
+		for range 8192 {
+			if workspace.overlapsViews(constView, probeView, 8192) {
+				b.Fatal("unexpected overlap")
+			}
 		}
 	}
 }
