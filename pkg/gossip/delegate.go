@@ -272,13 +272,8 @@ func (d *delegate) NotifyLeave(node *memberlist.Node) {
 	if len(cacheServiceAddr) == 0 {
 		return
 	}
-	d.dataCacheKey.mu.Lock()
-	defer d.dataCacheKey.mu.Unlock()
-	for key, target := range d.dataCacheKey.mu.keyTarget {
-		if cacheServiceAddr == target {
-			delete(d.dataCacheKey.mu.keyTarget, key)
-		}
-	}
+	d.dataCacheKey.removeByTarget(cacheServiceAddr)
+	d.statsInfoKey.removeByTarget(cacheServiceAddr)
 }
 
 // NotifyUpdate implements the memberlist.EventDelegate interface.
