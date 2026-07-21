@@ -16,10 +16,12 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -96,6 +98,8 @@ func (client *testHAKClient) UpdateNonVotingLocality(ctx context.Context, locali
 var _ taskservice.TaskRunner = new(testRunner)
 
 type testRunner struct {
+	stopErr error
+	stopped int
 }
 
 func (runner *testRunner) ID() string {
@@ -109,8 +113,8 @@ func (runner *testRunner) Start() error {
 }
 
 func (runner *testRunner) Stop() error {
-	//TODO implement me
-	panic("implement me")
+	runner.stopped++
+	return runner.stopErr
 }
 
 func (runner *testRunner) Parallelism() int {
@@ -138,12 +142,14 @@ func (runner *testRunner) Attach(ctx context.Context, taskID uint64, routine tas
 var _ taskservice.TaskServiceHolder = new(testHolder)
 
 type testHolder struct {
-	ts taskservice.TaskService
+	ts       taskservice.TaskService
+	closeErr error
+	closed   int
 }
 
 func (holder *testHolder) Close() error {
-	//TODO implement me
-	panic("implement me")
+	holder.closed++
+	return holder.closeErr
 }
 
 func (holder *testHolder) Get() (taskservice.TaskService, bool) {
@@ -153,6 +159,22 @@ func (holder *testHolder) Get() (taskservice.TaskService, bool) {
 func (holder *testHolder) Create(command pb.CreateTaskService) error {
 	//TODO implement me
 	panic("implement me")
+}
+
+func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
+	holderErr := errors.New("holder close failed")
+	runnerErr := errors.New("runner stop failed")
+	holder := &testHolder{closeErr: holderErr}
+	runner := &testRunner{stopErr: runnerErr}
+	sv := &service{logger: zap.NewNop()}
+	sv.task.holder = holder
+	sv.task.runner = runner
+
+	err := sv.stopTask()
+	assert.ErrorIs(t, err, holderErr)
+	assert.ErrorIs(t, err, runnerErr)
+	assert.Equal(t, 1, holder.closed)
+	assert.Equal(t, 1, runner.stopped)
 }
 
 var _ taskservice.TaskService = new(testTS)

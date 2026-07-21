@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestCloseCNServiceStepsAttemptsAllAndAggregatesErrors(t *testing.T) {
+	bootstrapErr := errors.New("bootstrap close failed")
+	gossipErr := errors.New("gossip leave failed")
+
+	var calls []string
+	steps := []struct {
+		name string
+		err  error
+	}{
+		{name: "bootstrap", err: bootstrapErr},
+		{name: "frontend"},
+		{name: "task"},
+		{name: "rpcs"},
+		{name: "io-pipeline"},
+		{name: "gossip", err: gossipErr},
+		{name: "pipeline-server"},
+		{name: "lock-service"},
+		{name: "shard-service"},
+		{name: "pipeline-client"},
+	}
+
+	closeSteps := make([]func() error, 0, len(steps))
+	for _, step := range steps {
+		step := step
+		closeSteps = append(closeSteps, func() error {
+			calls = append(calls, step.name)
+			return step.err
+		})
+	}
+
+	err := closeCNServiceSteps(closeSteps...)
+	require.ErrorIs(t, err, bootstrapErr)
+	require.ErrorIs(t, err, gossipErr)
+	require.Equal(t, []string{
+		"bootstrap",
+		"frontend",
+		"task",
+		"rpcs",
+		"io-pipeline",
+		"gossip",
+		"pipeline-server",
+		"lock-service",
+		"shard-service",
+		"pipeline-client",
+	}, calls)
+}
 
 func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
 	oldMemoryEvictor := evictMemoryCachesToCapacityPercent
