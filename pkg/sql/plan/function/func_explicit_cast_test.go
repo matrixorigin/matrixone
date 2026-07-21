@@ -229,7 +229,7 @@ func TestExplicitCastDecimalsToSigned(t *testing.T) {
 
 func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	values := []string{"-1.4", "-1.5", "-1.6", "1.4", "1.5", "1.6"}
+	values := []string{"-2.5", "-1.6", "-1.5", "-1.4", "-0.5", "0.5", "1.4", "1.5", "1.6", "2.5"}
 	decimal64 := make([]types.Decimal64, len(values)+1)
 	decimal128 := make([]types.Decimal128, len(values)+1)
 	decimal256 := make([]types.Decimal256, len(values)+1)
@@ -242,7 +242,8 @@ func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
 		decimal256[i], err = types.ParseDecimal256(value, 40, 1)
 		require.NoError(t, err)
 	}
-	nulls := []bool{false, false, false, false, false, false, true}
+	nulls := make([]bool, len(values)+1)
+	nulls[len(values)] = true
 	tests := []struct {
 		name  string
 		input FunctionTestInput
@@ -255,7 +256,7 @@ func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
 		t.Run(test.name+" to signed", func(t *testing.T) {
 			inputs := []FunctionTestInput{test.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{-1, -2, -2, 1, 2, 2, 0}, nulls)
+				[]int64{-3, -2, -2, -1, -1, 1, 1, 2, 2, 3, 0}, nulls)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
@@ -263,7 +264,8 @@ func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
 		t.Run(test.name+" to unsigned", func(t *testing.T) {
 			inputs := []FunctionTestInput{test.input, NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil)}
 			expect := NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{math.MaxUint64, math.MaxUint64 - 1, math.MaxUint64 - 1, 1, 2, 2, 0}, nulls)
+				[]uint64{math.MaxUint64 - 2, math.MaxUint64 - 1, math.MaxUint64 - 1, math.MaxUint64,
+					math.MaxUint64, 1, 1, 2, 2, 3, 0}, nulls)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
