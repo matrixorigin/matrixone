@@ -1590,6 +1590,28 @@ func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
 	})
 }
 
+func TestHandlePrepareStmtExecutableCommentDelimiter(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	const sql = "prepare fromx /*! from */ select 1"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	execCtx := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStmt executable comment delimiter", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, "select 1", prepared.Sql)
+		return nil
+	})
+}
+
 func TestExtractPrepareStmtSQL(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -1623,6 +1645,16 @@ func TestExtractPrepareStmtSQL(t *testing.T) {
 			sql:  "/* rewrite hint */ prepare fromx from select 5",
 			want: "select 5",
 		},
+		{
+			name: "executable comment delimiter",
+			sql:  "prepare fromx /*! from */ select 1",
+			want: "select 1",
+		},
+		{
+			name: "statement inside executable comment",
+			sql:  "prepare fromx /*! from select 2 */",
+			want: "select 2",
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -1639,6 +1671,7 @@ func TestExtractPrepareStmtSQLRejectsInvalidInput(t *testing.T) {
 		"select 1",
 		"prepare",
 		"prepare stmt select 1",
+		"prepare stmt /*! from select 1",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := extractPrepareStmtSQL(context.Background(), sql, "")

@@ -1556,7 +1556,25 @@ func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, er
 		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement delimiter")
 	}
 
-	return strings.TrimLeftFunc(sql[scanner.Pos:], unicode.IsSpace), nil
+	preparedSQL := sql[scanner.Pos:]
+	if scanner.CommentFlag {
+		commentEnd := strings.Index(preparedSQL, "*/")
+		if commentEnd < 0 {
+			return "", moerr.NewInvalidInput(ctx, "invalid PREPARE executable comment")
+		}
+		insideComment := strings.TrimSpace(preparedSQL[:commentEnd])
+		afterComment := strings.TrimLeftFunc(preparedSQL[commentEnd+2:], unicode.IsSpace)
+		switch {
+		case insideComment == "":
+			preparedSQL = afterComment
+		case afterComment == "":
+			preparedSQL = insideComment
+		default:
+			preparedSQL = insideComment + " " + afterComment
+		}
+	}
+
+	return strings.TrimLeftFunc(preparedSQL, unicode.IsSpace), nil
 }
 
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
