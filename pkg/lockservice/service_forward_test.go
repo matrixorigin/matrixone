@@ -105,6 +105,54 @@ func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 	)
 }
 
+func TestForwardLockDeadlineCancelsLockTableAllocationWait(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const (
+				group   = uint32(0)
+				tableID = uint64(24917)
+			)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			if s.mu.allocating[group] == nil {
+				s.mu.allocating[group] = make(map[uint64]chan struct{})
+			}
+			s.mu.allocating[group][tableID] = waitC
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], tableID)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := s.forwardLock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					[]byte("forward-bind-waiter"),
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "forwarded lock budget did not cancel the allocation wait")
+			}
+		},
+	)
+}
+
 func TestNewLockRPCContextPreservesEarlierParentDeadline(t *testing.T) {
 	parent, cancelParent := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancelParent()

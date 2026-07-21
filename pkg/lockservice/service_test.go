@@ -1684,6 +1684,14 @@ func TestIssue3654(t *testing.T) {
 			l1 := s[0]
 			l2 := s[1]
 
+			// Establish the first lock with a live setup context. Lock-table
+			// binding now observes caller cancellation, so using the intentionally
+			// expired context below for setup would test the old cancellation bug
+			// rather than the remote retry behavior covered by issue 3654.
+			setupCtx, setupCancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer setupCancel()
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
 				time.Nanosecond)
@@ -1696,7 +1704,7 @@ func TestIssue3654(t *testing.T) {
 			}
 
 			_, err := l1.Lock(
-				ctx,
+				setupCtx,
 				0,
 				[][]byte{{1}},
 				[]byte("txn1"),
@@ -5516,6 +5524,119 @@ func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
 		WithWait(func() {
 			once.Do(func() { time.Sleep(50 * time.Millisecond) })
 		}),
+	)
+}
+
+func TestLockWaitTimeoutExpiresWhileWaitingForLockTableAllocation(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const (
+				group   = uint32(0)
+				tableID = uint64(24915)
+			)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			if s.mu.allocating[group] == nil {
+				s.mu.allocating[group] = make(map[uint64]chan struct{})
+			}
+			s.mu.allocating[group][tableID] = waitC
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], tableID)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			txnID := []byte("bind-waiter")
+			resultC := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					txnID,
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+				require.Less(t, time.Since(start), time.Second)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "lock budget did not cancel the in-flight allocation wait")
+			}
+			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseHandler := func() {
+				releaseOnce.Do(func() { close(release) })
+			}
+			defer releaseHandler()
+			alloc.server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					context.Context,
+					context.CancelFunc,
+					*pb.Request,
+					*pb.Response,
+					morpc.ClientSession,
+				) {
+					close(entered)
+					<-release
+				})
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			txnID := []byte("bind-rpc-waiter")
+			resultC := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					24916,
+					[][]byte{{1}},
+					txnID,
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.Fail(t, "lock request did not reach the allocator")
+			}
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+				require.Less(t, time.Since(start), time.Second)
+			case <-time.After(2 * time.Second):
+				releaseHandler()
+				require.Fail(t, "lock budget did not cancel the allocator RPC")
+			}
+			releaseHandler()
+			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		},
 	)
 }
 

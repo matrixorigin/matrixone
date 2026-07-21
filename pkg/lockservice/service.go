@@ -195,9 +195,26 @@ func (s *service) Lock(
 	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
-	l, err := s.getLockTableWithCreate(options.Group, tableID, rows, options.Sharding)
+	bindCtx, cancel := newLockWaitContext(ctx, options)
+	if cancel != nil {
+		defer cancel()
+	}
+	l, err := s.getLockTableWithCreateContext(
+		bindCtx,
+		options.Group,
+		tableID,
+		rows,
+		options.Sharding)
 	if err != nil {
 		return pb.Result{}, err
+	}
+	if err := bindCtx.Err(); err != nil {
+		return pb.Result{}, lockWaitContextError(bindCtx, err)
+	}
+	// Binding can finish concurrently with the deadline. Recheck after it
+	// returns so an uncontended local table cannot admit an expired request.
+	if lockWaitDeadlineExpired(options, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
 	}
 
 	s.bindChangeMu.RLock()
@@ -326,6 +343,37 @@ func (s *service) applyLockWaitTimeoutCeiling(options pb.LockOptions) pb.LockOpt
 func lockWaitDeadlineExpired(options pb.LockOptions, now time.Time) bool {
 	return options.LockWaitDeadline > 0 &&
 		!now.Before(time.Unix(0, options.LockWaitDeadline))
+}
+
+// newLockWaitContext makes lock-table binding/allocation consume the same
+// absolute budget as the subsequent lock wait. Unlike newLockRPCContext, it
+// intentionally adds no transport slack: binding is part of the lock budget.
+func newLockWaitContext(
+	ctx context.Context,
+	options pb.LockOptions,
+) (context.Context, context.CancelFunc) {
+	if options.LockWaitDeadline > 0 {
+		return context.WithDeadlineCause(
+			ctx,
+			time.Unix(0, options.LockWaitDeadline),
+			ErrLockTimeout)
+	}
+	if options.LockWaitTimeout > 0 {
+		return context.WithTimeoutCause(
+			ctx,
+			time.Duration(options.LockWaitTimeout)*time.Second,
+			ErrLockTimeout)
+	}
+	return ctx, nil
+}
+
+// lockWaitContextError preserves an earlier caller cancellation/deadline, but
+// normalizes expiry of the lock budget to the public MySQL 1205 sentinel.
+func lockWaitContextError(ctx context.Context, err error) error {
+	if context.Cause(ctx) == ErrLockTimeout {
+		return ErrLockTimeout
+	}
+	return err
 }
 
 func (s *service) Unlock(
@@ -712,13 +760,21 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 func (s *service) getLockTable(
 	group uint32,
 	tableID uint64) (lockTable, error) {
+	return s.getLockTableWithContext(context.Background(), group, tableID)
+}
+
+func (s *service) getLockTableWithContext(
+	ctx context.Context,
+	group uint32,
+	tableID uint64) (lockTable, error) {
 	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
 	}
-	return s.waitLockTableBind(
+	return s.waitLockTableBindWithContext(
+		ctx,
 		group,
 		tableID,
-		false), nil
+		false)
 }
 
 func (s *service) getAllocatingC(
@@ -735,18 +791,37 @@ func (s *service) getAllocatingC(
 	return nil
 }
 
-func (s *service) waitLockTableBind(
+func (s *service) waitLockTableBindWithContext(
+	ctx context.Context,
 	group uint32,
 	tableID uint64,
-	locked bool) lockTable {
+	locked bool) (lockTable, error) {
 	c := s.getAllocatingC(group, tableID, locked)
 	if c != nil {
-		<-c
+		select {
+		case <-c:
+		case <-ctx.Done():
+			return nil, lockWaitContextError(ctx, ctx.Err())
+		}
 	}
-	return s.tableGroups.get(group, tableID)
+	return s.tableGroups.get(group, tableID), nil
 }
 
 func (s *service) getLockTableWithCreate(
+	group uint32,
+	tableID uint64,
+	rows [][]byte,
+	sharding pb.Sharding) (lockTable, error) {
+	return s.getLockTableWithCreateContext(
+		context.Background(),
+		group,
+		tableID,
+		rows,
+		sharding)
+}
+
+func (s *service) getLockTableWithCreateContext(
+	ctx context.Context,
 	group uint32,
 	tableID uint64,
 	rows [][]byte,
@@ -761,12 +836,16 @@ func (s *service) getLockTableWithCreate(
 	}
 
 	var c chan struct{}
-	fn := func() lockTable {
+	fn := func() (lockTable, error) {
 		s.mu.Lock()
 		waitC := s.getAllocatingC(group, tableID, true)
 		if waitC != nil {
 			s.mu.Unlock()
-			<-waitC
+			select {
+			case <-waitC:
+			case <-ctx.Done():
+				return nil, lockWaitContextError(ctx, ctx.Err())
+			}
 			s.mu.Lock()
 		}
 
@@ -781,10 +860,14 @@ func (s *service) getLockTableWithCreate(
 			m[tableID] = c
 		}
 		s.mu.Unlock()
-		return v
+		return v, nil
 	}
 
-	if v := fn(); v != nil {
+	v, err := fn()
+	if err != nil {
+		return nil, err
+	}
+	if v != nil {
 		return v, nil
 	}
 
@@ -796,7 +879,8 @@ func (s *service) getLockTableWithCreate(
 	}()
 
 	requestAllocator := s.allocatorStateSnapshot()
-	bind, allocator, err := getLockTableBind(
+	bind, allocator, err := getLockTableBindWithContext(
+		ctx,
 		s.remote.client,
 		group,
 		tableID,
@@ -804,7 +888,7 @@ func (s *service) getLockTableWithCreate(
 		s.serviceID,
 		sharding)
 	if err != nil {
-		return nil, err
+		return nil, lockWaitContextError(ctx, err)
 	}
 
 	return s.publishLockTableBindFromAllocator(
