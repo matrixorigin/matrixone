@@ -282,6 +282,44 @@ func TestJSONOverlapsSQL(t *testing.T) {
 	require.True(t, succeed, message)
 }
 
+func TestJSONOverlapsMySQLDocumentCases(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{
+					`6`,
+					`{"a":1}`,
+					`{"a":null}`,
+					`{"a":1,"a":2}`,
+					`[]`,
+					`true`,
+					`"1"`,
+					`[[1,2]]`,
+					`"x"`,
+				}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{
+					`[4,5,6,7]`,
+					`[{"a":1}]`,
+					`{"a":null}`,
+					`{"a":2}`,
+					`[]`,
+					`1`,
+					`1`,
+					`[[1,2]]`,
+					`"x"`,
+				}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{1, 1, 1, 1, 0, 0, 0, 1, 1}, nil),
+		jsonOverlaps,
+	)
+	succeed, message := testCase.Run()
+	require.True(t, succeed, message)
+}
+
 func TestJSONOverlapsTypedJSON(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCase := NewFunctionTestCase(
