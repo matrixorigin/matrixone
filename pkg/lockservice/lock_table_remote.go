@@ -40,14 +40,28 @@ var (
 
 const (
 	// lockRpcSlack is the extra budget added to the RPC deadline beyond
-	// LockWaitTimeout.  The lock-table owner starts its own wait budget only
-	// after receiving the RPC, so the client-side RPC deadline must outlive the
-	// server-side wait timer for the owner to observe and return ErrLockTimeout.
+	// the effective lock-wait deadline. The client-side RPC context must outlive
+	// the owner-side wait timer long enough to carry ErrLockTimeout back.
 	// Without this slack, the client deadline can fire before the owner returns
 	// ErrLockTimeout, causing the client to see a retryable connectivity error
 	// instead of a lock-timeout result.
 	lockRpcSlack = 30 * time.Second
 )
+
+// newLockRPCContext bounds the transport by the effective lock deadline while
+// preserving an earlier caller deadline. The slack applies only to RPC
+// delivery: the owner-side waiter still enforces LockWaitDeadline exactly, and
+// the extra time lets its ErrLockTimeout response reach the caller instead of
+// being replaced by a retryable transport timeout.
+func newLockRPCContext(ctx context.Context, opts pb.LockOptions) (context.Context, context.CancelFunc) {
+	if opts.LockWaitDeadline > 0 {
+		return context.WithDeadline(ctx, time.Unix(0, opts.LockWaitDeadline).Add(lockRpcSlack))
+	}
+	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
+		return context.WithTimeout(ctx, d+lockRpcSlack)
+	}
+	return ctx, nil
+}
 
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
@@ -112,23 +126,22 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, err)
 		return
 	}
+	if lockWaitDeadlineExpired(opts.LockOptions, time.Now()) {
+		cb(pb.Result{}, ErrLockTimeout)
+		return
+	}
 
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
 
-	// When session-level lock_wait_timeout is set, bound the RPC by that
-	// timeout plus slack so the lock-table owner has enough time to observe
-	// and return ErrLockTimeout before the client-side RPC deadline fires.
-	// Without a session timeout, use the caller context as-is.
-	var rpcCtx context.Context
-	var rpcCancel context.CancelFunc
-	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
-		lockRpcTimeout := d + lockRpcSlack
-		rpcCtx, rpcCancel = context.WithTimeout(ctx, lockRpcTimeout)
-	} else {
-		rpcCtx = ctx
-	}
+	// Bound the RPC by the absolute lock deadline plus transport slack so the
+	// lock-table owner has enough time to return ErrLockTimeout before the
+	// client-side RPC deadline fires.
+	// Service entry points also use this field for the safety ceiling. A zero
+	// value is possible only for direct lock-table callers and tests, where the
+	// caller context remains the fallback.
+	rpcCtx, rpcCancel := newLockRPCContext(ctx, opts.LockOptions)
 	defer func() {
 		if rpcCancel != nil {
 			rpcCancel()
