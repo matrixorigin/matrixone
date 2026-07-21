@@ -94,7 +94,7 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 }
 
 func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, inputTag int32, colName2Idx map[string]int32, ignoreMode bool) (int32, error) {
-	if len(tableDef.Checks) == 0 {
+	if !hasEnforcedCheckConstraint(tableDef) {
 		return lastNodeID, nil
 	}
 
@@ -123,7 +123,7 @@ func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tabl
 }
 
 func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32) (int32, error) {
-	if len(tableDef.Checks) == 0 {
+	if !hasEnforcedCheckConstraint(tableDef) {
 		return lastNodeID, nil
 	}
 
@@ -148,6 +148,9 @@ func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindC
 func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr, ignoreMode bool) (int32, error) {
 	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
 	for _, check := range tableDef.Checks {
+		if check.NotEnforced {
+			continue
+		}
 		if colName, ok := checkConstraintReferencesSyntheticCol(check.Check, tableDef); ok {
 			return 0, moerr.NewInternalErrorf(builder.GetContext(),
 				"check constraint %q references synthetic column %s", check.Name, colName)
@@ -189,6 +192,15 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 		FilterList:  filterList,
 		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
 	}, bindCtx), nil
+}
+
+func hasEnforcedCheckConstraint(tableDef *TableDef) bool {
+	for _, check := range tableDef.Checks {
+		if !check.NotEnforced {
+			return true
+		}
+	}
+	return false
 }
 
 func checkConstraintReferencesSyntheticCol(expr *plan.Expr, tableDef *TableDef) (string, bool) {

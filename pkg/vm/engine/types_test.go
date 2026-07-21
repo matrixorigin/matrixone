@@ -26,6 +26,7 @@ func TestPlanDefToCstrDefPersistsCheckConstraints(t *testing.T) {
 	check := &plan.CheckDef{
 		Name:            "__mo_chk_1",
 		IsGeneratedName: true,
+		NotEnforced:     true,
 		Check: &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_bool)},
 			Expr: &plan.Expr_Lit{
@@ -47,6 +48,7 @@ func TestPlanDefToCstrDefPersistsCheckConstraints(t *testing.T) {
 	require.Len(t, checks, 1)
 	require.Equal(t, check.Name, checks[0].Name)
 	require.True(t, checks[0].IsGeneratedName)
+	require.True(t, checks[0].NotEnforced)
 	require.NotNil(t, checks[0].Check)
 }
 

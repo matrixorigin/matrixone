@@ -359,12 +359,28 @@ func TestDeepCopyTableDefPreservesGeneratedCheckNameMarker(t *testing.T) {
 			Name:            "__mo_chk_1",
 			OriginSql:       "`a` > 0",
 			IsGeneratedName: true,
+			NotEnforced:     true,
 		}},
 	}
 
 	copied := DeepCopyTableDef(tableDef, false)
 	require.Len(t, copied.Checks, 1)
 	require.True(t, copied.Checks[0].IsGeneratedName)
+	require.True(t, copied.Checks[0].NotEnforced)
+}
+
+func TestShowCreateTablePreservesRecoveredNotEnforcedCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["t1"]
+	tableDef.Checks = nil
+	tableDef.Createsql = "CREATE TABLE t1 (a INT, b INT, CHECK (a > 0) NOT ENFORCED)"
+	RecoverCheckConstraintsFromCreateSql(&mock.ctxt, tableDef)
+	require.Len(t, tableDef.Checks, 1)
+	require.True(t, tableDef.Checks[0].NotEnforced)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "CHECK (`a` > 0) NOT ENFORCED")
 }
 
 func TestShowCreateTableQuotesCheckIdentifiersForRoundTrip(t *testing.T) {

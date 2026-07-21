@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -68,12 +69,14 @@ func TestAlterTableAddColumnWithColumnCheck(t *testing.T) {
 	}
 }
 
-func TestAlterTableAddColumnRejectsNotEnforcedCheck(t *testing.T) {
+func TestAlterTableAddColumnPreservesNotEnforcedCheck(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	// NOT ENFORCED is unsupported and must be rejected here just as CREATE TABLE
-	// rejects it, not silently accepted (and inverted into an enforced check).
-	_, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0) NOT ENFORCED;")
-	assert.ErrorContains(t, err, "NOT ENFORCED")
+	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0) NOT ENFORCED;")
+	require.NoError(t, err)
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Len(t, alter.CopyTableDef.Checks, 1)
+	require.True(t, alter.CopyTableDef.Checks[0].NotEnforced)
+	require.Contains(t, alter.CreateTmpTableSql, "CHECK (`d` > 0) NOT ENFORCED")
 }
 
 func TestAlterTableRenameRejectsCheckDependentColumn(t *testing.T) {
@@ -103,6 +106,12 @@ func TestAlterTableRenameRejectsCheckDependentColumn(t *testing.T) {
 		t.Fatalf("%+v", err)
 	}
 	tableDef.Checks = []*plan.CheckDef{{Name: "chk_val_positive", Check: checkExpr}}
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE single_idx_t CHANGE COLUMN val val2 INT;")
+	assert.ErrorContains(t, err, "check constraint")
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE single_idx_t CHANGE COLUMN val val BIGINT;")
+	assert.ErrorContains(t, err, "check constraint")
 
 	_, err = buildSingleStmt(mock, t, "ALTER TABLE single_idx_t RENAME COLUMN val TO val2;")
 	assert.ErrorContains(t, err, "check constraint")

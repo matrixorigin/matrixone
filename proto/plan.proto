@@ -375,6 +375,8 @@ message CheckDef {
   string origin_sql = 3;
   // True when name was generated internally for an anonymous constraint.
   bool is_generated_name = 4;
+  // True when the constraint is retained as schema metadata but is not enforced.
+  bool not_enforced = 5;
 }
 
 message Partition {

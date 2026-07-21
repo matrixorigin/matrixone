@@ -1538,12 +1538,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	for _, check := range pendingChecks {
-		if check.enforcementSet && !check.enforced {
-			return moerr.NewNotSupported(ctx.GetContext(), "CHECK constraint NOT ENFORCED")
-		}
 		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr); err != nil {
 			return err
 		}
+		createTable.TableDef.Checks[len(createTable.TableDef.Checks)-1].NotEnforced =
+			check.enforcementSet && !check.enforced
 	}
 
 	// table must have one visible column
@@ -1886,6 +1885,7 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 		logutil.Errorf("recover check constraints: parse createsql for table %s failed: %v", tableDef.Name, err)
 		return
 	}
+	defer stmt.Free()
 	ct, ok := stmt.(*tree.CreateTable)
 	if !ok {
 		return
@@ -1929,15 +1929,14 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	// binding, naming and OriginSql formatting used by CREATE TABLE.
 	scratch := &TableDef{Name: tableDef.Name, Cols: tableDef.Cols}
 	for _, c := range checks {
-		// Ordinary tables persist the original CREATE statement, so an explicit
-		// NOT ENFORCED clause remains distinguishable during legacy recovery.
-		if c.enforcementSet && !c.enforced {
-			continue
-		}
 		if err := appendCheckDef(ctx, scratch, c.name, c.expr); err != nil {
 			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
 			return
 		}
+		// Ordinary tables persist the original CREATE statement, so an explicit
+		// NOT ENFORCED clause remains distinguishable during legacy recovery. Keep
+		// it as schema metadata while preventing DML from asserting it.
+		scratch.Checks[len(scratch.Checks)-1].NotEnforced = c.enforcementSet && !c.enforced
 	}
 	tableDef.Checks = scratch.Checks
 }

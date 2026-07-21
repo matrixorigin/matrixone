@@ -475,6 +475,9 @@ func ConstructCreateTableSQL(
 		} else {
 			createStr += ",\n  CONSTRAINT `" + formatStr(chk.Name) + "` CHECK (" + chk.OriginSql + ")"
 		}
+		if chk.NotEnforced {
+			createStr += " NOT ENFORCED"
+		}
 	}
 
 	if rowCount != 0 {

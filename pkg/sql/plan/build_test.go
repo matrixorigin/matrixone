@@ -3301,6 +3301,47 @@ func TestAppendCheckConstraintPlanFromLastNodeErrorsOnMissingVisibleProjection(t
 	require.ErrorContains(t, err, "cannot find column missing_projection_t.b for check constraint")
 }
 
+func TestAppendCheckConstraintPlanSkipsNotEnforcedChecks(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT}, bindCtx)
+	tableDef := &plan.TableDef{
+		Checks: []*plan.CheckDef{{
+			Name:        "legacy_not_enforced",
+			Check:       MakePlan2BoolConstExprWithType(false),
+			NotEnforced: true,
+		}},
+	}
+
+	got, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, nodeID)
+	require.NoError(t, err)
+	require.Equal(t, nodeID, got)
+}
+
+func TestAppendCheckConstraintPlanKeepsEnforcedChecksInMixedSet(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{MakePlan2Int32ConstExprWithType(1)},
+	}, bindCtx)
+	tableDef := &plan.TableDef{
+		Name: "mixed_checks",
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}}},
+		Checks: []*plan.CheckDef{
+			{Name: "not_enforced", Check: MakePlan2BoolConstExprWithType(false), NotEnforced: true},
+			{Name: "enforced", Check: MakePlan2BoolConstExprWithType(true)},
+		},
+	}
+
+	got, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, nodeID)
+	require.NoError(t, err)
+	require.NotEqual(t, nodeID, got)
+	require.Len(t, builder.qry.Nodes[got].FilterList, 1)
+}
+
 func TestSubstituteColRefsInExprSkipsNilProjection(t *testing.T) {
 	expr := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_Rowid)},

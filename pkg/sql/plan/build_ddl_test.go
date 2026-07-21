@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -629,7 +628,7 @@ func TestBuildCreateTableCheckConstraintEnforcement(t *testing.T) {
 	}
 }
 
-func TestBuildCreateTableRejectsNotEnforcedCheckConstraints(t *testing.T) {
+func TestBuildCreateTablePreservesNotEnforcedCheckConstraints(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	for _, tt := range []struct {
 		name string
@@ -645,9 +644,11 @@ func TestBuildCreateTableRejectsNotEnforcedCheckConstraints(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := runOneStmt(mock, t, tt.sql)
-			require.Error(t, err)
-			require.Contains(t, strings.ToLower(err.Error()), "not enforced")
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+			require.Len(t, checks, 1)
+			require.True(t, checks[0].NotEnforced)
 		})
 	}
 }
@@ -786,10 +787,11 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		require.Len(t, td.Checks, 2)
 	})
 
-	t.Run("skips explicit table-level not enforced from persisted root sql", func(t *testing.T) {
+	t.Run("preserves explicit table-level not enforced from persisted root sql", func(t *testing.T) {
 		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0) NOT ENFORCED)")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Empty(t, td.Checks)
+		require.Len(t, td.Checks, 1)
+		require.True(t, td.Checks[0].NotEnforced)
 	})
 
 	t.Run("recovers default column check from persisted root sql", func(t *testing.T) {
@@ -800,10 +802,11 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		require.True(t, td.Checks[0].IsGeneratedName)
 	})
 
-	t.Run("skips explicit column not enforced from persisted root sql", func(t *testing.T) {
+	t.Run("preserves explicit column not enforced from persisted root sql", func(t *testing.T) {
 		td := newTableDef("CREATE TABLE t (a INT CHECK (a > 0) NOT ENFORCED, b INT)")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Empty(t, td.Checks)
+		require.Len(t, td.Checks, 1)
+		require.True(t, td.Checks[0].NotEnforced)
 	})
 
 	t.Run("recovers default table check from persisted root sql", func(t *testing.T) {
@@ -812,16 +815,20 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		require.Len(t, td.Checks, 1)
 	})
 
-	t.Run("recovers only default and enforced checks from mixed root sql", func(t *testing.T) {
+	t.Run("recovers default enforced and not enforced checks from mixed root sql", func(t *testing.T) {
 		td := newTableDef(`CREATE TABLE t (
 			a INT CHECK (a > 0),
 			b INT CHECK (b > 0) ENFORCED,
 			CHECK (a < 100) NOT ENFORCED
 		)`)
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Len(t, td.Checks, 2)
+		require.Len(t, td.Checks, 3)
 		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
 		require.Equal(t, "`b` > 0", td.Checks[1].OriginSql)
+		require.False(t, td.Checks[0].NotEnforced)
+		require.False(t, td.Checks[1].NotEnforced)
+		require.True(t, td.Checks[2].NotEnforced)
+		require.Equal(t, "`a` < 100", td.Checks[2].OriginSql)
 	})
 
 	t.Run("no-op when checks already present", func(t *testing.T) {

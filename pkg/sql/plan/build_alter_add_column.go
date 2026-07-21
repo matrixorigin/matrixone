@@ -72,14 +72,10 @@ func AddColumn(
 	// tableDef.Cols, so a check may reference the new column itself.
 	for _, attr := range specNewColumn.Attributes {
 		if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
-			// Match CREATE TABLE: NOT ENFORCED is not supported yet and must be
-			// rejected rather than silently enforced.
-			if ca.EnforcementSet && !ca.Enforced {
-				return false, moerr.NewNotSupported(ctx.GetContext(), "CHECK constraint NOT ENFORCED")
-			}
 			if err = appendCheckDef(ctx, tableDef, ca.Name, ca.Expr); err != nil {
 				return false, err
 			}
+			tableDef.Checks[len(tableDef.Checks)-1].NotEnforced = ca.EnforcementSet && !ca.Enforced
 		}
 	}
 

@@ -516,6 +516,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 			Check:           DeepCopyExpr(col.Check),
 			OriginSql:       col.OriginSql,
 			IsGeneratedName: col.IsGeneratedName,
+			NotEnforced:     col.NotEnforced,
 		}
 	}
 

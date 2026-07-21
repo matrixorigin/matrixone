@@ -57,6 +57,9 @@ func ChangeColumn(
 			alterPlan.TableDef.Name,
 		)
 	}
+	if err := checkColumnWithCheckDependency(ctx, tableDef, oldColName); err != nil {
+		return false, err
+	}
 
 	// If you want to rename the original column name to new name,
 	// you need to first check if the new name already exists.
