@@ -1089,6 +1089,14 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		return true
 	}
 	validationFks := nonSelfFks
+	type foreignKeyLock struct {
+		tableDef  *plan.TableDef
+		objRef    *plan.ObjectRef
+		expr      *plan.Expr
+		typ       plan.Type
+		lockTable bool
+	}
+	foreignKeyLocks := make([]foreignKeyLock, 0, len(nonSelfFks))
 	if lockForeignKeys {
 		type orderedFK struct {
 			fk  *plan.ForeignKeyDef
@@ -1247,32 +1255,43 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
 					"foreign-key lock table %s has no primary key", lockTableDef.Name)
 			}
-			lockInputID := lastNodeID
-			rowProject := getProjectionByLastNodeWithTag(builder, lockInputID, selectTag)
-			lockTag := builder.genNewBindTag()
-			lockProject := append(slices.Clone(rowProject), lockExpr)
-			lockInputID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_PROJECT, Children: []int32{lockInputID},
-				ProjectList: lockProject, BindingTags: []int32{lockTag},
-			}, bindCtx)
-			lockOutput := getProjectionByLastNodeWithTag(builder, lockInputID, lockTag)
-			lockNodeID := builder.appendNode(&plan.Node{
-				NodeType: plan.Node_LOCK_OP, Children: []int32{lockInputID}, TableDef: lockTableDef,
-				LockTargets: []*plan.LockTarget{{
-					TableId: lockTableDef.TblId, ObjRef: lockObjRef,
-					PrimaryColIdxInBat: int32(len(rowProject)), PrimaryColRelPos: lockTag,
-					PrimaryColTyp: lockTyp, Mode: lockpb.LockMode_Shared, LockTable: lockTable,
-				}},
-			}, bindCtx)
-			lockNodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_PROJECT, Children: []int32{lockNodeID},
-				ProjectList: slices.Clone(lockOutput[:len(rowProject)]), BindingTags: []int32{selectTag},
-			}, bindCtx)
-			lastNodeID = lockNodeID
+			foreignKeyLocks = append(foreignKeyLocks, foreignKeyLock{
+				tableDef:  lockTableDef,
+				objRef:    lockObjRef,
+				expr:      lockExpr,
+				typ:       lockTyp,
+				lockTable: lockTable,
+			})
 		}
 	}
 
 	if lockForeignKeys {
+		rowProject := getProjectionByLastNodeWithTag(builder, lastNodeID, selectTag)
+		lockTag := builder.genNewBindTag()
+		lockProject := slices.Clone(rowProject)
+		lockTargets := make([]*plan.LockTarget, 0, len(foreignKeyLocks))
+		for _, fkLock := range foreignKeyLocks {
+			lockProject = append(lockProject, fkLock.expr)
+			lockTargets = append(lockTargets, &plan.LockTarget{
+				TableId: fkLock.tableDef.TblId, ObjRef: fkLock.objRef,
+				PrimaryColIdxInBat: int32(len(lockProject) - 1), PrimaryColRelPos: lockTag,
+				PrimaryColTyp: fkLock.typ, Mode: lockpb.LockMode_Shared, LockTable: fkLock.lockTable,
+			})
+		}
+		lockInputID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+			ProjectList: lockProject, BindingTags: []int32{lockTag},
+		}, bindCtx)
+		lockOutput := getProjectionByLastNodeWithTag(builder, lockInputID, lockTag)
+		lockNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_LOCK_OP, Children: []int32{lockInputID},
+			TableDef: foreignKeyLocks[0].tableDef, LockTargets: lockTargets,
+		}, bindCtx)
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lockNodeID},
+			ProjectList: slices.Clone(lockOutput[:len(rowProject)]), BindingTags: []int32{selectTag},
+		}, bindCtx)
+
 		// Materialize the row image only after every referenced key has been locked.
 		// The final validation/DML step consumes this single sink dependency, avoiding
 		// unsupported multi-hop sink chains while preserving lock-before-scan ordering.

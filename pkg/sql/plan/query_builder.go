@@ -1136,6 +1136,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_AGG:
+		// Some DML duplicate-check aggregates intentionally expose positional
+		// output. They are already fully projected and cannot participate in the
+		// global-tag pruning protocol used by regular aggregates.
+		if len(node.BindingTags) < 2 {
+			for i := range node.ProjectList {
+				remapping.addColRef([2]int32{0, int32(i)})
+			}
+			return remapping, nil
+		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))

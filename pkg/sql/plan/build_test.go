@@ -3601,6 +3601,21 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, oldRowExclusions, 2,
 		"initial and recursive cascade sources must exclude main REPLACE old rows")
+	cascadeLocks := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_LOCK_OP || len(node.Children) != 1 ||
+			query.Nodes[node.Children[0]].NodeType != plan.Node_SINK_SCAN {
+			continue
+		}
+		for _, target := range node.LockTargets {
+			if target.TableId == mock.ctxt.tables["self_ref_cascade"].TblId &&
+				target.Mode == lockpb.LockMode_Exclusive {
+				cascadeLocks++
+			}
+		}
+	}
+	assert.GreaterOrEqual(t, cascadeLocks, 2,
+		"root and recursively cascaded rows must each lock a materialized source")
 }
 
 func TestReplaceDetectSqls(t *testing.T) {
@@ -4095,6 +4110,42 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 
 	assertReplaceParentPlanMarker(t, query)
 	assert.True(t, queryUpdatesTable(query, "replace_fk_sc"), "SET NULL must build a child update branch")
+}
+
+func TestReplaceParentSideFKCombinesSetNullActions(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	child := mock.ctxt.tables["replace_fk_sc"]
+	if child.Name2ColIndex == nil {
+		child.Name2ColIndex = make(map[string]int32)
+		for i, col := range child.Cols {
+			child.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	rowIDPos := len(child.Cols) - 1
+	child.Cols = append(child.Cols, nil)
+	copy(child.Cols[rowIDPos+1:], child.Cols[rowIDPos:])
+	child.Cols[rowIDPos] = &plan.ColDef{
+		Name: "pid2", ColId: 10, Typ: plan.Type{Id: int32(types.T_int32), Width: 32},
+	}
+	child.Name2ColIndex["pid2"] = int32(rowIDPos)
+	child.Name2ColIndex[catalog.Row_ID] = int32(rowIDPos + 1)
+	child.Fkeys = append(child.Fkeys, &plan.ForeignKeyDef{
+		Name: "fk_replace_sc_2", Cols: []uint64{10}, ForeignTbl: 77005, ForeignCols: []uint64{0},
+		OnDelete: plan.ForeignKeyDef_SET_NULL, OnUpdate: plan.ForeignKeyDef_SET_NULL,
+	})
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_sp VALUES (1, 'p1_new')")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	updates := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_INSERT && node.InsertCtx != nil &&
+			node.InsertCtx.TableDef != nil && node.InsertCtx.TableDef.Name == "replace_fk_sc" {
+			updates++
+		}
+	}
+	require.Equal(t, 1, updates,
+		"all SET NULL columns for one child row must be emitted by one base-table update")
 }
 
 func TestReplaceParentSideFKNonLiteralSkip(t *testing.T) {

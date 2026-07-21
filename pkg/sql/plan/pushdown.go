@@ -43,6 +43,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Legacy positional aggregates have no global binding tags. Keep filters
+		// above them because tag-based replacement cannot address their outputs.
+		if len(node.BindingTags) < 2 {
+			return originalNodeID, filters
+		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 
@@ -157,6 +162,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_FILTER:
+		// IsEnd filters are terminal assertions/action selectors. Moving their
+		// predicates below joins can change both assertion scope and marker layout.
+		if node.IsEnd {
+			return originalNodeID, filters
+		}
 		canPushdown = filters
 		if !node.RollupFilter {
 			for _, filter := range node.FilterList {

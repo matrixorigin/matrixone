@@ -204,10 +204,38 @@ func performLock(
 	targetIdx int,
 ) error {
 	needRetry := false
+	consumed := make([]bool, len(lockOp.targets))
 	for idx, target := range lockOp.targets {
+		if consumed[idx] {
+			continue
+		}
 		if targetIdx != -1 && targetIdx != idx {
 			continue
 		}
+		group := []int{idx}
+		if targetIdx == -1 && target.filter == nil && !target.lockTable && target.lockRows == nil {
+			for next := idx + 1; next < len(lockOp.targets); next++ {
+				candidate := lockOp.targets[next]
+				if candidate.tableID != target.tableID || candidate.mode != target.mode ||
+					candidate.primaryColumnType != target.primaryColumnType || candidate.filter != nil ||
+					candidate.lockTable || candidate.lockRows != nil || candidate.changeDef != target.changeDef ||
+					candidate.partitionColumnIndexInBatch != target.partitionColumnIndexInBatch ||
+					candidate.refreshTimestampIndexInBatch != target.refreshTimestampIndexInBatch {
+					break
+				}
+				group = append(group, next)
+				consumed[next] = true
+			}
+		}
+		primaryIdx := idx
+		for _, groupIdx := range group {
+			vec := resultVector(bat, lockOp.targets[groupIdx].primaryColumnIndexInBatch)
+			if vec != nil && !vec.AllNull() {
+				primaryIdx = groupIdx
+				break
+			}
+		}
+		target = lockOp.targets[primaryIdx]
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
@@ -236,11 +264,41 @@ func performLock(
 				}
 			}
 		} */
+		fetchRows := lockOp.ctr.fetchers[primaryIdx]
+		if len(group) > 1 {
+			fetchRows = func(
+				_ *vector.Vector,
+				packer *types.Packer,
+				pkType types.Type,
+				maxCountPerLock int,
+				lockTable bool,
+				_ RowsFilter,
+				_ []int32,
+			) (bool, [][]byte, lock.Granularity) {
+				var rows [][]byte
+				for _, groupIdx := range group {
+					groupTarget := lockOp.targets[groupIdx]
+					has, targetRows, granularity := lockOp.ctr.fetchers[groupIdx](
+						resultVector(bat, groupTarget.primaryColumnIndexInBatch),
+						packer, pkType, maxCountPerLock, lockTable, nil, nil)
+					if granularity != lock.Granularity_Row {
+						return has, targetRows, granularity
+					}
+					if has {
+						rows = append(rows, targetRows...)
+					}
+				}
+				if len(rows) == 0 {
+					return false, nil, lock.Granularity_Row
+				}
+				return true, dedupLockRows(rows), lock.Granularity_Row
+			}
+		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
 			analyzer,
-			lockOp.ctr.relations[idx],
+			lockOp.ctr.relations[primaryIdx],
 			target.tableID,
 			proc,
 			bat,
@@ -249,7 +307,7 @@ func performLock(
 			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
 				WithLockMode(target.mode).
-				WithFetchLockRowsFunc(lockOp.ctr.fetchers[idx]).
+				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable, target.changeDef).
@@ -303,6 +361,13 @@ func performLock(
 		lockOp.ctr.retryError = retryWithDefChangedError
 	}
 	return nil
+}
+
+func resultVector(bat *batch.Batch, idx int32) *vector.Vector {
+	if bat == nil {
+		return nil
+	}
+	return bat.GetVector(idx)
 }
 
 // LockTable lock table, all rows in the table will be locked, and wait current txn
