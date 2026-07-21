@@ -214,6 +214,114 @@ func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {
 	}
 }
 
+func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
+	const (
+		projectTag int32 = 10
+		outerTag   int32 = 20
+	)
+
+	newCorr := func(relPos, colPos, depth int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{RelPos: relPos, ColPos: colPos, Depth: depth},
+			},
+		}
+	}
+	validProject := func() *plan.Node {
+		return &plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			BindingTags: []int32{projectTag},
+			ProjectList: []*plan.Expr{newCorr(outerTag, 0, 1)},
+		}
+	}
+
+	for _, tt := range []struct {
+		name     string
+		results  []*plan.Expr
+		projects []*plan.Expr
+		nodes    []*plan.Node
+		subID    int32
+	}{
+		{
+			name:     "missing result",
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes:    []*plan.Node{validProject()},
+		},
+		{
+			name:     "nested offset",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				validProject(),
+				{NodeType: plan.Node_SORT, Children: []int32{0}, Offset: makePlan2Uint64ConstExprWithType(1)},
+				{NodeType: plan.Node_SORT, Children: []int32{1}},
+			},
+			subID: 2,
+		},
+		{
+			name:     "non-one limit below rim",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}, ProjectList: []*plan.Expr{newCorr(outerTag, 0, 1)}, Limit: makePlan2Uint64ConstExprWithType(2)},
+				{NodeType: plan.Node_SORT, Children: []int32{0}},
+			},
+			subID: 1,
+		},
+		{
+			name:     "empty project list",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}},
+			},
+		},
+		{
+			name:     "mismatched projected column",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}, ProjectList: []*plan.Expr{newCorr(outerTag, 1, 1)}},
+			},
+		},
+		{
+			name:     "non-unary wrapper",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				{NodeType: plan.Node_SORT, Children: []int32{0, 1}},
+			},
+		},
+		{
+			name:     "unsupported wrapper",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				validProject(),
+				{NodeType: plan.Node_FILTER, Children: []int32{0}},
+			},
+			subID: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: tt.nodes}}
+			ctx := &BindContext{
+				projectTag: projectTag,
+				results:    tt.results,
+				projects:   tt.projects,
+			}
+
+			nodeID, match, outerResult, existential :=
+				builder.normalizeDirectCorrelatedScalarProjection(tt.subID, ctx)
+			require.Equal(t, tt.subID, nodeID)
+			require.Nil(t, match)
+			require.Nil(t, outerResult)
+			require.False(t, existential)
+		})
+	}
+}
+
 func TestGenerateRowComparisonBuildsBalancedTree(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	subqueryCtx := NewBindContext(builder, nil)
