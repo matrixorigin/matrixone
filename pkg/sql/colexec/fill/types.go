@@ -82,6 +82,14 @@ type container struct {
 	// segment without pinning the segment's final output batch in memory.
 	linSeed      []*vector.Vector
 	linSeedValid []bool
+	// linEntry is the endpoint immediately before bats[0]. Unlike linSeed,
+	// which follows the currently consumed partition and may be cleared when a
+	// right endpoint arrives, linEntry advances only when a resolved batch is
+	// emitted. A spill therefore always starts with the endpoint that belongs
+	// to the beginning of its persisted suffix.
+	linEntry      []*vector.Vector
+	linEntryValid []bool
+	linEntryPart  spillPartitionSnapshot
 
 	buf *batch.Batch
 
@@ -145,6 +153,7 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
 	ctr.cleanupSpill(proc)
 	ctr.clearLinearSeeds(proc.Mp())
+	ctr.clearLinearEntries(proc.Mp())
 	ctr.resetCtrParma()
 	ctr.resetExes()
 	if ctr.buf != nil {
@@ -213,6 +222,7 @@ func (ctr *container) freeVectors(mp *mpool.MPool) {
 	}
 	ctr.prevVecs = nil
 	ctr.clearLinearSeeds(mp)
+	ctr.clearLinearEntries(mp)
 }
 
 func (ctr *container) clearLinearSeeds(mp *mpool.MPool) {
@@ -225,6 +235,19 @@ func (ctr *container) clearLinearSeeds(mp *mpool.MPool) {
 	for i := range ctr.linSeedValid {
 		ctr.linSeedValid[i] = false
 	}
+}
+
+func (ctr *container) clearLinearEntries(mp *mpool.MPool) {
+	for i, vec := range ctr.linEntry {
+		if vec != nil {
+			vec.Free(mp)
+			ctr.linEntry[i] = nil
+		}
+	}
+	for i := range ctr.linEntryValid {
+		ctr.linEntryValid[i] = false
+	}
+	ctr.linEntryPart = spillPartitionSnapshot{}
 }
 
 func (ctr *container) freeExes() {

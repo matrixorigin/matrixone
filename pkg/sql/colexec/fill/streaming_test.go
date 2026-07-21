@@ -721,6 +721,105 @@ func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
+	t.Run("single decimal column", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		typ := types.New(types.T_decimal128, 38, 0)
+		makeBatch := func(values []int64, nulls []uint64, parts []int64) *batch.Batch {
+			vec := vector.NewVec(typ)
+			for row, value := range values {
+				require.NoError(t, vector.AppendFixed(
+					vec, types.Decimal128FromInt64(value), vec.GetNulls().Contains(uint64(row)), proc.Mp()))
+			}
+			for _, row := range nulls {
+				vec.GetNulls().Add(row)
+			}
+			bat := batch.NewWithSize(2)
+			bat.SetVector(0, vec)
+			bat.SetVector(1, testutil.MakeInt64Vector(parts, nil, proc.Mp()))
+			bat.SetRowCount(len(values))
+			return bat
+		}
+		bats := []*batch.Batch{
+			makeBatch([]int64{10}, nil, []int64{1}),
+			makeBatch([]int64{0, 20}, []uint64{0}, []int64{1, 1}),
+		}
+		arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}, SpillThreshold: 1}
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
+		require.NoError(t, arg.Prepare(proc))
+
+		var got []types.Decimal128
+		var nulls []bool
+		for {
+			res, err := arg.Call(proc)
+			require.NoError(t, err)
+			if res.Batch == nil {
+				break
+			}
+			for row := 0; row < res.Batch.RowCount(); row++ {
+				nulls = append(nulls, res.Batch.Vecs[0].IsNull(uint64(row)))
+				got = append(got, vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[0], row))
+			}
+		}
+		require.Equal(t, []bool{false, false, false}, nulls)
+		require.Equal(t, types.Decimal128FromInt64(10), got[0])
+		require.Equal(t, types.Decimal128FromInt64(15), got[1])
+		require.Equal(t, types.Decimal128FromInt64(20), got[2])
+
+		arg.Free(proc, false, nil)
+		for _, bat := range bats {
+			bat.Clean(proc.Mp())
+		}
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	})
+
+	t.Run("multiple columns and partition boundary", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		makeBatch := func(col0, col1 []int64, nulls0, nulls1 []uint64, parts []int64) *batch.Batch {
+			bat := batch.NewWithSize(3)
+			bat.SetVector(0, testutil.MakeInt64Vector(col0, nulls0, proc.Mp()))
+			bat.SetVector(1, testutil.MakeInt64Vector(col1, nulls1, proc.Mp()))
+			bat.SetVector(2, testutil.MakeInt64Vector(parts, nil, proc.Mp()))
+			bat.SetRowCount(len(parts))
+			return bat
+		}
+		bats := []*batch.Batch{
+			makeBatch([]int64{10}, []int64{100}, nil, nil, []int64{1}),
+			makeBatch([]int64{0, 20}, []int64{0, 200}, []uint64{0}, []uint64{0}, []int64{1, 1}),
+			makeBatch([]int64{0, 40}, []int64{0, 400}, []uint64{0}, []uint64{0}, []int64{2, 2}),
+		}
+		arg := &Fill{ColLen: 2, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{2}, SpillThreshold: 1}
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
+		require.NoError(t, arg.Prepare(proc))
+		midpoint := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(midpoint, int64(99), false, proc.Mp()))
+		stub := &fillStubExpressionExecutor{result: midpoint}
+		arg.ctr.exes = []colexec.ExpressionExecutor{stub, stub}
+
+		var col0, col1 []cell
+		for {
+			res, err := arg.Call(proc)
+			require.NoError(t, err)
+			if res.Batch == nil {
+				break
+			}
+			col0 = append(col0, readCol(res.Batch, 0)...)
+			col1 = append(col1, readCol(res.Batch, 1)...)
+		}
+		require.Equal(t, []cell{{val: 10}, {val: 99}, {val: 20}, {null: true}, {val: 40}}, col0)
+		require.Equal(t, []cell{{val: 100}, {val: 99}, {val: 200}, {null: true}, {val: 400}}, col1)
+
+		arg.Free(proc, false, nil)
+		midpoint.Free(proc.Mp())
+		for _, bat := range bats {
+			bat.Clean(proc.Mp())
+		}
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	})
+}
+
 func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{

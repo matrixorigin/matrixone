@@ -63,6 +63,17 @@ type spillPartitionSnapshot struct {
 	set   bool
 }
 
+func (s *spillPartitionSnapshot) cloneFrom(src *spillPartitionSnapshot) {
+	*s = spillPartitionSnapshot{set: src.set}
+	if len(src.keys) > 0 {
+		s.keys = make([][]byte, len(src.keys))
+		for i := range src.keys {
+			s.keys[i] = append([]byte(nil), src.keys[i]...)
+		}
+	}
+	s.nulls = append([]bool(nil), src.nulls...)
+}
+
 func addOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error {
 	rows := bat.RowCount()
 	for c := 0; c < colLen; c++ {
@@ -489,11 +500,13 @@ func (ctr *container) beginSpill(ap *Fill, proc *process.Process) error {
 		}
 	}
 	spill.updateSafeWatermark()
-	if ap.FillType == plan.Node_LINEAR && len(ctr.linSeed) > 0 {
-		spill.linearLeft = ctr.linSeed
-		spill.linearLeftValid = ctr.linSeedValid
-		ctr.linSeed = make([]*vector.Vector, ap.ColLen)
-		ctr.linSeedValid = make([]bool, ap.ColLen)
+	if ap.FillType == plan.Node_LINEAR && len(ctr.linEntry) > 0 {
+		spill.linearLeft = ctr.linEntry
+		spill.linearLeftValid = ctr.linEntryValid
+		spill.forwardPart.cloneFrom(&ctr.linEntryPart)
+		ctr.linEntry = make([]*vector.Vector, ap.ColLen)
+		ctr.linEntryValid = make([]bool, ap.ColLen)
+		ctr.linEntryPart = spillPartitionSnapshot{}
 	}
 	for i, bat := range ctr.bats {
 		if err = spill.writeRecord(spill.input, bat); err != nil {
@@ -667,9 +680,31 @@ func (ctr *container) finishSpillReplay(
 		return nil
 	}
 	if ap.FillType == plan.Node_LINEAR {
+		seed := make([]*vector.Vector, ap.ColLen)
+		seedValid := make([]bool, ap.ColLen)
+		for col := 0; col < ap.ColLen; col++ {
+			if !spill.linearLeftValid[col] {
+				continue
+			}
+			var err error
+			seed[col], err = makeEndpoint(spill.linearLeft[col], 0, proc)
+			if err != nil {
+				for _, vec := range seed {
+					if vec != nil {
+						vec.Free(proc.Mp())
+					}
+				}
+				return err
+			}
+			seedValid[col] = true
+		}
 		ctr.clearLinearSeeds(proc.Mp())
-		ctr.linSeed = spill.linearLeft
-		ctr.linSeedValid = spill.linearLeftValid
+		ctr.clearLinearEntries(proc.Mp())
+		ctr.linSeed = seed
+		ctr.linSeedValid = seedValid
+		ctr.linEntry = spill.linearLeft
+		ctr.linEntryValid = spill.linearLeftValid
+		ctr.linEntryPart.cloneFrom(&spill.forwardPart)
 		spill.linearLeft = nil
 		spill.linearLeftValid = nil
 	}

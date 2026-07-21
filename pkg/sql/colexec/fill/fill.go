@@ -91,6 +91,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 			ctr.linPre = make([]fillCoord, fill.ColLen)
 			ctr.linSeed = make([]*vector.Vector, fill.ColLen)
 			ctr.linSeedValid = make([]bool, fill.ColLen)
+			ctr.linEntry = make([]*vector.Vector, fill.ColLen)
+			ctr.linEntryValid = make([]bool, fill.ColLen)
 			for i := range ctr.linPre {
 				ctr.linPre[i] = fillCoord{seq: -1, row: -1}
 			}
@@ -282,8 +284,13 @@ func (ctr *container) pullChild(ap *Fill, proc *process.Process, analyzer proces
 // emitResolved pops and returns the resolved prefix of the FIFO one batch at a
 // time. The popped batch is handed to the caller and freed on the next Call
 // (via toFree), because no unresolved coordinate can still reference it.
-func (ctr *container) emitResolved(ap *Fill, proc *process.Process) vm.CallResult {
+func (ctr *container) emitResolved(ap *Fill, proc *process.Process) (vm.CallResult, error) {
 	b := ctr.bats[0]
+	if ap.FillType == plan.Node_LINEAR && b != nil {
+		if err := ctr.advanceLinearEntry(ap, b, proc); err != nil {
+			return vm.NewCallResult(), err
+		}
+	}
 	ctr.bats = ctr.bats[1:]
 	if b != nil {
 		ctr.pendingBytes -= int64(b.Size())
@@ -296,7 +303,31 @@ func (ctr *container) emitResolved(ap *Fill, proc *process.Process) vm.CallResul
 	result := vm.NewCallResult()
 	result.Batch = b
 	result.Status = vm.ExecNext
-	return result
+	return result, nil
+}
+
+// advanceLinearEntry moves the endpoint immediately before the pending FIFO
+// across one emitted batch. Original-NULL markers are authoritative here:
+// interpolated cells are not endpoints, while every original non-NULL cell is.
+func (ctr *container) advanceLinearEntry(ap *Fill, bat *batch.Batch, proc *process.Process) error {
+	for row := 0; row < bat.RowCount(); row++ {
+		if len(ap.PartitionColIdx) > 0 {
+			wasSet := ctr.linEntryPart.set
+			if !ctr.linEntryPart.sameAndSet(ap.PartitionColIdx, bat, row) && wasSet {
+				clearEndpoints(ctr.linEntryValid)
+			}
+		}
+		for col := 0; col < ap.ColLen; col++ {
+			if originalNullAt(bat, ap.ColLen, col, row) {
+				continue
+			}
+			if err := setEndpoint(&ctr.linEntry[col], bat.Vecs[col], row, proc); err != nil {
+				return err
+			}
+			ctr.linEntryValid[col] = true
+		}
+	}
+	return nil
 }
 
 // isNewSegment reports whether row r of the just-arrived batch opens a new
@@ -620,7 +651,7 @@ func (ctr *container) driveFill(
 	}
 	for {
 		if ctr.flushable > 0 {
-			return ctr.emitResolved(ap, proc), nil
+			return ctr.emitResolved(ap, proc)
 		}
 		if ctr.childDone {
 			if len(ctr.bats) == 0 {
