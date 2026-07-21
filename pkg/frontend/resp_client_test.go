@@ -253,15 +253,26 @@ func TestEvalCondRestoresAffectedRows(t *testing.T) {
 }
 
 func TestStarlarkSQLRecordsAffectedRows(t *testing.T) {
-	back := &evalCondBackgroundExec{}
-	interpreter := &Interpreter{
-		ctx: context.Background(),
-		bh:  back,
-	}
-	si := &starlarkInterpreter{interp: interpreter}
+	for _, tc := range []struct {
+		name    string
+		execErr error
+	}{
+		{name: "success"},
+		{name: "failure", execErr: errors.New("sql failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			back := &evalCondBackgroundExec{execErr: tc.execErr}
+			interpreter := &Interpreter{
+				ctx:              context.Background(),
+				bh:               back,
+				lastAffectedRows: 7,
+			}
+			si := &starlarkInterpreter{interp: interpreter}
 
-	value, err := si.moSql(nil, nil, starlark.Tuple{starlark.String("select 1")}, nil)
-	require.NoError(t, err)
-	require.NotNil(t, value)
-	require.Equal(t, int64(-1), interpreter.lastAffectedRows)
+			value, err := si.moSql(nil, nil, starlark.Tuple{starlark.String("select 1")}, nil)
+			require.NoError(t, err)
+			require.NotNil(t, value)
+			require.Equal(t, int64(-1), interpreter.lastAffectedRows)
+		})
+	}
 }

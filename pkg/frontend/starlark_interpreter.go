@@ -228,11 +228,11 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 
 	si.interp.bh.ClearExecResultSet()
 	err := si.interp.bh.Exec(si.interp.ctx, sql)
+	si.interp.recordAffectedRows()
 	if err != nil {
 		ret[1] = starlark.String(err.Error())
 		return starlark.NewList(ret), nil
 	}
-	si.interp.recordAffectedRows()
 
 	erArray, err := getResultSet(si.interp.ctx, si.interp.bh)
 	if err != nil {
