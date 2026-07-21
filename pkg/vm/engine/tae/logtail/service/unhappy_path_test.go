@@ -681,6 +681,116 @@ func TestCongestedSubscriptionDoesNotBlockHealthyIncrementalProgress(t *testing.
 	require.ErrorIs(t, slowTransport.ctx.Err(), context.Canceled)
 }
 
+func TestCongestedSubscriptionErrorDoesNotBlockHealthyIncrementalProgress(t *testing.T) {
+	phaseTwoEntered := make(chan struct{})
+	returnPhaseTwoError := make(chan struct{})
+	var returnPhaseTwoOnce sync.Once
+	returnPhaseTwo := func() { returnPhaseTwoOnce.Do(func() { close(returnPhaseTwoError) }) }
+	var phaseTwoReleased atomic.Int32
+	logtailer := &controlledLogtailer{
+		tableFn: func(
+			_ context.Context, _ api.TableID, _, _ timestamp.Timestamp,
+		) (logtail.TableLogtail, func(), error) {
+			close(phaseTwoEntered)
+			<-returnPhaseTwoError
+			return logtail.TableLogtail{}, func() { phaseTwoReleased.Add(1) }, context.DeadlineExceeded
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	t.Cleanup(returnPhaseTwo)
+	responses := server.pool.responses
+
+	newSession := func(
+		streamID uint64, table api.TableID, state TableState, active int32,
+	) (*Session, *captureSession) {
+		ctx, cancel := context.WithCancel(server.rootCtx)
+		transport := newCaptureSession()
+		id := MarshalTableID(&table)
+		return &Session{
+			sessionCtx:       ctx,
+			cancelFunc:       cancel,
+			logger:           server.logger,
+			sendTimeout:      time.Hour,
+			responses:        responses,
+			notifier:         server,
+			stream:           mockMorpcStream(transport, streamID, 1024),
+			poisonTime:       time.Hour,
+			sendChan:         make(chan message, 1),
+			active:           active,
+			tables:           map[TableID]tableSubscription{id: {state: state, generation: 1}},
+			progressInterval: time.Hour,
+			progressTimer:    time.NewTimer(time.Hour),
+		}, transport
+	}
+
+	slowTable := mockTable(1, 1, 1)
+	slow, slowTransport := newSession(1, slowTable, TableOnSubscription, 0)
+	slow.sendChan <- message{response: responses.Acquire()}
+	healthyTable := mockTable(1, 2, 1)
+	healthy, _ := newSession(2, healthyTable, TableSubscribed, 1)
+	server.ssmgr.Lock()
+	server.ssmgr.clients[slow.stream] = slow
+	server.ssmgr.clients[healthy.stream] = healthy
+	server.ssmgr.Unlock()
+
+	var phaseOneReleased atomic.Int32
+	slowID := MarshalTableID(&slowTable)
+	server.subTailChan <- &LogtailPhase{
+		tail:    mockLogtail(slowTable, timestamp.Timestamp{PhysicalTime: 1}),
+		closeCB: func() { phaseOneReleased.Add(1) },
+		sub: subscription{
+			timeout:    time.Hour,
+			tableID:    slowID,
+			generation: 1,
+			req:        &logtail.SubscribeRequest{Table: &slowTable},
+			session:    slow,
+		},
+	}
+
+	select {
+	case <-phaseTwoEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("global sender did not enter subscription phase two")
+	}
+
+	var incrementalReleased atomic.Int32
+	released := make(chan struct{})
+	require.NoError(t, logtailer.notify(
+		timestamp.Timestamp{PhysicalTime: 1},
+		timestamp.Timestamp{PhysicalTime: 2},
+		func() {
+			if incrementalReleased.Add(1) == 1 {
+				close(released)
+			}
+		},
+		mockLogtail(healthyTable, timestamp.Timestamp{PhysicalTime: 2}),
+	))
+	returnPhaseTwo()
+
+	select {
+	case msg := <-healthy.sendChan:
+		update := msg.response.GetUpdateResponse()
+		require.NotNil(t, update)
+		require.Len(t, update.LogtailList, 1)
+		responses.Release(msg.response)
+	case <-time.After(10 * time.Second):
+		slow.cancelFunc()
+		t.Fatal("congested subscription error blocked healthy incremental progress")
+	}
+	select {
+	case <-released:
+	case <-time.After(10 * time.Second):
+		t.Fatal("healthy incremental response ownership was not released")
+	}
+
+	require.Equal(t, int32(1), phaseOneReleased.Load())
+	require.Equal(t, int32(1), phaseTwoReleased.Load())
+	require.Equal(t, int32(1), incrementalReleased.Load())
+	require.Zero(t, slow.Active())
+	require.Equal(t, TableNotFound, slow.Unregister(slowID))
+	require.ErrorIs(t, slowTransport.ctx.Err(), context.Canceled)
+}
+
 func TestServerRejectsSessionAdmissionAfterShutdownStarts(t *testing.T) {
 	tests := []struct {
 		name string

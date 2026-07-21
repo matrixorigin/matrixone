@@ -745,7 +745,9 @@ func (ss *Session) CompleteSubscription(
 	return true, nil
 }
 
-// SendErrorResponse sends error response to logtail client.
+// SendErrorResponse sends an error response without waiting for queue capacity.
+// Phase-2 subscription errors are reported by the single global logtail sender,
+// so a congested session must not delay progress for every other session.
 func (ss *Session) SendErrorResponse(
 	sendCtx context.Context, table api.TableID, code uint16, message string,
 ) error {
@@ -753,7 +755,7 @@ func (ss *Session) SendErrorResponse(
 
 	resp := ss.responses.Acquire()
 	resp.Response = newErrorResponse(table, code, message)
-	return ss.SendResponse(sendCtx, resp)
+	return ss.sendResponse(sendCtx, resp, false)
 }
 
 // SendSubscriptionResponse sends a subscription response without waiting for
