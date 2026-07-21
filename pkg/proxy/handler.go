@@ -346,7 +346,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 	if err := st.RunNamedTask("event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-t.reqC:
+			case e, ok := <-t.reqC:
+				if !ok {
+					return
+				}
 				if err := cc.HandleEvent(ctx, e, t.respC); err != nil {
 					h.logger.Error("failed to handle event",
 						zap.Any("event", e), zap.Error(err))

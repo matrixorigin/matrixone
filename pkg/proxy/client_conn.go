@@ -545,15 +545,11 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		if c.tun != nil {
 			c.tun.markExpectedCacheQuit()
 		}
-		// Notify/finish the event immediately.
-		ev.notify()
-		// Then handle the quit event async.
-		go func() {
-			if err := c.handleQuitEvent(ctx); err != nil {
-				c.log.Error("failed to exec quit cmd", zap.Error(err))
-			}
-		}()
-		return nil
+		// The c2s pipe is blocked on this event, so seal that generation and
+		// finish reset/cache publication before releasing it. Once notified,
+		// the pipe terminates instead of reading another client command.
+		defer ev.notify()
+		return c.handleQuitCommand(ctx)
 	case *upgradeEvent:
 		return c.handleUpgradeEvent(ctx, ev, resp)
 	default:
@@ -780,26 +776,54 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 }
 
 func (c *clientConn) handleQuitEvent(ctx context.Context) error {
+	return c.handleQuitEventInternal(ctx, true)
+}
+
+// handleQuitCommand handles an intercepted COM_QUIT while c2s is synchronously
+// blocked waiting for the event notification. Sealing is sufficient here: the
+// pipe cannot touch the backend again before it is notified, and it terminates
+// immediately afterwards.
+func (c *clientConn) handleQuitCommand(ctx context.Context) error {
+	return c.handleQuitEventInternal(ctx, false)
+}
+
+func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe bool) error {
 	c.quit.once.Do(func() {
-		// Get server->client pipe and set it to pause.
-		_, scp := c.tun.getPipes()
-		// Quit handling is synchronous. Bound pause wait time to avoid hanging
-		// the close path if the pipe cannot reach paused state.
+		csp, scp := c.tun.getPipes()
+		abort := func(cause error) {
+			if err := c.sc.Quit(); err != nil {
+				c.log.Error("failed to quit from cn server", zap.Error(err))
+			}
+			c.quit.err = cause
+		}
+		// Bound pipe shutdown to avoid hanging the close path if either
+		// direction cannot reach a terminal state.
 		pauseCtx := ctx
 		if pauseCtx == nil {
 			pauseCtx = context.Background()
 		}
 		pauseCtx, cancel := context.WithTimeout(pauseCtx, defaultTransferTimeout)
 		defer cancel()
-		if err := scp.pause(pauseCtx); err != nil {
-			if err := c.sc.Quit(); err != nil {
-				c.log.Error("failed to quit from cn server", zap.Error(err))
+		if csp != nil {
+			if err := csp.seal(); err != nil {
+				abort(err)
+				return
 			}
-			c.quit.err = err
-			return
+			if waitClientPipe {
+				if err := csp.waitStopped(pauseCtx); err != nil {
+					abort(err)
+					return
+				}
+			}
 		}
-		// After the server->client pipe is paused, push the
-		// connection to cache.
+		if scp != nil {
+			if err := scp.pause(pauseCtx); err != nil {
+				abort(err)
+				return
+			}
+		}
+		// c2s is terminal and s2c is paused, so no pipe from the originating
+		// generation can issue a command or consume a reset response after Push.
 		if !c.connCache.Push(c.clientInfo.hash, c.sc) {
 			if err := c.sc.Quit(); err != nil {
 				c.log.Error("failed to quit from cn server", zap.Error(err))

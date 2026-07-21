@@ -827,7 +827,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var currSeq int16
 	var lastSeq int16 = -1
 	var rotated bool
+	var stopAfterSend bool
 	prepareNextMessage := func() (terminate bool, err error) {
+		stopAfterSend = false
 		if terminate := func() bool {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -840,7 +842,13 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		}(); terminate {
 			return true, nil
 		}
-		_, re := p.src.preRecv()
+		packetSize, re := p.src.preRecv()
+		// A fragmented one-byte command may leave only its four-byte header in
+		// the buffer. Read the command byte before event detection so COM_QUIT is
+		// always intercepted and made terminal, independent of TCP framing.
+		if re == nil && p.name == pipeClientToServer && packetSize >= preRecvLen {
+			re = p.src.receiveAtLeast(preRecvLen)
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.mu.inPreRecv = false
@@ -920,6 +928,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			}
 			if isCmdQuit(tempBuf) {
 				p.tun.markExpectedClientQuit()
+				stopAfterSend = true
 			}
 			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
 				if !isCmdQuit(tempBuf) {
@@ -959,6 +968,12 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		if err = p.src.sendTo(p.dst); err != nil {
 			return wrapPipeSendError(p.name, err)
 		}
+		if stopAfterSend {
+			// COM_QUIT is terminal even when another complete packet is already
+			// buffered. Reporting a client disconnect lets the owning handler run
+			// its normal cleanup after cache publication has completed.
+			return withCode(io.EOF, codeClientDisconnect)
+		}
 	}
 	return ctx.Err()
 }
@@ -985,6 +1000,66 @@ func (p *pipe) waitReady(ctx context.Context) error {
 		}
 		if p.mu.closed {
 			return errPipeClosed
+		}
+		p.mu.cond.Wait()
+	}
+	return nil
+}
+
+// seal makes a pipe generation terminal without waiting for its goroutine.
+// This is used by COM_QUIT while c2s is synchronously blocked on its event: the
+// caller can publish the reset backend knowing the old pipe cannot restart or
+// advance to another packet after notification.
+func (p *pipe) seal() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mu.closed = true
+	p.mu.paused = true
+	if p.mu.inPreRecv && p.src != nil {
+		if err := p.src.SetReadDeadline(time.Unix(1, 0)); err != nil {
+			return err
+		}
+	}
+	if p.mu.cond != nil {
+		p.mu.cond.Broadcast()
+	}
+	return nil
+}
+
+// waitStopped joins a pipe after seal. Unlike pause, a closed pipe is a valid
+// terminal state here and can never be restarted by a later generation.
+func (p *pipe) waitStopped(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.mu.started {
+		return nil
+	}
+	if p.mu.cond == nil {
+		return errPipeClosed
+	}
+	stopCtxWatcher := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			p.mu.cond.Broadcast()
+			p.mu.Unlock()
+		case <-stopCtxWatcher:
+		}
+	}()
+	defer close(stopCtxWatcher)
+	for p.mu.started {
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
 		}
 		p.mu.cond.Wait()
 	}
