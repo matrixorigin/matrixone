@@ -15,8 +15,10 @@
 package txnbase
 
 import (
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -51,4 +53,59 @@ func TestTryUpdateMaxCommittedTSConcurrent(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, types.BuildTS(updates, 0), *mgr.MaxCommittedTS.Load())
+}
+
+func TestAllocateAndPublishCommitTSSerializesPublication(t *testing.T) {
+	mgr := NewTxnManager(nil, nil, types.NewMockHLCClock(1))
+	defer mgr.workers.Release()
+
+	firstStarted := make(chan types.TS, 1)
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.AllocateAndPublishCommitTS(func(ts types.TS) error {
+			firstStarted <- ts
+			<-releaseFirst
+			return nil
+		})
+		firstDone <- err
+	}()
+
+	firstTS := <-firstStarted
+	require.True(t, mgr.MaxCommittedTS.Load().LT(&firstTS))
+
+	secondStarted := make(chan types.TS, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.AllocateAndPublishCommitTS(func(ts types.TS) error {
+			secondStarted <- ts
+			return nil
+		})
+		secondDone <- err
+	}()
+
+	select {
+	case <-secondStarted:
+		t.Fatal("later timestamp allocated before earlier state was published")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	require.NoError(t, <-firstDone)
+	secondTS := <-secondStarted
+	require.True(t, secondTS.GT(&firstTS))
+	require.NoError(t, <-secondDone)
+	require.Equal(t, secondTS, *mgr.MaxCommittedTS.Load())
+}
+
+func TestAllocateAndPublishCommitTSErrorDoesNotPublish(t *testing.T) {
+	mgr := NewTxnManager(nil, nil, types.NewMockHLCClock(1))
+	defer mgr.workers.Release()
+
+	publishErr := errors.New("publish failed")
+	ts, err := mgr.AllocateAndPublishCommitTS(func(types.TS) error {
+		return publishErr
+	})
+	require.ErrorIs(t, err, publishErr)
+	require.True(t, mgr.MaxCommittedTS.Load().LT(&ts))
 }

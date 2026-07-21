@@ -94,8 +94,28 @@ func TombstoneRangeScanByObject(
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()
+	pendingActiveDrops := 0
+	stopAfterActiveDrops := false
 	for ok := it.Last(); ok; ok = it.Prev() {
+		// ObjectList is ordered by max(CreatedAt, DeletedAt). Once an entry is
+		// entirely older than start, the remaining history can only matter when
+		// an active D entry was skipped above its still-visible C counterpart.
+		if stopAfterActiveDrops && pendingActiveDrops == 0 {
+			break
+		}
 		tombstone := it.Item()
+		if tombstone.IsDEntry() && tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
+			if created := tombstone.GetPrevVersion(); created != nil && created.IsAppendable() {
+				pendingActiveDrops++
+				continue
+			}
+		}
+		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
+			tombstone.HasDCounterpart() &&
+			tombstone.GetNextVersion().DeletedAt.Equal(&txnif.UncommitTS) &&
+			pendingActiveDrops > 0 {
+			pendingActiveDrops--
+		}
 		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
 			// The dropped counterpart owns the persisted appendable tombstone data.
 			// Scanning both versions duplicates the same committed delete rows.
@@ -107,14 +127,16 @@ func TombstoneRangeScanByObject(
 				// committing create object is excluded here
 				continue
 			}
-			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
-				continue
-			}
 			if tombstone.HasDropCommitted() {
 				deleteAt := tombstone.GetDeleteAt()
-				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
+				if deleteAt.LT(&start) {
+					stopAfterActiveDrops = true
 					continue
 				}
+			} else if tombstone.CreatedAt.LT(&start) {
+				// Rows appended to this object can still commit in the range. Scan
+				// it, then stop after any active-drop C counterparts are visited.
+				stopAfterActiveDrops = true
 			}
 		} else {
 			// we only check the created version of the object.

@@ -742,11 +742,13 @@ func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt
 		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
-	createTS := baseTxn.Mgr.Now()
-	if meta, err = tbl.entry.CreateCommittedObject(createTS, opts, factory); err != nil {
+	_, err = baseTxn.Mgr.AllocateAndPublishCommitTS(func(createTS types.TS) error {
+		meta, err = tbl.entry.CreateCommittedObject(createTS, opts, factory)
+		return err
+	})
+	if err != nil {
 		return
 	}
-	baseTxn.Mgr.TryUpdateMaxCommittedTS(createTS)
 	obj = newObject(tbl, meta)
 	return
 }

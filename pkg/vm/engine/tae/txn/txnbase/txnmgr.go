@@ -210,6 +210,24 @@ func (mgr *TxnManager) TryUpdateMaxCommittedTS(ts types.TS) {
 	}
 }
 
+// AllocateAndPublishCommitTS serializes timestamp allocation with publishing
+// the state committed at that timestamp. The publisher must make the state
+// visible before returning so a later transaction timestamp cannot pass state
+// that has not been published yet.
+func (mgr *TxnManager) AllocateAndPublishCommitTS(
+	publish func(types.TS) error,
+) (ts types.TS, err error) {
+	mgr.ts.mu.Lock()
+	defer mgr.ts.mu.Unlock()
+
+	ts = mgr.ts.allocator.Alloc()
+	if err = publish(ts); err != nil {
+		return
+	}
+	mgr.TryUpdateMaxCommittedTS(ts)
+	return
+}
+
 // Now gets a timestamp under the protect from a inner lock. The lock makes
 // all timestamps allocated before have been assigned to txn, which means those
 // txn are visible for the returned timestamp.
