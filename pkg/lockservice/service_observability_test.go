@@ -442,9 +442,10 @@ func (l *getLockHolderTestTable) unlock(
 }
 
 func (l *getLockHolderTestTable) getLock(
+	_ context.Context,
 	key []byte,
 	txn pb.WaitTxn,
-	fn func(Lock)) {
+	fn func(Lock)) error {
 	panic("unexpected getLock")
 }
 
