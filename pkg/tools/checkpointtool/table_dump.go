@@ -1461,6 +1461,25 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 				result[primaryID].Schema.Partition = partition
 			}
 		}
+
+		moIndexesView, err := r.catalogTableViewFromIndex(
+			ctx, snapshotTS, catalogIDs, catalog.MO_INDEXES, accountID, moIndexesHeaders,
+		)
+		if err != nil {
+			return nil, err
+		}
+		indexRowsByTableID := groupCatalogRowsByUintColumn(moIndexesView, "table_id")
+		for primaryID := range primaries {
+			data := result[primaryID]
+			tableIndexesView := logicalViewWithRows(moIndexesView, indexRowsByTableID[primaryID])
+			data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexes(
+				tableIndexesView, primaryID, data.Schema.TableName,
+			)
+			if err != nil {
+				return nil, err
+			}
+			data.IndexesPrepared = true
+		}
 	}
 	for primaryID, partitionIDs := range partitionTableMap {
 		for _, partitionID := range partitionIDs {
@@ -1469,22 +1488,6 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 		}
 		partitionIDsByPrimary[primaryID] = append(partitionIDsByPrimary[primaryID], partitionIDs...)
 	}
-	moIndexesView, err := r.catalogTableViewFromIndex(
-		ctx, snapshotTS, catalogIDs, catalog.MO_INDEXES, 0, moIndexesHeaders,
-	)
-	if err != nil {
-		return nil, err
-	}
-	indexRowsByTableID := groupCatalogRowsByUintColumn(moIndexesView, "table_id")
-	for tableID, data := range result {
-		tableIndexesView := logicalViewWithRows(moIndexesView, indexRowsByTableID[tableID])
-		data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexes(tableIndexesView, tableID, data.Schema.TableName)
-		if err != nil {
-			return nil, err
-		}
-		data.IndexesPrepared = true
-	}
-
 	entryRefs := make([]*EntryInfo, 0, len(composed.Incrementals)+1)
 	if composed.BaseEntry != nil {
 		entryRefs = append(entryRefs, composed.BaseEntry)
@@ -4156,7 +4159,17 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 	tableName string,
 	snapshotTS types.TS,
 ) ([]string, error) {
-	moIndexesTableID, ok, err := r.findCatalogTableID(ctx, snapshotTS, catalog.MO_INDEXES)
+	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "read mo_tables: %v", err)
+	}
+	accountID := uint32(0)
+	if schema := findTableSchemaFromMoTables(moTablesView, tableID); schema != nil {
+		accountID = schema.AccountID
+	}
+	moIndexesTableID, ok, err := findCatalogTableIDInView(
+		moTablesView, catalog.MO_INDEXES, accountID,
+	)
 	if err != nil {
 		return nil, err
 	}

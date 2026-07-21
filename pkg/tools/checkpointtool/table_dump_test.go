@@ -586,6 +586,7 @@ func TestPrepareTableDumpDataForTablesMaterializesCatalogViewsOnce(t *testing.T)
 			moTablesCatalogTestRow(t, "100", "t1", "db", "10", "r", "1", ""),
 			moTablesCatalogTestRow(t, "101", "t2", "db", "10", "r", "1", ""),
 			moTablesCatalogTestRow(t, "200", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "0", ""),
+			moTablesCatalogTestRow(t, "201", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "1", ""),
 		},
 	}
 	moColumnsView := &LogicalTableView{
@@ -595,7 +596,12 @@ func TestPrepareTableDumpDataForTablesMaterializesCatalogViewsOnce(t *testing.T)
 			moColumnsTestRow(t, "101", "t2", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
 		},
 	}
-	moIndexesView := &LogicalTableView{Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...)}
+	moIndexesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...),
+		Rows: [][]string{
+			moIndexesCatalogTestRow(t, "1", "100", "idx_t1_id", "INDEX", "", "", "id", "1"),
+		},
+	}
 	calls := make(map[uint64]int)
 	reader := &CheckpointReader{
 		ctx:     context.Background(),
@@ -613,7 +619,7 @@ func TestPrepareTableDumpDataForTablesMaterializesCatalogViewsOnce(t *testing.T)
 				return moTablesView, nil
 			case moColumnsID:
 				return moColumnsView, nil
-			case 200:
+			case 201:
 				return moIndexesView, nil
 			default:
 				return nil, moerr.NewInternalErrorNoCtxf("unexpected catalog table %d", tableID)
@@ -626,9 +632,12 @@ func TestPrepareTableDumpDataForTablesMaterializesCatalogViewsOnce(t *testing.T)
 	require.Len(t, data, 2)
 	require.Equal(t, 1, calls[moTablesID])
 	require.Equal(t, 1, calls[moColumnsID])
-	require.Equal(t, 1, calls[200])
+	require.Zero(t, calls[200])
+	require.Equal(t, 1, calls[201])
 	require.True(t, data[100].IndexesPrepared)
 	require.True(t, data[101].IndexesPrepared)
+	require.Equal(t, []string{"ALTER TABLE `t1` ADD KEY `idx_t1_id`(`id`);"}, data[100].IndexDDLs)
+	require.Empty(t, data[101].IndexDDLs)
 }
 
 func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
@@ -965,6 +974,7 @@ func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
 		Rows: [][]string{
 			moTablesCatalogTestRow(t, "100", "users", "appdb", "10", "r", "1", ""),
 			moTablesCatalogTestRow(t, "200", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "0", ""),
+			moTablesCatalogTestRow(t, "201", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "1", ""),
 		},
 	}
 	moDatabaseView := &LogicalTableView{
@@ -995,8 +1005,10 @@ func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
 			return moDatabaseView, nil
 		case moColumnsID:
 			return moColumnsView, nil
-		case 200:
+		case 201:
 			return moIndexesView, nil
+		case 200:
+			return &LogicalTableView{Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...)}, nil
 		default:
 			return nil, moerr.NewInternalErrorNoCtxf("missing table %d", tableID)
 		}
@@ -1004,8 +1016,12 @@ func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
 
 	tables, err := reader.ListCatalogTables(ctx, types.BuildTS(10, 0), TableListOptions{})
 	require.NoError(t, err)
-	require.Len(t, tables, 2)
-	require.Contains(t, []string{tables[0].TableName, tables[1].TableName}, "users")
+	require.Len(t, tables, 3)
+	tableNames := make([]string, 0, len(tables))
+	for _, table := range tables {
+		tableNames = append(tableNames, table.TableName)
+	}
+	require.Contains(t, tableNames, "users")
 
 	dbs, err := reader.ListCatalogDatabases(ctx, types.BuildTS(10, 0), TableListOptions{})
 	require.NoError(t, err)
