@@ -1767,6 +1767,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 func restoreIntervalSyntaxForCTAS(sql string) string {
 	var out strings.Builder
 	for i := 0; i < len(sql); {
+		if sql[i] == '`' {
+			next := skipBacktickIdentifierForCTAS(sql, i)
+			out.WriteString(sql[i:next])
+			i = next
+			continue
+		}
 		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
 			out.WriteByte(sql[i])
 			i++
@@ -1799,6 +1805,10 @@ func parseIntervalCall(sql string, start int) (expr string, unit string, next in
 
 	for pos < len(sql) {
 		ch := sql[pos]
+		if ch == '`' && !inSingleQuote && !inDoubleQuote {
+			pos = skipBacktickIdentifierForCTAS(sql, pos)
+			continue
+		}
 		switch ch {
 		case '\'':
 			if !inDoubleQuote {
@@ -1830,6 +1840,20 @@ func parseIntervalCall(sql string, start int) (expr string, unit string, next in
 		pos++
 	}
 	return "", "", 0, false
+}
+
+func skipBacktickIdentifierForCTAS(sql string, start int) int {
+	for pos := start + 1; pos < len(sql); pos++ {
+		if sql[pos] != '`' {
+			continue
+		}
+		if pos+1 < len(sql) && sql[pos+1] == '`' {
+			pos++
+			continue
+		}
+		return pos + 1
+	}
+	return len(sql)
 }
 
 func isIntervalUnitToken(unit string) bool {

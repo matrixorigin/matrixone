@@ -667,13 +667,43 @@ func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 }
 
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
-	got := restoreIntervalSyntaxForCTAS(
-		"select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",
-	)
-	require.Contains(t, got, "interval 45 day")
-	require.Contains(t, got, "interval 5 day")
-	require.NotContains(t, got, "interval(45, day)")
-	require.NotContains(t, got, "interval(5, day)")
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "interval expressions",
+			sql:  "select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",
+			want: "select date_add(col2, interval 45 day), date_sub(col2, interval 5 day) from time01",
+		},
+		{
+			name: "interval text in identifier",
+			sql:  "select `interval(x,day)` from src as `interval(y,month)`",
+			want: "select `interval(x,day)` from src as `interval(y,month)`",
+		},
+		{
+			name: "doubled backtick in identifier",
+			sql:  "select `a``interval(x,day)` from src",
+			want: "select `a``interval(x,day)` from src",
+		},
+		{
+			name: "unclosed backtick",
+			sql:  "select `interval(x,day)",
+			want: "select `interval(x,day)",
+		},
+		{
+			name: "quoted interval operand",
+			sql:  "select date_add(col2, interval(`a,b)`, day)) from src",
+			want: "select date_add(col2, interval `a,b)` day) from src",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, restoreIntervalSyntaxForCTAS(test.sql))
+		})
+	}
 }
 
 func TestParseDuration(t *testing.T) {

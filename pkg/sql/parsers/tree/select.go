@@ -827,7 +827,7 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 			if i > 0 {
 				ctx.WriteString(", ")
 			}
-			ctx.WriteString(value)
+			ctx.WriteIdentifier(Identifier(value))
 		}
 	}
 	ctx.WriteString(")")
