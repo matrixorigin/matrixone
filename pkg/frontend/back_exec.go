@@ -519,11 +519,13 @@ func doComQueryInBack(
 }
 
 func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *UserInput, proc *process.Process) {
-	mode := sessionSQLMode(backSes)
+	nativeMode := backSes.currentMatrixOneNativeMode()
 	if input != nil && input.useParserSQLMode {
-		mode = input.parserSQLMode
+		nativeMode = mysql.HasMatrixOneNativeSQLMode(input.parserSQLMode)
 	}
-	refreshStatementScopedSessionInfoWithSQLMode(mode, proc)
+	backSes.effectiveMatrixOneNativeMode = nativeMode
+	backSes.hasEffectiveMatrixOneNativeMode = true
+	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
 }
 
 func executeStmtInBack(backSes *backSession,
@@ -905,6 +907,9 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
+	parentBackSession               *backSession
+	effectiveMatrixOneNativeMode    bool
+	hasEffectiveMatrixOneNativeMode bool
 	//ep *ExportConfig
 }
 
@@ -942,7 +947,27 @@ func (backSes *backSession) initFeSes(
 	backSes.timeZone = time.Local
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
+	if parent, ok := ses.(*backSession); ok {
+		backSes.parentBackSession = parent
+	}
 	return backSes
+}
+
+func (backSes *backSession) currentMatrixOneNativeMode() bool {
+	if backSes.parentBackSession != nil {
+		parent := backSes.parentBackSession
+		if parent.hasEffectiveMatrixOneNativeMode {
+			return parent.effectiveMatrixOneNativeMode
+		}
+		return parent.currentMatrixOneNativeMode()
+	}
+	if backSes.upstream != nil {
+		return backSes.upstream.sqlModeHasMatrixOneNative()
+	}
+	if backSes.hasEffectiveMatrixOneNativeMode {
+		return backSes.effectiveMatrixOneNativeMode
+	}
+	return false
 }
 
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
@@ -1206,10 +1231,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		}
 		return int64(1), nil
 	case "sql_mode":
-		if backSes.upstream == nil {
-			return "", nil
-		}
-		return backSes.upstream.GetSessionSysVar(name)
+		return "", nil
 	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}

@@ -1750,7 +1750,7 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
 
-	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
 }
@@ -1765,7 +1765,11 @@ func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
 	backSes.upstream = ses
 	proc := &process.Process{Base: &process.BaseProcess{}}
 
-	refreshStatementScopedSessionInfo(backSes, proc)
+	mode, err := backSes.GetSessionSysVar("sql_mode")
+	require.NoError(t, err)
+	require.Equal(t, "", mode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
 }
 
@@ -1790,6 +1794,65 @@ func TestBackgroundExplicitSQLModeOverridesUpstream(t *testing.T) {
 		parserSQLMode:    "ANSI_QUOTES,MATRIXONE_NATIVE",
 	}, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+
+	tests := []struct {
+		name         string
+		sessionMode  string
+		explicitMode *string
+		wantNative   bool
+	}{
+		{name: "upstream_native", sessionMode: "MATRIXONE_NATIVE", wantNative: true},
+		{name: "explicit_native", sessionMode: "", explicitMode: ptrTo("MATRIXONE_NATIVE"), wantNative: true},
+		{name: "explicit_default", sessionMode: "MATRIXONE_NATIVE", explicitMode: ptrTo(""), wantNative: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.sessionMode))
+
+			parent := (&backSession{}).initFeSes(ses, nil, "", nil)
+			parent.upstream = ses
+			defer parent.Close()
+
+			input := &UserInput{}
+			if tc.explicitMode != nil {
+				input.useParserSQLMode = true
+				input.parserSQLMode = *tc.explicitMode
+			}
+			parentProc := &process.Process{Base: &process.BaseProcess{}}
+			refreshBackgroundStatementScopedSessionInfo(parent, input, parentProc)
+			require.Equal(t, tc.wantNative, parentProc.Base.SessionInfo.MatrixOneNativeMode)
+
+			child := (&backSession{}).initFeSes(parent, nil, "", nil)
+			defer child.Close()
+			childProc := &process.Process{Base: &process.BaseProcess{}}
+			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
+			require.Equal(t, tc.wantNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+
+			nextMode := "MATRIXONE_NATIVE"
+			nextNative := true
+			if tc.wantNative {
+				nextMode = ""
+				nextNative = false
+			}
+			refreshBackgroundStatementScopedSessionInfo(parent, &UserInput{
+				useParserSQLMode: true,
+				parserSQLMode:    nextMode,
+			}, parentProc)
+			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
+			require.Equal(t, nextNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+		})
+	}
 }
 
 func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
