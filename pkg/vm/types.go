@@ -106,6 +106,9 @@ const (
 	PostDml
 	IcebergWrite
 	TableClone
+	// OpTypeEnd is the exclusive upper bound for executable operator types.
+	// New operator types must be added before it.
+	OpTypeEnd
 )
 
 var OperatorToStrMap map[OpType]string
