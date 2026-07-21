@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -513,6 +514,171 @@ func TestPublishEventDoesNotWaitForSlowSessionQueue(t *testing.T) {
 	server.pendingSessionErrors.Unlock()
 	require.True(t, cleanupRetained,
 		"non-blocking notification must retain cleanup responsibility")
+}
+
+func TestCompleteSubscriptionDoesNotWaitForFullSessionQueue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	transport := newCaptureSession()
+	responses := NewLogtailResponsePool()
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	session := &Session{
+		sessionCtx:       ctx,
+		cancelFunc:       cancel,
+		logger:           mockMOLogger(),
+		sendTimeout:      time.Hour,
+		responses:        responses,
+		notifier:         &recordingSessionNotifier{notified: make(chan error, 1)},
+		stream:           mockMorpcStream(transport, 1, 1024),
+		poisonTime:       time.Hour,
+		sendChan:         make(chan message, 1),
+		tables:           map[TableID]tableSubscription{id: {state: TableOnSubscription, generation: 1}},
+		progressInterval: time.Hour,
+		progressTimer:    time.NewTimer(time.Hour),
+	}
+	t.Cleanup(session.PostClean)
+
+	// Keep the queue full without a sender goroutine. The completion path must
+	// reject this session synchronously instead of waiting for poisonTime.
+	session.sendChan <- message{response: responses.Acquire()}
+	var released atomic.Int32
+	type result struct {
+		completed bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		completed, err := session.CompleteSubscription(
+			context.Background(), id, 1,
+			mockLogtail(table, timestamp.Timestamp{PhysicalTime: 1}),
+			func() { released.Add(1) },
+		)
+		done <- result{completed: completed, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		require.True(t, result.completed)
+		require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrStreamClosed))
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("subscription completion waited for a congested session queue")
+	}
+	require.Equal(t, int32(1), released.Load())
+	require.Zero(t, session.Active())
+	require.Equal(t, TableNotFound, session.Unregister(id),
+		"failed response hand-off must roll back the subscription generation")
+	require.ErrorIs(t, transport.ctx.Err(), context.Canceled,
+		"a congested session must be closed so it can rebuild from a snapshot")
+}
+
+func TestCongestedSubscriptionDoesNotBlockHealthyIncrementalProgress(t *testing.T) {
+	phaseTwoEntered := make(chan struct{})
+	var phaseTwoOnce sync.Once
+	var subscriptionReleased atomic.Int32
+	logtailer := &controlledLogtailer{
+		tableFn: func(
+			_ context.Context, table api.TableID, _, to timestamp.Timestamp,
+		) (logtail.TableLogtail, func(), error) {
+			phaseTwoOnce.Do(func() { close(phaseTwoEntered) })
+			return mockLogtail(table, to), func() { subscriptionReleased.Add(1) }, nil
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	responses := server.pool.responses
+
+	newSession := func(
+		streamID uint64, table api.TableID, state TableState, active int32,
+	) (*Session, *captureSession) {
+		ctx, cancel := context.WithCancel(server.rootCtx)
+		transport := newCaptureSession()
+		id := MarshalTableID(&table)
+		return &Session{
+			sessionCtx:       ctx,
+			cancelFunc:       cancel,
+			logger:           server.logger,
+			sendTimeout:      time.Hour,
+			responses:        responses,
+			notifier:         server,
+			stream:           mockMorpcStream(transport, streamID, 1024),
+			poisonTime:       time.Hour,
+			sendChan:         make(chan message, 1),
+			active:           active,
+			tables:           map[TableID]tableSubscription{id: {state: state, generation: 1}},
+			progressInterval: time.Hour,
+			progressTimer:    time.NewTimer(time.Hour),
+		}, transport
+	}
+
+	slowTable := mockTable(1, 1, 1)
+	slow, slowTransport := newSession(1, slowTable, TableOnSubscription, 0)
+	// No sender consumes this placeholder, so subscription completion observes
+	// a deterministically full queue.
+	slow.sendChan <- message{response: responses.Acquire()}
+	healthyTable := mockTable(1, 2, 1)
+	healthy, _ := newSession(2, healthyTable, TableSubscribed, 1)
+	server.ssmgr.Lock()
+	server.ssmgr.clients[slow.stream] = slow
+	server.ssmgr.clients[healthy.stream] = healthy
+	server.ssmgr.Unlock()
+
+	slowID := MarshalTableID(&slowTable)
+	server.subTailChan <- &LogtailPhase{
+		tail: mockLogtail(slowTable, timestamp.Timestamp{PhysicalTime: 1}),
+		closeCB: func() {
+			subscriptionReleased.Add(1)
+		},
+		sub: subscription{
+			timeout:    time.Hour,
+			tableID:    slowID,
+			generation: 1,
+			req:        &logtail.SubscribeRequest{Table: &slowTable},
+			session:    slow,
+		},
+	}
+
+	select {
+	case <-phaseTwoEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("global sender did not enter subscription phase two")
+	}
+
+	var incrementalReleased atomic.Int32
+	released := make(chan struct{})
+	require.NoError(t, logtailer.notify(
+		timestamp.Timestamp{PhysicalTime: 1},
+		timestamp.Timestamp{PhysicalTime: 2},
+		func() {
+			if incrementalReleased.Add(1) == 1 {
+				close(released)
+			}
+		},
+		mockLogtail(healthyTable, timestamp.Timestamp{PhysicalTime: 2}),
+	))
+
+	select {
+	case msg := <-healthy.sendChan:
+		update := msg.response.GetUpdateResponse()
+		require.NotNil(t, update)
+		require.Len(t, update.LogtailList, 1)
+		responses.Release(msg.response)
+	case <-time.After(10 * time.Second):
+		slow.cancelFunc()
+		t.Fatal("congested subscription blocked healthy incremental progress")
+	}
+	select {
+	case <-released:
+	case <-time.After(10 * time.Second):
+		t.Fatal("healthy incremental response ownership was not released")
+	}
+
+	require.Equal(t, int32(2), subscriptionReleased.Load(),
+		"both subscription phases must be released exactly once")
+	require.Equal(t, int32(1), incrementalReleased.Load())
+	require.Zero(t, slow.Active())
+	require.Equal(t, TableNotFound, slow.Unregister(slowID))
+	require.ErrorIs(t, slowTransport.ctx.Err(), context.Canceled)
 }
 
 func TestServerRejectsSessionAdmissionAfterShutdownStarts(t *testing.T) {

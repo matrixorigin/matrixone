@@ -756,7 +756,10 @@ func (ss *Session) SendErrorResponse(
 	return ss.SendResponse(sendCtx, resp)
 }
 
-// SendSubscriptionResponse sends subscription response.
+// SendSubscriptionResponse sends a subscription response without waiting for
+// queue capacity. Subscription completion runs on the single global logtail
+// sender, so a congested session must reconnect and rebuild from a snapshot
+// rather than delay subscription or incremental progress for every session.
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail, closeCB func(),
 ) error {
@@ -765,7 +768,7 @@ func (ss *Session) SendSubscriptionResponse(
 	resp := ss.responses.Acquire()
 	resp.closeCB = closeCB
 	resp.Response = newSubscritpionResponse(tail)
-	err := ss.SendResponse(sendCtx, resp)
+	err := ss.sendResponse(sendCtx, resp, false)
 	if err == nil {
 		atomic.AddInt32(&ss.active, 1)
 	}
