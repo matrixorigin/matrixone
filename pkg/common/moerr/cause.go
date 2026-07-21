@@ -76,6 +76,14 @@ var (
 	CauseNewAwsSDKv2     = NewInternalError(context.Background(), "fileservice newAwsSDKv2")
 	CauseReadCache       = NewInternalError(context.Background(), "fileservice read cache")
 	CauseRemoteCacheRead = NewInternalError(context.Background(), "fileservice remote cache read")
+	//pkg/iceberg
+	CauseIcebergConfig     = NewInternalError(context.Background(), "iceberg config")
+	CauseIcebergCatalog    = NewInternalError(context.Background(), "iceberg catalog")
+	CauseIcebergMetadata   = NewInternalError(context.Background(), "iceberg metadata")
+	CauseIcebergPlanning   = NewInternalError(context.Background(), "iceberg planning")
+	CauseIcebergCredential = NewInternalError(context.Background(), "iceberg credential")
+	CauseIcebergResidency  = NewInternalError(context.Background(), "iceberg residency")
+	CauseIcebergInternal   = NewInternalError(context.Background(), "iceberg internal")
 	//pkg/vm/engine/disttae
 	CauseWorkspaceRSSCacheEvict = NewInternalError(context.Background(), "workspace rss cache evict")
 	//pkg/frontend
