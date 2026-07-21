@@ -659,7 +659,7 @@ func walRecoverySkipReferences(
 	if entry.skip != nil {
 		return entry.skip.references, nil
 	}
-	if entry.RawData == nil || len(entry.RawData) < logEntryHeaderSize {
+	if len(entry.RawData) < logEntryHeaderSize {
 		return nil, nil
 	}
 	if binary.LittleEndian.Uint16(entry.RawData[logEntryCommandOffset:]) != logEntryCommandSkipDSN {
