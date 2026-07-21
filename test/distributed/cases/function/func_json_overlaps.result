@@ -22,6 +22,28 @@ select json_overlaps('1', '1.0');
 select json_overlaps('1', '1.000000009');
 ➤ json_overlaps(1, 1.000000009)[-5,64,0]  𝄀
 0
+select json_overlaps('[1e100]', '1e100');
+➤ json_overlaps([1e100], 1e100)[-5,64,0]  𝄀
+1
+select json_overlaps('[1e100]', '10e99');
+➤ json_overlaps([1e100], 10e99)[-5,64,0]  𝄀
+1
+select json_overlaps('[1e100]', '1e101');
+➤ json_overlaps([1e100], 1e101)[-5,64,0]  𝄀
+0
+select json_overlaps('[1e100]', '"1e100"');
+➤ json_overlaps([1e100], "1e100")[-5,64,0]  𝄀
+0
+select json_overlaps('1e100', '[1e100]');
+➤ json_overlaps(1e100, [1e100])[-5,64,0]  𝄀
+1
+select json_overlaps('1e100', '[1e101]');
+➤ json_overlaps(1e100, [1e101])[-5,64,0]  𝄀
+0
+select json_overlaps('{}x', '{}');
+invalid argument json_overlaps, bad value invalid JSON document
+select json_overlaps('{}', '[]x');
+invalid argument json_overlaps, bad value invalid JSON document
 select json_overlaps(null, 'null');
 ➤ json_overlaps(null, null)[-5,64,0]  𝄀
 null

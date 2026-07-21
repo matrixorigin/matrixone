@@ -688,7 +688,7 @@ func jsonOverlapCanFastAlign(left, right bytejson.ByteJson, leftDecimal, rightDe
 	} else if right.Type == bytejson.TpCodeUint64 {
 		rightValue = jsonOverlapDecimalFromUint64(right.GetUint64())
 	}
-	if leftValue.value.Sign() == false && rightValue.value.Sign() == false &&
+	if !leftValue.value.Sign() && !rightValue.value.Sign() &&
 		leftValue.value == (types.Decimal256{}) && rightValue.value == (types.Decimal256{}) {
 		return true
 	}

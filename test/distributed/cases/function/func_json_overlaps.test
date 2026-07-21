@@ -7,6 +7,17 @@ select json_overlaps('[4,5,6,7]', '6');
 select json_overlaps('[4,5,"6",7]', '6');
 select json_overlaps('1', '1.0');
 select json_overlaps('1', '1.000000009');
+-- Scientific notation equality, inequality, and JSON string distinction.
+select json_overlaps('[1e100]', '1e100');
+select json_overlaps('[1e100]', '10e99');
+select json_overlaps('[1e100]', '1e101');
+select json_overlaps('[1e100]', '"1e100"');
+-- A top-level scalar is compared with the elements of an array.
+select json_overlaps('1e100', '[1e100]');
+select json_overlaps('1e100', '[1e101]');
+-- A completed root followed by a malformed suffix must report invalid JSON.
+select json_overlaps('{}x', '{}');
+select json_overlaps('{}', '[]x');
 select json_overlaps(null, 'null');
 select json_overlaps('null', 'null');
 select json_overlaps(cast('[1,{"a":2}]' as json), '{"a":2}');
