@@ -177,7 +177,11 @@ func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 					panic(fmt.Sprintf("invalid txn status %s", klog.Txn.Status.String()))
 				}
 
-				c <- klog.Txn
+				select {
+				case <-ctx.Done():
+					return
+				case c <- klog.Txn:
+				}
 			}
 		}
 
