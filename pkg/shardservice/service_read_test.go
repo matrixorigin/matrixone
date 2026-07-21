@@ -20,12 +20,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateRemoteReadCompatibility(t *testing.T) {
+	cns, _ := initTestCluster("target")
+	cluster := clusterservice.GetMOCluster(sid)
+	s := &service{}
+	s.remote.cluster = cluster
+	target := shard.TableShard{Replicas: []shard.ShardReplica{{CN: "target"}}}
+	binaryParam := shard.ReadParam{Process: pipeline.ProcessInfo{
+		PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{false, true}},
+	}}
+
+	cns[0].CommitID = version.CommitID
+	cluster.UpdateCN(cns[0])
+	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
+
+	cns[0].CommitID = "older-commit"
+	cluster.UpdateCN(cns[0])
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
+
+	textParam := binaryParam
+	textParam.Process.PrepareParams.IsBin = []bool{false, false}
+	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, textParam))
+
+	unknown := target
+	unknown.Replicas[0].CN = "unknown"
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
+}
 
 func TestRead(t *testing.T) {
 	runServicesTest(
