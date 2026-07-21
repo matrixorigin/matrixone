@@ -4215,39 +4215,6 @@ func (r *CheckpointReader) readPartitionTableIDs(
 	return buildPartitionTableIDMap(view, primarySet)[primaryTableID], nil
 }
 
-func (r *CheckpointReader) readPartitionTableIDsForPrimaries(
-	ctx context.Context,
-	snapshotTS types.TS,
-	primaryTableIDs map[uint64]struct{},
-	accountByPrimary map[uint64]uint32,
-) (map[uint64][]uint64, error) {
-	if len(primaryTableIDs) == 0 {
-		return nil, nil
-	}
-	result := make(map[uint64][]uint64)
-	primaryByAccount := make(map[uint32]map[uint64]struct{})
-	for primaryID := range primaryTableIDs {
-		accountID := accountByPrimary[primaryID]
-		if primaryByAccount[accountID] == nil {
-			primaryByAccount[accountID] = make(map[uint64]struct{})
-		}
-		primaryByAccount[accountID][primaryID] = struct{}{}
-	}
-	for accountID, primaries := range primaryByAccount {
-		view, err := r.getPartitionTablesView(ctx, snapshotTS, accountID)
-		if err != nil {
-			return nil, err
-		}
-		if view == nil {
-			continue
-		}
-		for primaryID, partitionIDs := range buildPartitionTableIDMap(view, primaries) {
-			result[primaryID] = append(result[primaryID], partitionIDs...)
-		}
-	}
-	return result, nil
-}
-
 func (r *CheckpointReader) readPartitionClause(
 	ctx context.Context,
 	tableID uint64,
