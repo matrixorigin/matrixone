@@ -1111,6 +1111,11 @@ drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
 select * from alias02;
+drop table if exists ctas_non_ascii_alias;
+create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
+desc ctas_non_ascii_alias;
+select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
+drop table ctas_non_ascii_alias;
 drop table alias01;
 -- @session
 drop database test;

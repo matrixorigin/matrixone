@@ -494,7 +494,7 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
-		ctx.WriteString(node.As.Origin())
+		ctx.WriteIdentifier(Identifier(node.As.Origin()))
 	}
 }
 

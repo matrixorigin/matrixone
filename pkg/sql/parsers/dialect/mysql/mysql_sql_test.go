@@ -530,6 +530,16 @@ func TestQuoteIdentifer(t *testing.T) {
 	}
 }
 
+func TestQuoteSelectAlias(t *testing.T) {
+	ast, err := ParseOne(context.TODO(), "select col as `中文别名` from tbl", 1)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"select `col` as `中文别名` from `tbl`",
+		tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
+	)
+}
+
 var (
 	pitrSQLs = []struct {
 		input  string
