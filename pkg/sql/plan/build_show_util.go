@@ -469,7 +469,7 @@ func ConstructCreateTableSQL(
 		if chk.OriginSql == "" {
 			continue
 		}
-		if strings.HasPrefix(chk.Name, "__mo_chk_") {
+		if chk.IsGeneratedName {
 			// Anonymous constraint: MO auto-generated the name, so omit it.
 			createStr += ",\n  CHECK (" + chk.OriginSql + ")"
 		} else {

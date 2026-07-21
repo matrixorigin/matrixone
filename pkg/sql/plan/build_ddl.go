@@ -1819,6 +1819,7 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	}
 
 	// Assign or validate the constraint name
+	isGeneratedName := name == ""
 	if name == "" {
 		// Anonymous constraint: generate __mo_chk_N, skipping already-occupied names
 		for i := len(tableDef.Checks) + 1; ; i++ {
@@ -1833,9 +1834,10 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	}
 
 	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
-		Name:      name,
-		Check:     checkExpr,
-		OriginSql: originSql,
+		Name:            name,
+		Check:           checkExpr,
+		OriginSql:       originSql,
+		IsGeneratedName: isGeneratedName,
 	})
 	return nil
 }
@@ -1890,23 +1892,29 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	}
 
 	type recoveredCheck struct {
-		name string
-		expr tree.Expr
+		name           string
+		expr           tree.Expr
+		enforced       bool
+		enforcementSet bool
 	}
 	var checks []recoveredCheck
 	for _, def := range ct.Defs {
 		switch d := def.(type) {
 		case *tree.CheckIndex:
 			checks = append(checks, recoveredCheck{
-				name: d.ConstraintSymbol,
-				expr: d.Expr,
+				name:           d.ConstraintSymbol,
+				expr:           d.Expr,
+				enforced:       d.Enforced,
+				enforcementSet: d.EnforcementSet,
 			})
 		case *tree.ColumnTableDef:
 			for _, attr := range d.Attributes {
 				if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
 					checks = append(checks, recoveredCheck{
-						name: ca.Name,
-						expr: ca.Expr,
+						name:           ca.Name,
+						expr:           ca.Expr,
+						enforced:       ca.Enforced,
+						enforcementSet: ca.EnforcementSet,
 					})
 				}
 			}
@@ -1921,10 +1929,11 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	// binding, naming and OriginSql formatting used by CREATE TABLE.
 	scratch := &TableDef{Name: tableDef.Name, Cols: tableDef.Cols}
 	for _, c := range checks {
-		// Legacy column CHECK formatting serialized an omitted enforcement clause
-		// as NOT ENFORCED, while legacy table CHECK formatting omitted it. Since
-		// Createsql cannot distinguish that artifact from an explicit clause, the
-		// migration policy consistently recovers every legacy CHECK as enforced.
+		// Ordinary tables persist the original CREATE statement, so an explicit
+		// NOT ENFORCED clause remains distinguishable during legacy recovery.
+		if c.enforcementSet && !c.enforced {
+			continue
+		}
 		if err := appendCheckDef(ctx, scratch, c.name, c.expr); err != nil {
 			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
 			return

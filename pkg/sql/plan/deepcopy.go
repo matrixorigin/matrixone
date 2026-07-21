@@ -512,9 +512,10 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 
 	for idx, col := range table.Checks {
 		newTable.Checks[idx] = &plan.CheckDef{
-			Name:      col.Name,
-			Check:     DeepCopyExpr(col.Check),
-			OriginSql: col.OriginSql,
+			Name:            col.Name,
+			Check:           DeepCopyExpr(col.Check),
+			OriginSql:       col.OriginSql,
+			IsGeneratedName: col.IsGeneratedName,
 		}
 	}
 

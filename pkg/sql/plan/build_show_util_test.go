@@ -281,6 +281,8 @@ func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build create table failed: %+v", err)
 	}
+	require.Len(t, tableDef.Checks, 1)
+	require.True(t, tableDef.Checks[0].IsGeneratedName)
 
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	if err != nil {
@@ -292,6 +294,26 @@ func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
 	if strings.Contains(showSQL, "__mo_chk_") {
 		t.Fatalf("anonymous check must not leak its internal __mo_chk_ name: %s", showSQL)
 	}
+}
+
+func TestShowCreateTablePreservesExplicitInternalPrefixCheckName(t *testing.T) {
+	const sql = `CREATE TABLE t_named_chk (
+		a INT,
+		CONSTRAINT __mo_chk_1 CHECK (a > 0)
+	)`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 1)
+	require.False(t, tableDef.Checks[0].IsGeneratedName)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "CONSTRAINT `__mo_chk_1` CHECK (`a` > 0)")
+	stmt, err := mysql.ParseOne(context.Background(), showSQL, 1)
+	require.NoError(t, err, "SHOW CREATE output must preserve the explicit name: %s", showSQL)
+	stmt.Free()
 }
 
 // Test_ShowCreateTableChecksSurviveDeepCopy guards the regression where
@@ -329,6 +351,20 @@ func Test_ShowCreateTableChecksSurviveDeepCopy(t *testing.T) {
 	if !strings.Contains(showSQL, "CONSTRAINT `chk_v` CHECK (`v` > 0)") {
 		t.Fatalf("check constraint must survive deep copy into show create output: %s", showSQL)
 	}
+}
+
+func TestDeepCopyTableDefPreservesGeneratedCheckNameMarker(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Checks: []*plan.CheckDef{{
+			Name:            "__mo_chk_1",
+			OriginSql:       "`a` > 0",
+			IsGeneratedName: true,
+		}},
+	}
+
+	copied := DeepCopyTableDef(tableDef, false)
+	require.Len(t, copied.Checks, 1)
+	require.True(t, copied.Checks[0].IsGeneratedName)
 }
 
 func TestShowCreateTableQuotesCheckIdentifiersForRoundTrip(t *testing.T) {
