@@ -6738,15 +6738,17 @@ var supportedArrayOperations = []FuncNew{
 				newOp:      func() executeLogicOfOverload { return NormalizeL2Array[types.Float16] },
 			},
 			{
+				// int8/uint8 normalize to a unit vector, which cannot be represented
+				// in an integer type — the result widens to vecf32 (same dimension).
 				overloadId: 5,
 				args:       []types.T{types.T_array_int8},
-				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				retType:    func(parameters []types.Type) types.Type { return types.New(types.T_array_float32, parameters[0].Width, parameters[0].Scale) },
 				newOp:      func() executeLogicOfOverload { return NormalizeL2Array[int8] },
 			},
 			{
 				overloadId: 6,
 				args:       []types.T{types.T_array_uint8},
-				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				retType:    func(parameters []types.Type) types.Type { return types.New(types.T_array_float32, parameters[0].Width, parameters[0].Scale) },
 				newOp:      func() executeLogicOfOverload { return NormalizeL2Array[uint8] },
 			},
 		},

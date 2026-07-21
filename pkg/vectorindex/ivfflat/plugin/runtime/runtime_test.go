@@ -161,3 +161,33 @@ func TestIvfflatParamsFromTree_InvalidQuantization(t *testing.T) {
 		require.Contains(t, err.Error(), "unsupported quantization")
 	}
 }
+
+// TestIvfflatValidQuantization exercises the (quant, op) catalog hook. The affine
+// int8/uint8 scalar quantizer only preserves L2 geometry, so those quantizations
+// are gated to op_type 'vector_l2_ops'; the lossless-ordering f32/f16/bf16 casts
+// keep every op type.
+func TestIvfflatValidQuantization(t *testing.T) {
+	h := CatalogHooks{}
+	// empty quantization is always allowed
+	require.NoError(t, h.ValidQuantization("", metric.OpType_InnerProduct))
+
+	// f32/f16/bf16 keep every op type
+	for _, q := range []string{"float32", "float16", "bf16"} {
+		for _, op := range []string{metric.OpType_L2Distance, metric.OpType_InnerProduct, metric.OpType_CosineDistance} {
+			require.NoErrorf(t, h.ValidQuantization(q, op), "quant=%s op=%s", q, op)
+		}
+	}
+
+	// int8/uint8 are valid only with L2 (case-insensitive); IP/cosine rejected
+	for _, q := range []string{"int8", "uint8", "INT8", "UInt8"} {
+		require.NoErrorf(t, h.ValidQuantization(q, metric.OpType_L2Distance), "quant=%s L2", q)
+		err := h.ValidQuantization(q, metric.OpType_InnerProduct)
+		require.Errorf(t, err, "quant=%s IP must be rejected", q)
+		require.Contains(t, err.Error(), "only supported with L2")
+		require.Errorf(t, h.ValidQuantization(q, metric.OpType_CosineDistance), "quant=%s cosine must be rejected", q)
+	}
+
+	// unknown quantization is rejected regardless of op
+	require.Error(t, h.ValidQuantization("float64", metric.OpType_L2Distance))
+	require.Error(t, h.ValidQuantization("garbage", metric.OpType_L2Distance))
+}

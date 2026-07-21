@@ -807,6 +807,56 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 		pk.Free(mp)
 	})
 
+	// Narrow vector element types must be handled (not hit the default panic).
+	// These columns are rejected as primary keys at DDL admission, but checkPKDup
+	// still handles them defensively so it degrades to normal dedup, never panics.
+	t.Run("array_int8_dup_and_nulls", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_int8.ToType())
+		require.NoError(t, vector.AppendArray(pk, []int8{1, 2, 3}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []int8{0}, true, mp)) // NULL
+		require.NoError(t, vector.AppendArray(pk, []int8{1, 2, 3}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 3)
+		require.True(t, dup, "duplicate int8 array must be caught, NULL skipped")
+		pk.Free(mp)
+	})
+
+	t.Run("array_uint8_distinct", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_uint8.ToType())
+		require.NoError(t, vector.AppendArray(pk, []uint8{0, 1, 2, 3}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []uint8{255, 254, 0, 128}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.False(t, dup, "distinct uint8 arrays must not report duplicate")
+		require.Len(t, m, 2)
+		pk.Free(mp)
+	})
+
+	t.Run("array_bf16_dup", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_bf16.ToType())
+		require.NoError(t, vector.AppendArray(pk, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(2.5)}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(2.5)}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.True(t, dup, "duplicate bf16 array must be caught")
+		pk.Free(mp)
+	})
+
+	t.Run("array_float16_distinct", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_float16.ToType())
+		require.NoError(t, vector.AppendArray(pk, []types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []types.Float16{types.Float16FromFloat32(3), types.Float16FromFloat32(4)}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.False(t, dup, "distinct f16 arrays must not report duplicate")
+		require.Len(t, m, 2)
+		pk.Free(mp)
+	})
+
 	t.Run("bool_nulls", func(t *testing.T) {
 		pk := vector.NewVec(types.T_bool.ToType())
 		require.NoError(t, vector.AppendFixed(pk, true, false, mp))

@@ -435,12 +435,30 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			resid = append(resid, pk)
 
 			dist := vector.GetFixedAtNoTypeCheck[float64](distVec, i)
-			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
+			dist = idx.scoreFromQuantized(dist, rt.OrigFuncName, metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}
 	}
 
 	return resid, distances, nil
+}
+
+// scoreFromQuantized converts a raw distance the SQL entries query measured in
+// the QUANTIZED domain back to the source scale, then applies the index's
+// squared-L2 -> L2 conversion (DistanceTransformIvfflat).
+//
+// For int8/uint8 QUANTIZATION the entries and query are both mapped by the same
+// affine transform q(x)=mul*x+add, so the squared L2 in the quantized domain is
+// mul^2 times the source squared L2 (||q(a)-q(b)||^2 = mul^2*||a-b||^2 — the add
+// offset cancels). We divide it out here, in the index's squared-L2 metric space
+// and BEFORE the squared->L2 conversion, so returned distances (and range
+// predicates expressed in source units) read on the source scale. QuantMul==1
+// for f32/f64/bf16/f16 (identity quantizer), so this is a no-op there.
+func (idx *IvfflatSearchIndex[T]) scoreFromQuantized(raw float64, origFuncName string, metricType metric.MetricType) float64 {
+	if idx.QuantMul != 0 && idx.QuantMul != 1 {
+		raw /= idx.QuantMul * idx.QuantMul
+	}
+	return metric.DistanceTransformIvfflat(raw, metric.DistFuncNameToMetricType[origFuncName], metricType)
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {

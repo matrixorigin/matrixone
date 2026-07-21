@@ -295,9 +295,13 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 		case types.T_array_float16:
 			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
 		case types.T_array_int8:
-			_ = appendNormalizedNarrowArray[int8](rs, data)
+			// A normalized vector is a unit vector, which cannot be represented in
+			// an integer element type (components round to 0/±1 and the norm is no
+			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
+			// The overload's retType is T_array_float32 to match (see list_builtIn).
+			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
 		case types.T_array_uint8:
-			_ = appendNormalizedNarrowArray[uint8](rs, data)
+			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
 		}
 
 	}
@@ -305,15 +309,28 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 	return nil
 }
 
-// appendNormalizedNarrowArray normalizes a narrow-typed vector (bf16/f16/int8)
-// by upcasting to float32, normalizing in float32, then narrowing back to T.
-// int8 normalization is mostly degenerate (unit vectors round to 0/±1) but is
-// supported for completeness.
+// appendNormalizedNarrowArray normalizes a bf16/f16 vector by upcasting to
+// float32, normalizing in float32, then narrowing back to T. bf16/f16 are
+// floating-point so they can hold a (near-)unit vector; int8/uint8 cannot and
+// use appendNormalizedIntArrayAsFloat32 instead.
 func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
 	_ = moarray.NormalizeL2(in, out)
 	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
+}
+
+// appendNormalizedIntArrayAsFloat32 normalizes an integer-typed (int8/uint8)
+// vector and writes the result as float32. A unit vector cannot be represented
+// in an integer element type — narrowing back would round components to 0/±1 so
+// the norm is no longer 1 (e.g. normalize_l2([0,1,2,3]::vecuint8) would become
+// [0,0,1,1], whose norm is √2). Widening the result to vecf32 keeps the unit-norm
+// contract; the int8/uint8 overloads declare retType T_array_float32 to match.
+func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

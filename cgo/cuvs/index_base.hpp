@@ -1118,15 +1118,53 @@ public:
 
         auto res = handle.get_raft_resources();
 
-        // --- GPU work: train quantizer on ALL pending B-source data — NO LOCK ---
-        std::vector<B> all_floats;
-        all_floats.reserve(total * dimension);
-        for (auto& c : chunks) {
-            all_floats.insert(all_floats.end(), c.data.begin(), c.data.end());
+        // --- GPU work: train the quantizer on a bounded STRIDED sample of the
+        // buffered rows — NO LOCK ---
+        //
+        // The quantizer is only a scale + offset derived from the value range
+        // ([min,max] -> 8-bit codes), so training just needs a representative
+        // sample of the population of element values, not every row. We therefore
+        // sample quantizer_train_limit_ rows (default 1000) spread by a fixed
+        // STRIDE across all `total` buffered rows, rather than copying every row
+        // into one contiguous training buffer.
+        //
+        // Two reasons it must be strided, not the first-N rows:
+        //   * Statistics: a range/quantile estimate converges like 1/sqrt(n) and
+        //     the unit is the ELEMENT (1000 rows x dim=768 ~ 7.7e5 values), so a
+        //     strided sample pins [min,max] as well as the full set — cuVS clips
+        //     the extreme 1% via a 0.99 quantile anyway. Standard practice: FAISS
+        //     trains ScalarQuantizer/PQ on a subset; cuVS's kmeans_trainset_fraction
+        //     samples too.
+        //   * Bias: datasets are often stored sorted by time/id, so the first N
+        //     rows are NOT representative — a stride across the whole buffer is.
+        //
+        // Copying only the sample (not all N rows) is also what removes the O(N)
+        // duplicate-of-the-source training buffer that OOMed large 1-byte builds.
+        int64_t n_train = std::min<int64_t>(static_cast<int64_t>(total),
+                                            static_cast<int64_t>(quantizer_train_limit_));
+        if (n_train < 1) n_train = 1;
+        std::vector<B> sample(static_cast<size_t>(n_train) * dimension);
+        {
+            // Walk the buffered chunks once, copying the row whose global index
+            // hits the next strided target (floor(j*(total-1)/(n_train-1))).
+            int64_t next_j = 0, global_row = 0;
+            for (auto& c : chunks) {
+                for (uint64_t r = 0; r < c.count && next_j < n_train; ++r, ++global_row) {
+                    int64_t target = (n_train <= 1) ? 0
+                        : (next_j * (static_cast<int64_t>(total) - 1) / (n_train - 1));
+                    if (global_row == target) {
+                        const B* srcp = c.data.data() + static_cast<size_t>(r) * dimension;
+                        std::copy(srcp, srcp + dimension,
+                                  sample.begin() + static_cast<size_t>(next_j) * dimension);
+                        ++next_j;
+                    }
+                }
+                if (next_j >= n_train) break;
+            }
         }
         auto train_host_view = raft::make_host_matrix_view<const B, int64_t>(
-            all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
-        auto train_device = raft::make_device_matrix<B, int64_t>(*res, total, dimension);
+            sample.data(), n_train, static_cast<int64_t>(dimension));
+        auto train_device = raft::make_device_matrix<B, int64_t>(*res, n_train, dimension);
         raft::copy(*res, train_device.view(), train_host_view);
         // Train without holding the lock: GPU kernels run while lock is not held,
         // so concurrent readers are not blocked for the duration of training.
@@ -1389,6 +1427,14 @@ public:
         std::shared_lock<std::shared_mutex> lock(mutex_);
         *min = static_cast<float>(quantizer_.min());
         *max = static_cast<float>(quantizer_.max());
+    }
+
+    // Set the number of rows strided-sampled from the buffer to train the
+    // int8/uint8 quantizer. 0 keeps the default (kDefaultQuantizerTrainLimit).
+    // Call before build/flush; it only affects the training sample size.
+    void set_quantizer_train_limit(uint64_t n) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (n > 0) quantizer_train_limit_ = n;
     }
 
     // ---- Native B-source quantization (base element B -> 1-byte T) ----
@@ -1912,6 +1958,12 @@ protected:
         std::vector<IdT> ids;    ///< empty if caller supplied no IDs
     };
     static constexpr uint64_t kQuantizerTrainThreshold = 1000;
+    // Number of rows STRIDED-sampled from the buffer to train the int8/uint8
+    // scalar quantizer (flush_pending_float_chunks_internal). Default 1000;
+    // settable per index via set_quantizer_train_limit. A sample this size
+    // estimates [min,max] fine — see the training block for why.
+    static constexpr uint64_t kDefaultQuantizerTrainLimit = 1000;
+    uint64_t quantizer_train_limit_ = kDefaultQuantizerTrainLimit;
     std::vector<pending_float_chunk_t> pending_float_chunks_;
     uint64_t pending_total_count_ = 0;
 };

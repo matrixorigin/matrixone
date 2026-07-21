@@ -161,6 +161,47 @@ TEST(GpuIvfPqTest, HalfQuantizeToInt8Build) {
     index.destroy();
 }
 
+// StridedQuantizerTrainSamplesTail feeds a MAGNITUDE-SORTED f32 base one row at a
+// time through add_chunk_quantize (row i has value i — the "stored sorted by
+// time/id" case). The quantizer trains on quantizer_train_limit rows sampled by
+// STRIDE across the whole buffer, so the learned [min,max] must span the whole
+// dataset — including the high-magnitude TAIL. A biased first-N sample (the bug
+// this guards against) would train only on the low-magnitude prefix (rows
+// 0..limit-1) and learn a max near `limit`, saturating the entire tail to int8
+// 127. Asserting the learned max reaches the tail proves the sample is strided,
+// not a prefix. Also exercises the tunable limit via set_quantizer_train_limit.
+TEST(GpuIvfPqTest, StridedQuantizerTrainSamplesTail) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 5000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i; // sorted: row i has value i, tail ~= 4999
+        ids[i] = (int64_t)(i + 7000);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_pq_t<float, int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_quantizer_train_limit(500); // sample 500 rows, STRIDED across all 5000
+    for (uint64_t i = 0; i < count; ++i) {
+        index.add_chunk_quantize(&dataset[i * dimension], 1, -1, &ids[i]);
+    }
+    index.build();
+
+    // The learned range must reach the tail (~count-1), not stop near the prefix
+    // (~limit). Strided => qmax ~ 4900+; a first-500 prefix sample => qmax ~ 500.
+    float qmin = 0.0f, qmax = 0.0f;
+    index.get_quantizer(&qmin, &qmax);
+    ASSERT_GE(qmax, 3000.0f); // strided sample reached the high tail (not ~500)
+    ASSERT_LE(qmin, 2000.0f); // and the low prefix
+
+    index.destroy();
+}
+
 // ---------------------------------------------------------------------------
 // REPRODUCTION: f32 base -> int8 vs uint8 storage recall on SIGNED data.
 //
