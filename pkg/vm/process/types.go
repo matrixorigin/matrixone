@@ -102,16 +102,17 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account         string
-	User            string
-	Host            string
-	Role            string
-	ConnectionID    uint64
-	LastInsertID    uint64
-	Database        string
-	Version         string
-	TimeZone        *time.Location
-	LockWaitTimeout int64
+	Account            string
+	User               string
+	Host               string
+	Role               string
+	ConnectionID       uint64
+	LastInsertID       uint64
+	Database           string
+	Version            string
+	TimeZone           *time.Location
+	LockWaitTimeout    int64
+	LockWaitTimeoutSet bool // distinguishes an explicit zero from an unset value
 	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
 	// carried in the remote process snapshot because remote CNs have no session
 	// variable resolver.
