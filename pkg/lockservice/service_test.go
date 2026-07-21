@@ -34,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -1682,6 +1684,14 @@ func TestIssue3654(t *testing.T) {
 			l1 := s[0]
 			l2 := s[1]
 
+			// Establish the first lock with a live setup context. Lock-table
+			// binding now observes caller cancellation, so using the intentionally
+			// expired context below for setup would test the old cancellation bug
+			// rather than the remote retry behavior covered by issue 3654.
+			setupCtx, setupCancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer setupCancel()
 			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
@@ -1690,7 +1700,7 @@ func TestIssue3654(t *testing.T) {
 			}
 
 			_, err := l1.Lock(
-				context.Background(),
+				setupCtx,
 				0,
 				[][]byte{{1}},
 				[]byte("txn1"),
@@ -5399,7 +5409,243 @@ func TestLockWaitTimeout(t *testing.T) {
 	)
 }
 
-func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
+func TestLockWaitTimeoutCeilingBoundsMissingCallerTimeout(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+			elapsed := time.Since(start)
+
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected safety-ceiling lock-wait-timeout error, got %v", err)
+			require.GreaterOrEqual(t, elapsed, time.Second)
+			require.Less(t, elapsed, 3*time.Second)
+		},
+		func(c *Config) {
+			c.MaxLockWaitDuration.Duration = time.Second
+		})
+}
+
+func TestApplyLockWaitTimeoutCeiling(t *testing.T) {
+	s := &service{}
+	s.cfg.MaxLockWaitDuration.Duration = 1500 * time.Millisecond
+
+	metricBefore := testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter)
+	start := time.Now()
+	injected := s.applyLockWaitTimeoutCeiling(pb.LockOptions{})
+	require.Equal(t, int64(2), injected.LockWaitTimeout)
+	require.WithinDuration(t, start.Add(2*time.Second), time.Unix(0, injected.LockWaitDeadline), 100*time.Millisecond)
+	require.Equal(t, metricBefore, testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter),
+		"injecting a missing timeout is the normal safety-net path")
+	reapplied := s.applyLockWaitTimeoutCeiling(injected)
+	require.Equal(t, injected.LockWaitDeadline, reapplied.LockWaitDeadline,
+		"remote/forward owner must keep the deadline injected at the first service entry")
+	require.LessOrEqual(t, reapplied.LockWaitTimeout, injected.LockWaitTimeout)
+
+	start = time.Now()
+	shorter := s.applyLockWaitTimeoutCeiling(pb.LockOptions{LockWaitTimeout: 1})
+	require.Equal(t, int64(1), shorter.LockWaitTimeout)
+	require.WithinDuration(t, start.Add(time.Second), time.Unix(0, shorter.LockWaitDeadline), 100*time.Millisecond)
+
+	callerDeadline := time.Now().Add(500 * time.Millisecond).UnixNano()
+	withEarlierDeadline := s.applyLockWaitTimeoutCeiling(pb.LockOptions{
+		LockWaitTimeout:  1,
+		LockWaitDeadline: callerDeadline,
+	})
+	require.Equal(t, int64(1), withEarlierDeadline.LockWaitTimeout)
+	require.Equal(t, callerDeadline, withEarlierDeadline.LockWaitDeadline)
+
+	start = time.Now()
+	clamped := s.applyLockWaitTimeoutCeiling(pb.LockOptions{LockWaitTimeout: 30})
+	require.Equal(t, int64(2), clamped.LockWaitTimeout)
+	require.WithinDuration(t, start.Add(2*time.Second), time.Unix(0, clamped.LockWaitDeadline), 100*time.Millisecond)
+	require.True(t, s.lockWaitCeilingWarned.Load())
+	require.Equal(t, metricBefore+1, testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter))
+
+	expiredDeadline := time.Now().Add(-time.Second).UnixNano()
+	expired := s.applyLockWaitTimeoutCeiling(pb.LockOptions{
+		LockWaitTimeout:  1,
+		LockWaitDeadline: expiredDeadline,
+	})
+	require.Zero(t, expired.LockWaitTimeout,
+		"an expired absolute budget must not be restarted as a one-second relative timeout")
+	require.Equal(t, expiredDeadline, expired.LockWaitDeadline)
+}
+
+func TestLockWaitTimeoutExpiredDeadlineFailsBeforeQueueAdmission(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			options := newTestRowExclusiveOptions()
+			_, err := s.Lock(context.Background(), 0, [][]byte{{1}}, []byte("holder"), options)
+			require.NoError(t, err)
+
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(-time.Second).UnixNano()
+			start := time.Now()
+			_, err = s.Lock(context.Background(), 0, [][]byte{{1}}, []byte("waiter"), options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+			require.Less(t, time.Since(start), 250*time.Millisecond)
+		},
+	)
+}
+
+func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
+	var once sync.Once
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(10 * time.Millisecond).UnixNano()
+			_, err := services[0].Lock(
+				context.Background(),
+				0,
+				[][]byte{{1}},
+				[]byte("waiter"),
+				options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+		},
+		WithWait(func(context.Context) error {
+			once.Do(func() { time.Sleep(50 * time.Millisecond) })
+			return nil
+		}),
+	)
+}
+
+func TestLockWaitTimeoutExpiresWhileWaitingForLockTableAllocation(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const (
+				group   = uint32(0)
+				tableID = uint64(24915)
+			)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			if s.mu.allocating[group] == nil {
+				s.mu.allocating[group] = make(map[uint64]chan struct{})
+			}
+			s.mu.allocating[group][tableID] = waitC
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], tableID)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			txnID := []byte("bind-waiter")
+			resultC := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					txnID,
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+				require.Less(t, time.Since(start), time.Second)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "lock budget did not cancel the in-flight allocation wait")
+			}
+			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseHandler := func() {
+				releaseOnce.Do(func() { close(release) })
+			}
+			defer releaseHandler()
+			alloc.server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					context.Context,
+					context.CancelFunc,
+					*pb.Request,
+					*pb.Response,
+					morpc.ClientSession,
+				) {
+					close(entered)
+					<-release
+				})
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			txnID := []byte("bind-rpc-waiter")
+			resultC := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					24916,
+					[][]byte{{1}},
+					txnID,
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.Fail(t, "lock request did not reach the allocator")
+			}
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+				require.Less(t, time.Since(start), time.Second)
+			case <-time.After(2 * time.Second):
+				releaseHandler()
+				require.Fail(t, "lock budget did not cancel the allocator RPC")
+			}
+			releaseHandler()
+			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestLockWaitTimeoutCallerContextBeforeCeiling(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -5421,7 +5667,7 @@ func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
 			require.NoError(t, err)
 
 			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
-			// Should be blocked until ctx expires (no internal/default timeout interception).
+			// The caller context is earlier than the one-hour safety ceiling.
 			option2 := option
 			option2.LockWaitTimeout = 0 // no session/internal timeout; rely on caller context deadline
 			start := time.Now()
@@ -5513,7 +5759,7 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 	)
 }
 
-func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
+func TestLockWaitTimeoutZeroUsesEarlierCallerContext(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -5534,8 +5780,8 @@ func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
 			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
 			require.NoError(t, err)
 
-			// txn2 with LockWaitTimeout=0 should wait for context expiry (500ms),
-			// NOT the default 5-minute configLockWaitTimeout.
+			// txn2 with LockWaitTimeout=0 should use the earlier context expiry
+			// instead of waiting for the one-hour safety ceiling.
 			option2 := option
 			option2.LockWaitTimeout = 0
 			start := time.Now()
@@ -5680,6 +5926,7 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||
 		moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 		return res
 	}

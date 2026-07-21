@@ -171,15 +171,20 @@ func (l *localLockTable) doLock(
 
 		waitCtx := c.ctx
 		var cancel context.CancelFunc
-		if leftTimeout > 0 {
+		if !c.lockWaitDeadline.IsZero() {
+			waitCtx, cancel = context.WithDeadlineCause(
+				c.ctx,
+				c.lockWaitDeadline,
+				c.getLockWaitTimeoutErr())
+		} else if leftTimeout > 0 {
 			waitCtx, cancel = context.WithTimeoutCause(c.ctx, leftTimeout, ErrLockTimeout)
 		}
 		waitStart := time.Now()
 		v := c.w.wait(waitCtx, l.logger)
 		l.events.removeBlockedWaiter(c.w)
-		lockWaitTimeoutHit := leftTimeout > 0 &&
+		lockWaitTimeoutHit := cancel != nil &&
 			errors.Is(v.err, context.DeadlineExceeded) &&
-			context.Cause(waitCtx) == ErrLockTimeout
+			context.Cause(waitCtx) == c.getLockWaitTimeoutErr()
 		if cancel != nil {
 			cancel()
 		}
@@ -189,7 +194,7 @@ func (l *localLockTable) doLock(
 		}
 
 		// Update the remaining lock_wait_timeout budget using only wait time.
-		if leftTimeout > 0 {
+		if c.lockWaitDeadline.IsZero() && leftTimeout > 0 {
 			waited := time.Since(waitStart)
 			if waited < leftTimeout {
 				leftTimeout -= waited
@@ -200,8 +205,10 @@ func (l *localLockTable) doLock(
 				// lock_wait_timeout expired: return ErrLockTimeout directly
 				// (not errors.Join) so upper layers can recognize it via
 				// moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout).
-				v.err = ErrLockTimeout
+				v.err = c.getLockWaitTimeoutErr()
 			}
+		} else if lockWaitTimeoutHit {
+			v.err = c.getLockWaitTimeoutErr()
 		}
 
 		c.txn.Lock()
@@ -600,7 +607,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
-	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+	if !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
 		return c.getLockWaitTimeoutErr()
 	}
 	if l.detectOwnerLocalDeadlockLocked(c, conflictWith) {

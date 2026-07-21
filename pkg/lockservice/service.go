@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // WithWait setup wait func to wait some condition ready
@@ -58,6 +59,9 @@ type service struct {
 	clock                 clock.Clock
 	stopper               *stopper.Stopper
 	stopOnce              sync.Once
+	// lockWaitCeilingWarned prevents a large explicit timeout from logging on
+	// every lock operation. The metric still counts every clamped request.
+	lockWaitCeilingWarned atomic.Bool
 	bindChangeMu          sync.RWMutex
 	fetchWhoWaitingListC  chan who
 	logger                *log.MOLogger
@@ -164,6 +168,10 @@ func (s *service) Lock(
 	if err := ctx.Err(); err != nil {
 		return pb.Result{}, err
 	}
+	options = s.applyLockWaitTimeoutCeiling(options)
+	if lockWaitDeadlineExpired(options, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
+	}
 
 	admission, admitted := s.beginLockAdmission(txnID, options, tableID, rows)
 	if !admitted {
@@ -185,6 +193,12 @@ func (s *service) Lock(
 	if err := ctx.Err(); err != nil {
 		return pb.Result{}, err
 	}
+	// Service admission/bind work may consume the remaining budget after the
+	// entry check. Recheck before dispatch so a delayed hop cannot restart or
+	// transmit an already exhausted absolute deadline.
+	if lockWaitDeadlineExpired(options, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
+	}
 
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
@@ -194,12 +208,26 @@ func (s *service) Lock(
 		return s.forwardLock(ctx, tableID, rows, txnID, options)
 	}
 
-	l, err := s.getLockTableWithCreate(ctx, options.Group, tableID, rows, options.Sharding)
+	bindCtx, cancel := newLockWaitContext(ctx, options)
+	if cancel != nil {
+		defer cancel()
+	}
+	l, err := s.getLockTableWithCreateContext(
+		bindCtx,
+		options.Group,
+		tableID,
+		rows,
+		options.Sharding)
 	if err != nil {
 		return pb.Result{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return pb.Result{}, err
+	if err := bindCtx.Err(); err != nil {
+		return pb.Result{}, lockWaitContextError(bindCtx, err)
+	}
+	// Binding can finish concurrently with the deadline. Recheck after it
+	// returns so an uncontended local table cannot admit an expired request.
+	if lockWaitDeadlineExpired(options, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
 	}
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 
@@ -262,6 +290,103 @@ func (s *service) Lock(
 		}
 	}
 	return result, err
+}
+
+// applyLockWaitTimeoutCeiling bounds missing or oversized wait budgets and
+// puts the effective absolute deadline in the returned options. Carrying that
+// deadline keeps local-to-remote/forward hops on one budget. Lock receives
+// options by value, so callers that retry by invoking Lock again must propagate
+// their own deadline; this service-side safety net cannot update their copy.
+func (s *service) applyLockWaitTimeoutCeiling(options pb.LockOptions) pb.LockOptions {
+	ceiling := s.cfg.MaxLockWaitDuration.Duration
+	if ceiling <= 0 {
+		return options
+	}
+	// LockWaitTimeout is encoded as whole seconds. Round up so a positive
+	// sub-second ceiling or remaining budget never becomes an unbounded zero.
+	seconds := int64(ceiling / time.Second)
+	if ceiling%time.Second != 0 {
+		seconds++
+	}
+	if seconds <= 0 {
+		seconds = 1
+	}
+
+	now := time.Now()
+	requested := options.LockWaitTimeout
+	effectiveSeconds := requested
+	if effectiveSeconds <= 0 || effectiveSeconds > seconds {
+		effectiveSeconds = seconds
+	}
+	effectiveDeadline := now.Add(time.Duration(effectiveSeconds) * time.Second)
+	if options.LockWaitDeadline > 0 {
+		callerDeadline := time.Unix(0, options.LockWaitDeadline)
+		if callerDeadline.Before(effectiveDeadline) {
+			effectiveDeadline = callerDeadline
+			remaining := effectiveDeadline.Sub(now)
+			if remaining <= 0 {
+				// Keep an exhausted absolute budget exhausted. Consumers use the
+				// deadline as the authority and service entry rejects it before a
+				// waiter can enter the queue.
+				effectiveSeconds = 0
+			} else {
+				effectiveSeconds = int64(remaining / time.Second)
+				if remaining%time.Second != 0 {
+					effectiveSeconds++
+				}
+			}
+		}
+	}
+	options.LockWaitTimeout = effectiveSeconds
+	options.LockWaitDeadline = effectiveDeadline.UnixNano()
+
+	if requested > seconds {
+		v2.TxnLockWaitTimeoutCeilingClampedCounter.Inc()
+		if s.lockWaitCeilingWarned.CompareAndSwap(false, true) && s.logger != nil {
+			s.logger.Warn("lock wait timeout exceeds lockservice safety ceiling; request was clamped",
+				zap.Int64("requested-seconds", requested),
+				zap.Duration("max-lock-wait-duration", ceiling),
+				zap.Int64("effective-seconds", effectiveSeconds),
+				zap.Time("effective-deadline", effectiveDeadline))
+		}
+	}
+	return options
+}
+
+func lockWaitDeadlineExpired(options pb.LockOptions, now time.Time) bool {
+	return options.LockWaitDeadline > 0 &&
+		!now.Before(time.Unix(0, options.LockWaitDeadline))
+}
+
+// newLockWaitContext makes lock-table binding/allocation consume the same
+// absolute budget as the subsequent lock wait. Unlike newLockRPCContext, it
+// intentionally adds no transport slack: binding is part of the lock budget.
+func newLockWaitContext(
+	ctx context.Context,
+	options pb.LockOptions,
+) (context.Context, context.CancelFunc) {
+	if options.LockWaitDeadline > 0 {
+		return context.WithDeadlineCause(
+			ctx,
+			time.Unix(0, options.LockWaitDeadline),
+			ErrLockTimeout)
+	}
+	if options.LockWaitTimeout > 0 {
+		return context.WithTimeoutCause(
+			ctx,
+			time.Duration(options.LockWaitTimeout)*time.Second,
+			ErrLockTimeout)
+	}
+	return ctx, nil
+}
+
+// lockWaitContextError preserves an earlier caller cancellation/deadline, but
+// normalizes expiry of the lock budget to the public MySQL 1205 sentinel.
+func lockWaitContextError(ctx context.Context, err error) error {
+	if context.Cause(ctx) == ErrLockTimeout {
+		return ErrLockTimeout
+	}
+	return err
 }
 
 func (s *service) Unlock(
@@ -788,14 +913,25 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 	activeTxn.abort(wait, err, s.logger)
 }
 
-func (s *service) getLockTable(ctx context.Context, group uint32, tableID uint64) (lockTable, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (s *service) getLockTable(
+	ctx context.Context,
+	group uint32,
+	tableID uint64) (lockTable, error) {
+	return s.getLockTableWithContext(ctx, group, tableID)
+}
+
+func (s *service) getLockTableWithContext(
+	ctx context.Context,
+	group uint32,
+	tableID uint64) (lockTable, error) {
 	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
 	}
-	return s.waitLockTableBind(ctx, group, tableID, false)
+	return s.waitLockTableBindWithContext(
+		ctx,
+		group,
+		tableID,
+		false)
 }
 
 func (s *service) getAllocatingC(
@@ -812,7 +948,7 @@ func (s *service) getAllocatingC(
 	return nil
 }
 
-func (s *service) waitLockTableBind(
+func (s *service) waitLockTableBindWithContext(
 	ctx context.Context,
 	group uint32,
 	tableID uint64,
@@ -822,19 +958,32 @@ func (s *service) waitLockTableBind(
 		select {
 		case <-c:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, lockWaitContextError(ctx, ctx.Err())
 		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
 	}
 	return s.tableGroups.get(group, tableID), nil
 }
 
-func (s *service) getLockTableWithCreate(ctx context.Context, group uint32, tableID uint64, rows [][]byte, sharding pb.Sharding) (lockTable, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (s *service) getLockTableWithCreate(
+	ctx context.Context,
+	group uint32,
+	tableID uint64,
+	rows [][]byte,
+	sharding pb.Sharding) (lockTable, error) {
+	return s.getLockTableWithCreateContext(
+		ctx,
+		group,
+		tableID,
+		rows,
+		sharding)
+}
+
+func (s *service) getLockTableWithCreateContext(
+	ctx context.Context,
+	group uint32,
+	tableID uint64,
+	rows [][]byte,
+	sharding pb.Sharding) (lockTable, error) {
 	originTableID := tableID
 	if sharding == pb.Sharding_ByRow {
 		tableID = ShardingByRow(rows[0])
@@ -842,13 +991,13 @@ func (s *service) getLockTableWithCreate(ctx context.Context, group uint32, tabl
 
 	if v := s.tableGroups.get(group, tableID); v != nil {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, lockWaitContextError(ctx, err)
 		}
 		return v, nil
 	}
 
 	var c chan struct{}
-	fn := func() lockTable {
+	fn := func() (lockTable, error) {
 		s.mu.Lock()
 		waitC := s.getAllocatingC(group, tableID, true)
 		if waitC != nil {
@@ -856,13 +1005,13 @@ func (s *service) getLockTableWithCreate(ctx context.Context, group uint32, tabl
 			select {
 			case <-waitC:
 			case <-ctx.Done():
-				return nil
+				return nil, lockWaitContextError(ctx, ctx.Err())
 			}
 			s.mu.Lock()
 		}
 		if err := ctx.Err(); err != nil {
 			s.mu.Unlock()
-			return nil
+			return nil, lockWaitContextError(ctx, err)
 		}
 
 		v := s.tableGroups.get(group, tableID)
@@ -876,24 +1025,23 @@ func (s *service) getLockTableWithCreate(ctx context.Context, group uint32, tabl
 			m[tableID] = c
 		}
 		s.mu.Unlock()
-		return v
+		return v, nil
 	}
 
-	v := fn()
-	if c != nil {
-		defer func() {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			delete(s.mu.allocating[group], tableID)
-			close(c)
-		}()
+	v, err := fn()
+	if err != nil {
+		return nil, err
 	}
 	if v != nil {
 		return v, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.mu.allocating[group], tableID)
+		close(c)
+	}()
 
 	requestAllocator := s.allocatorStateSnapshot()
 	bind, allocator, err := getLockTableBindWithContext(
@@ -905,10 +1053,10 @@ func (s *service) getLockTableWithCreate(ctx context.Context, group uint32, tabl
 		s.serviceID,
 		sharding)
 	if err != nil {
-		return nil, err
+		return nil, lockWaitContextError(ctx, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, lockWaitContextError(ctx, err)
 	}
 
 	return s.publishLockTableBindFromAllocator(
@@ -933,7 +1081,7 @@ func (s *service) publishLockTableBindFromAllocator(
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, lockWaitContextError(ctx, err)
 	}
 
 	// Allocator-state observation and bind publication form one non-cancellable
