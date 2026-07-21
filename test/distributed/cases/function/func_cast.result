@@ -1,7 +1,9 @@
 select CAST(1-2 AS UNSIGNED);
-Data truncation: data out of range: data type uint64, value '-1'
+➤ cast(1 - 2 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-Data truncation: data out of range: data type uint64, value '-1'
+➤ cast(cast(1 - 2 as unsigned) as integer)[-5,64,0]  𝄀
+-1
 select CAST('10 ' as unsigned integer);
 ➤ cast(10  as integer unsigned)[-5,64,0]  𝄀
 10
@@ -22,6 +24,50 @@ select cast('+0012' as unsigned) as r;
 12
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint64, bad value 10x
+select cast('999999999999999999999999' as signed);
+➤ cast(999999999999999999999999 as signed)[-5,64,0]  𝄀
+-1
+select cast('999999999999999999999999' as unsigned);
+➤ cast(999999999999999999999999 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast('9999999.99' as decimal(6,2));
+➤ cast(9999999.99 as decimal(6, 2))[3,6,2]  𝄀
+9999.99
+select cast(-1 as unsigned);
+➤ cast(-1 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast('-1' as unsigned);
+➤ cast(-1 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast(-1.0 as unsigned);
+➤ cast(-1.0 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast(cast(-1 as decimal(10,2)) as unsigned);
+➤ cast(cast(-1 as decimal(10, 2)) as unsigned)[-5,64,0]  𝄀
+18446744073709551615
+select cast('999999999999999999999999999999999999999999999999999999999999999999999' as decimal(65,2));
+➤ cast(999999999999999999999999999999999999999999999999999999999999999999999 as decimal(65, 2))[3,65,2]  𝄀
+999999999999999999999999999999999999999999999999999999999999999.99
+select cast(cast(18446744073709551615 as decimal(20,0)) as signed);
+➤ cast(cast(18446744073709551615 as decimal(20)) as signed)[-5,64,0]  𝄀
+9223372036854775807
+select cast(cast('9.223372036854776e18' as double) as signed);
+Data truncation: data out of range: data type int64, value '9.223372036854776e+18'
+select cast(cast('-1.8446744073709552e19' as double) as unsigned);
+Data truncation: data out of range: data type uint64, value '-1.8446744073709552e+19'
+select cast(cast(-1.4 as decimal(10,2)) as unsigned), cast(cast(-1.5 as decimal(10,2)) as unsigned), cast(cast(-1.6 as decimal(10,2)) as unsigned);
+➤ cast(cast(-1.4 as decimal(10, 2)) as unsigned)[-5,64,0]  ¦  cast(cast(-1.5 as decimal(10, 2)) as unsigned)[-5,64,0]  ¦  cast(cast(-1.6 as decimal(10, 2)) as unsigned)[-5,64,0]  𝄀
+18446744073709551615  ¦  18446744073709551614  ¦  18446744073709551614
+select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2)) as signed), cast(cast(1.6 as decimal(10,2)) as signed);
+➤ cast(cast(1.4 as decimal(10, 2)) as signed)[-5,64,0]  ¦  cast(cast(1.5 as decimal(10, 2)) as signed)[-5,64,0]  ¦  cast(cast(1.6 as decimal(10, 2)) as signed)[-5,64,0]  𝄀
+1  ¦  2  ¦  2
+select cast(cast(10000 as signed) as decimal(6,2)), cast(cast(-10000 as signed) as decimal(6,2));
+➤ cast(cast(10000 as signed) as decimal(6, 2))[3,6,2]  ¦  cast(cast(-10000 as signed) as decimal(6, 2))[3,6,2]  𝄀
+9999.99  ¦  -9999.99
+select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed), cast(cast(2.5 as double) as signed),
+cast(cast(-0.5 as double) as signed), cast(cast(-1.5 as double) as signed), cast(cast(-2.5 as double) as signed);
+➤ cast(cast(0.5 as double) as signed)[-5,64,0]  ¦  cast(cast(1.5 as double) as signed)[-5,64,0]  ¦  cast(cast(2.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-0.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-1.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-2.5 as double) as signed)[-5,64,0]  𝄀
+0  ¦  2  ¦  2  ¦  0  ¦  -2  ¦  -2
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
@@ -50,7 +96,8 @@ select cast('-000' as unsigned);
 ➤ cast(-000 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-123' as unsigned);
-invalid argument cast to uint64, bad value -123
+➤ cast(-123 as unsigned)[-5,64,0]  𝄀
+18446744073709551493
 select cast('+000' as decimal(6,2));
 ➤ cast(+000 as decimal(6, 2))[3,6,2]  𝄀
 0.00
@@ -82,7 +129,8 @@ select cast('-0b0' as unsigned);
 ➤ cast(-0b0 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-0b1010' as unsigned);
-invalid argument cast to uint64, bad value -0b1010
+➤ cast(-0b1010 as unsigned)[-5,64,0]  𝄀
+18446744073709551606
 select cast('+0b1010' as decimal(6,2));
 ➤ cast(+0b1010 as decimal(6, 2))[3,6,2]  𝄀
 10.00
@@ -108,7 +156,8 @@ select cast('-0o0' as unsigned);
 ➤ cast(-0o0 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-0o17' as unsigned);
-invalid argument cast to uint64, bad value -0o17
+➤ cast(-0o17 as unsigned)[-5,64,0]  𝄀
+18446744073709551601
 select cast('+0o17' as decimal(6,2));
 ➤ cast(+0o17 as decimal(6, 2))[3,6,2]  𝄀
 15.00
@@ -134,7 +183,8 @@ select cast('-0x0' as unsigned);
 ➤ cast(-0x0 as unsigned)[-5,64,0]  𝄀
 0
 select cast('-0x123' as unsigned);
-invalid argument cast to uint64, bad value -0x123
+➤ cast(-0x123 as unsigned)[-5,64,0]  𝄀
+18446744073709551325
 select cast('+0x123' as decimal(6,2));
 ➤ cast(+0x123 as decimal(6, 2))[3,6,2]  𝄀
 291.00
@@ -211,9 +261,11 @@ select cast(timestamp '2020-08-23 11:52:21' as char(4)), length(cast(timestamp '
 ➤ cast(timestamp(2020-08-23 11:52:21) as char(4))[1,4,0]  ¦  length(cast(timestamp(2020-08-23 11:52:21) as char(4)))[-5,64,0]  𝄀
 2020  ¦  4
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
-Data truncation: data out of range: data type uint64, value '-5'
+➤ cast(-5 as unsigned) | 1[-5,64,0]  ¦  cast(-5 as unsigned) & -1[-5,64,0]  𝄀
+18446744073709551611  ¦  18446744073709551611
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-Data truncation: data out of range: data type uint64, value '-5'
+➤ cast(-5 as unsigned) - 1[3,38,0]  ¦  cast(-5 as unsigned) + 1[3,38,0]  𝄀
+18446744073709551610  ¦  18446744073709551612
 select cast(5 as unsigned) -6.0;
 ➤ cast(5 as unsigned) - 6.0[3,38,1]  𝄀
 -1.0
@@ -222,7 +274,7 @@ select cast(NULL as signed);
 null
 select cast(1/2 as signed);
 ➤ cast(1 / 2 as signed)[-5,64,0]  𝄀
-1
+0
 select cast(12 as char(3)), length(cast(12 as char(3)));
 ➤ cast(12 as char(3))[1,3,0]  ¦  length(cast(12 as char(3)))[-5,64,0]  𝄀
 12  ¦  2
@@ -315,13 +367,17 @@ select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
 10.0
 select cast('18446744073709551616' as unsigned);
-Data truncation: data out of range: data type uint64, value '18446744073709551616'
+➤ cast(18446744073709551616 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
 select cast('18446744073709551616' as signed);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+➤ cast(18446744073709551616 as signed)[-5,64,0]  𝄀
+-1
 select cast('9223372036854775809' as signed);
-Data truncation: data out of range: data type int64, value '9223372036854775809'
+➤ cast(9223372036854775809 as signed)[-5,64,0]  𝄀
+-9223372036854775807
 select cast('-1' as unsigned);
-invalid argument cast to uint64, bad value -1
+➤ cast(-1 as unsigned)[-5,64,0]  𝄀
+18446744073709551615
 select cast('abc' as signed);
 invalid argument cast to int, bad value abc
 select cast('1a' as signed);
@@ -344,12 +400,14 @@ select cast(18446744073709551615 as unsigned);
 ➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select cast(18446744073709551615 as signed);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ cast(18446744073709551615 as signed)[-5,64,0]  𝄀
+-1
 select cast('18446744073709551615' as unsigned);
 ➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select cast('18446744073709551615' as signed);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ cast(18446744073709551615 as signed)[-5,64,0]  𝄀
+-1
 select cast('9223372036854775807' as signed);
 ➤ cast(9223372036854775807 as signed)[-5,64,0]  𝄀
 9223372036854775807
