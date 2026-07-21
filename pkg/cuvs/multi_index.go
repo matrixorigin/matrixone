@@ -289,6 +289,17 @@ func multiGpuSearch[T VectorType](
 	}
 	jobs := make([]jobInfo, 0, numIndices)
 
+	// Same contract as multiGpuSearchBQ.drainJobs: a submitted async job parks
+	// its result in the worker's result store until SearchWait (or a discard)
+	// claims it, so returning early on a partial dispatch leaks one result per
+	// abandoned job for the worker's lifetime — unbounded across repeated
+	// failures.
+	drainJobs := func() {
+		for _, job := range jobs {
+			_, _, _ = job.w.SearchWait(job.jobID, numQueries, limit)
+		}
+	}
+
 	for _, idx := range indices {
 		var jobID uint64
 		var err error
@@ -298,6 +309,7 @@ func multiGpuSearch[T VectorType](
 			jobID, err = searchF32Fn(idx, queriesF32, numQueries, queryDimension, limit)
 		}
 		if err != nil {
+			drainJobs()
 			return nil, nil, err
 		}
 		jobs = append(jobs, jobInfo{w: idx, jobID: jobID})
@@ -325,6 +337,7 @@ func multiGpuSearch[T VectorType](
 			}
 		}
 		if err != nil {
+			drainJobs()
 			return nil, nil, err
 		}
 		jobs = append(jobs, jobInfo{w: bruteForce, jobID: jobID})
@@ -333,13 +346,22 @@ func multiGpuSearch[T VectorType](
 	allNeighbors := make([][]int64, len(jobs))
 	allDistances := make([][]float32, len(jobs))
 
+	// Keep draining after the first SearchWait error (continue, not return) so
+	// no submitted result stays abandoned; surface the first error afterward.
+	var firstErr error
 	for i, job := range jobs {
 		neighbors, distances, err := job.w.SearchWait(job.jobID, numQueries, limit)
 		if err != nil {
-			return nil, nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		allNeighbors[i] = neighbors
 		allDistances[i] = distances
+	}
+	if firstErr != nil {
+		return nil, nil, firstErr
 	}
 
 	n, d := mergeMultiResults(allNeighbors, allDistances, numQueries, limit)
@@ -414,6 +436,25 @@ func multiGpuSearchBQ[Q VectorType, B VectorType](
 	}
 	jobs := make([]jobInfo, 0, n)
 
+	// drainJobs reclaims every already-submitted async job so its result cannot
+	// linger in the worker's result store for the worker's lifetime (a submitted
+	// result is only freed by SearchWait/discard). Called on every partial-
+	// dispatch error path so an early return never abandons in-flight jobs.
+	drainJobs := func() {
+		for _, job := range jobs {
+			_, _, _ = job.w.SearchWait(job.jobID, numQueries, limit)
+		}
+	}
+
+	// Validate the [B,Q] dispatch BEFORE submitting any search. If the overflow
+	// brute force is live but neither a base-typed (B) nor an f32 query was
+	// supplied, the async overflow search would submit an empty job (id 0) and
+	// SearchWait(0) would block forever. Checking here — not after the index
+	// loop — guarantees the mismatch cannot abandon already-submitted index jobs.
+	if bruteForce != nil && len(queriesB) == 0 && len(queriesBF32) == 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("multiGpuSearchBQ: brute force is loaded but no base/f32 query was provided (B/Q dispatch mismatch)")
+	}
+
 	for _, idx := range indices {
 		var jobID uint64
 		var err error
@@ -426,23 +467,17 @@ func multiGpuSearchBQ[Q VectorType, B VectorType](
 			jobID, err = idxF32Fn(idx, queriesQF32, numQueries, queryDimension, limit)
 		}
 		if err != nil {
+			drainJobs()
 			return nil, nil, err
 		}
 		jobs = append(jobs, jobInfo{w: idx, jobID: jobID})
 	}
 
 	if bruteForce != nil {
-		// Guard against a dispatch mismatch: if the overflow brute force is
-		// live but neither a base-typed (B) nor an f32 query was supplied, the
-		// async search would submit an empty job (job id 0) and SearchWait(0)
-		// would block forever. Fail loudly instead — this means the [B,Q]
-		// instantiation disagrees with the decoded query type.
-		if len(queriesB) == 0 && len(queriesBF32) == 0 {
-			return nil, nil, moerr.NewInternalErrorNoCtx("multiGpuSearchBQ: brute force is loaded but no base/f32 query was provided (B/Q dispatch mismatch)")
-		}
 		// The overflow always takes the base-typed (B) query and quantizes B->OB
 		// inside cuVS. When only an f32 channel was supplied (the SearchFloat32
-		// paths, where B==float32), reinterpret it as []B.
+		// paths, where B==float32), reinterpret it as []B. (The B/Q dispatch
+		// mismatch was already rejected above, before any job was submitted.)
 		qB := queriesB
 		if qB == nil {
 			qB, _ = any(queriesBF32).([]B)
@@ -457,20 +492,31 @@ func multiGpuSearchBQ[Q VectorType, B VectorType](
 			jobID, err = bruteForce.SearchQuantizeAsync(qB, numQueries, queryDimension, limit)
 		}
 		if err != nil {
+			drainJobs()
 			return nil, nil, err
 		}
 		jobs = append(jobs, jobInfo{w: bruteForce, jobID: jobID})
 	}
 
+	// Wait on every submitted job. On the first SearchWait error, keep draining
+	// the remaining jobs (continue, not return) so no submitted result is left
+	// abandoned in the worker's result store; surface the first error afterward.
 	allNeighbors := make([][]int64, len(jobs))
 	allDistances := make([][]float32, len(jobs))
+	var firstErr error
 	for i, job := range jobs {
 		neighbors, distances, err := job.w.SearchWait(job.jobID, numQueries, limit)
 		if err != nil {
-			return nil, nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		allNeighbors[i] = neighbors
 		allDistances[i] = distances
+	}
+	if firstErr != nil {
+		return nil, nil, firstErr
 	}
 
 	n2, d := mergeMultiResults(allNeighbors, allDistances, numQueries, limit)

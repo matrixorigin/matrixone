@@ -119,9 +119,9 @@ const (
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
 	// explicitly specified, read back by the build path (table functions /
 	// sync), and rendered by IndexParamsToStringList for SHOW CREATE.
-	IndexAlgoParamKmeansTrainPercent = "kmeans_train_percent"
-	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
-	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
+	IndexAlgoParamKmeansTrainPercent  = "kmeans_train_percent"
+	IndexAlgoParamKmeansMaxIteration  = "kmeans_max_iteration"
+	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"

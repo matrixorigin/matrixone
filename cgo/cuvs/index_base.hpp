@@ -42,12 +42,16 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <limits>
 #include <numeric>
 #include <map>
 #include <mutex>
 #include <unordered_map>
 #include <sys/stat.h>
 #include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 
 namespace matrixone {
@@ -383,6 +387,108 @@ inline void transform_distance(distance_type_t metric,
  * @tparam BuildParams Index-specific build parameter struct
  * @tparam IdT         Neighbor ID type: int64_t (IVF) or uint32_t (CAGRA)
  */
+// ---------------------------------------------------------------------------
+// Host staging budget for the 1-byte-storage quantizer path.
+//
+// These are deliberately NON-TEMPLATE inline functions: as static members of
+// gpu_index_base_t every <B,T,BuildParams,IdT> instantiation would get its own
+// copy of the statics, so gpu_ivf_pq_t<int8_t,float> and gpu_cagra_t<uint8_t,half>
+// would each enforce a private budget and track a private staged-byte total —
+// which is exactly the process-wide quantity the valve needs to reason about.
+// C++17 inline functions have one copy program-wide, so the counter below is
+// shared by every index in the process.
+// ---------------------------------------------------------------------------
+namespace stage_budget {
+
+// cgroup v2 then v1. Returns 0 when unlimited or unreadable. The v2 sentinel is
+// the literal string "max"; v1 uses a huge number for "no limit".
+inline uint64_t cgroup_mem_limit_bytes() {
+    constexpr uint64_t kUnlimited = 1ull << 62;
+    auto read_one = [](const char* path) -> uint64_t {
+        std::ifstream f(path);
+        if (!f.is_open()) return 0;
+        std::string tok;
+        if (!(f >> tok)) return 0;
+        if (tok == "max") return 0;
+        errno = 0;
+        char* end = nullptr;
+        unsigned long long v = std::strtoull(tok.c_str(), &end, 10);
+        if (errno != 0 || end == tok.c_str() || v >= kUnlimited) return 0;
+        return static_cast<uint64_t>(v);
+    };
+    if (uint64_t v = read_one("/sys/fs/cgroup/memory.max")) return v;
+    return read_one("/sys/fs/cgroup/memory/memory.limit_in_bytes");
+}
+
+// MemAvailable from /proc/meminfo, in bytes; 0 when unreadable. Parsed
+// line-by-line: a token-stream read (>> key >> value >> unit) desynchronizes on
+// the two-token lines further down the file ("HugePages_Total:  0"), where the
+// unit read would swallow the next line's key.
+inline uint64_t meminfo_available_bytes() {
+    std::ifstream meminfo("/proc/meminfo");
+    if (!meminfo.is_open()) return 0;
+    std::string line;
+    while (std::getline(meminfo, line)) {
+        if (line.rfind("MemAvailable:", 0) == 0) {
+            unsigned long long kb = 0;
+            if (std::sscanf(line.c_str(), "MemAvailable: %llu kB", &kb) == 1) {
+                return static_cast<uint64_t>(kb) * 1024ull;
+            }
+            return 0;
+        }
+    }
+    return 0;
+}
+
+// 25% of min(cgroup limit, host MemAvailable), refreshed at most once a second.
+//
+// /proc/meminfo is NOT namespaced: inside a container it reports the NODE's
+// memory, so a budget derived from it alone is ~100 GiB in an 8 GiB pod and the
+// valve never fires — the pod is OOM-killed instead. MatrixOne runs under
+// exactly that constraint (pkg/common/system watches /sys/fs/cgroup/memory.max).
+//
+// Refreshed rather than frozen for the process lifetime: mo-service is long
+// running, so a value sampled at the first build (fresh CN, memory nearly all
+// available) would still be enforced hours later when little is free — and the
+// reverse, a budget sampled under transient pressure, would pin every later
+// build to the emergency valve and permanently prefix-train the quantizer.
+inline uint64_t budget_bytes() {
+    constexpr uint64_t kFallback = 2ull << 30;
+    static std::atomic<uint64_t> cached{0};
+    static std::atomic<int64_t> cached_at_ns{0};
+
+    auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count();
+    uint64_t cur = cached.load(std::memory_order_relaxed);
+    if (cur != 0 &&
+        (now_ns - cached_at_ns.load(std::memory_order_relaxed)) < 1000000000LL) {
+        return cur;
+    }
+
+    uint64_t limit = cgroup_mem_limit_bytes();
+    uint64_t avail = meminfo_available_bytes();
+    uint64_t effective = (limit && avail) ? std::min(limit, avail)
+                                          : (limit ? limit : avail);
+    uint64_t budget = effective ? effective / 4 : kFallback;
+    if (budget == 0) budget = kFallback;
+    cached.store(budget, std::memory_order_relaxed);
+    cached_at_ns.store(now_ns, std::memory_order_relaxed);
+    return budget;
+}
+
+// Bytes staged across every live index in the process.
+inline std::atomic<uint64_t>& staged_bytes() {
+    static std::atomic<uint64_t> staged{0};
+    return staged;
+}
+
+inline bool over_budget() {
+    return staged_bytes().load(std::memory_order_relaxed) >= budget_bytes();
+}
+
+} // namespace stage_budget
+
 template <typename B, typename T, typename BuildParams, typename IdT = int64_t>
 class gpu_index_base_t {
 public:
@@ -409,11 +515,13 @@ public:
     // ---- Deferred float buffer for quantizer training (1-byte types only) ----
     // When T is int8_t or uint8_t the quantizer must be trained on a
     // representative sample before any vectors can be quantized.
-    // Raw float chunks are accumulated here until kQuantizerTrainThreshold
-    // vectors are available, then the quantizer is trained on all of them at
-    // once and the buffer is flushed into flattened_host_dataset as T.
-    // If build() is called before the threshold is reached the buffer is
-    // force-flushed (trained on whatever is available).
+    // Raw base-typed chunks are accumulated here until build(), which flushes
+    // them: the quantizer is trained on a STRIDED sample of everything staged
+    // (so the learned [min,max] spans the whole table, not a prefix) and the
+    // buffer is quantized into flattened_host_dataset as T.
+    // An early flush happens only if staging exceeds host_stage_budget_bytes()
+    // — the emergency valve, which logs because it makes the range
+    // prefix-derived.
     // Only ever accessed from submit_main() tasks (serialised), so no extra
     // locking is needed beyond what those tasks already take.
     // (Fields are in protected: — see below.)
@@ -925,6 +1033,22 @@ public:
 
     // Common management methods
     virtual void destroy() {
+        // Return whatever this index still charges to the process-wide staging
+        // budget. An index dropped before build() (failed CREATE INDEX, DROP
+        // during ingest) still holds its staged chunks, and leaking the charge
+        // would shrink every future build's headroom until the process restarts.
+        uint64_t staged = 0;
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            staged = pending_stage_bytes_;
+            pending_stage_bytes_ = 0;
+            pending_total_count_ = 0;
+            pending_float_chunks_.clear();
+            pending_float_chunks_.shrink_to_fit();
+        }
+        if (staged) {
+            stage_budget::staged_bytes().fetch_sub(staged, std::memory_order_relaxed);
+        }
         if (worker) worker->stop();
     }
 
@@ -1125,6 +1249,56 @@ public:
         return requested_rows;
     }
 
+    // Host-memory budget for the raw base-typed staging buffer
+    // (pending_float_chunks_), in BYTES.
+    //
+    // Why a byte budget and not a row count: the buffer exists only so the
+    // quantizer can be trained on a STRIDED sample of the WHOLE table (see
+    // flush_pending_float_chunks_internal). Training early — at any fixed row
+    // count — makes the learned [min,max] a PREFIX of the table, which
+    // saturates the tail of magnitude-sorted data to +/-127 (the failure
+    // GpuIvfPqTest.StridedQuantizerTrainSamplesTail guards). So the default
+    // must be "keep buffering", and an early flush is an EMERGENCY valve that
+    // only fires when retaining more would risk the OOM this staging buffer is
+    // capable of causing (N * dim * sizeof(B) for a large table).
+    //
+    // Real cost of staging one chunk, not just its vector payload. The GPU
+    // builders call AddChunkQuantize with chunk_count == 1 (one row per chunk:
+    // pkg/vectorindex/{cagra,ivfpq}/build_gpu.go), so per-chunk overhead — the
+    // pending_float_chunk_t record, both vector headers, their capacity
+    // rounding, and the allocator's own bookkeeping — dominates the payload at
+    // low dimension. Counting payload alone under-charges real RSS several-fold
+    // (at dim=8/f32: 32 B accounted vs ~144 B actual), which would let the valve
+    // fire only after the process had already been OOM-killed.
+    uint64_t staged_chunk_bytes(uint64_t chunk_count, bool with_ids) const {
+        constexpr uint64_t kAllocOverhead = 48;  // per heap block, conservative
+        uint64_t bytes = sizeof(pending_float_chunk_t);
+        bytes += chunk_count * static_cast<uint64_t>(dimension) * sizeof(B) + kAllocOverhead;
+        if (with_ids) bytes += chunk_count * sizeof(IdT) + kAllocOverhead;
+        return bytes;
+    }
+
+    // Warn once per index when the emergency valve fires: the quantizer range
+    // is then derived from a prefix of the table, not the whole table, so recall
+    // on magnitude-sorted data can drop. Silent truncation of accuracy is worse
+    // than a log line.
+    //
+    // MUST be called with mutex_ RELEASED. std::endl flushes, and a stderr whose
+    // reader has stalled (piped to a log collector, full 64 KiB pipe) blocks in
+    // write(2); doing that under the exclusive lock would stall every reader of
+    // this index behind a log line (CLAUDE.md rule 1).
+    void warn_prefix_trained_once(uint64_t staged_rows) {
+        if (warned_prefix_trained_.exchange(true)) return;
+        std::cerr << "[quantizer] host staging budget ("
+                  << (stage_budget::budget_bytes() >> 20) << " MB) reached after "
+                  << staged_rows << " rows: training the scalar quantizer NOW on "
+                  << "those rows only. The learned [min,max] covers a PREFIX of "
+                  << "the table — if the source is sorted by magnitude the tail "
+                  << "will saturate. Reduce the base width, pre-set the range "
+                  << "with set_quantizer(), or give the process more memory."
+                  << std::endl;
+    }
+
     // Flush all pending float chunks: train the quantizer on the combined data,
     // then quantize each chunk and store into flattened_host_dataset.
     // Must be called only from inside a submit_main() task (GPU work is legal there).
@@ -1140,6 +1314,14 @@ public:
             total = pending_total_count_;
             pending_total_count_ = 0;
             pending_float_chunks_.clear();
+            // Release this index's share of the process-wide staging budget. The
+            // bytes are still live until `chunks` goes out of scope at the end of
+            // this function, but the rows they hold are about to be quantized into
+            // flattened_host_dataset, and charging them for the duration would let
+            // one flushing index block another's staging.
+            stage_budget::staged_bytes().fetch_sub(pending_stage_bytes_,
+                                                   std::memory_order_relaxed);
+            pending_stage_bytes_ = 0;
         }
 
         auto res = handle.get_raft_resources();
@@ -1284,24 +1466,41 @@ public:
                         if (ids) c.ids.assign(ids, ids + chunk_count);
                         
                         bool should_flush = false;
+                        uint64_t staged_rows_at_flush = 0;
                         {
                             std::unique_lock<std::shared_mutex> lock(mutex_);
                             // Re-check trained under unique_lock to be absolutely safe
                             if (!quantizer_.is_trained()) {
+                                uint64_t cost = staged_chunk_bytes(chunk_count, ids != nullptr);
                                 pending_total_count_ += chunk_count;
+                                pending_stage_bytes_ += cost;
+                                stage_budget::staged_bytes().fetch_add(cost, std::memory_order_relaxed);
                                 pending_float_chunks_.push_back(std::move(c));
-                                if (pending_total_count_ >= kQuantizerTrainThreshold) {
+                                // Same emergency-valve rule as add_chunk_quantize.
+                                // This used to be a hard 1000-row threshold, which
+                                // (a) trained the quantizer on the first ~1000 rows
+                                // of every f32->int8/uint8 build and (b) made
+                                // set_quantizer_train_limit() a no-op on this path,
+                                // since the sample is min(buffered, limit) and only
+                                // 1000 rows were ever buffered.
+                                if (stage_budget::over_budget()) {
                                     should_flush = true;
+                                    staged_rows_at_flush = pending_total_count_;
                                 }
                             } else {
                                 trained = true; // Someone trained it while we were copying
                             }
                         }
-                        
+
+                        // Logged with mutex_ RELEASED: std::endl flushes, and a
+                        // stalled stderr (piped to a collector whose 64 KiB pipe
+                        // filled) blocks in write(2) — under the exclusive lock
+                        // that would stall every reader of this index.
                         if (should_flush) {
+                            warn_prefix_trained_once(staged_rows_at_flush);
                             flush_pending_float_chunks_internal(handle);
                         }
-                        
+
                         if (!trained) return std::any();
                         // trained=true here means set_quantizer() was called on another thread
                         // between the first check (shared_lock) and the re-check (unique_lock).
@@ -1457,10 +1656,25 @@ public:
 
     // Set the number of rows strided-sampled from the buffer to train the
     // int8/uint8 quantizer. 0 keeps the default (kDefaultQuantizerTrainLimit).
-    // Call before build/flush; it only affects the training sample size.
+    // Call before build/flush; it only affects the training SAMPLE size — it
+    // never sizes the host staging buffer (that is host_stage_budget_bytes()).
+    //
+    // Clamped to kMaxQuantizerTrainLimit: the value reaches here straight from
+    // SQL (CREATE INDEX ... quantizer_train_limit N — the parser rejects only
+    // <= 0), and the sample is materialized as one contiguous
+    // n_train * dim * sizeof(B) host vector before cap_train_rows_to_gpu_mem
+    // trims the device copy, so an unclamped value allocates that much host RAM.
     void set_quantizer_train_limit(uint64_t n) {
+        if (n == 0) return;
+        if (n > kMaxQuantizerTrainLimit) {
+            std::cerr << "[quantizer] train limit " << n << " capped to "
+                      << kMaxQuantizerTrainLimit
+                      << " rows (a larger sample does not improve a min/max estimate)"
+                      << std::endl;
+            n = kMaxQuantizerTrainLimit;
+        }
         std::unique_lock<std::shared_mutex> lock(mutex_);
-        if (n > 0) quantizer_train_limit_ = n;
+        quantizer_train_limit_ = n;
     }
 
     // ---- Native B-source quantization (base element B -> 1-byte T) ----
@@ -1476,18 +1690,112 @@ public:
             // B == T: no conversion — native storage add.
             this->add_chunk(chunk_data, chunk_count, offset, ids);
         } else if constexpr (sizeof(T) == 1) {
-            {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
-                if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
-            }
-            pending_float_chunk_t c;
-            c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
-            c.count  = chunk_count;
-            c.offset = offset;
-            if (ids) c.ids.assign(ids, ids + chunk_count);
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            pending_total_count_ += chunk_count;
-            pending_float_chunks_.push_back(std::move(c));
+            // int8/uint8 storage: quantize B -> T. Bound host memory — train the
+            // quantizer once the buffered rows reach quantizer_train_limit_, then
+            // quantize every later chunk on-the-fly straight into
+            // flattened_host_dataset. This keeps the raw base-typed buffer to
+            // ~quantizer_train_limit_ rows instead of retaining the whole table
+            // until Build() (the O(N*sizeof(B)) buffer-all that could OOM a large
+            // 1-byte build). Same bounded buffer/flush/stream shape as
+            // add_chunk_float, but the input is already base type B (no f32->B
+            // conversion). GPU training must run in a worker task, so submit_main.
+            uint64_t job_id = worker->submit_main(
+                [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+                    }
+                    bool trained;
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        trained = quantizer_.is_trained();
+                    }
+                    if (!trained) {
+                        // Buffer this chunk (as B) for deferred training.
+                        pending_float_chunk_t c;
+                        c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
+                        c.count  = chunk_count;
+                        c.offset = offset;
+                        if (ids) c.ids.assign(ids, ids + chunk_count);
+                        bool should_flush = false;
+                        uint64_t staged_rows_at_flush = 0;
+                        {
+                            std::unique_lock<std::shared_mutex> lock(mutex_);
+                            if (!quantizer_.is_trained()) {
+                                uint64_t cost = staged_chunk_bytes(chunk_count, ids != nullptr);
+                                pending_total_count_ += chunk_count;
+                                pending_stage_bytes_ += cost;
+                                stage_budget::staged_bytes().fetch_add(cost, std::memory_order_relaxed);
+                                pending_float_chunks_.push_back(std::move(c));
+                                // Emergency valve ONLY — see stage_budget::budget_bytes().
+                                // Flushing here trains on a PREFIX of the table, so it
+                                // must not be tied to quantizer_train_limit_ (a sample
+                                // size, typically far smaller than the table): doing so
+                                // made every build prefix-trained and broke
+                                // GpuIvfPqTest.StridedQuantizerTrainSamplesTail.
+                                if (stage_budget::over_budget()) {
+                                    should_flush = true;
+                                    staged_rows_at_flush = pending_total_count_;
+                                }
+                            } else {
+                                trained = true; // trained on another thread while copying
+                            }
+                        }
+                        // Warn with mutex_ RELEASED — see warn_prefix_trained_once.
+                        if (should_flush) {
+                            warn_prefix_trained_once(staged_rows_at_flush);
+                            flush_pending_float_chunks_internal(handle);
+                        }
+                        // Either still untrained (chunk stays buffered) or the flush
+                        // above already quantized this chunk with the rest — done.
+                        if (!trained) return std::any();
+                        // trained==true here means set_quantizer() raced in and c was
+                        // NOT pushed; fall through to quantize this chunk directly.
+                    }
+
+                    // Quantizer trained: CPU affine map straight into the dataset
+                    // (pure host transform — no per-chunk GPU round-trip).
+                    std::unique_lock<std::shared_mutex> lock(mutex_);
+                    uint64_t target_offset;
+                    if (offset == -1) {
+                        target_offset = current_offset_;
+                        current_offset_ += chunk_count;
+                    } else {
+                        target_offset = static_cast<uint64_t>(offset);
+                        if (target_offset + chunk_count > current_offset_) {
+                            current_offset_ = target_offset + chunk_count;
+                        }
+                    }
+                    if (current_offset_ > count) count = current_offset_;
+
+                    size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
+                    if (flattened_host_dataset.size() < required_elements) {
+                        flattened_host_dataset.resize(required_elements);
+                    }
+                    quantizer_.template transform_host<T>(
+                        chunk_data,
+                        flattened_host_dataset.data() + (target_offset * dimension),
+                        static_cast<size_t>(chunk_count) * dimension);
+
+                    if (this->dist_mode == DistributionMode_SHARDED) {
+                        int num_shards = static_cast<int>(this->devices_.size());
+                        if (this->shard_sizes_.size() != (size_t)num_shards) {
+                            this->shard_sizes_.assign(num_shards, 0);
+                        }
+                        uint64_t total = this->current_offset_;
+                        uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                        for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+                        this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+                    }
+
+                    if (ids) {
+                        this->set_ids_internal(ids, chunk_count, target_offset);
+                    }
+                    return std::any();
+                }
+            );
+            auto res = worker->wait(job_id).get();
+            if (res.error) std::rethrow_exception(res.error);
         } else if constexpr (std::is_same_v<B, float>) {
             // B=float, T=half (sizeof(T)!=1): f32 -> T cast via add_chunk_float.
             this->add_chunk_float(chunk_data, chunk_count, offset, ids);
@@ -1983,7 +2291,10 @@ protected:
         int64_t          offset; ///< -1 = append; >= 0 = explicit position
         std::vector<IdT> ids;    ///< empty if caller supplied no IDs
     };
-    static constexpr uint64_t kQuantizerTrainThreshold = 1000;
+    // (kQuantizerTrainThreshold, a hard 1000-row early-train trigger, was
+    // removed: it trained every f32->int8/uint8 build on the first ~1000 rows
+    // and made set_quantizer_train_limit inert on that path. Staging is now
+    // bounded by host_stage_budget_bytes() instead.)
     // Number of rows STRIDED-sampled from the buffer to train the int8/uint8
     // scalar quantizer (flush_pending_float_chunks_internal). Default 100000;
     // settable per index via set_quantizer_train_limit, and hard-capped to 60%
@@ -1991,9 +2302,20 @@ protected:
     // 0.99-quantile estimate at a few hundred MB of f32 even at high dim — see
     // the training block for the statistics; 1M would be ~3-4 GB and get capped.
     static constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
+    // Hard ceiling for the SQL-settable train limit — see
+    // set_quantizer_train_limit. 5M rows of the widest realistic base
+    // (f32 x dim 4096) is ~80 GB, so the clamp alone is not the memory bound;
+    // it is the guard against an absurd value, with cap_train_rows_to_gpu_mem
+    // trimming the device side and host_stage_budget_bytes() bounding staging.
+    static constexpr uint64_t kMaxQuantizerTrainLimit = 5000000;
     uint64_t quantizer_train_limit_ = kDefaultQuantizerTrainLimit;
+    // One-shot latch for the prefix-training warning (see warn_prefix_trained_once).
+    std::atomic<bool> warned_prefix_trained_{false};
     std::vector<pending_float_chunk_t> pending_float_chunks_;
     uint64_t pending_total_count_ = 0;
+    // This index's contribution to stage_budget::staged_bytes(), so the
+    // destructor and flush can return exactly what they charged.
+    uint64_t pending_stage_bytes_ = 0;
 };
 
 } // namespace matrixone

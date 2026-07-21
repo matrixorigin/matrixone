@@ -117,10 +117,11 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfflat HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index immediately rather than waiting for the
-	// 5-min VectorIndexCacheTTL. Mirrors the create-side
-	// cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName)).
+	// 5-min VectorIndexCacheTTL. Prefix form because the search key carries the
+	// meta-table version (and a /cnIdx/cnCnt suffix when the read is split
+	// across CNs) — see the create-side RemovePrefix.
 	if centroidsDef, ok := defs[catalog.SystemSI_IVFFLAT_TblType_Centroids]; ok {
-		cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName))
+		cache.Cache.RemovePrefix(fmt.Sprintf("%s:", centroidsDef.IndexTableName))
 	}
 	return nil
 }
@@ -207,8 +208,11 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return err
 	}
 
-	// remove the cache with version 0
-	cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName))
+	// Drop every cached generation of this index table, not just ":0" — the
+	// search key is "<indexTable>:<version>" with the version read from the meta
+	// table, so a rebuilt index sits under ":1", ":2", ... and a ":0"-only
+	// eviction would leave the live entry behind.
+	cache.Cache.RemovePrefix(fmt.Sprintf("%s:", centroidsDef.IndexTableName))
 
 	// 3. count rows in the source table
 	totalCnt, err := indexColCount(ctx, metaDef, qryDatabase, originalTableDef)
