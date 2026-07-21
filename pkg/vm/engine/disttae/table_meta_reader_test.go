@@ -50,6 +50,25 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, stats[1].ObjectName().String()))
 }
 
+func TestProtectCloneFilesDistinguishesExistingOwnership(t *testing.T) {
+	tbl := newTxnTableForTest()
+	txn := tbl.getTxn()
+	txn.BindTxnOp(tbl.db.op)
+	txn.engine.cloneTxnCache = newCloneTxnCache()
+	txn.SetCloneTxn(1)
+
+	stats := mockStatsList(t, 2)
+	mp := mpool.MustNewZero()
+	bat := cloneObjectStatsBatchForTest(t, mp, stats[1])
+	defer bat.Clean(mp)
+	txn.writes = append(txn.writes, Entry{typ: INSERT, fileName: "load-meta", bat: bat})
+
+	txn.ProtectCloneFiles(stats[0].ObjectName().String(), stats[1].ObjectName().String())
+	txnID := txn.op.Txn().ID
+	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, stats[0].ObjectName().String()))
+	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, stats[1].ObjectName().String()))
+}
+
 func TestCloneTxnIntermediateGCKeepsTxnLocalSharedObjects(t *testing.T) {
 	ctx := context.Background()
 	fs := newCleanFS(t)

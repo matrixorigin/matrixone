@@ -192,6 +192,17 @@ type ObjectStorage interface {
 	)
 }
 
+// objectStorageCopier is implemented by object-store SDK adapters that can
+// ask the provider to copy an object without downloading it through CN.
+type objectStorageCopier interface {
+	CopyObject(
+		ctx context.Context,
+		src ObjectStorage,
+		srcKey string,
+		dstKey string,
+	) (copied bool, err error)
+}
+
 // ParallelMultipartWriter is implemented by storages that support parallel multipart uploads.
 type ParallelMultipartWriter interface {
 	SupportsParallelMultipart() bool

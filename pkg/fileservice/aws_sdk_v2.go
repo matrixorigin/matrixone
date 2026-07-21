@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"math"
+	"net/url"
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
@@ -51,11 +52,32 @@ import (
 
 type AwsSDKv2 struct {
 	name               string
+	endpoint           string
 	bucket             string
 	client             *s3.Client
 	perfCounterSets    []*perfcounter.CounterSet
 	listMaxKeys        int32
 	disableMultiDelete atomic.Bool
+}
+
+var _ objectStorageCopier = new(AwsSDKv2)
+
+func (a *AwsSDKv2) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*AwsSDKv2)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) {
+		return false, nil
+	}
+	_, err := a.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(a.bucket),
+		CopySource: aws.String(url.PathEscape(s.bucket + "/" + srcKey)),
+		Key:        aws.String(dstKey),
+	})
+	return true, err
 }
 
 func NewAwsSDKv2(
@@ -189,6 +211,7 @@ func NewAwsSDKv2(
 
 	return &AwsSDKv2{
 		name:            args.Name,
+		endpoint:        args.Endpoint,
 		bucket:          args.Bucket,
 		client:          client,
 		perfCounterSets: perfCounterSets,

@@ -6579,6 +6579,22 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.DumpTable:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
+	case *tree.LoadTable:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)

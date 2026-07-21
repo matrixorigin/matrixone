@@ -41,6 +41,7 @@ import (
 
 type QCloudSDK struct {
 	name            string
+	copySourceHost  string
 	client          *cos.Client
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int
@@ -129,9 +130,26 @@ func NewQCloudSDK(
 
 	return &QCloudSDK{
 		name:            args.Name,
+		copySourceHost:  baseURL.Host,
 		client:          client,
 		perfCounterSets: perfCounterSets,
 	}, nil
+}
+
+var _ objectStorageCopier = new(QCloudSDK)
+
+func (a *QCloudSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*QCloudSDK)
+	if !ok {
+		return false, nil
+	}
+	_, _, err := a.client.Object.Copy(ctx, dstKey, s.copySourceHost+"/"+srcKey, nil)
+	return true, err
 }
 
 var _ ObjectStorage = new(QCloudSDK)

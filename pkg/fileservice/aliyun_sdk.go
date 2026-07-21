@@ -24,6 +24,7 @@ import (
 	"net/http"
 	gotrace "runtime/trace"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -41,9 +42,26 @@ import (
 
 type AliyunSDK struct {
 	name            string
+	endpoint        string
 	bucket          *oss.Bucket
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int
+}
+
+var _ objectStorageCopier = new(AliyunSDK)
+
+func (a *AliyunSDK) CopyObject(
+	_ context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*AliyunSDK)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) {
+		return false, nil
+	}
+	_, err := a.bucket.CopyObjectFrom(s.bucket.BucketName, srcKey, dstKey)
+	return true, err
 }
 
 var (
@@ -116,6 +134,7 @@ func NewAliyunSDK(
 
 	return &AliyunSDK{
 		name:            args.Name,
+		endpoint:        args.Endpoint,
 		bucket:          bucket,
 		perfCounterSets: perfCounterSets,
 	}, nil

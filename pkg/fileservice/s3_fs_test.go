@@ -44,6 +44,76 @@ type objectStorageReadRange struct {
 	max *int64
 }
 
+type testObjectCopyStorage struct {
+	dummyObjectStorage
+	src    ObjectStorage
+	srcKey string
+	dstKey string
+}
+
+func (s *testObjectCopyStorage) CopyObject(
+	_ context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s.src = src
+	s.srcKey = srcKey
+	s.dstKey = dstKey
+	return true, nil
+}
+
+func TestS3FSCopyObject(t *testing.T) {
+	ctx := context.Background()
+	srcStorage := &testObjectCopyStorage{}
+	dstStorage := &testObjectCopyStorage{}
+	src := &S3FS{name: "src", keyPrefix: "cluster", storage: srcStorage, rawStorage: srcStorage}
+	dst := &S3FS{name: "dst", keyPrefix: "fixture", storage: dstStorage, rawStorage: dstStorage}
+
+	copied, err := dst.CopyObject(ctx, src, "objects/a", "backup/objects/a")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Same(t, srcStorage, dstStorage.src)
+	require.Equal(t, "cluster/objects/a", dstStorage.srcKey)
+	require.Equal(t, "fixture/backup/objects/a", dstStorage.dstKey)
+
+	sub := SubPath(dst, "table")
+	copied, err = sub.(ObjectCopier).CopyObject(ctx, src, "objects/a", "objects/a")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, "fixture/table/objects/a", dstStorage.dstKey)
+
+	srcServices, err := NewFileServices("src", src)
+	require.NoError(t, err)
+	dstServices, err := NewFileServices("dst", dst)
+	require.NoError(t, err)
+	copied, err = dstServices.CopyObject(ctx, srcServices, "objects/a", "objects/b")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, "cluster/objects/a", dstStorage.srcKey)
+	require.Equal(t, "fixture/objects/b", dstStorage.dstKey)
+}
+
+func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
+	copied, err := (&AwsSDKv2{endpoint: "https://s3-b.example.com"}).CopyObject(
+		context.Background(), &AwsSDKv2{endpoint: "https://s3-a.example.com"}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&MinioSDK{endpoint: "minio-b:9000"}).CopyObject(
+		context.Background(), &MinioSDK{endpoint: "minio-a:9000"}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&AliyunSDK{endpoint: "oss-b.example.com"}).CopyObject(
+		context.Background(), &AliyunSDK{endpoint: "oss-a.example.com"}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+}
+
 type readRangeRecordingObjectStorage struct {
 	ObjectStorage
 	mu    sync.Mutex

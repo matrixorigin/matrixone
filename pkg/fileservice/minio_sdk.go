@@ -38,11 +38,32 @@ import (
 
 type MinioSDK struct {
 	name            string
+	endpoint        string
 	bucket          string
 	core            *minio.Core
 	client          *minio.Client
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int
+}
+
+var _ objectStorageCopier = new(MinioSDK)
+
+func (a *MinioSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*MinioSDK)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) {
+		return false, nil
+	}
+	_, err := a.client.CopyObject(
+		ctx,
+		minio.CopyDestOptions{Bucket: a.bucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
+	)
+	return true, err
 }
 
 func NewMinioSDK(
@@ -205,6 +226,7 @@ func NewMinioSDK(
 
 	return &MinioSDK{
 		name:            args.Name,
+		endpoint:        args.Endpoint,
 		bucket:          args.Bucket,
 		client:          client,
 		core:            core,

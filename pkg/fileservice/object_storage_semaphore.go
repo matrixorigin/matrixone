@@ -48,6 +48,26 @@ func (o *objectStorageSemaphore) release() {
 
 var _ ObjectStorage = new(objectStorageSemaphore)
 var _ ParallelMultipartWriter = new(objectStorageSemaphore)
+var _ objectStorageCopier = new(objectStorageSemaphore)
+
+func (o *objectStorageSemaphore) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	copier, ok := o.upstream.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	select {
+	case o.semaphore <- struct{}{}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	defer o.release()
+	return copier.CopyObject(ctx, src, srcKey, dstKey)
+}
 
 func (o *objectStorageSemaphore) Delete(ctx context.Context, keys ...string) (err error) {
 	o.acquire()

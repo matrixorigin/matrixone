@@ -461,6 +461,30 @@ func (txn *Transaction) SetCloneTxn(snapshot int64) {
 	txn.engine.cloneTxnCache.AddTxn(txn.op.Txn().ID, snapshot)
 }
 
+// ProtectCloneFiles records pre-existing objects reused by a clone-like write.
+// Objects already referenced by this transaction remain txn-local: statement
+// rollback must preserve them for earlier statements, while transaction
+// rollback must still delete them. Other objects are owned by committed state
+// outside this transaction and must never be deleted by clone rollback.
+func (txn *Transaction) ProtectCloneFiles(names ...string) {
+	txn.Lock()
+	defer txn.Unlock()
+	txnID := txn.op.Txn().ID
+	liveNames := make(map[string]struct{}, len(names))
+	for _, entry := range txn.writes {
+		for _, stats := range collectObjectStatsFromEntry(entry) {
+			liveNames[stats.ObjectName().String()] = struct{}{}
+		}
+	}
+	for _, name := range names {
+		if _, ok := liveNames[name]; ok {
+			txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txnID, name)
+		} else {
+			txn.engine.cloneTxnCache.AddSharedFile(txnID, name)
+		}
+	}
+}
+
 // SetCCPRTxn marks this transaction as a CCPR transaction.
 // CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
 func (txn *Transaction) SetCCPRTxn() {
