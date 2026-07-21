@@ -1,0 +1,56 @@
+drop database if exists ft2_postcap;
+create database ft2_postcap;
+use ft2_postcap;
+set experimental_fulltext2_index = 1;
+drop table if exists docs;
+create table docs(id bigint primary key, body text);
+insert into docs values
+(0,'the quick brown fox jumps'),
+(1,'a quick brown dog runs'),
+(2,'the lazy fox sleeps here'),
+(3,'brown bear and lazy cat'),
+(4,'quick quick quick fox fox');
+create fulltext2 index ft on docs(body) max_index_capacity 1000000 max_postings_capacity 8;
+select distinct algo, algo_params from mo_catalog.mo_indexes where name = 'ft';
+➤ algo[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
+fulltext2  ¦  {"max_index_capacity":"1000000","max_postings_capacity":"8","parser":"ngram"}
+select id from docs where match(body) against('quick brown fox') order by id;
+➤ id[-5,64,0]  𝄀
+0
+select id from docs where match(body) against('brown') order by id;
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
+3
+select id from docs where match(body) against('+quick +fox' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+0  𝄀
+4
+select id from docs where match(body) against('lazy') order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+3
+alter table docs alter reindex ft fulltext2;
+select id from docs where match(body) against('brown') order by id;
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
+3
+drop table if exists docs2;
+create table docs2(id bigint primary key, body text);
+insert into docs2 values
+(0,'the quick brown fox jumps'),
+(1,'a quick brown dog runs'),
+(2,'the lazy fox sleeps here');
+create fulltext2 index ft on docs2(body) max_postings_capacity 8000000;
+select distinct algo_params from mo_catalog.mo_indexes where name = 'ft' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 'docs2');
+➤ algo_params[12,-1,0]  𝄀
+{"max_postings_capacity":"8000000","parser":"ngram"}
+select id from docs2 where match(body) against('brown') order by id;
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1
+create table bad(id bigint primary key, body text);
+create fulltext2 index ftbad on bad(body) max_postings_capacity 0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. MAX_POSTINGS_CAPACITY should be greater than 0 at line 1 column 65 near " 0;";
+drop database ft2_postcap;

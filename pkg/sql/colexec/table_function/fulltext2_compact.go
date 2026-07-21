@@ -34,10 +34,11 @@ import (
 )
 
 type fulltext2CompactState struct {
-	inited   bool
-	tblcfg   fulltext2.TableConfig
-	capacity int64
-	batch    *batch.Batch
+	inited     bool
+	tblcfg     fulltext2.TableConfig
+	capacity   int64
+	postingCap int64
+	batch      *batch.Batch
 }
 
 func (u *fulltext2CompactState) reset(tf *TableFunction, proc *process.Process) {
@@ -92,6 +93,15 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 			u.tblcfg.PositionFree = pv.UnsafeGetStringAt(0) == "true"
 		}
 	}
+	// Optional 6th arg: posting_capacity (max_postings_capacity). Absent ⇒ 0, floored
+	// to DefaultPostingCapacity in CompactSegments so the fresh base stays memory-bounded.
+	if len(tf.ctr.argVecs) > 5 {
+		if cv := tf.ctr.argVecs[5]; cv != nil && cv.IsConst() && cv.Length() > 0 {
+			if pc, perr := strconv.ParseInt(cv.UnsafeGetStringAt(0), 10, 64); perr == nil {
+				u.postingCap = pc
+			}
+		}
+	}
 	u.batch = tf.createResultBatch()
 	u.inited = true
 	return nil
@@ -104,7 +114,7 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 		return nil
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
-	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity); err != nil {
+	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity, u.postingCap); err != nil {
 		return err
 	}
 	// The tag=0 base changed (tail folded into a fresh merged base) — evict any cached
@@ -115,10 +125,11 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 }
 
 func fulltext2CompactPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
-	// 5th arg (position_free) is optional so a position-free index's MERGE rebuilds
-	// position-free; older 4-arg callers stay valid (positional).
-	if len(arg.Args) != 4 && len(arg.Args) != 5 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: expects 4 or 5 args (db, store, meta, capacity[, position_free])")
+	// 5th arg (position_free) and 6th arg (posting_capacity) are optional so a
+	// position-free index's MERGE rebuilds position-free and older 4/5-arg callers
+	// stay valid (positional, default posting cap).
+	if len(arg.Args) < 4 || len(arg.Args) > 6 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: expects 4 to 6 args (db, store, meta, capacity[, position_free[, posting_capacity]])")
 	}
 	var err error
 	st := &fulltext2CompactState{}

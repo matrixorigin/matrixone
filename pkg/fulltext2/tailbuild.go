@@ -41,7 +41,8 @@ type TailSegment struct {
 // be deferred to remove the temp files.
 type TailBuilder struct {
 	pkType     int32
-	capacity   int64
+	capacity   int64 // doc cap (max_index_capacity)
+	postingCap int64 // posting cap (max_postings_capacity); seal on whichever is hit first
 	tokenize   func(string) []WordPos
 	dir        string
 	seq        int
@@ -55,15 +56,20 @@ type TailBuilder struct {
 
 // NewTailBuilder creates a streaming tail builder backed by a private temp dir. Pass
 // WithPositionFree() so a position-free index's CDC tail stays position-free.
-func NewTailBuilder(pkType int32, capacity int64, tokenize func(string) []WordPos, opts ...BuildOpt) (*TailBuilder, error) {
+// capacity is max_index_capacity (docs), postingCap is max_postings_capacity
+// (postings); each non-positive value falls back to its default.
+func NewTailBuilder(pkType int32, capacity, postingCap int64, tokenize func(string) []WordPos, opts ...BuildOpt) (*TailBuilder, error) {
 	if capacity < 1 {
 		capacity = defaultTailCapacity
+	}
+	if postingCap < 1 {
+		postingCap = DefaultPostingCapacity
 	}
 	dir, err := os.MkdirTemp("", "ftv2tail")
 	if err != nil {
 		return nil, err
 	}
-	return &TailBuilder{pkType: pkType, capacity: capacity, tokenize: tokenize, dir: dir, opts: opts}, nil
+	return &TailBuilder{pkType: pkType, capacity: capacity, postingCap: postingCap, tokenize: tokenize, dir: dir, opts: opts}, nil
 }
 
 // AddBatch streams one decoded CDC batch: insert/upsert rows are tokenized into
@@ -82,7 +88,7 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 					return err
 				}
 			}
-			if int64(t.cur.NumDocs()) >= t.capacity {
+			if ReachedSegmentCap(t.cur, t.capacity, t.postingCap) {
 				if err := t.seal(); err != nil {
 					return err
 				}

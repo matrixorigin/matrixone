@@ -927,6 +927,7 @@ type AlterOptionAlterReIndex struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxPostingsCapacity      int64
 	PositionFree             bool
 	PositionFreeSet          bool
 	IncludeColumns           []*UnresolvedName
@@ -962,6 +963,7 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.KmeansTrainPercent = option.KmeansTrainPercent
 	a.KmeansMaxIteration = option.KmeansMaxIteration
 	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.MaxPostingsCapacity = option.MaxPostingsCapacity
 	a.PositionFree = option.PositionFree
 	a.PositionFreeSet = option.PositionFreeSet
 	a.IncludeColumns = option.IncludeColumns
@@ -1011,6 +1013,7 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	writeInt("kmeans_train_percent", node.KmeansTrainPercent)
 	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
 	writeInt("max_index_capacity", node.MaxIndexCapacity)
+	writeInt("max_postings_capacity", node.MaxPostingsCapacity)
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString(" include (")
 		for i, c := range node.IncludeColumns {

@@ -195,6 +195,12 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 		if idx.IndexOption.MaxIndexCapacity > 0 {
 			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 		}
+		// max_postings_capacity: postings (term occurrences) per built segment — the
+		// memory-correlated seal (a long-doc corpus seals on postings, not docs). Absence
+		// ⇒ DefaultPostingCapacity in the build paths.
+		if idx.IndexOption.MaxPostingsCapacity > 0 {
+			res[catalog.IndexAlgoParamMaxPostingsCapacity] = strconv.FormatInt(idx.IndexOption.MaxPostingsCapacity, 10)
+		}
 		// position_free ⇒ build without the positional payload (bag-of-words retrieval
 		// only). Recorded only when TRUE; absence ⇒ positional (phrase-capable). Only
 		// gojieba (word tokens) is meaningful position-free: ngram/json emit overlapping

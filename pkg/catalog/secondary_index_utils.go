@@ -133,6 +133,13 @@ const (
 	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
 	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
 
+	// IndexAlgoParamMaxPostingsCapacity (fulltext2): max postings (term occurrences)
+	// per built segment. Bounds per-segment build memory regardless of doc size —
+	// max_index_capacity (docs) is a poor memory proxy since a doc can hold one token
+	// or tens of thousands. A segment seals on whichever cap (docs OR postings) is hit
+	// first. Recorded only when explicitly specified; absence ⇒ DefaultPostingCapacity.
+	IndexAlgoParamMaxPostingsCapacity = "max_postings_capacity"
+
 	// IndexAlgoParamPositionFree (fulltext2): "true" ⇒ build a position-free index
 	// (bag-of-words retrieval only, ~half the footprint; the FST term dict is kept).
 	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
@@ -237,6 +244,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[IndexAlgoParamMaxIndexCapacity]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
+	}
+
+	if val, ok := result[IndexAlgoParamMaxPostingsCapacity]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
 	}
 
 	if val, ok := result[IndexAlgoParamVersion]; ok {

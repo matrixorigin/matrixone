@@ -28,6 +28,7 @@ import (
 )
 
 const defaultFulltext2Capacity int64 = 1000000
+const defaultFulltext2PostingCapacity int64 = 8_000_000
 
 // Fulltext2SqlWriter is the ISCP sink adapter for the fulltext2 positional index.
 // Like WandSqlWriter it is model-building: it accumulates one flush's CDC rows
@@ -35,11 +36,12 @@ const defaultFulltext2Capacity int64 = 1000000
 // (per the index parser), and turns into tag=1 CdcTail frames. Binary (typed pk)
 // because a fulltext2 pk is `any` (int64 OR varchar).
 type Fulltext2SqlWriter struct {
-	cfg      fulltext2.TableConfig // DbName + ftv2_index (storage) + ftv2_meta (metadata) + parser
-	pkType   int32                 // types.T of the source primary key
-	pkPos    int32                 // pk column index in the extracted row
-	textPos  []int32               // indexed text columns (all idxdef.Parts) — multi-column joins with '\n'
-	capacity int64                 // max docs per delta segment (max_index_capacity)
+	cfg        fulltext2.TableConfig // DbName + ftv2_index (storage) + ftv2_meta (metadata) + parser
+	pkType     int32                 // types.T of the source primary key
+	pkPos      int32                 // pk column index in the extracted row
+	textPos    []int32               // indexed text columns (all idxdef.Parts) — multi-column joins with '\n'
+	capacity   int64                 // max docs per delta segment (max_index_capacity)
+	postingCap int64                 // max postings per delta segment (max_postings_capacity)
 
 	cdc   *fulltext2.Cdc
 	ndata int
@@ -92,14 +94,19 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	if err != nil {
 		return nil, err
 	}
+	postingCap, err := indexplugin.AlgoParamInt(flat[catalog.IndexAlgoParamMaxPostingsCapacity], resolve, "fulltext_max_postings_capacity", defaultFulltext2PostingCapacity)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Fulltext2SqlWriter{
-		cfg:      fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
-		pkType:   int32(pkTyp.Id),
-		pkPos:    pkPos,
-		textPos:  textPos,
-		capacity: capacity,
-		cdc:      fulltext2.NewCdc(int32(pkTyp.Id)),
+		cfg:        fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
+		pkType:     int32(pkTyp.Id),
+		pkPos:      pkPos,
+		textPos:    textPos,
+		capacity:   capacity,
+		postingCap: postingCap,
+		cdc:        fulltext2.NewCdc(int32(pkTyp.Id)),
 	}, nil
 }
 

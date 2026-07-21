@@ -137,6 +137,11 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 // WITH max_index_capacity option is omitted.
 const DefaultMaxIndexCapacity = int64(1000000)
 
+// DefaultMaxPostingsCapacity caps each tag=0 sub-index's posting (term-occurrence)
+// count when WITH max_postings_capacity is omitted (~512 MB peak build heap). Bounds
+// build memory for long-document corpora that a doc-count cap alone would not.
+const DefaultMaxPostingsCapacity = int64(8_000_000)
+
 // buildFromSource builds the index straight from the SOURCE table in one
 // statement: SELECT f.* FROM src CROSS APPLY fulltext2_create(params, cfg, pk,
 // cols…). The create TVF tokenizes each row in execution (datalink → plain text,
@@ -151,7 +156,11 @@ func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.I
 	if err != nil {
 		return err
 	}
-	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity)
+	postingCap, err := resolveFulltext2PostingCapacity(storeDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap)
 	if err != nil {
 		return err
 	}
@@ -180,6 +189,29 @@ func resolveFulltext2Capacity(algoParams string) (int64, error) {
 	return DefaultMaxIndexCapacity, nil
 }
 
+// resolveFulltext2PostingCapacity reads max_postings_capacity from the index's
+// algo_params, defaulting when the WITH option was omitted. Mirrors the doc-cap
+// resolver; both caps are pinned at CREATE and read back on every build path.
+func resolveFulltext2PostingCapacity(algoParams string) (int64, error) {
+	if algoParams == "" {
+		return DefaultMaxPostingsCapacity, nil
+	}
+	flat, err := catalog.IndexParamsStringToMap(algoParams)
+	if err != nil {
+		return 0, err
+	}
+	if v, ok := flat[catalog.IndexAlgoParamMaxPostingsCapacity]; ok && v != "" {
+		n, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			return 0, perr
+		}
+		if n > 0 {
+			return n, nil
+		}
+	}
+	return DefaultMaxPostingsCapacity, nil
+}
+
 // resolveFulltext2PositionFree reads position_free from the index's algo_params
 // (absence ⇒ false, i.e. a positional/phrase-capable index).
 func resolveFulltext2PositionFree(algoParams string) (bool, error) {
@@ -194,22 +226,23 @@ func resolveFulltext2PositionFree(algoParams string) (bool, error) {
 }
 
 // genFulltext2BuildFromSourceSQL emits the CROSS APPLY fulltext2_create build SQL.
-func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity int64) (string, error) {
+func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap int64) (string, error) {
 	const srcAlias = "src"
 	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
 	if err != nil {
 		return "", err
 	}
 	cfg := fulltext2.TableConfig{
-		DbName:        db,
-		SrcTable:      origTable.Name,
-		IndexTable:    storeDef.IndexTableName,
-		MetadataTable: metaDef.IndexTableName,
-		PKey:          origTable.Pkey.PkeyColName,
-		Parser:        parserFromParams(storeDef.IndexAlgoParams),
-		Capacity:      capacity,
-		PositionFree:  positionFree,
-		FromSource:    true,
+		DbName:          db,
+		SrcTable:        origTable.Name,
+		IndexTable:      storeDef.IndexTableName,
+		MetadataTable:   metaDef.IndexTableName,
+		PKey:            origTable.Pkey.PkeyColName,
+		Parser:          parserFromParams(storeDef.IndexAlgoParams),
+		Capacity:        capacity,
+		PostingCapacity: postingCap,
+		PositionFree:    positionFree,
+		FromSource:      true,
 	}
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
@@ -256,16 +289,21 @@ func handleMergeCompact(ctx compileplugin.CompileContext, storeDef, metaDef *pla
 	if err != nil {
 		return err
 	}
+	postingCap, err := resolveFulltext2PostingCapacity(storeDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
 	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	sql := fmt.Sprintf("SELECT * FROM fulltext2_compact(%s, %s, %s, %s, %s) AS f",
+	sql := fmt.Sprintf("SELECT * FROM fulltext2_compact(%s, %s, %s, %s, %s, %s) AS f",
 		sqlquote.String(ctx.QryDatabase()),
 		sqlquote.String(storeDef.IndexTableName),
 		sqlquote.String(metaDef.IndexTableName),
 		sqlquote.String(strconv.FormatInt(capacity, 10)),
-		sqlquote.String(strconv.FormatBool(positionFree)))
+		sqlquote.String(strconv.FormatBool(positionFree)),
+		sqlquote.String(strconv.FormatInt(postingCap, 10)))
 	return ctx.RunSql(sql)
 }
 

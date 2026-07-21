@@ -47,8 +47,12 @@ type TableConfig struct {
 	PKey          string `json:"pkey"`
 	Parser        string `json:"parser,omitempty"`
 	// Capacity is max_index_capacity: the create build splits the tag=0 base into
-	// sub-indexes of at most Capacity docs each (0 => a single unbounded base).
+	// sub-indexes of at most Capacity docs each (0 => DefaultBuildCapacity).
 	Capacity int64 `json:"capacity,omitempty"`
+	// PostingCapacity is max_postings_capacity: a segment also seals once it holds
+	// this many postings (term occurrences), whichever comes first with Capacity.
+	// Bounds per-segment build memory regardless of doc size (0 => DefaultPostingCapacity).
+	PostingCapacity int64 `json:"posting_capacity,omitempty"`
 	// PositionFree builds segments without the positional payload (bag-of-words
 	// retrieval only; ~half the footprint, FST kept). Sourced from the persisted
 	// position_free algo_param so every build path (create, CDC tail, compact) agrees.

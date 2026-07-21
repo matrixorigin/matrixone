@@ -442,7 +442,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY FULLTEXT2 POSITION_FREE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY FULLTEXT2 POSITION_FREE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -8733,6 +8733,8 @@ index_option_list:
               opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
             } else if opt2.MaxIndexCapacity > 0 {
               opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
+            } else if opt2.MaxPostingsCapacity > 0 {
+              opt1.MaxPostingsCapacity = opt2.MaxPostingsCapacity
             } else if opt2.PositionFreeSet {
               opt1.PositionFree = opt2.PositionFree
               opt1.PositionFreeSet = true
@@ -8918,6 +8920,17 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.MaxIndexCapacity = val
+	$$ = io
+    }
+|   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("MAX_POSTINGS_CAPACITY should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxPostingsCapacity = val
 	$$ = io
     }
 |   POSITION_FREE '=' TRUE
@@ -14823,6 +14836,7 @@ non_reserved_keyword:
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_POSTINGS_CAPACITY
 |   POSITION_FREE
 |   KEYS
 |   LANGUAGE

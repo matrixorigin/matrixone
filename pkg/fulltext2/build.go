@@ -194,12 +194,39 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc, opt
 	return s, nil
 }
 
-// DefaultBuildCapacity floors a non-positive segment capacity for the streaming
+// DefaultBuildCapacity floors a non-positive segment DOC capacity for the streaming
 // build paths (base CREATE build and the CDC tail), so a segment is sealed and
 // spilled every ~1M docs and peak build memory stays bounded to one segment even
 // when max_index_capacity is unset. Splitting a logically "unbounded" base into
 // 1M-doc sub-indexes is transparent to queries (the Index already spans segments).
 const DefaultBuildCapacity int64 = 1000000
+
+// DefaultPostingCapacity floors a non-positive segment POSTING capacity
+// (max_postings_capacity). Per-segment build memory tracks the number of
+// accumulated postings (one term occurrence ≈ a term-string ref + an int32
+// position ≈ 30 B of Go heap, ~2× at assembly), NOT the doc count — a doc can hold
+// one token or tens of thousands, so a doc-only seal lets a long-document corpus
+// (e.g. wiki articles ≈ 1k tokens each) blow past any memory bound. 8M postings ≈
+// a ~512 MB peak build heap per segment; a segment seals on whichever cap
+// (docs OR postings) is reached first, so build memory is bounded regardless of
+// doc shape. See ReachedSegmentCap.
+const DefaultPostingCapacity int64 = 8_000_000
+
+// ReachedSegmentCap reports whether an open streaming Builder has hit either the
+// doc cap (max_index_capacity, bounds the docmap/liveOrd heap for a many-tiny-docs
+// index) or the posting cap (max_postings_capacity, bounds the positional posting
+// heap for a few-long-docs index). Non-positive caps fall back to their defaults.
+// Every streaming build path (CREATE TVF, CDC TailBuilder, MERGE/REBUILD compaction)
+// seals on this single predicate so peak build memory is one bounded segment.
+func ReachedSegmentCap(b *Builder, docCap, postingCap int64) bool {
+	if docCap <= 0 {
+		docCap = DefaultBuildCapacity
+	}
+	if postingCap <= 0 {
+		postingCap = DefaultPostingCapacity
+	}
+	return int64(b.NumDocs()) >= docCap || int64(b.NumPostings()) >= postingCap
+}
 
 // Builder accumulates a token stream fed in (word, pk) order — the positional
 // analogue of bm25's wand.Builder, with the SAME API (NewBuilder / Add / Finish /
@@ -207,11 +234,12 @@ const DefaultBuildCapacity int64 = 1000000
 // occurrence to its document (position = the doc's running token count), so the
 // caller feeds a document's tokens contiguously and in order.
 type Builder struct {
-	id     string
-	pkType int32
-	ordMap map[any]int64 // normalized pk -> ord
-	docs   []TokenizedDoc
-	opts   []BuildOpt // carried into FinishSegments (e.g. WithPositionFree)
+	id       string
+	pkType   int32
+	ordMap   map[any]int64 // normalized pk -> ord
+	docs     []TokenizedDoc
+	postings int64      // total term occurrences Add'd (one Add == one posting)
+	opts     []BuildOpt // carried into FinishSegments (e.g. WithPositionFree)
 }
 
 // NewBuilder creates a Builder for an index id and source pk type (types.T). Pass
@@ -244,11 +272,17 @@ func (b *Builder) Add(word string, pos int32, pk any) error {
 	ord := b.docOrd(pk)
 	b.docs[ord].Terms = append(b.docs[ord].Terms, word)
 	b.docs[ord].Positions = append(b.docs[ord].Positions, pos)
+	b.postings++
 	return nil
 }
 
 // NumDocs returns the number of distinct documents added so far.
 func (b *Builder) NumDocs() int { return len(b.docs) }
+
+// NumPostings returns the number of term occurrences Add'd so far (one Add == one
+// posting). It is the memory-correlated dimension the streaming build paths seal
+// on (max_postings_capacity) — see ReachedSegmentCap.
+func (b *Builder) NumPostings() int { return int(b.postings) }
 
 // Finish produces a single-segment index (no capacity limit).
 func (b *Builder) Finish() (*Segment, error) {

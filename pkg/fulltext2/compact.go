@@ -28,7 +28,7 @@ import (
 // caller's (TVF statement) transaction. This is a FULL compaction, simpler than
 // bm25's incremental tail-fold; an incremental variant is a later optimization.
 // Returns the live-doc count. No tail delta → nothing to reclaim (returns 0).
-func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int64) (int, error) {
+func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, postingCap int64) (int, error) {
 	bases, err := LoadAllBases(sqlproc, cfg)
 	if err != nil {
 		return 0, err
@@ -61,6 +61,9 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 	idx := NewIndex(segs, deletes)
 	if capacity <= 0 {
 		capacity = DefaultBuildCapacity // floor so the fresh base is sealed+spilled per ~1M docs
+	}
+	if postingCap <= 0 {
+		postingCap = DefaultPostingCapacity // floor so a long-doc corpus's rebuild stays memory-bounded
 	}
 
 	ts := time.Now().UnixMicro()
@@ -126,7 +129,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 			}
 		}
 		nlive++
-		if int64(cur.NumDocs()) >= capacity {
+		if ReachedSegmentCap(cur, capacity, postingCap) {
 			if e := sealFresh(); e != nil {
 				return 0, e
 			}

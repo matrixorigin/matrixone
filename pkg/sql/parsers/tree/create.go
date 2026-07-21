@@ -2147,8 +2147,9 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
-	PositionFree             bool // fulltext2: build a position-free (bag-of-words only) index
-	PositionFreeSet          bool // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
+	MaxPostingsCapacity      int64 // fulltext2: max postings (term occurrences) per built segment
+	PositionFree             bool  // fulltext2: build a position-free (bag-of-words only) index
+	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -2164,7 +2165,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.PositionFree ||
+		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 || node.PositionFree ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2281,6 +2282,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.MaxIndexCapacity != 0 {
 		ctx.WriteString("MAX_INDEX_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.MaxPostingsCapacity != 0 {
+		ctx.WriteString("MAX_POSTINGS_CAPACITY ")
+		ctx.WriteString(strconv.FormatInt(node.MaxPostingsCapacity, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.PositionFree {

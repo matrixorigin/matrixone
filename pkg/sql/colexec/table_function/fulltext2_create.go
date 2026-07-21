@@ -53,6 +53,7 @@ type fulltext2CreateState struct {
 	// peak build memory is one capacity-bounded segment rather than the whole corpus.
 	cur          *fulltext2.Builder // current open segment (nil after a seal, recreated on the next row)
 	capacity     int64              // docs per sealed segment (floored to DefaultBuildCapacity)
+	postingCap   int64              // postings per sealed segment (floored to DefaultPostingCapacity)
 	pkType       int32
 	bopts        []fulltext2.BuildOpt
 	uid          string // per-build-unique sub-index id prefix (IndexTable:ts)
@@ -112,11 +113,16 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		if u.tblcfg.PositionFree {
 			u.bopts = append(u.bopts, fulltext2.WithPositionFree())
 		}
-		// Floor capacity so a segment is sealed+spilled every ~capacity docs even when
-		// max_index_capacity is unset (Capacity==0), keeping build memory bounded.
+		// Floor both caps so a segment is sealed+spilled every ~capacity docs OR
+		// ~postingCap postings even when the WITH options are unset, keeping build
+		// memory bounded regardless of doc size (a long-doc corpus seals on postings).
 		u.capacity = u.tblcfg.Capacity
 		if u.capacity <= 0 {
 			u.capacity = fulltext2.DefaultBuildCapacity
+		}
+		u.postingCap = u.tblcfg.PostingCapacity
+		if u.postingCap <= 0 {
+			u.postingCap = fulltext2.DefaultPostingCapacity
 		}
 		// A per-build-unique id prefix (index table + build ts) keeps concurrent /
 		// repeated builds from colliding on sub-index ids (mirrors bm25 / HNSW).
@@ -149,9 +155,9 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 	// A document's tokens are fed contiguously, so once the open segment reaches
-	// capacity DISTINCT docs the current doc is complete: seal + persist it as a
-	// tag=0 base and start a fresh segment, freeing the sealed one's postings.
-	if int64(u.cur.NumDocs()) >= u.capacity {
+	// capacity DISTINCT docs (or its posting cap) the current doc is complete: seal +
+	// persist it as a tag=0 base and start a fresh segment, freeing the sealed postings.
+	if fulltext2.ReachedSegmentCap(u.cur, u.capacity, u.postingCap) {
 		if err := u.sealSegment(proc); err != nil {
 			return err
 		}

@@ -93,3 +93,66 @@ func TestBuilderEmpty(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, segs)
 }
+
+// TestBuilderNumPostings: NumPostings counts term occurrences (one per Add), not docs
+// — the memory-correlated seal dimension. Three 2-token docs => 6 postings, 3 docs.
+func TestBuilderNumPostings(t *testing.T) {
+	b := NewBuilder("idx", int32(types.T_int64))
+	feed(t, b, int64(0), "a", "b")
+	feed(t, b, int64(1), "c", "d")
+	feed(t, b, int64(2), "e", "f")
+	require.Equal(t, 3, b.NumDocs())
+	require.Equal(t, 6, b.NumPostings())
+}
+
+// TestReachedSegmentCap: a segment seals on whichever cap (docs OR postings) is hit
+// first, and non-positive caps fall back to the package defaults.
+func TestReachedSegmentCap(t *testing.T) {
+	// Doc cap fires first: 2 single-token docs reach docCap=2 before postingCap=100.
+	b := NewBuilder("d", int32(types.T_int64))
+	feed(t, b, int64(0), "x")
+	require.False(t, ReachedSegmentCap(b, 2, 100)) // 1 doc / 1 posting
+	feed(t, b, int64(1), "y")
+	require.True(t, ReachedSegmentCap(b, 2, 100)) // 2 docs => doc cap
+
+	// Posting cap fires first: one long doc crosses postingCap=3 while docCap=100 idle.
+	// This is the long-document case a doc-only seal would miss.
+	b2 := NewBuilder("p", int32(types.T_int64))
+	feed(t, b2, int64(0), "a", "b", "c") // 1 doc, 3 postings
+	require.True(t, ReachedSegmentCap(b2, 100, 3))
+	require.False(t, ReachedSegmentCap(b2, 100, 4)) // 3 postings < 4
+
+	// Non-positive caps fall back to defaults (both large) — a tiny builder never seals.
+	require.False(t, ReachedSegmentCap(b2, 0, 0))
+	require.Less(t, int64(b2.NumDocs()), DefaultBuildCapacity)
+	require.Less(t, int64(b2.NumPostings()), DefaultPostingCapacity)
+}
+
+// TestBuilderPostingSplitStreaming: the streaming seal pattern the build paths use —
+// ReachedSegmentCap on a posting cap seals a long-document corpus into multiple
+// segments even though the doc cap is never reached; the merged Index finds every doc.
+func TestBuilderPostingSplitStreaming(t *testing.T) {
+	const postingCap = int64(4)
+	var segs []*Segment
+	cur := NewBuilder("s", int32(types.T_int64))
+	seal := func() {
+		if cur.NumDocs() == 0 {
+			return
+		}
+		seg, err := cur.Finish()
+		require.NoError(t, err)
+		segs = append(segs, seg)
+		cur = NewBuilder("s", int32(types.T_int64))
+	}
+	// 6 docs × 2 tokens = 12 postings; docCap huge, postingCap=4 => seal every 2 docs.
+	for i := 0; i < 6; i++ {
+		feed(t, cur, int64(i), "common", "brown")
+		if ReachedSegmentCap(cur, 1_000_000, postingCap) {
+			seal()
+		}
+	}
+	seal()
+	require.Len(t, segs, 3) // 12 postings / 4 => 3 segments
+	idx := NewIndex(segs, nil)
+	require.Len(t, resultIDs(idx.SearchPhrase(phr("brown"), BM25, 100, nil)), 6)
+}

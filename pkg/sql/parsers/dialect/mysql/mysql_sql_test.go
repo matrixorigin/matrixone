@@ -2176,6 +2176,12 @@ var (
 			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
 			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
 		}, {
+			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
+			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input:  "create index idx using master on A (a,b,c)",
