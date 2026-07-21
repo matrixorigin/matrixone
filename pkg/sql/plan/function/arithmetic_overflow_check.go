@@ -25,286 +25,168 @@ import (
 // These functions implement strict overflow detection for SELECT queries,
 // matching MySQL 8.0 strict mode behavior (ERROR 1690: BIGINT value is out of range)
 
-// addInt64WithOverflowCheck checks for overflow in int64 addition
-func addInt64WithOverflowCheck(ctx context.Context, v1, v2 int64) (int64, error) {
+// signedInt constrains the signed integer types used by checked arithmetic.
+type signedInt interface {
+	int8 | int16 | int32 | int64
+}
+
+// unsignedInt constrains the unsigned integer types used by checked arithmetic.
+type unsignedInt interface {
+	uint8 | uint16 | uint32 | uint64
+}
+
+// integerTypeName returns the type name used in out-of-range error messages.
+// It is only called on the error path, so the interface conversion cost does
+// not affect the vectorized fast path.
+func integerTypeName[T signedInt | unsignedInt](v T) string {
+	switch any(v).(type) {
+	case int8:
+		return "int8"
+	case int16:
+		return "int16"
+	case int32:
+		return "int32"
+	case int64:
+		return "int64"
+	case uint8:
+		return "uint8"
+	case uint16:
+		return "uint16"
+	case uint32:
+		return "uint32"
+	default:
+		return "uint64"
+	}
+}
+
+// addSignedWithOverflowCheck checks for overflow in signed integer addition.
+// Overflow happened iff the wrapped result moved in the opposite direction of v2.
+func addSignedWithOverflowCheck[T signedInt](ctx context.Context, v1, v2 T) (T, error) {
 	result := v1 + v2
-	// Overflow detection:
-	// - If both operands have the same sign, result must have the same sign
-	// - Positive + Positive overflow if result is negative or zero
-	// - Negative + Negative overflow if result is positive or zero (when both are negative)
-	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int64", "(%d + %d)", v1, v2)
+	if (v2 > 0 && result < v1) || (v2 < 0 && result > v1) {
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d + %d)", v1, v2)
 	}
 	return result, nil
 }
 
-// addInt32WithOverflowCheck checks for overflow in int32 addition
-func addInt32WithOverflowCheck(ctx context.Context, v1, v2 int32) (int32, error) {
+// addUnsignedWithOverflowCheck checks for overflow in unsigned integer addition.
+func addUnsignedWithOverflowCheck[T unsignedInt](ctx context.Context, v1, v2 T) (T, error) {
 	result := v1 + v2
-	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int32", "(%d + %d)", v1, v2)
+	if result < v1 {
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d + %d)", v1, v2)
 	}
 	return result, nil
 }
 
-// addInt16WithOverflowCheck checks for overflow in int16 addition
-func addInt16WithOverflowCheck(ctx context.Context, v1, v2 int16) (int16, error) {
-	result := v1 + v2
-	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int16", "(%d + %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// addInt8WithOverflowCheck checks for overflow in int8 addition
-func addInt8WithOverflowCheck(ctx context.Context, v1, v2 int8) (int8, error) {
-	result := v1 + v2
-	if (v1 > 0 && v2 > 0 && result <= 0) || (v1 < 0 && v2 < 0 && result >= 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int8", "(%d + %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// addUint64WithOverflowCheck checks for overflow in uint64 addition
-func addUint64WithOverflowCheck(ctx context.Context, v1, v2 uint64) (uint64, error) {
-	result := v1 + v2
-	// Unsigned overflow: if result < either operand, overflow occurred
-	if result < v1 || result < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint64", "(%d + %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// addUint32WithOverflowCheck checks for overflow in uint32 addition
-func addUint32WithOverflowCheck(ctx context.Context, v1, v2 uint32) (uint32, error) {
-	result := v1 + v2
-	if result < v1 || result < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint32", "(%d + %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// addUint16WithOverflowCheck checks for overflow in uint16 addition
-func addUint16WithOverflowCheck(ctx context.Context, v1, v2 uint16) (uint16, error) {
-	result := v1 + v2
-	if result < v1 || result < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint16", "(%d + %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// addUint8WithOverflowCheck checks for overflow in uint8 addition
-func addUint8WithOverflowCheck(ctx context.Context, v1, v2 uint8) (uint8, error) {
-	result := v1 + v2
-	if result < v1 || result < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint8", "(%d + %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// subInt64WithOverflowCheck checks for overflow in int64 subtraction
-func subInt64WithOverflowCheck(ctx context.Context, v1, v2 int64) (int64, error) {
+// subSignedWithOverflowCheck checks for overflow in signed integer subtraction.
+// The exact result must move in the opposite direction of v2; this also covers
+// v1 - MinInt (e.g. 0 - (-9223372036854775808)) which two's-complement wraps.
+func subSignedWithOverflowCheck[T signedInt](ctx context.Context, v1, v2 T) (T, error) {
 	result := v1 - v2
-	// Overflow detection for subtraction:
-	// - Positive - Negative overflow if result is negative
-	// - Negative - Positive overflow if result is positive
-	if (v1 > 0 && v2 < 0 && result < 0) || (v1 < 0 && v2 > 0 && result > 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int64", "(%d - %d)", v1, v2)
+	if (v2 > 0 && result > v1) || (v2 < 0 && result < v1) {
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d - %d)", v1, v2)
 	}
 	return result, nil
 }
 
-// subInt32WithOverflowCheck checks for overflow in int32 subtraction
-func subInt32WithOverflowCheck(ctx context.Context, v1, v2 int32) (int32, error) {
-	result := v1 - v2
-	if (v1 > 0 && v2 < 0 && result < 0) || (v1 < 0 && v2 > 0 && result > 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int32", "(%d - %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// subInt16WithOverflowCheck checks for overflow in int16 subtraction
-func subInt16WithOverflowCheck(ctx context.Context, v1, v2 int16) (int16, error) {
-	result := v1 - v2
-	if (v1 > 0 && v2 < 0 && result < 0) || (v1 < 0 && v2 > 0 && result > 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int16", "(%d - %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// subInt8WithOverflowCheck checks for overflow in int8 subtraction
-func subInt8WithOverflowCheck(ctx context.Context, v1, v2 int8) (int8, error) {
-	result := v1 - v2
-	if (v1 > 0 && v2 < 0 && result < 0) || (v1 < 0 && v2 > 0 && result > 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "int8", "(%d - %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// subUint64WithOverflowCheck checks for underflow in uint64 subtraction
-func subUint64WithOverflowCheck(ctx context.Context, v1, v2 uint64) (uint64, error) {
+// subUnsignedWithOverflowCheck checks for underflow in unsigned integer subtraction.
+func subUnsignedWithOverflowCheck[T unsignedInt](ctx context.Context, v1, v2 T) (T, error) {
 	if v1 < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint64", "(%d - %d)", v1, v2)
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d - %d)", v1, v2)
 	}
 	return v1 - v2, nil
 }
 
-// subUint32WithOverflowCheck checks for underflow in uint32 subtraction
-func subUint32WithOverflowCheck(ctx context.Context, v1, v2 uint32) (uint32, error) {
-	if v1 < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint32", "(%d - %d)", v1, v2)
-	}
-	return v1 - v2, nil
-}
-
-// subUint16WithOverflowCheck checks for underflow in uint16 subtraction
-func subUint16WithOverflowCheck(ctx context.Context, v1, v2 uint16) (uint16, error) {
-	if v1 < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint16", "(%d - %d)", v1, v2)
-	}
-	return v1 - v2, nil
-}
-
-// subUint8WithOverflowCheck checks for underflow in uint8 subtraction
-func subUint8WithOverflowCheck(ctx context.Context, v1, v2 uint8) (uint8, error) {
-	if v1 < v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint8", "(%d - %d)", v1, v2)
-	}
-	return v1 - v2, nil
-}
-
-// mulInt64WithOverflowCheck checks for overflow in int64 multiplication
-func mulInt64WithOverflowCheck(ctx context.Context, v1, v2 int64) (int64, error) {
+// mulSignedWithOverflowCheck checks for overflow in signed integer multiplication.
+// MinInt * -1 is detected explicitly because result/v2 wraps back to v1 in that
+// case (v < 0 && -v == v identifies the most negative value without a per-type
+// constant); every other overflow fails the division round-trip check.
+func mulSignedWithOverflowCheck[T signedInt](ctx context.Context, v1, v2 T) (T, error) {
 	if v1 == 0 || v2 == 0 {
 		return 0, nil
 	}
-
-	// Special case: -9223372036854775808 * -1 overflows
-	if v1 == math.MinInt64 && v2 == -1 || v2 == math.MinInt64 && v1 == -1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int64", "(%d * %d)", v1, v2)
+	if (v1 < 0 && -v1 == v1 && v2 == -1) || (v2 < 0 && -v2 == v2 && v1 == -1) {
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d * %d)", v1, v2)
 	}
-
 	result := v1 * v2
-	// Check if division brings back the original value
 	if result/v2 != v1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int64", "(%d * %d)", v1, v2)
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d * %d)", v1, v2)
 	}
 	return result, nil
 }
 
-// mulInt32WithOverflowCheck checks for overflow in int32 multiplication
-func mulInt32WithOverflowCheck(ctx context.Context, v1, v2 int32) (int32, error) {
+// mulUnsignedWithOverflowCheck checks for overflow in unsigned integer multiplication.
+func mulUnsignedWithOverflowCheck[T unsignedInt](ctx context.Context, v1, v2 T) (T, error) {
 	if v1 == 0 || v2 == 0 {
 		return 0, nil
 	}
-
-	if v1 == math.MinInt32 && v2 == -1 || v2 == math.MinInt32 && v1 == -1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int32", "(%d * %d)", v1, v2)
-	}
-
 	result := v1 * v2
 	if result/v2 != v1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int32", "(%d * %d)", v1, v2)
+		return 0, moerr.NewOutOfRangef(ctx, integerTypeName(v1), "(%d * %d)", v1, v2)
 	}
 	return result, nil
 }
 
-// mulInt16WithOverflowCheck checks for overflow in int16 multiplication
-func mulInt16WithOverflowCheck(ctx context.Context, v1, v2 int16) (int16, error) {
-	if v1 == 0 || v2 == 0 {
-		return 0, nil
+// floatDivToInt64WithOverflowCheck implements DIV for float operands.
+// The quotient is computed in float64 and truncated toward zero; a quotient
+// whose magnitude reaches 2^63 (or NaN from Inf/Inf) raises out-of-range,
+// matching MySQL 8.4 ERROR 1690 "BIGINT value is out of range". MySQL computes
+// DIV on unsigned magnitudes, so a quotient of exactly -2^63 errors as well
+// even though it is representable as MinInt64 (verified against MySQL 8.4.8).
+// float64(math.MaxInt64) rounds up to 2^63, so the comparisons below reject
+// exactly the quotients with magnitude >= 2^63.
+func floatDivToInt64WithOverflowCheck[T float32 | float64](ctx context.Context, v1, v2 T) (int64, error) {
+	q := float64(v1) / float64(v2)
+	if math.IsNaN(q) || q >= float64(math.MaxInt64) || q <= float64(math.MinInt64) {
+		return 0, moerr.NewOutOfRangef(ctx, "BIGINT", "(%v DIV %v)", v1, v2)
 	}
-
-	if v1 == math.MinInt16 && v2 == -1 || v2 == math.MinInt16 && v1 == -1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int16", "(%d * %d)", v1, v2)
-	}
-
-	result := v1 * v2
-	if result/v2 != v1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int16", "(%d * %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// mulInt8WithOverflowCheck checks for overflow in int8 multiplication
-func mulInt8WithOverflowCheck(ctx context.Context, v1, v2 int8) (int8, error) {
-	if v1 == 0 || v2 == 0 {
-		return 0, nil
-	}
-
-	if v1 == math.MinInt8 && v2 == -1 || v2 == math.MinInt8 && v1 == -1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int8", "(%d * %d)", v1, v2)
-	}
-
-	result := v1 * v2
-	if result/v2 != v1 {
-		return 0, moerr.NewOutOfRangef(ctx, "int8", "(%d * %d)", v1, v2)
-	}
-	return result, nil
-}
-
-// mulUint64WithOverflowCheck checks for overflow in uint64 multiplication
-func mulUint64WithOverflowCheck(ctx context.Context, v1, v2 uint64) (uint64, error) {
-	if v1 == 0 || v2 == 0 {
-		return 0, nil
-	}
-
-	if v1 > math.MaxUint64/v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint64", "(%d * %d)", v1, v2)
-	}
-	return v1 * v2, nil
-}
-
-// mulUint32WithOverflowCheck checks for overflow in uint32 multiplication
-func mulUint32WithOverflowCheck(ctx context.Context, v1, v2 uint32) (uint32, error) {
-	if v1 == 0 || v2 == 0 {
-		return 0, nil
-	}
-
-	if v1 > math.MaxUint32/v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint32", "(%d * %d)", v1, v2)
-	}
-	return v1 * v2, nil
-}
-
-// mulUint16WithOverflowCheck checks for overflow in uint16 multiplication
-func mulUint16WithOverflowCheck(ctx context.Context, v1, v2 uint16) (uint16, error) {
-	if v1 == 0 || v2 == 0 {
-		return 0, nil
-	}
-
-	if v1 > math.MaxUint16/v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint16", "(%d * %d)", v1, v2)
-	}
-	return v1 * v2, nil
-}
-
-// mulUint8WithOverflowCheck checks for overflow in uint8 multiplication
-func mulUint8WithOverflowCheck(ctx context.Context, v1, v2 uint8) (uint8, error) {
-	if v1 == 0 || v2 == 0 {
-		return 0, nil
-	}
-
-	if v1 > math.MaxUint8/v2 {
-		return 0, moerr.NewOutOfRangef(ctx, "uint8", "(%d * %d)", v1, v2)
-	}
-	return v1 * v2, nil
+	return int64(q), nil
 }
 
 // addFloat64WithOverflowCheck checks for overflow in float64 addition
 func addFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
-	result := v1 + v2
-	if math.IsInf(result, 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v + %v)'", v1, v2)
-	}
-	return result, nil
+	return checkFloat64Result(ctx, v1+v2, "+", v1, v2)
 }
 
 // addFloat32WithOverflowCheck checks for overflow in float32 addition
 func addFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
-	result := v1 + v2
-	if math.IsInf(float64(result), 0) {
-		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v + %v)'", v1, v2)
+	return checkFloat32Result(ctx, v1+v2, "+", v1, v2)
+}
+
+func subFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	return checkFloat64Result(ctx, v1-v2, "-", v1, v2)
+}
+
+func subFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	return checkFloat32Result(ctx, v1-v2, "-", v1, v2)
+}
+
+func mulFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	return checkFloat64Result(ctx, v1*v2, "*", v1, v2)
+}
+
+func mulFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	return checkFloat32Result(ctx, v1*v2, "*", v1, v2)
+}
+
+func divFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	return checkFloat64Result(ctx, v1/v2, "/", v1, v2)
+}
+
+func divFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	return checkFloat32Result(ctx, v1/v2, "/", v1, v2)
+}
+
+func checkFloat64Result(ctx context.Context, result float64, op string, v1, v2 float64) (float64, error) {
+	if math.IsInf(result, 0) && !math.IsInf(v1, 0) && !math.IsInf(v2, 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v %s %v)'", v1, op, v2)
+	}
+	return result, nil
+}
+
+func checkFloat32Result(ctx context.Context, result float32, op string, v1, v2 float32) (float32, error) {
+	if math.IsInf(float64(result), 0) && !math.IsInf(float64(v1), 0) && !math.IsInf(float64(v2), 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v %s %v)'", v1, op, v2)
 	}
 	return result, nil
 }
