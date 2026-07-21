@@ -1492,6 +1492,7 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrDeadlockCheckBusy:        false,
 	moerr.ErrLockConflict:             false,
 	moerr.ErrRemoteLockWaitTimeout:    false,
+	moerr.ErrLockWaitTimeout:          false,
 	moerr.ErrTxnUnknown:               false,
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
@@ -1514,13 +1515,19 @@ func isErrorRollbackWholeTxn(inputErr error) bool {
 }
 
 func getRandomErrorRollbackWholeTxn() error {
-	rand.NewSource(time.Now().UnixNano())
 	x := rand.Intn(len(errCodeRollbackWholeTxn))
 	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
 	for k := range errCodeRollbackWholeTxn {
 		arr = append(arr, k)
 	}
-	switch arr[x] {
+	return newErrorRollbackWholeTxn(arr[x])
+}
+
+// newErrorRollbackWholeTxn keeps the test error factory in sync with
+// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
+// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
+func newErrorRollbackWholeTxn(code uint16) error {
+	switch code {
 	case moerr.ErrRetryForCNRollingRestart:
 		return moerr.NewRetryForCNRollingRestart()
 	case moerr.ErrDeadLockDetected:
@@ -1535,6 +1542,8 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewLockConflictNoCtx()
 	case moerr.ErrRemoteLockWaitTimeout:
 		return moerr.NewRemoteLockWaitTimeoutNoCtx()
+	case moerr.ErrLockWaitTimeout:
+		return moerr.NewLockWaitTimeoutNoCtx()
 	case moerr.ErrTxnUnknown:
 		return moerr.NewTxnUnknown(context.Background(), "test")
 	case moerr.ErrBackendClosed:
@@ -1544,7 +1553,7 @@ func getRandomErrorRollbackWholeTxn() error {
 	case moerr.ErrBackendCannotConnect:
 		return moerr.NewBackendCannotConnectNoCtx("test")
 	default:
-		panic(fmt.Sprintf("usp error code %d", arr[x]))
+		panic(fmt.Sprintf("unsupported error code %d", code))
 	}
 }
 

@@ -76,18 +76,19 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetQueryId("query-1")
 	proc.Base.UnixTime = 12345
 	proc.Base.SessionInfo = SessionInfo{
-		Account:         "acc",
-		User:            "user",
-		Host:            "host",
-		Role:            "role",
-		ConnectionID:    99,
-		Database:        "db1",
-		Version:         "v1",
-		TimeZone:        time.FixedZone("UTC+8", 8*3600),
-		LockWaitTimeout: 7,
-		QueryId:         []string{"stmt-qid"},
-		LogLevel:        zap.WarnLevel,
-		SessionId:       uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		Account:            "acc",
+		User:               "user",
+		Host:               "host",
+		Role:               "role",
+		ConnectionID:       99,
+		Database:           "db1",
+		Version:            "v1",
+		TimeZone:           time.FixedZone("UTC+8", 8*3600),
+		LockWaitTimeout:    7,
+		LockWaitTimeoutSet: true,
+		QueryId:            []string{"stmt-qid"},
+		LogLevel:           zap.WarnLevel,
+		SessionId:          uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -125,20 +126,22 @@ func TestProcessCodecHelpers(t *testing.T) {
 		timeBytes, err := time.Now().In(time.UTC).MarshalBinary()
 		require.NoError(t, err)
 		info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
-			User:            "u",
-			Host:            "h",
-			Role:            "r",
-			ConnectionId:    1,
-			Database:        "d",
-			Version:         "v",
-			Account:         "a",
-			QueryId:         []string{"q1"},
-			TimeZone:        timeBytes,
-			LockWaitTimeout: 9,
+			User:               "u",
+			Host:               "h",
+			Role:               "r",
+			ConnectionId:       1,
+			Database:           "d",
+			Version:            "v",
+			Account:            "a",
+			QueryId:            []string{"q1"},
+			TimeZone:           timeBytes,
+			LockWaitTimeout:    9,
+			LockWaitTimeoutSet: true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
+		require.True(t, info.LockWaitTimeoutSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -167,6 +170,21 @@ func TestProcessCodecHelpers(t *testing.T) {
 			return int64(0), nil
 		})
 		require.Equal(t, int64(7), resolveLockWaitTimeoutSeconds(proc))
+
+		proc.Base.SessionInfo.LockWaitTimeout = 5
+		proc.Base.SessionInfo.LockWaitTimeoutSet = true
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return int64(11), nil
+		})
+		require.Equal(t, int64(5), resolveLockWaitTimeoutSeconds(proc),
+			"an explicit positive execution timeout must survive remote encoding")
+
+		proc.Base.SessionInfo.LockWaitTimeout = 0
+		require.Equal(t, int64(11), resolveLockWaitTimeoutSeconds(proc),
+			"an explicit zero clears the txn override and falls back to the resolver")
+		proc.SetResolveVariableFunc(nil)
+		require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, resolveLockWaitTimeoutSeconds(proc),
+			"the legacy wire field must remain positive when an explicit clear is sent to an old peer")
 	})
 }
 
@@ -183,7 +201,23 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
+	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
+
+	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
+	// presence bit. It must still see the product fallback in the legacy value
+	// field rather than zero, which would revive the reused txn's stale budget.
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LockWaitTimeout = 0
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	legacyInfo, err := proc.BuildProcessInfo("select legacy")
+	require.NoError(t, err)
+	require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, legacyInfo.SessionInfo.LockWaitTimeout)
+	legacyInfo.SessionInfo.LockWaitTimeoutSet = false // simulate an old decoder
+	legacySession, err := ConvertToProcessSessionInfo(legacyInfo.SessionInfo)
+	require.NoError(t, err)
+	require.False(t, legacySession.LockWaitTimeoutSet)
+	require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, legacySession.LockWaitTimeout)
 
 	mockInfo, err := MockProcessInfoWithPro("select 2", proc)
 	require.NoError(t, err)
@@ -213,6 +247,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
+	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
