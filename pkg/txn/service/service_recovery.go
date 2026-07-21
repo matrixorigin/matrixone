@@ -47,13 +47,6 @@ func (s *service) doRecovery(ctx context.Context) {
 				s.end()
 				return
 			}
-			if s.recoveryTxnNeedsRouteResolution(txn) {
-				var resolved bool
-				txn, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txn)
-				if !resolved {
-					return
-				}
-			}
 			s.addLog(txn)
 		}
 	}
@@ -114,16 +107,6 @@ func waitRecoveryRouteRetry(ctx context.Context, interval time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func (s *service) recoveryTxnNeedsRouteResolution(txnMeta txn.TxnMeta) bool {
-	// Persisted ReplicaID and Address are routing data, not stable participant
-	// identity, so even complete routes must be resolved again after restart.
-	// Only the coordinator sends recovery RPCs; participants must not block
-	// startup waiting for routes they will never use.
-	return len(txnMeta.TNShards) > 1 &&
-		txnMeta.TNShards[0].ShardID == s.shard.ShardID &&
-		(txnMeta.Status == txn.TxnStatus_Prepared || txnMeta.Status == txn.TxnStatus_Committing)
 }
 
 func (s *service) resolveRecoveryTNShardsFromSnapshot(
@@ -219,9 +202,18 @@ func (s *service) end() {
 	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
-		if !s.shard.Equal(txnMeta.TNShards[0]) {
+		if len(txnMeta.TNShards) == 0 ||
+			txnMeta.TNShards[0].ShardID != s.shard.ShardID {
 			return true
 		}
+		// Fold the complete log stream before waiting for live routes. A later
+		// terminal record may remove an obsolete prepared transaction entirely.
+		var resolved bool
+		txnMeta, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txnMeta)
+		if !resolved {
+			return false
+		}
+		txnCtx.updateTxn(txnMeta)
 
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
@@ -231,6 +223,7 @@ func (s *service) end() {
 					util.TxnField(txnMeta))
 			}
 		case txn.TxnStatus_Committing:
+			s.validTNShard(txnMeta.TNShards[0])
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
 				s.logger.Error("start commit task failed during recovery",
 					zap.Error(err),
@@ -305,7 +298,4 @@ func (s *service) checkRecoveryStatus(txnMeta txn.TxnMeta) {
 			util.TxnField(txnMeta))
 	}
 
-	if txnMeta.Status == txn.TxnStatus_Committing {
-		s.validTNShard(txnMeta.TNShards[0])
-	}
 }

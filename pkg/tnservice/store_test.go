@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -305,6 +307,86 @@ func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
 		}
 	})
 	require.True(t, canceledBeforeServerClose.Load())
+}
+
+func TestStoreCloseCancelsRecoveryBeforeStoppingReplicaTask(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
+	fsFactory := func(name string) (*fileservice.FileServices, error) {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, fs)
+	}
+	s := newTestStore(
+		t,
+		"u1",
+		fsFactory,
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
+			return newTestHAKeeperClient(), nil
+		}),
+		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+			return mem.NewMemLog(), nil
+		}),
+		WithConfigAdjust(func(c *Config) {
+			c.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+			c.Txn.Storage.Backend = StorageMEMKV
+		}),
+	)
+	require.NoError(t, s.Start())
+
+	meta := service.NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = service.NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 99},
+	})
+	mlog := mem.NewMemLog()
+	data := (&mem.KVLog{Txn: meta}).MustMarshal()
+	record := mlog.GetLogRecord(len(data))
+	record.Type = logservicepb.UserRecord
+	record.Data = data
+	_, err := mlog.Append(context.Background(), record)
+	require.NoError(t, err)
+
+	sender := service.NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	txnService := service.NewTestTxnServiceWithLog(
+		t, 1, sender, service.NewTestClock(0), mlog)
+	baseCluster := clusterservice.NewMOCluster(
+		"dn-uuid", nil, time.Hour,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(nil, nil),
+	)
+	t.Cleanup(baseCluster.Close)
+	cluster := &signalingRecoveryCluster{
+		MOCluster: baseCluster,
+		entered:   make(chan struct{}),
+	}
+	runtime.ServiceRuntime("dn-uuid").SetGlobalVariables(runtime.ClusterService, cluster)
+
+	r := newReplica(newTestTNShard(1, 2, 3), s.rt)
+	s.replicas.Store(r.shard.ShardID, r)
+	require.NoError(t, s.stopper.RunTask(func(context.Context) {
+		_ = r.start(txnService)
+	}))
+	select {
+	case <-cluster.entered:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not reach the missing participant route wait")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.NoError(t, r.close(false))
+		require.NoError(t, <-closed)
+		t.Fatal("store Close waited for the stopper before canceling recovery")
+	}
 }
 
 func TestHeartbeatOnlyReportsStartedReplicas(t *testing.T) {

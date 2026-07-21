@@ -162,6 +162,30 @@ func (r *replica) close(destroy bool) error {
 	return r.closeErr
 }
 
+func (r *replica) cancelRecovery() {
+	r.mu.RLock()
+	starting := r.mu.starting
+	txnService := r.service
+	r.mu.RUnlock()
+	if !starting {
+		return
+	}
+	if txnService == nil {
+		// Once start is reserved, startReserved either publishes the service or
+		// finishStart reports that startup ended without one.
+		select {
+		case <-r.serviceC:
+		case <-r.startedC:
+		}
+		r.mu.RLock()
+		txnService = r.service
+		r.mu.RUnlock()
+	}
+	if txnService != nil {
+		txnService.CancelRecovery()
+	}
+}
+
 func (r *replica) closeOnceFn() error {
 	r.mu.RLock()
 	starting := r.mu.starting
@@ -170,18 +194,7 @@ func (r *replica) closeOnceFn() error {
 		return nil
 	}
 	// Recovery may block Start indefinitely while waiting for a participant.
-	// Wait only until the service has been published, then cancel recovery
-	// before waiting for Start to finish.
-	select {
-	case <-r.serviceC:
-	case <-r.startedC:
-	}
-	r.mu.RLock()
-	txnService := r.service
-	r.mu.RUnlock()
-	if txnService != nil {
-		txnService.CancelRecovery()
-	}
+	r.cancelRecovery()
 
 	r.waitStartCompleted()
 	r.mu.Lock()
@@ -189,7 +202,7 @@ func (r *replica) closeOnceFn() error {
 		r.mu.cond.Wait()
 	}
 	startErr := r.mu.startErr
-	txnService = r.service
+	txnService := r.service
 	destroy := r.mu.destroyOnCancel
 	r.mu.Unlock()
 	if txnService == nil {

@@ -238,16 +238,20 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	// Reject new replica calls and cancel active call contexts before waiting
+	// for store tasks. A published service may be blocked in recovery, so its
+	// cancellation must be delivered before joining the store stopper. Storage
+	// remains open until the RPC server drains below.
+	s.replicas.Range(func(_, value any) bool {
+		r := value.(*replica)
+		r.cancelStart(false)
+		r.cancelRecovery()
+		return true
+	})
 	s.stopper.Stop()
 	s.moCluster.Close()
 
 	var err error
-	// Reject new replica calls and cancel active call contexts before waiting
-	// for the RPC server to drain. Storage remains open until the drain ends.
-	s.replicas.Range(func(_, value any) bool {
-		value.(*replica).cancelStart(false)
-		return true
-	})
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}

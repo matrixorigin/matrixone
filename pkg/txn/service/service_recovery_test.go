@@ -424,6 +424,40 @@ func TestRecoveryParticipantDoesNotWaitForUnrelatedRoute(t *testing.T) {
 	assert.Empty(t, sender.requests)
 }
 
+func TestRecoveryCommittedTerminalRecordDoesNotWaitForObsoleteRoute(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	meta := NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 99},
+	})
+	mlog := mem.NewMemLog()
+	addLog(t, mlog, meta, 1)
+	meta.Status = txn.TxnStatus_Committed
+	meta.CommitTS = NewTestTimestamp(3)
+	addLog(t, mlog, meta)
+
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog).(*service)
+	installRecoveryCluster(t, s.sid)
+	started := make(chan error, 1)
+	go func() { started <- s.Start() }()
+
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		s.CancelRecovery()
+		require.NoError(t, <-started)
+		t.Fatal("obsolete prepared route blocked a later committed terminal record")
+	}
+	defer func() { require.NoError(t, s.Close(false)) }()
+	assert.Nil(t, s.getTxnContext(meta.ID))
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	assert.Empty(t, sender.requests)
+}
+
 func TestRecoveryRetriesTransientClusterLookupError(t *testing.T) {
 	sender := newRecoveryRouteSender()
 	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
@@ -719,6 +753,10 @@ func TestRecoveryEndDoesNotPanicWhenStopperUnavailable(t *testing.T) {
 			}()
 
 			s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+			installRecoveryCluster(t, s.sid, metadata.TNService{
+				TxnServiceAddress: "dn-2",
+				Shards:            []metadata.TNShard{NewTestTNShard(2)},
+			})
 			s.stopper.Stop()
 
 			wTxn := NewTestTxn(1, 1, 1, 2)
