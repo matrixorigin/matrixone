@@ -11316,7 +11316,7 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	return resultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool) ([]ExecResult, error) {
+func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool) ([]ExecResult, int64, error) {
 	// fetch related
 	var spLang string
 	var spBody string
@@ -11336,7 +11336,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	if call.Name.HasNoNameQualifier() {
 		dbName = ses.GetDatabaseName()
 		if dbName == "" {
-			return nil, moerr.NewNoDBNoCtx()
+			return nil, 0, moerr.NewNoDBNoCtx()
 		}
 	} else {
 		dbName = string(call.Name.Name.SchemaName)
@@ -11344,7 +11344,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 
 	sql, err = getSqlForSpBody(ctx, string(call.Name.Name.ObjectName), dbName)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// XXXSP
@@ -11359,44 +11359,44 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if execResultArrayHasData(erArray) {
 		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
 		spLang, err = erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		spBody, err = erArray[0].GetString(ctx, 0, 1)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		argstr, err = erArray[0].GetString(ctx, 0, 2)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		spSQLMode, err = erArray[0].GetString(ctx, 0, 3)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		// perform argument length validation
 		// postpone argument type check until actual execution of its procedure body. This will be handled by the binder.
 		err = json.Unmarshal([]byte(argstr), &argList)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if len(argList) != len(call.Args) {
-			return nil, moerr.NewInvalidArg(ctx, string(call.Name.Name.ObjectName)+" procedure have invalid input args length", len(call.Args))
+			return nil, 0, moerr.NewInvalidArg(ctx, string(call.Name.Name.ObjectName)+" procedure have invalid input args length", len(call.Args))
 		}
 	} else {
-		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
+		return nil, 0, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
@@ -11427,25 +11427,25 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	case "sql":
 		stmt, err := parseStoredProcedureBody(ctx, ses, spBody, spSQLMode)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		defer freeStatements(stmt)
 
-		err = interpreter.ExecuteSp(stmt[0], dbName)
+		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		return interpreter.GetResult(), nil
+		return interpreter.GetResult(), interpreter.lastAffectedRows, nil
 
 	case "starlark":
 		err = interpreter.ExecuteStarlark(spBody, dbName, bg)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		return interpreter.GetResult(), nil
+		return interpreter.GetResult(), interpreter.lastAffectedRows, nil
 
 	default:
-		return nil, moerr.NewInternalError(ctx, "unknown language")
+		return nil, 0, moerr.NewInternalError(ctx, "unknown language")
 	}
 }
 

@@ -104,3 +104,69 @@ create table d1(id int primary key, v int, index idx_v(v));
 create table d2(id int);
 drop database row_count_drop_db;
 select row_count();
+
+-- stored procedures retain affected rows between statements
+create database row_count_procedure_db;
+use row_count_procedure_db;
+create table proc_t(id int primary key, v int);
+
+create procedure proc_inner_counts() '
+begin
+    insert into proc_t values (1, 10), (2, 20), (3, 30);
+    select row_count();
+    update proc_t set v = v + 1 where id in (1, 2);
+    select row_count();
+    delete from proc_t where id = 3;
+    select row_count();
+end';
+call proc_inner_counts();
+select row_count();
+
+create procedure proc_update_count() '
+begin
+    update proc_t set v = v + 1 where id in (1, 2);
+    select row_count();
+end';
+call proc_update_count();
+
+create procedure proc_delete_count() '
+begin
+    delete from proc_t where id = 2;
+    select row_count();
+end';
+call proc_delete_count();
+
+create procedure proc_final_dml() '
+begin
+    insert into proc_t values (4, 40), (5, 50);
+end';
+call proc_final_dml();
+select row_count();
+
+create procedure proc_final_result() '
+begin
+    select v from proc_t where id = 1;
+end';
+call proc_final_result();
+select row_count();
+
+create procedure proc_inner_dml() '
+begin
+    insert into proc_t values (6, 60);
+end';
+create procedure proc_outer_call() '
+begin
+    call proc_inner_dml();
+    select row_count();
+end';
+call proc_outer_call();
+select row_count();
+
+create procedure proc_ddl_count() '
+begin
+    create table proc_ddl_t(id int);
+    select row_count();
+end';
+call proc_ddl_count();
+
+drop database row_count_procedure_db;

@@ -228,6 +228,16 @@ func TestRowCountOverMySQLProtocol(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1), affectedRows)
 
+			_, err = conn.ExecContext(ctx, "create procedure insert_rows() 'begin insert into t values (4), (5); end'")
+			require.NoError(t, err)
+			result, err = conn.ExecContext(ctx, "call insert_rows()")
+			require.NoError(t, err)
+			affectedRows, err = result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(2), affectedRows)
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(2), rowCount)
+
 			_, err = conn.ExecContext(ctx, "insert into t values (1)")
 			require.Error(t, err)
 			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))

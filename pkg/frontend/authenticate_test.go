@@ -9022,7 +9022,7 @@ func Test_doInterpretCall(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ctx, ses, call, false)
+		_, _, err = doInterpretCall(ctx, ses, call, false)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -9075,7 +9075,7 @@ func Test_doInterpretCall(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ctx, ses, call, false)
+		_, _, err = doInterpretCall(ctx, ses, call, false)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -9139,7 +9139,7 @@ func Test_doInterpretCall(t *testing.T) {
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ctx, ses, call, false)
+		_, _, err = doInterpretCall(ctx, ses, call, false)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

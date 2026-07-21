@@ -2037,10 +2037,14 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 }
 
 func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, bg bool) error {
-	results, err := doInterpretCall(execCtx.reqCtx, ses, call, bg)
+	results, affectedRows, err := doInterpretCall(execCtx.reqCtx, ses, call, bg)
 	if err != nil {
 		return err
 	}
+	if affectedRows < 0 {
+		affectedRows = 0
+	}
+	execCtx.runResult = &util.RunResult{AffectRows: uint64(affectedRows)}
 
 	ses.SetMysqlResultSet(nil)
 	execCtx.results = results

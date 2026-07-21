@@ -232,6 +232,7 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 		ret[1] = starlark.String(err.Error())
 		return starlark.NewList(ret), nil
 	}
+	si.interp.recordAffectedRows()
 
 	erArray, err := getResultSet(si.interp.ctx, si.interp.bh)
 	if err != nil {

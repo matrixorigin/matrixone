@@ -112,6 +112,8 @@ func TestRecordLastAffectedRows(t *testing.T) {
 		{"select -> -1", &tree.Select{}, 4, -1},
 		// DDL is a status statement but affects no rows.
 		{"ddl -> 0", &tree.CreateTable{}, 0, 0},
+		// CALL propagates the final statement's affected rows from the procedure.
+		{"call", &tree.CallStmt{}, 6, 6},
 	}
 	for _, c := range cases {
 		ses := &Session{}
@@ -127,4 +129,38 @@ func TestRecordLastAffectedRows(t *testing.T) {
 		require.Equal(t, c.want, proc.GetAffectedRows(), "%s: proc", c.name)
 		require.Equal(t, c.want, ses.GetLastAffectedRows(), "%s: session", c.name)
 	}
+}
+
+func TestAffectedRowsForBackgroundStatement(t *testing.T) {
+	cases := []struct {
+		name   string
+		stmt   tree.Statement
+		result *util.RunResult
+		want   int64
+	}{
+		{"insert", &tree.Insert{}, &util.RunResult{AffectRows: 5}, 5},
+		{"select", &tree.Select{}, nil, -1},
+		{"ddl", &tree.CreateTable{}, &util.RunResult{}, 0},
+		{"call", &tree.CallStmt{}, &util.RunResult{AffectRows: 3}, 3},
+		{"call without result", &tree.CallStmt{}, nil, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			execCtx := &ExecCtx{stmt: c.stmt, runResult: c.result}
+			require.Equal(t, c.want, affectedRowsForStatement(execCtx))
+		})
+	}
+}
+
+func TestInterpreterBackgroundAffectedRows(t *testing.T) {
+	back := &backExec{backSes: &backSession{}}
+	interpreter := &Interpreter{bh: back}
+
+	interpreter.setAffectedRows(7)
+	require.Equal(t, int64(7), interpreter.lastAffectedRows)
+	require.Equal(t, int64(7), back.GetLastAffectedRows())
+
+	back.SetLastAffectedRows(-1)
+	interpreter.recordAffectedRows()
+	require.Equal(t, int64(-1), interpreter.lastAffectedRows)
 }
