@@ -16,6 +16,8 @@ package shardservice
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -70,6 +72,80 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	unknown := target
 	unknown.Replicas[0].CN = "unknown"
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
+}
+
+func TestNewReadRequestUsesVersionedMethodForBinaryParams(t *testing.T) {
+	s := &service{}
+	s.remote.pool = morpc.NewMessagePool(
+		func() *shard.Request { return &shard.Request{} },
+		func() *shard.Response { return &shard.Response{} },
+	)
+	target := shard.TableShard{Replicas: []shard.ShardReplica{{CN: "target"}}}
+
+	textReq := s.newReadRequest(target, ReadRows, shard.ReadParam{}, timestamp.Timestamp{})
+	require.Equal(t, shard.Method_ShardRead, textReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(textReq)
+
+	binaryReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, binaryReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(binaryReq)
+}
+
+func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {
+	initTestCluster("cn1")
+	address := fmt.Sprintf("unix:///tmp/shard-read-v2-%d.sock", time.Now().UnixNano())
+	require.NoError(t, os.RemoveAll(address[7:]))
+
+	pool := morpc.NewMessagePool(
+		func() *shard.Request { return &shard.Request{} },
+		func() *shard.Response { return &shard.Response{} },
+	)
+	server, err := morpc.NewMessageHandler(
+		sid,
+		"old-shard-service",
+		address,
+		morpc.Config{},
+		pool,
+	)
+	require.NoError(t, err)
+	var handlerCalls atomic.Int32
+	server.RegisterMethod(
+		uint32(shard.Method_ShardRead),
+		func(context.Context, *shard.Request, *shard.Response, *morpc.Buffer) error {
+			handlerCalls.Add(1)
+			return nil
+		},
+		false,
+	)
+	require.NoError(t, server.Start())
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	client, err := morpc.NewMethodBasedClient(
+		sid,
+		"new-shard-client",
+		morpc.Config{ClientOptions: []morpc.ClientOption{morpc.WithClientEnableAutoCreateBackend()}},
+		pool,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	client.RegisterMethod(
+		uint32(shard.Method_ShardReadV2),
+		func(*shard.Request) (string, error) { return address, nil },
+	)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err = client.Send(ctx, &shard.Request{RPCMethod: shard.Method_ShardReadV2})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Zero(t, handlerCalls.Load())
 }
 
 func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
