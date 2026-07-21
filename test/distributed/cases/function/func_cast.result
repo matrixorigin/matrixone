@@ -61,6 +61,13 @@ select cast(cast(-1.4 as decimal(10,2)) as unsigned), cast(cast(-1.5 as decimal(
 select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2)) as signed), cast(cast(1.6 as decimal(10,2)) as signed);
 ➤ cast(cast(1.4 as decimal(10, 2)) as signed)[-5,64,0]  ¦  cast(cast(1.5 as decimal(10, 2)) as signed)[-5,64,0]  ¦  cast(cast(1.6 as decimal(10, 2)) as signed)[-5,64,0]  𝄀
 1  ¦  2  ¦  2
+select cast(cast(10000 as signed) as decimal(6,2)), cast(cast(-10000 as signed) as decimal(6,2));
+➤ cast(cast(10000 as signed) as decimal(6, 2))[3,6,2]  ¦  cast(cast(-10000 as signed) as decimal(6, 2))[3,6,2]  𝄀
+9999.99  ¦  -9999.99
+select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed), cast(cast(2.5 as double) as signed),
+       cast(cast(-0.5 as double) as signed), cast(cast(-1.5 as double) as signed), cast(cast(-2.5 as double) as signed);
+➤ cast(cast(0.5 as double) as signed)[-5,64,0]  ¦  cast(cast(1.5 as double) as signed)[-5,64,0]  ¦  cast(cast(2.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-0.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-1.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-2.5 as double) as signed)[-5,64,0]  𝄀
+0  ¦  2  ¦  2  ¦  0  ¦  -2  ¦  -2
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
