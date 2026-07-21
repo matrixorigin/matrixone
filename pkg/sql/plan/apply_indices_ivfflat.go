@@ -1370,12 +1370,19 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			bucketExpandStep = 1
 		}
 	}
+	asyncIndex, err := catalog.IsIndexAsync(ivfCtx.metaDef.IndexAlgoParams)
+	if err != nil {
+		return nodeID, err
+	}
 
 	// build ivf_search table function node
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		// Async index payload may be committed locally before every CN has
+		// replayed the corresponding object metadata. Keep search on one CN
+		// until the async path provides a global visibility watermark.
+		Stats: &plan.Stats{ForceOneCN: asyncIndex},
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
