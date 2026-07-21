@@ -72,7 +72,7 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 		genKey("pub_db", "v1"),
 	}
 
-	rewrittenViewMap, rewrittenViews, err := rewriteCloneViewInfos(viewMap, sortedViews, "pub_db", "clone_db")
+	rewrittenViewMap, rewrittenViews, err := rewriteCloneViewInfos(viewMap, sortedViews, "pub_db", "clone_db", 1)
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		genKey("other_db", "dep_v"),
@@ -111,6 +111,7 @@ func Test_rewriteCloneCreateSQL_RewritesOnlyTableNames(t *testing.T) {
 			having count(*) > (select count(*) from pub_db.having_t)`,
 		"pub_db",
 		"clone_db",
+		1,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "create view `clone_db`.`v`")
@@ -139,6 +140,7 @@ func Test_rewriteCloneCreateSQL_RewritesQualifiedColumnsAndOrderingSubqueries(t 
 		"create view src.v as select src.t.a from src.t order by (select max(b) from src.u)",
 		"src",
 		"dst",
+		1,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "create view `dst`.`v`")
@@ -154,6 +156,7 @@ func Test_rewriteCloneCreateSQL_PreservesUnqualifiedViewFormat(t *testing.T) {
 		"create view v1 as select * from t1;",
 		"pub_db",
 		"clone_db",
+		1,
 	)
 	require.NoError(t, err)
 	require.Equal(t, "create view `v1` as select * from `t1`;", got)
@@ -164,11 +167,12 @@ func Test_rewriteCloneCreateSQL_QuotesUserViewIdentifiers(t *testing.T) {
 		"create view `quote'db`.`quote view` as select `quote col` from `quote'db`.`quote table`",
 		"quote'db",
 		"clone db",
+		1,
 	)
 	require.NoError(t, err)
 	require.Equal(t, "create view `clone db`.`quote view` as select `quote col` from `clone db`.`quote table`;", got)
 
-	_, err = rewriteCloneCreateSQL(got, "clone db", "next db")
+	_, err = rewriteCloneCreateSQL(got, "clone db", "next db", 1)
 	require.NoError(t, err)
 }
 
@@ -177,11 +181,23 @@ func Test_rewriteCloneCreateSQL_QuotesSystemViewIdentifiers(t *testing.T) {
 		"create view information_schema.v as select mt.`constraint` from mo_catalog.mo_tables as mt",
 		"information_schema",
 		"information_schema_new",
+		1,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "`mt`.`constraint`")
 	require.NotContains(t, got, "mt.constraint")
 
-	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next")
+	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
 	require.NoError(t, err)
+}
+
+func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view `SrcDB`.`ViewName` as select `ID` from `SrcDB`.`TableName`",
+		"SrcDB",
+		"DstDB",
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "create view `DstDB`.`ViewName` as select `ID` from `DstDB`.`TableName`;", got)
 }

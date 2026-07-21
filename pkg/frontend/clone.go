@@ -551,7 +551,11 @@ func handleCloneDatabaseWithSource(
 		var rewrittenViewMap map[string]*tableInfo
 		var rewrittenViews []string
 		rewrittenViewMap, rewrittenViews, err = rewriteCloneViewInfos(
-			source.viewMap, sortedViews, source.srcResolveDBName, stmt.DstDatabase.String(),
+			source.viewMap,
+			sortedViews,
+			source.srcResolveDBName,
+			stmt.DstDatabase.String(),
+			parserLowerCaseTableNames(ses),
 		)
 		if err != nil {
 			return
@@ -585,6 +589,7 @@ func rewriteCloneViewInfos(
 	sortedViews []string,
 	srcDBName string,
 	dstDBName string,
+	lowerCaseTableNames int64,
 ) (map[string]*tableInfo, []string, error) {
 	rewrittenViews := make([]string, 0, len(sortedViews))
 	for _, key := range sortedViews {
@@ -611,6 +616,7 @@ func rewriteCloneViewInfos(
 			info.createSql,
 			srcDBName,
 			dstDBName,
+			lowerCaseTableNames,
 		)
 		if err != nil {
 			return nil, nil, err
@@ -625,12 +631,12 @@ func rewriteCloneViewInfos(
 	return rewrittenViewMap, rewrittenViews, nil
 }
 
-func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string) (string, error) {
+func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames int64) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return sql, nil
 	}
 
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
 	if err != nil {
 		return "", err
 	}
