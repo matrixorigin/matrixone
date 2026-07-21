@@ -113,7 +113,7 @@ func TestOperatorTypeAndBaseAccessors(t *testing.T) {
 func TestOperatorToStrMapCompleteness(t *testing.T) {
 	const reservedShuffleV2 = Shuffle + 1
 
-	for op := Top; op <= IcebergWrite; op++ {
+	for op := Top; op <= TableClone; op++ {
 		if op == reservedShuffleV2 {
 			continue
 		}

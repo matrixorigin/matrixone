@@ -105,6 +105,7 @@ const (
 	Apply
 	PostDml
 	IcebergWrite
+	TableClone
 )
 
 var OperatorToStrMap map[OpType]string
@@ -175,6 +176,7 @@ func init() {
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
 		IcebergWrite:            "IcebergWrite",
+		TableClone:              "TableClone",
 	}
 
 	// Initialize StrToOperatorMap
