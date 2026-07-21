@@ -1468,7 +1468,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		fmtCtx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithQuoteString(true),
+			tree.WithQuoteIdentifier(),
+		)
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 

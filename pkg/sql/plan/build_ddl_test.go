@@ -630,6 +630,24 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		"CREATE TABLE ctas_alias AS SELECT N_NAME AS `中文别名` FROM NATION",
+	)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Equal(
+		t,
+		"insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`)",
+		createTable.GetCreateAsSelectSql(),
+	)
+}
+
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
 	got := restoreIntervalSyntaxForCTAS(
 		"select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",

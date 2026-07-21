@@ -1602,6 +1602,16 @@ select * from alias02;
 newcol    col1    col2
 null    1    2
 null    2    3
+drop table if exists ctas_non_ascii_alias;
+create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
+desc ctas_non_ascii_alias;
+Field    Type    Null    Key    Default    Extra    Comment
+中文别名    INT(32)    YES        null        
+select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
+中文别名
+1
+2
+drop table ctas_non_ascii_alias;
 drop table alias01;
 drop database test;
 drop database if exists db1;
