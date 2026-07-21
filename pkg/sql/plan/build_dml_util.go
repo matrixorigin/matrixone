@@ -887,20 +887,36 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					combinedNodeID := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN, Children: []int32{childNodeID, parentNodeID},
 						JoinType: plan.Node_INNER, OnList: []*Expr{anyMatch},
-						ProjectList: joinProjection,
 					}, bindCtx)
 					combinedNodeID = builder.appendNode(&plan.Node{
 						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
-						ProjectList: getProjectionByLastNode(builder, combinedNodeID), BindingTags: []int32{combinedTag},
+						ProjectList: joinProjection, BindingTags: []int32{combinedTag},
 					}, bindCtx)
 					groupTag := builder.genNewBindTag()
-					groupBy := make([]*Expr, 0, len(childTableDef.Cols))
+					aggTag := builder.genNewBindTag()
+					groupBy := make([]*Expr, 0, 2)
+					childGroupPos := make([]int32, len(childTableDef.Cols))
+					childAggPos := make([]int32, len(childTableDef.Cols))
+					aggList := make([]*Expr, 0, len(childTableDef.Cols)-2+len(fkMatches))
 					for i, col := range childTableDef.Cols {
-						groupBy = append(groupBy, &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						colExpr := &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 							RelPos: combinedTag, ColPos: int32(i), Name: col.Name,
-						}}})
+						}}}
+						if col.Name == catalog.Row_ID || col.Name == catalog.FakePrimaryKeyColName {
+							childGroupPos[i] = int32(len(groupBy))
+							childAggPos[i] = -1
+							groupBy = append(groupBy, colExpr)
+							continue
+						}
+						childAggPos[i] = int32(len(aggList))
+						colAgg, bindErr := BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "any_value", []*Expr{colExpr})
+						if bindErr != nil {
+							return bindErr
+						}
+						aggList = append(aggList, colAgg)
 					}
-					aggList := make([]*Expr, 0, len(fkMatches))
+					markerAggOffset := len(aggList)
 					for i := range fkMatches {
 						marker := &Expr{Typ: fkMatches[i].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 							RelPos: combinedTag, ColPos: int32(len(childTableDef.Cols) + i),
@@ -912,46 +928,63 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 						aggList = append(aggList, markerAgg)
 					}
-					aggProject := make([]*Expr, 0, len(groupBy)+len(aggList))
-					for i, expr := range groupBy {
-						aggProject = append(aggProject, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: -2, ColPos: int32(i),
-						}}})
-					}
-					for i, expr := range aggList {
-						aggProject = append(aggProject, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: -2, ColPos: int32(len(groupBy) + i),
-						}}})
-					}
 					combinedNodeID = builder.appendNode(&plan.Node{
 						NodeType: plan.Node_AGG, Children: []int32{combinedNodeID},
-						GroupBy: groupBy, AggList: aggList, ProjectList: aggProject,
+						GroupBy: groupBy, AggList: aggList, BindingTags: []int32{groupTag, aggTag},
 						SpillMem: builder.aggSpillMem,
 					}, bindCtx)
+					actionTag := builder.genNewBindTag()
+					actionProjection := make([]*Expr, 0, len(childTableDef.Cols)+len(fkMatches))
+					for i, col := range childTableDef.Cols {
+						relPos := aggTag
+						colPos := childAggPos[i]
+						if childAggPos[i] < 0 {
+							relPos = groupTag
+							colPos = childGroupPos[i]
+						}
+						actionProjection = append(actionProjection, &Expr{
+							Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: relPos, ColPos: colPos, Name: col.Name,
+							}},
+						})
+					}
+					for i := range fkMatches {
+						expr := aggList[markerAggOffset+i]
+						actionProjection = append(actionProjection, &Expr{
+							Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: aggTag, ColPos: int32(markerAggOffset + i),
+							}},
+						})
+					}
 					combinedNodeID = builder.appendNode(&plan.Node{
 						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
-						ProjectList: getProjectionByLastNode(builder, combinedNodeID), BindingTags: []int32{groupTag},
+						ProjectList: actionProjection, BindingTags: []int32{actionTag},
 					}, bindCtx)
+					actionSinkID := appendSinkNodeWithTag(builder, bindCtx, combinedNodeID, actionTag)
+					if builder.preserveSinkProjection == nil {
+						builder.preserveSinkProjection = make(map[int32]struct{})
+					}
+					builder.preserveSinkProjection[actionSinkID] = struct{}{}
+					actionStep := builder.appendStep(actionSinkID)
+					combinedNodeID = builder.appendTaggedSinkScan(bindCtx, actionStep, actionTag)
+					if builder.preserveScanProjection == nil {
+						builder.preserveScanProjection = make(map[int32]struct{})
+					}
+					builder.preserveScanProjection[combinedNodeID] = struct{}{}
 
 					updateMap := make(map[string]int)
 					insertColPos := make([]int, 0, len(childTableDef.Cols)-1)
 					projectList := make([]*Expr, len(childTableDef.Cols))
 					for i, col := range childTableDef.Cols {
-						if col.Name == catalog.Row_ID {
-							projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: groupTag, ColPos: int32(i), Name: col.Name,
-							}}}
-						} else {
-							projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: groupTag, ColPos: int32(i), Name: col.Name,
-							}}}
-						}
+						projectList[i] = &Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: actionTag, ColPos: int32(i), Name: col.Name,
+						}}}
 					}
 					for columnName, markers := range markerByColumn {
 						var matched *Expr
 						for _, markerIdx := range markers {
 							marker := &Expr{Typ: fkMatches[markerIdx].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: groupTag, ColPos: int32(len(childTableDef.Cols) + markerIdx),
+								RelPos: actionTag, ColPos: int32(len(childTableDef.Cols) + markerIdx),
 							}}}
 							if matched == nil {
 								matched = marker
@@ -987,6 +1020,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID}, ProjectList: projectList,
 					}, bindCtx)
 					combinedNodeID = appendSinkNode(builder, bindCtx, combinedNodeID)
+					builder.preserveSinkProjection[combinedNodeID] = struct{}{}
 					combinedStep := builder.appendStep(combinedNodeID)
 					upPlanCtx := getDmlPlanCtx()
 					upPlanCtx.objRef = childObjRef
@@ -998,6 +1032,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 					upPlanCtx.insertColPos = insertColPos
 					upPlanCtx.isFkRecursionCall = true
+					upPlanCtx.updatePkCol = false
+					upPlanCtx.preserveUpdateSourceProjection = true
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
@@ -4000,7 +4036,20 @@ func makePreUpdateDeletePlan(
 	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	//lock new pk for update statement (if update pk)
-	if delCtx.updateColLength > 0 && delCtx.updatePkCol && delCtx.tableDef.Pkey != nil {
+	updatesPrimaryKey := false
+	if delCtx.tableDef.Pkey != nil {
+		if delCtx.tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			for _, colName := range delCtx.tableDef.Pkey.Names {
+				if _, ok := delCtx.updateColPosMap[colName]; ok {
+					updatesPrimaryKey = true
+					break
+				}
+			}
+		} else {
+			_, updatesPrimaryKey = delCtx.updateColPosMap[delCtx.tableDef.Pkey.PkeyColName]
+		}
+	}
+	if delCtx.updateColLength > 0 && delCtx.updatePkCol && updatesPrimaryKey {
 		newPkPos := int32(0)
 
 		// for compound primary key, we need append hidden pk column to the project list

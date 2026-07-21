@@ -4141,10 +4141,11 @@ func TestReplaceParentSideFKCombinesSetNullActions(t *testing.T) {
 	updates := 0
 	foundPhysicalRowGrouping := false
 	for _, node := range query.Nodes {
-		if node.NodeType == plan.Node_AGG && len(node.GroupBy) == len(child.Cols) {
-			rowIDGroup := node.GroupBy[child.Name2ColIndex[catalog.Row_ID]].GetCol()
-			if rowIDGroup != nil && rowIDGroup.Name == catalog.Row_ID {
-				foundPhysicalRowGrouping = true
+		if node.NodeType == plan.Node_AGG {
+			for _, groupExpr := range node.GroupBy {
+				if groupExpr.Typ.Id == int32(types.T_Rowid) {
+					foundPhysicalRowGrouping = true
+				}
 			}
 		}
 		if node.NodeType == plan.Node_INSERT && node.InsertCtx != nil &&
