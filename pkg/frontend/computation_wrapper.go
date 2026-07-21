@@ -659,6 +659,17 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if query == nil {
 		return true
 	}
+	for _, node := range query.GetNodes() {
+		if node != nil && node.GetExternScan() != nil && node.GetExternScan().GetIcebergScan() != nil {
+			// Iceberg tasks are resolved from an external snapshot while the
+			// pipeline is compiled. That snapshot is not covered by MatrixOne's
+			// schema-change timestamp, so a cached Compile would keep scanning the
+			// old snapshot across EXECUTE calls. If Iceberg planning moves to an
+			// execution-time operator in the future this restriction can be
+			// revisited without weakening the generic prepared-statement cache.
+			return false
+		}
+	}
 	return !query.GetHasForeignKeyAction()
 }
 
