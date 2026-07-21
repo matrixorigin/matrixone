@@ -35,7 +35,8 @@ func TestDiskObjectStorageReadInvalidRangeClosesFile(t *testing.T) {
 
 	storage := &diskObjectStorage{path: t.TempDir()}
 	const key = "object"
-	require.NoError(t, os.WriteFile(filepath.Join(storage.path, key), []byte("data"), 0644))
+	objectPath := filepath.Join(storage.path, key)
+	require.NoError(t, os.WriteFile(objectPath, []byte("data"), 0644))
 
 	minusOne := int64(-1)
 	zero := int64(0)
@@ -55,7 +56,7 @@ func TestDiskObjectStorageReadInvalidRangeClosesFile(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			before := openFileDescriptorCount(t)
+			before := openFileDescriptorCountForPath(t, objectPath)
 			for range 16 {
 				reader, err := storage.Read(context.Background(), key, tc.min, tc.max)
 				require.Nil(t, reader)
@@ -64,13 +65,33 @@ func TestDiskObjectStorageReadInvalidRangeClosesFile(t *testing.T) {
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyRange))
 				}
 			}
-			require.Equal(t, before, openFileDescriptorCount(t))
+			require.Equal(t, before, openFileDescriptorCountForPath(t, objectPath))
 		})
 	}
 }
 
-func openFileDescriptorCount(t *testing.T) int {
+func TestOpenFileDescriptorCountForPathIgnoresUnrelatedFile(t *testing.T) {
+	targetPath := filepath.Join(t.TempDir(), "target")
+	require.NoError(t, os.WriteFile(targetPath, []byte("target"), 0644))
+	target, err := os.Open(targetPath)
+	require.NoError(t, err)
+	defer target.Close()
+
+	unrelatedPath := filepath.Join(t.TempDir(), "unrelated")
+	require.NoError(t, os.WriteFile(unrelatedPath, []byte("unrelated"), 0644))
+	unrelated, err := os.Open(unrelatedPath)
+	require.NoError(t, err)
+
+	before := openFileDescriptorCountForPath(t, targetPath)
+	require.NoError(t, unrelated.Close())
+	require.Equal(t, before, openFileDescriptorCountForPath(t, targetPath))
+}
+
+func openFileDescriptorCountForPath(t *testing.T, path string) int {
 	t.Helper()
+
+	var targetStat unix.Stat_t
+	require.NoError(t, unix.Stat(path, &targetStat))
 
 	var limit unix.Rlimit
 	require.NoError(t, unix.Getrlimit(unix.RLIMIT_NOFILE, &limit))
@@ -82,12 +103,15 @@ func openFileDescriptorCount(t *testing.T) int {
 	count := 0
 	for fd := uint64(0); fd < limit.Cur; fd++ {
 		for {
-			_, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+			var stat unix.Stat_t
+			err := unix.Fstat(int(fd), &stat)
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
 			if err == nil {
-				count++
+				if stat.Dev == targetStat.Dev && stat.Ino == targetStat.Ino {
+					count++
+				}
 			} else if !errors.Is(err, unix.EBADF) {
 				t.Fatalf("inspect file descriptor %d: %v", fd, err)
 			}

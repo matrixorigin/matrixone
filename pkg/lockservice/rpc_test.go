@@ -613,7 +613,7 @@ func TestValidateService(t *testing.T) {
 			require.False(t, err != nil && isRetryError(err))
 			require.True(t, !valid)
 
-			valid, err = validateService(time.Millisecond*100, "s1", c, getLogger(""))
+			valid, err = validateService(rpcTestResponseTimeout, "s1", c, getLogger(""))
 			require.False(t, err != nil && isRetryError(err))
 			require.False(t, !valid)
 		},

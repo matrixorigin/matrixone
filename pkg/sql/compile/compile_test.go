@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -55,7 +56,9 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -67,6 +70,34 @@ type compileTestCase struct {
 	stmt      tree.Statement
 	proc      *process.Process
 	txnClient client.TxnClient // Store txnClient for truncating table with real transaction
+}
+
+func TestApplyExecutorLockWaitTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZero(),
+		nil,
+		txnOp,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+
+	applyExecutorLockWaitTimeout(proc, executor.Options{}.WithLockWaitTimeout(1500*time.Millisecond))
+	require.Equal(t, int64(2), proc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet)
+
+	clearOpts := executor.Options{}.WithTxn(txnOp).WithLockWaitTimeout(0)
+	require.True(t, clearOpts.HasExistsTxn())
+	applyExecutorLockWaitTimeout(proc, clearOpts)
+	require.Zero(t, proc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet,
+		"an explicit zero must be distinguishable from an absent override")
 }
 
 func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
@@ -699,6 +730,158 @@ func newShuffleGroupTestNodes(dop int32) (*plan.Node, []*plan.Node) {
 		GroupBy:  []*plan.Expr{col},
 	}
 	return agg, []*plan.Node{child}
+}
+
+func TestDistributedShuffleJoinFallsBackFromPackedReuse(t *testing.T) {
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}})
+	node := newShuffleJoinTestNode(4)
+	probe := newShuffleJoinTestScope(t, c.cnList[0], 4)
+	build := newShuffleJoinTestScope(t, c.cnList[0], 4)
+
+	result := c.newShuffleJoinScopeList([]*Scope{probe}, []*Scope{build}, node)
+
+	require.Len(t, result, 4)
+	require.Equal(t, plan.ShuffleMethod_Reuse, node.Stats.HashmapStats.ShuffleMethod,
+		"the physical fallback must not mutate reusable plan metadata")
+	probeDispatch, ok := probe.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, probeDispatch.LocalRegs, 4)
+	require.Equal(t, []int{0, 1, 2, 3}, probeDispatch.ShuffleRegIdxLocal)
+	require.IsType(t, &shuffle.Shuffle{}, probeDispatch.GetOperatorBase().GetChildren(0))
+	buildDispatch, ok := build.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, buildDispatch.LocalRegs, 4)
+	require.Equal(t, []int{0, 1, 2, 3}, buildDispatch.ShuffleRegIdxLocal)
+}
+
+func TestDistributedShuffleJoinKeepsMaterializedReuse(t *testing.T) {
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}})
+	node := newShuffleJoinTestNode(4)
+	probes := make([]*Scope, 4)
+	probeRoots := make([]vm.Operator, 4)
+	for i := range probes {
+		probes[i] = newShuffleJoinTestScope(t, c.cnList[0], 1)
+		probeRoots[i] = probes[i].RootOp
+	}
+	build := newShuffleJoinTestScope(t, c.cnList[0], 4)
+
+	result := c.newShuffleJoinScopeList(probes, []*Scope{build}, node)
+
+	require.Len(t, result, 4)
+	for i := range probes {
+		require.Same(t, probes[i], result[i])
+		require.Same(t, probeRoots[i], probes[i].RootOp,
+			"valid reuse must not add a probe shuffle")
+	}
+	buildDispatch, ok := build.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, buildDispatch.LocalRegs, 4)
+}
+
+func TestDistributedShuffleJoinRejectsMisorderedReuse(t *testing.T) {
+	nodes := engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 2},
+		{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	node := newShuffleJoinTestNode(2)
+	probes := []*Scope{
+		newShuffleJoinTestScope(t, nodes[0], 1),
+		newShuffleJoinTestScope(t, nodes[1], 1),
+		newShuffleJoinTestScope(t, nodes[0], 1),
+		newShuffleJoinTestScope(t, nodes[1], 1),
+	}
+	builds := []*Scope{
+		newShuffleJoinTestScope(t, nodes[0], 1),
+		newShuffleJoinTestScope(t, nodes[1], 1),
+	}
+
+	result := c.newShuffleJoinScopeList(probes, builds, node)
+
+	require.Len(t, result, 4)
+	require.NotSame(t, probes[0], result[0],
+		"noncanonical bucket order must materialize a new distributed shuffle layout")
+}
+
+func TestDistributedShuffleJoinRejectsMultiCNDedupReuse(t *testing.T) {
+	nodes := engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 2},
+		{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	node := newShuffleJoinTestNode(2)
+	node.JoinType = plan.Node_DEDUP
+	probes := []*Scope{
+		newShuffleJoinTestScope(t, nodes[0], 1),
+		newShuffleJoinTestScope(t, nodes[0], 1),
+		newShuffleJoinTestScope(t, nodes[1], 1),
+		newShuffleJoinTestScope(t, nodes[1], 1),
+	}
+	builds := []*Scope{
+		newShuffleJoinTestScope(t, nodes[0], 1),
+		newShuffleJoinTestScope(t, nodes[1], 1),
+	}
+
+	result := c.newShuffleJoinScopeList(probes, builds, node)
+
+	require.Len(t, result, 4,
+		"multi-CN DEDUP normalization must force a physical reshuffle")
+}
+
+func newCompileForShuffleJoinTest(t *testing.T, nodes engine.Nodes) *Compile {
+	c := NewMockCompile(t)
+	c.addr = nodes[0].Addr
+	c.cnList = nodes
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+	return c
+}
+
+func newShuffleJoinTestScope(t *testing.T, node engine.Node, mcpu int) *Scope {
+	scope := newScope(Remote)
+	scope.NodeInfo = scopeNodeWithMcpu(node, mcpu)
+	scope.Proc = testutil.NewProcess(t)
+	scope.setRootOperator(colexec.NewMockOperator())
+	return scope
+}
+
+func newShuffleJoinTestNode(dop int32) *plan.Node {
+	leftCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 0,
+		}},
+	}
+	rightCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 2,
+			ColPos: 0,
+		}},
+	}
+	return &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Stats: &plan.Stats{
+			Dop:      dop,
+			TableCnt: 1000,
+			HashmapStats: &plan.HashMapStats{
+				Shuffle:       true,
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Hash,
+				ShuffleMethod: plan.ShuffleMethod_Reuse,
+			},
+		},
+		OnList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Args: []*plan.Expr{leftCol, rightCol},
+			}},
+		}},
+	}
 }
 
 // TestNewCompileTxnOffsetForInternalSql verifies the statement-boundary

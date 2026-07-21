@@ -202,6 +202,9 @@ type TxnHandler struct {
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
 	ret := &TxnHandler{
 		service:      service,
 		storage:      &engine.EntireEngine{Engine: storage},
