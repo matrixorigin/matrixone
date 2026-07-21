@@ -418,8 +418,6 @@ func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 
 func (s *store) removeReplicaLocked(tnShardID uint64) error {
 	if r := s.getReplica(tnShardID); r != nil {
-		r.cancelStart(true)
-		r.waitStartCompleted()
 		err := r.close(true)
 		s.replicas.CompareAndDelete(tnShardID, r)
 		s.removeTNShardLocked(tnShardID)

@@ -77,6 +77,16 @@ func (s *service) resolveRecoveryTNShards(
 	}
 
 	for {
+		// A complete cached route can still name a replaced replica. Establish
+		// freshness before accepting ReplicaID and Address for recovery RPCs.
+		if refresher, ok := cluster.(clusterservice.AuthoritativeRefresher); ok {
+			if err := refresher.Refresh(ctx); err != nil {
+				if ctx.Err() != nil || !waitRecoveryRouteRetry(ctx, retryInterval) {
+					return txnMeta, false
+				}
+				continue
+			}
+		}
 		services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
 		if err != nil {
 			if !waitRecoveryRouteRetry(ctx, retryInterval) {
@@ -89,11 +99,6 @@ func (s *service) resolveRecoveryTNShards(
 			return txnMeta, true
 		}
 
-		if refresher, ok := cluster.(clusterservice.AuthoritativeRefresher); ok {
-			if err := refresher.Refresh(ctx); err != nil && ctx.Err() != nil {
-				return txnMeta, false
-			}
-		}
 		if !waitRecoveryRouteRetry(ctx, retryInterval) {
 			return txnMeta, false
 		}
@@ -112,16 +117,10 @@ func waitRecoveryRouteRetry(ctx context.Context, interval time.Duration) bool {
 }
 
 func recoveryTxnNeedsRouteResolution(txnMeta txn.TxnMeta) bool {
-	if len(txnMeta.TNShards) <= 1 ||
-		(txnMeta.Status != txn.TxnStatus_Prepared && txnMeta.Status != txn.TxnStatus_Committing) {
-		return false
-	}
-	for _, shard := range txnMeta.TNShards {
-		if !recoveryTNShardRouteComplete(shard) {
-			return true
-		}
-	}
-	return false
+	// Persisted ReplicaID and Address are routing data, not stable participant
+	// identity, so even complete routes must be resolved again after restart.
+	return len(txnMeta.TNShards) > 1 &&
+		(txnMeta.Status == txn.TxnStatus_Prepared || txnMeta.Status == txn.TxnStatus_Committing)
 }
 
 func (s *service) resolveRecoveryTNShardsFromSnapshot(

@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -80,9 +81,56 @@ func installRecoveryCluster(t *testing.T, sid string, services ...metadata.TNSer
 	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, c)
 }
 
+func installRecoveryRoutesForServices(t *testing.T, services ...*service) {
+	t.Helper()
+	require.NotEmpty(t, services)
+	tnServices := make([]metadata.TNService, 0, len(services))
+	for _, service := range services {
+		tnServices = append(tnServices, metadata.TNService{
+			TxnServiceAddress: service.shard.Address,
+			Shards:            []metadata.TNShard{service.shard},
+		})
+	}
+	installRecoveryCluster(t, services[0].sid, tnServices...)
+}
+
 type recoveryClusterClient struct {
 	mu      sync.RWMutex
 	details logpb.ClusterDetails
+}
+
+type staleRecoveryCluster struct {
+	clusterservice.MOCluster
+	mu           sync.Mutex
+	stale        []metadata.TNService
+	current      []metadata.TNService
+	refreshed    bool
+	refreshCalls int
+	refreshFails int
+}
+
+func (c *staleRecoveryCluster) GetAllTNServices() []metadata.TNService {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refreshed {
+		return c.current
+	}
+	return c.stale
+}
+
+func (c *staleRecoveryCluster) Refresh(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshCalls++
+	if c.refreshFails > 0 {
+		c.refreshFails--
+		return errors.New("transient refresh failure")
+	}
+	c.refreshed = true
+	return nil
 }
 
 func (c *recoveryClusterClient) GetClusterDetails(context.Context) (logpb.ClusterDetails, error) {
@@ -143,6 +191,88 @@ func TestRecoveryRestoresRemoteParticipantRoutes(t *testing.T) {
 		ReplicaID:     200,
 		Address:       "tn-2",
 	}, sender.requests[0][0].GetTargetTN())
+}
+
+func TestRecoveryRefreshesStaleParticipantRoutes(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		persistedRoute  metadata.TNShard
+		refreshFails    int
+		expectRefreshes int
+	}{
+		{
+			name:            "incomplete persisted route with complete stale cache",
+			expectRefreshes: 1,
+			persistedRoute: metadata.TNShard{
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+			},
+		},
+		{
+			name:            "complete stale persisted route",
+			expectRefreshes: 1,
+			persistedRoute: metadata.TNShard{
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+				ReplicaID:     100,
+				Address:       "old-tn-2",
+			},
+		},
+		{
+			name:            "transient authoritative refresh failure",
+			refreshFails:    1,
+			expectRefreshes: 2,
+			persistedRoute: metadata.TNShard{
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sender := newRecoveryRouteSender()
+			s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+			defer s.stopper.Stop()
+			cluster := &staleRecoveryCluster{
+				stale: []metadata.TNService{{
+					TxnServiceAddress: "old-tn-2",
+					Shards: []metadata.TNShard{{
+						TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+						ReplicaID:     100,
+					}},
+				}},
+				current: []metadata.TNService{{
+					TxnServiceAddress: "current-tn-2",
+					Shards: []metadata.TNShard{{
+						TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+						ReplicaID:     200,
+					}},
+				}},
+				refreshFails: test.refreshFails,
+			}
+			runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.ClusterService, cluster)
+
+			meta := NewTestTxn(1, 1, 1)
+			meta.Status = txn.TxnStatus_Prepared
+			meta.PreparedTS = NewTestTimestamp(2)
+			meta.TNShards = append(meta.TNShards, test.persistedRoute)
+			require.NoError(t, s.stopper.RunTask(s.doRecovery))
+			s.txnC <- meta
+			close(s.txnC)
+			s.waitRecoveryCompleted()
+
+			select {
+			case <-sender.notifyC:
+			case <-time.After(time.Second):
+				t.Fatal("recovery did not query the remote participant")
+			}
+			sender.mu.Lock()
+			require.NotEmpty(t, sender.requests)
+			assert.Equal(t, uint64(200), sender.requests[0][0].GetTargetTN().ReplicaID)
+			assert.Equal(t, "current-tn-2", sender.requests[0][0].GetTargetTN().Address)
+			sender.mu.Unlock()
+
+			cluster.mu.Lock()
+			assert.Equal(t, test.expectRefreshes, cluster.refreshCalls)
+			cluster.mu.Unlock()
+		})
+	}
 }
 
 func TestRecoveryRestoresRoutesBeforeCommitTNShard(t *testing.T) {
@@ -429,6 +559,7 @@ func TestRecoveryFromMultiTNShardWithAllPrepared(t *testing.T) {
 
 	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
 	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	installRecoveryRoutesForServices(t, s1, s2)
 	sender.AddTxnService(s1)
 	sender.AddTxnService(s2)
 
@@ -475,6 +606,7 @@ func TestRecoveryFromMultiTNShardWithAnyNotPrepared(t *testing.T) {
 
 	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
 	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	installRecoveryRoutesForServices(t, s1, s2)
 	sender.AddTxnService(s1)
 	sender.AddTxnService(s2)
 
@@ -520,6 +652,7 @@ func TestRecoveryFromMultiTNShardWithCommitting(t *testing.T) {
 
 	s1 := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), mlog1).(*service)
 	s2 := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), mlog2).(*service)
+	installRecoveryRoutesForServices(t, s1, s2)
 	sender.AddTxnService(s1)
 	sender.AddTxnService(s2)
 

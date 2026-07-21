@@ -23,6 +23,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -277,6 +279,46 @@ func TestCloseCancelsBlockedReplicaStart(t *testing.T) {
 		t.Fatal("close did not cancel blocked replica start")
 	}
 	require.ErrorIs(t, <-startResult, context.Canceled)
+}
+
+func TestRemoveReplicaCancelsBlockedStartBeforeWaiting(t *testing.T) {
+	txnService := &closeUnblocksStartTxnService{
+		started: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	startResult := make(chan error, 1)
+	go func() { startResult <- r.start(txnService) }()
+	select {
+	case <-txnService.started:
+	case <-time.After(time.Second):
+		t.Fatal("replica start did not begin")
+	}
+
+	fs, err := fileservice.NewMemoryFS(
+		defines.LocalFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	s := &store{
+		cfg:                 &Config{UUID: "test"},
+		rt:                  runtime.DefaultRuntime(),
+		metadataFileService: fs,
+		replicas:            &sync.Map{},
+	}
+	s.replicas.Store(r.shard.ShardID, r)
+
+	removed := make(chan error, 1)
+	go func() { removed <- s.removeReplicaLocked(r.shard.ShardID) }()
+	select {
+	case err := <-removed:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("removeReplicaLocked waited for Start before canceling recovery")
+	}
+	require.ErrorIs(t, <-startResult, context.Canceled)
+	require.Nil(t, s.getReplica(r.shard.ShardID))
 }
 
 func TestCloseCancelsReplicaBlockedInRecovery(t *testing.T) {
