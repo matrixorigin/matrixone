@@ -603,8 +603,8 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 		)
 	}()
 
-	// Remove from running readers
-	s.runningReaders.Delete(s.runningReaderKey)
+	// Remove from running readers only if this stream still owns the entry.
+	s.runningReaders.CompareAndDelete(s.runningReaderKey, s)
 
 	// Remove watermark cache
 	removeStart := time.Now()

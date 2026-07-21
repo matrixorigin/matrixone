@@ -378,6 +378,43 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	}
 }
 
+func TestTableChangeStreamCleanupDoesNotDeleteReplacedReader(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	oldStream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  newTableStreamRecordingSinker(),
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	newStream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: newWatermarkUpdaterStub(),
+		watermarkKey:     &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:   runningReaders,
+		runningReaderKey: key,
+	}
+	runningReaders.Store(key, oldStream)
+	runningReaders.Store(key, newStream)
+
+	oldStream.wg.Add(1)
+	oldStream.cleanup(context.Background())
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "replaced reader ownership should remain")
+	require.Same(t, newStream, stored, "old cleanup must not delete a newer reader")
+}
+
 // Integration: commit failure triggers EnsureCleanup rollback, then recovery succeeds
 func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()

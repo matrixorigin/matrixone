@@ -836,6 +836,65 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	)
 }
 
+var cdcStopRemovedReaderTimeout = 10 * time.Second
+
+func (exec *CDCTaskExecutor) stopReadersMissingFromScan(accountTbls cdc.TblMap) {
+	if exec.runningReaders == nil {
+		return
+	}
+
+	exec.runningReaders.Range(func(key, value interface{}) bool {
+		tableKey, ok := key.(string)
+		if !ok {
+			return true
+		}
+		if _, ok = accountTbls[tableKey]; ok {
+			return true
+		}
+
+		reader, ok := value.(cdc.ChangeReader)
+		if !ok {
+			exec.runningReaders.Delete(key)
+			return true
+		}
+
+		readerInfo := reader.GetTableInfo()
+		if readerInfo != nil && !exec.matchAnyPattern(tableKey, readerInfo) {
+			return true
+		}
+
+		logutil.Info(
+			"cdc.frontend.task.stop_reader_removed_from_scan",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("table", tableKey),
+		)
+
+		reader.Close()
+		done := make(chan struct{})
+		go func() {
+			reader.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			logutil.Debug(
+				"cdc.frontend.task.stop_reader_removed_from_scan_done",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("table", tableKey),
+			)
+			exec.runningReaders.CompareAndDelete(key, reader)
+		case <-time.After(cdcStopRemovedReaderTimeout):
+			logutil.Warn(
+				"cdc.frontend.task.stop_reader_removed_from_scan_timeout",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("table", tableKey),
+			)
+		}
+		return true
+	})
+}
+
 func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
 	if len(cdc.AesKey) > 0 {
 		return nil
@@ -1130,8 +1189,10 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	// Track failed tables for better error reporting
 	failedTables := make(map[string]error)
 	successCount := 0
+	accountTbls := allAccountTbls[accountId]
+	exec.stopReadersMissingFromScan(accountTbls)
 
-	for key, info := range allAccountTbls[accountId] {
+	for key, info := range accountTbls {
 		// already running
 		if val, ok := exec.runningReaders.Load(key); ok {
 			if reader, ok := val.(cdc.ChangeReader); ok {
