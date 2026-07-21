@@ -51,6 +51,8 @@ func (s *leaseCancelReadTxnService) Close(bool) error {
 	return nil
 }
 
+func (s *leaseCancelReadTxnService) CancelRecovery() {}
+
 func (s *leaseCancelReadTxnService) Read(ctx context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {
 	if s.entered != nil {
 		close(s.entered)
