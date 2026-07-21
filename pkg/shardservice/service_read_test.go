@@ -115,6 +115,9 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 			incompatible.CommitID = "older-commit"
 			s.remote.cluster.UpdateCN(incompatible)
 
+			// Stop the heartbeat loop before replacing the client so the test does
+			// not race with background RPCs unrelated to the read under test.
+			s.stopper.Stop()
 			client := &countingMethodBasedClient{MethodBasedClient: s.remote.client}
 			s.remote.client = client
 			adjustCalls := make(map[uint64]int)
