@@ -1556,14 +1556,22 @@ func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, er
 		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement delimiter")
 	}
 
-	preparedSQL := sql[scanner.Pos:]
+	preparedStart := scanner.Pos
+	preparedSQL := sql[preparedStart:]
 	if scanner.CommentFlag {
-		commentEnd := strings.Index(preparedSQL, "*/")
-		if commentEnd < 0 {
-			return "", moerr.NewInvalidInput(ctx, "invalid PREPARE executable comment")
+		scanner.TakeExecutableCommentEnd()
+		var commentEnd int
+		for commentEnd == 0 {
+			previousPos := scanner.Pos
+			token, _ := scanner.Scan()
+			commentEnd = scanner.TakeExecutableCommentEnd()
+			if commentEnd == 0 &&
+				(token == mysql.EofChar() || token == mysql.LEX_ERROR || scanner.Pos == previousPos) {
+				return "", moerr.NewInvalidInput(ctx, "invalid PREPARE executable comment")
+			}
 		}
-		insideComment := strings.TrimSpace(preparedSQL[:commentEnd])
-		afterComment := strings.TrimLeftFunc(preparedSQL[commentEnd+2:], unicode.IsSpace)
+		insideComment := strings.TrimSpace(sql[preparedStart : commentEnd-2])
+		afterComment := strings.TrimLeftFunc(sql[commentEnd:], unicode.IsSpace)
 		switch {
 		case insideComment == "":
 			preparedSQL = afterComment

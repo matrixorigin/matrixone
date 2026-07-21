@@ -1612,6 +1612,28 @@ func TestHandlePrepareStmtExecutableCommentDelimiter(t *testing.T) {
 	})
 }
 
+func TestHandlePrepareStmtQuotedCommentTerminator(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	const sql = "prepare fromx /*! from select 'x*/y' */"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	execCtx := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStmt quoted comment terminator", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, "select 'x*/y'", prepared.Sql)
+		return nil
+	})
+}
+
 func TestExtractPrepareStmtSQL(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -1654,6 +1676,16 @@ func TestExtractPrepareStmtSQL(t *testing.T) {
 			name: "statement inside executable comment",
 			sql:  "prepare fromx /*! from select 2 */",
 			want: "select 2",
+		},
+		{
+			name: "quoted comment terminator",
+			sql:  "prepare fromx /*! from select 'x*/y' */",
+			want: "select 'x*/y'",
+		},
+		{
+			name: "preserve comment after executable delimiter",
+			sql:  "prepare fromx /*! from */ /* inner */ select 3",
+			want: "/* inner */ select 3",
 		},
 	}
 
