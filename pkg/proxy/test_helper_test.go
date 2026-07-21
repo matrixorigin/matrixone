@@ -55,7 +55,7 @@ func (c *popCountConnCache) Push(cacheKey, ServerConn) bool {
 	return false
 }
 
-func (c *popCountConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn {
+func (c *popCountConnCache) Pop(cacheKey, uint32, []byte, []byte, clientInfo) ServerConn {
 	c.popCount++
 	return nil
 }

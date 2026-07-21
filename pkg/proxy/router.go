@@ -134,7 +134,7 @@ type transferRouter interface {
 // backend connection is still eligible for a fresh client login. Cached reuse
 // must honor the same CN health policy as a new session route.
 type cacheReuseChecker interface {
-	CanReuseCachedCN(cn *CNServer) bool
+	CanReuseCachedCN(cn *CNServer, client clientInfo) bool
 }
 
 // RefreshableRouter is a router that can be refreshed to get latest route strategy
@@ -405,7 +405,7 @@ func (r *router) RouteForTransfer(
 
 // CanReuseCachedCN implements cacheReuseChecker. Cached connections must pass
 // the same cluster-eligibility and health gates as a newly routed session.
-func (r *router) CanReuseCachedCN(cn *CNServer) bool {
+func (r *router) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 	if cn == nil {
 		return true
 	}
@@ -413,14 +413,41 @@ func (r *router) CanReuseCachedCN(cn *CNServer) bool {
 		return false
 	}
 
-	eligible := false
+	var current metadata.CNService
+	found := false
 	r.moCluster.GetCNService(
 		clusterservice.NewServiceIDSelector(cn.uuid),
-		func(metadata.CNService) bool {
-			eligible = true
+		func(service metadata.CNService) bool {
+			current = service
+			found = true
 			return false
 		},
 	)
+	if !found {
+		return false
+	}
+
+	// Apply the exact fresh-session routing policy to the current metadata for
+	// this CN. The initial service-ID lookup establishes identity and work
+	// state; the candidate helper then evaluates labels and the sys-tenant
+	// root/dump fallback using this login's context.
+	eligible := false
+	selector := client.labelInfo.genSelector(clusterservice.EQ_Globbing)
+	appendFn := func(service *metadata.CNService) {
+		eligible = service.ServiceID == cn.uuid
+	}
+	candidates := []metadata.CNService{current}
+	if client.isSuperTenant() {
+		if err := route.RouteForSuperTenantCandidates(
+			context.Background(), candidates, selector, client.username, nil, appendFn,
+		); err != nil {
+			return false
+		}
+	} else if err := route.RouteForCommonTenantCandidates(
+		context.Background(), candidates, selector, nil, appendFn,
+	); err != nil {
+		return false
+	}
 	return eligible
 }
 

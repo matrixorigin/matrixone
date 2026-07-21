@@ -188,7 +188,7 @@ type ConnCache interface {
 	// Returns if the connection is pushed into the cache.
 	Push(cacheKey, ServerConn) bool
 	// Pop pops a server connection from the cache.
-	Pop(cacheKey, uint32, []byte, []byte) ServerConn
+	Pop(cacheKey, uint32, []byte, []byte, clientInfo) ServerConn
 	// Count returns the total number of cached connections. It is
 	// mainly for testing.
 	Count() int
@@ -197,7 +197,7 @@ type ConnCache interface {
 }
 
 type contextConnCache interface {
-	PopContext(context.Context, cacheKey, uint32, []byte, []byte) ServerConn
+	PopContext(context.Context, cacheKey, uint32, []byte, []byte, clientInfo) ServerConn
 }
 
 // the main cache struct.
@@ -234,7 +234,7 @@ type connCache struct {
 	// canReuseCN decides whether a cached connection to the CN may be reused
 	// for a fresh client login. If it returns false, the cached connection is
 	// discarded before any SET CONNECTION ID or auth work is attempted.
-	canReuseCN func(*CNServer) bool
+	canReuseCN func(*CNServer, clientInfo) bool
 }
 
 // connCacheOption is the option for connCache.
@@ -282,7 +282,7 @@ func withQueryClient(qc client.QueryClient) connCacheOption {
 	}
 }
 
-func withCanReuseCN(f func(*CNServer) bool) connCacheOption {
+func withCanReuseCN(f func(*CNServer, clientInfo) bool) connCacheOption {
 	return func(c *connCache) {
 		c.canReuseCN = f
 	}
@@ -418,10 +418,12 @@ func (c *connCache) closeCachedConnection(sc *serverConnAuth) {
 }
 
 // Pop implements the ConnCache interface.
-func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byte) ServerConn {
+func (c *connCache) Pop(
+	key cacheKey, connID uint32, salt []byte, authResp []byte, client clientInfo,
+) ServerConn {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
 	defer cancel()
-	return c.PopContext(ctx, key, connID, salt, authResp)
+	return c.PopContext(ctx, key, connID, salt, authResp, client)
 }
 
 func (c *connCache) PopContext(
@@ -430,6 +432,7 @@ func (c *connCache) PopContext(
 	connID uint32,
 	salt []byte,
 	authResp []byte,
+	client clientInfo,
 ) ServerConn {
 	if ctx == nil {
 		ctx = context.Background()
@@ -463,16 +466,15 @@ func (c *connCache) PopContext(
 		}
 
 		// Before using a cached connection for a fresh login, ensure its CN is
-		// still eligible under the current health policy. This keeps connCache
-		// reuse aligned with the same breaker decision that Route() applies to
-		// newly-built sessions, and avoids executing SET CONNECTION ID against a
-		// CN that is currently cooling down.
-		if c.canReuseCN != nil && !c.canReuseCN(sc.GetCNServer()) {
+		// still eligible under the current login's route and health policy. This
+		// avoids executing SET CONNECTION ID against a CN that a fresh Route()
+		// would reject.
+		if c.canReuseCN != nil && !c.canReuseCN(sc.GetCNServer(), client) {
 			cnUUID := ""
 			if cn := sc.GetCNServer(); cn != nil {
 				cnUUID = cn.uuid
 			}
-			c.logger.Warn("skip cached connection on unhealthy cn",
+			c.logger.Warn("skip cached connection on ineligible cn",
 				zap.Uint32("conn ID", sc.ConnID()),
 				zap.String("cn", cnUUID),
 			)

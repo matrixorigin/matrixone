@@ -231,7 +231,9 @@ func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
 	return true
 }
 
-func (m *mockConnCache) Pop(key cacheKey, connID uint32, salt, authResp []byte) ServerConn {
+func (m *mockConnCache) Pop(
+	key cacheKey, connID uint32, salt, authResp []byte, _ clientInfo,
+) ServerConn {
 	if m.popFn != nil {
 		return m.popFn(key, connID, salt, authResp)
 	}
