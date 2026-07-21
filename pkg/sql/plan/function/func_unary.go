@@ -6981,6 +6981,8 @@ const userLevelLockCloseTimeout = 5 * time.Second
 const userLevelLockDetachedCleanupAttemptTimeout = time.Second
 const userLevelLockDetachedCleanupInitialBackoff = 10 * time.Millisecond
 const userLevelLockDetachedCleanupMaxBackoff = time.Second
+const userLevelLockDetachedCleanupMaxEntries = 1024
+const userLevelLockDetachedCleanupWorkers = 4
 
 type userLevelLockKey struct {
 	owner string
@@ -6992,12 +6994,15 @@ type detachedUserLevelLockCleanupKey struct {
 	owner     string
 	name      string
 	connID    uint64
+	kind      string
 }
 
 type detachedUserLevelLockCleanupEntry struct {
-	key    detachedUserLevelLockCleanupKey
-	ls     lockservice.LockService
-	cancel context.CancelFunc
+	key     detachedUserLevelLockCleanupKey
+	ls      lockservice.LockService
+	txnIDs  [][]byte
+	queued  bool
+	backoff time.Duration
 }
 
 type UserLevelLockState struct {
@@ -7026,8 +7031,11 @@ var userLevelLocks = struct {
 var detachedUserLevelLockCleanups = struct {
 	sync.Mutex
 	entries map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry
+	queue   chan detachedUserLevelLockCleanupKey
+	started bool
 }{
 	entries: make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry),
+	queue:   make(chan detachedUserLevelLockCleanupKey, userLevelLockDetachedCleanupMaxEntries),
 }
 
 func userLevelLockOwner(proc *process.Process) string {
@@ -7046,8 +7054,8 @@ func deriveUserLevelLockOwner(proc *process.Process) string {
 		return ""
 	}
 	si := proc.GetSessionInfo()
-	if si.GetConnectionID() != 0 {
-		return fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID())
+	if sessionID := si.SessionId.String(); sessionID != "" && sessionID != "00000000-0000-0000-0000-000000000000" {
+		return fmt.Sprintf("%s:%s", si.Account, sessionID)
 	}
 	if proc.GetLockService() != nil {
 		return fmt.Sprintf("%s:%s:%s", si.Account, proc.GetLockService().GetServiceID(), si.SessionId.String())
@@ -7170,80 +7178,259 @@ func unlockUserLevelLockTxnID(ctx context.Context, ls lockservice.LockService, t
 	return ls.Unlock(ctx, txnID, timestamp.Timestamp{})
 }
 
-func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
-	if err := unlockUserLevelLockTxnID(ctx, ls, userLevelLockTxnID(owner, connID, name)); err != nil {
-		return err
+func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, txnIDs [][]byte) error {
+	for _, txnID := range txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		if err := unlockUserLevelLockTxnID(ctx, ls, txnID); err != nil {
+			return err
+		}
 	}
-	return unlockUserLevelLockTxnID(ctx, ls, userLevelLockTxnIDOld(owner, name))
+	return nil
+}
+
+func userLevelLockTxnIDs(owner string, connID uint64, name string) [][]byte {
+	return [][]byte{
+		userLevelLockTxnID(owner, connID, name),
+		userLevelLockTxnIDOld(owner, name),
+	}
+}
+
+func unlockUserLevelLockByName(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
+	return unlockUserLevelLockTxnIDs(ctx, ls, userLevelLockTxnIDs(owner, connID, name))
 }
 
 func enqueueDetachedUserLevelLockCleanup(ls lockservice.LockService, owner string, connID uint64, name string) bool {
-	if ls == nil || owner == "" || name == "" {
+	if ls == nil {
 		return false
 	}
-	key := detachedUserLevelLockCleanupKey{
-		serviceID: ls.GetServiceID(),
-		owner:     owner,
-		name:      name,
-		connID:    connID,
+	return enqueueDetachedUserLevelLockTxnCleanup(
+		ls,
+		detachedUserLevelLockCleanupKey{
+			serviceID: ls.GetServiceID(),
+			owner:     owner,
+			name:      name,
+			connID:    connID,
+			kind:      "lock",
+		},
+		userLevelLockTxnIDs(owner, connID, name),
+	)
+}
+
+func enqueueDetachedUserLevelLockProbeCleanup(ls lockservice.LockService, owner string, connID uint64, name, probeType string, txnID []byte) bool {
+	if ls == nil {
+		return false
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	entry := &detachedUserLevelLockCleanupEntry{
-		key:    key,
-		ls:     ls,
-		cancel: cancel,
+	return enqueueDetachedUserLevelLockTxnCleanup(
+		ls,
+		detachedUserLevelLockCleanupKey{
+			serviceID: ls.GetServiceID(),
+			owner:     owner,
+			name:      name,
+			connID:    connID,
+			kind:      "probe:" + probeType,
+		},
+		[][]byte{txnID},
+	)
+}
+
+func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
+		return false
 	}
+	startDetachedUserLevelLockCleanupWorkers()
 
 	detachedUserLevelLockCleanups.Lock()
-	if _, ok := detachedUserLevelLockCleanups.entries[key]; ok {
-		detachedUserLevelLockCleanups.Unlock()
-		cancel()
+	defer detachedUserLevelLockCleanups.Unlock()
+	if entry, ok := detachedUserLevelLockCleanups.entries[key]; ok {
+		if !entry.queued {
+			if len(detachedUserLevelLockCleanups.queue) >= cap(detachedUserLevelLockCleanups.queue) {
+				return false
+			}
+			return enqueueDetachedUserLevelLockCleanupLocked(entry)
+		}
 		return true
 	}
+	if len(detachedUserLevelLockCleanups.entries) >= userLevelLockDetachedCleanupMaxEntries {
+		return false
+	}
+	if len(detachedUserLevelLockCleanups.queue) >= cap(detachedUserLevelLockCleanups.queue) {
+		return false
+	}
+	entry := &detachedUserLevelLockCleanupEntry{
+		key:     key,
+		ls:      ls,
+		txnIDs:  txnIDs,
+		backoff: userLevelLockDetachedCleanupInitialBackoff,
+	}
+	if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
+		return false
+	}
 	detachedUserLevelLockCleanups.entries[key] = entry
-	detachedUserLevelLockCleanups.Unlock()
-
-	go runDetachedUserLevelLockCleanup(ctx, entry)
 	return true
 }
 
-func runDetachedUserLevelLockCleanup(ctx context.Context, entry *detachedUserLevelLockCleanupEntry) {
-	backoff := userLevelLockDetachedCleanupInitialBackoff
-	for {
-		attemptCtx, cancel := context.WithTimeout(ctx, userLevelLockDetachedCleanupAttemptTimeout)
-		err := unlockUserLevelLockTxnIDs(attemptCtx, entry.ls, entry.key.owner, entry.key.connID, entry.key.name)
-		cancel()
-		if err == nil {
-			detachedUserLevelLockCleanups.Lock()
-			if detachedUserLevelLockCleanups.entries[entry.key] == entry {
-				delete(detachedUserLevelLockCleanups.entries, entry.key)
-			}
-			detachedUserLevelLockCleanups.Unlock()
-			return
+func enqueueDetachedUserLevelLockCleanupLocked(entry *detachedUserLevelLockCleanupEntry) bool {
+	select {
+	case detachedUserLevelLockCleanups.queue <- entry.key:
+		entry.queued = true
+		return true
+	default:
+		return false
+	}
+}
+
+func enqueueDetachedUserLevelLockCleanups(ls lockservice.LockService, owner string, connID uint64, states []UserLevelLockState) bool {
+	if ls == nil || owner == "" || len(states) == 0 {
+		return false
+	}
+	startDetachedUserLevelLockCleanupWorkers()
+
+	type pendingEntry struct {
+		key    detachedUserLevelLockCleanupKey
+		txnIDs [][]byte
+	}
+	pending := make([]pendingEntry, 0, len(states))
+	for _, state := range states {
+		if state.Name == "" || state.Count == 0 {
+			continue
 		}
-		if ctx.Err() != nil {
-			return
+		pending = append(pending, pendingEntry{
+			key: detachedUserLevelLockCleanupKey{
+				serviceID: ls.GetServiceID(),
+				owner:     owner,
+				name:      state.Name,
+				connID:    connID,
+				kind:      "lock",
+			},
+			txnIDs: userLevelLockTxnIDs(owner, connID, state.Name),
+		})
+	}
+	if len(pending) == 0 {
+		return false
+	}
+
+	detachedUserLevelLockCleanups.Lock()
+	defer detachedUserLevelLockCleanups.Unlock()
+	newEntries := 0
+	neededQueueSlots := 0
+	for _, item := range pending {
+		entry, ok := detachedUserLevelLockCleanups.entries[item.key]
+		if !ok {
+			newEntries++
+			neededQueueSlots++
+			continue
 		}
-		logutil.Warn(fmt.Sprintf(
-			"detached user-level lock cleanup failed: owner=%s lock=%s err=%v",
-			entry.key.owner,
-			entry.key.name,
-			err,
-		))
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		if backoff < userLevelLockDetachedCleanupMaxBackoff {
-			backoff *= 2
-			if backoff > userLevelLockDetachedCleanupMaxBackoff {
-				backoff = userLevelLockDetachedCleanupMaxBackoff
-			}
+		if !entry.queued {
+			neededQueueSlots++
 		}
 	}
+	if len(detachedUserLevelLockCleanups.entries)+newEntries > userLevelLockDetachedCleanupMaxEntries {
+		return false
+	}
+	if len(detachedUserLevelLockCleanups.queue)+neededQueueSlots > cap(detachedUserLevelLockCleanups.queue) {
+		return false
+	}
+	for _, item := range pending {
+		entry, ok := detachedUserLevelLockCleanups.entries[item.key]
+		if !ok {
+			entry = &detachedUserLevelLockCleanupEntry{
+				key:     item.key,
+				ls:      ls,
+				txnIDs:  item.txnIDs,
+				backoff: userLevelLockDetachedCleanupInitialBackoff,
+			}
+			detachedUserLevelLockCleanups.entries[item.key] = entry
+		}
+		if entry.queued {
+			continue
+		}
+		if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
+			return false
+		}
+	}
+	return true
+}
+
+func startDetachedUserLevelLockCleanupWorkers() {
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.started {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	detachedUserLevelLockCleanups.started = true
+	queue := detachedUserLevelLockCleanups.queue
+	detachedUserLevelLockCleanups.Unlock()
+
+	for i := 0; i < userLevelLockDetachedCleanupWorkers; i++ {
+		go runDetachedUserLevelLockCleanupWorker(queue)
+	}
+}
+
+func runDetachedUserLevelLockCleanupWorker(queue <-chan detachedUserLevelLockCleanupKey) {
+	for key := range queue {
+		runDetachedUserLevelLockCleanupAttempt(key)
+	}
+}
+
+func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey) {
+	detachedUserLevelLockCleanups.Lock()
+	entry := detachedUserLevelLockCleanups.entries[key]
+	if entry == nil {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	entry.queued = false
+	backoff := entry.backoff
+	ls := entry.ls
+	txnIDs := append([][]byte(nil), entry.txnIDs...)
+	detachedUserLevelLockCleanups.Unlock()
+
+	attemptCtx, cancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+	err := unlockUserLevelLockTxnIDs(attemptCtx, ls, txnIDs)
+	cancel()
+	if err == nil {
+		detachedUserLevelLockCleanups.Lock()
+		if detachedUserLevelLockCleanups.entries[key] == entry {
+			delete(detachedUserLevelLockCleanups.entries, key)
+		}
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+
+	logutil.Warn(fmt.Sprintf(
+		"detached user-level lock cleanup failed: owner=%s lock=%s kind=%s err=%v",
+		key.owner,
+		key.name,
+		key.kind,
+		err,
+	))
+	time.Sleep(backoff)
+
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.entries[key] == entry && !entry.queued {
+		if entry.backoff < userLevelLockDetachedCleanupMaxBackoff {
+			entry.backoff *= 2
+			if entry.backoff > userLevelLockDetachedCleanupMaxBackoff {
+				entry.backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
+		}
+		_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
+	}
+	detachedUserLevelLockCleanups.Unlock()
+}
+
+func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string) error {
+	txnID := userLevelLockProbeTxnID(owner, connID, name, probeType)
+	err := unlockUserLevelLockTxnID(ctx, ls, txnID)
+	if err == nil {
+		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		_ = enqueueDetachedUserLevelLockProbeCleanup(ls, owner, connID, name, probeType, txnID)
+	}
+	return err
 }
 
 func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
@@ -7533,7 +7720,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		}
 		// Lock did not exist — we acquired it via the probe. Release it and
 		// return NULL to signal the lock was already free.
-		if err := ls.Unlock(proc.Ctx, userLevelLockProbeTxnID(owner, connID, name, "release"), timestamp.Timestamp{}); err != nil {
+		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release"); err != nil {
 			return 0, false, err
 		}
 		return 0, true, nil
@@ -7542,7 +7729,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		untrackUserLevelLock(owner, name)
 		return 1, false, nil
 	}
-	if err := unlockUserLevelLockTxnIDs(proc.Ctx, ls, owner, connID, name); err != nil {
+	if err := unlockUserLevelLockByName(proc.Ctx, ls, owner, connID, name); err != nil {
 		return 0, false, err
 	}
 	untrackUserLevelLock(owner, name)
@@ -7572,7 +7759,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 		}
 		return 0, err
 	}
-	if err := ls.Unlock(proc.Ctx, userLevelLockProbeTxnID(owner, connID, name, "is_free"), timestamp.Timestamp{}); err != nil {
+	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free"); err != nil {
 		return 0, err
 	}
 	return 1, nil
@@ -7630,7 +7817,7 @@ func releaseAllUserLevelLocksWithContext(ctx context.Context, proc *process.Proc
 		if userLevelLockRefCount(owner, name) == 0 {
 			continue
 		}
-		if err := unlockUserLevelLockTxnIDs(ctx, proc.GetLockService(), owner, connID, name); err != nil {
+		if err := unlockUserLevelLockByName(ctx, proc.GetLockService(), owner, connID, name); err != nil {
 			logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
 			return released, err
 		}
@@ -7656,13 +7843,7 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 		owner := userLevelLockOwner(proc)
 		connID := userLevelLockConnectionID(proc)
 		states := userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
-		var enqueued uint64
-		for _, state := range states {
-			if enqueueDetachedUserLevelLockCleanup(proc.GetLockService(), owner, connID, state.Name) {
-				enqueued += state.Count
-			}
-		}
-		if enqueued > 0 {
+		if enqueueDetachedUserLevelLockCleanups(proc.GetLockService(), owner, connID, states) {
 			detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
 			logutil.Warn(fmt.Sprintf(
 				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after timeout: owner=%s locks=%d err=%v",

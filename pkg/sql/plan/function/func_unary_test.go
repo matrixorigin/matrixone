@@ -7188,10 +7188,14 @@ func detachedUserLevelLockCleanupCount() int {
 func resetDetachedUserLevelLockCleanupsForTest() {
 	detachedUserLevelLockCleanups.Lock()
 	defer detachedUserLevelLockCleanups.Unlock()
-	for _, entry := range detachedUserLevelLockCleanups.entries {
-		entry.cancel()
-	}
 	detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+	for {
+		select {
+		case <-detachedUserLevelLockCleanups.queue:
+		default:
+			return
+		}
+	}
 }
 
 func newUserLevelLockTestProcess(t *testing.T, ls lockservice.LockService, account string) *process.Process {
@@ -7588,6 +7592,8 @@ func TestUserLevelLockMigrationKeepsOwnershipAndRefCount(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
+		oldOwner, oldConnID := oldProc.GetUserLevelLockIdentity()
+		newProc.PinUserLevelLockIdentity(oldOwner, oldConnID)
 		states := UserLevelLocksForMigration(oldProc)
 		RestoreUserLevelLocksFromMigration(newProc, states)
 		DiscardMigratedUserLevelLocks(oldProc)
@@ -7624,6 +7630,7 @@ func TestUserLevelLockMigrationEdgeCases(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().Account = "acc"
 	proc.GetSessionInfo().ConnectionID = 2026
+	proc.GetSessionInfo().SessionId = uuid.New()
 	RestoreUserLevelLocksFromMigration(proc, []UserLevelLockState{
 		{Name: "", Count: 1},
 		{Name: "zero_count", Count: 0},
@@ -7634,6 +7641,7 @@ func TestUserLevelLockMigrationEdgeCases(t *testing.T) {
 	sortProc := testutil.NewProcess(t)
 	sortProc.GetSessionInfo().Account = "acc"
 	sortProc.GetSessionInfo().ConnectionID = 2027
+	sortProc.GetSessionInfo().SessionId = uuid.New()
 	RestoreUserLevelLocksFromMigration(sortProc, []UserLevelLockState{
 		{Name: "z_lock", Count: 2},
 		{Name: "a_lock", Count: 1},
@@ -7926,7 +7934,7 @@ func TestIsUsedLockReturnsConnectionIDForLegacyHolderTxnID(t *testing.T) {
 		proc.GetSessionInfo().ConnectionID = 1001
 		state := services[0].(*userLevelLockTestService).state
 		state.Lock()
-		state.locks[string(userLevelLockRow(proc, "legacy_holder"))] = string(userLevelLockTxnIDOld(userLevelLockOwner(proc), "legacy_holder"))
+		state.locks[string(userLevelLockRow(proc, "legacy_holder"))] = string(userLevelLockTxnIDOld("acc:1001", "legacy_holder"))
 		state.Unlock()
 
 		holder, isNull, err := isUserLevelLockUsed("legacy_holder", proc)
@@ -8229,6 +8237,114 @@ func TestReleaseUserLevelLocksOnSessionClosePermanentOutageRetainsDedupedCleanup
 			return detachedUserLevelLockCleanupCount() != 1
 		}, 150*time.Millisecond, 10*time.Millisecond)
 	})
+}
+
+func TestReleaseUserLevelLocksOnSessionCloseFencesReusedConnectionGeneration(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+		service.unlockStarted = make(chan struct{}, 1)
+
+		oldProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		oldProc.GetSessionInfo().ConnectionID = 1001
+		lockName := "close_timeout_reused_conn"
+		v, err := getUserLevelLock(lockName, 0, oldProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		releaseUserLevelLocksOnSessionCloseWithTimeout(oldProc, 10*time.Millisecond)
+		require.Empty(t, UserLevelLocksForMigration(oldProc))
+		require.Equal(t, 1, detachedUserLevelLockCleanupCount())
+
+		reusedConnProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		reusedConnProc.GetSessionInfo().ConnectionID = 1001
+		v, err = getUserLevelLock(lockName, 0, reusedConnProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "new session reusing the connection id must not be treated as reentrant")
+		require.Empty(t, UserLevelLocksForMigration(reusedConnProc))
+
+		service.blockUnlock.Store(false)
+		require.Eventually(t, func() bool {
+			return detachedUserLevelLockCleanupCount() == 0
+		}, 3*time.Second, 10*time.Millisecond)
+
+		v, err = getUserLevelLock(lockName, 0, reusedConnProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+
+		tooMany := make([]UserLevelLockState, 0, userLevelLockDetachedCleanupMaxEntries+1)
+		for i := 0; i < userLevelLockDetachedCleanupMaxEntries+1; i++ {
+			tooMany = append(tooMany, UserLevelLockState{Name: fmt.Sprintf("bounded_cleanup_%d", i), Count: 1})
+		}
+		require.False(t, enqueueDetachedUserLevelLockCleanups(service, "owner-bounded", 1001, tooMany))
+		require.Equal(t, 0, detachedUserLevelLockCleanupCount())
+
+		bounded := tooMany[:userLevelLockDetachedCleanupMaxEntries]
+		require.True(t, enqueueDetachedUserLevelLockCleanups(service, "owner-bounded", 1001, bounded))
+		require.Equal(t, userLevelLockDetachedCleanupMaxEntries, detachedUserLevelLockCleanupCount())
+		require.True(t, enqueueDetachedUserLevelLockCleanups(service, "owner-bounded", 1001, bounded))
+		require.Equal(t, userLevelLockDetachedCleanupMaxEntries, detachedUserLevelLockCleanupCount())
+		require.False(t, enqueueDetachedUserLevelLockCleanup(service, "owner-bounded-extra", 1001, "overflow"))
+		require.Equal(t, userLevelLockDetachedCleanupMaxEntries, detachedUserLevelLockCleanupCount())
+	})
+}
+
+func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   func(string, *process.Process) error
+	}{
+		{
+			name: "release_lock_probe",
+			fn: func(name string, proc *process.Process) error {
+				_, _, err := releaseUserLevelLock(name, proc)
+				return err
+			},
+		},
+		{
+			name: "is_free_lock_probe",
+			fn: func(name string, proc *process.Process) error {
+				_, err := isUserLevelLockFree(name, proc)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runUserLevelLockTest(t, func(services []lockservice.LockService) {
+				service := services[0].(*userLevelLockTestService)
+				service.blockUnlock.Store(true)
+				proc := newUserLevelLockTestProcess(t, services[0], "acc")
+				ctx, cancel := context.WithCancel(context.Background())
+				proc.BuildPipelineContext(ctx)
+				cancel()
+
+				lockName := "probe_cancel_" + tc.name
+				err := tc.fn(lockName, proc)
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, 1, detachedUserLevelLockCleanupCount())
+
+				state := service.state
+				state.Lock()
+				require.NotEmpty(t, state.locks[string(userLevelLockRow(proc, lockName))])
+				state.Unlock()
+
+				service.blockUnlock.Store(false)
+				require.Eventually(t, func() bool {
+					return detachedUserLevelLockCleanupCount() == 0
+				}, 3*time.Second, 10*time.Millisecond)
+				state.Lock()
+				require.Empty(t, state.locks[string(userLevelLockRow(proc, lockName))])
+				state.Unlock()
+			})
+		})
+	}
 }
 
 func TestReleaseLockLegacyTxnIDCompatible(t *testing.T) {
