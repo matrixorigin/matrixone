@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -57,6 +58,115 @@ func TestForwardLock(t *testing.T) {
 			require.True(t, l2.activeTxnHolder.hasRemoteLockBind(l1.serviceID, l2.tableGroups.get(0, tableID).getBind(), time.Second))
 		},
 	)
+}
+
+func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
+	holderTxn := []byte("holder")
+	waiterTxn := []byte("waiter")
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			origin := services[0]
+			owner := services[1]
+			const tableID = uint64(11)
+			_, err := owner.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = "s2"
+			options.LockWaitTimeout = 1
+			// Forwarded txns are normally created by the frontend txn lifecycle on
+			// the origin CN. Register both here so owner-side orphan detection sees
+			// the same liveness state as production while the waiter is blocked.
+			origin.activeTxnHolder.getActiveTxn(holderTxn, true, "")
+			origin.activeTxnHolder.getActiveTxn(waiterTxn, true, "")
+
+			// A deadline-less background context previously reached morpc.Send
+			// unchanged and panicked. Service entry must inject and propagate the
+			// effective lock deadline to the forwarded RPC.
+			_, err = origin.Lock(context.Background(), tableID, [][]byte{{1}}, holderTxn, options)
+			require.NoError(t, err)
+
+			start := time.Now()
+			_, err = origin.Lock(context.Background(), tableID, [][]byte{{1}}, waiterTxn, options)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout), "unexpected error: %v", err)
+			require.GreaterOrEqual(t, time.Since(start), time.Second)
+			require.Less(t, time.Since(start), 3*time.Second)
+		},
+		func(c *Config) {
+			c.TxnIterFunc = func(fn func([]byte) bool) {
+				if fn(holderTxn) {
+					fn(waiterTxn)
+				}
+			}
+		},
+	)
+}
+
+func TestForwardLockDeadlineCancelsLockTableAllocationWait(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const (
+				group   = uint32(0)
+				tableID = uint64(24917)
+			)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			if s.mu.allocating[group] == nil {
+				s.mu.allocating[group] = make(map[uint64]chan struct{})
+			}
+			s.mu.allocating[group][tableID] = waitC
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], tableID)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := s.forwardLock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					[]byte("forward-bind-waiter"),
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "forwarded lock budget did not cancel the allocation wait")
+			}
+		},
+	)
+}
+
+func TestNewLockRPCContextPreservesEarlierParentDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelParent()
+	parentDeadline, ok := parent.Deadline()
+	require.True(t, ok)
+
+	rpcCtx, cancelRPC := newLockRPCContext(parent, pb.LockOptions{
+		LockWaitTimeout:  60,
+		LockWaitDeadline: time.Now().Add(time.Second).UnixNano(),
+	})
+	defer cancelRPC()
+	rpcDeadline, ok := rpcCtx.Deadline()
+	require.True(t, ok)
+	require.Equal(t, parentDeadline, rpcDeadline)
 }
 
 func TestDeadLockWithForward(t *testing.T) {

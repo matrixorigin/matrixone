@@ -112,6 +112,7 @@ type SessionInfo struct {
 	Version              string
 	TimeZone             *time.Location
 	LockWaitTimeout      int64
+	LockWaitTimeoutSet   bool // distinguishes an explicit zero from an unset value
 	MatrixOneNativeMode  bool
 	StorageEngine        engine.Engine
 	QueryId              []string

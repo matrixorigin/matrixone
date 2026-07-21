@@ -102,6 +102,7 @@ func (proc *Process) BuildProcessInfo(
 			TimeZone:            timeBytes,
 			QueryId:             proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
 		}
 	}
@@ -310,6 +311,7 @@ func ConvertToProcessSessionInfo(
 		Account:             sei.Account,
 		QueryId:             sei.QueryId,
 		LockWaitTimeout:     sei.LockWaitTimeout,
+		LockWaitTimeoutSet:  sei.LockWaitTimeoutSet,
 		MatrixOneNativeMode: sei.MatrixoneNativeMode,
 	}
 	t := time.Time{}
@@ -322,7 +324,23 @@ func ConvertToProcessSessionInfo(
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
+	// A positive per-execution timeout must survive remote pipeline encoding
+	// without being replaced by the background resolver's compiled default.
+	// For an explicit zero, continue to the resolver so clearing an old txn
+	// override falls back to the normal default when one is available.
+	if proc != nil && proc.GetSessionInfo() != nil &&
+		proc.GetSessionInfo().LockWaitTimeoutSet &&
+		proc.GetSessionInfo().LockWaitTimeout > 0 {
+		return proc.GetSessionInfo().LockWaitTimeout
+	}
 	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		if proc != nil && proc.GetSessionInfo() != nil &&
+			proc.GetSessionInfo().LockWaitTimeoutSet {
+			// Older pipeline peers ignore LockWaitTimeoutSet. Encode an explicit
+			// clear as the shared positive fallback in the legacy timeout field,
+			// so they cannot resurrect a stale timeout from the reused txn.
+			return defines.DefaultLockWaitTimeoutSeconds
+		}
 		return procSessionLockWaitTimeout(proc)
 	}
 	if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {

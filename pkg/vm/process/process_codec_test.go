@@ -85,6 +85,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		Version:             "v1",
 		TimeZone:            time.FixedZone("UTC+8", 8*3600),
 		LockWaitTimeout:     7,
+		LockWaitTimeoutSet:  true,
 		QueryId:             []string{"stmt-qid"},
 		MatrixOneNativeMode: true,
 		LogLevel:            zap.WarnLevel,
@@ -135,12 +136,14 @@ func TestProcessCodecHelpers(t *testing.T) {
 			QueryId:             []string{"q1"},
 			TimeZone:            timeBytes,
 			LockWaitTimeout:     9,
+			LockWaitTimeoutSet:  true,
 			MatrixoneNativeMode: true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
 		require.True(t, info.MatrixOneNativeMode)
+		require.True(t, info.LockWaitTimeoutSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -169,6 +172,21 @@ func TestProcessCodecHelpers(t *testing.T) {
 			return int64(0), nil
 		})
 		require.Equal(t, int64(7), resolveLockWaitTimeoutSeconds(proc))
+
+		proc.Base.SessionInfo.LockWaitTimeout = 5
+		proc.Base.SessionInfo.LockWaitTimeoutSet = true
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return int64(11), nil
+		})
+		require.Equal(t, int64(5), resolveLockWaitTimeoutSeconds(proc),
+			"an explicit positive execution timeout must survive remote encoding")
+
+		proc.Base.SessionInfo.LockWaitTimeout = 0
+		require.Equal(t, int64(11), resolveLockWaitTimeoutSeconds(proc),
+			"an explicit zero clears the txn override and falls back to the resolver")
+		proc.SetResolveVariableFunc(nil)
+		require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, resolveLockWaitTimeoutSeconds(proc),
+			"the legacy wire field must remain positive when an explicit clear is sent to an old peer")
 	})
 }
 
@@ -184,7 +202,23 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
+	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
+
+	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
+	// presence bit. It must still see the product fallback in the legacy value
+	// field rather than zero, which would revive the reused txn's stale budget.
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LockWaitTimeout = 0
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	legacyInfo, err := proc.BuildProcessInfo("select legacy")
+	require.NoError(t, err)
+	require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, legacyInfo.SessionInfo.LockWaitTimeout)
+	legacyInfo.SessionInfo.LockWaitTimeoutSet = false // simulate an old decoder
+	legacySession, err := ConvertToProcessSessionInfo(legacyInfo.SessionInfo)
+	require.NoError(t, err)
+	require.False(t, legacySession.LockWaitTimeoutSet)
+	require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, legacySession.LockWaitTimeout)
 
 	mockInfo, err := MockProcessInfoWithPro("select 2", proc)
 	require.NoError(t, err)
@@ -215,6 +249,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
+	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
