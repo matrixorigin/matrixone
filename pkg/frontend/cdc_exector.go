@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -870,17 +871,109 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 		errMsg = errMsg[:cdc.CDCWatermarkErrMsgMaxLen]
 	}
 
-	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgByStateSQL(
 		uint64(accId),
 		exec.spec.TaskId,
 		state,
 		errMsg,
+		cdc.CDCState_Running,
 	)
-	return exec.ie.Exec(
-		defines.AttachAccountId(ctx, catalog.System_Account),
+	return execCDCSQLWithAffectedRows(
+		ctx,
+		exec.ie,
 		sql,
-		ie.SessionOverrideOptions{},
+		uint64(accId),
+		exec.spec.TaskId,
+		state,
+		cdc.CDCState_Running,
 	)
+}
+
+func execCDCSQLWithAffectedRows(
+	ctx context.Context,
+	sqlExecutor ie.InternalExecutor,
+	sql string,
+	accountID uint64,
+	taskID string,
+	targetState string,
+	currentState string,
+) error {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	fault.TriggerFault(cdcStateTransitionFaultPoint(currentState, targetState))
+	if sqlExecutorWithStatus, ok := sqlExecutor.(ie.InternalExecutorWithStatus); ok {
+		status, err := sqlExecutorWithStatus.ExecWithStatus(ctx, sql, ie.SessionOverrideOptions{})
+		if err != nil {
+			return err
+		}
+		switch status.AffectedRows {
+		case 1:
+			return nil
+		case 0:
+			return validateCDCStateTransitionResult(ctx, sqlExecutor, accountID, taskID, currentState, targetState)
+		default:
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cdc task state transition affected %d rows, task_id=%s, current_state=%s, target_state=%s",
+				status.AffectedRows,
+				taskID,
+				currentState,
+				targetState,
+			)
+		}
+	}
+	return sqlExecutor.Exec(ctx, sql, ie.SessionOverrideOptions{})
+}
+
+func validateCDCStateTransitionResult(
+	ctx context.Context,
+	sqlExecutor ie.InternalExecutor,
+	accountID uint64,
+	taskID string,
+	currentState string,
+	targetState string,
+) error {
+	querySQL := cdc.CDCSQLBuilder.GetTaskStateSQL(accountID, taskID)
+	result := sqlExecutor.Query(ctx, querySQL, ie.SessionOverrideOptions{})
+	if result == nil {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cdc task state transition query returned no result, task_id=%s, current_state=%s, target_state=%s",
+			taskID,
+			currentState,
+			targetState,
+		)
+	}
+	if err := result.Error(); err != nil {
+		return err
+	}
+	if result.RowCount() == 0 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cdc task state transition found no catalog row, task_id=%s, current_state=%s, target_state=%s",
+			taskID,
+			currentState,
+			targetState,
+		)
+	}
+	state, err := result.GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	if state == targetState {
+		return nil
+	}
+	return moerr.NewInternalErrorf(
+		ctx,
+		"cdc task state transition found conflicting catalog state %s, task_id=%s, current_state=%s, target_state=%s",
+		state,
+		taskID,
+		currentState,
+		targetState,
+	)
+}
+
+func cdcStateTransitionFaultPoint(currentState string, targetState string) string {
+	return "cdc/state_transition/" + currentState + "_to_" + targetState + "/before_exec"
 }
 
 func CDCPauseTaskCompleteHook(sqlExecutorFactory func() ie.InternalExecutor) taskservice.PauseTaskCompletedHook {
@@ -931,11 +1024,7 @@ func updateCDCTaskState(
 		state,
 		cdc.CDCState_Pausing,
 	)
-	if err := sqlExecutor.Exec(
-		defines.AttachAccountId(ctx, catalog.System_Account),
-		sql,
-		ie.SessionOverrideOptions{},
-	); err != nil {
+	if err := execCDCSQLWithAffectedRows(ctx, sqlExecutor, sql, accountID, spec.TaskId, state, cdc.CDCState_Pausing); err != nil {
 		logutil.Error(
 			"cdc.frontend.task.update_state.failed",
 			zap.String("task-id", spec.TaskId),
