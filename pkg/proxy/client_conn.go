@@ -363,7 +363,7 @@ func (c *clientConn) sendErr(err error, resp chan<- []byte) {
 }
 
 func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) error {
-	sc, r, err := c.router.Connect(cn, c.handshakePack, c.tun)
+	sc, r, err := c.router.Connect(cn, c.handshakePack, nil)
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
 		if resp != nil {
