@@ -1,0 +1,46 @@
+[
+  {
+    "id": "ICE-TEST-135",
+    "case_id": "ICE-TEST-135_nesr_gold_mart_kpi_publish",
+    "name": "nesr-gold-mart-kpi-publish",
+    "catalog": "${MO_ICEBERG_NESR_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_NESR_NAMESPACE}",
+    "table": "${MO_ICEBERG_NESR_KPI_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_NESR_MO_SQL_CMD",
+        "actions": [
+          "${MO_ICEBERG_NESR_PUBLISH_SQL}",
+          "${MO_ICEBERG_NESR_AUDIT_SQL}"
+        ],
+        "sql": "${MO_ICEBERG_NESR_MO_KPI_SQL}"
+      },
+      {
+        "name": "external",
+        "command_env": "MO_ICEBERG_NESR_EXTERNAL_SQL_CMD",
+        "sql": "${MO_ICEBERG_NESR_EXTERNAL_KPI_SQL}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-135",
+    "case_id": "ICE-TEST-135_nesr_ksa_residency_gate",
+    "name": "nesr-ksa-residency-gate",
+    "catalog": "${MO_ICEBERG_NESR_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_NESR_NAMESPACE}",
+    "table": "${MO_ICEBERG_NESR_KPI_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_NESR_MO_SQL_CMD",
+        "sql": "${MO_ICEBERG_NESR_RESIDENCY_ASSERT_SQL}",
+        "expect_error_contains": "${MO_ICEBERG_NESR_RESIDENCY_ERROR}"
+      }
+    ]
+  }
+]

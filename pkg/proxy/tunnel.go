@@ -148,6 +148,9 @@ type tunnel struct {
 	// the conn-cache path above and the non-cache path where COM_QUIT is
 	// forwarded to CN.
 	expectedClientQuit atomic.Bool
+	// clientRequestInFlight indicates a client request has been forwarded to
+	// the backend and no terminal OK/ERR response has been observed yet.
+	clientRequestInFlight atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -322,9 +325,24 @@ func (t *tunnel) markCacheReuseReady() {
 	})
 }
 
+func (t *tunnel) markClientRequestInFlight() {
+	if t != nil {
+		t.clientRequestInFlight.Store(true)
+	}
+}
+
+func (t *tunnel) clearClientRequestInFlight() {
+	if t != nil {
+		t.clientRequestInFlight.Store(false)
+	}
+}
+
 func (t *tunnel) hasInFlightClientRequest() bool {
 	if t == nil {
 		return false
+	}
+	if t.clientRequestInFlight.Load() {
+		return true
 	}
 	t.mu.Lock()
 	csp, scp := t.mu.csp, t.mu.scp
@@ -885,6 +903,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if ok {
 				p.mu.inTxn = inTxn
 			}
+			if isOKPacket(tempBuf) || isErrPacket(tempBuf) {
+				p.tun.clearClientRequestInFlight()
+			}
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
@@ -901,6 +922,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				p.tun.markExpectedClientQuit()
 			}
 			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
+				if !isCmdQuit(tempBuf) {
+					p.tun.markClientRequestInFlight()
+				}
 				p.mu.lastCmdTime = time.Now()
 			}
 		}

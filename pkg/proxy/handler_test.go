@@ -544,6 +544,41 @@ func TestHandler_handleTunnelErrKillsBackendForInFlightEOFClientDisconnect(t *te
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
 
+func TestHandler_handleTunnelErrKillsBackendForTrackedInFlightClientRequest(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	killCalled := 0
+	closeCalled := 0
+	tun := &tunnel{}
+	// Exercise the explicit request-in-flight marker without relying on the
+	// c2s/s2c lastCmdTime heuristic.
+	tun.markClientRequestInFlight()
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			killCalled++
+			return nil
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 1, killCalled)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
 func TestHandler_handleTunnelErrClosesBackendForWrappedConnEndClientDisconnectWithoutInFlight(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
