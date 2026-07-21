@@ -3794,6 +3794,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 			continue
 		}
 		sources[i].targets = make([]Type, len(sources[i].outputNames))
+		sources[i].targetAmbiguous = make([]bool, len(sources[i].outputNames))
 	}
 
 	targetPos := 0
@@ -3811,7 +3812,9 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 				}
 				for _, ref := range output.refs {
 					if ref.pos < len(sources[ref.source].targets) {
-						sources[ref.source].targets[ref.pos] = ctx.numericProjectionTypes[targetPos]
+						seedNumericSourceTarget(
+							&sources[ref.source], ref.pos, ctx.numericProjectionTypes[targetPos],
+						)
 					}
 				}
 				targetPos++
@@ -3998,14 +4001,15 @@ func storeNumericTableProjectionTargets(targetsByTable map[string][]Type, table 
 }
 
 type numericProjectionSourceInfo struct {
-	source       *tree.Select
-	sourceName   string
-	sourceSchema string
-	alias        string
-	aliasCols    tree.IdentifierList
-	outputNames  []string
-	outputKnown  bool
-	targets      []Type
+	source          *tree.Select
+	sourceName      string
+	sourceSchema    string
+	alias           string
+	aliasCols       tree.IdentifierList
+	outputNames     []string
+	outputKnown     bool
+	targets         []Type
+	targetAmbiguous []bool
 }
 
 func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjectionSourceInfo) []*plan.ColDef {
@@ -4294,7 +4298,7 @@ func seedNumericStarTargets(source *numericProjectionSourceInfo, targets []Type,
 			return targetPos
 		}
 		if pos < len(source.targets) {
-			source.targets[pos] = targets[targetPos]
+			seedNumericSourceTarget(source, pos, targets[targetPos])
 		}
 		targetPos++
 	}
@@ -4321,7 +4325,23 @@ func seedNumericColumnTarget(sources []numericProjectionSourceInfo, name *tree.U
 		}
 	}
 	if matchedSource >= 0 && matchedPos < len(sources[matchedSource].targets) {
-		sources[matchedSource].targets[matchedPos] = target
+		seedNumericSourceTarget(&sources[matchedSource], matchedPos, target)
+	}
+}
+
+func seedNumericSourceTarget(source *numericProjectionSourceInfo, pos int, target Type) {
+	if target.Id == 0 || pos < 0 || pos >= len(source.targets) ||
+		pos >= len(source.targetAmbiguous) || source.targetAmbiguous[pos] {
+		return
+	}
+	existing := source.targets[pos]
+	if existing.Id == 0 {
+		source.targets[pos] = target
+		return
+	}
+	if existing.Id != target.Id || existing.Width != target.Width || existing.Scale != target.Scale {
+		source.targets[pos] = Type{}
+		source.targetAmbiguous[pos] = true
 	}
 }
 

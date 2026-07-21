@@ -941,6 +941,26 @@ func (b *baseBinder) numericAstTypesInternal(
 			return numericAstTypeScan{}, err
 		}
 		return left.merge(right), nil
+	case *tree.CaseExpr:
+		var scan numericAstTypeScan
+		for _, when := range expr.Whens {
+			if when == nil || when.Val == nil {
+				continue
+			}
+			value, err := b.numericAstTypesInternal(when.Val, depth, resolveColumn)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
+		}
+		if expr.Else != nil {
+			value, err := b.numericAstTypesInternal(expr.Else, depth, resolveColumn)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
+		}
+		return scan, nil
 	case *tree.UnresolvedName:
 		if resolveColumn != nil {
 			if scan, ok := resolveColumn(expr); ok {

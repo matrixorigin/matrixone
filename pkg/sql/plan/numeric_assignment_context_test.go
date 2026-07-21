@@ -103,6 +103,13 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name: "case double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"case when 1 = 1 then cast(1 as double) else 0 end",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
 			name:       "group by position",
 			sql:        "insert into constraint_test.emp (sal) select ? + ? from constraint_test.emp group by 1",
 			want:       types.T_decimal64,
@@ -300,6 +307,34 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name: "derived conflicting targets fall back",
+			sql: "insert into constraint_test.emp (sal, empno) " +
+				"select d.x, d.x from (select ? + ? as x) d",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "derived conflicting targets reverse order fall back",
+			sql: "insert into constraint_test.emp (empno, sal) " +
+				"select d.x, d.x from (select ? + ? as x) d",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "cte conflicting targets fall back",
+			sql: "insert into constraint_test.emp (sal, empno) " +
+				"with c as (select ? + ? as x) select c.x, c.x from c",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "derived identical targets propagate",
+			sql: "insert into constraint_test.emp (sal, comm) " +
+				"select d.x, d.x from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name: "recursive cte seed target",
 			sql: "insert into constraint_test.emp (sal) with recursive c(x) as " +
 				"(select ? + ? union all select x from c where x < 1) select x from c",
@@ -335,6 +370,27 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSeedNumericSourceTargetKeepsAmbiguousPositionEmpty(t *testing.T) {
+	decimal72 := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}
+	decimal74 := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 4}
+	source := numericProjectionSourceInfo{
+		targets:         make([]planpb.Type, 1),
+		targetAmbiguous: make([]bool, 1),
+	}
+
+	seedNumericSourceTarget(&source, 0, decimal72)
+	require.Equal(t, decimal72, source.targets[0])
+	seedNumericSourceTarget(&source, 0, decimal72)
+	require.Equal(t, decimal72, source.targets[0])
+
+	seedNumericSourceTarget(&source, 0, decimal74)
+	require.Equal(t, planpb.Type{}, source.targets[0])
+	require.True(t, source.targetAmbiguous[0])
+
+	seedNumericSourceTarget(&source, 0, decimal72)
+	require.Equal(t, planpb.Type{}, source.targets[0])
 }
 
 func TestPreparedNumericContextUsesClusterTableStarVisibility(t *testing.T) {
@@ -854,6 +910,13 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			want: planpb.Type{Id: int32(types.T_float64)},
 		},
 		{
+			name: "update case double result overrides target",
+			sql: "update constraint_test.emp set sal = ? + " +
+				"case when 1 = 1 then cast(1 as double) else 0 end where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_float64)},
+			paramCount: 1,
+		},
+		{
 			name:       "update parameter follows scalar subquery double domain",
 			sql:        "update constraint_test.emp set sal = (select cast(1 as double)) + ? where empno = 1",
 			want:       planpb.Type{Id: int32(types.T_float64)},
@@ -886,6 +949,14 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 				"on duplicate key update sal = (select ? + ?)",
 			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 			checkFlatten: true,
+		},
+		{
+			name: "on duplicate key update case double result overrides target",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = ? + " +
+				"case when 1 = 1 then cast(1 as double) else 0 end",
+			want:       planpb.Type{Id: int32(types.T_float64)},
+			paramCount: 1,
 		},
 		{
 			name: "on duplicate key update scalar subquery with from",
