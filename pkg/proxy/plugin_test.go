@@ -49,7 +49,9 @@ func (p *mockPlugin) RecommendCN(ctx context.Context, clientInfo clientInfo) (*p
 type mockRouter struct {
 	mockRouteFn func(ctx context.Context, ci clientInfo) (*CNServer, error)
 
-	refreshCount int
+	refreshCount       int
+	connectCount       int
+	routeSelectedCount int
 }
 
 func (r *mockRouter) Route(ctx context.Context, sid string, ci clientInfo, f func(string) bool) (*CNServer, error) {
@@ -64,10 +66,12 @@ func (r *mockRouter) SelectByConnID(connID uint32) (*CNServer, error) {
 }
 
 func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.connectCount++
 	return nil, nil, nil
 }
 
 func (r *mockRouter) ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.routeSelectedCount++
 	return r.Connect(c, handshakeResp, t)
 }
 
@@ -77,6 +81,56 @@ func (r *mockRouter) AllServers(sid string) ([]*CNServer, error) {
 
 func (r *mockRouter) Refresh(sync bool) {
 	r.refreshCount++
+}
+
+type contextRecordingRouter struct {
+	mockRouter
+	connectContextCount       int
+	routeSelectedContextCount int
+}
+
+func (r *contextRecordingRouter) ConnectContext(
+	context.Context, *CNServer, *frontend.Packet, *tunnel,
+) (ServerConn, []byte, error) {
+	r.connectContextCount++
+	return nil, []byte("context"), nil
+}
+
+func (r *contextRecordingRouter) ConnectRouteSelectedContext(
+	context.Context, *CNServer, *frontend.Packet, *tunnel,
+) (ServerConn, []byte, error) {
+	r.routeSelectedContextCount++
+	return nil, []byte("selected-context"), nil
+}
+
+func TestPluginRouter_PropagatesConnectionContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cn := &CNServer{}
+	pack := &frontend.Packet{}
+	tun := &tunnel{}
+
+	contextual := &contextRecordingRouter{}
+	pr := newPluginRouter("", contextual, nil)
+	_, response, err := pr.ConnectContext(ctx, cn, pack, tun)
+	require.NoError(t, err)
+	require.Equal(t, []byte("context"), response)
+	_, response, err = pr.ConnectRouteSelectedContext(ctx, cn, pack, tun)
+	require.NoError(t, err)
+	require.Equal(t, []byte("selected-context"), response)
+	require.Equal(t, 1, contextual.connectContextCount)
+	require.Equal(t, 1, contextual.routeSelectedContextCount)
+	require.Zero(t, contextual.connectCount)
+	require.Zero(t, contextual.routeSelectedCount)
+
+	legacy := &mockRouter{}
+	legacyPR := newPluginRouter("", legacy, nil)
+	_, _, err = legacyPR.ConnectContext(ctx, cn, pack, tun)
+	require.NoError(t, err)
+	_, _, err = legacyPR.ConnectRouteSelectedContext(ctx, cn, pack, tun)
+	require.NoError(t, err)
+	require.Equal(t, 2, legacy.connectCount)
+	require.Equal(t, 1, legacy.routeSelectedCount)
 }
 
 func TestPluginRouter_SelectHonorsBreaker(t *testing.T) {
