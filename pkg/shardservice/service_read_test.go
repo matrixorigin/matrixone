@@ -148,6 +148,62 @@ func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {
 	require.Zero(t, handlerCalls.Load())
 }
 
+func TestBinaryReadUsesVersionedRemoteHandler(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2",
+		func(ctx context.Context, _ *server, services []*service) {
+			s1 := services[0]
+			s2 := services[1]
+			table := uint64(1)
+			mustAddTestShards(t, ctx, s1, table, 2, 1, s2)
+			waitReplicaCount(table, s1, 1)
+			waitReplicaCount(table, s2, 1)
+
+			var cns []metadata.CNService
+			s1.remote.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewSelector(),
+				func(cn metadata.CNService) bool {
+					cns = append(cns, cn)
+					return true
+				},
+			)
+			for _, cn := range cns {
+				cn.CommitID = version.CommitID
+				s1.remote.cluster.UpdateCN(cn)
+			}
+
+			key := []byte("key")
+			value := []byte("value")
+			store := s2.storage.(*MemShardStorage)
+			store.set(key, value, newTestTimestamp(1))
+			store.waiter.NotifyLatestCommitTS(newTestTimestamp(2))
+			remoteShard := s2.getAllocatedShards()[0].ShardID
+			applied := false
+			err := s1.Read(
+				ctx,
+				ReadRequest{
+					TableID: table,
+					Param: shard.ReadParam{
+						KeyParam: shard.KeyParam{Key: key},
+						Process: pipeline.ProcessInfo{
+							PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
+						},
+					},
+					Apply: func(actual []byte) {
+						applied = true
+						require.Equal(t, value, actual)
+					},
+				},
+				DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(remoteShard),
+			)
+			require.NoError(t, err)
+			require.True(t, applied)
+		},
+		nil,
+	)
+}
+
 func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 	runServicesTest(
 		t,
