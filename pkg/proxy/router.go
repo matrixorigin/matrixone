@@ -413,30 +413,29 @@ func (r *router) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 		return false
 	}
 
-	var current metadata.CNService
-	found := false
+	candidates := make([]metadata.CNService, 0)
 	r.moCluster.GetCNService(
-		clusterservice.NewServiceIDSelector(cn.uuid),
+		clusterservice.NewSelector(),
 		func(service metadata.CNService) bool {
-			current = service
-			found = true
-			return false
+			candidates = append(candidates, service)
+			return true
 		},
 	)
-	if !found {
+	if len(candidates) == 0 {
 		return false
 	}
 
 	// Apply the exact fresh-session routing policy to the current metadata for
-	// this CN. The initial service-ID lookup establishes identity and work
-	// state; the candidate helper then evaluates labels and the sys-tenant
-	// root/dump fallback using this login's context.
+	// all working CNs. The full snapshot is required because labeled and empty
+	// CNs form priority tiers: whether a cached fallback remains eligible can
+	// change when another CN is added or removed.
 	eligible := false
 	selector := client.labelInfo.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(service *metadata.CNService) {
-		eligible = service.ServiceID == cn.uuid
+		if service.ServiceID == cn.uuid {
+			eligible = true
+		}
 	}
-	candidates := []metadata.CNService{current}
 	if client.isSuperTenant() {
 		if err := route.RouteForSuperTenantCandidates(
 			context.Background(), candidates, selector, client.username, nil, appendFn,

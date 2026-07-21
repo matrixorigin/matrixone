@@ -786,6 +786,7 @@ func TestCanReuseCachedCNRequiresCurrentRouteEligibility(t *testing.T) {
 	})
 	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
 
 	ru := newRouter(mc, testRebalancer(t, st, rt.Logger(), mc), newMockSQLWorker(), true).(*router)
@@ -827,12 +828,34 @@ func TestCanReuseCachedCNRequiresCurrentRouteEligibility(t *testing.T) {
 	require.False(t, ru.CanReuseCachedCN(cn, sysClient),
 		"cached reuse must not apply the root/dump fallback to another sys user")
 
+	// An empty-label CN is eligible only while it is the common tenant's
+	// fallback. Once a matching labeled CN appears, fresh routing promotes the
+	// labeled tier and cached reuse must stop admitting the old fallback.
+	hc.updateCN("cn1", "cn1-addr", nil)
+	mc.ForceRefresh(true)
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
+	matchingCN := &CNServer{uuid: "cn2"}
+	hc.updateCN("cn2", "cn2-addr", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+		"k1":           {Labels: []string{"v1"}},
+	})
+	mc.ForceRefresh(true)
+	freshCN, err := ru.Route(ctx, "", commonClient, nil)
+	require.NoError(t, err)
+	require.Equal(t, matchingCN.uuid, freshCN.uuid)
+	require.False(t, ru.CanReuseCachedCN(cn, commonClient),
+		"cached fallback must be rejected after a matching labeled CN appears")
+	require.True(t, ru.CanReuseCachedCN(matchingCN, commonClient))
+
 	require.NoError(t, hc.updateCNWorkState(ctx, logpb.CNWorkState{
-		UUID:  cn.uuid,
+		UUID:  matchingCN.uuid,
 		State: metadata.WorkState_Draining,
 	}))
 	mc.ForceRefresh(true)
-	require.False(t, ru.CanReuseCachedCN(cn, commonClient), "draining CN must not receive cached sessions")
+	require.False(t, ru.CanReuseCachedCN(matchingCN, commonClient),
+		"draining CN must not receive cached sessions")
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient),
+		"empty-label fallback becomes eligible again after the matching CN starts draining")
 	require.False(t, ru.CanReuseCachedCN(&CNServer{uuid: "removed"}, commonClient),
 		"CN missing from the current cluster view must not receive cached sessions")
 }
