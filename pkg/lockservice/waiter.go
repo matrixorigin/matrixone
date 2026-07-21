@@ -203,10 +203,13 @@ func (w *waiter) mustRecvNotification(
 func (w *waiter) mustSendNotification(
 	value notifyValue,
 	logger *log.MOLogger,
+	notifyEvent bool,
 ) {
 	logWaiterNotified(logger, w, value)
 
-	w.event.notified()
+	if notifyEvent {
+		w.event.notified()
+	}
 	select {
 	case w.c <- value:
 		return
@@ -279,6 +282,25 @@ func (w *waiter) notify(
 	value notifyValue,
 	logger *log.MOLogger,
 ) bool {
+	return w.notifyWithEvent(value, logger, true)
+}
+
+// notifyWithoutEvent is used by waiterEvents.check, which already runs on the
+// event-consumer goroutine. Sending back into its own bounded eventC can
+// self-deadlock when the channel is full; the checker instead resumes the lock
+// context directly after releasing waiterEvents.mu.
+func (w *waiter) notifyWithoutEvent(
+	value notifyValue,
+	logger *log.MOLogger,
+) bool {
+	return w.notifyWithEvent(value, logger, false)
+}
+
+func (w *waiter) notifyWithEvent(
+	value notifyValue,
+	logger *log.MOLogger,
+	notifyEvent bool,
+) bool {
 	debug := ""
 	if logger != nil && logger.Enabled(zap.DebugLevel) {
 		debug = w.String()
@@ -297,7 +319,7 @@ func (w *waiter) notify(
 		// retry.
 		if w.casStatus(status, notified, logger) {
 			w.stopLockWaitTimer()
-			w.mustSendNotification(value, logger)
+			w.mustSendNotification(value, logger, notifyEvent)
 			return true
 		}
 		logWaiterNotifySkipped(logger, debug, "concurrently issued")

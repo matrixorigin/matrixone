@@ -332,6 +332,13 @@ func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
 		return proc.GetSessionInfo().LockWaitTimeout
 	}
 	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		if proc != nil && proc.GetSessionInfo() != nil &&
+			proc.GetSessionInfo().LockWaitTimeoutSet {
+			// Older pipeline peers ignore LockWaitTimeoutSet. Encode an explicit
+			// clear as the shared positive fallback in the legacy timeout field,
+			// so they cannot resurrect a stale timeout from the reused txn.
+			return defines.DefaultLockWaitTimeoutSeconds
+		}
 		return procSessionLockWaitTimeout(proc)
 	}
 	if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {

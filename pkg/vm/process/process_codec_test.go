@@ -182,7 +182,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, int64(11), resolveLockWaitTimeoutSeconds(proc),
 			"an explicit zero clears the txn override and falls back to the resolver")
 		proc.SetResolveVariableFunc(nil)
-		require.Zero(t, resolveLockWaitTimeoutSeconds(proc))
+		require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, resolveLockWaitTimeoutSeconds(proc),
+			"the legacy wire field must remain positive when an explicit clear is sent to an old peer")
 	})
 }
 
@@ -199,6 +200,21 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
+
+	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
+	// presence bit. It must still see the product fallback in the legacy value
+	// field rather than zero, which would revive the reused txn's stale budget.
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LockWaitTimeout = 0
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	legacyInfo, err := proc.BuildProcessInfo("select legacy")
+	require.NoError(t, err)
+	require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, legacyInfo.SessionInfo.LockWaitTimeout)
+	legacyInfo.SessionInfo.LockWaitTimeoutSet = false // simulate an old decoder
+	legacySession, err := ConvertToProcessSessionInfo(legacyInfo.SessionInfo)
+	require.NoError(t, err)
+	require.False(t, legacySession.LockWaitTimeoutSet)
+	require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, legacySession.LockWaitTimeout)
 
 	mockInfo, err := MockProcessInfoWithPro("select 2", proc)
 	require.NoError(t, err)

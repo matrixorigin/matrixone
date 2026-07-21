@@ -5465,6 +5465,58 @@ func TestApplyLockWaitTimeoutCeiling(t *testing.T) {
 	require.WithinDuration(t, start.Add(2*time.Second), time.Unix(0, clamped.LockWaitDeadline), 100*time.Millisecond)
 	require.True(t, s.lockWaitCeilingWarned.Load())
 	require.Equal(t, metricBefore+1, testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter))
+
+	expiredDeadline := time.Now().Add(-time.Second).UnixNano()
+	expired := s.applyLockWaitTimeoutCeiling(pb.LockOptions{
+		LockWaitTimeout:  1,
+		LockWaitDeadline: expiredDeadline,
+	})
+	require.Zero(t, expired.LockWaitTimeout,
+		"an expired absolute budget must not be restarted as a one-second relative timeout")
+	require.Equal(t, expiredDeadline, expired.LockWaitDeadline)
+}
+
+func TestLockWaitTimeoutExpiredDeadlineFailsBeforeQueueAdmission(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			options := newTestRowExclusiveOptions()
+			_, err := s.Lock(context.Background(), 0, [][]byte{{1}}, []byte("holder"), options)
+			require.NoError(t, err)
+
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(-time.Second).UnixNano()
+			start := time.Now()
+			_, err = s.Lock(context.Background(), 0, [][]byte{{1}}, []byte("waiter"), options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+			require.Less(t, time.Since(start), 250*time.Millisecond)
+		},
+	)
+}
+
+func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
+	var once sync.Once
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(10 * time.Millisecond).UnixNano()
+			_, err := services[0].Lock(
+				context.Background(),
+				0,
+				[][]byte{{1}},
+				[]byte("waiter"),
+				options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+		},
+		WithWait(func() {
+			once.Do(func() { time.Sleep(50 * time.Millisecond) })
+		}),
+	)
 }
 
 func TestLockWaitTimeoutCallerContextBeforeCeiling(t *testing.T) {

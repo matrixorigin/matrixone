@@ -162,6 +162,9 @@ func (s *service) Lock(
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
 	options = s.applyLockWaitTimeoutCeiling(options)
+	if lockWaitDeadlineExpired(options, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
+	}
 
 	if !s.canLockOnServiceStatus(txnID, options, tableID, rows) {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
@@ -176,6 +179,12 @@ func (s *service) Lock(
 	}()
 
 	s.wait()
+	// Service admission/bind work may consume the remaining budget after the
+	// entry check. Recheck before dispatch so a delayed hop cannot restart or
+	// transmit an already exhausted absolute deadline.
+	if lockWaitDeadlineExpired(options, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
+	}
 
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
@@ -284,12 +293,17 @@ func (s *service) applyLockWaitTimeoutCeiling(options pb.LockOptions) pb.LockOpt
 		callerDeadline := time.Unix(0, options.LockWaitDeadline)
 		if callerDeadline.Before(effectiveDeadline) {
 			effectiveDeadline = callerDeadline
-			effectiveSeconds = int64(effectiveDeadline.Sub(now) / time.Second)
-			if effectiveDeadline.Sub(now)%time.Second != 0 {
-				effectiveSeconds++
-			}
-			if effectiveSeconds <= 0 {
-				effectiveSeconds = 1
+			remaining := effectiveDeadline.Sub(now)
+			if remaining <= 0 {
+				// Keep an exhausted absolute budget exhausted. Consumers use the
+				// deadline as the authority and service entry rejects it before a
+				// waiter can enter the queue.
+				effectiveSeconds = 0
+			} else {
+				effectiveSeconds = int64(remaining / time.Second)
+				if remaining%time.Second != 0 {
+					effectiveSeconds++
+				}
 			}
 		}
 	}
@@ -307,6 +321,11 @@ func (s *service) applyLockWaitTimeoutCeiling(options pb.LockOptions) pb.LockOpt
 		}
 	}
 	return options
+}
+
+func lockWaitDeadlineExpired(options pb.LockOptions, now time.Time) bool {
+	return options.LockWaitDeadline > 0 &&
+		!now.Before(time.Unix(0, options.LockWaitDeadline))
 }
 
 func (s *service) Unlock(

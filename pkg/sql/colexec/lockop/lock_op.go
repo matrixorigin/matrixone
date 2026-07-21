@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -830,7 +831,11 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 		}
 	}
 	if explicitProcessTimeout {
-		return 0
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
 	}
 	return txnTimeout
 }
