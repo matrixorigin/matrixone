@@ -274,6 +274,7 @@ func (s *service) handleRemoteLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
 	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
@@ -377,6 +378,7 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
 	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)

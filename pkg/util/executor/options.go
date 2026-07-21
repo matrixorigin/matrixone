@@ -243,6 +243,32 @@ func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
 
+// WithLockWaitTimeout sets a per-execution lock wait budget. It is propagated
+// both to newly created transactions and to the process used by an existing
+// transaction, so background execution can override the global default
+// resolver without changing other sessions.
+func (opts Options) WithLockWaitTimeout(timeout time.Duration) Options {
+	opts.lockWaitTimeout = timeout
+	opts.hasLockWaitTimeout = timeout > 0
+	// Txn options are applied in append order. Always append, including for
+	// zero, so a later WithLockWaitTimeout(0) intentionally clears an earlier
+	// value instead of leaving the first option effective.
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnLockWaitTimeout(timeout))
+	return opts
+}
+
+// HasLockWaitTimeout reports whether this execution has a positive explicit
+// lock wait budget that should override background defaults.
+func (opts Options) HasLockWaitTimeout() bool {
+	return opts.hasLockWaitTimeout
+}
+
+// LockWaitTimeout returns the per-execution lock wait budget. Callers should
+// check HasLockWaitTimeout before treating a zero value as an explicit budget.
+func (opts Options) LockWaitTimeout() time.Duration {
+	return opts.lockWaitTimeout
+}
+
 func (opts Options) WithEnableTrace() Options {
 	opts.enableTrace = true
 	return opts
