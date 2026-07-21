@@ -563,7 +563,7 @@ func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 
-	bat := makeInt32Batch(mp, []int32{10, 20, 30})
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
 	spec.Expr.(*plan.Expr_W).W.Frame = &plan.FrameClause{
 		Type: plan.FrameClause_ROWS,
@@ -585,7 +585,7 @@ func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
 	result, err := ctr.processValueFunc(0, ap, proc)
 	require.NoError(t, err)
-	require.Equal(t, 3, result.Length())
+	require.Equal(t, 4, result.Length())
 	for row := 0; row < result.Length(); row++ {
 		require.True(t, result.IsNull(uint64(row)), "row %d", row)
 	}
