@@ -45,6 +45,87 @@ type connectionLease struct {
 	released bool
 }
 
+// connectionAdmissionListener keeps sockets that have not acquired a global
+// connection slot out of Goetty. Accept is the last boundary before Goetty
+// materializes an IOSession, inserts it into its session map, and starts a
+// handler goroutine, so admission must happen here rather than in the handler.
+type connectionAdmissionListener struct {
+	net.Listener
+	limiter *connectionLimiter
+	reject  func(net.Conn)
+}
+
+func newConnectionAdmissionListener(
+	listener net.Listener,
+	limiter *connectionLimiter,
+	reject func(net.Conn),
+) net.Listener {
+	return &connectionAdmissionListener{
+		Listener: listener,
+		limiter:  limiter,
+		reject:   reject,
+	}
+}
+
+func (l *connectionAdmissionListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		lease, ok := l.limiter.acquire()
+		if ok {
+			return &connectionAdmissionConn{Conn: conn, lease: lease}, nil
+		}
+		if l.reject != nil {
+			l.reject(conn)
+		} else {
+			writeConnectionLimitError(conn)
+		}
+		_ = conn.Close()
+	}
+}
+
+// connectionAdmissionConn owns the listener-acquired lease until the handler
+// atomically takes it. If Goetty fails before starting the handler, IOSession
+// cleanup closes this connection and releases the lease. Once taken, the
+// handler's existing defer is the sole release owner.
+type connectionAdmissionConn struct {
+	net.Conn
+	mu    sync.Mutex
+	lease *connectionLease
+}
+
+func (c *connectionAdmissionConn) takeAdmission() *connectionLease {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	lease := c.lease
+	c.lease = nil
+	return lease
+}
+
+func (c *connectionAdmissionConn) Close() error {
+	lease := c.takeAdmission()
+	if lease != nil {
+		lease.release()
+	}
+	if c == nil || c.Conn == nil {
+		return nil
+	}
+	return c.Conn.Close()
+}
+
+func takeConnectionAdmission(conn net.Conn) (*connectionLease, bool) {
+	admitted, ok := conn.(*connectionAdmissionConn)
+	if !ok {
+		return nil, false
+	}
+	return admitted.takeAdmission(), true
+}
+
 func newConnectionLimiter(maxTotal, maxPerTenant int) *connectionLimiter {
 	return &connectionLimiter{
 		maxTotal:     maxTotal,

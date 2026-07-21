@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,6 +34,19 @@ import (
 type deadlineErrorConn struct {
 	net.Conn
 }
+
+type scriptedAdmissionListener struct {
+	accept func() (net.Conn, error)
+}
+
+func (l *scriptedAdmissionListener) Accept() (net.Conn, error) { return l.accept() }
+func (l *scriptedAdmissionListener) Close() error              { return nil }
+func (l *scriptedAdmissionListener) Addr() net.Addr            { return testAddr("listener") }
+
+type testAddr string
+
+func (a testAddr) Network() string { return "test" }
+func (a testAddr) String() string  { return string(a) }
 
 func (c *deadlineErrorConn) SetWriteDeadline(time.Time) error {
 	return net.ErrClosed
@@ -180,6 +194,140 @@ func TestConnectionLimiter(t *testing.T) {
 			require.Equal(t, 0, limiter.total)
 			require.Empty(t, limiter.byTenant)
 		}
+	})
+}
+
+func TestConnectionAdmissionListenerRejectsBeforeSessionMaterialization(t *testing.T) {
+	limiter := newConnectionLimiter(1, 1)
+	occupied, ok := limiter.acquire()
+	require.True(t, ok)
+	defer occupied.release()
+
+	proxySide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	sentinel := errors.New("listener stopped")
+	step := 0
+	raw := &scriptedAdmissionListener{accept: func() (net.Conn, error) {
+		step++
+		if step == 1 {
+			return proxySide, nil
+		}
+		return nil, sentinel
+	}}
+	rejected := 0
+	listener := newConnectionAdmissionListener(raw, limiter, func(net.Conn) {
+		rejected++
+	})
+
+	conn, err := listener.Accept()
+	require.Nil(t, conn)
+	require.ErrorIs(t, err, sentinel)
+	require.Equal(t, 1, rejected)
+	require.Equal(t, 1, limiter.total,
+		"a rejected raw socket must not acquire another connection slot")
+
+	buf := make([]byte, 1)
+	_, err = peerSide.Read(buf)
+	require.Error(t, err, "the rejected raw socket must be closed inside Accept")
+}
+
+func TestConnectionAdmissionListenerBoundsBlockedRejections(t *testing.T) {
+	limiter := newConnectionLimiter(1, 1)
+	occupied, ok := limiter.acquire()
+	require.True(t, ok)
+	defer occupied.release()
+
+	proxySide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	sentinel := errors.New("listener stopped")
+	var accepts atomic.Int64
+	raw := &scriptedAdmissionListener{accept: func() (net.Conn, error) {
+		if accepts.Add(1) == 1 {
+			return proxySide, nil
+		}
+		return nil, sentinel
+	}}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	listener := newConnectionAdmissionListener(raw, limiter, func(net.Conn) {
+		close(entered)
+		<-release
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		result <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("rejection callback did not start")
+	}
+	require.Equal(t, int64(1), accepts.Load(),
+		"a blocked rejection must stop the accept loop before another session can materialize")
+	require.Equal(t, 1, limiter.total)
+	select {
+	case err := <-result:
+		require.Failf(t, "Accept returned while rejection was blocked", "error: %v", err)
+	default:
+	}
+
+	unblock()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, sentinel)
+	case <-time.After(time.Second):
+		t.Fatal("Accept did not resume after rejection was unblocked")
+	}
+	require.Equal(t, int64(2), accepts.Load())
+}
+
+func TestConnectionAdmissionOwnershipTransfer(t *testing.T) {
+	t.Run("session close before handler releases listener-owned lease", func(t *testing.T) {
+		limiter := newConnectionLimiter(1, 1)
+		proxySide, peerSide := net.Pipe()
+		defer peerSide.Close()
+		raw := &scriptedAdmissionListener{accept: func() (net.Conn, error) {
+			return proxySide, nil
+		}}
+		listener := newConnectionAdmissionListener(raw, limiter, nil)
+		conn, err := listener.Accept()
+		require.NoError(t, err)
+		require.Equal(t, 1, limiter.total)
+		require.NoError(t, conn.Close())
+		require.Equal(t, 0, limiter.total)
+		require.NoError(t, conn.Close())
+		require.Equal(t, 0, limiter.total)
+	})
+
+	t.Run("handler becomes sole lease owner after take", func(t *testing.T) {
+		limiter := newConnectionLimiter(1, 1)
+		proxySide, peerSide := net.Pipe()
+		defer peerSide.Close()
+		raw := &scriptedAdmissionListener{accept: func() (net.Conn, error) {
+			return proxySide, nil
+		}}
+		listener := newConnectionAdmissionListener(raw, limiter, nil)
+		conn, err := listener.Accept()
+		require.NoError(t, err)
+		lease, preadmitted := takeConnectionAdmission(conn)
+		require.True(t, preadmitted)
+		require.NotNil(t, lease)
+		require.NoError(t, conn.Close())
+		require.Equal(t, 1, limiter.total,
+			"transport close must not release a handler-owned lease")
+		lease.release()
+		lease.release()
+		require.Equal(t, 0, limiter.total)
 	})
 }
 

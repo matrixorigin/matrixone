@@ -218,10 +218,20 @@ func (h *handler) handle(c goetty.IOSession) error {
 		v2.ProxyConnectClosedCounter.Inc()
 	}()
 
-	admission, ok := h.connectionLimiter.acquire()
-	if !ok {
+	admission, preadmitted := takeConnectionAdmission(c.RawConn())
+	if !preadmitted {
+		var ok bool
+		admission, ok = h.connectionLimiter.acquire()
+		if !ok {
+			v2.ProxyConnectRejectCounter.Inc()
+			writeConnectionLimitError(c.RawConn())
+			return nil
+		}
+	} else if admission == nil {
+		// Goetty shutdown may close the raw connection immediately before the
+		// handler begins. In that ordering the connection wrapper remains the
+		// lease owner and has already released it.
 		v2.ProxyConnectRejectCounter.Inc()
-		writeConnectionLimitError(c.RawConn())
 		return nil
 	}
 	defer admission.release()
@@ -362,6 +372,14 @@ func (h *handler) handle(c goetty.IOSession) error {
 	case err := <-t.errC:
 		return h.handleTunnelErr(err, cc, t, c.ID(), goId)
 	}
+}
+
+func (h *handler) rejectBeforeSession(conn net.Conn) {
+	v2.ProxyConnectAcceptedCounter.Inc()
+	v2.ProxyConnectRejectCounter.Inc()
+	v2.ProxyConnectClosedCounter.Inc()
+	h.counterSet.connAccepted.Add(1)
+	writeConnectionLimitError(conn)
 }
 
 func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {

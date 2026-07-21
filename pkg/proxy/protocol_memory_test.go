@@ -112,6 +112,28 @@ func TestCalculateProtocolMemoryBudget(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, expectedSteady, budget.steadyBytes)
 	})
+
+	t.Run("cached connections retain originating tunnel buffers", func(t *testing.T) {
+		withoutCache := Config{
+			MaxConnections:      1,
+			ProtocolMemoryLimit: 512 << 20,
+		}
+		withCache := withoutCache
+		withCache.ConnCacheEnabled = true
+
+		activeBudget, err := calculateProtocolMemoryBudget(&withoutCache)
+		require.NoError(t, err)
+		cachedBudget, err := calculateProtocolMemoryBudget(&withCache)
+		require.NoError(t, err)
+
+		expectedCachedSteady := uint64(defaultMaxNumTotal) *
+			(proxyIOSessionBufferSize + proxyBackendRetainedResponseLimit + proxyTunnelBufferSize)
+		require.Equal(t, expectedCachedSteady,
+			cachedBudget.steadyBytes-activeBudget.steadyBytes)
+		require.Equal(t, uint64(defaultMaxNumTotal)*proxyTunnelBufferSize,
+			activeBudget.managedBytes-cachedBudget.managedBytes,
+			"external cached tunnel memory must be deducted from the shared allocator ceiling")
+	})
 }
 
 func TestProxyApplicationReadCapacityUpperBound(t *testing.T) {

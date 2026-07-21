@@ -135,6 +135,10 @@ type tunnel struct {
 
 	mu struct {
 		sync.Mutex
+		// closed is the terminal generation state. It shares this lock with
+		// backend publication so a replacement can never become reachable after
+		// Close has selected the resources it owns.
+		closed bool
 		// started indicates that the tunnel has started.
 		started bool
 		// inTransfer means a transfer of server connection is in progress.
@@ -353,17 +357,31 @@ func (t *tunnel) kickoff() error {
 }
 
 // replaceServerConn replaces the CN server.
-func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, sync bool) {
+func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, sync bool) error {
 	t.mu.Lock()
+	if t.mu.closed {
+		t.mu.Unlock()
+		// newSC owns the raw backend transport, connManager registration and
+		// transient protocol-memory lease. The unpublished MySQL wrapper owns
+		// only Go-heap buffers and becomes unreachable on return.
+		if newSC != nil {
+			_ = newSC.Close()
+		} else if newServerConn != nil {
+			_ = newServerConn.Close()
+		}
+		return errPipeClosed
+	}
 	defer t.mu.Unlock()
 
 	oldServerConn := t.mu.serverConn
 
-	// Flush and preserve bufDst before closing old connection.
-	// bufDst wraps the client conn (unchanged), so it stays valid.
+	// Preserve bufDst before closing the old connection. It targets the client
+	// connection, which is unchanged, and may already contain ordered response
+	// bytes from the old backend. Moving the writer preserves those bytes and
+	// avoids a blocking network flush while t.mu is held; otherwise Close could
+	// queue behind the data path it is supposed to terminate.
 	var savedBufDst *bufio.Writer
 	if oldServerConn != nil && oldServerConn.msgBuf != nil && oldServerConn.msgBuf.bufDst != nil {
-		_ = oldServerConn.flushBufDst()
 		savedBufDst = oldServerConn.msgBuf.bufDst
 		oldServerConn.msgBuf.bufDst = nil // detach before close
 	}
@@ -395,6 +413,7 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	if leased, ok := newSC.(interface{ promoteProtocolMemory() }); ok {
 		leased.promoteProtocolMemory()
 	}
+	return nil
 }
 
 // canStartTransfer checks whether the transfer can be started.
@@ -403,7 +422,7 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	defer t.mu.Unlock()
 
 	// The tunnel has not started.
-	if !t.mu.started {
+	if t.mu.closed || !t.mu.started {
 		return false
 	}
 
@@ -501,7 +520,9 @@ func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 		t.logger.Error("failed to get a new connection", zap.Error(err))
 		return err
 	}
-	t.replaceServerConn(newConn, newSC, sync)
+	if err := t.replaceServerConn(newConn, newSC, sync); err != nil {
+		return err
+	}
 	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
@@ -614,6 +635,14 @@ func (t *tunnel) setTransferType(typ transferType) {
 // Close closes the tunnel.
 func (t *tunnel) Close() error {
 	t.closeOnce.Do(func() {
+		// Select the terminal generation and its cleanup resources before any
+		// cancellation can race a replacement into publishing new state.
+		t.mu.Lock()
+		t.mu.closed = true
+		cc, sc := t.mu.clientConn, t.mu.serverConn
+		serverC := t.mu.sc
+		t.mu.Unlock()
+
 		if t.ctxCancel != nil {
 			t.ctxCancel()
 		}
@@ -621,7 +650,6 @@ func (t *tunnel) Close() error {
 		close(t.reqC)
 		// close(t.respC)
 
-		cc, sc := t.getConns()
 		// cc.Close() just only close the raw net connection, and it
 		// is closed in goetty module, so do NOT need to close it here:
 		// cc, sc := t.getConns()
@@ -630,7 +658,6 @@ func (t *tunnel) Close() error {
 		}
 		if !t.connCacheEnabled {
 			// close the server connection
-			serverC := t.getServerConn()
 			if serverC != nil {
 				_ = serverC.Close()
 			} else if sc != nil {

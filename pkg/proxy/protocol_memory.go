@@ -159,7 +159,15 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	// MySQLConn and bufio buffers live on the Go heap rather than in the shared
 	// session allocator, but connection admission makes their count equally
 	// deterministic. Keep them in the same end-to-end protocol memory budget.
-	tunnelBytes, ok := checkedMulUint64(connections, proxyTunnelBufferSize)
+	// Cached server connections retain their originating tunnel through
+	// serverConn.tun so connManager can untrack them on terminal Close. That
+	// tunnel still owns both message buffers and the client writer even though
+	// it no longer consumes a live connection slot.
+	tunnelOwners, ok := checkedAddUint64(connections, cachedSessions)
+	if !ok {
+		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
+	}
+	tunnelBytes, ok := checkedMulUint64(tunnelOwners, proxyTunnelBufferSize)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
 	}

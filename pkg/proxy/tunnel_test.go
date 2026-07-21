@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -24,6 +25,7 @@ import (
 	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -873,6 +875,95 @@ func TestReplaceServerConn(t *testing.T) {
 	n, err := newServer.Read(buf)
 	require.NoError(t, err)
 	require.Equal(t, "select 1", string(buf[5:n]))
+}
+
+type closeCountingServerConn struct {
+	ServerConn
+	closes atomic.Int64
+}
+
+func (c *closeCountingServerConn) Close() error {
+	c.closes.Add(1)
+	return c.ServerConn.Close()
+}
+
+func TestReplaceServerConnRejectsAfterTunnelClose(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	tu := newTunnel(context.Background(), rt.Logger(), nil)
+	require.NoError(t, tu.Close())
+
+	proxySide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	backend := &closeCountingServerConn{ServerConn: newMockServerConn(proxySide)}
+	limiter := newProtocolMemoryLimiterWithBudget(protocolMemoryBudget{headroomBytes: 1})
+	lease, err := limiter.acquire(context.Background(), 1)
+	require.NoError(t, err)
+	newSC := &protocolMemoryServerConn{ServerConn: backend, lease: lease}
+	newServerConn := newMySQLConn(
+		connServerName,
+		newSC.RawConn(),
+		0,
+		nil,
+		nil,
+		false,
+		0,
+	)
+
+	err = tu.replaceServerConn(newServerConn, newSC, false)
+	require.ErrorIs(t, err, errPipeClosed)
+	require.Equal(t, int64(1), backend.closes.Load(),
+		"the unpublished backend must have exactly one terminal cleanup owner")
+	require.Zero(t, limiter.used.Load(),
+		"rejected publication must release transient protocol memory")
+	require.Nil(t, tu.getServerConn())
+	_, installed := tu.getConns()
+	require.Nil(t, installed, "a closed generation must never publish the replacement wrapper")
+}
+
+func TestReplaceServerConnTransfersBufferedWriterWithoutBlockingFlush(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	clientProxy, clientPeer := net.Pipe()
+	defer clientPeer.Close()
+	oldProxy, oldPeer := net.Pipe()
+	defer oldPeer.Close()
+	newProxy, newPeer := net.Pipe()
+	defer newPeer.Close()
+
+	rt := runtime.DefaultRuntime()
+	tu := newTunnel(context.Background(), rt.Logger(), nil)
+	oldServerConn := newMySQLConn(connServerName, oldProxy, 0, nil, nil, false, 0)
+	writer := bufio.NewWriterSize(clientProxy, 64)
+	_, err := writer.Write([]byte("pending"))
+	require.NoError(t, err)
+	oldServerConn.msgBuf.bufDst = writer
+	tu.mu.clientConn = newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 0)
+	tu.mu.serverConn = oldServerConn
+	tu.mu.sc = newMockServerConn(oldProxy)
+
+	newSC := newMockServerConn(newProxy)
+	newServerConn := newMySQLConn(connServerName, newProxy, 0, nil, nil, false, 0)
+	result := make(chan error, 1)
+	go func() {
+		result <- tu.replaceServerConn(newServerConn, newSC, false)
+	}()
+
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(250 * time.Millisecond):
+		// Releasing the socket makes cleanup deterministic even if a future
+		// regression reintroduces a blocking Flush under t.mu.
+		_ = clientPeer.Close()
+		<-result
+		t.Fatal("replacement blocked flushing the client data path")
+	}
+	require.Same(t, writer, newServerConn.msgBuf.bufDst)
+	require.Equal(t, len("pending"), writer.Buffered(),
+		"ordered buffered bytes must move to the new backend wrapper intact")
+	require.NoError(t, tu.Close())
 }
 
 func TestCheckTxnStatus(t *testing.T) {

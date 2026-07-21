@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -130,7 +131,16 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 
 	s.handler = h
-	app, err := goetty.NewApplication(config.ListenAddress, nil,
+	listener, err := newProxyListener(config.ListenAddress)
+	if err != nil {
+		return nil, err
+	}
+	listener = newConnectionAdmissionListener(
+		listener,
+		s.handler.connectionLimiter,
+		s.handler.rejectBeforeSession,
+	)
+	app, err := goetty.NewApplicationWithListeners([]net.Listener{listener}, nil,
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
 		goetty.WithAppHandleSessionFunc(s.handler.handle),
 		goetty.WithAppSessionOptions(
@@ -148,6 +158,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		),
 	)
 	if err != nil {
+		_ = listener.Close()
 		return nil, err
 	}
 	s.app = app
@@ -160,12 +171,12 @@ func newProxySessionCodec(config Config) codec.Codec {
 	), WithProxyProtocolMaxBodySize(int(config.ProxyProtocolBodyLimit)))
 }
 
-// proxyApplicationAllocator keeps Goetty's small bootstrap buffers infallible
-// before connection admission, then routes every grown protocol buffer through
-// the Proxy's shared bounded allocator. Goetty constructs an application
-// session before the handler can acquire admission and panics if that initial
-// allocation returns an error, so putting the bootstrap allocation itself
-// behind the bounded allocator would turn overload into a process crash.
+// proxyApplicationAllocator keeps Goetty's small bootstrap buffers infallible,
+// then routes every grown protocol buffer through the Proxy's shared bounded
+// allocator. Goetty constructs an application session after listener admission
+// but before the handler takes the lease, and panics if that initial allocation
+// returns an error. The listener bounds these bootstrap allocations; putting
+// them behind a fallible allocator would turn overload into a process crash.
 //
 // The first socket read always requests a 4 KiB writable region, which moves the
 // input above the inline threshold after the handshake lease has been acquired.
