@@ -320,24 +320,34 @@ func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.I
 // merged algo_params. NOTE: changing position_free needs REBUILD (no MERGE) — a MERGE
 // cannot re-derive positions when turning position_free OFF.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	pf, ok := alter.Params[catalog.IndexAlgoParamPositionFree]
-	if !ok {
-		return old, nil
+	pf, hasPF := alter.Params[catalog.IndexAlgoParamPositionFree]
+	pc, hasPC := alter.Params[catalog.IndexAlgoParamMaxPostingsCapacity]
+	if !hasPF && !hasPC {
+		return old, nil // nothing fulltext2 honors on a reindex
 	}
 	merged := make(map[string]string, len(old)+1)
 	for k, v := range old {
 		merged[k] = v
 	}
-	if pf == "true" {
-		// Only gojieba is meaningful position-free (ngram/json trigrams are noise as
-		// bag-of-words). Mirrors the CREATE-time check.
-		if old["parser"] != "gojieba" {
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"fulltext2 POSITION_FREE requires the gojieba parser (this index uses %q); ngram/json need positions", old["parser"])
+	if hasPF {
+		if pf == "true" {
+			// Only gojieba is meaningful position-free (ngram/json trigrams are noise as
+			// bag-of-words). Mirrors the CREATE-time check.
+			if old["parser"] != "gojieba" {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"fulltext2 POSITION_FREE requires the gojieba parser (this index uses %q); ngram/json need positions", old["parser"])
+			}
+			merged[catalog.IndexAlgoParamPositionFree] = "true"
+		} else {
+			delete(merged, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (param absent)
 		}
-		merged[catalog.IndexAlgoParamPositionFree] = "true"
-	} else {
-		delete(merged, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (param absent)
+	}
+	// max_postings_capacity override: the grammar already rejected <=0, so a present
+	// value is valid; the subsequent REBUILD/MERGE reads it back from the merged
+	// algo_params and seals segments at the new posting bound. (max_index_capacity is
+	// NOT re-honored on a reindex — a pre-existing fulltext2 limitation, unchanged.)
+	if hasPC {
+		merged[catalog.IndexAlgoParamMaxPostingsCapacity] = pc
 	}
 	return merged, nil
 }

@@ -64,10 +64,14 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 	if u.inited {
 		return nil
 	}
-	for i := 0; i < 4; i++ {
+	// Validate EVERY provided arg is a string const — including the optional
+	// position_free (5th) and posting_capacity (6th) — so a user-issued direct call
+	// with a non-varchar optional arg errors cleanly instead of UnsafeGetStringAt
+	// reinterpreting a fixed-width vector as a Varlena (panic/garbage).
+	for i := 0; i < len(tf.ctr.argVecs); i++ {
 		v := tf.ctr.argVecs[i]
 		if v.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: args (db, store, meta, capacity) must be strings")
+			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_compact: args (db, store, meta, capacity[, position_free[, posting_capacity]]) must be strings")
 		}
 		if !v.IsConst() {
 			return moerr.NewInternalError(proc.Ctx, "fulltext2_compact: args must be string constants")

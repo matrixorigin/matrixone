@@ -225,7 +225,9 @@ func ReachedSegmentCap(b *Builder, docCap, postingCap int64) bool {
 	if postingCap <= 0 {
 		postingCap = DefaultPostingCapacity
 	}
-	return int64(b.NumDocs()) >= docCap || int64(b.NumPostings()) >= postingCap
+	// Compare the int64 posting counter directly (not via NumPostings()'s int) so a
+	// max_postings_capacity above 2^31 can never wrap on a 32-bit build.
+	return int64(b.NumDocs()) >= docCap || b.postings >= postingCap
 }
 
 // Builder accumulates a token stream fed in (word, pk) order — the positional

@@ -37,6 +37,12 @@ select id from docs where match(body) against('lazy') order by id;
 alter table docs alter reindex ft fulltext2;
 select id from docs where match(body) against('brown') order by id;
 
+-- ALTER REINDEX can RE-BOUND the posting cap: the override is merged into algo_params
+-- and the rebuild seals at the new value (max_index_capacity stays as-is).
+alter table docs alter reindex ft fulltext2 max_postings_capacity 4000000;
+select distinct algo_params from mo_catalog.mo_indexes where name = 'ft' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 'docs');
+select id from docs where match(body) against('brown') order by id;
+
 -- A generous posting cap keeps the base as a single segment; results identical.
 drop table if exists docs2;
 create table docs2(id bigint primary key, body text);
