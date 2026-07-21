@@ -131,6 +131,8 @@ type CDCTaskExecutor struct {
 	watermarkUpdater *cdc.CDCWatermarkUpdater
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
+	// removedReaderShutdowns stores in-progress shutdowns for readers that disappeared from scan results.
+	removedReaderShutdowns sync.Map
 
 	// stateMachine manages executor state transitions
 	stateMachine *ExecutorStateMachine
@@ -836,7 +838,10 @@ func (exec *CDCTaskExecutor) stopAllReaders() {
 	)
 }
 
-var cdcStopRemovedReaderTimeout = 10 * time.Second
+type removedReaderShutdown struct {
+	reader cdc.ChangeReader
+	done   chan struct{}
+}
 
 func (exec *CDCTaskExecutor) stopReadersMissingFromScan(accountTbls cdc.TblMap) {
 	if exec.runningReaders == nil {
@@ -858,41 +863,71 @@ func (exec *CDCTaskExecutor) stopReadersMissingFromScan(accountTbls cdc.TblMap) 
 			return true
 		}
 
-		readerInfo := reader.GetTableInfo()
-		if readerInfo != nil && !exec.matchAnyPattern(tableKey, readerInfo) {
+		if !exec.matchesAnySourcePattern(tableKey) {
 			return true
 		}
 
-		logutil.Info(
-			"cdc.frontend.task.stop_reader_removed_from_scan",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
-			zap.String("table", tableKey),
-		)
-
-		reader.Close()
-		done := make(chan struct{})
-		go func() {
-			reader.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-			logutil.Debug(
-				"cdc.frontend.task.stop_reader_removed_from_scan_done",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("table", tableKey),
-			)
-			exec.runningReaders.CompareAndDelete(key, reader)
-		case <-time.After(cdcStopRemovedReaderTimeout):
-			logutil.Warn(
-				"cdc.frontend.task.stop_reader_removed_from_scan_timeout",
-				zap.String("task-id", exec.spec.TaskId),
-				zap.String("table", tableKey),
-			)
-		}
+		exec.stopRemovedReader(tableKey, key, reader)
 		return true
 	})
+}
+
+func (exec *CDCTaskExecutor) stopRemovedReader(tableKey string, mapKey interface{}, reader cdc.ChangeReader) {
+	shutdown := &removedReaderShutdown{
+		reader: reader,
+		done:   make(chan struct{}),
+	}
+
+	actual, loaded := exec.removedReaderShutdowns.LoadOrStore(tableKey, shutdown)
+	if loaded {
+		existing, ok := actual.(*removedReaderShutdown)
+		if ok && existing.reader == reader {
+			select {
+			case <-existing.done:
+				exec.removedReaderShutdowns.CompareAndDelete(tableKey, existing)
+			default:
+				return
+			}
+		} else {
+			exec.removedReaderShutdowns.CompareAndDelete(tableKey, actual)
+		}
+		_, loaded = exec.removedReaderShutdowns.LoadOrStore(tableKey, shutdown)
+		if loaded {
+			return
+		}
+	}
+
+	logutil.Info(
+		"cdc.frontend.task.stop_reader_removed_from_scan",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+		zap.String("table", tableKey),
+	)
+
+	go func() {
+		reader.Close()
+		reader.Wait()
+		exec.runningReaders.CompareAndDelete(mapKey, reader)
+		close(shutdown.done)
+		exec.removedReaderShutdowns.CompareAndDelete(tableKey, shutdown)
+	}()
+}
+
+func (exec *CDCTaskExecutor) removedReaderShutdownInProgress(tableKey string, reader cdc.ChangeReader) bool {
+	actual, ok := exec.removedReaderShutdowns.Load(tableKey)
+	if !ok {
+		return false
+	}
+	shutdown, ok := actual.(*removedReaderShutdown)
+	if !ok || shutdown.reader != reader {
+		return false
+	}
+	select {
+	case <-shutdown.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
@@ -1199,6 +1234,15 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 				readerInfo := reader.GetTableInfo()
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
+					if exec.removedReaderShutdownInProgress(key, reader) {
+						logutil.Info(
+							"cdc.frontend.task.skip_wait_removed_reader_shutdown",
+							zap.String("table", key),
+							zap.Uint64("old-table-id", readerInfo.SourceTblId),
+							zap.Uint64("new-table-id", info.SourceTblId),
+						)
+						continue
+					}
 					logutil.Info(
 						"cdc.frontend.task.wait_old_reader",
 						zap.String("table", key),
@@ -1488,6 +1532,23 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 			if info.SinkTblName == cdc.CDCPitrGranularity_All {
 				info.SinkTblName = table
 			}
+			return true
+		}
+	}
+	return false
+}
+
+func (exec *CDCTaskExecutor) matchesAnySourcePattern(key string) bool {
+	match := func(s, p string) bool {
+		if p == cdc.CDCPitrGranularity_All {
+			return true
+		}
+		return s == p
+	}
+
+	db, table := cdc.SplitDbTblKey(key)
+	for _, pt := range exec.tables.Pts {
+		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
 			return true
 		}
 	}
