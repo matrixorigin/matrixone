@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_query"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_shard"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_task"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -1296,4 +1298,47 @@ func Test_service_handleMetadataCacheRequest(t *testing.T) {
 	if resp.MetadataCacheResponse.CacheCapacity != 42 {
 		t.Fatal()
 	}
+}
+
+func Test_service_handleIcebergCacheInvalidate(t *testing.T) {
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	handler := &fakeIcebergCacheInvalidationHandler{removed: 2}
+	rt.SetGlobalVariables(api.CacheInvalidatorRuntimeKey, handler)
+	defer rt.SetGlobalVariables(api.CacheInvalidatorRuntimeKey, nil)
+
+	s := &service{}
+	var resp query.Response
+	err := s.handleIcebergCacheInvalidate(context.Background(), &query.Request{
+		IcebergCacheInvalidateRequest: query.IcebergCacheInvalidateRequest{
+			AccountID:            7,
+			CatalogID:            42,
+			Namespace:            "sales",
+			Table:                "orders",
+			SnapshotID:           200,
+			MetadataLocationHash: "hash-200",
+			CommitID:             "commit-200",
+		},
+	}, &resp, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), resp.IcebergCacheInvalidateResponse.RemovedEntries)
+	require.Equal(t, api.CacheInvalidationRequest{
+		AccountID:            7,
+		CatalogID:            42,
+		Namespace:            "sales",
+		Table:                "orders",
+		SnapshotID:           200,
+		MetadataLocationHash: "hash-200",
+		CommitID:             "commit-200",
+	}, handler.req)
+}
+
+type fakeIcebergCacheInvalidationHandler struct {
+	req     api.CacheInvalidationRequest
+	removed int
+}
+
+func (h *fakeIcebergCacheInvalidationHandler) InvalidateIcebergCache(ctx context.Context, req api.CacheInvalidationRequest) (int, error) {
+	h.req = req
+	return h.removed, nil
 }
