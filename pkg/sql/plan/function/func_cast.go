@@ -919,7 +919,6 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 	}
 	strictStringWidth := mode.strictStringWidth()
-	assignmentCast := mode == castModeStrictStringWidth
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
 	}
