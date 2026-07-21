@@ -1164,16 +1164,22 @@ func TestScheduleQueryWorkersStrictIntentUnhappyPaths(t *testing.T) {
 		require.ErrorContains(t, err, schedule.ReasonNoCandidateCN)
 	})
 
-	t.Run("unsupported local exec kind is explicit", func(t *testing.T) {
+	t.Run("local exec kind satisfies explicit upper bound", func(t *testing.T) {
 		c := NewMockCompile(t)
 		c.addr = "local:6001"
 		c.execType = plan2.ExecTypeAP_ONECN
 		c.SetQuerySchedulingIntent(schedule.SchedulingIntent{
 			Explicit: true, PoolFallback: schedule.PoolFallbackStrict,
+			WorkerSet: schedule.WorkerSetPolicy{
+				Mode:       schedule.WorkerSetMax,
+				MaxWorkers: 1,
+			},
 		})
 
-		_, err := c.scheduleQueryWorkers()
-		require.ErrorContains(t, err, schedule.ReasonUnsupportedSchedulingIntent)
+		workers, err := c.scheduleQueryWorkers()
+		require.NoError(t, err)
+		require.Len(t, workers, 1)
+		require.Equal(t, "local:6001", workers[0].Addr)
 	})
 }
 

@@ -1074,6 +1074,33 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
+func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: "select /*+ SET_VAR(query_max_workers=1) */ 1;; " +
+		"select /*+ SET_VAR(query_pool_strict=on) */ 2"}
+
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 2)
+	defer func() {
+		for _, cw := range cws {
+			cw.Free()
+		}
+	}()
+
+	first := cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL()
+	second := cws[1].(interface{ SchedulingSQL() string }).SchedulingSQL()
+	require.Contains(t, first, "query_max_workers=1")
+	require.NotContains(t, first, "query_pool_strict")
+	require.Contains(t, second, "query_pool_strict=on")
+	require.NotContains(t, second, "query_max_workers")
+}
+
 func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -2776,6 +2803,61 @@ func TestQuerySchedulingIntentUsesSessionAndSetVarCapableVariables(t *testing.T)
 	require.Equal(t, int64(2147483647), maxWorkersType.maximum)
 }
 
+func TestQuerySchedulingIntentAppliesStatementSetVarOverrides(t *testing.T) {
+	intent := querySchedulingIntentForStatement(nil,
+		"select /*+ SET_VAR(query_max_workers=2) SET_VAR(query_pool_strict='ON') */ 1")
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 2, intent.WorkerSet.MaxWorkers)
+	require.Equal(t, schedule.PoolFallbackStrict, intent.PoolFallback)
+	require.Equal(t, schedule.EmptyWorkerFail, intent.EmptyWorkerPolicy)
+
+	// Optimizer hints use first-wins semantics for duplicate variables.
+	intent = querySchedulingIntentForStatement(nil,
+		"select /*+ SET_VAR(query_max_workers=1) SET_VAR(query_max_workers=2) */ 1")
+	require.Equal(t, 1, intent.WorkerSet.MaxWorkers)
+
+	// Hint-looking text outside optimizer-hint comments must not affect intent.
+	intent = querySchedulingIntentForStatement(nil,
+		"select '/*+ SET_VAR(query_max_workers=3) */' /* SET_VAR(query_pool_strict=on) */")
+	require.False(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetAll, intent.WorkerSet.Mode)
+
+	// SET_VAR-looking text nested in another hint or its quoted arguments is
+	// not a top-level optimizer hint and must not become scheduling policy.
+	intent = querySchedulingIntentForStatement(nil,
+		"select /*+ QB_NAME('SET_VAR(query_max_workers=3)') OTHER(SET_VAR(query_pool_strict=on)) */ 1")
+	require.False(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetAll, intent.WorkerSet.Mode)
+}
+
+func TestQuerySchedulingIntentScannerRespectsNoBackslashEscapes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "NO_BACKSLASH_ESCAPES"))
+
+	// With NO_BACKSLASH_ESCAPES, the quote after the backslash closes the
+	// string, so the following optimizer comment is in SQL lexical space.
+	intent := querySchedulingIntentForStatement(ses,
+		`select 'value\' /*+ SET_VAR(query_max_workers=3) */`)
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 3, intent.WorkerSet.MaxWorkers)
+}
+
+func TestQuerySchedulingIntentRejectsInvalidStatementSetVar(t *testing.T) {
+	for _, sql := range []string{
+		"select /*+ SET_VAR(query_max_workers=-1) */ 1",
+		"select /*+ SET_VAR(query_max_workers=2147483648) */ 1",
+		"select /*+ SET_VAR(query_pool_strict=maybe) */ 1",
+		"select /*+ SET_VAR(query_max_workers) */ 1",
+	} {
+		intent := querySchedulingIntentForStatement(nil, sql)
+		require.True(t, intent.Explicit, sql)
+		require.False(t, intent.PoolFallback.Valid(), sql)
+	}
+}
+
 func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
@@ -2790,10 +2872,38 @@ func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
 	require.Equal(t, "candidate-discovery", config.schedulingTrace.Attempts[0].Failures[0].Category)
 }
 
+type successfulSchedulingPreviewEngine struct {
+	engine.Engine
+}
+
+func (*successfulSchedulingPreviewEngine) DiscoverQueryCandidates(context.Context) (engine.QueryCandidates, error) {
+	return engine.QueryCandidates{{
+		Service: metadata.CNService{
+			ServiceID:              "preview-cn",
+			PipelineServiceAddress: "preview-cn:6001",
+		},
+		Mcpu: 1,
+	}}, nil
+}
+
+func (*successfulSchedulingPreviewEngine) ResolveQueryCandidatePool(
+	_ context.Context,
+	_ engine.QueryCandidates,
+	_ engine.QueryCandidatePoolRequest,
+) (engine.ResolvedQueryPool, error) {
+	return engine.ResolvedQueryPool{
+		Nodes:             engine.Nodes{{Id: "preview-cn", Addr: "preview-cn:6001", Mcpu: 1}},
+		RequestedIdentity: "preview",
+		Identity:          "preview",
+		Resolution:        engine.QueryPoolResolutionAllCompatible,
+	}, nil
+}
+
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &successfulSchedulingPreviewEngine{}
 	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
 	defer func() {
 		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
@@ -2820,6 +2930,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		context.Background(),
 		ses,
 		stmt,
+		"explain select /*+ SET_VAR(query_max_workers=1) */ 1",
 	)
 	require.NoError(t, err)
 
@@ -2832,7 +2943,59 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		output.WriteByte('\n')
 	}
 	require.Contains(t, output.String(), "Scheduling (preview):")
-	require.Contains(t, output.String(), "Failure: category=candidate-provider")
+	require.Contains(t, output.String(), "Intent: explicit=true")
+	require.Contains(t, output.String(), "worker-set=max-workers max-workers=1")
+}
+
+func TestDoExplainExecuteUsesPreparedSchedulingSQL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &successfulSchedulingPreviewEngine{}
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		context.Context,
+		FeSession,
+		plan.CompilerContext,
+		tree.Statement,
+	) (*plan.Plan, error) {
+		return &plan.Plan{
+			Plan: &plan0.Plan_Query{
+				Query: &plan0.Query{
+					Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+					Steps: []int32{0},
+				},
+			},
+		}, nil
+	}
+
+	ctx := context.Background()
+	require.NoError(t, ses.SetSessionSysVar(ctx, enableExplainScheduling, int64(1)))
+	require.NoError(t, ses.SetPrepareStmt(ctx, "sched", &PrepareStmt{
+		Name:              "sched",
+		Sql:               `select 'value\' /*+ SET_VAR(query_max_workers=2) */`,
+		schedulingSQLMode: "NO_BACKSLASH_ESCAPES",
+	}))
+	err := doExplainStmt(
+		ctx,
+		ses,
+		tree.NewExplainStmt(tree.NewExecute(tree.Identifier("sched")), "text"),
+		"explain /*+ SET_VAR(query_max_workers=1) */ execute sched",
+	)
+	require.NoError(t, err)
+
+	var output strings.Builder
+	for i := uint64(0); i < ses.GetMysqlResultSet().GetRowCount(); i++ {
+		row, rowErr := ses.GetMysqlResultSet().GetRow(ctx, i)
+		require.NoError(t, rowErr)
+		output.WriteString(row[0].(string))
+		output.WriteByte('\n')
+	}
+	require.Contains(t, output.String(), "worker-set=max-workers max-workers=2")
+	require.NotContains(t, output.String(), "worker-set=max-workers max-workers=1")
 }
 
 func TestDoExplainStmtKeepsSchedulingPreviewOptIn(t *testing.T) {

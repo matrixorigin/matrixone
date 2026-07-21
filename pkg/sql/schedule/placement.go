@@ -249,14 +249,18 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if !req.Intent.PoolFallback.Valid() || !req.Intent.EmptyWorkerPolicy.Valid() {
 		return queryDecision(req, nil, nil, ReasonInvalidSchedulingIntent, false)
 	}
+	if reason := validateWorkerSetPolicy(req.Intent.WorkerSet, false); reason != "" {
+		return queryDecision(req, nil, nil, reason, false)
+	}
 	if req.Intent.PoolFallback == PoolFallbackStrict && req.ResolvedPool.Fallback {
 		return queryDecision(req, nil, nil, ReasonStrictPoolFallback, false)
 	}
 	if req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN {
-		if req.Intent.Explicit &&
-			(req.Intent.PoolFallback == PoolFallbackStrict || req.Intent.WorkerSet.Mode != WorkerSetAll) {
-			return queryDecision(req, nil, nil, ReasonUnsupportedSchedulingIntent, false)
-		}
+		// A max-worker policy is an upper bound, so a local query using one
+		// worker satisfies every positive cap. Strict pool intent has already
+		// rejected a compatibility fallback above. Treating either policy as
+		// unsupported here makes the session unusable after SET because even
+		// local control statements pass through query placement.
 		return decideLocalQueryPlacement(req)
 	}
 
@@ -345,22 +349,13 @@ func resolvedWorkers(req QueryRequest) Workers {
 }
 
 func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker) (Workers, string, bool) {
+	if reason := validateWorkerSetPolicy(policy, true); reason != "" {
+		return nil, reason, false
+	}
 	switch policy.Mode {
 	case WorkerSetAll:
-		if policy.MaxWorkers != 0 || policy.SelectionKey != "" || policy.AlgorithmVersion != "" {
-			return nil, ReasonInvalidWorkerSetPolicy, false
-		}
 		return workers, "", true
 	case WorkerSetMax:
-		if policy.MaxWorkers <= 0 {
-			return nil, ReasonInvalidWorkerSetPolicy, false
-		}
-		if policy.SelectionKey == "" {
-			return nil, ReasonMissingSelectionKey, false
-		}
-		if policy.AlgorithmVersion != "" && policy.AlgorithmVersion != WorkerSelectionAlgorithmV1 {
-			return nil, ReasonInvalidWorkerSetPolicy, false
-		}
 		if policy.MaxWorkers >= len(workers) {
 			return workers, "", true
 		}
@@ -404,6 +399,28 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 	default:
 		return nil, ReasonInvalidWorkerSetPolicy, false
 	}
+}
+
+func validateWorkerSetPolicy(policy WorkerSetPolicy, requireSelectionKey bool) string {
+	switch policy.Mode {
+	case WorkerSetAll:
+		if policy.MaxWorkers != 0 || policy.SelectionKey != "" || policy.AlgorithmVersion != "" {
+			return ReasonInvalidWorkerSetPolicy
+		}
+	case WorkerSetMax:
+		if policy.MaxWorkers <= 0 {
+			return ReasonInvalidWorkerSetPolicy
+		}
+		if requireSelectionKey && policy.SelectionKey == "" {
+			return ReasonMissingSelectionKey
+		}
+		if policy.AlgorithmVersion != "" && policy.AlgorithmVersion != WorkerSelectionAlgorithmV1 {
+			return ReasonInvalidWorkerSetPolicy
+		}
+	default:
+		return ReasonInvalidWorkerSetPolicy
+	}
+	return ""
 }
 
 // stableHRWScore is FNV-1a with length-delimited fields. Its byte-level

@@ -870,18 +870,37 @@ func TestDecideQueryPlacementSeparatesPoolAndEmptyWorkerFallback(t *testing.T) {
 	require.Equal(t, Workers{local}, decision.Workers)
 }
 
-func TestDecideQueryPlacementRejectsStrictIntentForUnsupportedExecKind(t *testing.T) {
+func TestDecideQueryPlacementLocalExecKindSatisfiesExplicitUpperBound(t *testing.T) {
+	local := Worker{ID: "local", Route: WorkerRouteLocal}
 	decision := DecideQueryPlacement(QueryRequest{
 		ExecKind:  QueryExecAPOneCN,
-		CurrentCN: Worker{ID: "local", Route: WorkerRouteLocal},
+		CurrentCN: local,
 		Intent: SchedulingIntent{
 			Explicit:     true,
 			PoolFallback: PoolFallbackStrict,
+			WorkerSet: WorkerSetPolicy{
+				Mode:       WorkerSetMax,
+				MaxWorkers: 1,
+			},
+		},
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, ReasonLocalExecType, decision.Reason)
+	require.Equal(t, Workers{local}, decision.Workers)
+}
+
+func TestDecideQueryPlacementLocalExecKindRejectsInvalidWorkerPolicy(t *testing.T) {
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:  QueryExecTP,
+		CurrentCN: Worker{ID: "local", Route: WorkerRouteLocal},
+		Intent: SchedulingIntent{
+			WorkerSet: WorkerSetPolicy{Mode: WorkerSetMax},
 		},
 	})
 
 	require.False(t, decision.Satisfied)
-	require.Equal(t, ReasonUnsupportedSchedulingIntent, decision.Reason)
+	require.Equal(t, ReasonInvalidWorkerSetPolicy, decision.Reason)
 	require.Empty(t, decision.Workers)
 }
 
