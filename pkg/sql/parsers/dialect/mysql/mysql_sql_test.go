@@ -446,6 +446,12 @@ func TestTableDumpAndLoadParse(t *testing.T) {
 				require.Equal(t, tree.Identifier("t1"), dump.Table.Name())
 				require.Equal(t, "/tmp/t1", dump.Path)
 				require.False(t, dump.MetadataOnly)
+				require.Equal(t, "dump table db1.t1 to '/tmp/t1'", tree.String(dump, dialect.MYSQL))
+				require.Equal(t, "dump table", dump.GetStatementType())
+				require.Equal(t, tree.QueryTypeOth, dump.GetQueryType())
+				require.Equal(t, "tree.DumpTable", dump.TypeName())
+				require.Equal(t, "dump table", dump.String())
+				dump.Free()
 			},
 		},
 		{
@@ -464,6 +470,12 @@ func TestTableDumpAndLoadParse(t *testing.T) {
 				require.Equal(t, tree.Identifier("db2"), load.Table.Schema())
 				require.Equal(t, tree.Identifier("t1"), load.Table.Name())
 				require.Equal(t, "/tmp/t1", load.Path)
+				require.Equal(t, "load table db2.t1 from '/tmp/t1'", tree.String(load, dialect.MYSQL))
+				require.Equal(t, "load table", load.GetStatementType())
+				require.Equal(t, tree.QueryTypeDML, load.GetQueryType())
+				require.Equal(t, "tree.LoadTable", load.TypeName())
+				require.Equal(t, "load table", load.String())
+				load.Free()
 			},
 		},
 	}

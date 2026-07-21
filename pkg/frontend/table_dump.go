@@ -88,9 +88,7 @@ type tableDumpRelationRef struct {
 }
 
 func openLocalTableDump(path string) (fileservice.FileService, error) {
-	if strings.HasPrefix(path, "file://") {
-		path = strings.TrimPrefix(path, "file://")
-	}
+	path = strings.TrimPrefix(path, "file://")
 	if strings.Contains(path, "://") || !filepath.IsAbs(path) {
 		return nil, moerr.NewInvalidInputNoCtx("table dump path must be an absolute local path or file:// URL")
 	}
