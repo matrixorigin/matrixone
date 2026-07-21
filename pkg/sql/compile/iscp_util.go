@@ -17,13 +17,21 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 )
@@ -31,6 +39,10 @@ import (
 var (
 	iscpRegisterJobFunc   = iscp.RegisterJob
 	iscpUnregisterJobFunc = iscp.UnregisterJob
+	iscpLookupJobLogFunc  = iscp.LookupJobLog
+	iscpGetExecutorFunc   = iscp.GetExecutorRuntime
+	iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+	iscpGetCNQueryAddress = getCNQueryAddress
 	isTableInCCPRFunc     = isTableInCCPRImpl
 )
 
@@ -192,6 +204,248 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	return nil
 }
 
+func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
+	return drainIndexCdcTaskConsumer(c, tableDef, dbname, tablename, indexname)
+}
+
+func drainIndexCdcTaskConsumer(
+	c *Compile,
+	tableDef *plan.TableDef,
+	dbname string,
+	tablename string,
+	indexname string,
+) error {
+	valid, err := checkValidIndexCdc(tableDef, indexname)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	jobName := genCdcTaskJobID(indexname)
+	_, tableID, jobID, exists, _, err := iscpLookupJobLogFunc(
+		c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		&iscp.JobID{DBName: dbname, TableName: tablename, JobName: jobName},
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		logutil.Infof("skip draining index cdc task consumer, iscp job not found: tableID=%d index=%s", tableDef.TblId, indexname)
+		return nil
+	}
+	if tableID == 0 {
+		tableID = tableDef.TblId
+	}
+	runnerCN, err := iscpGetTaskRunnerFunc(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	if runnerCN == "" {
+		runnerCN = c.proc.GetService()
+	}
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	logutil.Infof("drain index cdc task consumer: accountID=%d tableID=%d jobName=%s jobID=%d", accountID, tableID, jobName, jobID)
+	if exec, ok := iscpGetExecutorFunc(runnerCN); ok && exec != nil {
+		if err := exec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID); err != nil {
+			exec.RemoveJobFence(key)
+			return err
+		}
+		if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+			lease := startISCPJobFenceLease(func() error {
+				if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+					return moerr.NewInternalErrorf(
+						c.proc.Ctx,
+						"cannot renew ISCP consumer quiescence fence for tableID=%d jobName=%s jobID=%d",
+						tableID,
+						jobName,
+						jobID,
+					)
+				}
+				return nil
+			})
+			cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+				lease.Stop()
+				if !event.CostEvent {
+					return nil
+				}
+				exec.RemoveJobFence(key)
+				return nil
+			})
+			txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+			txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+				if !event.CostEvent {
+					lease.Stop()
+				}
+				return nil
+			}))
+		}
+		return nil
+	}
+	qc := c.proc.GetQueryClient()
+	if qc == nil {
+		return moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+			runnerCN,
+			tableID,
+			jobName,
+			jobID,
+		)
+	}
+	queryAddress, err := iscpGetCNQueryAddress(c.proc.Ctx, c.proc.GetService(), runnerCN)
+	if err != nil {
+		return err
+	}
+	if err := sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false); err != nil {
+		return err
+	}
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		lease := startISCPJobFenceLease(func() error {
+			ttl := iscp.RollbackFenceTTL()
+			renewCtx, cancel := context.WithTimeoutCause(
+				context.Background(),
+				iscpFenceRenewTimeout(ttl),
+				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
+			)
+			defer cancel()
+			return sendISCPDrainConsumerRequest(renewCtx, qc, queryAddress, accountID, tableID, jobName, jobID, false, true)
+		})
+		cleanup := client.NewTxnEventCallback(func(ctx context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			lease.Stop()
+			if !event.CostEvent {
+				return nil
+			}
+			cleanupCtx, cancel := context.WithTimeoutCause(
+				context.Background(),
+				iscp.DefaultRollbackFenceTTL,
+				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
+			)
+			defer cancel()
+			return sendISCPDrainConsumerRequest(cleanupCtx, qc, queryAddress, accountID, tableID, jobName, jobID, true, false)
+		})
+		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+		txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			if !event.CostEvent {
+				lease.Stop()
+			}
+			return nil
+		}))
+	}
+	return nil
+}
+
+type iscpJobFenceLease struct {
+	stop func()
+}
+
+func startISCPJobFenceLease(renew func() error) iscpJobFenceLease {
+	ttl := iscp.RollbackFenceTTL()
+	if ttl <= 0 || renew == nil {
+		return iscpJobFenceLease{stop: func() {}}
+	}
+	interval := ttl / 2
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	stopCh := make(chan struct{})
+	var once sync.Once
+	go func() {
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				if err := renew(); err != nil {
+					logutil.Warnf("failed to renew ISCP job fence lease: %v", err)
+				}
+				timer.Reset(interval)
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+	return iscpJobFenceLease{stop: func() {
+		once.Do(func() {
+			close(stopCh)
+		})
+	}}
+}
+
+func iscpFenceRenewTimeout(ttl time.Duration) time.Duration {
+	timeout := ttl / 4
+	if timeout < 10*time.Millisecond {
+		timeout = 10 * time.Millisecond
+	}
+	return timeout
+}
+
+func (l iscpJobFenceLease) Stop() {
+	if l.stop != nil {
+		l.stop()
+	}
+}
+
+func getCNQueryAddress(ctx context.Context, service string, cnUUID string) (string, error) {
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		return "", err
+	}
+	var queryAddress string
+	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewServiceIDSelector(cnUUID),
+		func(cn metadata.CNService) bool {
+			queryAddress = cn.QueryAddress
+			return false
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	if queryAddress == "" {
+		return "", moerr.NewInternalErrorf(ctx, "cannot find query address for CN %s", cnUUID)
+	}
+	return queryAddress, nil
+}
+
+func sendISCPDrainConsumerRequest(
+	ctx context.Context,
+	qc qclient.QueryClient,
+	queryAddress string,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	removeFenceOnly bool,
+	renewFenceOnly bool,
+) error {
+	req := qc.NewRequest(query.CmdMethod_ISCPDrainConsumer)
+	req.ISCPDrainConsumerRequest = &query.ISCPDrainConsumerRequest{
+		AccountID:       accountID,
+		TableID:         tableID,
+		JobName:         jobName,
+		JobID:           jobID,
+		RemoveFenceOnly: removeFenceOnly,
+		RenewFenceOnly:  renewFenceOnly,
+	}
+	resp, err := qc.SendMessage(ctx, queryAddress, req)
+	if err != nil {
+		return err
+	}
+	if resp != nil {
+		qc.Release(resp)
+	}
+	return nil
+}
+
 // drop all cdc tasks according to tableDef
 func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
@@ -212,6 +466,9 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 			//hasindex = true
 			_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(idx.IndexName)})
 			if e != nil {
+				return e
+			}
+			if e = drainIndexCdcTaskConsumer(c, tabledef, dbname, tablename, idx.IndexName); e != nil {
 				return e
 			}
 		}

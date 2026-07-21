@@ -22,7 +22,6 @@ import (
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -49,9 +48,7 @@ type RoutineManager struct {
 	baseService      BaseService
 	service          string
 	sessionManager   *queryservice.SessionManager
-	// reportSystemStatusTime is the time when report system status last time.
-	reportSystemStatusTime atomic.Pointer[time.Time]
-	cancel                 context.CancelFunc
+	cancel           context.CancelFunc
 }
 
 type AccountRoutineManager struct {

@@ -17,7 +17,8 @@ package tree
 type TableName struct {
 	TableExpr
 	objName
-	AtTsExpr *AtTimeStamp
+	AtTsExpr   *AtTimeStamp
+	IcebergRef *IcebergRefSpec
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {
@@ -32,6 +33,9 @@ func (tn TableName) Format(ctx *FmtCtx) {
 	ctx.WriteIdentifier(tn.ObjectName)
 	if tn.AtTsExpr != nil {
 		tn.AtTsExpr.Format(ctx)
+	}
+	if tn.IcebergRef != nil {
+		tn.IcebergRef.Format(ctx)
 	}
 }
 

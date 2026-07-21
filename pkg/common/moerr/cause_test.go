@@ -71,6 +71,14 @@ var causeArray = []error{
 	CauseReadCache,
 	CauseRemoteCacheRead,
 
+	CauseIcebergConfig,
+	CauseIcebergCatalog,
+	CauseIcebergMetadata,
+	CauseIcebergPlanning,
+	CauseIcebergCredential,
+	CauseIcebergResidency,
+	CauseIcebergInternal,
+
 	CauseWorkspaceRSSCacheEvict,
 
 	CauseRegisterCdc,

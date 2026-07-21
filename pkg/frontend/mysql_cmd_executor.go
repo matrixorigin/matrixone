@@ -158,6 +158,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		envStmt = redactStatementTextForLogging(statement, envStmt)
 
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
@@ -268,6 +269,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	switch statement.(type) {
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog:
+		return tree.String(statement, dialect.MYSQL)
+	default:
+		return text
+	}
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
@@ -3722,18 +3732,6 @@ func executeStmt(ses *Session,
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
-
-	// record goroutine info when ddl stmt run timeout
-	switch execCtx.stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
-		_, span := trace.Start(execCtx.reqCtx, "executeStmtHung",
-			trace.WithHungThreshold(time.Minute), // be careful with this options
-			trace.WithProfileGoroutine(),
-			trace.WithProfileTraceSecs(10*time.Second),
-		)
-		defer span.End()
-	default:
-	}
 
 	var cmpBegin time.Time
 	var ret interface{}

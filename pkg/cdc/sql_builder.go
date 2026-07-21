@@ -100,6 +100,11 @@ const (
 		"FROM `mo_catalog`.`mo_cdc_task` " +
 		"WHERE 1=1 AND account_id = %d"
 
+	CDCGetCdcTaskStateSqlTemplate = "SELECT " +
+		"state " +
+		"FROM `mo_catalog`.`mo_cdc_task` " +
+		"WHERE 1=1 AND account_id = %d AND task_id = '%s'"
+
 	CDCDeleteTaskSqlTemplate = "DELETE " +
 		"FROM " +
 		"`mo_catalog`.`mo_cdc_task` " +
@@ -117,6 +122,12 @@ const (
 		"SET state = '%s', err_msg = '%s' " +
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
+
+	CDCUpdateTaskStateAndErrMsgByStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s', err_msg = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
 
 	CDCUpdateTaskStateByTaskIdSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_task` " +
@@ -348,8 +359,10 @@ const (
 	CDCGetTableIDTemplate_Idx                       = 29
 	CDCUpdateTaskStateByTaskIdSQL_Idx               = 30
 	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx       = 31
+	CDCUpdateTaskStateAndErrMsgByStateSQL_Idx       = 32
+	CDCGetTaskStateSqlTemplate_Idx                  = 33
 
-	CDCSqlTemplateCount = 32
+	CDCSqlTemplateCount = 34
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -397,11 +410,18 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	CDCUpdateTaskStateAndErrMsgSQL_Idx: {
 		SQL: CDCUpdateTaskStateAndErrMsgSqlTemplate,
 	},
+	CDCUpdateTaskStateAndErrMsgByStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateAndErrMsgByStateSqlTemplate,
+	},
 	CDCUpdateTaskStateByTaskIdSQL_Idx: {
 		SQL: CDCUpdateTaskStateByTaskIdSqlTemplate,
 	},
 	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx: {
 		SQL: CDCUpdateTaskStateByTaskIdAndStateSqlTemplate,
+	},
+	CDCGetTaskStateSqlTemplate_Idx: {
+		SQL:         CDCGetCdcTaskStateSqlTemplate,
+		OutputAttrs: []string{"state"},
 	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,
@@ -656,6 +676,23 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
 	)
 }
 
+func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgByStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	errMsg string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgByStateSQL_Idx].SQL,
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
+		accountId,
+		escapeSQLString(taskId),
+		escapeSQLString(currentState),
+	)
+}
+
 func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
 	accountId uint64,
 	taskId string,
@@ -699,6 +736,17 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 		)
 	}
 	return sql
+}
+
+func (b cdcSQLBuilder) GetTaskStateSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTaskStateSqlTemplate_Idx].SQL,
+		accountId,
+		escapeSQLString(taskId),
+	)
 }
 
 // ClearTaskTableErrorsSQL generates SQL to clear error messages for all tables in a task
