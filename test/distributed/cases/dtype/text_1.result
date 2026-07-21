@@ -333,11 +333,17 @@ delete from t8 where col12 is not NULL;
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
 select cast(col13 as decimal(5,3)) from t8;
-invalid input: 12345.123456789 beyond the range, can't be converted to Decimal64(5,3).
+➤ cast(col13 as decimal(5, 3))[3,5,3]  𝄀
+99.999  𝄀
+99.999
 insert into t8(col13) values ('1.234567');
 insert into t8(col13) values (1.234567);
 select cast(col13 as decimal(5,3)) from t8;
-invalid input: 12345.123456789 beyond the range, can't be converted to Decimal64(5,3).
+➤ cast(col13 as decimal(5, 3))[3,5,3]  𝄀
+99.999  𝄀
+99.999  𝄀
+1.235  𝄀
+1.235
 select cast(col13 as decimal(20,15)) from t8;
 ➤ cast(col13 as decimal(20, 15))[3,20,15]  𝄀
 12345.123456789000000  𝄀
