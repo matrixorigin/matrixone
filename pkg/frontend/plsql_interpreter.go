@@ -48,7 +48,8 @@ type Interpreter struct {
 	argsMap     map[string]tree.Expr         // used for argument to parameter mapping
 	outParamMap map[string]interface{}       // used for storing and updating OUT type arg
 
-	lastAffectedRows int64
+	lastAffectedRows    int64
+	initialAffectedRows int64
 }
 
 func (interpreter *Interpreter) recordAffectedRows() {
@@ -296,6 +297,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg
 		}
 	}
 
+	interpreter.setAffectedRows(interpreter.initialAffectedRows)
 	_, err = interpreter.interpret(stmt)
 
 	if err != nil {
@@ -526,7 +528,6 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		for _, v := range st.Variables {
 			(*interpreter.varScope)[len(*interpreter.varScope)-1][v] = value
 		}
-		interpreter.setAffectedRows(0)
 		return SpOk, nil
 	case *tree.SetVar:
 		for _, assign := range st.Assignments {
@@ -556,7 +557,6 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				if err != nil {
 					return SpNotOk, err
 				}
-				interpreter.setAffectedRows(0)
 			}
 		}
 	default: // normal sql. Since we don't support SELECT INTO for now, we don't have to worry about updating variables
@@ -575,7 +575,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			return SpNotOk, err
 		}
 		if execResultArrayHasData(erArray) {
-			interpreter.result = append(interpreter.result, erArray[0])
+			interpreter.result = append(interpreter.result, erArray...)
 		}
 		return SpOk, nil
 	}

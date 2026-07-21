@@ -2048,7 +2048,14 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 
 func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, bg bool) error {
 	var affectedRows int64
-	results, err := doInterpretCall(execCtx.reqCtx, ses, call, bg, &affectedRows)
+	results, err := doInterpretCall(
+		execCtx.reqCtx,
+		ses,
+		call,
+		bg,
+		procedureCallerAffectedRows(execCtx),
+		&affectedRows,
+	)
 	if err != nil {
 		return err
 	}
@@ -2057,6 +2064,13 @@ func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, b
 	ses.SetMysqlResultSet(nil)
 	execCtx.results = results
 	return nil
+}
+
+func procedureCallerAffectedRows(execCtx *ExecCtx) int64 {
+	if execCtx.proc == nil {
+		return 0
+	}
+	return execCtx.proc.GetAffectedRows()
 }
 
 func normalizeProcedureAffectedRows(affectedRows int64) uint64 {

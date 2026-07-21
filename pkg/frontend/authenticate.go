@@ -11513,7 +11513,14 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	return resultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool, affectedRows *int64) ([]ExecResult, error) {
+func doInterpretCall(
+	ctx context.Context,
+	ses FeSession,
+	call *tree.CallStmt,
+	bg bool,
+	callerAffectedRows int64,
+	affectedRows *int64,
+) ([]ExecResult, error) {
 	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
 		if err != nil {
 			return nil, err
@@ -11626,6 +11633,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
 	interpreter.outParamMap = make(map[string]interface{})
+	interpreter.initialAffectedRows = callerAffectedRows
 
 	switch spLang {
 	case "sql":

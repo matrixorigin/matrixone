@@ -2558,6 +2558,13 @@ func TestNormalizeProcedureAffectedRows(t *testing.T) {
 	require.Equal(t, uint64(7), normalizeProcedureAffectedRows(7))
 }
 
+func TestProcedureCallerAffectedRows(t *testing.T) {
+	require.Equal(t, int64(0), procedureCallerAffectedRows(&ExecCtx{}))
+	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
+	proc.SetAffectedRows(7)
+	require.Equal(t, int64(7), procedureCallerAffectedRows(&ExecCtx{proc: proc}))
+}
+
 func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

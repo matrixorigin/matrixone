@@ -163,6 +163,7 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 		}
 	}
 
+	interpreter.setAffectedRows(interpreter.initialAffectedRows)
 	globals, err := starlark.ExecFileOptions(
 		&syntax.FileOptions{
 			While:           true,

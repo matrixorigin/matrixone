@@ -528,9 +528,25 @@ func doComQueryInBack(
 		if err != nil {
 			return err
 		}
+		if _, ok := stmt.(*tree.CallStmt); ok {
+			if err = appendNestedCallResults(execCtx.reqCtx, backSes, execCtx.results); err != nil {
+				return err
+			}
+		}
 		backSes.lastAffectedRows = affectedRowsForStatement(execCtx)
 	} // end of for
 
+	return nil
+}
+
+func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
+	for _, result := range results {
+		mrs, ok := result.(*MysqlResultSet)
+		if !ok {
+			return moerr.NewInternalError(ctx, "nested CALL returned an unsupported result type")
+		}
+		backSes.allResultSet = append(backSes.allResultSet, mrs)
+	}
 	return nil
 }
 

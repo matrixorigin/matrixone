@@ -19,6 +19,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -170,9 +172,10 @@ func TestInterpreterBackgroundAffectedRows(t *testing.T) {
 
 type evalCondBackgroundExec struct {
 	BackgroundExec
-	rows    int64
-	result  []interface{}
-	execErr error
+	rows       int64
+	result     []interface{}
+	execResult []interface{}
+	execErr    error
 }
 
 func (e *evalCondBackgroundExec) ClearExecResultSet() {
@@ -182,7 +185,11 @@ func (e *evalCondBackgroundExec) ClearExecResultSet() {
 func (e *evalCondBackgroundExec) Exec(context.Context, string) error {
 	e.rows = -1
 	if e.execErr == nil {
-		e.result = []interface{}{&evalCondResult{value: 1}}
+		if e.execResult != nil {
+			e.result = e.execResult
+		} else {
+			e.result = []interface{}{&evalCondResult{value: 1}}
+		}
 	}
 	return e.execErr
 }
@@ -275,4 +282,37 @@ func TestStarlarkSQLRecordsAffectedRows(t *testing.T) {
 			require.Equal(t, int64(-1), interpreter.lastAffectedRows)
 		})
 	}
+}
+
+func TestNestedCallResultsRemainOrdered(t *testing.T) {
+	first := &MysqlResultSet{}
+	second := &MysqlResultSet{}
+	first.AddRow([]interface{}{10})
+	second.AddRow([]interface{}{20})
+	backSes := &backSession{}
+	require.NoError(t, appendNestedCallResults(
+		context.Background(),
+		backSes,
+		[]ExecResult{first, second},
+	))
+	require.Equal(t, []*MysqlResultSet{first, second}, backSes.allResultSet)
+	require.Error(t, appendNestedCallResults(
+		context.Background(),
+		backSes,
+		[]ExecResult{&evalCondResult{}},
+	))
+
+	back := &evalCondBackgroundExec{execResult: []interface{}{first, second}}
+	varScope := []map[string]interface{}{{}}
+	interpreter := &Interpreter{
+		ctx:      context.Background(),
+		bh:       back,
+		varScope: &varScope,
+		fmtctx:   tree.NewFmtCtx(dialect.MYSQL),
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select 1", 1)
+	require.NoError(t, err)
+	_, err = interpreter.interpret(stmt)
+	require.NoError(t, err)
+	require.Equal(t, []ExecResult{first, second}, interpreter.result)
 }
