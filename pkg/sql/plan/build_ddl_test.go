@@ -697,6 +697,36 @@ func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
 			sql:  "select date_add(col2, interval(`a,b)`, day)) from src",
 			want: "select date_add(col2, interval `a,b)` day) from src",
 		},
+		{
+			name: "single quoted string",
+			sql:  "select 'interval(1,day)' as c",
+			want: "select 'interval(1,day)' as c",
+		},
+		{
+			name: "double quoted string",
+			sql:  `select "interval(1,day)" as c`,
+			want: `select "interval(1,day)" as c`,
+		},
+		{
+			name: "doubled quote in string",
+			sql:  "select 'a''interval(1,day)' as c",
+			want: "select 'a''interval(1,day)' as c",
+		},
+		{
+			name: "backslash escaped quote in string",
+			sql:  `select 'a\'interval(1,day)' as c`,
+			want: `select 'a\'interval(1,day)' as c`,
+		},
+		{
+			name: "unclosed quoted string",
+			sql:  "select 'interval(1,day)",
+			want: "select 'interval(1,day)",
+		},
+		{
+			name: "identifier prefix",
+			sql:  "select myinterval(1, day), $interval(2, day), 中文interval(3, day)",
+			want: "select myinterval(1, day), $interval(2, day), 中文interval(3, day)",
+		},
 	}
 
 	for _, test := range tests {

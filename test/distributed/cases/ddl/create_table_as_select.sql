@@ -1159,9 +1159,15 @@ create table ctas_interval_identifier_src (`interval(x,day)` int);
 insert into ctas_interval_identifier_src values (1), (2);
 create table ctas_interval_identifier_dst as
 select `interval(x,day)` from ctas_interval_identifier_src;
+desc ctas_interval_identifier_dst;
 select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
 drop table ctas_interval_identifier_dst;
 drop table ctas_interval_identifier_src;
+drop table if exists ctas_interval_string;
+create table ctas_interval_string as
+select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
+select * from ctas_interval_string;
+drop table ctas_interval_string;
 drop table alias01;
 -- @session
 drop database test;

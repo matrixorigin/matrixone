@@ -1670,12 +1670,22 @@ create table ctas_interval_identifier_src (`interval(x,day)` int);
 insert into ctas_interval_identifier_src values (1), (2);
 create table ctas_interval_identifier_dst as
 select `interval(x,day)` from ctas_interval_identifier_src;
+desc ctas_interval_identifier_dst;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+interval(x,day)  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
 ➤ interval(x,day)[4,32,0]  𝄀
 1  𝄀
 2
 drop table ctas_interval_identifier_dst;
 drop table ctas_interval_identifier_src;
+drop table if exists ctas_interval_string;
+create table ctas_interval_string as
+select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
+select * from ctas_interval_string;
+➤ single_quoted[12,-1,0]  ¦  double_quoted[12,-1,0]  𝄀
+interval(1,day)  ¦  interval(2,month)
+drop table ctas_interval_string;
 drop table alias01;
 drop database test;
 drop database if exists db1;
