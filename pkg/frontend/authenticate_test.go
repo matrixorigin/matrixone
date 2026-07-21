@@ -8982,7 +8982,19 @@ func Test_doDropUser(t *testing.T) {
 }
 
 func Test_doInterpretCall(t *testing.T) {
-	t.Skip("skip doInterpretCall")
+	convey.Convey("call procedure without database fails", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		call := &tree.CallStmt{
+			Name: tree.NewProcedureName("test_without_database", tree.ObjectNamePrefix{}),
+		}
+		ses := newSes(determinePrivilegeSetOfStatement(call), ctrl)
+
+		_, err := doInterpretCall(context.Background(), ses, call, false, new(int64))
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
 	convey.Convey("call precedure (not exist)fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -9022,7 +9034,7 @@ func Test_doInterpretCall(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, _, err = doInterpretCall(ctx, ses, call, false)
+		_, err = doInterpretCall(ctx, ses, call, false, new(int64))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -9060,8 +9072,8 @@ func Test_doInterpretCall(t *testing.T) {
 
 		sql, err := getSqlForSpBody(ses.GetTxnHandler().GetConnCtx(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
 		convey.So(err, convey.ShouldBeNil)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"begin set sid = 1000; end", "{}"},
+		mrs := newMrsForStoredProcedure([][]interface{}{
+			{"unsupported", "begin set sid = 1000; end", "[]", ""},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -9075,7 +9087,7 @@ func Test_doInterpretCall(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, _, err = doInterpretCall(ctx, ses, call, false)
+		_, err = doInterpretCall(ctx, ses, call, false, new(int64))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -9114,8 +9126,8 @@ func Test_doInterpretCall(t *testing.T) {
 
 		sql, err := getSqlForSpBody(ses.GetTxnHandler().GetConnCtx(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
 		convey.So(err, convey.ShouldBeNil)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end", "{}"},
+		mrs := newMrsForStoredProcedure([][]interface{}{
+			{"sql", "begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end", "[]", ""},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -9139,8 +9151,10 @@ func Test_doInterpretCall(t *testing.T) {
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, _, err = doInterpretCall(ctx, ses, call, false)
+		var affectedRows int64
+		_, err = doInterpretCall(ctx, ses, call, false, &affectedRows)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(affectedRows, convey.ShouldEqual, int64(0))
 	})
 }
 
@@ -11519,6 +11533,20 @@ func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
 		mrs.AddRow(row)
 	}
 
+	return mrs
+}
+
+func newMrsForStoredProcedure(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"language", "body", "args", "sql_mode"} {
+		col := &MysqlColumn{}
+		col.SetName(name)
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
 	return mrs
 }
 

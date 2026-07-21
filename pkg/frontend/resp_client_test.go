@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
 )
 
 func Test_mysqlResp(t *testing.T) {
@@ -207,6 +208,14 @@ func (e *evalCondResult) GetRowCount() uint64 {
 	return 1
 }
 
+func (e *evalCondResult) GetColumnCount() uint64 {
+	return 1
+}
+
+func (e *evalCondResult) GetString(context.Context, uint64, uint64) (string, error) {
+	return "1", nil
+}
+
 func (e *evalCondResult) GetInt64(context.Context, uint64, uint64) (int64, error) {
 	return e.value, nil
 }
@@ -241,4 +250,18 @@ func TestEvalCondRestoresAffectedRows(t *testing.T) {
 			require.Equal(t, int64(7), back.GetLastAffectedRows())
 		})
 	}
+}
+
+func TestStarlarkSQLRecordsAffectedRows(t *testing.T) {
+	back := &evalCondBackgroundExec{}
+	interpreter := &Interpreter{
+		ctx: context.Background(),
+		bh:  back,
+	}
+	si := &starlarkInterpreter{interp: interpreter}
+
+	value, err := si.moSql(nil, nil, starlark.Tuple{starlark.String("select 1")}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, value)
+	require.Equal(t, int64(-1), interpreter.lastAffectedRows)
 }

@@ -2047,18 +2047,23 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 }
 
 func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, bg bool) error {
-	results, affectedRows, err := doInterpretCall(execCtx.reqCtx, ses, call, bg)
+	var affectedRows int64
+	results, err := doInterpretCall(execCtx.reqCtx, ses, call, bg, &affectedRows)
 	if err != nil {
 		return err
 	}
-	if affectedRows < 0 {
-		affectedRows = 0
-	}
-	execCtx.runResult = &util.RunResult{AffectRows: uint64(affectedRows)}
+	execCtx.runResult = &util.RunResult{AffectRows: normalizeProcedureAffectedRows(affectedRows)}
 
 	ses.SetMysqlResultSet(nil)
 	execCtx.results = results
 	return nil
+}
+
+func normalizeProcedureAffectedRows(affectedRows int64) uint64 {
+	if affectedRows < 0 {
+		return 0
+	}
+	return uint64(affectedRows)
 }
 
 // handleGrantRole grants the role

@@ -2509,6 +2509,11 @@ func TestSituationResponsePropagatesAffectedRows(t *testing.T) {
 	require.Equal(t, uint64(7), writer.responses[0].affectedRows)
 }
 
+func TestNormalizeProcedureAffectedRows(t *testing.T) {
+	require.Equal(t, uint64(0), normalizeProcedureAffectedRows(-1))
+	require.Equal(t, uint64(7), normalizeProcedureAffectedRows(7))
+}
+
 func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
