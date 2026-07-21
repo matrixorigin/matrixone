@@ -517,6 +517,7 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	addInt(catalog.IndexAlgoParamQuantizerTrainLimit, opt.QuantizerTrainLimit)
 	// quantization is normalized to lowercase here (matching the CREATE INDEX
 	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
 	// identically; the per-backend VALUE check (which names a given algorithm

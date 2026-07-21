@@ -124,6 +124,9 @@ func (idx *CagraModel[B, Q]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuv
 	if cfg.GraphDegree > 0 {
 		bp.GraphDegree = cfg.GraphDegree
 	}
+	if cfg.QuantizerTrainLimit > 0 {
+		bp.QuantizerTrainLimit = cfg.QuantizerTrainLimit
+	}
 	mode = cuvs.DistributionMode(cfg.DistributionMode)
 	return
 }

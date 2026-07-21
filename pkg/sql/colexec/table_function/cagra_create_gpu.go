@@ -228,6 +228,15 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsCagra.GraphDegree = val
 		}
 
+		// quantizer training-sample buffer limit (rows) for int8/uint8 storage.
+		// Flat algo_params key set in CREATE INDEX; 0 => C++ default (1000).
+		if qLimit, err := indexplugin.AlgoParamInt(u.param.QuantizerTrainLimit,
+			proc.GetResolveVariableFunc(), "quantizer_train_limit", 0); err != nil {
+			return err
+		} else if qLimit > 0 {
+			u.idxcfg.CuvsCagra.QuantizerTrainLimit = uint64(qLimit)
+		}
+
 		// distribution mode
 		switch u.param.Distribution {
 		case vectorindex.DistributionMode_REPLICATED_Str:

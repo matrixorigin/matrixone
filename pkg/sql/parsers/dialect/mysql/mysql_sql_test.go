@@ -2170,6 +2170,9 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
 		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
+		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
 		}, {

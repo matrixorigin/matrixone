@@ -243,6 +243,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	// quantization, and quantization and op_type come from one consistent source.
 	merged, err := compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamQuantizerTrainLimit,
 		catalog.IntermediateGraphDegree,
 		catalog.GraphDegree,
 		catalog.ITopkSize,

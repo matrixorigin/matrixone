@@ -306,6 +306,7 @@ func init() {
 		"kmeans_train_percent":       KMEANS_TRAIN_PERCENT,
 		"kmeans_max_iteration":       KMEANS_MAX_ITERATION,
 		"max_index_capacity":         MAX_INDEX_CAPACITY,
+		"quantizer_train_limit":      QUANTIZER_TRAIN_LIMIT,
 		"reindex":                    REINDEX,
 		"limit":                      LIMIT,
 		"linear":                     LINEAR,

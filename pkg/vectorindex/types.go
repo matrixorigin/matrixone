@@ -153,16 +153,17 @@ type IvfParam struct {
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists              string `json:"lists"`
-	M                  string `json:"m"`
-	BitsPerCode        string `json:"bits_per_code"`
-	OpType             string `json:"op_type"`
-	Quantization       string `json:"quantization"`
-	Distribution       string `json:"distribution_mode"`
-	IncludedColumns    string `json:"included_columns"`
-	KmeansTrainPercent string `json:"kmeans_train_percent"`
-	KmeansMaxIteration string `json:"kmeans_max_iteration"`
-	MaxIndexCapacity   string `json:"max_index_capacity"`
+	Lists               string `json:"lists"`
+	M                   string `json:"m"`
+	BitsPerCode         string `json:"bits_per_code"`
+	OpType              string `json:"op_type"`
+	Quantization        string `json:"quantization"`
+	Distribution        string `json:"distribution_mode"`
+	IncludedColumns     string `json:"included_columns"`
+	KmeansTrainPercent  string `json:"kmeans_train_percent"`
+	KmeansMaxIteration  string `json:"kmeans_max_iteration"`
+	MaxIndexCapacity    string `json:"max_index_capacity"`
+	QuantizerTrainLimit string `json:"quantizer_train_limit"`
 }
 
 // CAGRA specified parameters
@@ -179,6 +180,7 @@ type CagraParam struct {
 	ITopkSize              string `json:"itopk_size"`
 	IncludedColumns        string `json:"included_columns"`
 	MaxIndexCapacity       string `json:"max_index_capacity"`
+	QuantizerTrainLimit    string `json:"quantizer_train_limit"`
 }
 
 type IvfflatIndexConfig struct {
@@ -222,6 +224,7 @@ type CuvsCagraIndexConfig struct {
 	Quantization            uint16
 	DistributionMode        uint16
 	IncludedColumns         []string
+	QuantizerTrainLimit     uint64
 }
 
 type CuvsIvfpqIndexConfig struct {
@@ -235,6 +238,7 @@ type CuvsIvfpqIndexConfig struct {
 	Version                int64
 	KmeansTrainsetFraction float64
 	IncludedColumns        []string
+	QuantizerTrainLimit    uint64
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

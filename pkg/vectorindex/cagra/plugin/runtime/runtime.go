@@ -257,6 +257,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if idx.IndexOption.MaxIndexCapacity > 0 {
 		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
+	if idx.IndexOption.QuantizerTrainLimit > 0 {
+		res[catalog.IndexAlgoParamQuantizerTrainLimit] = strconv.FormatInt(idx.IndexOption.QuantizerTrainLimit, 10)
+	}
 	return res, nil
 }
 

@@ -235,6 +235,7 @@ public:
         this->count = static_cast<uint64_t>(count_vectors);
         this->metric = m;
         this->build_params = bp;
+        this->set_quantizer_train_limit(bp.quantizer_train_limit);
         this->dist_mode = mode;
         this->devices_ = devices;
         this->current_offset_ = count_vectors;
@@ -266,6 +267,7 @@ public:
         this->count = static_cast<uint64_t>(total_count);
         this->metric = m;
         this->build_params = bp;
+        this->set_quantizer_train_limit(bp.quantizer_train_limit);
         this->dist_mode = mode;
         this->devices_ = devices;
         this->current_offset_ = 0;
@@ -292,6 +294,7 @@ public:
         this->dimension = dimension;
         this->metric = m;
         this->build_params = bp;
+        this->set_quantizer_train_limit(bp.quantizer_train_limit);
         this->dist_mode = mode;
         this->devices_ = devices;
 
