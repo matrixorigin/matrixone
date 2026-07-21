@@ -531,13 +531,44 @@ func TestQuoteIdentifer(t *testing.T) {
 }
 
 func TestQuoteSelectAlias(t *testing.T) {
-	ast, err := ParseOne(context.TODO(), "select col as `中文别名` from tbl", 1)
-	require.NoError(t, err)
-	require.Equal(
-		t,
-		"select `col` as `中文别名` from `tbl`",
-		tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
-	)
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "reserved table alias",
+			sql:  "select `order`.col from tbl as `order`",
+			want: "select `order`.`col` from `tbl` as `order`",
+		},
+		{
+			name: "cte name and column aliases",
+			sql:  "with `select` (`from`, `中文 列`) as (select col1, col2 from tbl) select `from` from `select`",
+			want: "with `select`(`from`, `中文 列`) as (select `col1`, `col2` from `tbl`) select `from` from `select`",
+		},
+		{
+			name: "derived alias columns and join using",
+			sql:  "select `left`.`a b` from (select col as `a b` from tbl) as `left` (`a b`) join other as `right` using (`a b`)",
+			want: "select `left`.`a b` from (select `col` as `a b` from `tbl`) as `left`(`a b`) inner join `other` as `right` using (`a b`)",
+		},
+		{
+			name: "embedded backticks",
+			sql:  "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+			want: "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.sql, 1)
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				test.want,
+				tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
+			)
+		})
+	}
 }
 
 var (

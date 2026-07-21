@@ -692,7 +692,7 @@ type AliasClause struct {
 
 func (node *AliasClause) Format(ctx *FmtCtx) {
 	if node.Alias != "" {
-		ctx.WriteString(string(node.Alias))
+		ctx.WriteIdentifier(node.Alias)
 	}
 	if node.Cols != nil {
 		ctx.WriteByte('(')
