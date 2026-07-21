@@ -159,6 +159,36 @@ func TestGetTableEntriesAtReturnsNonMissingObjectEntryError(t *testing.T) {
 	require.ErrorIs(t, err, readErr)
 }
 
+func TestBuildLogicalTableViewComposedIncludesLiveBaseRowsAtIncremental(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "logical-composed.obj")
+	defer fs.Close(ctx)
+	base := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	incr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(20, 0), checkpoint.ET_Incremental)
+	baseObject := &ObjectEntryInfo{ObjectStats: stats, CreateTime: types.BuildTS(2, 0)}
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		fs:      fs,
+		mp:      mpool.MustNewZero(),
+		entries: []*checkpoint.CheckpointEntry{incr, base},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42, DataRanges: []ckputil.TableRange{{TableID: 42}}}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry, tableID uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			require.Equal(t, uint64(42), tableID)
+			if entry == base {
+				return []*ObjectEntryInfo{baseObject}, nil, nil
+			}
+			return nil, nil, nil
+		},
+	}
+
+	view, err := reader.BuildLogicalTableViewComposedLimited(ctx, 42, types.BuildTS(20, 0), 10, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, view.Rows, 2)
+	require.Equal(t, []string{"1", "alice"}, view.DataRow(view.Rows[0]))
+}
+
 func TestGetTableEntriesAtReturnsMissingSelectedObjectEntries(t *testing.T) {
 	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
 	reader := &CheckpointReader{
@@ -389,8 +419,14 @@ func TestCSVOptionsAndSmallHelperBranches(t *testing.T) {
 	require.Equal(t, "TIME", scaledSQLType("TIME", 0))
 	require.Equal(t, "TIME(6)", scaledSQLType("TIME", 6))
 	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(0, false))
+	require.Equal(t, uint64((512<<20)/csvPipelineFreeRatio), csvPipelineMemoryFloorFromTotal(512<<20, true))
 	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(8<<30, true))
 	require.Equal(t, uint64(2<<30), csvPipelineMemoryFloorFromTotal(20<<30, true))
+	require.Equal(t, []TableColumn{{Name: "a"}, {Name: "b"}}, tableLoadColumns([]TableColumn{
+		{Name: "a"},
+		{Name: "generated", Generated: "a + b"},
+		{Name: "b"},
+	}))
 
 	released := 0
 	block := &csvPipelineBlock{
@@ -2443,6 +2479,22 @@ func TestMergeLogicalViewWithSchema_UsesPhysicalPosition(t *testing.T) {
 	merged := MergeLogicalViewWithSchema(view, schema)
 	require.Len(t, merged.Rows, 1)
 	assert.Equal(t, []string{"case-001", "task-001"}, merged.Rows[0])
+}
+
+func TestWriteCSVExcludesGeneratedColumnsFromLoadInput(t *testing.T) {
+	schema := &TableSchema{Columns: []TableColumn{
+		{Name: "a", SQLType: "INT", PhysicalPosition: 0},
+		{Name: "b", SQLType: "INT", PhysicalPosition: 1},
+		{Name: "c", SQLType: "INT", PhysicalPosition: 2, Generated: "a + b", GeneratedStored: true},
+	}}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2"},
+		Rows:    [][]string{{"obj", "0", "0", "1", "2", "3"}},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteCSV(&buf, schema, view, WithCSVHeader(true), WithCSVMetaComments(false)))
+	require.Equal(t, "a,b\n1,2\n", buf.String())
 }
 
 // TestMergeLogicalViewWithSchema_hiddenColumns verifies that hidden columns (e.g. __mo_fake_pk_col,

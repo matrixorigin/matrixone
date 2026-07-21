@@ -276,6 +276,14 @@ func TestBuildLogicalTableViewReadsVisibleRows(t *testing.T) {
 	require.Equal(t, 2, view.VisibleRows)
 	require.Equal(t, []string{"1", "alice"}, view.DataRow(view.Rows[0]))
 
+	limited, err := reader.BuildLogicalTableViewLimited(ctx, types.BuildTS(200, 0), []*ObjectEntryInfo{
+		{ObjectStats: stats, CreateTime: types.BuildTS(1, 0)},
+	}, nil, 1, 0)
+	require.NoError(t, err)
+	require.True(t, limited.Truncated)
+	require.Len(t, limited.Rows, 1)
+	require.Equal(t, 1, limited.VisibleRows)
+
 	view, err = reader.BuildLogicalTableView(ctx, types.BuildTS(200, 0), []*ObjectEntryInfo{
 		{
 			ObjectStats: stats,

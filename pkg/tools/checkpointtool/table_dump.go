@@ -1861,6 +1861,9 @@ func (r *CheckpointReader) streamTableCSV(
 	header := make([]string, 0, len(schema.Columns))
 	columnSeqNums := make([]int, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
+		if col.Generated != "" {
+			continue
+		}
 		header = append(header, col.Name)
 		seqNum := col.PhysicalPosition
 		if seqNum < 0 {
@@ -2004,6 +2007,9 @@ func (r *CheckpointReader) streamTableCSVPipeline(
 	header := make([]string, 0, len(schema.Columns))
 	columnSeqNums := make([]int, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
+		if col.Generated != "" {
+			continue
+		}
 		header = append(header, col.Name)
 		seqNum := col.PhysicalPosition
 		if seqNum < 0 {
@@ -2308,6 +2314,15 @@ func csvPipelineMemoryFloorFromTotal(total uint64, ok bool) uint64 {
 		return csvPipelineMinFreeMemory
 	}
 	floor := total / csvPipelineFreeRatio
+	if total <= csvPipelineMinFreeMemory {
+		// Keep the admission threshold reachable on constrained hosts. A floor
+		// equal to or above total memory would block the single-worker progress
+		// path forever.
+		if floor == 0 {
+			return 1
+		}
+		return floor
+	}
 	if floor < csvPipelineMinFreeMemory {
 		return csvPipelineMinFreeMemory
 	}
@@ -2607,8 +2622,9 @@ func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView, opts ...
 
 	// Merge schema column names into headers
 	merged := MergeLogicalViewWithSchema(view, schema)
-	projectedTypes := make([]types.Type, len(schema.Columns))
-	for i, col := range schema.Columns {
+	loadColumns := tableLoadColumns(schema.Columns)
+	projectedTypes := make([]types.Type, len(loadColumns))
+	for i, col := range loadColumns {
 		projectedTypes[i] = sqlTypeStringToType(col.SQLType)
 	}
 	if options.IncludeHeader {
@@ -3112,19 +3128,22 @@ func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *Lo
 	// Without schema columns we cannot safely distinguish visible columns from hidden ones.
 	if len(schema.Columns) == 0 {
 		return &LogicalTableView{
-			Headers:      nil,
-			Rows:         nil,
-			VisibleRows:  view.VisibleRows,
-			DeletedRows:  view.DeletedRows,
-			PhysicalRows: view.PhysicalRows,
+			Headers:           nil,
+			Rows:              nil,
+			VisibleRows:       view.VisibleRows,
+			DeletedRows:       view.DeletedRows,
+			PhysicalRows:      view.PhysicalRows,
+			Truncated:         view.Truncated,
+			MaterializedBytes: view.MaterializedBytes,
 		}
 	}
 
 	// Build visible column headers and their physical data positions
-	newHeaders := make([]string, 0, len(schema.Columns))
-	colMap := make([]int, 0, len(schema.Columns)) // visibleIdx → physical data column index
+	loadColumns := tableLoadColumns(schema.Columns)
+	newHeaders := make([]string, 0, len(loadColumns))
+	colMap := make([]int, 0, len(loadColumns)) // visibleIdx → physical data column index
 
-	for _, col := range schema.Columns {
+	for _, col := range loadColumns {
 		newHeaders = append(newHeaders, col.Name)
 		dataPos := dataIndexForSeqNum(view, col.PhysicalPosition)
 		if dataPos < 0 {
@@ -3151,12 +3170,24 @@ func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *Lo
 	}
 
 	return &LogicalTableView{
-		Headers:      newHeaders,
-		Rows:         newRows,
-		VisibleRows:  view.VisibleRows,
-		DeletedRows:  view.DeletedRows,
-		PhysicalRows: view.PhysicalRows,
+		Headers:           newHeaders,
+		Rows:              newRows,
+		VisibleRows:       view.VisibleRows,
+		DeletedRows:       view.DeletedRows,
+		PhysicalRows:      view.PhysicalRows,
+		Truncated:         view.Truncated,
+		MaterializedBytes: view.MaterializedBytes,
 	}
+}
+
+func tableLoadColumns(columns []TableColumn) []TableColumn {
+	loadColumns := make([]TableColumn, 0, len(columns))
+	for _, col := range columns {
+		if col.Generated == "" {
+			loadColumns = append(loadColumns, col)
+		}
+	}
+	return loadColumns
 }
 
 func dataIndexForSeqNum(view *LogicalTableView, seqNum int) int {

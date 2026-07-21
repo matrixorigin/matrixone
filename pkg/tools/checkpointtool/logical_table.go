@@ -16,6 +16,7 @@ package checkpointtool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,13 @@ import (
 	objectioutil "github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
+
+const (
+	DefaultInteractiveLogicalViewMaxRows  = 10_000
+	DefaultInteractiveLogicalViewMaxBytes = 64 << 20
+)
+
+var errLogicalTableViewLimit = errors.New("logical table view materialization limit reached")
 
 type logicalTableStats struct {
 	PhysicalRows int
@@ -40,6 +48,19 @@ func (r *CheckpointReader) BuildLogicalTableView(
 	snapshotTS types.TS,
 	dataEntries []*ObjectEntryInfo,
 	tombEntries []*ObjectEntryInfo,
+) (*LogicalTableView, error) {
+	return r.BuildLogicalTableViewLimited(ctx, snapshotTS, dataEntries, tombEntries, 0, 0)
+}
+
+// BuildLogicalTableViewLimited materializes at most maxRows and maxBytes. Zero
+// limits are unlimited. A limited result is returned with Truncated set.
+func (r *CheckpointReader) BuildLogicalTableViewLimited(
+	ctx context.Context,
+	snapshotTS types.TS,
+	dataEntries []*ObjectEntryInfo,
+	tombEntries []*ObjectEntryInfo,
+	maxRows int,
+	maxBytes int64,
 ) (*LogicalTableView, error) {
 	view := newLogicalTableView()
 	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
@@ -55,20 +76,49 @@ func (r *CheckpointReader) BuildLogicalTableView(
 			return nil
 		},
 		func(objShort string, blockIdx int, rowIdx int, values []string, _ []bool) error {
+			if maxRows > 0 && len(view.Rows) >= maxRows {
+				view.Truncated = true
+				return errLogicalTableViewLimit
+			}
+			rowBytes := int64(len(objShort))
+			for _, value := range values {
+				rowBytes += int64(len(value))
+			}
+			if maxBytes > 0 && view.MaterializedBytes+rowBytes > maxBytes {
+				view.Truncated = true
+				return errLogicalTableViewLimit
+			}
 			row := make([]string, 0, len(values)+view.MetaWidth())
 			row = append(row, objShort, fmt.Sprintf("%d", blockIdx), fmt.Sprintf("%d", rowIdx))
 			row = append(row, values...)
 			view.Rows = append(view.Rows, row)
+			view.MaterializedBytes += rowBytes
 			return nil
 		},
 	)
-	if err != nil {
+	if err != nil && !errors.Is(err, errLogicalTableViewLimit) {
 		return nil, err
 	}
 	view.PhysicalRows = stats.PhysicalRows
 	view.DeletedRows = stats.DeletedRows
 	view.VisibleRows = stats.VisibleRows
 	return view, nil
+}
+
+// BuildLogicalTableViewComposedLimited builds the complete selected snapshot
+// (base GCKP plus all required ICKPs) before applying interactive limits.
+func (r *CheckpointReader) BuildLogicalTableViewComposedLimited(
+	ctx context.Context,
+	tableID uint64,
+	snapshotTS types.TS,
+	maxRows int,
+	maxBytes int64,
+) (*LogicalTableView, error) {
+	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	return r.BuildLogicalTableViewLimited(ctx, snapshotTS, dataEntries, tombEntries, maxRows, maxBytes)
 }
 
 func (r *CheckpointReader) scanLogicalTable(

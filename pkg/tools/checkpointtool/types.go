@@ -85,13 +85,15 @@ type ComposedView struct {
 
 // LogicalTableView contains a tombstone-applied table view for a checkpoint table.
 type LogicalTableView struct {
-	Headers      []string
-	Rows         [][]string
-	ColTypes     []types.Type // column types for data columns (after meta cols)
-	ColSeqNums   []uint16     // object seqnums for data columns (after meta cols)
-	PhysicalRows int
-	DeletedRows  int
-	VisibleRows  int
+	Headers           []string
+	Rows              [][]string
+	ColTypes          []types.Type // column types for data columns (after meta cols)
+	ColSeqNums        []uint16     // object seqnums for data columns (after meta cols)
+	PhysicalRows      int
+	DeletedRows       int
+	VisibleRows       int
+	Truncated         bool
+	MaterializedBytes int64
 }
 
 var logicalTableViewMetaHeaders = []string{"object", "block", "row"}

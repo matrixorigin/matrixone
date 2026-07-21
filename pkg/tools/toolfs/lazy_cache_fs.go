@@ -34,6 +34,20 @@ const defaultLazyCacheMaxBytes int64 = 8 << 30
 
 var errLazyCacheFillInvalidated = moerr.NewInternalErrorNoCtx("lazy cache fill invalidated")
 
+type cacheLimitWriter struct {
+	w         io.Writer
+	remaining int64
+}
+
+func (w *cacheLimitWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		return 0, moerr.NewInvalidInputNoCtx("lazy cache object exceeds reserved capacity")
+	}
+	n, err := w.w.Write(p)
+	w.remaining -= int64(n)
+	return n, err
+}
+
 type lazyCacheEntry struct {
 	path       string
 	size       int64
@@ -237,8 +251,12 @@ func (l *lazyCacheFS) cacheFile(
 			l.releaseCacheReservation(normalized)
 		}
 	}()
-	if stat, err := l.remote.StatFile(ctx, normalized); err == nil && stat != nil && stat.Size > 0 {
-		l.reserveCacheSpace(stat.Size, normalized)
+	reservation := l.maxBytes
+	if stat, err := l.remote.StatFile(ctx, normalized); err == nil && stat != nil {
+		reservation = stat.Size
+	}
+	if err := l.reserveCacheSpace(reservation, normalized); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return err
@@ -253,12 +271,16 @@ func (l *lazyCacheFS) cacheFile(
 		_ = os.Remove(tmpName)
 	}()
 
+	writer := io.Writer(tmp)
+	if l.maxBytes > 0 {
+		writer = &cacheLimitWriter{w: tmp, remaining: reservation}
+	}
 	vec := &fileservice.IOVector{
 		FilePath: normalized,
 		Entries: []fileservice.IOEntry{{
 			Offset:        0,
 			Size:          -1,
-			WriterForRead: tmp,
+			WriterForRead: writer,
 		}},
 	}
 	if err := l.remote.Read(ctx, vec); err != nil {
@@ -271,7 +293,9 @@ func (l *lazyCacheFS) cacheFile(
 	if err != nil {
 		return err
 	}
-	l.reserveCacheSpace(stat.Size(), normalized)
+	if err := l.reserveCacheSpace(stat.Size(), normalized); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.caching[normalized] != fill {
@@ -372,20 +396,36 @@ func (l *lazyCacheFS) touchCacheEntryLocked(normalized string, localPath string,
 	l.usedBytes += size
 }
 
-func (l *lazyCacheFS) reserveCacheSpace(needed int64, protected string) {
+func (l *lazyCacheFS) reserveCacheSpace(needed int64, protected string) error {
 	if l.maxBytes <= 0 || needed <= 0 {
-		return
+		return nil
+	}
+	if needed > l.maxBytes {
+		return moerr.NewInvalidInputNoCtxf(
+			"lazy cache object size %d exceeds configured limit %d",
+			needed,
+			l.maxBytes,
+		)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	reserved := l.reservations[protected]
 	if needed <= reserved {
-		return
+		return nil
 	}
 	delta := needed - reserved
 	l.evictCacheLocked(delta, protected)
+	if l.usedBytes+delta > l.maxBytes {
+		return moerr.NewInternalErrorNoCtxf(
+			"lazy cache capacity exhausted: need %d bytes with %d of %d bytes reserved",
+			delta,
+			l.usedBytes,
+			l.maxBytes,
+		)
+	}
 	l.reservations[protected] = needed
 	l.usedBytes += delta
+	return nil
 }
 
 func (l *lazyCacheFS) evictCacheLocked(needed int64, protected string) {

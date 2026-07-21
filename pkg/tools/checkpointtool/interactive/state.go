@@ -44,12 +44,13 @@ type State struct {
 	filterAccountID int64 // -1 means no filter
 
 	// Cached data
-	entries     []*checkpoint.CheckpointEntry
-	tables      []*checkpointtool.TableInfo
-	info        *checkpointtool.CheckpointInfo
-	dataEntries []*checkpointtool.ObjectEntryInfo
-	tombEntries []*checkpointtool.ObjectEntryInfo
-	logicalView *checkpointtool.LogicalTableView
+	entries                 []*checkpoint.CheckpointEntry
+	tables                  []*checkpointtool.TableInfo
+	info                    *checkpointtool.CheckpointInfo
+	dataEntries             []*checkpointtool.ObjectEntryInfo
+	tombEntries             []*checkpointtool.ObjectEntryInfo
+	logicalView             *checkpointtool.LogicalTableView
+	buildLogicalViewForTest func(context.Context, int, uint64) (*checkpointtool.LogicalTableView, error)
 }
 
 // NewState creates a new state
@@ -168,20 +169,33 @@ func (s *State) SelectTable(tableID uint64) error {
 }
 
 // LoadLogicalView materializes the tombstone-applied logical rows for the selected table.
-func (s *State) LoadLogicalView() error {
+func (s *State) LoadLogicalView(ctx context.Context) error {
 	if s.logicalView != nil {
 		return nil
 	}
-	if s.selectedEntry < 0 || s.selectedEntry >= len(s.entries) {
-		return nil
-	}
-	snapshotTS := s.entries[s.selectedEntry].GetEnd()
-	view, err := s.reader.BuildLogicalTableView(context.Background(), snapshotTS, s.dataEntries, s.tombEntries)
+	view, err := s.BuildLogicalView(ctx, s.selectedEntry, s.selectedTable)
 	if err != nil {
 		return err
 	}
 	s.logicalView = view
 	return nil
+}
+
+func (s *State) BuildLogicalView(ctx context.Context, entryIndex int, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+	if s.buildLogicalViewForTest != nil {
+		return s.buildLogicalViewForTest(ctx, entryIndex, tableID)
+	}
+	if entryIndex < 0 || entryIndex >= len(s.entries) {
+		return nil, nil
+	}
+	snapshotTS := s.entries[entryIndex].GetEnd()
+	return s.reader.BuildLogicalTableViewComposedLimited(
+		ctx,
+		tableID,
+		snapshotTS,
+		checkpointtool.DefaultInteractiveLogicalViewMaxRows,
+		checkpointtool.DefaultInteractiveLogicalViewMaxBytes,
+	)
 }
 
 // SetAccountFilter sets account filter

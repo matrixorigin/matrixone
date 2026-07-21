@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,45 @@ func TestObjectReaderAccessorsAndBounds(t *testing.T) {
 	assert.Nil(t, vec)
 	assert.Nil(t, release)
 	assert.Contains(t, err.Error(), "block index 2 out of range")
+}
+
+type staticCacheData []byte
+
+func (d staticCacheData) Bytes() []byte            { return d }
+func (d staticCacheData) Slice(n int) fscache.Data { return d[:n] }
+func (d staticCacheData) Retain()                  {}
+func (d staticCacheData) Release()                 {}
+
+func TestDecodeBlockBatchCleansPartialBatchOnCorruptColumn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
+	body, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(mp)
+	header := objectio.IOEntryHeader{Type: objectio.IOET_ColData, Version: objectio.IOET_ColumnData_CurrVer}
+	valid := append(append([]byte(nil), objectio.EncodeIOEntryHeader(&header)...), body...)
+	corrupt := append(append([]byte(nil), objectio.EncodeIOEntryHeader(&header)...), []byte("corrupt")...)
+
+	bat, err := decodeBlockBatch(context.Background(), []fileservice.IOEntry{
+		{CachedData: staticCacheData(valid)},
+		{CachedData: staticCacheData(corrupt)},
+	}, 2, mp)
+	require.Error(t, err)
+	require.Nil(t, bat)
+}
+
+func TestValidateCommitTSVectorFreesWrongType(t *testing.T) {
+	mp := mpool.MustNewNoLock("object-reader-wrong-type")
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
+	require.Positive(t, vec.Allocated())
+
+	got, err := validateCommitTSVector(context.Background(), vec, mp)
+	require.ErrorContains(t, err, "type mismatch")
+	require.Nil(t, got)
+	require.Zero(t, vec.Allocated())
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestOpenWithKindRejectsInvalidOfflineKind(t *testing.T) {

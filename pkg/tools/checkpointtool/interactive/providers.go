@@ -266,8 +266,12 @@ func (p *LogicalTableProvider) GetOverview() string {
 	if view == nil || tbl == nil {
 		return ""
 	}
-	return fmt.Sprintf("Table %d logical view │ visible: %d │ deleted: %d │ physical: %d",
+	overview := fmt.Sprintf("Table %d logical view │ visible: %d │ deleted: %d │ physical: %d",
 		tbl.TableID, view.VisibleRows, view.DeletedRows, view.PhysicalRows)
+	if view.Truncated {
+		overview += " │ truncated"
+	}
+	return overview
 }
 
 // === Table Detail Handler ===

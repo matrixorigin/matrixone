@@ -34,7 +34,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/require"
 	costypes "github.com/tencentyun/cos-go-sdk-v5"
+	"golang.org/x/sync/semaphore"
 )
 
 // failAfterBytesReader wraps an io.Reader and returns errAfter once
@@ -514,12 +516,12 @@ func TestAwsParallelMultipartBufferBudgetBlocksBeforeRead(t *testing.T) {
 	state.blockUploadPart = make(chan struct{})
 	state.uploadPartStarted = make(chan struct{})
 
-	tokensPerPart := int(minMultipartPartSize / parallelUploadBufferTokenSize)
-	if tokensPerPart < 1 {
-		tokensPerPart = 1
-	}
 	oldBudget := getParallelUploadBufferBudget()
-	parallelUploadBufferBudget = make(chan struct{}, tokensPerPart*2)
+	capacity := int64(minMultipartPartSize * 2)
+	parallelUploadBufferBudget = &weightedUploadBufferBudget{
+		semaphore: semaphore.NewWeighted(capacity),
+		capacity:  capacity,
+	}
 	defer func() {
 		parallelUploadBufferBudget = oldBudget
 	}()
@@ -572,6 +574,32 @@ func TestAwsParallelMultipartBufferBudgetBlocksBeforeRead(t *testing.T) {
 	if err := <-secondErr; err != nil {
 		t.Fatalf("second write failed: %v", err)
 	}
+}
+
+func TestParallelUploadBufferBudgetRejectsOversizedPartAndAcquiresAtomically(t *testing.T) {
+	oldBudget := getParallelUploadBufferBudget()
+	parallelUploadBufferBudget = &weightedUploadBufferBudget{
+		semaphore: semaphore.NewWeighted(2 << 20),
+		capacity:  2 << 20,
+	}
+	defer func() { parallelUploadBufferBudget = oldBudget }()
+
+	_, err := acquireParallelUploadBufferBudget(context.Background(), 5<<20)
+	require.ErrorContains(t, err, "exceeds shared upload buffer budget")
+
+	charged, err := acquireParallelUploadBufferBudget(context.Background(), 1<<20)
+	require.NoError(t, err)
+	require.Equal(t, int64(1<<20), charged)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = acquireParallelUploadBufferBudget(ctx, 2<<20)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	releaseParallelUploadBufferBudget(charged)
+
+	charged, err = acquireParallelUploadBufferBudget(context.Background(), 2<<20)
+	require.NoError(t, err)
+	releaseParallelUploadBufferBudget(charged)
 }
 
 func TestAwsDeleteMultiUsesBatchWhenSupported(t *testing.T) {

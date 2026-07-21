@@ -15,6 +15,7 @@
 package interactive
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,11 +107,8 @@ func TestStateNavigationWithEmptyCheckpointEntry(t *testing.T) {
 	require.Nil(t, state.DataEntries())
 	require.Nil(t, state.TombEntries())
 
-	require.NoError(t, state.LoadLogicalView())
-	require.NotNil(t, state.LogicalView())
-	require.Equal(t, []string{"object", "block", "row"}, state.LogicalView().Headers)
-
-	require.NoError(t, state.LoadLogicalView())
+	require.ErrorContains(t, state.LoadLogicalView(context.Background()), "table 42 not found")
+	require.Nil(t, state.LogicalView())
 }
 
 func TestStateSelectTableBackfillsObjectRanges(t *testing.T) {
@@ -155,6 +153,6 @@ func TestStateSwitchAndLogicalViewErrors(t *testing.T) {
 	require.ErrorIs(t, state.SwitchToTables(), hookErr)
 
 	state = &State{reader: &checkpointtool.CheckpointReader{}, entries: []*checkpoint.CheckpointEntry{entry}, selectedEntry: 1}
-	require.NoError(t, state.LoadLogicalView())
+	require.NoError(t, state.LoadLogicalView(context.Background()))
 	require.Nil(t, state.LogicalView())
 }

@@ -348,7 +348,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	type partBuffer struct {
 		buf    []byte
 		n      int
-		tokens int
+		tokens int64
 	}
 
 	releasePartBuffer := func(part *partBuffer) {

@@ -85,6 +85,71 @@ func TestLazyCacheFSConcurrentFailureIsSharedAndRetryable(t *testing.T) {
 	require.Equal(t, int32(2), reads.Load())
 }
 
+func TestLazyCacheFSRejectsObjectLargerThanLimit(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+		FilePath: "oversized",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 64, Data: bytes.Repeat([]byte("x"), 64)}},
+	}))
+
+	fs, _, err := newLazyCacheFS(ctx, memory)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	lazy := fs.(*lazyCacheFS)
+	lazy.maxBytes = 32
+
+	err = fs.PrefetchFile(ctx, "oversized")
+	require.ErrorContains(t, err, "exceeds configured limit")
+	require.Zero(t, lazy.usedBytes)
+	require.Empty(t, lazy.reservations)
+	_, localPath, err := lazy.cacheLocalPath("oversized")
+	require.NoError(t, err)
+	_, err = os.Stat(localPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestLazyCacheFSConcurrentReservationsStayWithinLimit(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	for _, name := range []string{"first", "second"} {
+		require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+			FilePath: name,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: 20, Data: bytes.Repeat([]byte(name[:1]), 20)}},
+		}))
+	}
+
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	remote := &readHookFileService{FileService: memory}
+	remote.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+		if vector.FilePath == "first" {
+			close(readStarted)
+			<-releaseRead
+		}
+		return memory.Read(ctx, vector)
+	}
+	fs, _, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	lazy := fs.(*lazyCacheFS)
+	lazy.maxBytes = 32
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- fs.PrefetchFile(ctx, "first") }()
+	<-readStarted
+	require.LessOrEqual(t, lazy.usedBytes, lazy.maxBytes)
+
+	err = fs.PrefetchFile(ctx, "second")
+	require.ErrorContains(t, err, "capacity exhausted")
+	require.LessOrEqual(t, lazy.usedBytes, lazy.maxBytes)
+	close(releaseRead)
+	require.NoError(t, <-firstDone)
+	require.LessOrEqual(t, lazy.usedBytes, lazy.maxBytes)
+}
+
 func TestLazyCacheFSWaiterCancellationDoesNotWaitForOwner(t *testing.T) {
 	ctx := context.Background()
 	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)

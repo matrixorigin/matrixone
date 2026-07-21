@@ -15,6 +15,7 @@
 package interactive
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +126,41 @@ func TestUnifiedModelUpdateNavigationBranches(t *testing.T) {
 	require.Nil(t, cmd)
 	require.Len(t, model.pageStack, 1)
 	assert.Contains(t, model.View(), "Logical Table View")
+}
+
+func TestUnifiedModelLogicalViewLoadsAsynchronouslyAndCancels(t *testing.T) {
+	model := NewUnifiedModel(&checkpointtool.CheckpointReader{})
+	model.state.entries = []*checkpoint.CheckpointEntry{
+		checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Global),
+	}
+	model.state.selectedEntry = 0
+	model.state.selectedTable = 42
+	started := make(chan struct{})
+	model.state.buildLogicalViewForTest = func(ctx context.Context, entryIndex int, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+		require.Equal(t, 0, entryIndex)
+		require.Equal(t, uint64(42), tableID)
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	updated, cmd := model.Update(openLogicalTableMsg{})
+	require.Same(t, model, updated)
+	require.NotNil(t, cmd)
+	require.True(t, model.logicalLoading)
+
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-started
+	_, quitCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	require.NotNil(t, quitCmd)
+	msg := <-result
+	loaded, ok := msg.(logicalTableLoadedMsg)
+	require.True(t, ok)
+	require.ErrorIs(t, loaded.err, context.Canceled)
+	require.False(t, model.logicalLoading)
+	model.Update(loaded)
+	require.Nil(t, model.state.LogicalView())
 }
 
 func TestUnifiedModelOpenObjectMessageTracksTombstoneRange(t *testing.T) {

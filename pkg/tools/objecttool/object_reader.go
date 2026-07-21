@@ -16,6 +16,7 @@ package objecttool
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -219,16 +220,10 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 		objectio.ReleaseIOVector(&ioVectors)
 	}
 
-	// Decode to batch
-	bat := batch.NewWithSize(len(colIdxs))
-	for i := range colIdxs {
-		obj, err := objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
-		if err != nil {
-			releaseIOVector()
-			return nil, nil, err
-		}
-		bat.Vecs[i] = obj.(*vector.Vector)
-		bat.SetRowCount(bat.Vecs[i].Length())
+	bat, err := decodeBlockBatch(ctx, ioVectors.Entries, len(colIdxs), r.mp)
+	if err != nil {
+		releaseIOVector()
+		return nil, nil, err
 	}
 
 	release := func() {
@@ -237,6 +232,35 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	}
 
 	return bat, release, nil
+}
+
+func decodeBlockBatch(ctx context.Context, entries []fileservice.IOEntry, columnCount int, mp *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(columnCount)
+	for i := 0; i < columnCount; i++ {
+		obj, err := decodeObjectColumn(entries[i].CachedData.Bytes())
+		if err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+		vec, ok := obj.(*vector.Vector)
+		if !ok {
+			bat.Clean(mp)
+			return nil, moerr.NewInternalErrorf(ctx, "decoded column %d is %T, expected vector", i, obj)
+		}
+		bat.Vecs[i] = vec
+		bat.SetRowCount(bat.Vecs[i].Length())
+	}
+	return bat, nil
+}
+
+func decodeObjectColumn(data []byte) (obj any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			obj = nil
+			err = fmt.Errorf("decode object column: %v", recovered)
+		}
+	}()
+	return objectio.Decode(data)
 }
 
 // ReadBlockCommitTS reads the hidden commit timestamp column for a block.
@@ -266,10 +290,10 @@ func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (
 		releaseIOVector()
 		return nil, nil, err
 	}
-	vec := obj.(*vector.Vector)
-	if vec.GetType().Oid != types.T_TS {
+	vec, err := validateCommitTSVector(ctx, obj, r.mp)
+	if err != nil {
 		releaseIOVector()
-		return nil, nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", vec.GetType().String())
+		return nil, nil, err
 	}
 	if vec.GetNulls().GetCardinality() == vec.Length() {
 		vec.Free(r.mp)
@@ -281,6 +305,18 @@ func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (
 		releaseIOVector()
 	}
 	return vec, release, nil
+}
+
+func validateCommitTSVector(ctx context.Context, obj any, mp *mpool.MPool) (*vector.Vector, error) {
+	vec, ok := obj.(*vector.Vector)
+	if !ok {
+		return nil, moerr.NewInternalErrorf(ctx, "decoded commit TS column is %T, expected vector", obj)
+	}
+	if vec.GetType().Oid != types.T_TS {
+		vec.Free(mp)
+		return nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", vec.GetType().String())
+	}
+	return vec, nil
 }
 
 // BlockCount returns block count

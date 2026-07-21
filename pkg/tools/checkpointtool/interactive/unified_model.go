@@ -15,6 +15,8 @@
 package interactive
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
@@ -26,6 +28,13 @@ type selectCheckpointMsg struct{ idx int }
 type selectTableMsg struct{ tableID uint64 }
 type openObjectMsg struct{ path string }
 type openLogicalTableMsg struct{}
+type logicalTableLoadedMsg struct {
+	loadID     uint64
+	entryIndex int
+	tableID    uint64
+	view       *checkpointtool.LogicalTableView
+	err        error
+}
 type goBackMsg struct{}
 
 // UnifiedModel uses GenericPage for all views
@@ -35,9 +44,12 @@ type UnifiedModel struct {
 	pageStack   []*interactive.GenericPage
 
 	// For opening objects
-	objectToOpen string
-	rangeToOpen  *ckputil.TableRange
-	quitting     bool
+	objectToOpen      string
+	rangeToOpen       *ckputil.TableRange
+	quitting          bool
+	logicalLoadCancel context.CancelFunc
+	logicalLoading    bool
+	logicalLoadID     uint64
 }
 
 // NewUnifiedModel creates a new unified model
@@ -164,15 +176,44 @@ func (m *UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case openLogicalTableMsg:
-		if err := m.state.LoadLogicalView(); err != nil {
+		if m.state.LogicalView() != nil {
+			m.pageStack = append(m.pageStack, m.currentPage)
+			m.currentPage = m.createLogicalTablePage()
+			m.currentPage.Refresh()
 			return m, nil
 		}
+		if m.logicalLoading {
+			return m, nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		m.logicalLoadCancel = cancel
+		m.logicalLoading = true
+		m.logicalLoadID++
+		loadID := m.logicalLoadID
+		entryIndex := m.state.selectedEntry
+		tableID := m.state.selectedTable
+		return m, func() tea.Msg {
+			view, err := m.state.BuildLogicalView(ctx, entryIndex, tableID)
+			return logicalTableLoadedMsg{loadID: loadID, entryIndex: entryIndex, tableID: tableID, view: view, err: err}
+		}
+
+	case logicalTableLoadedMsg:
+		if msg.loadID != m.logicalLoadID {
+			return m, nil
+		}
+		m.logicalLoading = false
+		m.logicalLoadCancel = nil
+		if msg.err != nil || msg.entryIndex != m.state.selectedEntry || msg.tableID != m.state.selectedTable {
+			return m, nil
+		}
+		m.state.logicalView = msg.view
 		m.pageStack = append(m.pageStack, m.currentPage)
 		m.currentPage = m.createLogicalTablePage()
 		m.currentPage.Refresh()
 		return m, nil
 
 	case goBackMsg:
+		m.cancelLogicalLoad()
 		if len(m.pageStack) > 0 {
 			m.currentPage = m.pageStack[len(m.pageStack)-1]
 			m.pageStack = m.pageStack[:len(m.pageStack)-1]
@@ -186,6 +227,7 @@ func (m *UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "q" {
+			m.cancelLogicalLoad()
 			return m, tea.Quit
 		}
 	}
@@ -194,6 +236,15 @@ func (m *UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	newPage, cmd := m.currentPage.Update(msg)
 	m.currentPage = newPage
 	return m, cmd
+}
+
+func (m *UnifiedModel) cancelLogicalLoad() {
+	if m.logicalLoadCancel != nil {
+		m.logicalLoadCancel()
+		m.logicalLoadCancel = nil
+		m.logicalLoadID++
+	}
+	m.logicalLoading = false
 }
 
 func (m *UnifiedModel) View() string {
