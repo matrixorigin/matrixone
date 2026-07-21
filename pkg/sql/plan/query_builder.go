@@ -2749,6 +2749,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
+		builder.disableMemoryUnsafeRightDedup(rootID)
 
 		builder.qry.Steps[i] = rootID
 
