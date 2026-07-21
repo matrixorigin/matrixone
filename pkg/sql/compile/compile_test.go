@@ -55,6 +55,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -67,6 +68,34 @@ type compileTestCase struct {
 	stmt      tree.Statement
 	proc      *process.Process
 	txnClient client.TxnClient // Store txnClient for truncating table with real transaction
+}
+
+func TestApplyExecutorLockWaitTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZero(),
+		nil,
+		txnOp,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+
+	applyExecutorLockWaitTimeout(proc, executor.Options{}.WithLockWaitTimeout(1500*time.Millisecond))
+	require.Equal(t, int64(2), proc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet)
+
+	clearOpts := executor.Options{}.WithTxn(txnOp).WithLockWaitTimeout(0)
+	require.True(t, clearOpts.HasExistsTxn())
+	applyExecutorLockWaitTimeout(proc, clearOpts)
+	require.Zero(t, proc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet,
+		"an explicit zero must be distinguishable from an absent override")
 }
 
 func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
