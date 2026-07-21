@@ -2750,6 +2750,32 @@ func TestExplainSchedulingEnabledUsesSessionOptIn(t *testing.T) {
 	require.False(t, explainSchedulingEnabled(ses))
 }
 
+func TestQuerySchedulingIntentUsesSessionAndSetVarCapableVariables(t *testing.T) {
+	require.Equal(t, schedule.SchedulingIntent{
+		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
+		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
+		CurrentCNPolicy:   schedule.CurrentCNAllowed,
+		WorkerSet:         schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll},
+	}, querySchedulingIntent(nil))
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryMaxWorkers, int64(3)))
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+
+	intent := querySchedulingIntent(ses)
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.PoolFallbackStrict, intent.PoolFallback)
+	require.Equal(t, schedule.EmptyWorkerFail, intent.EmptyWorkerPolicy)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 3, intent.WorkerSet.MaxWorkers)
+	require.True(t, gSysVarsDefs[queryMaxWorkers].SetVarHintApplies)
+	require.True(t, gSysVarsDefs[queryPoolStrict].SetVarHintApplies)
+	maxWorkersType := gSysVarsDefs[queryMaxWorkers].Type.(SystemVariableIntType)
+	require.Equal(t, int64(2147483647), maxWorkersType.maximum)
+}
+
 func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
@@ -2896,8 +2922,8 @@ func (*blockingSchedulingPreviewEngine) ResolveQueryCandidatePool(
 	context.Context,
 	engine.QueryCandidates,
 	engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
-	return nil, moerr.NewInternalErrorNoCtx("pool resolution should not run")
+) (engine.ResolvedQueryPool, error) {
+	return engine.ResolvedQueryPool{}, moerr.NewInternalErrorNoCtx("pool resolution should not run")
 }
 
 func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
@@ -2933,9 +2959,9 @@ func (*blockingPoolResolutionPreviewEngine) ResolveQueryCandidatePool(
 	ctx context.Context,
 	_ engine.QueryCandidates,
 	_ engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
+) (engine.ResolvedQueryPool, error) {
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return engine.ResolvedQueryPool{}, ctx.Err()
 }
 
 func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {

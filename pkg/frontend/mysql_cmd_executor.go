@@ -1521,6 +1521,7 @@ func previewQueryScheduling(
 		Tenant:     tenant,
 		Username:   ses.GetUserName(),
 		CNLabel:    ses.getCNLabels(),
+		Intent:     querySchedulingIntent(ses),
 		TxnHasDDL:  txnHaveDDL,
 	})
 }

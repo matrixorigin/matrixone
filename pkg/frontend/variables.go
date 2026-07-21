@@ -1054,7 +1054,11 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 }
 
 // definitions of system variables
-const enableExplainScheduling = "enable_explain_scheduling"
+const (
+	enableExplainScheduling = "enable_explain_scheduling"
+	queryMaxWorkers         = "query_max_workers"
+	queryPoolStrict         = "query_pool_strict"
+)
 
 var gSysVarsDefs = map[string]SystemVariable{
 	"port": {
@@ -3598,6 +3602,25 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType(enableExplainScheduling),
+		Default:           int64(0),
+	},
+	queryMaxWorkers: {
+		Name:              queryMaxWorkers,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		// CNCNT/CNIDX are int32 at the execution boundary. Do not impose a
+		// smaller arbitrary cluster-size ceiling here; a value above the resolved
+		// candidate count naturally selects the whole eligible pool.
+		Type:    InitSystemVariableIntType(queryMaxWorkers, 0, 2147483647, false),
+		Default: int64(0),
+	},
+	queryPoolStrict: {
+		Name:              queryPoolStrict,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableBoolType(queryPoolStrict),
 		Default:           int64(0),
 	},
 	// remap_rewrites holds a JSON object of table-rewrite rules that apply to

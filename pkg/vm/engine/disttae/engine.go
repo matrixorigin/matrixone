@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -816,12 +815,13 @@ func (e *Engine) Nodes(
 	if err != nil {
 		return nil, err
 	}
-	return e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+	pool, err := e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
 		IsInternal: isInternal,
 		Tenant:     tenant,
 		Username:   username,
 		CNLabel:    cnLabel,
 	})
+	return pool.Nodes, err
 }
 
 var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
@@ -846,9 +846,7 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 		return nil, err
 	}
 
-	ncpu := system.GoMaxProcs()
 	var candidates engine.QueryCandidates
-	hasMixedCommit := false
 	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
 		ctx,
 		cluster,
@@ -857,11 +855,11 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 			if ctx.Err() != nil {
 				return false
 			}
-			if c.CommitID != version.CommitID {
-				hasMixedCommit = true
-			}
 			if c.CommitID == version.CommitID {
-				candidates = append(candidates, engine.QueryCandidate{Service: c, Mcpu: ncpu})
+				candidates = append(candidates, engine.QueryCandidate{
+					Service: c,
+					Mcpu:    normalizedQueryCandidateCPU(c.CPUTotal),
+				})
 			}
 			return true
 		})
@@ -871,12 +869,19 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if hasMixedCommit {
-		for i := range candidates {
-			candidates[i].HasMixedCommit = true
-		}
-	}
 	return candidates, nil
+}
+
+func normalizedQueryCandidateCPU(cpuTotal uint64) int {
+	if cpuTotal == 0 {
+		return 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if cpuTotal > uint64(maxInt) {
+		// Invalid control-plane input must not turn into enormous execution DOP.
+		return 1
+	}
+	return int(cpuTotal)
 }
 
 // ResolveQueryCandidatePool applies the historical disttae tenant/label route
@@ -885,25 +890,34 @@ func (e *Engine) ResolveQueryCandidatePool(
 	ctx context.Context,
 	candidates engine.QueryCandidates,
 	request engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
+) (engine.ResolvedQueryPool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
+	}
+	if !request.FallbackPolicy.Valid() {
+		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
 	}
 	if len(request.CNLabel) == 0 {
-		return queryCandidateNodes(ctx, candidates)
+		nodes, err := queryCandidateNodes(ctx, candidates)
+		return engine.ResolvedQueryPool{
+			Nodes:             nodes,
+			RequestedIdentity: request.RequestedPool,
+			Identity:          "all-compatible",
+			Resolution:        engine.QueryPoolResolutionAllCompatible,
+		}, err
 	}
 
 	labels, err := cloneStringMap(ctx, request.CNLabel)
 	if err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
 	}
 	selector := clusterservice.NewSelector().SelectByLabel(labels, clusterservice.EQ_Globbing)
 	services, byID, err := queryCandidateRoutingInput(ctx, candidates)
 	if err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
 	}
 	var nodes engine.Nodes
 	appendCandidate := func(service *metadata.CNService) {
@@ -912,18 +926,78 @@ func (e *Engine) ResolveQueryCandidatePool(
 			nodes = append(nodes, queryCandidateNode(candidate))
 		}
 	}
+	var routeResolution route.PoolResolution
 	if request.IsInternal || strings.ToLower(request.Tenant) == "sys" {
-		err = route.RouteForSuperTenantCandidates(ctx, services, selector, request.Username, nil, appendCandidate)
+		routeResolution, err = route.ResolveForSuperTenantCandidates(ctx, services, selector, request.Username, nil, appendCandidate)
 	} else {
-		err = route.RouteForCommonTenantCandidates(ctx, services, selector, nil, appendCandidate)
+		routeResolution, err = route.ResolveForCommonTenantCandidates(ctx, services, selector, nil, appendCandidate)
 	}
 	if err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
+	}
+	resolution := toQueryPoolResolution(routeResolution)
+	fallback := routeResolution != route.PoolResolutionExactLabels && routeResolution != route.PoolResolutionNoMatch
+	if request.FallbackPolicy == engine.QueryPoolFallbackStrict && fallback {
+		// Strict mode rejects the compatibility branch, but preserves exact
+		// requested-pool members that are currently draining/drained. Eligibility
+		// filtering owns that state transition and needs these nodes for an
+		// accurate empty-pool reason and dropped-candidate trace.
+		var strictNodes engine.Nodes
+		if err = appendRuntimeIneligibleQueryCandidates(ctx, candidates, selector, &strictNodes); err != nil {
+			return engine.ResolvedQueryPool{}, err
+		}
+		strictResolution := engine.QueryPoolResolutionNoMatch
+		if len(strictNodes) > 0 {
+			strictResolution = engine.QueryPoolResolutionExactLabels
+		}
+		return engine.ResolvedQueryPool{
+			Nodes:             strictNodes,
+			RequestedIdentity: request.RequestedPool,
+			Identity:          request.RequestedPool,
+			Resolution:        strictResolution,
+			FallbackReason:    "strict-rejected-" + string(routeResolution),
+		}, nil
 	}
 	if err = appendRuntimeIneligibleQueryCandidates(ctx, candidates, selector, &nodes); err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
 	}
-	return nodes, nil
+	if resolution == engine.QueryPoolResolutionNoMatch && len(nodes) > 0 {
+		resolution = engine.QueryPoolResolutionExactLabels
+	}
+	identity := request.RequestedPool
+	if fallback || identity == "" {
+		identity = string(resolution)
+	}
+	return engine.ResolvedQueryPool{
+		Nodes:             nodes,
+		RequestedIdentity: request.RequestedPool,
+		Identity:          identity,
+		Resolution:        resolution,
+		Fallback:          fallback,
+		FallbackReason:    fallbackReason(fallback, routeResolution),
+	}, nil
+}
+
+func toQueryPoolResolution(resolution route.PoolResolution) engine.QueryPoolResolution {
+	switch resolution {
+	case route.PoolResolutionExactLabels:
+		return engine.QueryPoolResolutionExactLabels
+	case route.PoolResolutionNonAccountLabels:
+		return engine.QueryPoolResolutionNonAccountLabels
+	case route.PoolResolutionSharedUnlabeled:
+		return engine.QueryPoolResolutionSharedUnlabeled
+	case route.PoolResolutionPrivilegedAny:
+		return engine.QueryPoolResolutionPrivilegedAny
+	default:
+		return engine.QueryPoolResolutionNoMatch
+	}
+}
+
+func fallbackReason(fallback bool, resolution route.PoolResolution) string {
+	if !fallback {
+		return ""
+	}
+	return string(resolution)
 }
 
 func queryCandidateNodes(ctx context.Context, candidates engine.QueryCandidates) (engine.Nodes, error) {
@@ -954,11 +1028,10 @@ func queryCandidateNodes(ctx context.Context, candidates engine.QueryCandidates)
 
 func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
 	return engine.Node{
-		Mcpu:           candidate.Mcpu,
-		Id:             candidate.Service.ServiceID,
-		Addr:           candidate.Service.PipelineServiceAddress,
-		WorkState:      candidate.Service.WorkState,
-		HasMixedCommit: candidate.HasMixedCommit,
+		Mcpu:      candidate.Mcpu,
+		Id:        candidate.Service.ServiceID,
+		Addr:      candidate.Service.PipelineServiceAddress,
+		WorkState: candidate.Service.WorkState,
 	}
 }
 

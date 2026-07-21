@@ -203,11 +203,12 @@ func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[str
 	if err != nil {
 		return nil, err
 	}
-	return e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+	pool, err := e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
 		IsInternal: isInternal,
 		Tenant:     tenant,
 		CNLabel:    cnLabel,
 	})
+	return pool.Nodes, err
 }
 
 var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
@@ -238,7 +239,10 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 			if ctx.Err() != nil {
 				return false
 			}
-			candidates = append(candidates, engine.QueryCandidate{Service: c, Mcpu: 1})
+			candidates = append(candidates, engine.QueryCandidate{
+				Service: c,
+				Mcpu:    normalizedQueryCandidateCPU(c.CPUTotal),
+			})
 			return true
 		})
 	if err != nil {
@@ -250,24 +254,53 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 	return candidates, nil
 }
 
+func normalizedQueryCandidateCPU(cpuTotal uint64) int {
+	if cpuTotal == 0 {
+		return 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if cpuTotal > uint64(maxInt) {
+		// Invalid control-plane input must not turn into enormous execution DOP.
+		return 1
+	}
+	return int(cpuTotal)
+}
+
 func (e *Engine) ResolveQueryCandidatePool(
 	ctx context.Context,
 	candidates engine.QueryCandidates,
 	request engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
+) (engine.ResolvedQueryPool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
+	}
+	if !request.FallbackPolicy.Valid() {
+		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
 	}
 
-	var selector clusterservice.Selector
-	if request.IsInternal || strings.ToLower(request.Tenant) == "sys" {
-		selector = clusterservice.NewSelector()
-	} else {
-		selector = selector.SelectByLabel(request.CNLabel, clusterservice.EQ)
+	allCompatible := request.IsInternal || strings.ToLower(request.Tenant) == "sys" || len(request.CNLabel) == 0
+	selector := clusterservice.NewSelector().SelectByLabel(request.CNLabel, clusterservice.EQ)
+	hasExactWorking := false
+	hasSharedWorking := false
+	if !allCompatible {
+		for _, candidate := range candidates {
+			if err := ctx.Err(); err != nil {
+				return engine.ResolvedQueryPool{}, err
+			}
+			working := candidate.Service.WorkState == metadata.WorkState_Working ||
+				candidate.Service.WorkState == metadata.WorkState_Unknown
+			if working && len(candidate.Service.Labels) == 0 {
+				hasSharedWorking = true
+			}
+			if working && len(candidate.Service.Labels) > 0 && selector.Match(candidate.Service.Labels) {
+				hasExactWorking = true
+			}
+		}
 	}
+	useSharedFallback := !allCompatible && !hasExactWorking && request.FallbackPolicy == engine.QueryPoolFallbackLegacyCompatible
 	var nodes engine.Nodes
 	appendMatching := func(states ...metadata.WorkState) {
 		for _, candidate := range candidates {
@@ -281,7 +314,18 @@ func (e *Engine) ResolveQueryCandidatePool(
 					break
 				}
 			}
-			if !matchedState || !selector.Match(candidate.Service.Labels) {
+			if !matchedState {
+				continue
+			}
+			isRuntimeIneligible := candidate.Service.WorkState == metadata.WorkState_Draining ||
+				candidate.Service.WorkState == metadata.WorkState_Drained
+			exactMatch := len(candidate.Service.Labels) > 0 && selector.Match(candidate.Service.Labels)
+			matchesPool := allCompatible ||
+				(hasExactWorking && exactMatch) ||
+				(useSharedFallback && ((!isRuntimeIneligible && len(candidate.Service.Labels) == 0) ||
+					(isRuntimeIneligible && exactMatch))) ||
+				(!hasExactWorking && !useSharedFallback && exactMatch)
+			if !matchesPool {
 				continue
 			}
 			nodes = append(nodes, engine.Node{
@@ -295,9 +339,37 @@ func (e *Engine) ResolveQueryCandidatePool(
 	appendMatching(metadata.WorkState_Working, metadata.WorkState_Unknown)
 	appendMatching(metadata.WorkState_Draining, metadata.WorkState_Drained)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return engine.ResolvedQueryPool{}, err
 	}
-	return nodes, nil
+	resolution := engine.QueryPoolResolutionExactLabels
+	fallback := false
+	if allCompatible {
+		resolution = engine.QueryPoolResolutionAllCompatible
+	} else if useSharedFallback {
+		resolution = engine.QueryPoolResolutionSharedUnlabeled
+		fallback = true
+	} else if len(nodes) == 0 {
+		resolution = engine.QueryPoolResolutionNoMatch
+	}
+	identity := request.RequestedPool
+	if fallback || identity == "" {
+		identity = string(resolution)
+	}
+	fallbackReason := ""
+	if fallback {
+		fallbackReason = "shared-unlabeled"
+	} else if request.FallbackPolicy == engine.QueryPoolFallbackStrict &&
+		!allCompatible && !hasExactWorking && hasSharedWorking {
+		fallbackReason = "strict-rejected-shared-unlabeled"
+	}
+	return engine.ResolvedQueryPool{
+		Nodes:             nodes,
+		RequestedIdentity: request.RequestedPool,
+		Identity:          identity,
+		Resolution:        resolution,
+		Fallback:          fallback,
+		FallbackReason:    fallbackReason,
+	}, nil
 }
 
 func (e *Engine) Hints() (h engine.Hints) {

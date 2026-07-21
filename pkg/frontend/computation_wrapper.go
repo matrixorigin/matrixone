@@ -353,6 +353,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			retComp.SetQuerySchedulingIntent(querySchedulingIntent(cwft.ses))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
@@ -623,6 +624,15 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	// A cached prepared Compile already owns a materialized worker topology.
+	// Explicit scheduling intent must be evaluated for this execution, so it
+	// cannot reuse a topology compiled under the prepare-time defaults.
+	if prepareStmt.compile != nil && querySchedulingIntent(ses).Explicit {
+		prepareStmt.compile.FreeOperator()
+		prepareStmt.compile.SetIsPrepare(false)
+		prepareStmt.compile.Release()
+		prepareStmt.compile = nil
+	}
 	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
 }
 
@@ -708,6 +718,7 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	retCompile.SetQuerySchedulingIntent(querySchedulingIntent(ses))
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		// No permission verification is required when retry execute buildPlan
@@ -735,6 +746,44 @@ func createCompile(
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
+	intent := schedule.SchedulingIntent{
+		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
+		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
+		CurrentCNPolicy:   schedule.CurrentCNAllowed,
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode: schedule.WorkerSetAll,
+		},
+	}
+	if ses == nil {
+		return intent
+	}
+	if value, err := ses.GetSessionSysVar(queryMaxWorkers); err == nil {
+		var maxWorkers int
+		switch value := value.(type) {
+		case int64:
+			maxWorkers = int(value)
+		case uint64:
+			maxWorkers = int(value)
+		case int:
+			maxWorkers = value
+		}
+		if maxWorkers > 0 {
+			intent.Explicit = true
+			intent.WorkerSet.Mode = schedule.WorkerSetMax
+			intent.WorkerSet.MaxWorkers = maxWorkers
+		}
+	}
+	if value, err := ses.GetSessionSysVar(queryPoolStrict); err == nil {
+		if boolType, ok := gSysVarsDefs[queryPoolStrict].Type.(SystemVariableBoolType); ok && boolType.IsTrue(value) {
+			intent.Explicit = true
+			intent.PoolFallback = schedule.PoolFallbackStrict
+			intent.EmptyWorkerPolicy = schedule.EmptyWorkerFail
+		}
+	}
+	return intent
 }
 
 func currentCNPipelineAddress(ses FeSession) string {
