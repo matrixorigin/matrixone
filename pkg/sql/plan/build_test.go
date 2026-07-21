@@ -4188,6 +4188,29 @@ func TestReplaceParentSideFKLocksReferencedUniqueIndexKey(t *testing.T) {
 	modernPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (1, 'new')")
 	require.NoError(t, err)
 	assertLockTargetTypesMatchInput(t, modernPlan.GetQuery())
+
+	omittedPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p(id) VALUES (1)")
+	require.NoError(t, err)
+	oldIndexLockCount := 0
+	oldIndexUpdateFound := false
+	for _, node := range omittedPlan.GetQuery().Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId == indexTable.TblId {
+				oldIndexLockCount++
+			}
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef.TblId == indexTable.TblId {
+					oldIndexUpdateFound = true
+				}
+			}
+		}
+	}
+	assert.Equal(t, 1, oldIndexLockCount,
+		"a NULL replacement key must skip only the new-key lock and retain the old-key lock")
+	assert.True(t, oldIndexUpdateFound,
+		"a NULL replacement key must retain old hidden-index deletion")
 	stmt, err := mysql.ParseOne(context.Background(),
 		"REPLACE INTO replace_fk_p VALUES (1, 'new')", 1)
 	require.NoError(t, err)

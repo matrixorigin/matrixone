@@ -386,6 +386,8 @@ insert into fk_omitted_uk_c values (1, 1);
 replace into fk_omitted_uk_p(id) values (1);
 select * from fk_omitted_uk_p;
 select * from fk_omitted_uk_c;
+insert into fk_omitted_uk_p values (2, 'x', 200);
+select * from fk_omitted_uk_p order by id;
 drop table fk_omitted_uk_c;
 drop table fk_omitted_uk_p;
 

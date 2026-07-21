@@ -175,6 +175,26 @@ select * from parent_lock_order;
 1  ¦  11  ¦  21
 select * from child_lock_order;
 ➤ id[4,32,0]  ¦  parent_b[4,32,0]  ¦  parent_a[4,32,0]
+create table parent_nullable_lock(id int primary key, u int unique);
+create table child_nullable_lock(id int primary key, parent_u int,
+foreign key(parent_u) references parent_nullable_lock(u));
+insert into parent_nullable_lock values (1, 10);
+begin;
+replace into parent_nullable_lock(id) values (1);
+use replace_fk_unique_lock;
+set session lock_wait_timeout = 1;
+begin;
+insert into child_nullable_lock values (1, 10);
+Lock wait timeout exceeded; try restarting transaction
+rollback;
+commit;
+insert into parent_nullable_lock values (2, 10);
+select * from parent_nullable_lock order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  10
+select * from child_nullable_lock;
+➤ id[4,32,0]  ¦  parent_u[4,32,0]
 create table parent_dynamic(id int primary key, u int unique);
 create table child_dynamic(id int primary key, parent_id int,
 foreign key(parent_id) references parent_dynamic(id) on delete cascade);

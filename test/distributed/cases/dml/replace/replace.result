@@ -466,6 +466,11 @@ id    u    v
 1    NULL    NULL
 select * from fk_omitted_uk_c;
 id    pid
+insert into fk_omitted_uk_p values (2, 'x', 200);
+select * from fk_omitted_uk_p order by id;
+id    u    v
+1    NULL    NULL
+2    x    200
 drop table fk_omitted_uk_c;
 drop table fk_omitted_uk_p;
 create table fk_temporal_default_p(

@@ -122,6 +122,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			break
 		}
 	}
+	needsOldIndexMaintenance := !isFakePK || hasUniqueIdx
 
 	// get old columns from existing main table
 	//
@@ -187,7 +188,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		var err error
 		for i, idxDef := range tableDef.Indexes {
-			if skipUniqueIdx[i] {
+			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 				continue
 			}
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
@@ -244,7 +245,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 
 		for i, idxDef := range tableDef.Indexes {
-			if skipUniqueIdx[i] {
+			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 				continue
 			}
 			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
@@ -602,7 +603,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			requiredOldCols[catalog.Row_ID] = struct{}{}
 			requiredOldCols[tableDef.Pkey.PkeyColName] = struct{}{}
 			for i, idxDef := range tableDef.Indexes {
-				if skipUniqueIdx[i] {
+				if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 					continue
 				}
 				if !indexTableStoresSerializedKey(idxDef) {
@@ -738,8 +739,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// get old RowID for index tables
 	for i, idxDef := range tableDef.Indexes {
-		// Skipped unique index (statically-NULL key): not stored, so no old row to fetch.
-		if skipUniqueIdx[i] {
+		if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 			continue
 		}
 		idxTag := builder.genNewBindTag()
@@ -927,10 +927,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	})
 	for _, i := range orderedIndexPos {
 		idxDef := tableDef.Indexes[i]
-		// A unique index whose key is statically NULL for this statement is not stored
-		// (serial(...) is NULL), matching the INSERT path which skips index maintenance
-		// for a NULL key. Nothing to insert into or delete from its index table.
-		if skipUniqueIdx[i] {
+		if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 			continue
 		}
 		insertCols := make([]plan.ColRef, 2)
@@ -1015,13 +1012,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 
 		if idxDef.Unique {
+			if !skipUniqueIdx[i] {
+				lockTargets = append(lockTargets, &plan.LockTarget{
+					TableId:            idxTableDefs[i].TblId,
+					ObjRef:             idxObjRefs[i],
+					PrimaryColIdxInBat: int32(newIdxPos),
+					PrimaryColRelPos:   finalProjTag,
+					PrimaryColTyp:      finalProjList[newIdxPos].Typ,
+				})
+			}
 			lockTargets = append(lockTargets, &plan.LockTarget{
-				TableId:            idxTableDefs[i].TblId,
-				ObjRef:             idxObjRefs[i],
-				PrimaryColIdxInBat: int32(newIdxPos),
-				PrimaryColRelPos:   finalProjTag,
-				PrimaryColTyp:      finalProjList[newIdxPos].Typ,
-			}, &plan.LockTarget{
 				TableId:            idxTableDefs[i].TblId,
 				ObjRef:             idxObjRefs[i],
 				PrimaryColIdxInBat: int32(oldIdxPos),

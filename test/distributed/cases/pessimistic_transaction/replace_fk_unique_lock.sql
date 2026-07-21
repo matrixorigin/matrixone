@@ -154,6 +154,25 @@ commit;
 select * from parent_lock_order;
 select * from child_lock_order;
 
+create table parent_nullable_lock(id int primary key, u int unique);
+create table child_nullable_lock(id int primary key, parent_u int,
+  foreign key(parent_u) references parent_nullable_lock(u));
+insert into parent_nullable_lock values (1, 10);
+begin;
+replace into parent_nullable_lock(id) values (1);
+-- @session:id=1{
+use replace_fk_unique_lock;
+set session lock_wait_timeout = 1;
+begin;
+-- @pattern
+insert into child_nullable_lock values (1, 10);
+rollback;
+-- @session}
+commit;
+insert into parent_nullable_lock values (2, 10);
+select * from parent_nullable_lock order by id;
+select * from child_nullable_lock;
+
 create table parent_dynamic(id int primary key, u int unique);
 create table child_dynamic(id int primary key, parent_id int,
   foreign key(parent_id) references parent_dynamic(id) on delete cascade);
