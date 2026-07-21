@@ -1767,13 +1767,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 func restoreIntervalSyntaxForCTAS(sql string) string {
 	var out strings.Builder
 	for i := 0; i < len(sql); {
+		if sql[i] == '\'' || sql[i] == '"' {
+			next := skipQuotedStringForCTAS(sql, i, sql[i])
+			out.WriteString(sql[i:next])
+			i = next
+			continue
+		}
 		if sql[i] == '`' {
 			next := skipBacktickIdentifierForCTAS(sql, i)
 			out.WriteString(sql[i:next])
 			i = next
 			continue
 		}
-		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
+		if !hasIntervalKeywordAt(sql, i) {
 			out.WriteByte(sql[i])
 			i++
 			continue
@@ -1800,46 +1806,70 @@ func parseIntervalCall(sql string, start int) (expr string, unit string, next in
 	pos := start + len(prefix)
 	depth := 1
 	comma := -1
-	inSingleQuote := false
-	inDoubleQuote := false
 
 	for pos < len(sql) {
 		ch := sql[pos]
-		if ch == '`' && !inSingleQuote && !inDoubleQuote {
+		if ch == '\'' || ch == '"' {
+			pos = skipQuotedStringForCTAS(sql, pos, ch)
+			continue
+		}
+		if ch == '`' {
 			pos = skipBacktickIdentifierForCTAS(sql, pos)
 			continue
 		}
 		switch ch {
-		case '\'':
-			if !inDoubleQuote {
-				inSingleQuote = !inSingleQuote
-			}
-		case '"':
-			if !inSingleQuote {
-				inDoubleQuote = !inDoubleQuote
-			}
 		case '(':
-			if !inSingleQuote && !inDoubleQuote {
-				depth++
-			}
+			depth++
 		case ')':
-			if !inSingleQuote && !inDoubleQuote {
-				depth--
-				if depth == 0 {
-					if comma == -1 {
-						return "", "", 0, false
-					}
-					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
+			depth--
+			if depth == 0 {
+				if comma == -1 {
+					return "", "", 0, false
 				}
+				return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
 			}
 		case ',':
-			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
+			if depth == 1 && comma == -1 {
 				comma = pos
 			}
 		}
 		pos++
 	}
 	return "", "", 0, false
+}
+
+func hasIntervalKeywordAt(sql string, start int) bool {
+	const keyword = "interval"
+	end := start + len(keyword)
+	if end >= len(sql) || sql[end] != '(' || !strings.EqualFold(sql[start:end], keyword) {
+		return false
+	}
+	return start == 0 || !isSQLIdentifierByte(sql[start-1])
+}
+
+func isSQLIdentifierByte(ch byte) bool {
+	return ch >= 0x80 || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' ||
+		ch >= '0' && ch <= '9' || ch == '_' || ch == '$'
+}
+
+func skipQuotedStringForCTAS(sql string, start int, quote byte) int {
+	for pos := start + 1; pos < len(sql); pos++ {
+		if sql[pos] == '\\' {
+			if pos+1 < len(sql) {
+				pos++
+			}
+			continue
+		}
+		if sql[pos] != quote {
+			continue
+		}
+		if pos+1 < len(sql) && sql[pos+1] == quote {
+			pos++
+			continue
+		}
+		return pos + 1
+	}
+	return len(sql)
 }
 
 func skipBacktickIdentifierForCTAS(sql string, start int) int {
