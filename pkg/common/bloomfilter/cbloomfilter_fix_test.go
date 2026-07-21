@@ -120,6 +120,21 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	require.True(t, bf2.Test([]byte("world")))
 }
 
+func TestCBloomFilter_EmptyFixedVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+
+	bf := NewCBloomFilterWithProbability(1, 0.01)
+	defer bf.Free()
+
+	require.NotPanics(t, func() {
+		require.Empty(t, bf.TestVector(vec, nil))
+	})
+	require.NotPanics(t, func() { bf.AddVector(vec) })
+	require.NotPanics(t, func() { bf.TestAndAddVector(vec, nil) })
+}
+
 func TestCBloomFilter_IntegerCompatibility(t *testing.T) {
 	bf := NewCBloomFilterWithProbability(100, 0.0001)
 	defer bf.Free()

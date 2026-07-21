@@ -734,7 +734,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			stmt.OnDuplicateUpdate = nil
 		}
 
-		rightTableDef := DeepCopyTableDef(tableDef, true)
+		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols, uniqueColNames := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -1636,13 +1636,13 @@ func appendPrimaryConstraintPlan(
 			if pkSize > 1 {
 				pkSize++
 			}
-			scanTableDef := DeepCopyTableDef(tableDef, false)
+			scanTableDef := CloneTableDefForPlan(tableDef, false)
 			scanTableDef.Cols = make([]*ColDef, pkSize)
 			for _, col := range tableDef.Cols {
 				if i, ok := pkNameMap[col.Name]; ok {
-					scanTableDef.Cols[i] = DeepCopyColDef(col)
+					scanTableDef.Cols[i] = col
 				} else if col.Name == scanTableDef.Pkey.PkeyColName {
-					scanTableDef.Cols[pkSize-1] = DeepCopyColDef(col)
+					scanTableDef.Cols[pkSize-1] = col
 					break
 				}
 			}
@@ -1729,13 +1729,13 @@ func appendPrimaryConstraintPlan(
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				scanTableDef := DeepCopyTableDef(tableDef, false)
+				scanTableDef := CloneTableDefForPlan(tableDef, false)
 
 				rowIdIdx := len(tableDef.Cols)
 				rowIdDef := MakeRowIdColDef()
 				tableDef.Cols = append(tableDef.Cols, rowIdDef)
 
-				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
+				scanTableDef.Cols = []*plan.ColDef{tableDef.Cols[pkPos], rowIdDef}
 
 				scanPkExpr := &Expr{
 					Typ: pkTyp,
