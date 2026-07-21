@@ -1447,7 +1447,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s`.`%s` select ", createTable.Database, createTable.TableDef.Name))
+		insertSqlBuilder.WriteString("insert into ")
+		targetFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.Database))
+		targetFmtCtx.WriteByte('.')
+		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(targetFmtCtx.String())
+		insertSqlBuilder.WriteString(" select ")
 
 		cols := createTable.TableDef.Cols
 		firstCol := true

@@ -632,20 +632,38 @@ func TestCreateTableAsSelect(t *testing.T) {
 
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	logicPlan, err := buildSingleStmt(
-		mock,
-		t,
-		"CREATE TABLE ctas_alias AS SELECT N_NAME AS `中文别名` FROM NATION",
-	)
-	require.NoError(t, err)
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "non-ASCII select alias",
+			sql:  "CREATE TABLE ctas_alias AS SELECT N_NAME AS `中文别名` FROM NATION",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`)",
+		},
+		{
+			name: "reserved table alias",
+			sql:  "CREATE TABLE ctas_alias AS SELECT `order`.N_NAME AS `select` FROM NATION AS `order`",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `order`.`N_NAME` as `select` from `nation` as `order`)",
+		},
+		{
+			name: "embedded backtick in target name",
+			sql:  "CREATE TABLE `ctas``alias` AS SELECT N_NAME FROM NATION",
+			want: "insert into `tpch`.`ctas``alias` select * from (select `nation`.`N_NAME` from `nation`)",
+		},
+	}
 
-	createTable := logicPlan.GetDdl().GetCreateTable()
-	require.NotNil(t, createTable)
-	require.Equal(
-		t,
-		"insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`)",
-		createTable.GetCreateAsSelectSql(),
-	)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Equal(t, test.want, createTable.GetCreateAsSelectSql())
+		})
+	}
 }
 
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
