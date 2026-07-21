@@ -968,6 +968,37 @@ func TestWriteRestoreScriptForOrdinaryTableWithLoadData(t *testing.T) {
 	require.Contains(t, got, "parallel 'true'")
 }
 
+func TestWriteRestoreScriptUsesPreparedIndexesForBatchTables(t *testing.T) {
+	ctx := context.Background()
+	tables := []checkpointtool.TableCatalogEntry{
+		{TableID: 10, DatabaseName: "db", TableName: "t1", RelKind: "r"},
+		{TableID: 11, DatabaseName: "db", TableName: "t2", RelKind: "r"},
+	}
+	data := make(map[uint64]*checkpointtool.TableDumpData, len(tables))
+	for _, table := range tables {
+		data[table.TableID] = &checkpointtool.TableDumpData{
+			TableID: table.TableID,
+			Schema: &checkpointtool.TableSchema{
+				TableName: table.TableName,
+				Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+			},
+			IndexDDLs: []string{
+				fmt.Sprintf("ALTER TABLE %s ADD KEY %s(id);", quoteSQLIdent(table.TableName), quoteSQLIdent("idx_"+table.TableName)),
+			},
+			IndexesPrepared: true,
+		}
+	}
+
+	root := t.TempDir()
+	path, err := writeRestoreScript(ctx, &checkpointtool.CheckpointReader{}, &dumpOutput{}, tables, data,
+		types.BuildTS(1, 0), filepath.Join(root, "scripts"), filepath.Join(root, "csv"), loadDataPathResolver{}, false, true)
+	require.NoError(t, err)
+	script, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(script), "`idx_t1`")
+	require.Contains(t, string(script), "`idx_t2`")
+}
+
 func TestDumpTablesConcurrentlySkipsViews(t *testing.T) {
 	var out bytes.Buffer
 	err := dumpTablesConcurrently(

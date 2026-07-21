@@ -60,9 +60,8 @@ const (
 	csvPipelineMinFreeMemory = 1 << 30
 	csvPipelineFreeRatio     = 10
 	csvPipelineMemoryPoll    = 200 * time.Millisecond
+	csvPipelineMemoryMaxWait = 30 * time.Second
 	csvPipelineWorkerMemory  = 256 << 20
-	csvPipelineReorderWindow = 1
-	csvPipelineReorderBytes  = 2 * csvPipelineWorkerMemory
 )
 
 type catalogLayout struct {
@@ -194,10 +193,12 @@ type exportedCSVRow struct {
 
 // TableDumpData contains the checkpoint metadata needed to dump one table.
 type TableDumpData struct {
-	TableID     uint64
-	Schema      *TableSchema
-	DataEntries []*ObjectEntryInfo
-	TombEntries []*ObjectEntryInfo
+	TableID         uint64
+	Schema          *TableSchema
+	DataEntries     []*ObjectEntryInfo
+	TombEntries     []*ObjectEntryInfo
+	IndexDDLs       []string
+	IndexesPrepared bool
 }
 
 var moIndexesHeaders = []string{
@@ -1095,21 +1096,31 @@ func (r *CheckpointReader) ReadTableSchema(
 	dataView *LogicalTableView,
 ) *TableSchema {
 	_ = dataView
-	schema := &TableSchema{TableName: fmt.Sprintf("%d", tableID)}
-
-	// Try to read mo_tables from the checkpoint (table 2)
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
 	if err != nil {
-		// Don't log - expected for system tables or when mo_tables not in checkpoint
-	} else if moTablesView != nil {
+		moTablesView = nil
+	}
+	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
+	if err != nil {
+		moColumnsView = nil
+	}
+	schema := buildTableSchemaFromCatalogViews(tableID, moTablesView, moColumnsView)
+	if schema.Partition == "" {
+		if partitionClause := r.readPartitionClause(ctx, tableID, snapshotTS, schema.AccountID); partitionClause != "" {
+			schema.Partition = partitionClause
+		}
+	}
+	return schema
+}
+
+func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView) *TableSchema {
+	schema := &TableSchema{TableName: fmt.Sprintf("%d", tableID)}
+	if moTablesView != nil {
 		if moTablesSchema := findTableSchemaFromMoTables(moTablesView, tableID); moTablesSchema != nil {
 			schema = moTablesSchema
 		}
 	}
-
-	// Try to read mo_columns from the checkpoint (table 3)
-	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
-	if err == nil && moColumnsView != nil {
+	if moColumnsView != nil {
 		cols := buildColumnsFromMoColumnsRows(moColumnsView, tableID)
 		if len(cols) > 0 {
 			schema.Columns = cols
@@ -1124,13 +1135,64 @@ func (r *CheckpointReader) ReadTableSchema(
 		layout := inferBuiltinCatalogLayout(tableID, moTablesView, moColumnsView)
 		schema = mergeBuiltinSchemaFallback(schema, builtinTableSchemaForLayout(layout, tableID), tableID)
 	}
-	if schema.Partition == "" {
-		if partitionClause := r.readPartitionClause(ctx, tableID, snapshotTS, schema.AccountID); partitionClause != "" {
-			schema.Partition = partitionClause
+	return schema
+}
+
+func buildTableSchemasForIDs(
+	tableIDs []uint64,
+	moTablesView, moColumnsView *LogicalTableView,
+) map[uint64]*TableSchema {
+	tableRowsByID := groupCatalogRowsByUintColumn(moTablesView, catalog.SystemRelAttr_ID)
+	columnRowsByID := groupCatalogRowsByUintColumn(moColumnsView, catalog.SystemColAttr_RelID)
+	tableByID := mapTablesByID(moTablesView)
+	columnNamesByID := mapColumnNamesByTableIDAndColID(moColumnsView)
+	schemas := make(map[uint64]*TableSchema, len(tableIDs))
+	for _, tableID := range tableIDs {
+		if schemas[tableID] != nil {
+			continue
+		}
+		tableView := logicalViewWithRows(moTablesView, tableRowsByID[tableID])
+		columnView := logicalViewWithRows(moColumnsView, columnRowsByID[tableID])
+		schema := buildTableSchemaFromCatalogViews(tableID, tableView, columnView)
+		constraint := findMoTablesConstraint(tableView, tableID)
+		schema.ForeignKeys = decodeForeignKeysFromMoTablesConstraint(
+			constraint, tableID, tableByID, columnNamesByID,
+		)
+		schemas[tableID] = schema
+	}
+	return schemas
+}
+
+func groupCatalogRowsByUintColumn(view *LogicalTableView, columnName string) map[uint64][][]string {
+	result := make(map[uint64][][]string)
+	if view == nil {
+		return result
+	}
+	column := view.columnDataIndex(columnName)
+	if column < 0 {
+		return result
+	}
+	dataOffset := logicalViewDataOffset(view)
+	for _, fullRow := range view.Rows {
+		row := fullRow[dataOffset:]
+		if column >= len(row) {
+			continue
+		}
+		id, ok := parseUintCell(row[column])
+		if ok {
+			result[id] = append(result[id], fullRow)
 		}
 	}
+	return result
+}
 
-	return schema
+func logicalViewWithRows(view *LogicalTableView, rows [][]string) *LogicalTableView {
+	if view == nil {
+		return nil
+	}
+	copy := *view
+	copy.Rows = rows
+	return &copy
 }
 
 // getTableLogicalView composes the checkpoint view at snapshotTS and builds a logical
@@ -1324,9 +1386,20 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	tableIDs []uint64,
 	snapshotTS types.TS,
 ) (map[uint64]*TableDumpData, error) {
+	if len(tableIDs) == 0 {
+		return map[uint64]*TableDumpData{}, nil
+	}
 	composed, err := r.ComposeAt(snapshotTS)
 	if err != nil {
 		return nil, err
+	}
+	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "read mo_tables for batch dump: %v", err)
+	}
+	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "read mo_columns for batch dump: %v", err)
 	}
 
 	tableSet := make(map[uint64]struct{}, len(tableIDs))
@@ -1334,11 +1407,12 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	result := make(map[uint64]*TableDumpData, len(tableIDs))
 	partitionToPrimary := make(map[uint64]uint64)
 	partitionIDsByPrimary := make(map[uint64][]uint64)
+	schemasByID := buildTableSchemasForIDs(tableIDs, moTablesView, moColumnsView)
 	for _, tableID := range tableIDs {
 		if _, ok := tableSet[tableID]; ok {
 			continue
 		}
-		schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+		schema := schemasByID[tableID]
 		if len(schema.Columns) == 0 {
 			return nil, moerr.NewInternalErrorf(
 				ctx,
@@ -1353,9 +1427,40 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			Schema:  cloneTableSchema(schema),
 		}
 	}
-	partitionTableMap, err := r.readPartitionTableIDsForPrimaries(ctx, snapshotTS, tableSet, accountByPrimary)
-	if err != nil {
-		return nil, err
+	primaryByAccount := make(map[uint32]map[uint64]struct{})
+	catalogIDs := buildCatalogTableIDIndex(moTablesView)
+	for primaryID, accountID := range accountByPrimary {
+		if primaryByAccount[accountID] == nil {
+			primaryByAccount[accountID] = make(map[uint64]struct{})
+		}
+		primaryByAccount[accountID][primaryID] = struct{}{}
+	}
+	partitionTableMap := make(map[uint64][]uint64)
+	for accountID, primaries := range primaryByAccount {
+		partitionTablesView, err := r.catalogTableViewFromIndex(
+			ctx, snapshotTS, catalogIDs, catalog.MOPartitionTables, accountID, moPartitionTablesHeaders,
+		)
+		if err != nil {
+			return nil, err
+		}
+		partitionMetadataView, err := r.catalogTableViewFromIndex(
+			ctx, snapshotTS, catalogIDs, catalog.MOPartitionMetadata, accountID, moPartitionMetadataHeaders,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for primaryID, partitionIDs := range buildPartitionTableIDMap(partitionTablesView, primaries) {
+			partitionTableMap[primaryID] = append(partitionTableMap[primaryID], partitionIDs...)
+		}
+		partitionRowsByPrimary := groupCatalogRowsByUintColumn(partitionTablesView, "primary_table_id")
+		metadataRowsByPrimary := groupCatalogRowsByUintColumn(partitionMetadataView, "table_id")
+		for primaryID := range primaries {
+			primaryMetadataView := logicalViewWithRows(partitionMetadataView, metadataRowsByPrimary[primaryID])
+			primaryTablesView := logicalViewWithRows(partitionTablesView, partitionRowsByPrimary[primaryID])
+			if partition := buildPartitionClauseFromMetadata(primaryMetadataView, primaryID, primaryTablesView); partition != "" {
+				result[primaryID].Schema.Partition = partition
+			}
+		}
 	}
 	for primaryID, partitionIDs := range partitionTableMap {
 		for _, partitionID := range partitionIDs {
@@ -1363,6 +1468,21 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			partitionToPrimary[partitionID] = primaryID
 		}
 		partitionIDsByPrimary[primaryID] = append(partitionIDsByPrimary[primaryID], partitionIDs...)
+	}
+	moIndexesView, err := r.catalogTableViewFromIndex(
+		ctx, snapshotTS, catalogIDs, catalog.MO_INDEXES, 0, moIndexesHeaders,
+	)
+	if err != nil {
+		return nil, err
+	}
+	indexRowsByTableID := groupCatalogRowsByUintColumn(moIndexesView, "table_id")
+	for tableID, data := range result {
+		tableIndexesView := logicalViewWithRows(moIndexesView, indexRowsByTableID[tableID])
+		data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexes(tableIndexesView, tableID, data.Schema.TableName)
+		if err != nil {
+			return nil, err
+		}
+		data.IndexesPrepared = true
 	}
 
 	entryRefs := make([]*EntryInfo, 0, len(composed.Incrementals)+1)
@@ -2330,9 +2450,30 @@ func csvPipelineMemoryFloorFromTotal(total uint64, ok bool) uint64 {
 }
 
 func waitForCSVMemory(ctx context.Context, counters *csvPipelineCounters) error {
+	return waitForCSVMemoryWithReader(ctx, counters, csvPipelineMemoryMaxWait, readSystemMemory)
+}
+
+func waitForCSVMemoryWithReader(
+	ctx context.Context,
+	counters *csvPipelineCounters,
+	maxWait time.Duration,
+	readMemory func() (total uint64, available uint64, ok bool),
+) error {
 	floor := uint64(counters.memoryFloor.Load())
+	if maxWait <= 0 {
+		_, available, ok := readMemory()
+		if !ok || available >= floor {
+			return nil
+		}
+		counters.memoryAvailable.Store(int64(available))
+		return moerr.NewInternalErrorNoCtxf(
+			"csv pipeline memory remained below floor: available=%d floor=%d wait=%s",
+			available, floor, maxWait,
+		)
+	}
+	deadline := time.Now().Add(maxWait)
 	for {
-		_, available, ok := readSystemMemory()
+		_, available, ok := readMemory()
 		if !ok {
 			return nil
 		}
@@ -2341,7 +2482,18 @@ func waitForCSVMemory(ctx context.Context, counters *csvPipelineCounters) error 
 			return nil
 		}
 		counters.memoryWaits.Add(1)
-		timer := time.NewTimer(csvPipelineMemoryPoll)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return moerr.NewInternalErrorNoCtxf(
+				"csv pipeline memory remained below floor: available=%d floor=%d wait=%s",
+				available, floor, maxWait,
+			)
+		}
+		poll := csvPipelineMemoryPoll
+		if remaining < poll {
+			poll = remaining
+		}
+		timer := time.NewTimer(poll)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
@@ -2446,15 +2598,9 @@ func writeCSVChunks(
 	cancel context.CancelFunc,
 	done chan<- error,
 ) {
-	type chunkKey struct {
-		objectIdx int
-		blockIdx  int
-	}
-	pending := make(map[chunkKey]csvPipelineChunk)
-	objectDone := make(map[int]bool)
 	nextObjectIdx := 0
-	nextBlockIdx := 0
-	pendingBytes := 0
+	lastBlockIdx := -1
+	objectOpen := false
 
 	writeChunk := func(chunk csvPipelineChunk) error {
 		start := time.Now()
@@ -2470,97 +2616,43 @@ func writeCSVChunks(
 		return nil
 	}
 
-	nextPendingBlock := func(objectIdx, minBlockIdx int) (int, bool) {
-		found := false
-		next := 0
-		for key := range pending {
-			if key.objectIdx != objectIdx || key.blockIdx < minBlockIdx {
-				continue
-			}
-			if !found || key.blockIdx < next {
-				found = true
-				next = key.blockIdx
-			}
-		}
-		return next, found
-	}
-
-	flush := func() error {
-		for {
-			key := chunkKey{objectIdx: nextObjectIdx, blockIdx: nextBlockIdx}
-			chunk, ok := pending[key]
-			if !ok && objectDone[nextObjectIdx] {
-				if blockIdx, found := nextPendingBlock(nextObjectIdx, nextBlockIdx); found {
-					nextBlockIdx = blockIdx
-					key.blockIdx = blockIdx
-					chunk = pending[key]
-					ok = true
-				}
-			}
-			if ok {
-				delete(pending, key)
-				pendingBytes -= len(chunk.data)
-				if err := writeChunk(chunk); err != nil {
-					return err
-				}
-				nextBlockIdx++
-				continue
-			}
-			if objectDone[nextObjectIdx] {
-				delete(objectDone, nextObjectIdx)
-				nextObjectIdx++
-				nextBlockIdx = 0
-				continue
-			}
-			return nil
-		}
-	}
-
 	for chunk := range chunks {
 		if err := ctx.Err(); err != nil {
 			done <- err
 			return
 		}
-		if chunk.objectIdx > nextObjectIdx+csvPipelineReorderWindow {
+		if chunk.objectIdx != nextObjectIdx {
 			cancel()
 			done <- moerr.NewInternalErrorNoCtxf(
-				"csv pipeline reorder window exceeded: next_object=%d chunk_object=%d window=%d",
+				"csv pipeline received out-of-order object: expected=%d got=%d",
 				nextObjectIdx,
 				chunk.objectIdx,
-				csvPipelineReorderWindow,
 			)
 			return
 		}
 		if chunk.objectDone {
-			objectDone[chunk.objectIdx] = true
-		} else {
-			key := chunkKey{objectIdx: chunk.objectIdx, blockIdx: chunk.blockIdx}
-			if previous, ok := pending[key]; ok {
-				pendingBytes -= len(previous.data)
-			}
-			pendingBytes += len(chunk.data)
-			if pendingBytes > csvPipelineReorderBytes {
-				cancel()
-				done <- moerr.NewInternalErrorNoCtxf(
-					"csv pipeline reorder byte budget exceeded: pending_bytes=%d budget=%d",
-					pendingBytes,
-					csvPipelineReorderBytes,
-				)
-				return
-			}
-			pending[key] = chunk
+			nextObjectIdx++
+			lastBlockIdx = -1
+			objectOpen = false
+			continue
 		}
-		if err := flush(); err != nil {
+		if chunk.blockIdx <= lastBlockIdx {
+			cancel()
+			done <- moerr.NewInternalErrorNoCtxf(
+				"csv pipeline received out-of-order block: object=%d previous=%d got=%d",
+				chunk.objectIdx, lastBlockIdx, chunk.blockIdx,
+			)
+			return
+		}
+		if err := writeChunk(chunk); err != nil {
 			done <- err
 			return
 		}
+		lastBlockIdx = chunk.blockIdx
+		objectOpen = true
 	}
-	if err := flush(); err != nil {
-		done <- err
-		return
-	}
-	if len(pending) > 0 {
-		done <- moerr.NewInternalErrorNoCtxf("csv pipeline finished with %d unordered chunks still pending", len(pending))
+	if objectOpen {
+		done <- moerr.NewInternalErrorNoCtxf("csv pipeline finished before object %d completion", nextObjectIdx)
 		return
 	}
 	done <- nil
@@ -4257,26 +4349,70 @@ func (r *CheckpointReader) findCatalogTableIDForAccount(
 	if err != nil {
 		return 0, false, moerr.NewInternalErrorf(ctx, "read mo_tables: %v", err)
 	}
-	var fallback uint64
+	return findCatalogTableIDInView(moTablesView, tableName, accountID)
+}
+
+func findCatalogTableIDInView(
+	moTablesView *LogicalTableView,
+	tableName string,
+	accountID uint32,
+) (uint64, bool, error) {
+	return buildCatalogTableIDIndex(moTablesView).find(tableName, accountID)
+}
+
+type catalogTableIDKey struct {
+	accountID uint32
+	tableName string
+}
+
+type catalogTableIDIndex struct {
+	exact    map[catalogTableIDKey]uint64
+	fallback map[string]uint64
+}
+
+func buildCatalogTableIDIndex(moTablesView *LogicalTableView) catalogTableIDIndex {
+	index := catalogTableIDIndex{
+		exact:    make(map[catalogTableIDKey]uint64),
+		fallback: make(map[string]uint64),
+	}
 	tables := buildCatalogTablesFromMoTablesRows(moTablesView)
 	for _, table := range tables {
-		if table.TableName != tableName {
-			continue
-		}
 		if table.DatabaseName != "" && table.DatabaseName != catalog.MO_CATALOG {
 			continue
 		}
-		if table.AccountID == accountID {
-			return table.TableID, true, nil
-		}
-		if accountID == 0 && fallback == 0 {
-			fallback = table.TableID
+		index.exact[catalogTableIDKey{accountID: table.AccountID, tableName: table.TableName}] = table.TableID
+		if index.fallback[table.TableName] == 0 {
+			index.fallback[table.TableName] = table.TableID
 		}
 	}
-	if fallback != 0 {
-		return fallback, true, nil
+	return index
+}
+
+func (i catalogTableIDIndex) find(tableName string, accountID uint32) (uint64, bool, error) {
+	if tableID := i.exact[catalogTableIDKey{accountID: accountID, tableName: tableName}]; tableID != 0 {
+		return tableID, true, nil
+	}
+	if accountID == 0 {
+		if tableID := i.fallback[tableName]; tableID != 0 {
+			return tableID, true, nil
+		}
 	}
 	return 0, false, nil
+}
+
+func (r *CheckpointReader) catalogTableViewFromIndex(
+	ctx context.Context,
+	snapshotTS types.TS,
+	catalogIDs catalogTableIDIndex,
+	tableName string,
+	accountID uint32,
+	headers []string,
+) (*LogicalTableView, error) {
+	tableID, ok, err := catalogIDs.find(tableName, accountID)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return r.dumpCatalogTableViewWithHeaders(ctx, tableID, snapshotTS, headers)
 }
 
 func buildCreateIndexStatementsFromMoIndexes(

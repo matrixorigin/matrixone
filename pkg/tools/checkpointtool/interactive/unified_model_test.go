@@ -17,6 +17,7 @@ package interactive
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -161,6 +162,48 @@ func TestUnifiedModelLogicalViewLoadsAsynchronouslyAndCancels(t *testing.T) {
 	require.False(t, model.logicalLoading)
 	model.Update(loaded)
 	require.Nil(t, model.state.LogicalView())
+}
+
+func TestCancelAndWaitJoinsAllLogicalLoadGenerations(t *testing.T) {
+	model := NewUnifiedModel(&checkpointtool.CheckpointReader{})
+	model.state.selectedEntry = 0
+	model.state.selectedTable = 42
+	started := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	canceled := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	var calls atomic.Int32
+	model.state.buildLogicalViewForTest = func(ctx context.Context, _ int, _ uint64) (*checkpointtool.LogicalTableView, error) {
+		idx := int(calls.Add(1) - 1)
+		close(started[idx])
+		<-ctx.Done()
+		close(canceled[idx])
+		<-release[idx]
+		return nil, ctx.Err()
+	}
+
+	_, firstCmd := model.Update(openLogicalTableMsg{})
+	go firstCmd()
+	<-started[0]
+	model.cancelLogicalLoad()
+
+	_, secondCmd := model.Update(openLogicalTableMsg{})
+	go secondCmd()
+	<-started[1]
+	waitDone := make(chan struct{})
+	go func() {
+		model.CancelAndWaitLogicalLoad()
+		close(waitDone)
+	}()
+	<-canceled[0]
+	<-canceled[1]
+	close(release[0])
+	select {
+	case <-waitDone:
+		require.Fail(t, "wait returned while the newer generation was still running")
+	default:
+	}
+	close(release[1])
+	<-waitDone
 }
 
 func TestUnifiedModelOpenObjectMessageTracksTombstoneRange(t *testing.T) {

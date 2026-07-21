@@ -16,6 +16,7 @@ package interactive
 
 import (
 	"context"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
@@ -48,6 +49,7 @@ type UnifiedModel struct {
 	rangeToOpen       *ckputil.TableRange
 	quitting          bool
 	logicalLoadCancel context.CancelFunc
+	logicalLoadWG     sync.WaitGroup
 	logicalLoading    bool
 	logicalLoadID     uint64
 }
@@ -187,12 +189,14 @@ func (m *UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		m.logicalLoadCancel = cancel
+		m.logicalLoadWG.Add(1)
 		m.logicalLoading = true
 		m.logicalLoadID++
 		loadID := m.logicalLoadID
 		entryIndex := m.state.selectedEntry
 		tableID := m.state.selectedTable
 		return m, func() tea.Msg {
+			defer m.logicalLoadWG.Done()
 			view, err := m.state.BuildLogicalView(ctx, entryIndex, tableID)
 			return logicalTableLoadedMsg{loadID: loadID, entryIndex: entryIndex, tableID: tableID, view: view, err: err}
 		}
@@ -245,6 +249,13 @@ func (m *UnifiedModel) cancelLogicalLoad() {
 		m.logicalLoadID++
 	}
 	m.logicalLoading = false
+}
+
+// CancelAndWaitLogicalLoad transfers shutdown ownership back from the Bubble
+// Tea command before the caller closes the checkpoint reader and file service.
+func (m *UnifiedModel) CancelAndWaitLogicalLoad() {
+	m.cancelLogicalLoad()
+	m.logicalLoadWG.Wait()
 }
 
 func (m *UnifiedModel) View() string {

@@ -42,11 +42,15 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 	for {
 		p := newCheckpointProgram(m)
 		finalModel, err := p.Run()
+		um, ok := finalModel.(*UnifiedModel)
+		if ok {
+			m = um
+		}
+		m.CancelAndWaitLogicalLoad()
 		if err != nil {
 			return err
 		}
 
-		um, ok := finalModel.(*UnifiedModel)
 		if !ok {
 			return nil
 		}

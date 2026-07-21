@@ -119,3 +119,46 @@ func TestRunProgramAndViewerExitBranches(t *testing.T) {
 	}
 	require.ErrorIs(t, Run(&checkpointtool.CheckpointReader{}), viewerErr)
 }
+
+func TestRunCancelsAndJoinsBlockedLogicalLoad(t *testing.T) {
+	oldNewProgram := newCheckpointProgram
+	defer func() { newCheckpointProgram = oldNewProgram }()
+
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	newCheckpointProgram = func(model tea.Model) checkpointProgram {
+		m := model.(*UnifiedModel)
+		m.state.selectedEntry = 0
+		m.state.selectedTable = 42
+		m.state.buildLogicalViewForTest = func(ctx context.Context, _ int, _ uint64) (*checkpointtool.LogicalTableView, error) {
+			close(started)
+			<-ctx.Done()
+			close(canceled)
+			<-release
+			return nil, ctx.Err()
+		}
+		_, cmd := m.Update(openLogicalTableMsg{})
+		go cmd()
+		<-started
+		return fakeCheckpointProgram{model: m}
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- Run(&checkpointtool.CheckpointReader{}) }()
+	<-canceled
+	select {
+	case err := <-runDone:
+		require.Failf(t, "Run returned before logical load joined", "err=%v", err)
+	default:
+	}
+	close(release)
+	released = true
+	require.NoError(t, <-runDone)
+}

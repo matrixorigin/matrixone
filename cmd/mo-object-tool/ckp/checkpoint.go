@@ -893,9 +893,14 @@ func writeRestoreScript(
 			}
 		}
 		if !isViewRelation(table) {
-			indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
-			if err != nil {
-				return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
+			var indexDDLs []string
+			if dumpData != nil && dumpData.IndexesPrepared {
+				indexDDLs = dumpData.IndexDDLs
+			} else {
+				indexDDLs, err = reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
+				if err != nil {
+					return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
+				}
 			}
 			ddl, err = mergeCreateTableIndexDDLs(ddl, indexDDLs)
 			if err != nil {

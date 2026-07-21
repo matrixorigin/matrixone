@@ -207,28 +207,30 @@ func TestGetTableEntriesAtReturnsMissingSelectedObjectEntries(t *testing.T) {
 	require.ErrorContains(t, err, "required checkpoint object entries")
 }
 
-func TestWriteCSVChunksPreservesStorageOrder(t *testing.T) {
+func TestWriteCSVChunksConsumesOrderedStreamAcrossEmptyBlockPastOldBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	chunks := make(chan csvPipelineChunk, 5)
+	chunks := make(chan csvPipelineChunk, 2)
 	done := make(chan error, 1)
 	counters := &csvPipelineCounters{}
-	var buf bytes.Buffer
 
-	go writeCSVChunks(ctx, &buf, chunks, counters, cancel, done)
-	chunks <- csvPipelineChunk{objectIdx: 1, blockIdx: 0, data: []byte("c\n")}
-	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 1, data: []byte("b\n")}
-	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("a\n")}
+	go writeCSVChunks(ctx, io.Discard, chunks, counters, cancel, done)
+	payload := bytes.Repeat([]byte("x"), 1<<20)
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("first\n")}
+	// Block 1 is empty and therefore has no event. Later ordered blocks total
+	// more than the former 512 MiB reorder budget but are written immediately.
+	for blockIdx := 2; blockIdx < 2+513; blockIdx++ {
+		chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: blockIdx, data: payload}
+	}
 	chunks <- csvPipelineChunk{objectIdx: 0, objectDone: true}
-	chunks <- csvPipelineChunk{objectIdx: 1, objectDone: true}
 	close(chunks)
 
 	require.NoError(t, <-done)
-	assert.Equal(t, "a\nb\nc\n", buf.String())
+	require.Greater(t, counters.writtenBytes.Load(), int64(2*csvPipelineWorkerMemory))
 }
 
-func TestWriteCSVChunksRejectsUnboundedFutureObjects(t *testing.T) {
+func TestWriteCSVChunksRejectsOutOfOrderObjectsAndBlocks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -238,31 +240,23 @@ func TestWriteCSVChunksRejectsUnboundedFutureObjects(t *testing.T) {
 	var buf bytes.Buffer
 
 	go writeCSVChunks(ctx, &buf, chunks, counters, cancel, done)
-	chunks <- csvPipelineChunk{objectIdx: csvPipelineReorderWindow + 1, blockIdx: 0, data: []byte("future\n")}
+	chunks <- csvPipelineChunk{objectIdx: 1, blockIdx: 0, data: []byte("future\n")}
 
 	err := <-done
 	require.Error(t, err)
-	require.ErrorContains(t, err, "reorder window exceeded")
+	require.ErrorContains(t, err, "out-of-order object")
 	assert.Empty(t, buf.String())
-}
 
-func TestWriteCSVChunksRejectsReorderByteBudgetAndWriteError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
-
-	chunks := make(chan csvPipelineChunk, 1)
-	done := make(chan error, 1)
-	counters := &csvPipelineCounters{}
+	chunks = make(chan csvPipelineChunk, 3)
+	done = make(chan error, 1)
+	counters = &csvPipelineCounters{}
 	go writeCSVChunks(ctx, io.Discard, chunks, counters, cancel, done)
-	chunks <- csvPipelineChunk{
-		objectIdx: 1,
-		blockIdx:  0,
-		data:      bytes.Repeat([]byte("x"), csvPipelineReorderBytes+1),
-	}
-
-	err := <-done
-	require.Error(t, err)
-	require.ErrorContains(t, err, "reorder byte budget exceeded")
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 2, data: []byte("later\n")}
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 1, data: []byte("earlier\n")}
+	err = <-done
+	require.ErrorContains(t, err, "out-of-order block")
 
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
@@ -273,6 +267,19 @@ func TestWriteCSVChunksRejectsReorderByteBudgetAndWriteError(t *testing.T) {
 	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("a\n")}
 	close(chunks)
 	require.ErrorIs(t, <-done, writeErr)
+}
+
+func TestWaitForCSVMemoryReturnsBoundedLowMemoryError(t *testing.T) {
+	counters := &csvPipelineCounters{}
+	counters.memoryFloor.Store(1 << 30)
+	err := waitForCSVMemoryWithReader(
+		context.Background(),
+		counters,
+		time.Millisecond,
+		func() (uint64, uint64, bool) { return 2 << 30, 128 << 20, true },
+	)
+	require.ErrorContains(t, err, "memory remained below floor")
+	require.Equal(t, int64(128<<20), counters.memoryAvailable.Load())
 }
 
 type errWriter struct {
@@ -569,6 +576,59 @@ func TestPrepareTableDumpDataForTablesReturnsMissingSelectedObjectEntries(t *tes
 	_, err := reader.PrepareTableDumpDataForTables(context.Background(), []uint64{moTablesID}, types.BuildTS(10, 0))
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 	require.ErrorContains(t, err, "required checkpoint object entries")
+}
+
+func TestPrepareTableDumpDataForTablesMaterializesCatalogViewsOnce(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	moTablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		Rows: [][]string{
+			moTablesCatalogTestRow(t, "100", "t1", "db", "10", "r", "1", ""),
+			moTablesCatalogTestRow(t, "101", "t2", "db", "10", "r", "1", ""),
+			moTablesCatalogTestRow(t, "200", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "0", ""),
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "100", "t1", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
+			moColumnsTestRow(t, "101", "t2", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
+		},
+	}
+	moIndexesView := &LogicalTableView{Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...)}
+	calls := make(map[uint64]int)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 100}, {TableID: 101}}, nil
+		},
+		getObjectsForTablesTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+			return nil, nil, nil
+		},
+		getLogicalViewForTest: func(_ *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
+			calls[tableID]++
+			switch tableID {
+			case moTablesID:
+				return moTablesView, nil
+			case moColumnsID:
+				return moColumnsView, nil
+			case 200:
+				return moIndexesView, nil
+			default:
+				return nil, moerr.NewInternalErrorNoCtxf("unexpected catalog table %d", tableID)
+			}
+		},
+	}
+
+	data, err := reader.PrepareTableDumpDataForTables(context.Background(), []uint64{100, 101}, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Len(t, data, 2)
+	require.Equal(t, 1, calls[moTablesID])
+	require.Equal(t, 1, calls[moColumnsID])
+	require.Equal(t, 1, calls[200])
+	require.True(t, data[100].IndexesPrepared)
+	require.True(t, data[101].IndexesPrepared)
 }
 
 func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
