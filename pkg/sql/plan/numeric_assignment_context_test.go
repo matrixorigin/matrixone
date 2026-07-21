@@ -22,6 +22,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -333,6 +334,99 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPreparedNumericContextUsesClusterTableStarVisibility(t *testing.T) {
+	tests := []struct {
+		name      string
+		accountID uint32
+		sql       string
+	}{
+		{
+			name:      "tenant unqualified star hides account id",
+			accountID: 1,
+			sql: "insert into constraint_test.emp (empno, sal) " +
+				"select * from cluster_numeric_src cross join (select ? + ? as x) d",
+		},
+		{
+			name:      "tenant qualified star hides account id",
+			accountID: 1,
+			sql: "insert into constraint_test.emp (empno, sal) " +
+				"select s.*, d.* from cluster_numeric_src s cross join (select ? + ? as x) d",
+		},
+		{
+			name:      "system star keeps account id",
+			accountID: catalog.System_Account,
+			sql: "insert into constraint_test.emp (empno, mgr, sal) " +
+				"select * from cluster_numeric_src cross join (select ? + ? as x) d",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			optimizer.ctxt.GetAccountIdFunc = func() (uint32, error) {
+				return test.accountID, nil
+			}
+			optimizer.ctxt.tables["cluster_numeric_src"] = &planpb.TableDef{
+				Name:      "cluster_numeric_src",
+				TableType: catalog.SystemClusterRel,
+				Cols: []*planpb.ColDef{
+					{Name: "visible_col", Typ: planpb.Type{Id: int32(types.T_uint32)}},
+					{Name: catalog.ExternalFilePath, Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					{Name: util.GetClusterTableAttributeName(), Typ: planpb.Type{Id: int32(types.T_uint32)}},
+				},
+			}
+			optimizer.ctxt.objects["cluster_numeric_src"] = &planpb.ObjectRef{ObjName: "cluster_numeric_src"}
+
+			stmt, err := mysql.ParseOne(optimizer.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+			require.NoError(t, err)
+
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+			require.Len(t, paramTypes, 2)
+			for _, typ := range paramTypes {
+				require.Equal(t, int32(types.T_decimal64), typ.Id)
+				require.Equal(t, int32(7), typ.Width)
+				require.Equal(t, int32(2), typ.Scale)
+			}
+		})
+	}
+}
+
+func TestPreparedNumericContextUsesClusterTableStarVisibilityInScalarLineage(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	optimizer.ctxt.GetAccountIdFunc = func() (uint32, error) {
+		return 1, nil
+	}
+	optimizer.ctxt.tables["cluster_numeric_src"] = &planpb.TableDef{
+		Name:      "cluster_numeric_src",
+		TableType: catalog.SystemClusterRel,
+		Cols: []*planpb.ColDef{
+			{Name: "visible_col", Typ: planpb.Type{Id: int32(types.T_uint32)}},
+			{Name: catalog.ExternalFilePath, Typ: planpb.Type{Id: int32(types.T_varchar)}},
+			{Name: util.GetClusterTableAttributeName(), Typ: planpb.Type{Id: int32(types.T_uint32)}},
+		},
+	}
+	optimizer.ctxt.objects["cluster_numeric_src"] = &planpb.ObjectRef{ObjName: "cluster_numeric_src"}
+
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) select "+
+			"(select x from (select * from cluster_numeric_src cross join "+
+			"(select cast(1 as double) as x) d) q(a, x)) + ?",
+		1,
+	)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Len(t, paramTypes, 1)
+	for _, typ := range paramTypes {
+		require.Equal(t, int32(types.T_float64), typ.Id)
 	}
 }
 

@@ -1062,18 +1062,11 @@ func (b *baseBinder) numericScalarSources(
 			sources[i].types = scans
 			sources[i].known = true
 		} else if infos[i].sourceName != "" && b.builder != nil {
-			schema := infos[i].sourceSchema
-			if schema == "" {
-				schema = b.builder.compCtx.DefaultDatabase()
-			}
-			_, tableDef, err := b.builder.compCtx.Resolve(schema, infos[i].sourceName, nil)
-			if err != nil || tableDef == nil {
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			if cols == nil {
 				continue
 			}
-			for _, col := range tableDef.Cols {
-				if col == nil || col.Hidden {
-					continue
-				}
+			for _, col := range cols {
 				sources[i].cols = append(sources[i].cols, strings.ToLower(col.Name))
 				sources[i].types = append(sources[i].types, numericAstTypedOperand(col.Typ))
 			}

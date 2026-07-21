@@ -4008,7 +4008,7 @@ type numericProjectionSourceInfo struct {
 	targets      []Type
 }
 
-func numericPhysicalTableOutputNames(builder *QueryBuilder, source numericProjectionSourceInfo) []string {
+func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjectionSourceInfo) []*plan.ColDef {
 	if builder == nil {
 		return nil
 	}
@@ -4020,12 +4020,30 @@ func numericPhysicalTableOutputNames(builder *QueryBuilder, source numericProjec
 	if err != nil || tableDef == nil {
 		return nil
 	}
-	names := make([]string, 0, len(tableDef.Cols))
+	accountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return nil
+	}
+	isTenantClusterTable := accountID != catalog.System_Account && util.TableIsClusterTable(tableDef.TableType)
+	cols := make([]*plan.ColDef, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
-		if col == nil || col.Hidden {
+		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
+			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
-		names = append(names, strings.ToLower(col.Name))
+		cols = append(cols, col)
+	}
+	return cols
+}
+
+func numericPhysicalTableOutputNames(builder *QueryBuilder, source numericProjectionSourceInfo) []string {
+	cols := numericPhysicalTableVisibleCols(builder, source)
+	if cols == nil {
+		return nil
+	}
+	names := make([]string, len(cols))
+	for i, col := range cols {
+		names[i] = strings.ToLower(col.Name)
 	}
 	return names
 }
