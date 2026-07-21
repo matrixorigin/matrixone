@@ -399,6 +399,31 @@ func TestRecoveryMissingParticipantRouteStopsWhenCanceled(t *testing.T) {
 	assert.Empty(t, sender.requests, "must not send to an unresolved or empty address")
 }
 
+func TestRecoveryParticipantDoesNotWaitForUnrelatedRoute(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	s := NewTestTxnServiceWithLog(t, 2, sender, NewTestClock(0), nil).(*service)
+	defer s.stopper.Stop()
+	defer s.CancelRecovery()
+	installRecoveryCluster(t, s.sid)
+
+	meta := NewTestTxn(1, 1, 1, 2, 3)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = NewTestTimestamp(2)
+	require.NoError(t, s.stopper.RunTask(s.doRecovery))
+	s.txnC <- meta
+	close(s.txnC)
+
+	select {
+	case <-s.recoveryC:
+	case <-time.After(time.Second):
+		t.Fatal("non-coordinator recovery waited for an unrelated participant route")
+	}
+	assert.NotNil(t, s.getTxnContext(meta.ID))
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	assert.Empty(t, sender.requests)
+}
+
 func TestRecoveryRetriesTransientClusterLookupError(t *testing.T) {
 	sender := newRecoveryRouteSender()
 	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)

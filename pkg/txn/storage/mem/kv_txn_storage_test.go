@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -34,6 +35,21 @@ import (
 type closeTrackingLogClient struct {
 	logservice.Client
 	closed atomic.Int32
+}
+
+type cancelBlockingLogClient struct {
+	logservice.Client
+	started chan struct{}
+}
+
+func (c *cancelBlockingLogClient) Read(
+	ctx context.Context,
+	firstLsn logservice.Lsn,
+	_ uint64,
+) ([]logpb.LogRecord, logservice.Lsn, error) {
+	close(c.started)
+	<-ctx.Done()
+	return nil, firstLsn, ctx.Err()
 }
 
 func (c *closeTrackingLogClient) Close() error {
@@ -329,6 +345,32 @@ func TestRecoveryCancellationUnblocksFullTxnChannel(t *testing.T) {
 	case <-recovered:
 	case <-time.After(time.Second):
 		t.Fatal("recovery remained blocked on a full transaction channel after cancellation")
+	}
+}
+
+func TestRecoveryCancellationStopsLogRead(t *testing.T) {
+	client := &cancelBlockingLogClient{
+		Client:  NewMemLog(),
+		started: make(chan struct{}),
+	}
+	storage := NewKVTxnStorage(1, client, newTestClock(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		storage.StartRecovery(ctx, make(chan txn.TxnMeta))
+		close(done)
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start the log read")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recovery log read did not stop after cancellation")
 	}
 }
 

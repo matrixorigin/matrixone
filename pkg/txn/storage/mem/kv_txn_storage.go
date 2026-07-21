@@ -143,6 +143,9 @@ func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 	for {
 		logs, lsn, err := kv.logClient.Read(ctx, kv.recoverFrom, math.MaxUint64)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			panic(err)
 		}
 

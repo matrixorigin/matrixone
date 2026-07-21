@@ -47,7 +47,7 @@ func (s *service) doRecovery(ctx context.Context) {
 				s.end()
 				return
 			}
-			if recoveryTxnNeedsRouteResolution(txn) {
+			if s.recoveryTxnNeedsRouteResolution(txn) {
 				var resolved bool
 				txn, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txn)
 				if !resolved {
@@ -116,10 +116,13 @@ func waitRecoveryRouteRetry(ctx context.Context, interval time.Duration) bool {
 	}
 }
 
-func recoveryTxnNeedsRouteResolution(txnMeta txn.TxnMeta) bool {
+func (s *service) recoveryTxnNeedsRouteResolution(txnMeta txn.TxnMeta) bool {
 	// Persisted ReplicaID and Address are routing data, not stable participant
 	// identity, so even complete routes must be resolved again after restart.
+	// Only the coordinator sends recovery RPCs; participants must not block
+	// startup waiting for routes they will never use.
 	return len(txnMeta.TNShards) > 1 &&
+		txnMeta.TNShards[0].ShardID == s.shard.ShardID &&
 		(txnMeta.Status == txn.TxnStatus_Prepared || txnMeta.Status == txn.TxnStatus_Committing)
 }
 
