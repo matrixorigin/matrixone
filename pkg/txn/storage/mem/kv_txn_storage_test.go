@@ -20,6 +20,7 @@ import (
 	"math"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -297,6 +298,38 @@ func TestRecovery(t *testing.T) {
 		txns = append(txns, v)
 	}
 	assert.Equal(t, 6, len(txns))
+}
+
+func TestRecoveryCancellationUnblocksFullTxnChannel(t *testing.T) {
+	l := NewMemLog()
+	s := NewKVTxnStorage(0, l, newTestClock(1))
+	recoveryC := make(chan txn.TxnMeta, 16)
+	for i := 0; i <= cap(recoveryC); i++ {
+		meta := txn.TxnMeta{
+			ID:     []byte{byte(i + 1)},
+			Status: txn.TxnStatus_Committed,
+		}
+		_, err := s.saveLog(&KVLog{Txn: meta})
+		assert.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	recovered := make(chan struct{})
+	go func() {
+		NewKVTxnStorage(1, l, newTestClock(1)).StartRecovery(ctx, recoveryC)
+		close(recovered)
+	}()
+
+	assert.Eventually(t, func() bool {
+		return len(recoveryC) == cap(recoveryC)
+	}, time.Second, time.Millisecond)
+	cancel()
+
+	select {
+	case <-recovered:
+	case <-time.After(time.Second):
+		t.Fatal("recovery remained blocked on a full transaction channel after cancellation")
+	}
 }
 
 func TestEvent(t *testing.T) {

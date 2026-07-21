@@ -17,13 +17,18 @@ package tnservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,6 +42,39 @@ type startErrorStorage struct {
 	destroyErr   error
 	closeCalls   int
 	destroyCalls int
+}
+
+type closeUnblocksStartTxnService struct {
+	service.TxnService
+	started   chan struct{}
+	closed    chan struct{}
+	startOnce sync.Once
+	closeOnce sync.Once
+}
+
+type signalingRecoveryCluster struct {
+	clusterservice.MOCluster
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *signalingRecoveryCluster) GetAllTNServices() []metadata.TNService {
+	c.once.Do(func() { close(c.entered) })
+	return c.MOCluster.GetAllTNServices()
+}
+
+func (s *closeUnblocksStartTxnService) Start() error {
+	s.startOnce.Do(func() { close(s.started) })
+	<-s.closed
+	return context.Canceled
+}
+
+func (s *closeUnblocksStartTxnService) CancelRecovery() {
+	s.closeOnce.Do(func() { close(s.closed) })
+}
+
+func (s *closeUnblocksStartTxnService) Close(bool) error {
+	return nil
 }
 
 type closeTrackingTxnService struct {
@@ -207,6 +245,93 @@ func TestCloseFailedStartReplica(t *testing.T) {
 				t.Fatal("close hung after failed start")
 			}
 		})
+	}
+}
+
+func TestCloseCancelsBlockedReplicaStart(t *testing.T) {
+	txnService := &closeUnblocksStartTxnService{
+		started: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- r.start(txnService)
+	}()
+
+	select {
+	case <-txnService.started:
+	case <-time.After(time.Second):
+		t.Fatal("replica start did not begin")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- r.close(false)
+	}()
+
+	select {
+	case err := <-closeResult:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("close did not cancel blocked replica start")
+	}
+	require.ErrorIs(t, <-startResult, context.Canceled)
+}
+
+func TestCloseCancelsReplicaBlockedInRecovery(t *testing.T) {
+	meta := service.NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = service.NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 99},
+	})
+	mlog := mem.NewMemLog()
+	data := (&mem.KVLog{Txn: meta}).MustMarshal()
+	record := mlog.GetLogRecord(len(data))
+	record.Type = logpb.UserRecord
+	record.Data = data
+	_, err := mlog.Append(context.Background(), record)
+	require.NoError(t, err)
+
+	sender := service.NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	txnService := service.NewTestTxnServiceWithLog(
+		t, 1, sender, service.NewTestClock(0), mlog)
+	baseCluster := clusterservice.NewMOCluster(
+		"dn-uuid", nil, time.Hour,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(nil, nil),
+	)
+	t.Cleanup(baseCluster.Close)
+	cluster := &signalingRecoveryCluster{
+		MOCluster: baseCluster,
+		entered:   make(chan struct{}),
+	}
+	runtime.ServiceRuntime("dn-uuid").SetGlobalVariables(runtime.ClusterService, cluster)
+
+	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+	startResult := make(chan error, 1)
+	go func() { startResult <- r.start(txnService) }()
+	select {
+	case <-cluster.entered:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not reach the missing participant route wait")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- r.close(false) }()
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("replica close did not cancel real transaction recovery")
+	}
+	select {
+	case err := <-startResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("replica start remained blocked after recovery cancellation")
 	}
 }
 
