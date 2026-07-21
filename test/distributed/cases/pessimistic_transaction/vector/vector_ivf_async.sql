@@ -33,22 +33,20 @@ set @ivf3_entries = (
       and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf3')
     limit 1
 );
+set @ivf3_metadata = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx3' and algo = 'ivfflat' and algo_table_type = 'metadata'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf3')
+    limit 1
+);
 set @wait_ivf3_seed_sql = concat(
-    'select case when (select count(*) from `', database(), '`.`', @ivf3_entries,
-    '`) < 10000 then sleep(5) else 0 end as wait_for_async_ivf3_seed_sync'
+    'select count(*) as active_ivf3_entries from `', database(), '`.`', @ivf3_entries,
+    '` where `__mo_index_centroid_fk_version` = ',
+    '(select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ivf3_metadata,
+    '` where `__mo_index_key` = ''version'')'
 );
 prepare wait_ivf3_seed from @wait_ivf3_seed_sql;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
-execute wait_ivf3_seed;
+-- @wait_expect(5, 180)
 execute wait_ivf3_seed;
 deallocate prepare wait_ivf3_seed;
 
@@ -81,30 +79,38 @@ set @ivf1_entries = (
       and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf1_async')
     limit 1
 );
+set @ivf1_metadata = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx01' and algo = 'ivfflat' and algo_table_type = 'metadata'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf1_async')
+    limit 1
+);
 set @ivf4_entries = (
     select index_table_name from mo_catalog.mo_indexes
     where name = 'idx01' and algo = 'ivfflat' and algo_table_type = 'entries'
       and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf4')
     limit 1
 );
+set @ivf4_metadata = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx01' and algo = 'ivfflat' and algo_table_type = 'metadata'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ivf4')
+    limit 1
+);
 set @wait_ivf_sync_sql = concat(
-    'select case when (select count(*) from `', database(), '`.`', @ivf1_entries, '`) < 6',
-    ' or (select count(*) from `', database(), '`.`', @ivf3_entries, '`) < 20000',
-    ' or (select count(*) from `', database(), '`.`', @ivf4_entries, '`) < 5',
-    ' then sleep(10) else 0 end as wait_for_async_ivf_index_sync'
+    'select ',
+    '(select count(*) from `', database(), '`.`', @ivf1_entries,
+    '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `',
+    database(), '`.`', @ivf1_metadata, '` where `__mo_index_key` = ''version'')) as active_ivf1_entries, ',
+    '(select count(*) from `', database(), '`.`', @ivf3_entries,
+    '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `',
+    database(), '`.`', @ivf3_metadata, '` where `__mo_index_key` = ''version'')) as active_ivf3_entries, ',
+    '(select count(*) from `', database(), '`.`', @ivf4_entries,
+    '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `',
+    database(), '`.`', @ivf4_metadata, '` where `__mo_index_key` = ''version'')) as active_ivf4_entries'
 );
 prepare wait_ivf_sync from @wait_ivf_sync_sql;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
-execute wait_ivf_sync;
+-- @wait_expect(5, 180)
 execute wait_ivf_sync;
 deallocate prepare wait_ivf_sync;
 
