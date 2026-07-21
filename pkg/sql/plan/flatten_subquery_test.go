@@ -134,6 +134,11 @@ func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {
 			joinType: plan.Node_SINGLE,
 		},
 		{
+			name:     "non-one limit fallback",
+			subquery: "select n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey limit 2",
+			joinType: plan.Node_SINGLE,
+		},
+		{
 			name:     "distinct",
 			subquery: "select distinct n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey",
 			joinType: plan.Node_MARK,
