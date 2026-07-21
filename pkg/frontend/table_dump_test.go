@@ -41,10 +41,13 @@ type testTableDumpObjectCopier struct {
 
 type testConcurrentTableDumpObjectCopier struct {
 	fileservice.FileService
-	data    []byte
-	release chan struct{}
-	active  atomic.Int32
-	maximum atomic.Int32
+	data        []byte
+	release     chan struct{}
+	active      atomic.Int32
+	maximum     atomic.Int32
+	statRelease chan struct{}
+	statActive  atomic.Int32
+	statMaximum atomic.Int32
 }
 
 type testAmbiguousWriteFileService struct {
@@ -82,6 +85,29 @@ func (c *testConcurrentTableDumpObjectCopier) CopyObject(
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(c.data)), Data: c.data}},
 	})
 	return true, err
+}
+
+func (c *testConcurrentTableDumpObjectCopier) StatFile(
+	ctx context.Context,
+	filePath string,
+) (*fileservice.DirEntry, error) {
+	if c.statRelease == nil {
+		return c.FileService.StatFile(ctx, filePath)
+	}
+	active := c.statActive.Add(1)
+	defer c.statActive.Add(-1)
+	for {
+		maximum := c.statMaximum.Load()
+		if active <= maximum || c.statMaximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.statRelease:
+	}
+	return c.FileService.StatFile(ctx, filePath)
 }
 
 func (c *testTableDumpObjectCopier) CopyObject(
@@ -255,6 +281,59 @@ func TestCopyTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
 	for i := range objects {
 		require.Equal(t, int64(len(content)), objects[i].Size)
 		require.Empty(t, objects[i].SHA256)
+	}
+}
+
+func TestCopyTableDumpObjectsValidatesWithBoundedConcurrency(t *testing.T) {
+	ctx := context.Background()
+	src, err := fileservice.NewLocalETLFS("src", t.TempDir())
+	require.NoError(t, err)
+	dst, err := fileservice.NewLocalETLFS("dst", t.TempDir())
+	require.NoError(t, err)
+	content := []byte("provider-side object bytes")
+	objects := make([]tableDumpObject, fileservice.DefaultObjectCopyConcurrency*2)
+	for i := range objects {
+		name := fmt.Sprintf("obj-%d", i)
+		require.NoError(t, src.Write(ctx, fileservice.IOVector{
+			FilePath: name,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
+		}))
+		objects[i] = tableDumpObject{Name: name, FixturePath: path.Join("objects", name)}
+	}
+	copyRelease := make(chan struct{})
+	close(copyRelease)
+	copier := &testConcurrentTableDumpObjectCopier{
+		FileService: dst,
+		data:        content,
+		release:     copyRelease,
+		statRelease: make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(copier.statRelease)
+		}
+	}()
+	type copyResult struct {
+		written []string
+		err     error
+	}
+	resultCh := make(chan copyResult, 1)
+	go func() {
+		written, err := copyTableDumpObjects(ctx, src, copier, objects)
+		resultCh <- copyResult{written: written, err: err}
+	}()
+	require.Eventually(t, func() bool {
+		return copier.statMaximum.Load() == fileservice.DefaultObjectCopyConcurrency
+	}, 5*time.Second, 10*time.Millisecond)
+	close(copier.statRelease)
+	released = true
+	result := <-resultCh
+	require.NoError(t, result.err)
+	require.Len(t, result.written, len(objects))
+	require.Equal(t, int32(fileservice.DefaultObjectCopyConcurrency), copier.statMaximum.Load())
+	for i := range objects {
+		require.Equal(t, int64(len(content)), objects[i].Size)
 	}
 }
 

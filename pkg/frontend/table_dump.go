@@ -350,21 +350,43 @@ func copyTableDumpObjects(
 			continue
 		}
 		written = append(written, objects[i].FixturePath)
-		srcEntry, err := sourceFS.StatFile(ctx, objects[i].Name)
-		if err != nil {
-			return written, err
-		}
-		dstEntry, err := dumpFS.StatFile(ctx, objects[i].FixturePath)
-		if err != nil {
-			return written, err
-		}
-		if dstEntry.Size != srcEntry.Size {
-			return written, moerr.NewInternalErrorNoCtxf(
-				"server-side object copy size mismatch: source %d, destination %d",
-				srcEntry.Size, dstEntry.Size,
-			)
-		}
-		objects[i].Size = srcEntry.Size
+	}
+	var next atomic.Uint64
+	group, statCtx := errgroup.WithContext(ctx)
+	concurrency := min(fileservice.DefaultObjectCopyConcurrency, len(objects))
+	for range concurrency {
+		group.Go(func() error {
+			for {
+				if err := statCtx.Err(); err != nil {
+					return err
+				}
+				i := int(next.Add(1) - 1)
+				if i >= len(objects) {
+					return nil
+				}
+				if !results[i].Copied {
+					continue
+				}
+				srcEntry, err := sourceFS.StatFile(statCtx, objects[i].Name)
+				if err != nil {
+					return err
+				}
+				dstEntry, err := dumpFS.StatFile(statCtx, objects[i].FixturePath)
+				if err != nil {
+					return err
+				}
+				if dstEntry.Size != srcEntry.Size {
+					return moerr.NewInternalErrorNoCtxf(
+						"server-side object copy size mismatch: source %d, destination %d",
+						srcEntry.Size, dstEntry.Size,
+					)
+				}
+				objects[i].Size = srcEntry.Size
+			}
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return written, err
 	}
 	if batchErr != nil {
 		return written, batchErr
