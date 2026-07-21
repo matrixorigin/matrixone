@@ -398,6 +398,21 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindo
 	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 }
 
+func TestApplyIndicesForSortUsingIvfflat_AsyncIndexForcesOneCN(t *testing.T) {
+	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+	for _, indexDef := range multiTableIndex.IndexDefs {
+		indexDef.IndexAlgoParams = `{"op_type":"vector_l2_ops","async":"true"}`
+	}
+
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "pre", 0, 2, 3)
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	require.NoError(t, err)
+
+	tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+	require.NotNil(t, tableFuncNode)
+	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+}
+
 func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
