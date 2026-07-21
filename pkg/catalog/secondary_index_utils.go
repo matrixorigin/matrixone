@@ -220,6 +220,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
 	}
 
+	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
+	}
+
 	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
 		raw := strings.Split(val, ",")
 		parts := make([]string, 0, len(raw))

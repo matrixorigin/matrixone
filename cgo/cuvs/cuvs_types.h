@@ -84,7 +84,7 @@ typedef struct {
     size_t intermediate_graph_degree; // Degree of the intermediate graph (default 128)
     size_t graph_degree;              // Degree of the final graph (default 64)
     bool attach_dataset_on_build;     // Whether to attach the dataset to the index (default true)
-    uint64_t quantizer_train_limit;   // int8/uint8: rows sampled to train the scalar quantizer (0 = default 1000)
+    uint64_t quantizer_train_limit;   // int8/uint8: rows sampled to train the scalar quantizer (0 = default 100000)
 } cagra_build_params_t;
 
 /**
@@ -120,7 +120,7 @@ typedef struct {
     uint32_t bits_per_code;       // Bits per code (default 8)
     bool add_data_on_build;       // Whether to add data to the index during build (default true)
     double kmeans_trainset_fraction; // Fraction of data to use for k-means training (default 0.5)
-    uint64_t quantizer_train_limit;  // int8/uint8: rows sampled to train the scalar quantizer (0 = default 1000)
+    uint64_t quantizer_train_limit;  // int8/uint8: rows sampled to train the scalar quantizer (0 = default 100000)
 } ivf_pq_build_params_t;
 
 /**

@@ -1985,10 +1985,12 @@ protected:
     };
     static constexpr uint64_t kQuantizerTrainThreshold = 1000;
     // Number of rows STRIDED-sampled from the buffer to train the int8/uint8
-    // scalar quantizer (flush_pending_float_chunks_internal). Default 1000;
-    // settable per index via set_quantizer_train_limit. A sample this size
-    // estimates [min,max] fine — see the training block for why.
-    static constexpr uint64_t kDefaultQuantizerTrainLimit = 1000;
+    // scalar quantizer (flush_pending_float_chunks_internal). Default 100000;
+    // settable per index via set_quantizer_train_limit, and hard-capped to 60%
+    // of free GPU memory (cap_train_rows_to_gpu_mem). 100k rows give a fine
+    // 0.99-quantile estimate at a few hundred MB of f32 even at high dim — see
+    // the training block for the statistics; 1M would be ~3-4 GB and get capped.
+    static constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
     uint64_t quantizer_train_limit_ = kDefaultQuantizerTrainLimit;
     std::vector<pending_float_chunk_t> pending_float_chunks_;
     uint64_t pending_total_count_ = 0;
