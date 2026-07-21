@@ -1099,6 +1099,32 @@ public:
         }
     }
 
+    // Cap a requested quantizer training-sample row count so its device copy fits
+    // in ~60% of FREE GPU memory. train() uploads the sample as ONE contiguous
+    // n_rows*dim*sizeof(B) block; a single block rarely fits 80% of free memory
+    // once the pool is fragmented, and cuVS needs scratch for the quantile
+    // reduction — so 60% with headroom. High dim => fewer rows (Google's rule to
+    // avoid OOM during the training call). Logs when it caps (no silent
+    // truncation); a no-op when cudaMemGetInfo fails or the sample already fits.
+    // Must run on the target device (called from the flush worker task).
+    int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
+        if (requested_rows < 1) requested_rows = 1;
+        size_t free_bytes = 0, total_bytes = 0;
+        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) return requested_rows;
+        size_t per_row = static_cast<size_t>(dimension) * sizeof(B);
+        if (per_row == 0) return requested_rows;
+        int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row);
+        if (max_rows < 1) max_rows = 1;
+        if (requested_rows > max_rows) {
+            std::cerr << "[quantizer] train sample capped " << requested_rows
+                      << " -> " << max_rows << " rows to fit 60% of "
+                      << (free_bytes >> 20) << " MB free GPU mem (dim="
+                      << dimension << ")" << std::endl;
+            return max_rows;
+        }
+        return requested_rows;
+    }
+
     // Flush all pending float chunks: train the quantizer on the combined data,
     // then quantize each chunk and store into flattened_host_dataset.
     // Must be called only from inside a submit_main() task (GPU work is legal there).
@@ -1140,9 +1166,9 @@ public:
         //
         // Copying only the sample (not all N rows) is also what removes the O(N)
         // duplicate-of-the-source training buffer that OOMed large 1-byte builds.
-        int64_t n_train = std::min<int64_t>(static_cast<int64_t>(total),
-                                            static_cast<int64_t>(quantizer_train_limit_));
-        if (n_train < 1) n_train = 1;
+        int64_t n_train = cap_train_rows_to_gpu_mem(
+            std::min<int64_t>(static_cast<int64_t>(total),
+                              static_cast<int64_t>(quantizer_train_limit_)));
         std::vector<B> sample(static_cast<size_t>(n_train) * dimension);
         {
             // Walk the buffered chunks once, copying the row whose global index
