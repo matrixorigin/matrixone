@@ -83,8 +83,14 @@ type serverConn struct {
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
 	rebalancer *rebalancer
-	// tun is the tunnel which this server connection belongs to.
-	tun *tunnel
+	// tunnelOwner linearizes terminal Close with cache-generation rebinding.
+	// The backend may outlive its originating tunnel while cached, but it must
+	// have exactly one manager/tunnel owner at every instant.
+	tunnelOwner struct {
+		sync.Mutex
+		tun    *tunnel
+		closed bool
+	}
 	// connResp is the response bytes which is got from cn server when
 	// connect to the cn.
 	connResp []byte
@@ -186,9 +192,9 @@ func newServerConnContext(
 		conn:       c,
 		connID:     nextServerConnID(),
 		rebalancer: r,
-		tun:        tun,
 		createTime: time.Now(),
 	}
+	s.tunnelOwner.tun = tun
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
@@ -244,13 +250,97 @@ func (s *serverConn) RawConn() net.Conn {
 			return &wrappedConn{
 				Conn: s.conn,
 				closeFn: func() {
-					s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+					s.closeTunnelOwnership()
 				},
 			}
 		}
 		return s.conn
 	}
 	return nil
+}
+
+type cacheReuseServerConn interface {
+	waitCacheReuseReady(context.Context) error
+	rebindTunnel(*tunnel) bool
+}
+
+var _ cacheReuseServerConn = (*serverConn)(nil)
+
+func waitServerConnCacheReuseReady(ctx context.Context, sc ServerConn) error {
+	if reusable, ok := sc.(cacheReuseServerConn); ok {
+		return reusable.waitCacheReuseReady(ctx)
+	}
+	return nil
+}
+
+func rebindServerConnTunnel(sc ServerConn, next *tunnel) bool {
+	if reusable, ok := sc.(cacheReuseServerConn); ok {
+		return reusable.rebindTunnel(next)
+	}
+	// Test and extension implementations without manager ownership retain their
+	// existing behavior. Production serverConn and its memory wrapper implement
+	// the complete cache-reuse contract.
+	return true
+}
+
+func (s *serverConn) waitCacheReuseReady(ctx context.Context) error {
+	if s == nil {
+		return errPipeClosed
+	}
+	s.tunnelOwner.Lock()
+	if s.tunnelOwner.closed {
+		s.tunnelOwner.Unlock()
+		return errPipeClosed
+	}
+	origin := s.tunnelOwner.tun
+	s.tunnelOwner.Unlock()
+	if err := origin.waitCacheReuseReady(ctx); err != nil {
+		return err
+	}
+	// Close may have won while the caller waited. Do not let a terminal backend
+	// enter authentication or become visible to a new tunnel generation.
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	if s.tunnelOwner.closed || s.tunnelOwner.tun != origin {
+		return errPipeClosed
+	}
+	return nil
+}
+
+func (s *serverConn) rebindTunnel(next *tunnel) bool {
+	if s == nil {
+		return false
+	}
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	if s.tunnelOwner.closed {
+		return false
+	}
+	old := s.tunnelOwner.tun
+	if old == next {
+		return true
+	}
+	if s.rebalancer != nil {
+		s.rebalancer.connManager.rebind(s.cnServer, old, next)
+	}
+	s.tunnelOwner.tun = next
+	return true
+}
+
+func (s *serverConn) closeTunnelOwnership() {
+	if s == nil {
+		return
+	}
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	if s.tunnelOwner.closed {
+		return
+	}
+	s.tunnelOwner.closed = true
+	if s.rebalancer != nil {
+		s.rebalancer.connManager.disconnect(s.cnServer, s.tunnelOwner.tun)
+	}
+	s.tunnelOwner.tun = nil
 }
 
 // HandleHandshake implements the ServerConn interface.
@@ -460,6 +550,7 @@ func (s *serverConn) Quit() error {
 // Close implements the ServerConn interface.
 func (s *serverConn) Close() error {
 	s.closeOnce.Do(func() {
+		s.closeTunnelOwnership()
 		if s.mysqlProto != nil {
 			tcpConn := s.mysqlProto.GetTcpConnection()
 			if tcpConn != nil {
@@ -470,10 +561,6 @@ func (s *serverConn) Close() error {
 			_ = s.conn.Close()
 		}
 	})
-	if s.rebalancer != nil {
-		// Un-track the connection.
-		s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
-	}
 	return nil
 }
 

@@ -419,7 +419,9 @@ func (c *connCache) closeCachedConnection(sc *serverConnAuth) {
 
 // Pop implements the ConnCache interface.
 func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byte) ServerConn {
-	return c.PopContext(context.Background(), key, connID, salt, authResp)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
+	defer cancel()
+	return c.PopContext(ctx, key, connID, salt, authResp)
 }
 
 func (c *connCache) PopContext(
@@ -448,6 +450,15 @@ func (c *connCache) PopContext(
 		sc := connOperator[c.opStrategy].pop(store, nil)
 		c.mu.Unlock()
 		if sc == nil {
+			return nil
+		}
+
+		// Push is initiated by the originating tunnel's event handler. The cache
+		// entry can therefore become visible before that old handler and its pipes
+		// have finished cleanup. Never issue SET CONNECTION ID or authentication
+		// against the backend until the old generation has released it.
+		if err := waitServerConnCacheReuseReady(ctx, sc.ServerConn); err != nil {
+			c.closeCachedConnection(sc)
 			return nil
 		}
 

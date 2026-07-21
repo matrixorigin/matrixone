@@ -30,6 +30,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -983,4 +984,98 @@ func TestServerConnParseConnID(t *testing.T) {
 		err := s.parseConnID(p)
 		require.NoError(t, err)
 	})
+}
+
+func TestCachedServerConnRebindsManagerAcrossReuseGenerations(t *testing.T) {
+	manager := newConnManager()
+	rebalancer := &rebalancer{connManager: manager}
+	newTestTunnel := func() *tunnel {
+		tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), nil)
+		t.Cleanup(func() { require.NoError(t, tun.Close()) })
+		return tun
+	}
+	newTracked := func(id uint32, origin *tunnel) (*serverConn, *CNServer) {
+		cn := testMakeCNServer(
+			fmt.Sprintf("cn-%d", id),
+			fmt.Sprintf("backend-%d", id),
+			id,
+			LabelHash(fmt.Sprintf("tenant-%d", id)),
+			labelInfo{},
+		)
+		sc := &serverConn{
+			cnServer:   cn,
+			connID:     id,
+			rebalancer: rebalancer,
+		}
+		sc.tunnelOwner.tun = origin
+		manager.connect(cn, origin)
+		return sc, cn
+	}
+	contains := func(cn *CNServer, tun *tunnel) bool {
+		manager.Lock()
+		defer manager.Unlock()
+		return manager.cnTunnels[cn.uuid].exists(tun)
+	}
+
+	origin1 := newTestTunnel()
+	active1 := newTestTunnel()
+	sc1, cn1 := newTracked(1, origin1)
+	require.True(t, sc1.rebindTunnel(active1))
+	require.False(t, contains(cn1, origin1))
+	require.True(t, contains(cn1, active1))
+
+	// Replenish the cache while the first reused backend stays active, then pop
+	// that replacement too. Manager ownership must remain active-current plus
+	// cached-origin; prior origins must not accumulate with every reuse cycle.
+	origin2 := newTestTunnel()
+	active2 := newTestTunnel()
+	sc2, cn2 := newTracked(2, origin2)
+	require.True(t, contains(cn1, active1))
+	require.True(t, contains(cn2, origin2))
+	require.True(t, sc2.rebindTunnel(active2))
+	require.False(t, contains(cn2, origin2))
+	require.True(t, contains(cn2, active2))
+
+	origin3 := newTestTunnel()
+	sc3, cn3 := newTracked(3, origin3)
+	require.Equal(t, 3, manager.count())
+	require.True(t, contains(cn1, active1))
+	require.True(t, contains(cn2, active2))
+	require.True(t, contains(cn3, origin3))
+	require.False(t, contains(cn1, origin1))
+	require.False(t, contains(cn2, origin2))
+
+	require.NoError(t, sc1.Close())
+	require.False(t, sc1.rebindTunnel(origin1),
+		"a terminal backend generation must not be rebound")
+	require.False(t, contains(cn1, active1))
+	require.NoError(t, sc2.Close())
+	require.NoError(t, sc3.Close())
+
+	for i := uint32(0); i < 32; i++ {
+		origin := newTestTunnel()
+		next := newTestTunnel()
+		sc, cn := newTracked(100+i, origin)
+		start := make(chan struct{})
+		closeErr := make(chan error, 1)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = sc.rebindTunnel(next)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			closeErr <- sc.Close()
+		}()
+		close(start)
+		wg.Wait()
+		require.NoError(t, <-closeErr)
+		require.False(t, contains(cn, origin))
+		require.False(t, contains(cn, next),
+			"Close must remove whichever tunnel generation won publication")
+	}
+	require.Zero(t, manager.count())
 }

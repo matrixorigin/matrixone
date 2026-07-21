@@ -160,9 +160,12 @@ func calculateProtocolMemoryBudget(c *Config) (protocolMemoryBudget, error) {
 	// session allocator, but connection admission makes their count equally
 	// deterministic. Keep them in the same end-to-end protocol memory budget.
 	// Cached server connections retain their originating tunnel through
-	// serverConn.tun so connManager can untrack them on terminal Close. That
-	// tunnel still owns both message buffers and the client writer even though
-	// it no longer consumes a live connection slot.
+	// serverConn's tunnel ownership so connManager can untrack them on terminal
+	// Close. That tunnel still owns both message buffers and the client writer
+	// even though it no longer consumes a live connection slot. Cache reuse
+	// waits for the origin generation to finish and atomically rebinds this owner
+	// before the current tunnel allocates its buffers. An active reused backend
+	// therefore does not retain an additional origin generation.
 	tunnelOwners, ok := checkedAddUint64(connections, cachedSessions)
 	if !ok {
 		return protocolMemoryBudget{}, protocolMemoryConfigOverflow()
@@ -514,6 +517,8 @@ type protocolMemoryServerConn struct {
 	once  sync.Once
 }
 
+var _ cacheReuseServerConn = (*protocolMemoryServerConn)(nil)
+
 func (c *protocolMemoryServerConn) releaseProtocolMemory() {
 	if c == nil {
 		return
@@ -544,6 +549,14 @@ func (c *protocolMemoryServerConn) ExecStmtContext(
 	resp chan<- []byte,
 ) (bool, error) {
 	return execStmtWithContext(ctx, c.ServerConn, stmt, resp)
+}
+
+func (c *protocolMemoryServerConn) waitCacheReuseReady(ctx context.Context) error {
+	return waitServerConnCacheReuseReady(ctx, c.ServerConn)
+}
+
+func (c *protocolMemoryServerConn) rebindTunnel(next *tunnel) bool {
+	return rebindServerConnTunnel(c.ServerConn, next)
 }
 
 func acquireProtocolMemoryBefore(

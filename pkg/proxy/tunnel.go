@@ -80,6 +80,16 @@ func withConnCacheEnabled(v bool) tunnelOption {
 	}
 }
 
+// withCacheReuseBarrier prevents a cached backend from being reused until the
+// originating handler has finished all of its tunnel cleanup. Closing the
+// tunnel is only the terminal linearization point; pipe and handler defers may
+// still hold references to that generation afterwards.
+func withCacheReuseBarrier() tunnelOption {
+	return func(t *tunnel) {
+		t.cacheReuseReady = make(chan struct{})
+	}
+}
+
 type transferType int
 
 const (
@@ -103,6 +113,12 @@ type tunnel struct {
 	respC chan []byte
 	// closeOnce controls the close function to close tunnel only once.
 	closeOnce sync.Once
+	// cacheReuseReady is closed by the owning handler after all work from this
+	// tunnel generation has stopped. A cached backend must not execute commands
+	// for its next client before this barrier, or stale pipes can access the
+	// reused transport concurrently.
+	cacheReuseReady     chan struct{}
+	cacheReuseReadyOnce sync.Once
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
 	// the global rebalancer.
@@ -280,6 +296,30 @@ func (t *tunnel) markExpectedClientQuit() {
 
 func (t *tunnel) hasExpectedClientQuit() bool {
 	return t != nil && t.expectedClientQuit.Load()
+}
+
+func (t *tunnel) waitCacheReuseReady(ctx context.Context) error {
+	if t == nil || t.cacheReuseReady == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-t.cacheReuseReady:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (t *tunnel) markCacheReuseReady() {
+	if t == nil || t.cacheReuseReady == nil {
+		return
+	}
+	t.cacheReuseReadyOnce.Do(func() {
+		close(t.cacheReuseReady)
+	})
 }
 
 func (t *tunnel) hasInFlightClientRequest() bool {

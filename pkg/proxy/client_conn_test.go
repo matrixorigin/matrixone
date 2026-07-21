@@ -1978,6 +1978,16 @@ type shortHandshakeServerConn struct {
 	closeCount           int
 	setConnResponseCount int
 	connResponse         []byte
+	rebound              *tunnel
+}
+
+func (s *shortHandshakeServerConn) waitCacheReuseReady(context.Context) error {
+	return nil
+}
+
+func (s *shortHandshakeServerConn) rebindTunnel(tun *tunnel) bool {
+	s.rebound = tun
+	return true
 }
 
 func (s *shortHandshakeServerConn) Close() error {
@@ -2264,6 +2274,8 @@ func Test_connectToBackend_BindsOnlyAuthenticatedTenant(t *testing.T) {
 		got, err := client.connectToBackend("")
 		require.ErrorIs(t, err, errProxyConnectionLimit)
 		require.Nil(t, got)
+		require.Same(t, client.tun, serverConn.rebound,
+			"cache ownership must move before tenant admission publishes a result")
 		require.Equal(t, 1, serverConn.closeCount)
 		require.Zero(t, writer.writeCount, "a backend OK must not escape before tenant admission")
 	})

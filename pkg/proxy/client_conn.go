@@ -965,6 +965,13 @@ func (c *clientConn) connectToBackendContext(
 			)
 		}
 		if sc != nil {
+			// Pop transfers the physical backend, but serverConn and connManager
+			// still name its terminal originating tunnel. Move both owners to this
+			// generation before any client-visible success or tunnel allocation.
+			if !rebindServerConnTunnel(sc, c.tun) {
+				_ = sc.Close()
+				return nil, errPipeClosed
+			}
 			if err := c.bindAuthenticatedTenant(); err != nil {
 				_ = sc.Close()
 				return nil, err

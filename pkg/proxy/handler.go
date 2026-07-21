@@ -244,14 +244,22 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}()
 
 	// Create a new tunnel to manage client connection and server connection.
-	t := newTunnel(h.ctx, h.logger, h.counterSet,
+	tunnelOptions := []tunnelOption{
 		withRealConn(),
 		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
 		withRebalancer(h.rebalancer),
 		withConnCacheEnabled(h.connCache != nil),
-	)
+	}
+	if h.connCache != nil {
+		tunnelOptions = append(tunnelOptions, withCacheReuseBarrier())
+	}
+	t := newTunnel(h.ctx, h.logger, h.counterSet, tunnelOptions...)
 	defer func() {
 		_ = t.Close()
+		// This defer was installed before the client/server and event-handler
+		// cleanup defers, so reaching it proves the old tunnel generation can no
+		// longer touch a backend that is about to be reused.
+		t.markCacheReuseReady()
 	}()
 
 	cc, err := newClientConn(
