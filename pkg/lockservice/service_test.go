@@ -5095,6 +5095,41 @@ func TestRowLockWithFailFast(t *testing.T) {
 	}
 }
 
+func TestRowLockFastFailConflictActiveTxnCleanup(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					option.Policy = pb.WaitPolicy_FastFail
+					rows := newTestRows(1)
+					holderTxn := newTestTxnID(1)
+					conflictTxn := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, holderTxn, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+					}()
+
+					_, err = s.Lock(ctx, table, rows, conflictTxn, option)
+					require.Error(t, err)
+					require.ErrorIs(t, err, ErrLockConflict)
+					require.NotNil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
+
+					require.NoError(t, s.Unlock(ctx, conflictTxn, timestamp.Timestamp{}))
+					require.Nil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
+				})
+		})
+	}
+}
+
 func TestRangeLockWithFailFast(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {
