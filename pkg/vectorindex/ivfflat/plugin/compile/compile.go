@@ -103,6 +103,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	return nil
 }
 
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
+}
+
 // ivfflatIdxcronSpec captures every system / session var the cron-
 // triggered ALTER REINDEX needs to mirror the user's CREATE INDEX
 // configuration: kmeans tuning, capacity, and the experimental flag.

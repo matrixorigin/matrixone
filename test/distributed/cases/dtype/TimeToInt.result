@@ -292,7 +292,7 @@ select col1 % col2 from datetime01;
 4.123  𝄀
 68280075.400
 select col1 + 100.291024 from datetime01;
-invalid input: Decimal64 scale overflow: 20001212125858.123
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal64 scale overflow: 20001212125858.123
 select col1 + (-839402143.9320) from datetime01;
 ➤ col1 + (-839402143.9320)[3,18,4]  𝄀
 20000372723714.1910  𝄀
