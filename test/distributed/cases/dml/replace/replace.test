@@ -476,11 +476,14 @@ insert into t_chk_addcol values (2, -5);
 select * from t_chk_addcol order by id;
 drop table t_chk_addcol;
 
--- ALTER ADD COLUMN with NOT ENFORCED is unsupported and must be rejected, like
--- CREATE TABLE, rather than silently accepted as an enforced check.
+-- ALTER ADD COLUMN with NOT ENFORCED must retain the constraint as schema
+-- metadata without rejecting rows that violate it.
 drop table if exists t_chk_addcol_notenforced;
 create table t_chk_addcol_notenforced(id int primary key);
 alter table t_chk_addcol_notenforced add column b int check (b > 0) not enforced;
+insert into t_chk_addcol_notenforced values (1, -5);
+show create table t_chk_addcol_notenforced;
+select * from t_chk_addcol_notenforced order by id;
 drop table t_chk_addcol_notenforced;
 
 -- Renaming a column that a CHECK depends on must be rejected; renaming an
