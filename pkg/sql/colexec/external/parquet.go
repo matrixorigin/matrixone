@@ -35,6 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -50,8 +52,10 @@ const maxParquetS3PrefetchSize int64 = 128 * 1024 * 1024
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
-		batchCnt:         maxParquetBatchCnt,
-		filepathColIndex: -1, // sentinel: not projected
+		batchCnt:                       maxParquetBatchCnt,
+		filepathColIndex:               -1, // sentinel: not projected
+		icebergDMLDataFilePathColIndex: -1,
+		icebergDMLRowOrdinalColIndex:   -1,
 	}
 	err := h.openFile(param, hasPhysicalParquetAttrs(param))
 	if err != nil {
@@ -69,7 +73,7 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 		}
 		// Skip column count check in Hive mode: partition-only projections have
 		// 0 expected physical columns while the empty file still has schema columns.
-		if !param.Extern.HivePartitioning {
+		if !param.Extern.HivePartitioning && !isIcebergParquetScan(param) {
 			parquetColCnt := len(h.file.Root().Columns())
 			tableColCnt := getParquetExpectedColCnt(param)
 			if parquetColCnt != tableColCnt {
@@ -98,10 +102,13 @@ func (h *ParquetHandler) initRowGroupSelection(param *ExternalParam) error {
 	if len(param.ParquetRowGroupShards) == 0 {
 		h.rowGroups = all
 	} else {
+		rowGroupStarts := parquetRowGroupStartOrdinals(all)
 		currentFileIndex := int32(0)
 		if param.Fileparam != nil && param.Fileparam.FileIndex > 0 {
 			currentFileIndex = int32(param.Fileparam.FileIndex - 1)
 		}
+		var lastEnd int
+		matched := 0
 		for _, shard := range param.ParquetRowGroupShards {
 			if shard.FileIndex != currentFileIndex {
 				continue
@@ -113,7 +120,16 @@ func (h *ParquetHandler) initRowGroupSelection(param *ExternalParam) error {
 					"invalid parquet row group shard [%d,%d) for file index %d with %d row groups",
 					start, end, currentFileIndex, len(all))
 			}
+			if matched == 0 {
+				h.rowOrdinalBase = rowGroupStarts[start]
+			} else if param.NeedRowOrdinal && start != lastEnd {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"iceberg row ordinal requires contiguous parquet row group shards for file index %d",
+					currentFileIndex)
+			}
 			h.rowGroups = append(h.rowGroups, all[start:end]...)
+			lastEnd = end
+			matched++
 		}
 	}
 	if len(h.rowGroups) == 0 {
@@ -124,6 +140,19 @@ func (h *ParquetHandler) initRowGroupSelection(param *ExternalParam) error {
 	h.rowGroup = parquet.MultiRowGroup(h.rowGroups...)
 	h.rowGroupRows = h.rowGroup.NumRows()
 	return nil
+}
+
+func parquetRowGroupStartOrdinals(rowGroups []parquet.RowGroup) []int64 {
+	starts := make([]int64, len(rowGroups)+1)
+	var next int64
+	for i, rowGroup := range rowGroups {
+		starts[i] = next
+		if rowGroup != nil && rowGroup.NumRows() > 0 {
+			next += rowGroup.NumRows()
+		}
+	}
+	starts[len(rowGroups)] = next
+	return starts
 }
 
 func hasPhysicalParquetAttrs(param *ExternalParam) bool {
@@ -139,6 +168,9 @@ func hasPhysicalParquetAttrs(param *ExternalParam) bool {
 			continue
 		}
 		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
+		}
+		if isIcebergDMLMetadataAttr(attr.ColName) {
 			continue
 		}
 		return true
@@ -158,7 +190,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
-		fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+		fs, readPath, err := parquetFileServiceForCurrentFile(param)
 		if err != nil {
 			return err
 		}
@@ -203,6 +235,13 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
+func parquetFileServiceForCurrentFile(param *ExternalParam) (fileservice.ETLFileService, string, error) {
+	if strings.TrimSpace(param.IcebergObjectIORef) != "" {
+		return icebergio.ResolveObjectIORef(param.Ctx, param.IcebergObjectIORef, param.Fileparam.Filepath)
+	}
+	return plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+}
+
 func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards bool) bool {
 	return scanType == tree.S3 &&
 		prefetchS3 &&
@@ -212,19 +251,26 @@ func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasR
 }
 
 type parquetColumnLookup struct {
-	exact  map[string]*parquet.Column
-	folded map[string][]*parquet.Column
+	exact       map[string]*parquet.Column
+	folded      map[string][]*parquet.Column
+	fieldIDs    map[int][]*parquet.Column
+	hasFieldIDs bool
 }
 
 func newParquetColumnLookup(root *parquet.Column) parquetColumnLookup {
 	lookup := parquetColumnLookup{
-		exact:  make(map[string]*parquet.Column),
-		folded: make(map[string][]*parquet.Column),
+		exact:    make(map[string]*parquet.Column),
+		folded:   make(map[string][]*parquet.Column),
+		fieldIDs: make(map[int][]*parquet.Column),
 	}
 	for _, col := range root.Columns() {
 		lookup.exact[col.Name()] = col
 		nameLower := strings.ToLower(col.Name())
 		lookup.folded[nameLower] = append(lookup.folded[nameLower], col)
+		if id := col.ID(); id > 0 {
+			lookup.hasFieldIDs = true
+			lookup.fieldIDs[id] = append(lookup.fieldIDs[id], col)
+		}
 	}
 	return lookup
 }
@@ -252,6 +298,52 @@ func (lookup parquetColumnLookup) find(ctx context.Context, name string) (*parqu
 	return nil, nil
 }
 
+func (lookup parquetColumnLookup) findByFieldID(ctx context.Context, fieldID int32) (*parquet.Column, error) {
+	matches := lookup.fieldIDs[int(fieldID)]
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx,
+			"ambiguous parquet field id %d: multiple columns match (%s and %s)",
+			fieldID, matches[0].Name(), matches[1].Name())
+	}
+}
+
+func (lookup parquetColumnLookup) findIcebergColumn(
+	ctx context.Context,
+	mapping *pipeline.IcebergColumnMapping,
+) (*parquet.Column, error) {
+	if mapping == nil {
+		return nil, moerr.NewInvalidInput(ctx, "iceberg column mapping is required")
+	}
+	if mapping.IcebergFieldId <= 0 {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"invalid iceberg field id %d for column %s",
+			mapping.IcebergFieldId, icebergMappingName(mapping))
+	}
+	if col, err := lookup.findByFieldID(ctx, mapping.IcebergFieldId); err != nil || col != nil {
+		return col, err
+	}
+
+	fallbackName := strings.TrimSpace(mapping.ParquetPathHint)
+	if fallbackName == "" {
+		return nil, nil
+	}
+	col, err := lookup.find(ctx, fallbackName)
+	if err != nil || col == nil {
+		return col, err
+	}
+	if id := col.ID(); id != 0 && int32(id) != mapping.IcebergFieldId {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"iceberg parquet field id mismatch for column %s: expected field_id=%d, parquet column %s has field_id=%d",
+			icebergMappingName(mapping), mapping.IcebergFieldId, col.Name(), id)
+	}
+	return col, nil
+}
+
 // findColumnIgnoreCase is kept for direct unit tests; prepare() builds the
 // lookup once and uses it for all target columns.
 func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) (*parquet.Column, error) {
@@ -275,6 +367,13 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.currentPage = make([]parquet.Page, len(param.Cols))
 	h.pageOffset = make([]int64, len(param.Cols))
 	columnLookup := newParquetColumnLookup(h.file.Root())
+	icebergMappings, err := parquetIcebergColumnMappings(param)
+	if err != nil {
+		return err
+	}
+	if icebergMappings != nil {
+		h.icebergNullFill = make([]bool, len(param.Cols))
+	}
 	var rowGroupChunks []parquet.ColumnChunk
 	if h.rowGroup != nil {
 		rowGroupChunks = h.rowGroup.ColumnChunks()
@@ -298,17 +397,35 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			h.filepathColIndex = colIdx
 			continue
 		}
+		if isIcebergDMLDataFilePathAttr(attr.ColName) {
+			if !isIcebergDMLStringColumn(def) {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"iceberg DML data-file metadata column %s must be VARCHAR/TEXT, got %s",
+					attr.ColName, types.T(def.Typ.Id).String())
+			}
+			h.icebergDMLDataFilePathColIndex = colIdx
+			continue
+		}
+		if isIcebergDMLRowOrdinalAttr(attr.ColName) {
+			if types.T(def.Typ.Id) != types.T_int64 {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"iceberg DML row-ordinal metadata column %s must be BIGINT, got %s",
+					attr.ColName, types.T(def.Typ.Id).String())
+			}
+			h.icebergDMLRowOrdinalColIndex = colIdx
+			continue
+		}
 
-		h.hasPhysicalCol = true
-
-		// Use case-insensitive column lookup (fix for issue #15621)
-		col, err := columnLookup.find(param.Ctx, attr.ColName)
+		col, err := findParquetColumnForAttr(param, columnLookup, icebergMappings, attr, def)
 		if err != nil {
 			return err
 		}
 		if col == nil {
-			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
+			h.icebergNullFill[colIdx] = true
+			continue
 		}
+		h.hasPhysicalCol = true
+
 		physicalCol := col
 		var fn *columnMapper
 		if !col.Leaf() {
@@ -365,6 +482,131 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	}
 
 	return nil
+}
+
+func isIcebergDMLMetadataAttr(name string) bool {
+	return isIcebergDMLDataFilePathAttr(name) || isIcebergDMLRowOrdinalAttr(name)
+}
+
+func isIcebergDMLDataFilePathAttr(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), IcebergDMLDataFilePathAttr)
+}
+
+func isIcebergDMLRowOrdinalAttr(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), IcebergDMLRowOrdinalAttr)
+}
+
+func isIcebergDMLStringColumn(def *plan.ColDef) bool {
+	if def == nil {
+		return false
+	}
+	switch types.T(def.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+func parquetIcebergColumnMappings(param *ExternalParam) (map[int]*pipeline.IcebergColumnMapping, error) {
+	if param == nil || !isIcebergParquetScan(param) {
+		return nil, nil
+	}
+	mappings := make(map[int]*pipeline.IcebergColumnMapping, len(param.IcebergColumns))
+	for _, mapping := range param.IcebergColumns {
+		if mapping == nil {
+			continue
+		}
+		colIdx := int(mapping.MoColIndex)
+		if colIdx < 0 || colIdx >= len(param.Cols) {
+			return nil, moerr.NewInvalidInputf(param.Ctx,
+				"invalid iceberg column mapping index %d for field_id=%d",
+				mapping.MoColIndex, mapping.IcebergFieldId)
+		}
+		if prev := mappings[colIdx]; prev != nil {
+			return nil, moerr.NewInvalidInputf(param.Ctx,
+				"duplicate iceberg column mapping for column index %d: field_id=%d and field_id=%d",
+				colIdx, prev.IcebergFieldId, mapping.IcebergFieldId)
+		}
+		mappings[colIdx] = mapping
+	}
+	return mappings, nil
+}
+
+func isIcebergParquetScan(param *ExternalParam) bool {
+	return len(param.IcebergColumns) > 0 ||
+		(param.Extern != nil && param.Extern.ExternType == int32(plan.ExternType_ICEBERG_TB))
+}
+
+func findParquetColumnForAttr(
+	param *ExternalParam,
+	columnLookup parquetColumnLookup,
+	icebergMappings map[int]*pipeline.IcebergColumnMapping,
+	attr plan.ExternAttr,
+	def *plan.ColDef,
+) (*parquet.Column, error) {
+	if icebergMappings == nil {
+		col, err := columnLookup.find(param.Ctx, attr.ColName)
+		if err != nil {
+			return nil, err
+		}
+		if col == nil {
+			return nil, moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
+		}
+		return col, nil
+	}
+
+	mapping := icebergMappings[int(attr.ColIndex)]
+	if mapping == nil {
+		return nil, moerr.NewInvalidInputf(param.Ctx,
+			"iceberg column mapping not found for column %s index %d",
+			attr.ColName, attr.ColIndex)
+	}
+	col, err := columnLookup.findIcebergColumn(param.Ctx, mapping)
+	if err != nil {
+		return nil, err
+	}
+	if col != nil {
+		return col, nil
+	}
+	if icebergCanNullFillMissingColumn(mapping, def, columnLookup) {
+		return nil, nil
+	}
+	return nil, icebergColumnNotFoundError(param, mapping)
+}
+
+func icebergCanNullFillMissingColumn(mapping *pipeline.IcebergColumnMapping, def *plan.ColDef, lookup parquetColumnLookup) bool {
+	if mapping == nil || def == nil || mapping.Required || def.NotNull {
+		return false
+	}
+	return mapping.DefaultNullFill || lookup.hasFieldIDs
+}
+
+func icebergColumnNotFoundError(param *ExternalParam, mapping *pipeline.IcebergColumnMapping) error {
+	snapshotID := int64(0)
+	if param.IcebergSnapshot != nil {
+		snapshotID = param.IcebergSnapshot.SnapshotId
+	}
+	filePath := ""
+	if param.Fileparam != nil {
+		filePath = param.Fileparam.Filepath
+	}
+	return moerr.NewInvalidInputf(param.Ctx,
+		"iceberg parquet column not found: field_id=%d field_name=%s snapshot_id=%d file=%s",
+		mapping.IcebergFieldId, icebergMappingName(mapping), snapshotID, icebergio.RedactObjectPath(filePath))
+}
+
+func icebergMappingName(mapping *pipeline.IcebergColumnMapping) string {
+	if mapping == nil {
+		return ""
+	}
+	if mapping.SnapshotFieldName != "" {
+		return mapping.SnapshotFieldName
+	}
+	if mapping.CurrentFieldName != "" {
+		return mapping.CurrentFieldName
+	}
+	return mapping.ParquetPathHint
 }
 
 func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*parquet.Column, *columnMapper) {
@@ -3347,13 +3589,18 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	var err error
 	if h.rowCountOnly {
-		return h.getDataRowCountOnly(bat)
+		err = h.getDataRowCountOnly(bat)
+	} else if h.hasNestedCols {
+		err = h.getDataByRow(bat, param, proc)
+	} else {
+		err = h.getDataByPage(bat, param, proc)
 	}
-	if h.hasNestedCols {
-		return h.getDataByRow(bat, param, proc)
+	if err != nil {
+		return err
 	}
-	return h.getDataByPage(bat, param, proc)
+	return h.fillIcebergDefaultNullColumns(bat, proc)
 }
 
 func (h *ParquetHandler) isFinished() bool {
@@ -3402,6 +3649,86 @@ func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
 
 	h.offset += int64(rowCount)
 	bat.SetRowCount(rowCount)
+	return nil
+}
+
+func (h *ParquetHandler) fillIcebergDefaultNullColumns(bat *batch.Batch, proc *process.Process) error {
+	rowCount := bat.RowCount()
+	if rowCount == 0 || len(h.icebergNullFill) == 0 {
+		return nil
+	}
+	for colIdx, fillNull := range h.icebergNullFill {
+		if !fillNull {
+			continue
+		}
+		if colIdx < 0 || colIdx >= len(bat.Vecs) || bat.Vecs[colIdx] == nil {
+			continue
+		}
+		vec := bat.Vecs[colIdx]
+		for vec.Length() < rowCount {
+			if err := vector.AppendNull(vec, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		if vec.Length() != rowCount {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"iceberg null-fill column %d length mismatch: vector length %d, row count %d",
+				colIdx, vec.Length(), rowCount)
+		}
+	}
+	return nil
+}
+
+func (h *ParquetHandler) fillIcebergDMLMetadataColumns(
+	bat *batch.Batch,
+	param *ExternalParam,
+	proc *process.Process,
+	startRowOrdinal int64,
+) error {
+	if h == nil || bat == nil || param == nil || proc == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	rowCount := bat.RowCount()
+	if h.icebergDMLDataFilePathColIndex >= 0 {
+		if param.Fileparam == nil {
+			return moerr.NewInternalError(proc.Ctx, "iceberg DML data-file metadata requires current file path")
+		}
+		idx := h.icebergDMLDataFilePathColIndex
+		if idx >= len(bat.Vecs) || bat.Vecs[idx] == nil {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"iceberg DML data-file metadata column %d is not allocated", idx)
+		}
+		vec := bat.Vecs[idx]
+		for vec.Length() < rowCount {
+			if err := vector.AppendBytes(vec, []byte(param.Fileparam.Filepath), false, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		if vec.Length() != rowCount {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"iceberg DML data-file metadata column %d length mismatch: vector length %d, row count %d",
+				idx, vec.Length(), rowCount)
+		}
+	}
+	if h.icebergDMLRowOrdinalColIndex >= 0 {
+		idx := h.icebergDMLRowOrdinalColIndex
+		if idx >= len(bat.Vecs) || bat.Vecs[idx] == nil {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"iceberg DML row-ordinal metadata column %d is not allocated", idx)
+		}
+		vec := bat.Vecs[idx]
+		for vec.Length() < rowCount {
+			ordinal := startRowOrdinal + int64(vec.Length())
+			if err := vector.AppendFixed(vec, ordinal, false, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		if vec.Length() != rowCount {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"iceberg DML row-ordinal metadata column %d length mismatch: vector length %d, row count %d",
+				idx, vec.Length(), rowCount)
+		}
+	}
 	return nil
 }
 

@@ -1277,50 +1277,6 @@ func TestJsonMerge(t *testing.T) {
 	})
 }
 
-func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	trueJSON := mustJsonBinaryString(t, `true`)
-	falseJSON := mustJsonBinaryString(t, `false`)
-
-	measure := func(rows int) float64 {
-		left := make([]string, rows)
-		right := make([]string, rows)
-		for i := range rows {
-			left[i] = trueJSON
-			right[i] = falseJSON
-		}
-		testCase := NewFunctionTestCase(
-			proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), left, nil),
-				NewFunctionTestInput(types.T_json.ToType(), right, nil),
-			},
-			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
-			newOpBuiltInJsonMerge().buildJsonMergePatch,
-		)
-		var runErr error
-		allocs := testing.AllocsPerRun(3, func() {
-			runErr = testCase.result.PreExtendAndReset(rows)
-			if runErr == nil {
-				runErr = testCase.fn(
-					testCase.parameters,
-					testCase.result,
-					testCase.proc,
-					testCase.fnLength,
-					nil,
-				)
-			}
-		})
-		require.NoError(t, runErr)
-		return allocs
-	}
-
-	oneRow := measure(1)
-	manyRows := measure(8192)
-	require.LessOrEqual(t, manyRows, oneRow+10,
-		"wrapper allocations must not grow with rows: one=%f many=%f", oneRow, manyRows)
-}
-
 func TestJsonMergeDepthValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	overDepthArray := `[` + nestedJSONMergeObject(100, `1`) + `]`

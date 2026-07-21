@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -104,13 +105,34 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
+	isIcebergMapping := false
 	if tableDef.TableType == catalog.SystemExternalRel {
-		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return nil, err
+		}
+		if isIceberg {
+			isIcebergMapping = true
+		} else if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "insert into read-only external table %s", tblName)
 		}
 		if len(stmt.OnDuplicateUpdate) > 0 {
+			if isIcebergMapping {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on Iceberg table mapping")
+			}
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on external table")
 		}
+		if stmt.Overwrite && !isIcebergMapping {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT OVERWRITE on non-Iceberg external table")
+		}
+	} else if stmt.Overwrite {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT OVERWRITE currently supports Iceberg table mappings")
+	}
+	if stmt.Overwrite && len(stmt.PartitionNames) > 0 {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "Iceberg INSERT OVERWRITE PARTITION name syntax cannot express an Iceberg partition tuple")
+	}
+	if len(stmt.PartitionValues) > 0 && (!stmt.Overwrite || !isIcebergMapping) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only")
 	}
 
 	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
@@ -132,9 +154,22 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewInternalError(ctx.GetContext(), "ON DUPLICATE KEY UPDATE should be handled by the modern insert path")
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		// Writable external table: minimal plan, no preinsert/lock/pk-dedup/index.
-		if err = appendExternalInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId); err != nil {
-			return nil, err
+		if isIcebergMapping {
+			extraOptions := ""
+			if stmt.Overwrite {
+				extraOptions, err = icebergOverwritePlanExtraOptions(ctx.GetContext(), stmt)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err = appendIcebergInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, extraOptions); err != nil {
+				return nil, err
+			}
+		} else {
+			// Writable external table: minimal plan, no preinsert/lock/pk-dedup/index.
+			if err = appendExternalInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId); err != nil {
+				return nil, err
+			}
 		}
 		query.StmtType = plan.Query_INSERT
 	} else {
@@ -161,6 +196,77 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}, err
 }
 
+func icebergOverwritePlanExtraOptions(ctx context.Context, stmt *tree.Insert) (string, error) {
+	if stmt == nil || len(stmt.PartitionValues) == 0 {
+		return icebergapi.DMLOverwritePlanExtraOptions, nil
+	}
+	partition, err := icebergStaticPartitionTuple(ctx, stmt.PartitionValues)
+	if err != nil {
+		return "", err
+	}
+	return icebergapi.EncodeDMLOverwritePartitionPlanExtraOptions(partition)
+}
+
+func icebergStaticPartitionTuple(ctx context.Context, values tree.PartitionValues) (map[string]any, error) {
+	partition := make(map[string]any, len(values))
+	for _, value := range values {
+		name := strings.TrimSpace(string(value.Name))
+		if name == "" {
+			return nil, moerr.NewInvalidInput(ctx, "Iceberg INSERT OVERWRITE PARTITION requires a non-empty partition field name")
+		}
+		key := strings.ToLower(name)
+		if _, found := partition[key]; found {
+			return nil, moerr.NewInvalidInputf(ctx, "duplicate Iceberg INSERT OVERWRITE PARTITION field: %s", name)
+		}
+		literal, err := icebergStaticPartitionValue(ctx, value.Expr)
+		if err != nil {
+			return nil, err
+		}
+		partition[key] = literal
+	}
+	return partition, nil
+}
+
+func icebergStaticPartitionValue(ctx context.Context, expr tree.Expr) (any, error) {
+	switch v := expr.(type) {
+	case nil:
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg INSERT OVERWRITE PARTITION requires a literal value")
+	case *tree.NumVal:
+		switch v.ValType {
+		case tree.P_null:
+			return nil, nil
+		case tree.P_bool:
+			return v.Bool(), nil
+		case tree.P_int64:
+			i, _ := v.Int64()
+			return i, nil
+		case tree.P_uint64:
+			u, _ := v.Uint64()
+			return u, nil
+		case tree.P_float64:
+			f, _ := v.Float64()
+			return f, nil
+		default:
+			return v.String(), nil
+		}
+	case *tree.StrVal:
+		return v.String(), nil
+	case tree.Datum:
+		if v == tree.DNull {
+			return nil, nil
+		}
+	}
+	return nil, moerr.NewNotSupported(ctx, "Iceberg INSERT OVERWRITE PARTITION requires static literal values")
+}
+
+// appendIcebergInsertPlan appends the dedicated append-write intent for an
+// Iceberg persistent mapping. The TableDef carries the Iceberg envelope in
+// Createsql; compile detects that envelope and dispatches to icebergwrite
+// instead of the writable-external ToExternal path.
+func appendIcebergInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, extraOptions string) error {
+	return appendExternalInsertPlanWithExtraOptions(builder, bindCtx, objRef, tableDef, lastNodeId, extraOptions)
+}
+
 // getExternParamFromTableDef deserializes the external-table ExternParam stored
 // in the catalog (TableDef.Createsql) for an external table. Returns an empty
 // param if there is nothing to parse.
@@ -177,6 +283,10 @@ func getExternParamFromTableDef(tableDef *TableDef) *tree.ExternParam {
 // table. The source (lastNodeId) has already been bound, cast to the table
 // column types and projected by initInsertStmt, so we only attach the INSERT.
 func appendExternalInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) error {
+	return appendExternalInsertPlanWithExtraOptions(builder, bindCtx, objRef, tableDef, lastNodeId, "")
+}
+
+func appendExternalInsertPlanWithExtraOptions(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, extraOptions string) error {
 	insertProjection := getProjectionByLastNode(builder, lastNodeId)
 	if len(insertProjection) > len(tableDef.Cols) {
 		insertProjection = insertProjection[:len(tableDef.Cols)]
@@ -191,7 +301,8 @@ func appendExternalInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRe
 			AddAffectedRows: true,
 			TableDef:        tableDef,
 		},
-		ProjectList: insertProjection,
+		ProjectList:  insertProjection,
+		ExtraOptions: extraOptions,
 	}
 	lastNodeId = builder.appendNode(insertNode, bindCtx)
 	builder.appendStep(lastNodeId)

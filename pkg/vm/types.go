@@ -97,13 +97,14 @@ const (
 	LockOp
 
 	Shuffle
-	ShuffleV2
+	_ // reserved: former ShuffleV2 opcode; keep later wire values stable
 
 	Sample
 	ProductL2
 	Mock
 	Apply
 	PostDml
+	IcebergWrite
 )
 
 var OperatorToStrMap map[OpType]string
@@ -167,6 +168,7 @@ func init() {
 		Mock:                    "Mock",
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
+		IcebergWrite:            "IcebergWrite",
 	}
 
 	// Initialize StrToOperatorMap

@@ -20,6 +20,7 @@ import (
 	goruntime "runtime"
 	"runtime/debug"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/golang/mock/gomock"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -38,8 +40,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_query"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_shard"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_task"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -50,11 +55,70 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
+
+func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL, ":::", "echo", 1, "", false))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL)
+	}()
+
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime("runner-cn", exec)
+	defer iscp.UnregisterExecutorRuntime("runner-cn", exec)
+
+	s := &service{cfg: &Config{UUID: "runner-cn"}}
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+
+	resp := &query.Response{}
+	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+	require.Nil(t, resp.ISCPDrainConsumerResponse)
+	require.False(t, exec.IsJobFenced(key))
+
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
+	time.Sleep(700 * time.Millisecond)
+
+	resp = &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil))
+	time.Sleep(700 * time.Millisecond)
+	require.True(t, exec.IsJobFenced(key))
+
+	time.Sleep(1100 * time.Millisecond)
+	require.False(t, exec.IsJobFenced(key))
+	resp = &query.Response{}
+	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:      key.AccountID,
+			TableID:        key.TableID,
+			JobName:        key.JobName,
+			JobID:          key.JobID,
+			RenewFenceOnly: true,
+		},
+	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+}
 
 func Test_service_handleGoMaxProcs(t *testing.T) {
 	ctx := context.Background()
@@ -1234,4 +1298,47 @@ func Test_service_handleMetadataCacheRequest(t *testing.T) {
 	if resp.MetadataCacheResponse.CacheCapacity != 42 {
 		t.Fatal()
 	}
+}
+
+func Test_service_handleIcebergCacheInvalidate(t *testing.T) {
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	handler := &fakeIcebergCacheInvalidationHandler{removed: 2}
+	rt.SetGlobalVariables(api.CacheInvalidatorRuntimeKey, handler)
+	defer rt.SetGlobalVariables(api.CacheInvalidatorRuntimeKey, nil)
+
+	s := &service{}
+	var resp query.Response
+	err := s.handleIcebergCacheInvalidate(context.Background(), &query.Request{
+		IcebergCacheInvalidateRequest: query.IcebergCacheInvalidateRequest{
+			AccountID:            7,
+			CatalogID:            42,
+			Namespace:            "sales",
+			Table:                "orders",
+			SnapshotID:           200,
+			MetadataLocationHash: "hash-200",
+			CommitID:             "commit-200",
+		},
+	}, &resp, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), resp.IcebergCacheInvalidateResponse.RemovedEntries)
+	require.Equal(t, api.CacheInvalidationRequest{
+		AccountID:            7,
+		CatalogID:            42,
+		Namespace:            "sales",
+		Table:                "orders",
+		SnapshotID:           200,
+		MetadataLocationHash: "hash-200",
+		CommitID:             "commit-200",
+	}, handler.req)
+}
+
+type fakeIcebergCacheInvalidationHandler struct {
+	req     api.CacheInvalidationRequest
+	removed int
+}
+
+func (h *fakeIcebergCacheInvalidationHandler) InvalidateIcebergCache(ctx context.Context, req api.CacheInvalidationRequest) (int, error) {
+	h.req = req
+	return h.removed, nil
 }
