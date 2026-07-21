@@ -6696,15 +6696,19 @@ join_table:
             Cond: $4,
         }
     }
-|   table_reference outer_join table_factor join_condition
-    {
-        $$ = &tree.JoinTableExpr{
-            Left: $1,
-            JoinType: $2,
-            Right: $3,
-            Cond: $4,
-        }
-    }
+|   table_reference outer_join table_factor join_condition_opt
+	{
+		if $4 == nil {
+			yylex.Error("outer join requires ON/USING clause")
+			goto ret1
+		}
+		$$ = &tree.JoinTableExpr{
+			Left: $1,
+			JoinType: $2,
+			Right: $3,
+			Cond: $4,
+		}
+	}
 |   table_reference natural_join table_factor
     {
         $$ = &tree.JoinTableExpr{
