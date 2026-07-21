@@ -561,6 +561,11 @@ func TestQuoteSelectAlias(t *testing.T) {
 			sql:  "select * from tbl force index (`select`, `a b`, `x``y`)",
 			want: "select * from `tbl` force index(`select`, `a b`, `x``y`)",
 		},
+		{
+			name: "quoted user variables",
+			sql:  "select @`a b`, @`select`, @`x``y`, @@autocommit",
+			want: "select @`a b`, @`select`, @`x``y`, @@autocommit",
+		},
 	}
 
 	for _, test := range tests {
