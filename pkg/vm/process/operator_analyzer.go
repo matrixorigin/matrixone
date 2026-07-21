@@ -948,5 +948,5 @@ func (ps *OperatorStats) String() string {
 	}
 
 	sb.WriteString(metricsStr)
-	return strings.TrimRight(sb.String(), " ")
+	return sb.String()
 }

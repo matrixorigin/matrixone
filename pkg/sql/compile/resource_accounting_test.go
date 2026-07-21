@@ -63,7 +63,6 @@ func TestExecutionResourceRecorder(t *testing.T) {
 		nil,
 		anal,
 		"local:6001",
-		resource.OutcomeSuccess,
 		false,
 	)
 	recorder.publish()
@@ -81,7 +80,6 @@ func TestExplainPhyBufferUsesPublishedCurrentAttempt(t *testing.T) {
 	require.True(t, root.MergeExecution(resource.ExecutionSummary{
 		Usage:        resource.Usage{ExclusiveActiveNS: 42},
 		AttemptCount: 1,
-		LastOutcome:  resource.OutcomeSuccess,
 	}))
 	proc := testutil.NewProcess(t)
 	ctx := resource.ContextWithRoot(proc.GetTopContext(), root)
@@ -119,7 +117,6 @@ func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
 		nil,
 		nil,
 		"local:6001",
-		resource.OutcomeSuccess,
 		false,
 	)
 	recorder.publish()
@@ -142,7 +139,7 @@ func TestAggregateWaitLargerThanCoordinatorWallIsNotInvalid(t *testing.T) {
 
 	recorder.finishAttempt(
 		1, time.Now().Add(-time.Millisecond), 10*time.Nanosecond, 0,
-		stats, nil, nil, "local:6001", resource.OutcomeSuccess, false,
+		stats, nil, nil, "local:6001", false,
 	)
 	recorder.publish()
 
@@ -160,14 +157,14 @@ func TestRetryScopePrepareRequestsAreGenerationLocal(t *testing.T) {
 	stats.PrepareRunStage.ScopePrepareS3Request = statistic.S3Request{Get: 2}
 	recorder.finishAttempt(
 		0, time.Now(), 0, 0, stats, nil, nil, "local:6001",
-		resource.OutcomeError, true,
+		true,
 	)
 
 	stats.ResetRetryAttemptResource()
 	stats.PrepareRunStage.ScopePrepareS3Request = statistic.S3Request{Get: 3}
 	recorder.finishAttempt(
 		1, time.Now(), 0, 0, stats, nil, nil, "local:6001",
-		resource.OutcomeSuccess, false,
+		false,
 	)
 	recorder.publish()
 
@@ -182,7 +179,7 @@ func TestChildExecutionDoesNotInflateStatementAttemptCount(t *testing.T) {
 	parent := newExecutionResourceRecorder(ctx, true)
 	parent.finishAttempt(
 		0, time.Now(), 5*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeSuccess, false,
+		false,
 	)
 	parent.publish()
 
@@ -190,11 +187,11 @@ func TestChildExecutionDoesNotInflateStatementAttemptCount(t *testing.T) {
 
 	child.finishAttempt(
 		0, time.Now(), 10*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeError, true,
+		true,
 	)
 	child.finishAttempt(
 		1, time.Now(), 20*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeSuccess, false,
+		false,
 	)
 	child.publish()
 
@@ -218,21 +215,21 @@ func TestOnlyOneEligibleExecutionOwnsStatementAttempts(t *testing.T) {
 
 	child.finishAttempt(
 		0, time.Now(), 3*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeSuccess, false,
+		false,
 	)
 	child.publish()
 	owner.finishAttempt(
 		0, time.Now(), 5*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeError, true,
+		true,
 	)
 	owner.finishAttempt(
 		1, time.Now(), 7*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeSuccess, false,
+		false,
 	)
 	owner.publish()
 	secondEligible.finishAttempt(
 		0, time.Now(), 11*time.Nanosecond, 0, nil, nil, nil, "",
-		resource.OutcomeSuccess, false,
+		false,
 	)
 	secondEligible.publish()
 
@@ -367,7 +364,6 @@ func TestMissingRemoteCountsFragmentAndMemoryDomain(t *testing.T) {
 		scopes,
 		nil,
 		"local:6001",
-		resource.OutcomeError,
 		false,
 	)
 	recorder.publish()
@@ -381,14 +377,14 @@ func TestMissingRemoteCountsFragmentAndMemoryDomain(t *testing.T) {
 
 func TestComposeRemoteResourceAggregateAcrossHops(t *testing.T) {
 	cn3 := composeRemoteResourceAggregate(
-		resource.Delta{Usage: resource.Usage{ExclusiveActiveNS: 3}, Outcome: resource.OutcomeSuccess},
+		resource.Delta{Usage: resource.Usage{ExclusiveActiveNS: 3}},
 		resource.MemoryDomainSummary{PeakLiveBytes: 9},
 		0,
 		remoteResourceSnapshot{},
 		0,
 	)
 	cn2 := composeRemoteResourceAggregate(
-		resource.Delta{Usage: resource.Usage{ExclusiveActiveNS: 2}, Outcome: resource.OutcomeError},
+		resource.Delta{Usage: resource.Usage{ExclusiveActiveNS: 2}},
 		resource.MemoryDomainSummary{PeakLiveBytes: 7},
 		0,
 		remoteResourceSnapshot{
@@ -400,7 +396,7 @@ func TestComposeRemoteResourceAggregateAcrossHops(t *testing.T) {
 		1,
 	)
 	cn1 := composeRemoteResourceAggregate(
-		resource.Delta{Usage: resource.Usage{ExclusiveActiveNS: 1}, Outcome: resource.OutcomeCanceled},
+		resource.Delta{Usage: resource.Usage{ExclusiveActiveNS: 1}},
 		resource.MemoryDomainSummary{PeakLiveBytes: 5},
 		0,
 		remoteResourceSnapshot{
@@ -412,9 +408,6 @@ func TestComposeRemoteResourceAggregateAcrossHops(t *testing.T) {
 		1,
 	)
 	require.Equal(t, uint64(6), cn1.Delta.Usage.ExclusiveActiveNS)
-	require.Equal(t, resource.OutcomeCanceled, cn1.Delta.Outcome)
-	require.Equal(t, resource.OutcomeError, cn2.Delta.Outcome)
-	require.Equal(t, resource.OutcomeSuccess, cn3.Delta.Outcome)
 	require.Equal(t, uint64(9), cn1.Memory.MaxDomainPeakLiveBytes)
 	require.Equal(t, uint64(21), cn1.Memory.SumDomainPeakLiveBytesBound)
 }

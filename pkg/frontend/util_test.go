@@ -93,7 +93,6 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	require.True(t, root.MergeExecution(resource.ExecutionSummary{
 		Usage:        resource.Usage{ExclusiveActiveNS: 10},
 		AttemptCount: 1,
-		LastOutcome:  resource.OutcomeError,
 	}))
 	stmt := motrace.NewStatementInfo()
 	stmt.RequestAt = time.Now()

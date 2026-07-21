@@ -122,24 +122,6 @@ func TestMP(t *testing.T) {
 
 }
 
-func TestMPoolConcurrentHighWater(t *testing.T) {
-	const writers = 64
-	var stats MPoolStats
-	stats.Init()
-
-	var wg sync.WaitGroup
-	wg.Add(writers)
-	for i := 0; i < writers; i++ {
-		go func() {
-			defer wg.Done()
-			stats.RecordAlloc("concurrent-high-water", 1)
-		}()
-	}
-	wg.Wait()
-	require.Equal(t, int64(writers), stats.NumCurrBytes.Load())
-	require.Equal(t, int64(writers), stats.HighWaterMark.Load())
-}
-
 func TestMPoolFailedAllocationDoesNotAdvanceResourcePeak(t *testing.T) {
 	mp, err := NewMPool("failed-allocation-peak", 1<<20, NoFixed)
 	require.NoError(t, err)

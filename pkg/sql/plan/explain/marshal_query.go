@@ -743,9 +743,6 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 // The method only records the original table's input data, and does not record index table's input data
 // migrate ExplainData.StatisticsRead to here
 func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *ExplainOptions) (rows int64, size int64) {
-	if node == nil || node.TableDef == nil {
-		return 0, 0
-	}
 	if util.IsIndexTableName(node.TableDef.Name) {
 		return 0, 0
 	}

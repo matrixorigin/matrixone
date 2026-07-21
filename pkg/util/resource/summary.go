@@ -14,22 +14,10 @@
 
 package resource
 
-// Outcome is the terminal result of an attempt or fragment.
-type Outcome uint8
-
-const (
-	OutcomeUnknown Outcome = iota
-	OutcomeSuccess
-	OutcomeError
-	OutcomeCanceled
-	OutcomePanic
-)
-
 // Delta is the immutable terminal output of one producer or fragment.
 type Delta struct {
 	Usage   Usage
 	Quality QualityFlags
-	Outcome Outcome
 }
 
 // MemoryDomainSummary is the exact terminal state of one isolated MPool
@@ -93,7 +81,6 @@ type AttemptSummary struct {
 	MissingFragmentCount     uint64
 	MissingMemoryDomainCount uint64
 	Quality                  QualityFlags
-	Outcome                  Outcome
 }
 
 // ExecutionSummary is fixed-size in retry count.
@@ -106,7 +93,6 @@ type ExecutionSummary struct {
 	MissingFragmentCount     uint64
 	MissingMemoryDomainCount uint64
 	Quality                  QualityFlags
-	LastOutcome              Outcome
 }
 
 // AddAttempt merges a sealed attempt and retains no attempt object. retried is
@@ -122,7 +108,6 @@ func (s *ExecutionSummary) AddAttempt(attempt AttemptSummary, retried bool) {
 		s.MissingFragmentCount, attempt.MissingFragmentCount, s.Quality)
 	s.MissingMemoryDomainCount, s.Quality = addChecked(
 		s.MissingMemoryDomainCount, attempt.MissingMemoryDomainCount, s.Quality)
-	s.LastOutcome = attempt.Outcome
 }
 
 // ConnType is root metadata, not an additive resource.

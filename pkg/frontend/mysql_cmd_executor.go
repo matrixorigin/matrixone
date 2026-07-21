@@ -5063,18 +5063,24 @@ type jsonPlanHandler struct {
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
-	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
+	var staticJSON []byte
+	if h.marshalPlan == nil && (h.schedulingTrace == nil || !h.schedulingTrace.PersistStandalone()) {
+		if h.query != nil {
+			staticJSON = sqlQueryIgnoreExecPlan
+		} else {
+			staticJSON = sqlQueryNoRecordExecPlan
+		}
+	}
 	// The terminal resource refresh only needs the materialized ExplainData.
 	// Do not retain the statement or logical plan while the record waits for
 	// asynchronous export.
 	h.stmt = nil
 	h.query = nil
 	return &jsonPlanHandler{
-		jsonBytes:              jsonBytes,
+		jsonBytes:              staticJSON,
 		statsBytes:             statsBytes,
 		stats:                  stats,
-		buffer:                 h.handoverBuffer(),
 		persistSchedulingTrace: h.persistSchedulingTrace,
 		marshalHandler:         h,
 	}
@@ -5087,28 +5093,19 @@ func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *j
 			schedulingTrace: &trace,
 		},
 	}
-	jsonBytes := h.Marshal(ctx)
 	return &jsonPlanHandler{
-		jsonBytes:      jsonBytes,
 		statsBytes:     statistic.DefaultStatsArray,
-		buffer:         h.handoverBuffer(),
 		marshalHandler: h,
 	}
 }
 
 // SetResourceSummary forwards the sealed summary into the retained marshal
-// handler and refreshes the serialized explain payload before persistence.
+// handler. Marshal remains lazy so the final explain payload is encoded once.
 func (h *jsonPlanHandler) SetResourceSummary(summary resource.StatementResourceSummary) {
 	if h == nil || h.marshalHandler == nil {
 		return
 	}
-	oldBuffer := h.buffer
 	h.marshalHandler.SetResourceSummary(summary)
-	h.jsonBytes = h.marshalHandler.Marshal(context.Background())
-	h.buffer = h.marshalHandler.handoverBuffer()
-	if oldBuffer != nil && oldBuffer != h.buffer {
-		releaseMarshalPlanBufferPool(oldBuffer)
-	}
 }
 
 func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motrace.Statistic) {
@@ -5116,6 +5113,10 @@ func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motr
 }
 
 func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
+	if h.jsonBytes == nil && h.marshalHandler != nil {
+		h.jsonBytes = h.marshalHandler.Marshal(ctx)
+		h.buffer = h.marshalHandler.handoverBuffer()
+	}
 	return h.jsonBytes
 }
 

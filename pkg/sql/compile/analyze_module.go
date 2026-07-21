@@ -612,9 +612,7 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 
 	// record the number of remote cn s3 requests
 	for _, remotePhy := range runC.anal.remotePhyPlans {
-		if len(remotePhy.LocalScope) > 0 {
-			c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
-		}
+		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 	}
 	c.attachResourceSummary(c.anal.phyPlan)
 }

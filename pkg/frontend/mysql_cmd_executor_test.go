@@ -3241,6 +3241,8 @@ func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
 	}}}
 	h := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, nil)
 	defer h.Free()
+	require.Nil(t, h.jsonBytes)
+	require.Nil(t, h.buffer)
 	summary := resource.StatementResourceSummary{
 		StatementWallNS: 99,
 		AttemptCount:    2,
@@ -3250,15 +3252,71 @@ func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
 		},
 	}
 	h.SetResourceSummary(summary)
+	require.Nil(t, h.jsonBytes)
+	require.Nil(t, h.buffer)
 	var payload struct {
 		PhyPlan struct {
 			Resource *resource.StatementResourceSummary `json:"resource"`
 		}
 	}
-	require.NoError(t, json.Unmarshal(h.Marshal(context.Background()), &payload))
+	first := h.Marshal(context.Background())
+	firstBuffer := h.buffer
+	require.NotNil(t, firstBuffer)
+	require.NoError(t, json.Unmarshal(first, &payload))
 	require.Equal(t, &summary, payload.PhyPlan.Resource)
+	second := h.Marshal(context.Background())
+	require.Equal(t, first, second)
+	require.Same(t, firstBuffer, h.buffer)
 	require.Nil(t, h.marshalHandler.stmt)
 	require.Nil(t, h.marshalHandler.query)
+
+	unmarshaled := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, nil)
+	require.Nil(t, unmarshaled.jsonBytes)
+	require.Nil(t, unmarshaled.buffer)
+	unmarshaled.Free()
+	require.Nil(t, unmarshaled.buffer)
+	require.Nil(t, unmarshaled.marshalHandler)
+}
+
+func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+	h := newSchedulingTracePlanHandler(context.Background(), recorder.Snapshot())
+	defer h.Free()
+	require.Nil(t, h.jsonBytes)
+	require.Nil(t, h.buffer)
+
+	first := h.Marshal(context.Background())
+	firstBuffer := h.buffer
+	require.NotEmpty(t, first)
+	require.NotNil(t, firstBuffer)
+	require.Equal(t, first, h.Marshal(context.Background()))
+	require.Same(t, firstBuffer, h.buffer)
+}
+
+func TestJsonPlanHandlerKeepsStaticPlanPlaceholders(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now(),
+	}
+	shortPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	shortHandler := NewJsonPlanHandler(
+		context.Background(), stmt, nil, shortPlan, nil, WithWaitActiveCost(time.Hour))
+	defer shortHandler.Free()
+	require.Equal(t, sqlQueryIgnoreExecPlan, shortHandler.Marshal(context.Background()))
+	require.Nil(t, shortHandler.buffer)
+
+	noPlanHandler := NewJsonPlanHandler(context.Background(), stmt, nil, nil, nil)
+	defer noPlanHandler.Free()
+	require.Equal(t, sqlQueryNoRecordExecPlan, noPlanHandler.Marshal(context.Background()))
+	require.Nil(t, noPlanHandler.buffer)
 }
 
 func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *testing.T) {

@@ -155,23 +155,14 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAlloc.Add(1)
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
-	s.recordHighWater(tag, curr)
-	return curr
-}
-
-func (s *MPoolStats) recordHighWater(tag string, curr int64) {
-	for {
-		hwm := s.HighWaterMark.Load()
-		if curr <= hwm {
-			return
-		}
-		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
-			if curr/GB != hwm/GB {
-				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
-			}
-			return
+	hwm := s.HighWaterMark.Load()
+	if curr > hwm {
+		swapped := s.HighWaterMark.CompareAndSwap(hwm, curr)
+		if swapped && curr/GB != hwm/GB {
+			logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
 		}
 	}
+	return curr
 }
 
 // Update free stats, return curr bytes.

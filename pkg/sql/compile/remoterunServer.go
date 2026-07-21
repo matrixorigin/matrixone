@@ -257,7 +257,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			// descendant snapshot is already reduced under AnalyzeModule's mutex;
 			// sender quiescence remains the lifecycle contract for this boundary.
 			localDelta := collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
-			localDelta.Outcome = resourceOutcome(runErr)
 			descendant := runCompile.anal.remoteResourceSummary()
 			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
 			memoryPool := runCompile.proc.Mp()
@@ -275,7 +274,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
 
-			mpool.DeleteMPool(memoryPool)
 			runCompile.Release()
 		}()
 

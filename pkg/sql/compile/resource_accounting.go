@@ -50,8 +50,7 @@ type remoteTerminalEnvelope struct {
 }
 
 // remoteResourceAggregate is the already-reduced terminal output sent by one
-// remote hop. Delta contains local plus descendant usage and quality, but its
-// outcome belongs only to the sending hop; descendant outcomes are not reduced.
+// remote hop. Delta contains local plus descendant usage and quality.
 type remoteResourceAggregate struct {
 	Delta                    resource.Delta
 	Memory                   resource.MemoryTotals
@@ -101,7 +100,6 @@ func (r *executionResourceRecorder) finishAttempt(
 	scopes []*Scope,
 	anal *AnalyzeModule,
 	localAddress string,
-	outcome resource.Outcome,
 	retried bool,
 ) {
 	if r == nil {
@@ -167,10 +165,7 @@ func (r *executionResourceRecorder) finishAttempt(
 	delta.Quality |= coordinatorDelta.Quality | resource.MergeUsage(&delta.Usage, coordinatorDelta.Usage)
 
 	wallNS := durationNS(time.Since(attemptStart), &delta.Quality)
-	summary := resource.AttemptSummary{
-		WallNS:  wallNS,
-		Outcome: outcome,
-	}
+	summary := resource.AttemptSummary{WallNS: wallNS}
 	summary.Quality |= delta.Quality | resource.MergeUsage(&summary.Usage, delta.Usage)
 	summary.Quality |= resource.MergeMemoryTotals(&summary.Memory, remoteAggregate.Memory)
 	var quality resource.QualityFlags

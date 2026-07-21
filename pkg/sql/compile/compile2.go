@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -36,7 +35,6 @@ import (
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -270,7 +268,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				}
 				resourceRecorder.finishAttempt(
 					uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-					attemptScopes, attemptAnal, c.addr, resource.OutcomePanic, false,
+					attemptScopes, attemptAnal, c.addr, false,
 				)
 				attemptOpen = false
 			}
@@ -341,12 +339,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
-				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
+				attemptScopes, attemptAnal, c.addr, false,
 			)
 			attemptOpen = false
 			return nil, err
 		}
-		retryErr := err
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
 		if forcePreMode {
@@ -382,14 +379,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			err = transitionErr
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
+				attemptScopes, attemptAnal, c.addr, false,
 			)
 			attemptOpen = false
 			return nil, err
 		}
 		resourceRecorder.finishAttempt(
 			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-			attemptScopes, attemptAnal, c.addr, resourceOutcome(retryErr), true,
+			attemptScopes, attemptAnal, c.addr, true,
 		)
 		attemptOpen = false
 		if runC != c {
@@ -417,7 +414,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			err = buildErr
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-				attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
+				attemptScopes, attemptAnal, c.addr, false,
 			)
 			attemptOpen = false
 			return nil, err
@@ -456,7 +453,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-		attemptScopes, attemptAnal, c.addr, resourceOutcome(err), false,
+		attemptScopes, attemptAnal, c.addr, false,
 	)
 	attemptOpen = false
 	resourceRecorder.publish()
@@ -479,18 +476,6 @@ func releaseRetryCompile(c *Compile) {
 	defer proc.RestorePrepareParams(prepareParams)
 	c.Release()
 }
-
-func resourceOutcome(err error) resource.Outcome {
-	if err == nil {
-		return resource.OutcomeSuccess
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
-		return resource.OutcomeCanceled
-	}
-	return resource.OutcomeError
-}
-
 // rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
 // in the RankOption of vector search queries.
 // NOTE: RankOption is configured at the top-level SQL, so deep traversal here is defensive.
