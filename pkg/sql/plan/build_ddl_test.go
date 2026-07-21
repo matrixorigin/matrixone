@@ -1307,6 +1307,17 @@ func TestConstructAddedPartitionDefsErrors(t *testing.T) {
 	})
 }
 
+func TestBuildCreateTableRejectsReservedCheckConstraintProperty(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"CREATE TABLE reserved_check_property (a INT) PROPERTIES('__mo_check_constraints' = 'user-value')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(&mock.ctxt, stmt, false)
+	require.ErrorContains(t, err, "table property key \"__mo_check_constraints\" is reserved for internal use")
+}
+
 func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	ctx := &sqlModeMockCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false),

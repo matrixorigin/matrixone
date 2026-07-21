@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +43,7 @@ func TestPlanDefToCstrDefPersistsCheckConstraints(t *testing.T) {
 	require.Len(t, cstr.Cts, 1)
 
 	configs := cstr.Cts[0].(*StreamConfigsDef).Configs
+	require.True(t, strings.HasPrefix(configs[0].Value, checkConstraintsValuePrefix))
 	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs(configs)
 	require.NoError(t, err)
 	require.Empty(t, visibleConfigs)
@@ -83,9 +85,39 @@ func TestSplitCheckConstraintsFromConfigsKeepsVisibleConfigsOnDecodeError(t *tes
 			Value: "after",
 		},
 	})
-	require.Error(t, err)
-	require.Len(t, visibleConfigs, 2)
+	require.NoError(t, err)
+	require.Len(t, visibleConfigs, 3)
 	require.Equal(t, "visible-before", visibleConfigs[0].Key)
-	require.Equal(t, "visible-after", visibleConfigs[1].Key)
-	require.Nil(t, checks)
+	require.Equal(t, CheckConstraintsConfigKey, visibleConfigs[1].Key)
+	require.Equal(t, "not-base64", visibleConfigs[1].Value)
+	require.Equal(t, "visible-after", visibleConfigs[2].Key)
+	require.Len(t, checks, 1)
+	require.Equal(t, check.Name, checks[0].Name)
+}
+
+func TestSplitCheckConstraintsFromConfigsReadsLegacyUnprefixedPayload(t *testing.T) {
+	check := &plan.CheckDef{Name: "legacy_check"}
+	value, err := MarshalCheckConstraints([]*plan.CheckDef{check})
+	require.NoError(t, err)
+	legacyValue := strings.TrimPrefix(value, checkConstraintsValuePrefix)
+
+	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{{
+		Key:   CheckConstraintsConfigKey,
+		Value: legacyValue,
+	}})
+	require.NoError(t, err)
+	require.Empty(t, visibleConfigs)
+	require.Len(t, checks, 1)
+	require.Equal(t, check.Name, checks[0].Name)
+}
+
+func TestSplitCheckConstraintsFromConfigsDropsDamagedTaggedPayload(t *testing.T) {
+	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{
+		{Key: "visible", Value: "value"},
+		{Key: CheckConstraintsConfigKey, Value: checkConstraintsValuePrefix + "not-base64"},
+	})
+	require.NoError(t, err)
+	require.Len(t, visibleConfigs, 1)
+	require.Equal(t, "visible", visibleConfigs[0].Key)
+	require.Empty(t, checks)
 }

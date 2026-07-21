@@ -423,6 +423,25 @@ func Test_extractTopLevelCheckDefs(t *testing.T) {
 	}
 }
 
+func TestConstructCreateTableSQLPreservesLegacyChecksWithoutCompilerContext(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "legacy_checks",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_checks (a INT, CONSTRAINT chk_a CHECK (a > 0), CHECK (a < 10) NOT ENFORCED)",
+		Cols: []*plan.ColDef{{
+			Name:       "a",
+			Typ:        plan.Type{Id: int32(types.T_int32)},
+			Default:    &plan.Default{NullAbility: true},
+			OriginName: "a",
+		}},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "CONSTRAINT chk_a CHECK (a > 0)")
+	require.Contains(t, createSQL, "CHECK (a < 10) NOT ENFORCED")
+}
+
 func Test_SingleShowCreateTable(t *testing.T) {
 	tests := []struct {
 		name string

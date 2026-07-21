@@ -392,6 +392,20 @@ update t_chk_update_fail set a = -1;
 select * from t_chk_update_fail;
 drop table t_chk_update_fail;
 
+-- legacy multi-table UPDATE fallback must enforce CHECK on the final row image
+drop table if exists t_chk_update_multi;
+drop table if exists t_chk_update_multi_src;
+create table t_chk_update_multi(id int primary key, a int, check (a > 0));
+create table t_chk_update_multi_src(id int primary key);
+insert into t_chk_update_multi values (1, 1);
+insert into t_chk_update_multi_src values (1);
+update t_chk_update_multi, t_chk_update_multi_src
+set t_chk_update_multi.a = -1
+where t_chk_update_multi.id = t_chk_update_multi_src.id;
+select * from t_chk_update_multi;
+drop table t_chk_update_multi;
+drop table t_chk_update_multi_src;
+
 -- REPLACE must enforce CHECK
 drop table if exists t_chk_replace;
 create table t_chk_replace(id int primary key, a int, check (a > 0));

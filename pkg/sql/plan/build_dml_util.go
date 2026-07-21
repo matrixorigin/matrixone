@@ -266,6 +266,10 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	//append preinsert node
 	lastNodeId = appendPreInsertNode(builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, true)
+	lastNodeId, err = appendCheckConstraintPlanFromLastNode(builder, bindCtx, updatePlanCtx.tableDef, lastNodeId)
+	if err != nil {
+		return err
+	}
 
 	//append sink node
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)

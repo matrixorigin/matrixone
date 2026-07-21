@@ -463,6 +463,16 @@ func ConstructCreateTableSQL(
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
+	// Legacy tables created before CHECK metadata was persisted can reach this
+	// function through nil-context callers (CDC, publication, and get_ddl), where
+	// planner recovery is unavailable. Preserve the old top-level CHECK clauses
+	// from Createsql only when no structured CHECK metadata exists.
+	if len(tableDef.Checks) == 0 {
+		for _, checkDef := range extractTopLevelCheckDefs(tableDef) {
+			createStr += ",\n  " + checkDef
+		}
+	}
+
 	// Render CHECK constraints from the structured table definition so that the
 	// output stays correct after ALTER ADD/DROP CHECK (which updates Checks but
 	// not Createsql). OriginSql holds the formatted predicate text.

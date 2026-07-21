@@ -3255,6 +3255,19 @@ func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "UPDATE")
 }
 
+func TestLegacyMultiTableUpdateFallbackChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addPositiveCheck(t, mock.ctxt.tables["dept"], "deptno")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET dept.deptno = -1 WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "legacy multi-table UPDATE fallback")
+}
+
 func TestAppendCheckConstraintPlanFromLastNodeSkipsTablesWithoutChecks(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
@@ -3476,14 +3489,19 @@ func TestCheckConstraintRejectsSyntheticColumns(t *testing.T) {
 func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
 	t.Helper()
 	tableDef := mock.ctxt.tables["single_idx_t"]
-	valCol := tableDef.Name2ColIndex["val"]
+	addPositiveCheck(t, tableDef, "val")
+}
+
+func addPositiveCheck(t *testing.T, tableDef *plan.TableDef, colName string) {
+	t.Helper()
+	colPos := tableDef.Name2ColIndex[colName]
 	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
 		{
-			Typ: tableDef.Cols[valCol].Typ,
+			Typ: tableDef.Cols[colPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					Name:   "val",
-					ColPos: valCol,
+					Name:   colName,
+					ColPos: colPos,
 				},
 			},
 		},
@@ -3494,7 +3512,7 @@ func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
 	}
 	tableDef.Checks = []*plan.CheckDef{
 		{
-			Name:  "chk_val_positive",
+			Name:  "chk_" + colName + "_positive",
 			Check: checkExpr,
 		},
 	}

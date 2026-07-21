@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,7 +57,10 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
-const CheckConstraintsConfigKey = "__mo_check_constraints"
+const (
+	CheckConstraintsConfigKey   = "__mo_check_constraints"
+	checkConstraintsValuePrefix = "mo_check_constraints_v1:"
+)
 
 // QueryCandidate is a CN discovered before tenant and label pool resolution.
 // Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
@@ -151,10 +155,11 @@ func MarshalCheckConstraints(checks []*plan.CheckDef) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base64.StdEncoding.EncodeToString(data), nil
+	return checkConstraintsValuePrefix + base64.StdEncoding.EncodeToString(data), nil
 }
 
 func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
+	value = strings.TrimPrefix(value, checkConstraintsValuePrefix)
 	data, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
 		return nil, err
@@ -169,7 +174,6 @@ func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
 func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Property, []*plan.CheckDef, error) {
 	visibleConfigs := make([]*plan.Property, 0, len(configs))
 	var checks []*plan.CheckDef
-	var firstErr error
 	for _, config := range configs {
 		if config.Key != CheckConstraintsConfigKey {
 			visibleConfigs = append(visibleConfigs, config)
@@ -177,15 +181,24 @@ func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Propert
 		}
 		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+			if strings.HasPrefix(config.Value, checkConstraintsValuePrefix) {
+				// A tagged value is internal metadata. Drop only the damaged CHECK
+				// payload so the rest of the table definition remains usable.
+				continue
 			}
+			// Before CHECK metadata used this key, PROPERTIES accepted it as an
+			// arbitrary user key. An undecodable value is therefore a visible
+			// legacy property, not a reason to make the whole table unavailable.
+			visibleConfigs = append(visibleConfigs, config)
+			continue
+		}
+		if len(decodedChecks) == 0 && !strings.HasPrefix(config.Value, checkConstraintsValuePrefix) {
+			// Legacy internal payloads always contained at least one CHECK. An
+			// untagged empty TableDef is more safely treated as a user property.
+			visibleConfigs = append(visibleConfigs, config)
 			continue
 		}
 		checks = append(checks, decodedChecks...)
-	}
-	if firstErr != nil {
-		return visibleConfigs, nil, firstErr
 	}
 	return visibleConfigs, checks, nil
 }

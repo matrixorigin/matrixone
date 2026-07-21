@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -960,6 +961,10 @@ func buildCreateTable(
 		case *tree.TableOptionProperties:
 			properties := make([]*plan.Property, len(opt.Preperties))
 			for idx, property := range opt.Preperties {
+				if strings.EqualFold(property.Key, engine.CheckConstraintsConfigKey) {
+					return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+						"table property key %q is reserved for internal use", property.Key)
+				}
 				properties[idx] = &plan.Property{
 					Key:   property.Key,
 					Value: property.Value,
