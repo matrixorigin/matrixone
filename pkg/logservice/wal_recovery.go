@@ -29,6 +29,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/btree"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -96,6 +97,22 @@ type WALEntry struct {
 	dataOffset int64
 	dataLen    uint32
 	dataDigest [sha256.Size]byte
+	skip       *walRecoverySkipSemantics
+}
+
+type walRecoverySkipReference struct {
+	dsn uint64
+	psn uint64
+}
+
+type walRecoverySkipSemantics struct {
+	references []walRecoverySkipReference
+}
+
+type walRecoveryDSNRange struct {
+	start     uint64
+	end       uint64
+	raftIndex uint64
 }
 
 // WALRecoveryData contains all WAL entries to be recovered
@@ -455,6 +472,13 @@ func (s *Service) readWALDataFileWithLimit(
 		if err := validateWALLogEntry(ctx, int(i), entry, data); err != nil {
 			return nil, err
 		}
+		if binary.LittleEndian.Uint16(data[logEntryCommandOffset:]) == logEntryCommandSkipDSN {
+			references, err := parseWALRecoverySkipReferences(ctx, int(i), data)
+			if err != nil {
+				return nil, err
+			}
+			entry.skip = &walRecoverySkipSemantics{references: references}
+		}
 		bytesRead += int64(dataLen)
 
 		entries = append(entries, entry)
@@ -544,6 +568,10 @@ func verifyWALRecoverySource(ctx context.Context, path, expectedDigest string) e
 }
 
 func validateWALRecoveryEntries(ctx context.Context, entries []WALEntry) error {
+	activeByDSN := make(map[uint64]walRecoveryDSNRange)
+	activeRanges := btree.NewG(32, func(a, b walRecoveryDSNRange) bool {
+		return a.start < b.start
+	})
 	for i := range entries {
 		entry := entries[i]
 		if entry.RaftIndex == 0 {
@@ -560,8 +588,115 @@ func validateWALRecoveryEntries(ctx context.Context, entries []WALEntry) error {
 				"WAL recovery entry %d DSN range overflows uint64: start %d, count %d",
 				i, entry.DSN, entry.EntryCount)
 		}
+
+		skip, err := walRecoverySkipReferences(ctx, i, entry)
+		if err != nil {
+			return err
+		}
+		if skip != nil {
+			seen := make(map[uint64]struct{}, len(skip))
+			for _, ref := range skip {
+				if _, ok := seen[ref.dsn]; ok {
+					return moerr.NewInternalErrorf(ctx,
+						"WAL recovery skip entry %d repeats DSN %d", i, ref.dsn)
+				}
+				seen[ref.dsn] = struct{}{}
+				active, ok := activeByDSN[ref.dsn]
+				if !ok {
+					return moerr.NewInternalErrorf(ctx,
+						"WAL recovery skip entry %d references unknown DSN %d", i, ref.dsn)
+				}
+				if active.raftIndex != ref.psn {
+					return moerr.NewInternalErrorf(ctx,
+						"WAL recovery skip entry %d DSN %d PSN mismatch: got %d, want %d",
+						i, ref.dsn, ref.psn, active.raftIndex)
+				}
+				delete(activeByDSN, ref.dsn)
+				activeRanges.Delete(active)
+			}
+			continue
+		}
+
+		if entry.DSN == 0 || entry.EntryCount == 0 {
+			continue
+		}
+		current := walRecoveryDSNRange{
+			start:     entry.DSN,
+			end:       entry.DSN + uint64(entry.EntryCount) - 1,
+			raftIndex: entry.RaftIndex,
+		}
+		var overlap walRecoveryDSNRange
+		activeRanges.DescendLessOrEqual(current, func(item walRecoveryDSNRange) bool {
+			if item.end >= current.start {
+				overlap = item
+			}
+			return false
+		})
+		if overlap.raftIndex == 0 {
+			activeRanges.AscendGreaterOrEqual(current, func(item walRecoveryDSNRange) bool {
+				if item.start <= current.end {
+					overlap = item
+				}
+				return false
+			})
+		}
+		if overlap.raftIndex != 0 {
+			return moerr.NewInternalErrorf(ctx,
+				"WAL recovery entry %d DSN range %d-%d overlaps active DSN range %d-%d from raft index %d",
+				i, current.start, current.end, overlap.start, overlap.end, overlap.raftIndex)
+		}
+		activeByDSN[current.start] = current
+		activeRanges.ReplaceOrInsert(current)
 	}
 	return nil
+}
+
+func walRecoverySkipReferences(
+	ctx context.Context,
+	index int,
+	entry WALEntry,
+) ([]walRecoverySkipReference, error) {
+	if entry.skip != nil {
+		return entry.skip.references, nil
+	}
+	if entry.RawData == nil || len(entry.RawData) < logEntryHeaderSize {
+		return nil, nil
+	}
+	if binary.LittleEndian.Uint16(entry.RawData[logEntryCommandOffset:]) != logEntryCommandSkipDSN {
+		return nil, nil
+	}
+	return parseWALRecoverySkipReferences(ctx, index, entry.RawData)
+}
+
+func parseWALRecoverySkipReferences(
+	ctx context.Context,
+	index int,
+	data []byte,
+) ([]walRecoverySkipReference, error) {
+	if len(data) < logEntryHeaderSize {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"WAL recovery skip entry %d payload is too small", index)
+	}
+	footerOffset := uint64(binary.LittleEndian.Uint32(data[logEntryFooterOffset:]))
+	if footerOffset < logEntryHeaderSize || footerOffset > uint64(len(data)) {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"WAL recovery skip entry %d has invalid footer offset", index)
+	}
+	body := data[logEntryHeaderSize:footerOffset]
+	if len(body) == 0 || len(body)%16 != 0 {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"WAL recovery skip entry %d has invalid command payload", index)
+	}
+	count := len(body) / 16
+	result := make([]walRecoverySkipReference, count)
+	psnOffset := count * 8
+	for i := 0; i < count; i++ {
+		result[i] = walRecoverySkipReference{
+			dsn: binary.LittleEndian.Uint64(body[i*8:]),
+			psn: binary.LittleEndian.Uint64(body[psnOffset+i*8:]),
+		}
+	}
+	return result, nil
 }
 
 func validateWALLogEntry(

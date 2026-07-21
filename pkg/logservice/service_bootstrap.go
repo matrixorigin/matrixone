@@ -243,6 +243,12 @@ func (s *Service) restoreHAKeeperIDWatermarks(
 	backup *pb.BackupData,
 	logServiceRecovery bool,
 ) error {
+	// The explicit watermark command is part of the fenced WAL-recovery
+	// protocol. Backup-only restore keeps its existing initial-cluster behavior;
+	// it has no replicated recovery intent and must not send this command.
+	if !logServiceRecovery {
+		return nil
+	}
 	var lastErr error
 	for i := 0; i < checkBootstrapCycles; i++ {
 		if err := ctx.Err(); err != nil {

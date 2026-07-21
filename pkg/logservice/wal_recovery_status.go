@@ -111,11 +111,18 @@ func walRecoveryCoordinator(state *pb.CheckerState, expectedReplicas uint64) (st
 			return "", false
 		}
 		if store.ConfigData == nil {
-			continue
+			return "", false
 		}
 		item := store.ConfigData.Content[walRecoveryStatusConfigKey]
-		if item != nil && item.CurrentValue == walRecoveryStatusCoordinatorPending {
+		if item == nil {
+			return "", false
+		}
+		switch item.CurrentValue {
+		case walRecoveryStatusPending, walRecoveryStatusComplete:
+		case walRecoveryStatusCoordinatorPending:
 			pending = append(pending, storeID)
+		default:
+			return "", false
 		}
 	}
 	if len(pending) == 0 {

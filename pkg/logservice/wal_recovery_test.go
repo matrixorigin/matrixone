@@ -1008,9 +1008,92 @@ func TestWALRecoveryCoordinator(t *testing.T) {
 	}
 
 	state.LogState.Stores["store-b"] = pb.LogStoreInfo{}
+	state.LogState.Stores["store-a"] = recoveryStore(walRecoveryStatusCoordinatorPending)
 	if _, ready := walRecoveryCoordinator(state, 3); ready {
 		t.Fatal("stores without recovery status must not elect a coordinator")
 	}
+	state.LogState.Stores["store-b"] = pb.LogStoreInfo{ConfigData: &pb.ConfigData{
+		Content: map[string]*pb.ConfigItem{"other": {CurrentValue: "value"}},
+	}}
+	if _, ready := walRecoveryCoordinator(state, 3); ready {
+		t.Fatal("stores without the recovery status item must not elect a coordinator")
+	}
+	state.LogState.Stores["store-b"] = recoveryStore("invalid")
+	if _, ready := walRecoveryCoordinator(state, 3); ready {
+		t.Fatal("stores with an invalid recovery status must not elect a coordinator")
+	}
+}
+
+func TestValidateWALRecoverySequence(t *testing.T) {
+	ctx := context.Background()
+	normal := func(dsn uint64, count uint32, raftIndex uint64) WALEntry {
+		return WALEntry{
+			DSN:        dsn,
+			SafeDSN:    dsn - 1,
+			RaftIndex:  raftIndex,
+			EntryCount: count,
+			RawData:    testRawLogEntry(dsn, dsn-1, count),
+		}
+	}
+	skip := func(raftIndex uint64, dsns, psns []uint64) WALEntry {
+		return WALEntry{
+			RaftIndex:  raftIndex,
+			EntryCount: 1,
+			RawData:    testRawSkipLogEntryWithPairs(dsns, psns),
+		}
+	}
+
+	tests := []struct {
+		name    string
+		entries []WALEntry
+		want    string
+	}{
+		{
+			name: "overlapping normal ranges",
+			entries: []WALEntry{
+				normal(10, 2, 10),
+				normal(11, 2, 11),
+			},
+			want: "overlaps active DSN range",
+		},
+		{
+			name: "skip references missing DSN",
+			entries: []WALEntry{
+				normal(10, 1, 10),
+				skip(11, []uint64{11}, []uint64{10}),
+			},
+			want: "references unknown DSN",
+		},
+		{
+			name: "skip references wrong PSN",
+			entries: []WALEntry{
+				normal(10, 1, 10),
+				skip(11, []uint64{10}, []uint64{99}),
+			},
+			want: "PSN mismatch",
+		},
+		{
+			name: "skip repeats DSN",
+			entries: []WALEntry{
+				normal(10, 1, 10),
+				skip(11, []uint64{10, 10}, []uint64{10, 10}),
+			},
+			want: "repeats DSN",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWALRecoveryEntries(ctx, tc.entries)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	// A skip removes the old mapping and permits that DSN range to be reused.
+	require.NoError(t, validateWALRecoveryEntries(ctx, []WALEntry{
+		normal(10, 2, 10),
+		skip(11, []uint64{10}, []uint64{10}),
+		normal(10, 2, 12),
+	}))
 }
 
 func writeTestWALDataFile(path string, entries []WALEntry) error {
@@ -1080,7 +1163,14 @@ func testRawLogEntry(startDSN, safeDSN uint64, count uint32) []byte {
 }
 
 func testRawSkipLogEntry() []byte {
-	const bodySize = 16
+	return testRawSkipLogEntryWithPairs([]uint64{1}, []uint64{1})
+}
+
+func testRawSkipLogEntryWithPairs(dsns, psns []uint64) []byte {
+	if len(dsns) != len(psns) {
+		panic("skip DSN/PSN length mismatch")
+	}
+	bodySize := 16 * len(dsns)
 	footerOffset := logEntryHeaderSize + bodySize
 	data := make([]byte, footerOffset+logEntryFooterRecordSize)
 	binary.LittleEndian.PutUint16(data[logEntryTypeOffset:], logEntryTypeWALRecord)
@@ -1088,9 +1178,14 @@ func testRawSkipLogEntry() []byte {
 	binary.LittleEndian.PutUint16(data[logEntryCommandOffset:], logEntryCommandSkipDSN)
 	binary.LittleEndian.PutUint32(data[logEntryCountOffset:], 1)
 	binary.LittleEndian.PutUint32(data[logEntryFooterOffset:], uint32(footerOffset))
-	binary.LittleEndian.PutUint64(data[logEntryHeaderSize:], 1)
-	binary.LittleEndian.PutUint64(data[logEntryHeaderSize+8:], 1)
+	for i, dsn := range dsns {
+		binary.LittleEndian.PutUint64(data[logEntryHeaderSize+i*8:], dsn)
+	}
+	psnOffset := logEntryHeaderSize + len(dsns)*8
+	for i, psn := range psns {
+		binary.LittleEndian.PutUint64(data[psnOffset+i*8:], psn)
+	}
 	binary.LittleEndian.PutUint32(data[footerOffset:], logEntryHeaderSize)
-	binary.LittleEndian.PutUint32(data[footerOffset+4:], bodySize)
+	binary.LittleEndian.PutUint32(data[footerOffset+4:], uint32(bodySize))
 	return data
 }

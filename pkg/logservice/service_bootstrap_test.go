@@ -405,6 +405,12 @@ func TestRestoredHAKeeperStateReached(t *testing.T) {
 	}))
 }
 
+func TestBackupOnlyRestoreDoesNotSendRecoveryWatermarkCommand(t *testing.T) {
+	backup := &pb.BackupData{NextID: hakeeper.K8SIDRangeEnd + 1}
+	require.NoError(t, (&Service{}).restoreHAKeeperIDWatermarks(
+		context.Background(), backup, false))
+}
+
 func TestServiceBootstrap(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		fn := func(t *testing.T, s *Service) {
