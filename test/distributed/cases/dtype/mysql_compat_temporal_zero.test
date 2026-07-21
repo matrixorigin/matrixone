@@ -65,6 +65,17 @@ select dayname(cast('0000-00-00' as date)) as zero_dayname_date,
 select monthname(cast('0000-00-00' as date)) as zero_monthname_date,
        monthname(cast('0000-00-00 00:00:00' as datetime)) as zero_monthname_datetime,
        monthname(cast('0000-00-00 00:00:00' as timestamp)) as zero_monthname_timestamp;
+
+-- DATE_FORMAT preserves numeric zero fields, but name and weekday formats
+-- require a complete calendar date and therefore return NULL.
+select date_format(cast('0000-00-00' as date), '%Y-%m-%d') as zero_date_numeric_format,
+       date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%m-%d') as zero_datetime_numeric_format,
+       date_format(cast('0000-00-00 00:00:00' as timestamp), '%Y-%m-%d') as zero_timestamp_numeric_format;
+select date_format(cast('0000-00-00' as date), '%M') as zero_date_month_name,
+       date_format(cast('0000-00-00 00:00:00' as datetime), '%b') as zero_datetime_month_abbrev,
+       date_format(cast('0000-00-00 00:00:00' as timestamp), '%W') as zero_timestamp_weekday;
+select date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%M') as zero_datetime_mixed_format,
+       date_format(cast('0000-00-00 00:00:00' as datetime), '%%M') as zero_datetime_escaped_percent;
 select last_day('0000-00-00') as zero_last_day_date,
        last_day('0000-00-00 00:00:00') as zero_last_day_datetime,
        last_day('2024-02-10') as leap_year_last_day;
@@ -82,7 +93,8 @@ select dayofmonth(cast('0000-00-00' as date)) as zero_dayofmonth_date,
 
 -- The zero sentinels must not consume the valid minimum calendar value.
 select cast('0001-01-01' as date) as minimum_date,
-       cast('0001-01-01 00:00:00' as datetime) as minimum_datetime;
+       cast('0001-01-01 00:00:00' as datetime) as minimum_datetime,
+       date_format(cast('0001-01-01 00:00:00' as datetime), '%W %M') as minimum_datetime_name_format;
 
 drop table if exists mysql_compat_temporal_zero;
 drop table if exists mysql_compat_temporal_zero_dml;

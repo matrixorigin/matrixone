@@ -3071,6 +3071,77 @@ func TestFormat(t *testing.T) {
 	}
 }
 
+func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
+	valid, err := types.ParseDatetime("2024-01-01 00:00:00", 0)
+	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name       string
+		format     string
+		values     []types.Datetime
+		expected   []string
+		expectNull []bool
+	}{
+		{
+			name:       "numeric fields preserve zero components",
+			format:     "%Y-%m-%d",
+			values:     []types.Datetime{types.ZeroDatetime},
+			expected:   []string{"0000-00-00"},
+			expectNull: []bool{false},
+		},
+		{
+			name:       "full month name requires a month",
+			format:     "%M",
+			values:     []types.Datetime{types.ZeroDatetime, valid},
+			expected:   []string{"", "January"},
+			expectNull: []bool{true, false},
+		},
+		{
+			name:       "abbreviated month name requires a month",
+			format:     "%b",
+			values:     []types.Datetime{types.ZeroDatetime, valid},
+			expected:   []string{"", "Jan"},
+			expectNull: []bool{true, false},
+		},
+		{
+			name:       "weekday formats require a calendar date",
+			format:     "%W|%a|%w",
+			values:     []types.Datetime{types.ZeroDatetime, valid},
+			expected:   []string{"", "Monday|Mon|1"},
+			expectNull: []bool{true, false},
+		},
+		{
+			name:       "one invalid component nulls the whole result",
+			format:     "%Y-%M",
+			values:     []types.Datetime{types.ZeroDatetime},
+			expected:   []string{""},
+			expectNull: []bool{true},
+		},
+		{
+			name:       "escaped percent does not start a month conversion",
+			format:     "%%M",
+			values:     []types.Datetime{types.ZeroDatetime},
+			expected:   []string{"%M"},
+			expectNull: []bool{false},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_datetime.ToType(), tc.values, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.format}, nil),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expected, tc.expectNull),
+				DateFormat,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func initDateSubTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
 	r1, _ := types.ParseDatetime("2021-12-31", 6)

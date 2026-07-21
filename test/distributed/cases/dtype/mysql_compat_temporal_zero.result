@@ -85,6 +85,20 @@ monthname(cast('0000-00-00 00:00:00' as datetime)) as zero_monthname_datetime,
 monthname(cast('0000-00-00 00:00:00' as timestamp)) as zero_monthname_timestamp;
 ➤ zero_monthname_date[12,-1,0]  ¦  zero_monthname_datetime[12,-1,0]  ¦  zero_monthname_timestamp[12,-1,0]  𝄀
 null  ¦  null  ¦  null
+select date_format(cast('0000-00-00' as date), '%Y-%m-%d') as zero_date_numeric_format,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%m-%d') as zero_datetime_numeric_format,
+date_format(cast('0000-00-00 00:00:00' as timestamp), '%Y-%m-%d') as zero_timestamp_numeric_format;
+➤ zero_date_numeric_format[12,-1,0]  ¦  zero_datetime_numeric_format[12,-1,0]  ¦  zero_timestamp_numeric_format[12,-1,0]  𝄀
+0000-00-00  ¦  0000-00-00  ¦  0000-00-00
+select date_format(cast('0000-00-00' as date), '%M') as zero_date_month_name,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%b') as zero_datetime_month_abbrev,
+date_format(cast('0000-00-00 00:00:00' as timestamp), '%W') as zero_timestamp_weekday;
+➤ zero_date_month_name[12,-1,0]  ¦  zero_datetime_month_abbrev[12,-1,0]  ¦  zero_timestamp_weekday[12,-1,0]  𝄀
+null  ¦  null  ¦  null
+select date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%M') as zero_datetime_mixed_format,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%%M') as zero_datetime_escaped_percent;
+➤ zero_datetime_mixed_format[12,-1,0]  ¦  zero_datetime_escaped_percent[12,-1,0]  𝄀
+null  ¦  %M
 select last_day('0000-00-00') as zero_last_day_date,
 last_day('0000-00-00 00:00:00') as zero_last_day_datetime,
 last_day('2024-02-10') as leap_year_last_day;
@@ -102,9 +116,10 @@ year(cast('0000-00-00 00:00:00' as datetime)) as zero_year_datetime;
 ➤ zero_dayofmonth_date[-6,8,0]  ¦  zero_dayofmonth_datetime[-6,8,0]  ¦  zero_dayofmonth_timestamp[-6,8,0]  ¦  zero_month_date[-6,8,0]  ¦  zero_month_datetime[-6,8,0]  ¦  zero_quarter_date[-6,8,0]  ¦  zero_quarter_datetime[-6,8,0]  ¦  zero_year_date[-5,64,0]  ¦  zero_year_datetime[-5,64,0]  𝄀
 0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
 select cast('0001-01-01' as date) as minimum_date,
-cast('0001-01-01 00:00:00' as datetime) as minimum_datetime;
-➤ minimum_date[91,64,0]  ¦  minimum_datetime[93,64,0]  𝄀
-0001-01-01  ¦  0001-01-01 00:00:00
+cast('0001-01-01 00:00:00' as datetime) as minimum_datetime,
+date_format(cast('0001-01-01 00:00:00' as datetime), '%W %M') as minimum_datetime_name_format;
+➤ minimum_date[91,64,0]  ¦  minimum_datetime[93,64,0]  ¦  minimum_datetime_name_format[12,-1,0]  𝄀
+0001-01-01  ¦  0001-01-01 00:00:00  ¦  Monday January
 drop table if exists mysql_compat_temporal_zero;
 drop table if exists mysql_compat_temporal_zero_dml;
 create table mysql_compat_temporal_zero(d date, dt datetime, ts timestamp);
