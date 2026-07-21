@@ -1168,6 +1168,14 @@ create table ctas_interval_string as
 select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
 select * from ctas_interval_string;
 drop table ctas_interval_string;
+set @`a b` = 1;
+set @`select` = 2;
+set @`x``y` = 3;
+drop table if exists ctas_user_variable;
+create table ctas_user_variable as
+select @`a b` as space_name, @`select` as reserved_name, @`x``y` as backtick_name;
+select * from ctas_user_variable;
+drop table ctas_user_variable;
 drop table alias01;
 -- @session
 drop database test;

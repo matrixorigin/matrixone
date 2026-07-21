@@ -1686,6 +1686,16 @@ select * from ctas_interval_string;
 ➤ single_quoted[12,-1,0]  ¦  double_quoted[12,-1,0]  𝄀
 interval(1,day)  ¦  interval(2,month)
 drop table ctas_interval_string;
+set @`a b` = 1;
+set @`select` = 2;
+set @`x``y` = 3;
+drop table if exists ctas_user_variable;
+create table ctas_user_variable as
+select @`a b` as space_name, @`select` as reserved_name, @`x``y` as backtick_name;
+select * from ctas_user_variable;
+➤ space_name[12,0,0]  ¦  reserved_name[12,0,0]  ¦  backtick_name[12,0,0]  𝄀
+1  ¦  2  ¦  3
+drop table ctas_user_variable;
 drop table alias01;
 drop database test;
 drop database if exists db1;
