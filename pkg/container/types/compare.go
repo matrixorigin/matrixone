@@ -134,7 +134,9 @@ func ArrayElementCompare[T ArrayElement](v1, v2 []T) int {
 
 // arrayOrderedCompare compares two slices whose elements support the native `<`
 // operator (float32/float64/int8/uint8), lexicographically then by length.
-func arrayOrderedCompare[T interface{ ~float32 | ~float64 | ~int8 | ~uint8 }](v1, v2 []T) int {
+func arrayOrderedCompare[T interface {
+	~float32 | ~float64 | ~int8 | ~uint8
+}](v1, v2 []T) int {
 	minLen := len(v1)
 	if len(v2) < minLen {
 		minLen = len(v2)

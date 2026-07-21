@@ -40,7 +40,7 @@ func loadedSeg(t *testing.T, b *Builder) *Segment {
 // collectLiveDocs drains the ReconstructLiveDocs iterator into a slice for
 // assertions (the production consumer streams it one doc at a time).
 func collectLiveDocs(idx *Index, positionFree bool) ([]TokenizedDoc, error) {
-	var out []TokenizedDoc
+	out := make([]TokenizedDoc, 0, idx.globalN)
 	for d, err := range idx.ReconstructLiveDocs(positionFree) {
 		if err != nil {
 			return nil, err
