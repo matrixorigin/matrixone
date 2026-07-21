@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -90,14 +93,22 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if isRoot && !b.ctx.isGroupingSet {
 		astStr := tree.String(astExpr, dialect.MYSQL)
 		// Independently written prepared expressions have different parameter
-		// identities even when their formatted SQL is identical. Only an ordinal
-		// GROUP BY is guaranteed to refer to the SELECT expression itself.
-		registerAst := reusesProjection || !containsDynamicParam(expr)
+		// identities even when their formatted SQL is identical. Ordinal and alias
+		// GROUP BY references are guaranteed to reuse the SELECT expression itself.
+		hasParam := containsDynamicParam(expr)
+		registerAst := reusesProjection || !hasParam
 		if registerAst {
 			if _, ok := b.ctx.groupByAst[astStr]; ok {
 				return nil, nil
 			}
 			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
+		}
+		if hasParam {
+			key := parameterizedGroupByKey(astStr, expr)
+			if _, ok := b.ctx.groupByParamAst[key]; ok {
+				return nil, nil
+			}
+			b.ctx.groupByParamAst[key] = int32(len(b.ctx.groups))
 		}
 		if !registerAst {
 			b.ctx.groups = append(b.ctx.groups, expr)
@@ -106,12 +117,45 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		b.ctx.groups = append(b.ctx.groups, expr)
 	}
 
-	if b.ctx.isGroupingSet {
+	if isRoot && b.ctx.isGroupingSet {
 		astStr := tree.String(astExpr, dialect.MYSQL)
-		b.ctx.groupingFlag[b.ctx.groupByAst[astStr]] = true
+		pos, ok := b.ctx.groupByAst[astStr]
+		if containsDynamicParam(expr) {
+			pos, ok = b.ctx.groupByParamAst[parameterizedGroupByKey(astStr, expr)]
+		}
+		if !ok || int(pos) >= len(b.ctx.groupingFlag) {
+			return nil, moerr.NewInternalErrorf(b.GetContext(), "grouping expression position not found: %s", astStr)
+		}
+		b.ctx.groupingFlag[pos] = true
 	}
 
 	return expr, err
+}
+
+func parameterizedGroupByKey(ast string, expr *plan.Expr) string {
+	positions := make([]int32, 0, 2)
+	collectGroupByParamPositions(expr, &positions)
+	var key strings.Builder
+	key.WriteString(ast)
+	for _, pos := range positions {
+		key.WriteByte('#')
+		key.WriteString(strconv.FormatInt(int64(pos), 10))
+	}
+	return key.String()
+}
+
+func collectGroupByParamPositions(expr *plan.Expr, positions *[]int32) {
+	if expr == nil {
+		return
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_P:
+		*positions = append(*positions, item.P.Pos)
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			collectGroupByParamPositions(arg, positions)
+		}
+	}
 }
 
 func (b *GroupBinder) BindProjectionExpr(pos int32) (*plan.Expr, error) {

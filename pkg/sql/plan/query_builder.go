@@ -3833,6 +3833,13 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 			}
 			targetPos++
 		default:
+			if targetPos < len(ctx.numericProjectionTypes) {
+				if target, ok := numericProjectionExprTarget(
+					builder, ctx, expr, ctx.numericProjectionTypes[targetPos],
+				); ok {
+					seedNumericExprColumnTargets(sources, expr, target)
+				}
+			}
 			targetPos++
 		}
 	}
@@ -3844,9 +3851,86 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		if ctx.numericTableProjectionTypes == nil {
 			ctx.numericTableProjectionTypes = make(map[string][]Type)
 		}
-		storeNumericTableProjectionTargets(ctx.numericTableProjectionTypes, sources[i].alias, sources[i].targets)
+		if ctx.numericTableProjectionAmbiguous == nil {
+			ctx.numericTableProjectionAmbiguous = make(map[string][]bool)
+		}
+		storeNumericTableProjectionTargets(
+			ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
+			sources[i].alias, sources[i].targets,
+		)
 		if sources[i].sourceName != "" {
-			storeNumericTableProjectionTargets(ctx.numericTableProjectionTypes, sources[i].sourceName, sources[i].targets)
+			storeNumericTableProjectionTargets(
+				ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
+				sources[i].sourceName, sources[i].targets,
+			)
+		}
+	}
+}
+
+func numericProjectionExprTarget(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	expr tree.Expr,
+	outer Type,
+) (Type, bool) {
+	if outer.Id == 0 || !isNumericArithmeticRoot(expr) {
+		return Type{}, false
+	}
+	binder := NewProjectionBinder(builder, ctx, nil)
+	scan, err := binder.numericAstTypesInternal(expr, 0, nil)
+	if err != nil || scan.incompatible {
+		return Type{}, false
+	}
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	}
+	outerType := makeTypeByPlan2Type(outer)
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, &outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
+	}
+	target, ok := function.InferNumericParameterType(typesKnown, &outerType)
+	if !ok {
+		return Type{}, false
+	}
+	return makePlan2Type(&target), true
+}
+
+func seedNumericExprColumnTargets(sources []numericProjectionSourceInfo, expr tree.Expr, target Type) {
+	switch item := expr.(type) {
+	case *tree.ParenExpr:
+		seedNumericExprColumnTargets(sources, item.Expr, target)
+	case *tree.BinaryExpr:
+		if isNumericBinaryOp(item.Op) {
+			seedNumericExprColumnTargets(sources, item.Left, target)
+			seedNumericExprColumnTargets(sources, item.Right, target)
+		}
+	case *tree.UnaryExpr:
+		if item.Op == tree.UNARY_PLUS || item.Op == tree.UNARY_MINUS {
+			seedNumericExprColumnTargets(sources, item.Expr, target)
+		}
+	case *tree.FuncExpr:
+		indexes, ok := numericFunctionResultArgs(numericAstFunctionName(item), len(item.Exprs))
+		if !ok {
+			return
+		}
+		for _, idx := range indexes {
+			seedNumericExprColumnTargets(sources, item.Exprs[idx], target)
+		}
+	case *tree.CaseExpr:
+		for _, when := range item.Whens {
+			if when != nil {
+				seedNumericExprColumnTargets(sources, when.Val, target)
+			}
+		}
+		if item.Else != nil {
+			seedNumericExprColumnTargets(sources, item.Else, target)
+		}
+	case *tree.UnresolvedName:
+		if !item.Star {
+			seedNumericColumnTarget(sources, item, target)
 		}
 	}
 }
@@ -3975,18 +4059,33 @@ func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string)
 	return matched, matched >= 0
 }
 
-func storeNumericTableProjectionTargets(targetsByTable map[string][]Type, table string, targets []Type) {
+func storeNumericTableProjectionTargets(
+	targetsByTable map[string][]Type,
+	ambiguousByTable map[string][]bool,
+	table string,
+	targets []Type,
+) {
 	key := strings.ToLower(table)
 	existing, ok := targetsByTable[key]
 	if !ok {
 		targetsByTable[key] = append([]Type(nil), targets...)
+		ambiguousByTable[key] = make([]bool, len(targets))
 		return
 	}
 	if len(existing) != len(targets) {
 		targetsByTable[key] = nil
+		ambiguousByTable[key] = nil
 		return
 	}
+	ambiguous := ambiguousByTable[key]
+	if len(ambiguous) != len(existing) {
+		ambiguous = make([]bool, len(existing))
+		ambiguousByTable[key] = ambiguous
+	}
 	for i := range existing {
+		if ambiguous[i] {
+			continue
+		}
 		if existing[i].Id == 0 {
 			existing[i] = targets[i]
 			continue
@@ -3996,6 +4095,7 @@ func storeNumericTableProjectionTargets(targetsByTable map[string][]Type, table 
 		}
 		if existing[i].Id != targets[i].Id || existing[i].Width != targets[i].Width || existing[i].Scale != targets[i].Scale {
 			existing[i] = Type{}
+			ambiguous[i] = true
 		}
 	}
 }
@@ -4266,9 +4366,10 @@ func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 				continue
 			}
 			subCtx := &BindContext{
-				numericProjectionTypes:      targets,
-				numericTableProjectionTypes: ctx.numericTableProjectionTypes,
-				numericCteByName:            ctx.numericCteByName,
+				numericProjectionTypes:          targets,
+				numericTableProjectionTypes:     ctx.numericTableProjectionTypes,
+				numericTableProjectionAmbiguous: ctx.numericTableProjectionAmbiguous,
+				numericCteByName:                ctx.numericCteByName,
 			}
 			seedNumericTableProjectionTypes(builder, source, subCtx)
 		}
@@ -7280,6 +7381,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	rightCtx := NewBindContext(builder, ctx)
 	leftCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
 	rightCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
+	leftCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
+	rightCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
 
 	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {

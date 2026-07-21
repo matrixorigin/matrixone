@@ -748,7 +748,9 @@ func isNumericContextNode(astExpr tree.Expr) bool {
 	case *tree.UnaryExpr:
 		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
 	case *tree.FuncExpr:
-		return numericAstFunctionName(expr) == "mod"
+		return isNumericContextFunction(numericAstFunctionName(expr))
+	case *tree.CaseExpr:
+		return true
 	default:
 		return false
 	}
@@ -929,18 +931,20 @@ func (b *baseBinder) numericAstTypesInternal(
 		}
 		return numericAstTypedOperand(bound.Typ), nil
 	case *tree.FuncExpr:
-		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
+		name := numericAstFunctionName(expr)
+		indexes, ok := numericFunctionResultArgs(name, len(expr.Exprs))
+		if !ok {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypesInternal(expr.Exprs[0], depth, resolveColumn)
-		if err != nil {
-			return numericAstTypeScan{}, err
+		var scan numericAstTypeScan
+		for _, idx := range indexes {
+			value, err := b.numericAstTypesInternal(expr.Exprs[idx], depth, resolveColumn)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
 		}
-		right, err := b.numericAstTypesInternal(expr.Exprs[1], depth, resolveColumn)
-		if err != nil {
-			return numericAstTypeScan{}, err
-		}
-		return left.merge(right), nil
+		return scan, nil
 	case *tree.CaseExpr:
 		var scan numericAstTypeScan
 		for _, when := range expr.Whens {
@@ -1300,6 +1304,71 @@ func numericAstFunctionName(astExpr *tree.FuncExpr) string {
 		return ""
 	}
 	return strings.ToLower(funcRef.ColName())
+}
+
+func isNumericContextFunction(name string) bool {
+	switch name {
+	case "mod", "if", "coalesce", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
+}
+
+func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
+	switch name {
+	case "mod":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0, 1}, true
+	case "if":
+		if argCount != 3 {
+			return nil, false
+		}
+		return []int{1, 2}, true
+	case "coalesce", "ifnull":
+		if argCount == 0 {
+			return nil, false
+		}
+		indexes := make([]int, argCount)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes, true
+	case "nullif":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0}, true
+	default:
+		return nil, false
+	}
+}
+
+func numericFunctionArgKeepsContext(name string, idx, argCount int) bool {
+	if name == "case" {
+		return idx%2 == 1 || idx == argCount-1
+	}
+	indexes, ok := numericFunctionResultArgs(name, argCount)
+	if !ok {
+		return false
+	}
+	for _, resultIdx := range indexes {
+		if idx == resultIdx {
+			return true
+		}
+	}
+	return false
+}
+
+func numericFunctionHasSelectiveContext(name string) bool {
+	switch name {
+	case "case", "if", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
@@ -2033,7 +2102,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	} else {
 		args = make([]*Expr, len(astArgs))
 		for idx, arg := range astArgs {
+			paramType := b.numericParamType
+			subqueryTarget := b.numericSubqueryTarget
+			if paramType != nil && numericFunctionHasSelectiveContext(name) &&
+				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
+			b.numericParamType = paramType
+			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
 			}

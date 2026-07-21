@@ -349,20 +349,22 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst     map[string]int32
-	aggregateByAst map[string]int32
-	sampleByAst    map[string]int32
-	windowByAst    map[string]int32
-	projectByExpr  map[string]int32
-	timeByAst      map[string]int32
+	groupByAst      map[string]int32
+	groupByParamAst map[string]int32
+	aggregateByAst  map[string]int32
+	sampleByAst     map[string]int32
+	windowByAst     map[string]int32
+	projectByExpr   map[string]int32
+	timeByAst       map[string]int32
 
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
 
-	numericProjectionTypes      []Type
-	numericTableProjectionTypes map[string][]Type
-	numericCteByName            map[string]*tree.CTE
+	numericProjectionTypes          []Type
+	numericTableProjectionTypes     map[string][]Type
+	numericTableProjectionAmbiguous map[string][]bool
+	numericCteByName                map[string]*tree.CTE
 
 	timeAsts []tree.Expr
 

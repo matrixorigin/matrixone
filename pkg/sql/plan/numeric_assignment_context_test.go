@@ -110,6 +110,41 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "if double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"if(1 = 1, cast(-100000 as double), 0)",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "coalesce double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"coalesce(cast(-100000 as double), 0)",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "ifnull double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"ifnull(cast(-100000 as double), 0)",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "nullif double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"nullif(cast(-100000 as double), 0)",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "case result arithmetic keeps target",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"case when 1 = 1 then ? + ? else 0 end",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name:       "group by position",
 			sql:        "insert into constraint_test.emp (sal) select ? + ? from constraint_test.emp group by 1",
 			want:       types.T_decimal64,
@@ -230,6 +265,19 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "derived arithmetic passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.x + 0 from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "derived arithmetic double sibling overrides target",
+			sql: "insert into constraint_test.emp (sal) select d.x + cast(0 as double) " +
+				"from (select ? + ? as x) d",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
 			name:       "unnamed sibling does not block derived passthrough",
 			sql:        "insert into constraint_test.emp (sal) select d.x from (select ? + ? as x, 1) d",
 			want:       types.T_decimal64,
@@ -264,6 +312,13 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 		{
 			name:       "cte passthrough",
 			sql:        "insert into constraint_test.emp (sal) with c as (select ? + ? as x) select x from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "cte arithmetic passthrough",
+			sql: "insert into constraint_test.emp (sal) with c as (select ? + ? as x) " +
+				"select x + 0 from c",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -324,6 +379,14 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "cte conflicting targets fall back",
 			sql: "insert into constraint_test.emp (sal, empno) " +
 				"with c as (select ? + ? as x) select c.x, c.x from c",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "cte conflict stays ambiguous across three aliases",
+			sql: "insert into constraint_test.emp (sal, empno, mgr) " +
+				"with c as (select ? + ? as x) select a.x, b.x, d.x " +
+				"from c a cross join c b cross join c d",
 			want:       types.T_float64,
 			paramCount: 2,
 		},
@@ -391,6 +454,22 @@ func TestSeedNumericSourceTargetKeepsAmbiguousPositionEmpty(t *testing.T) {
 
 	seedNumericSourceTarget(&source, 0, decimal72)
 	require.Equal(t, planpb.Type{}, source.targets[0])
+}
+
+func TestStoreNumericTableProjectionTargetsKeepsConflictAmbiguous(t *testing.T) {
+	decimal72 := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}
+	uint32Type := planpb.Type{Id: int32(types.T_uint32)}
+	targets := make(map[string][]planpb.Type)
+	ambiguous := make(map[string][]bool)
+
+	storeNumericTableProjectionTargets(targets, ambiguous, "c", []planpb.Type{decimal72})
+	storeNumericTableProjectionTargets(targets, ambiguous, "c", []planpb.Type{uint32Type})
+	require.Equal(t, planpb.Type{}, targets["c"][0])
+	require.True(t, ambiguous["c"][0])
+
+	storeNumericTableProjectionTargets(targets, ambiguous, "c", []planpb.Type{uint32Type})
+	require.Equal(t, planpb.Type{}, targets["c"][0])
+	require.True(t, ambiguous["c"][0])
 }
 
 func TestPreparedNumericContextUsesClusterTableStarVisibility(t *testing.T) {
@@ -862,6 +941,61 @@ func TestNumericAssignmentTargetKeepsGroupedProjection(t *testing.T) {
 	}
 }
 
+func TestParameterizedGroupingSetsKeepDistinctPositions(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(
+		optimizer.CurrentContext().GetContext(),
+		"select count(*) from nation group by grouping sets "+
+			"((n_regionkey + ?), (n_nationkey + ?))",
+		1,
+	)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	require.Len(t, collectUniquePlanParamTypes(t, queryPlan), 2)
+
+	seen := make(map[int]bool)
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_AGG || len(node.GroupingFlag) != 2 {
+			continue
+		}
+		active := -1
+		for pos, grouped := range node.GroupingFlag {
+			if !grouped {
+				continue
+			}
+			require.Equal(t, -1, active)
+			active = pos
+		}
+		if active >= 0 {
+			seen[active] = true
+		}
+	}
+	require.Equal(t, map[int]bool{0: true, 1: true}, seen)
+}
+
+func TestNumericConditionalContextSkipsPredicateParams(t *testing.T) {
+	tests := []string{
+		"insert into constraint_test.emp (sal) select ? + " +
+			"if(? = 1, cast(-100000 as double), 0)",
+		"insert into constraint_test.emp (sal) select ? + " +
+			"case when ? = 1 then cast(-100000 as double) else 0 end",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+			require.Equal(t, int32(types.T_float64), paramTypes[1].Id)
+			require.Equal(t, int32(types.T_int64), paramTypes[2].Id)
+		})
+	}
+}
+
 func TestValuesExprIsFuncCall(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	sql := "insert into constraint_test.emp (sal) values " +
@@ -917,6 +1051,13 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "update case result arithmetic keeps target",
+			sql: "update constraint_test.emp set sal = " +
+				"case when 1 = 1 then ? + ? else 0 end where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 2,
+		},
+		{
 			name:       "update parameter follows scalar subquery double domain",
 			sql:        "update constraint_test.emp set sal = (select cast(1 as double)) + ? where empno = 1",
 			want:       planpb.Type{Id: int32(types.T_float64)},
@@ -957,6 +1098,14 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 				"case when 1 = 1 then cast(1 as double) else 0 end",
 			want:       planpb.Type{Id: int32(types.T_float64)},
 			paramCount: 1,
+		},
+		{
+			name: "on duplicate key update case result arithmetic keeps target",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = case when 1 = 1 then ? + ? else 0 end",
+			want:         planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			checkFlatten: true,
+			paramCount:   2,
 		},
 		{
 			name: "on duplicate key update scalar subquery with from",
