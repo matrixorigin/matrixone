@@ -4254,7 +4254,19 @@ func numericProjectionOutputNames(
 	}
 	visiting[source] = true
 	defer delete(visiting, source)
-	if values, ok := source.Select.(*tree.ValuesClause); ok {
+	return numericProjectionStatementOutputNames(builder, source, source.Select, ctx, visiting)
+}
+
+func numericProjectionStatementOutputNames(
+	builder *QueryBuilder,
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	ctx *BindContext,
+	visiting map[*tree.Select]bool,
+) []string {
+	switch selectStmt := stmt.(type) {
+	case *tree.ValuesClause:
+		values := selectStmt
 		if len(values.Rows) == 0 {
 			return nil
 		}
@@ -4269,61 +4281,56 @@ func numericProjectionOutputNames(
 			names[i] = fmt.Sprintf("column_%d", i)
 		}
 		return names
-	}
-
-	clause := firstNumericProjectionSelectClause(source.Select)
-	if clause == nil {
-		return nil
-	}
-	var sources []numericProjectionSourceInfo
-	if clause.From != nil && len(clause.From.Tables) == 1 {
-		sources = collectNumericProjectionSources(clause.From.Tables[0], "", nil)
-		resolveNumericProjectionSourceOutputs(builder, source, ctx, sources, visiting)
-	}
-	names := make([]string, 0, len(clause.Exprs))
-	for _, expr := range clause.Exprs {
-		if expr.As != nil && !expr.As.Empty() {
-			names = append(names, strings.ToLower(expr.As.Origin()))
-			continue
+	case *tree.ParenSelect:
+		return numericProjectionOutputNames(builder, selectStmt.Select, ctx, visiting)
+	case *tree.UnionClause:
+		left := numericProjectionStatementOutputNames(builder, owner, selectStmt.Left, ctx, visiting)
+		right := numericProjectionStatementOutputNames(builder, owner, selectStmt.Right, ctx, visiting)
+		if left == nil || right == nil || len(left) != len(right) {
+			return nil
 		}
-		switch item := expr.Expr.(type) {
-		case tree.UnqualifiedStar:
-			if clause.From == nil || len(clause.From.Tables) != 1 {
-				return nil
+		return left
+	case *tree.SelectClause:
+		clause := selectStmt
+		var sources []numericProjectionSourceInfo
+		if clause.From != nil && len(clause.From.Tables) == 1 {
+			sources = collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+			resolveNumericProjectionSourceOutputs(builder, owner, ctx, sources, visiting)
+		}
+		names := make([]string, 0, len(clause.Exprs))
+		for _, expr := range clause.Exprs {
+			if expr.As != nil && !expr.As.Empty() {
+				names = append(names, strings.ToLower(expr.As.Origin()))
+				continue
 			}
-			cursor := 0
-			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
-			if !ok || cursor != len(sources) {
-				return nil
-			}
-			for _, output := range outputs {
-				names = append(names, output.name)
-			}
-		case *tree.UnresolvedName:
-			if item.Star {
-				sourceIdx := uniqueNumericStarSource(sources, item.ColName())
-				if sourceIdx < 0 {
+			switch item := expr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				if clause.From == nil || len(clause.From.Tables) != 1 {
 					return nil
 				}
-				names = append(names, sources[sourceIdx].outputNames...)
-			} else {
-				names = append(names, strings.ToLower(item.ColName()))
+				cursor := 0
+				outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
+				if !ok || cursor != len(sources) {
+					return nil
+				}
+				for _, output := range outputs {
+					names = append(names, output.name)
+				}
+			case *tree.UnresolvedName:
+				if item.Star {
+					sourceIdx := uniqueNumericStarSource(sources, item.ColName())
+					if sourceIdx < 0 {
+						return nil
+					}
+					names = append(names, sources[sourceIdx].outputNames...)
+				} else {
+					names = append(names, strings.ToLower(item.ColName()))
+				}
+			default:
+				names = append(names, "")
 			}
-		default:
-			names = append(names, "")
 		}
-	}
-	return names
-}
-
-func firstNumericProjectionSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
-	switch selectStmt := stmt.(type) {
-	case *tree.SelectClause:
-		return selectStmt
-	case *tree.UnionClause:
-		return firstNumericProjectionSelectClause(selectStmt.Left)
-	case *tree.ParenSelect:
-		return firstNumericProjectionSelectClause(selectStmt.Select.Select)
+		return names
 	default:
 		return nil
 	}

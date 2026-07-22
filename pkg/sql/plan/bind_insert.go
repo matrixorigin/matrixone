@@ -2998,12 +2998,12 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 }
 
 // valuesExprIsFuncCall reports whether a VALUES item is, or transparently wraps
-// (through parentheses or a cast), a function call. Such expressions must be
-// bound without the destination column type so the function's literal arguments
-// bind by their own types — e.g. st_point(116.3975, 39.9087),
-// (st_point(116.3975, 39.9087)) or cast(st_point(...) as point) into a geometry
-// column. A bare literal (or a literal wrapped in a unary minus / cast) is not a
-// function call and still binds against the column type.
+// (through parentheses or a cast), a function call. For non-numeric destinations
+// such expressions bind without the destination type so arguments keep their
+// own domains — e.g. st_point(116.3975, 39.9087), (st_point(...)) or a cast of
+// st_point into a geometry column. Numeric destinations instead use assignment-
+// aware overload resolution. A bare literal (or a literal wrapped in a unary
+// minus / cast) is not a function call.
 func valuesExprIsFuncCall(e tree.Expr) bool {
 	for {
 		switch v := e.(type) {
@@ -3088,15 +3088,11 @@ func (builder *QueryBuilder) buildValueScan(
 				defaultBinder.builder = builder
 				binder = defaultBinder
 
-				// A function-call value expression must be bound without the
-				// destination column type. The DefaultBinder pushes its type down to
-				// nested literals, so binding st_point(116.3975, 39.9087) against a
-				// GEOMETRY column would type the float arguments as GEOMETRY and break
-				// the function's overload resolution. A function's arguments bind by
-				// their own types, and the result is cast to the column type below
-				// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
-				// negative literal like -1.5, a cast, etc.) still bind against the
-				// column type, which a literal value legitimately adopts.
+				// Non-numeric destinations need a target-free function binder. The
+				// DefaultBinder would otherwise push GEOMETRY into st_point's float
+				// arguments and break overload resolution. Numeric destinations use
+				// the target-aware binder below, which resolves each function argument
+				// from overload metadata before the final assignment cast.
 				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
 				defaultFuncBinder.builder = builder
 				funcBinder = defaultFuncBinder
@@ -3122,15 +3118,28 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				} else {
 					valueBinder := binder
-					if valuesExprIsFuncCall(r[i]) {
-						// function call (possibly wrapped in parens / a cast):
-						// bind its arguments by their own types, not the
-						// destination column type
+					boundWithNumericContext := false
+					if isNumericAssignmentTarget(col.Typ) {
+						switch numericBinder := binder.(type) {
+						case *DefaultBinder:
+							defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+						case *ReplaceValueBinder:
+							defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+						}
+						if err != nil {
+							return 0, err
+						}
+						boundWithNumericContext = defExpr != nil
+					} else if valuesExprIsFuncCall(r[i]) {
+						// Geometry and other non-numeric functions need their
+						// arguments to bind independently of the destination type.
 						valueBinder = funcBinder
 					}
-					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
-					if err != nil {
-						return 0, err
+					if !boundWithNumericContext {
+						defExpr, err = valueBinder.BindExpr(r[i], 0, true)
+						if err != nil {
+							return 0, err
+						}
 					}
 					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)

@@ -146,7 +146,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
-		if isNumericArithmeticRoot(exprImpl.Expr) {
+		if isNumericArithmeticRoot(exprImpl.Expr) ||
+			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
@@ -773,6 +774,18 @@ func (b *baseBinder) isNumericContextNode(astExpr tree.Expr, depth int32) bool {
 	return ok
 }
 
+func (b *baseBinder) isGenericNumericFunctionRoot(astExpr tree.Expr, depth int32, target *Type) bool {
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isGenericNumericFunctionRoot(paren.Expr, depth, target)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(functionExpr, depth, b.numericAstColumnResolver(), target)
+	return ok
+}
+
 func isNumericArithmeticRoot(astExpr tree.Expr) bool {
 	switch expr := astExpr.(type) {
 	case *tree.ParenExpr:
@@ -990,7 +1003,13 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			}
 			resolved, ok := b.resolveNumericFunctionContext(expr, depth, resolveColumn, hint)
 			if ok {
-				scan := numericAstTypedOperand(resolved.returnType)
+				var scan numericAstTypeScan
+				for _, dynamic := range resolved.dynamic {
+					if !dynamic {
+						scan = numericAstTypedOperand(resolved.returnType)
+						break
+					}
+				}
 				for _, arg := range expr.Exprs {
 					argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
 					if scanErr != nil {
@@ -1354,6 +1373,29 @@ func (b *baseBinder) numericScalarStatementOutputs(
 			}
 			cols = append(cols, col)
 			scans = append(scans, scan)
+		}
+		return cols, scans, true, nil
+	case *tree.ValuesClause:
+		if len(selectStmt.Rows) == 0 {
+			return nil, nil, false, nil
+		}
+		width := len(selectStmt.Rows[0])
+		cols := make([]string, width)
+		scans := make([]numericAstTypeScan, width)
+		for i := range cols {
+			cols[i] = fmt.Sprintf("column_%d", i)
+		}
+		for _, row := range selectStmt.Rows {
+			if len(row) != width {
+				return nil, nil, false, nil
+			}
+			for i, cell := range row {
+				scan, err := b.numericAstTypesInternal(cell, depth, nil)
+				if err != nil {
+					return nil, nil, false, err
+				}
+				scans[i] = scans[i].merge(scan)
+			}
 		}
 		return cols, scans, true, nil
 	case *tree.UnionClause:

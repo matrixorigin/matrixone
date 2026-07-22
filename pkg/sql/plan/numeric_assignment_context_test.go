@@ -28,9 +28,10 @@ import (
 
 func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
-		want planpb.Type
+		name       string
+		sql        string
+		want       planpb.Type
+		paramCount int
 	}{
 		{
 			name: "binary arithmetic",
@@ -47,6 +48,48 @@ func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 			sql:  "insert into constraint_test.emp (sal) values ((? + ?) + cast(1 as double))",
 			want: planpb.Type{Id: int32(types.T_float64)},
 		},
+		{
+			name:       "numeric function",
+			sql:        "insert into constraint_test.emp (sal) values (abs(?))",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
+			name:       "parenthesized numeric function",
+			sql:        "insert into constraint_test.emp (sal) values (((abs(?))))",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
+			name:       "cast wrapped numeric function",
+			sql:        "insert into constraint_test.emp (sal) values (cast(abs(?) as decimal(7, 2)))",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
+			name:       "numeric function inside arithmetic",
+			sql:        "insert into constraint_test.emp (sal) values (abs(?) + 0)",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
+			name:       "replace numeric function",
+			sql:        "replace into constraint_test.emp (sal) values (abs(?))",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
+			name:       "insert set numeric function",
+			sql:        "insert into constraint_test.emp set sal = abs(?)",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
+			name:       "replace set numeric function",
+			sql:        "replace into constraint_test.emp set sal = abs(?)",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
 	}
 
 	for _, test := range tests {
@@ -58,14 +101,17 @@ func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 			require.NoError(t, err)
 
-			paramTypes := collectPlanParamTypes(queryPlan)
-			require.Len(t, paramTypes, 2)
-			require.Equal(t, test.want.Id, int32(paramTypes[0]))
-			require.Equal(t, test.want.Id, int32(paramTypes[1]))
-			if test.want.Id == int32(types.T_decimal64) {
-				planTypes := collectUniquePlanParamTypes(t, queryPlan)
-				require.Equal(t, test.want, planTypes[1])
-				require.Equal(t, test.want, planTypes[2])
+			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+			paramCount := test.paramCount
+			if paramCount == 0 {
+				paramCount = 2
+			}
+			require.Len(t, paramTypes, paramCount)
+			for _, typ := range paramTypes {
+				require.Equal(t, test.want.Id, typ.Id)
+				if test.want.Id == int32(types.T_decimal64) {
+					require.Equal(t, test.want, typ)
+				}
 			}
 		})
 	}
@@ -228,6 +274,20 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "outer parameter follows scalar derived values double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select d.x from (values row(cast(-100000 as double))) as d(x)) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "outer parameter follows scalar parenthesized values double domain",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"(select d.x from ((values row(cast(-100000 as double)))) as d(x)) + ?",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
 			name: "outer parameter follows scalar derived column double domain",
 			sql: "insert into constraint_test.emp (sal) select " +
 				"(select x from (select cast(1 as double) as x) d) + ?",
@@ -340,6 +400,19 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			sql:        "insert into constraint_test.emp (sal) select d.column_0 from (values row(? + ?)) as d",
 			want:       types.T_decimal64,
 			paramCount: 2,
+		},
+		{
+			name:       "derived parenthesized values passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.x from ((values row(? + ?))) as d(x)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "derived values union passthrough",
+			sql: "insert into constraint_test.emp (sal) select d.x " +
+				"from ((values row(? + ?)) union all select ? + ?) as d(x)",
+			want:       types.T_decimal64,
+			paramCount: 4,
 		},
 		{
 			name: "derived values multiple rows passthrough",
