@@ -121,7 +121,13 @@ func getAsyncLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, 
 		deadline time.Time
 		err      error
 	)
-	if opts.LockWaitTimeout > 0 {
+	// An absolute deadline carried across an RPC is authoritative. The
+	// relative timeout is rounded to whole seconds for wire compatibility and
+	// must only be used when no earlier hop supplied an absolute budget.
+	if opts.LockWaitDeadline > 0 {
+		deadline = time.Unix(0, opts.LockWaitDeadline)
+		err = ErrLockTimeout
+	} else if opts.LockWaitTimeout > 0 {
 		deadline = createAt.Add(time.Duration(opts.LockWaitTimeout) * time.Second)
 		err = ErrLockTimeout
 	}
@@ -315,12 +321,13 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 
 func (mw *waiterEvents) check(timeout time.Duration) {
 	mw.mu.Lock()
-	defer mw.mu.Unlock()
 	if len(mw.mu.blockedWaiters) == 0 {
+		mw.mu.Unlock()
 		return
 	}
 
 	now := time.Now()
+	var timedOut []*lockContext
 	newBlockedWaiters := mw.mu.blockedWaiters[:0]
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
@@ -358,7 +365,9 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 					zap.Duration("wait", wait),
 					zap.Duration("timeout", w.lockWaitTimeout))
 			}
-			w.notify(notifyValue{err: err}, mw.logger)
+			if w.notifyWithoutEvent(notifyValue{err: err}, mw.logger) && w.event.c != nil {
+				timedOut = append(timedOut, w.event.c)
+			}
 			w.close("waiterEvents check timeout", mw.logger)
 			mw.mu.blockedWaiters[i] = nil
 			continue
@@ -370,6 +379,17 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 		newBlockedWaiters = append(newBlockedWaiters, w)
 	}
 	mw.mu.blockedWaiters = newBlockedWaiters
+	mw.mu.Unlock()
+
+	// Complete timed-out async waits outside mw.mu. doLock removes the waiter
+	// from the checker and may acquire mw.mu again, and it also takes txn locks;
+	// neither is safe while the checker mutex is held.
+	for _, c := range timedOut {
+		txn := c.txn
+		txn.Lock()
+		c.doLock()
+		txn.Unlock()
+	}
 }
 
 func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
