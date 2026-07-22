@@ -363,6 +363,25 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.NotNil(t, retStmt)
 }
 
+func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitSchedulingIntent(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
+	defer prepareStmt.Close()
+
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryMaxWorkers, int64(2)))
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+}
+
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {
 	var released bool
 	mockComp := &mockCompile{
