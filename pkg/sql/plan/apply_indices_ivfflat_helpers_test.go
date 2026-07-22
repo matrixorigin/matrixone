@@ -24,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	ivfflatruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -689,6 +690,8 @@ func TestIvfLiteralAndPlanTypeConversionHelpers(t *testing.T) {
 		{name: "uint64", typ: Type{Id: int32(types.T_uint64)}, family: "bigint", unsigned: true},
 		{name: "float64", typ: Type{Id: int32(types.T_float64)}, family: "double"},
 		{name: "decimal64", typ: Type{Id: int32(types.T_decimal64), Width: 12, Scale: 3}, family: "decimal", display: 12},
+		{name: "decimal128", typ: Type{Id: int32(types.T_decimal128), Width: 38, Scale: 4}, family: "decimal", display: 38},
+		{name: "decimal256", typ: Type{Id: int32(types.T_decimal256), Width: 65, Scale: 4}, family: "decimal", display: 65},
 		{name: "date", typ: Type{Id: int32(types.T_date)}, family: "date"},
 		{name: "time", typ: Type{Id: int32(types.T_time), Scale: 4}, family: "time", display: 4},
 		{name: "datetime", typ: Type{Id: int32(types.T_datetime), Scale: 6}, family: "datetime", display: 6},
@@ -725,6 +728,75 @@ func TestIvfLiteralAndPlanTypeConversionHelpers(t *testing.T) {
 
 	_, err := ivfPlanTypeToTreeType(Type{Id: int32(types.T_any)})
 	require.Error(t, err)
+}
+
+func TestIvfIncludeCastSerializationAcceptedTypes(t *testing.T) {
+	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
+	scanTag := scanNode.BindingTags[0]
+	covered := buildVectorIndexCoveredColumns(scanNode.TableDef, []string{"category"})
+
+	for _, oid := range (ivfflatruntime.CatalogHooks{}).SupportedIncludeColumnTypes() {
+		t.Run(oid.String(), func(t *testing.T) {
+			targetType := Type{Id: int32(oid), Width: 32, Scale: 4}
+			if oid == types.T_decimal256 {
+				targetType.Width = 65
+			}
+			castExpr := makeIvfHelperFnExpr(
+				"cast",
+				targetType,
+				makeIvfHelperColExpr(scanTag, 3, scanNode.TableDef),
+				&Expr{Typ: targetType, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+			)
+
+			ast, ok, err := serializeFilterExprToAST(castExpr, scanNode, scanTag, 1, covered)
+			require.NoError(t, err)
+			if _, conversionErr := ivfPlanTypeToTreeType(targetType); conversionErr != nil {
+				assert.False(t, ok)
+				assert.Nil(t, ast)
+				return
+			}
+			require.True(t, ok)
+			require.NotNil(t, ast)
+		})
+	}
+}
+
+func TestIvfIncludeDecimal256CastSerialization(t *testing.T) {
+	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
+	scanTag := scanNode.BindingTags[0]
+	targetType := Type{Id: int32(types.T_decimal256), Width: 65, Scale: 4}
+	decimalColPos := int32(len(scanNode.TableDef.Cols))
+	scanNode.TableDef.Cols = append(scanNode.TableDef.Cols, &ColDef{Name: "amount", Typ: targetType})
+	scanNode.TableDef.Name2ColIndex["amount"] = decimalColPos
+	castExpr := makeIvfHelperFnExpr(
+		"cast",
+		targetType,
+		makeIvfHelperColExpr(scanTag, decimalColPos, scanNode.TableDef),
+		&Expr{Typ: targetType, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+	)
+	filterExpr := makeIvfHelperFnExpr("is_not_null", Type{Id: int32(types.T_bool)}, castExpr)
+
+	sql, pushdown, remaining, err := serializeFiltersToSQL([]*Expr{filterExpr}, scanNode, []string{"amount"}, 1)
+	require.NoError(t, err)
+	require.Len(t, pushdown, 1)
+	assert.Empty(t, remaining)
+	assert.Contains(t, sql, "decimal(65, 4)")
+	assert.Contains(t, sql, "is not null")
+
+	unsupportedType := Type{Id: int32(types.T_any)}
+	unsupportedCast := makeIvfHelperFnExpr(
+		"cast",
+		unsupportedType,
+		makeIvfHelperColExpr(scanTag, decimalColPos, scanNode.TableDef),
+		&Expr{Typ: unsupportedType, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+	)
+	unsupportedFilter := makeIvfHelperFnExpr("is_not_null", Type{Id: int32(types.T_bool)}, unsupportedCast)
+	sql, pushdown, remaining, err = serializeFiltersToSQL([]*Expr{unsupportedFilter}, scanNode, []string{"amount"}, 1)
+	require.NoError(t, err)
+	assert.Empty(t, sql)
+	assert.Empty(t, pushdown)
+	require.Len(t, remaining, 1)
+	assert.Same(t, unsupportedFilter, remaining[0])
 }
 
 func TestIvfFilterColumnAndDistanceRangeHelpers(t *testing.T) {
