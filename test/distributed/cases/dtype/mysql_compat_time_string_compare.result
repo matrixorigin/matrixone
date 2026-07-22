@@ -27,3 +27,66 @@ from mysql_compat_time_string_compare;
 ➤ time_col_eq_compact_string[-7,1,0]  ¦  time_col_between_compact_string[-7,1,0]  𝄀
 1  ¦  1
 drop table mysql_compat_time_string_compare;
+drop table if exists mysql_compat_time_prepare;
+create table mysql_compat_time_prepare(t time(2));
+insert into mysql_compat_time_prepare values ('12:00:00.24');
+prepare time_col_gt_param from 'select t > ? as time_col_gt_param from mysql_compat_time_prepare';
+set @time_param = '2:00:00';
+execute time_col_gt_param using @time_param;
+➤ time_col_gt_param[-7,1,0]  𝄀
+1
+deallocate prepare time_col_gt_param;
+prepare time_param_lt_col from 'select ? < t as time_param_lt_col from mysql_compat_time_prepare';
+execute time_param_lt_col using @time_param;
+➤ time_param_lt_col[-7,1,0]  𝄀
+1
+deallocate prepare time_param_lt_col;
+prepare time_col_eq_compact_param from 'select t = ? as time_col_eq_compact_param from mysql_compat_time_prepare';
+set @time_param = '120000.24';
+execute time_col_eq_compact_param using @time_param;
+➤ time_col_eq_compact_param[-7,1,0]  𝄀
+1
+deallocate prepare time_col_eq_compact_param;
+prepare time_col_lt_scale_param from 'select t < ? as time_col_lt_scale_param from mysql_compat_time_prepare';
+set @time_param = '120000.25';
+execute time_col_lt_scale_param using @time_param;
+➤ time_col_lt_scale_param[-7,1,0]  𝄀
+1
+deallocate prepare time_col_lt_scale_param;
+prepare time_col_between_params from 'select t between ? and ? as time_col_between_params from mysql_compat_time_prepare';
+set @time_lower = '2:00:00';
+set @time_upper = '13:00:00';
+execute time_col_between_params using @time_lower, @time_upper;
+➤ time_col_between_params[-7,1,0]  𝄀
+1
+deallocate prepare time_col_between_params;
+prepare time_col_between_lower_param from 'select t between ? and ''13:00:00'' as time_col_between_lower_param from mysql_compat_time_prepare';
+execute time_col_between_lower_param using @time_lower;
+➤ time_col_between_lower_param[-7,1,0]  𝄀
+1
+deallocate prepare time_col_between_lower_param;
+prepare time_col_between_upper_param from 'select t between ''2:00:00'' and ? as time_col_between_upper_param from mysql_compat_time_prepare';
+execute time_col_between_upper_param using @time_upper;
+➤ time_col_between_upper_param[-7,1,0]  𝄀
+1
+deallocate prepare time_col_between_upper_param;
+prepare time_col_between_time_param from 'select t between cast(''2:00:00'' as time(2)) and ? as time_col_between_time_param from mysql_compat_time_prepare';
+execute time_col_between_time_param using @time_upper;
+➤ time_col_between_time_param[-7,1,0]  𝄀
+1
+deallocate prepare time_col_between_time_param;
+prepare time_col_eq_nullable_param from 'select t = ? as time_col_eq_nullable_param from mysql_compat_time_prepare';
+set @time_param = null;
+execute time_col_eq_nullable_param using @time_param;
+➤ time_col_eq_nullable_param[-7,1,0]  𝄀
+null
+set @time_param = '';
+execute time_col_eq_nullable_param using @time_param;
+➤ time_col_eq_nullable_param[-7,1,0]  𝄀
+null
+set @time_param = 'not-a-time';
+execute time_col_eq_nullable_param using @time_param;
+-- @regex("invalid time value not-a-time", true)
+invalid input: invalid time value not-a-time
+deallocate prepare time_col_eq_nullable_param;
+drop table mysql_compat_time_prepare;

@@ -2804,14 +2804,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a
-// constant string to TIME(scale) when the TIME side is a column.
+// constant string or direct prepared parameter to TIME(scale) when the TIME
+// side is a column.
 func normalizeTimeStringComparisonArgs(ctx context.Context, name string, args []*Expr) error {
 	switch name {
 	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
 		if len(args) != 2 || !isTimeStringComparisonPair(args[0], args[1]) {
 			return nil
 		}
-		if isTimeColumnStringLiteralPair(args[0], args[1]) {
+		if isTimeColumnStringLiteralOrDirectParamPair(args[0], args[1]) {
 			return nil
 		}
 	case "between":
@@ -2819,7 +2820,8 @@ func normalizeTimeStringComparisonArgs(ctx context.Context, name string, args []
 			return nil
 		}
 		if args[0].Typ.Id == int32(types.T_time) && args[0].GetCol() != nil &&
-			isTimeValueOrCharacterStringLiteral(args[1]) && isTimeValueOrCharacterStringLiteral(args[2]) {
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[1]) &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[2]) {
 			return nil
 		}
 	default:
@@ -2846,9 +2848,9 @@ func isTimeStringComparisonPair(left, right *Expr) bool {
 		(right.Typ.Id == int32(types.T_time) && isCharacterStringType(left.Typ.Id))
 }
 
-func isTimeColumnStringLiteralPair(left, right *Expr) bool {
-	return (left.Typ.Id == int32(types.T_time) && left.GetCol() != nil && isCharacterStringLiteral(right)) ||
-		(right.Typ.Id == int32(types.T_time) && right.GetCol() != nil && isCharacterStringLiteral(left))
+func isTimeColumnStringLiteralOrDirectParamPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && left.GetCol() != nil && isCharacterStringLiteralOrDirectParam(right)) ||
+		(right.Typ.Id == int32(types.T_time) && right.GetCol() != nil && isCharacterStringLiteralOrDirectParam(left))
 }
 
 func allTimeOrCharacterString(args []*Expr) bool {
@@ -2871,8 +2873,13 @@ func isCharacterStringLiteral(expr *Expr) bool {
 	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
 }
 
-func isTimeValueOrCharacterStringLiteral(expr *Expr) bool {
-	return expr.Typ.Id == int32(types.T_time) || isCharacterStringLiteral(expr)
+func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) ||
+		(isCharacterStringType(expr.Typ.Id) && isDirectDynamicParam(expr))
+}
+
+func isTimeValueOrCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return expr.Typ.Id == int32(types.T_time) || isCharacterStringLiteralOrDirectParam(expr)
 }
 
 func isCharacterStringType(typeID int32) bool {
