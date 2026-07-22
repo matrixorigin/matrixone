@@ -1,0 +1,64 @@
+drop database if exists prepare_ddl_schema_change;
+create database prepare_ddl_schema_change;
+use prepare_ddl_schema_change;
+create table prepared_t (
+id int primary key,
+v int
+);
+prepare add_column_stmt from
+'alter table prepared_t add column note varchar(20) default ''x''';
+execute add_column_stmt;
+execute add_column_stmt;
+Duplicate column name 'note'
+select column_name
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change' and table_name = 'prepared_t'
+order by ordinal_position;
+➤ column_name[12,-1,0]  𝄀
+id  𝄀
+v  𝄀
+note
+alter table prepared_t drop column note;
+execute add_column_stmt;
+select column_name
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change' and table_name = 'prepared_t'
+order by ordinal_position;
+➤ column_name[12,-1,0]  𝄀
+id  𝄀
+v  𝄀
+note
+deallocate prepare add_column_stmt;
+create index idx_v on prepared_t(v);
+prepare drop_column_stmt from 'alter table prepared_t drop column note';
+execute drop_column_stmt;
+execute drop_column_stmt;
+Can't DROP 'note'; check that column/key exists
+select column_name
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change' and table_name = 'prepared_t'
+order by ordinal_position;
+➤ column_name[12,-1,0]  𝄀
+id  𝄀
+v
+deallocate prepare drop_column_stmt;
+prepare create_index_stmt from 'create index idx_created on prepared_t(v)';
+execute create_index_stmt;
+execute create_index_stmt;
+duplicate key name 'idx_created'
+show index from prepared_t;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
+prepared_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+prepared_t  ¦  1  ¦  idx_created  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v
+deallocate prepare create_index_stmt;
+prepare drop_index_stmt from 'drop index idx_created on prepared_t';
+execute drop_index_stmt;
+execute drop_index_stmt;
+internal error: not found index: idx_created
+show index from prepared_t;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v  𝄀
+prepared_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+deallocate prepare drop_index_stmt;
+drop database prepare_ddl_schema_change;

@@ -2739,10 +2739,15 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 		}
 	case *plan.Plan_Ddl:
+		ddlSchemas, err := getPrepareDdlSchemas(ctx, pp.Ddl)
+		if err != nil {
+			return nil, nil, err
+		}
+		schemas = append(schemas, ddlSchemas...)
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
 			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-			err := VisitQuery.Visit(ctx.GetContext())
+			err = VisitQuery.Visit(ctx.GetContext())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2791,6 +2796,40 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 	}
 	return schemas, paramTypes, nil
+}
+
+func getPrepareDdlSchemas(ctx CompilerContext, ddl *plan.DataDefinition) ([]*plan.ObjectRef, error) {
+	var databaseName, tableName string
+	switch definition := ddl.GetDefinition().(type) {
+	case *plan.DataDefinition_AlterTable:
+		databaseName = definition.AlterTable.GetDatabase()
+		tableName = definition.AlterTable.GetTableDef().GetName()
+	case *plan.DataDefinition_CreateIndex:
+		databaseName = definition.CreateIndex.GetDatabase()
+		tableName = definition.CreateIndex.GetTable()
+	case *plan.DataDefinition_DropIndex:
+		databaseName = definition.DropIndex.GetDatabase()
+		tableName = definition.DropIndex.GetTable()
+	default:
+		return nil, nil
+	}
+
+	objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
+	if objRef == nil || tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+	}
+
+	ref := DeepCopyObjectRef(objRef)
+	ref.Server = int64(tableDef.Version)
+	ref.Db = int64(tableDef.DbId)
+	ref.Schema = int64(tableDef.DbId)
+	ref.Obj = int64(tableDef.TblId)
+	ref.SchemaName = databaseName
+	ref.ObjName = tableName
+	return []*plan.ObjectRef{ref}, nil
 }
 
 func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) ([]int32, error) {

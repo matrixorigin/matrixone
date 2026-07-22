@@ -15,12 +15,92 @@
 package plan
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+type resolveErrorCompilerContext struct {
+	*MockCompilerContext
+	err error
+}
+
+func (c *resolveErrorCompilerContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+	return nil, nil, c.err
+}
+
+func TestResetPreparePlanCollectsDdlSchemas(t *testing.T) {
+	testCases := []struct {
+		name string
+		ddl  *planpb.DataDefinition
+	}{
+		{
+			name: "alter table",
+			ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_AlterTable{
+				AlterTable: &planpb.AlterTable{
+					Database: "db", TableDef: &planpb.TableDef{Name: "tbl"},
+				},
+			}},
+		},
+		{
+			name: "create index",
+			ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_CreateIndex{
+				CreateIndex: &planpb.CreateIndex{Database: "db", Table: "tbl"},
+			}},
+		},
+		{
+			name: "drop index",
+			ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropIndex{
+				DropIndex: &planpb.DropIndex{Database: "db", Table: "tbl"},
+			}},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mock := NewMockCompilerContext(false)
+			mock.objects["tbl"] = &planpb.ObjectRef{ServerName: "server"}
+			mock.tables["tbl"] = &planpb.TableDef{Name: "tbl", DbId: 10, TblId: 20, Version: 30}
+
+			schemas, _, err := ResetPreparePlan(mock, &planpb.Plan{
+				Plan: &planpb.Plan_Ddl{Ddl: testCase.ddl},
+			})
+			require.NoError(t, err)
+			require.Equal(t, []*planpb.ObjectRef{{
+				Server:     30,
+				Db:         10,
+				Schema:     10,
+				Obj:        20,
+				ServerName: "server",
+				SchemaName: "db",
+				ObjName:    "tbl",
+			}}, schemas)
+		})
+	}
+}
+
+func TestGetPrepareDdlSchemasRejectsMissingTable(t *testing.T) {
+	ddl := &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropIndex{
+		DropIndex: &planpb.DropIndex{Database: "db", Table: "tbl"},
+	}}
+	mock := NewMockCompilerContext(false)
+	_, err := getPrepareDdlSchemas(mock, ddl)
+	require.Error(t, err)
+}
+
+func TestGetPrepareDdlSchemasPropagatesResolveError(t *testing.T) {
+	expected := errors.New("resolve failed")
+	ctx := &resolveErrorCompilerContext{MockCompilerContext: NewMockCompilerContext(false), err: expected}
+	ddl := &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropIndex{
+		DropIndex: &planpb.DropIndex{Database: "db", Table: "tbl"},
+	}}
+
+	_, err := getPrepareDdlSchemas(ctx, ddl)
+	require.ErrorIs(t, err, expected)
+}
 
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	const hiddenTable = "__mo_index_hidden"
