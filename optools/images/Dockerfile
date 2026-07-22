@@ -25,30 +25,12 @@ RUN module_files="$(sha256sum go.mod go.sum)" && \
         exit 1; \
     fi
 
-# Native dependencies change much less frequently than the Go source. Keep
-# them in independent layers so an external BuildKit cache can reuse them.
-COPY thirdparties thirdparties
-RUN make -C thirdparties
-
-COPY cgo cgo
-RUN make -C cgo
-
 COPY . .
 
-# CI can provide version metadata explicitly and omit .git from the build
-# context. Local builds keep the existing behavior and derive it from .git.
-ARG BUILD_BRANCH_NAME
-ARG BUILD_COMMIT_ID
-ARG BUILD_VERSION
-
-RUN --mount=type=cache,id=mo-go-build,target=/root/.cache/go-build \
-    branch_name="${BUILD_BRANCH_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}" && \
-    commit_id="${BUILD_COMMIT_ID:-$(git rev-parse --short HEAD 2>/dev/null || true)}" && \
-    mo_version="${BUILD_VERSION:-$(git symbolic-ref -q --short HEAD || git describe --tags --exact-match 2>/dev/null || true)}" && \
-    if [ "$TYPECHECK" = "1" ]; then \
-        make build TYPECHECK=1 BRANCH_NAME="$branch_name" LAST_COMMIT_ID="$commit_id" MO_VERSION="$mo_version"; \
+RUN if [ "$TYPECHECK" = "1" ]; then \
+        make clean && make build TYPECHECK=1; \
     else \
-        make build BRANCH_NAME="$branch_name" LAST_COMMIT_ID="$commit_id" MO_VERSION="$mo_version"; \
+        make clean && make build; \
     fi
 
 FROM matrixorigin/ubuntu:22.04
