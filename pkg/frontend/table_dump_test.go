@@ -25,12 +25,23 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type testTableDumpObjectCopier struct {
@@ -153,6 +164,428 @@ func TestOpenStageTableDump(t *testing.T) {
 	}))
 	_, err = fs.StatFile(context.Background(), tableDumpReadyName)
 	require.NoError(t, err)
+	_, _, err = openTableDumpFS(context.Background(), ses, "relative/path")
+	require.Error(t, err)
+}
+
+func TestResolveTableName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	_, _, err := resolveTableName(ses, nil)
+	require.Error(t, err)
+	_, _, err = resolveTableName(ses, &tree.TableName{})
+	require.Error(t, err)
+
+	table := tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil)
+	_, _, err = resolveTableName(ses, table)
+	require.Error(t, err)
+	ses.SetDatabaseName("tpch")
+	dbName, tableName, err := resolveTableName(ses, table)
+	require.NoError(t, err)
+	require.Equal(t, "tpch", dbName)
+	require.Equal(t, "orders", tableName)
+
+	table.ExplicitSchema = true
+	table.SchemaName = "archive"
+	dbName, tableName, err = resolveTableName(ses, table)
+	require.NoError(t, err)
+	require.Equal(t, "archive", dbName)
+	require.Equal(t, "orders", tableName)
+}
+
+func TestTableDumpPrivileges(t *testing.T) {
+	table := tree.NewTableName("orders", tree.ObjectNamePrefix{SchemaName: "tpch", ExplicitSchema: true}, nil)
+	for _, tc := range []struct {
+		stmt tree.Statement
+		want PrivilegeType
+	}{
+		{stmt: &tree.DumpTable{Table: table}, want: PrivilegeTypeSelect},
+		{stmt: &tree.LoadTable{Table: table}, want: PrivilegeTypeInsert},
+	} {
+		priv := determinePrivilegeSetOfStatement(tc.stmt)
+		require.Equal(t, objectTypeTable, priv.objType)
+		require.True(t, priv.writeDatabaseAndTableDirectly)
+		require.Equal(t, []string{"tpch"}, priv.writeDatabaseTargets)
+		require.Len(t, priv.entries, 3)
+		require.Equal(t, tc.want, priv.entries[0].privilegeId)
+		require.Equal(t, "tpch", priv.entries[0].databaseName)
+	}
+}
+
+func TestExecInFrontendRoutesTableDumpAndLoad(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	for _, stmt := range []tree.Statement{&tree.DumpTable{}, &tree.LoadTable{}} {
+		_, err := execInFrontend(ses, &ExecCtx{reqCtx: context.Background(), stmt: stmt})
+		require.Error(t, err)
+	}
+}
+
+func TestGetTableDumpRelations(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	master := mock_frontend.NewMockRelation(ctrl)
+	indexRel := mock_frontend.NewMockRelation(ctrl)
+	ses.txnHandler.storage = eng
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil).AnyTimes()
+
+	masterDef := &plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{{
+			Name: "o_orderkey", Typ: plan.Type{Id: int32(types.T_int64)},
+			Default: &plan.Default{},
+		}},
+		Indexes: []*plan.IndexDef{{IndexName: "idx", IndexTableName: "__idx", IndexAlgoTableType: "regular"}},
+	}
+	master.EXPECT().GetTableDef(gomock.Any()).Return(masterDef).AnyTimes()
+	master.EXPECT().GetTableName().Return("orders")
+	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(indexRel, nil)
+
+	refs, err := getTableDumpRelations(context.Background(), ses, "tpch", master)
+	require.NoError(t, err)
+	require.Len(t, refs, 2)
+	require.Equal(t, "main", refs[0].Role)
+	require.Equal(t, "index", refs[1].Role)
+	require.Equal(t, "idx", refs[1].IndexName)
+	require.NotEmpty(t, refs[0].SchemaHash)
+	require.Equal(t, tableDumpRelationKey("index", "idx", "regular"), "index\x00idx\x00regular")
+}
+
+func TestGetTableForDumpErrors(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	_, _, _, err := getTableForDump(context.Background(), ses, nil)
+	require.Error(t, err)
+
+	ses.SetDatabaseName("tpch")
+	eng := mock_frontend.NewMockEngine(ctrl)
+	ses.txnHandler.storage = eng
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(nil, errors.New("database failed"))
+	_, _, _, err = getTableForDump(context.Background(), ses, tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil))
+	require.Error(t, err)
+
+	db := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(nil, errors.New("relation failed"))
+	_, _, _, err = getTableForDump(context.Background(), ses, tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil))
+	require.Error(t, err)
+
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(nil)
+	_, err = getTableDumpRelations(context.Background(), ses, "tpch", rel)
+	require.Error(t, err)
+
+	def := &plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}},
+	}
+	rel = mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def)
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(nil, errors.New("database failed"))
+	_, err = getTableDumpRelations(context.Background(), ses, "tpch", rel)
+	require.Error(t, err)
+
+	def.Indexes = []*plan.IndexDef{{IndexName: "idx", IndexTableName: "__idx"}}
+	rel = mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def)
+	rel.EXPECT().GetTableName().Return("orders")
+	db = mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(nil, errors.New("index relation failed"))
+	_, err = getTableDumpRelations(context.Background(), ses, "tpch", rel)
+	require.Error(t, err)
+}
+
+func TestGetTableDumpRelationsRejectsDuplicateMapping(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	indexRel := mock_frontend.NewMockRelation(ctrl)
+	ses.txnHandler.storage = eng
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(indexRel, nil)
+	rel.EXPECT().GetTableName().Return("orders")
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}},
+		Indexes: []*plan.IndexDef{
+			{IndexName: "idx", IndexTableName: "__idx", IndexAlgoTableType: "regular"},
+			{IndexName: "idx", IndexTableName: "__idx", IndexAlgoTableType: "regular"},
+		},
+	})
+	_, err := getTableDumpRelations(context.Background(), ses, "tpch", rel)
+	require.Error(t, err)
+}
+
+func newTableDumpTestObject(t *testing.T, tombstone bool) tableDumpObject {
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	return tableDumpObject{
+		Name: stats.ObjectName().String(), Stats: append([]byte(nil), stats.Marshal()...), Tombstone: tombstone,
+	}
+}
+
+func TestSubmitTableDumpObjects(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+	}).Times(1)
+	rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, bat any) error {
+		require.NotNil(t, bat)
+		return nil
+	}).Times(1)
+	rel.EXPECT().Delete(gomock.Any(), gomock.Any(), "").DoAndReturn(func(ctx context.Context, bat any, _ string) error {
+		require.Equal(t, true, ctx.Value(defines.SkipTransferKey{}))
+		require.NotNil(t, bat)
+		return nil
+	}).Times(1)
+
+	objects := []tableDumpObject{newTableDumpTestObject(t, false), newTableDumpTestObject(t, true)}
+	submitted, err := submitTableDumpObjects(context.Background(), rel, objects, mpool.MustNewZero())
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{objects[0].Name, objects[1].Name}, submitted)
+}
+
+func TestSubmitTableDumpObjectsRejectsInvalidMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(nil).AnyTimes()
+	mp := mpool.MustNewZero()
+
+	_, err := submitTableDumpObjects(context.Background(), rel, []tableDumpObject{{Name: "bad", Stats: []byte("short")}}, mp)
+	require.Error(t, err)
+	item := newTableDumpTestObject(t, false)
+	item.Name = "wrong-name"
+	_, err = submitTableDumpObjects(context.Background(), rel, []tableDumpObject{item}, mp)
+	require.Error(t, err)
+	item = newTableDumpTestObject(t, false)
+	stats := objectio.ObjectStats(item.Stats)
+	objectio.WithAppendable()(&stats)
+	item.Stats = stats.Marshal()
+	_, err = submitTableDumpObjects(context.Background(), rel, []tableDumpObject{item}, mp)
+	require.Error(t, err)
+}
+
+func TestHandleLoadTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("tpch")
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := newTestWorkspace()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOp
+	eng.EXPECT().Database(gomock.Any(), "tpch", txnOp).Return(db, nil).Times(2)
+	db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
+
+	def := &plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{{
+			Name: "o_orderkey", Typ: plan.Type{Id: int32(types.T_int64)},
+			Default: &plan.Default{},
+		}},
+	}
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+	rel.EXPECT().GetTableName().Return("orders")
+	rel.EXPECT().Rows(gomock.Any()).Return(uint64(0), nil)
+	rel.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+
+	object := newTableDumpTestObject(t, false)
+	content := []byte("immutable object fixture")
+	object.Size = int64(len(content))
+	object.FixturePath = path.Join("objects", object.Name)
+	dumpRoot := t.TempDir()
+	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
+	require.NoError(t, err)
+	require.NoError(t, dumpFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: object.FixturePath,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: object.Size, Data: content}},
+	}))
+	require.NoError(t, dumpFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: tableDumpReadyName,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}},
+	}))
+	schemaHash, err := tableSchemaHash(def)
+	require.NoError(t, err)
+	require.NoError(t, writeTableDumpJSON(context.Background(), dumpFS, tableDumpManifestName, &tableDumpManifest{
+		Version: tableDumpFormatVersion, SourceDatabase: "tpch", SourceTable: "orders",
+		SchemaHash: schemaHash,
+		Relations:  []tableDumpRelation{{Role: "main", SourceTable: "orders", SchemaHash: schemaHash, Objects: []tableDumpObject{object}}},
+	}))
+
+	targetFS, err := fileservice.NewLocalETLFS("target", t.TempDir())
+	require.NoError(t, err)
+	stub := gostub.Stub(&GetObjectFSProvider, func(*Session) (fileservice.FileService, error) {
+		return targetFS, nil
+	})
+	defer stub.Reset()
+
+	stmt := &tree.LoadTable{Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: dumpRoot}
+	require.NoError(t, handleLoadTable(context.Background(), ses, stmt))
+	require.Equal(t, []string{object.Name}, workspace.protectedCloneFiles)
+	require.NoError(t, verifyTableDumpObject(context.Background(), targetFS, object.Name, object.Size, ""))
+}
+
+func TestHandleDumpTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("tpch")
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	reader := mock_frontend.NewMockReader(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := newTestWorkspace()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOp
+	eng.EXPECT().Database(gomock.Any(), "tpch", txnOp).Return(db, nil).Times(2)
+	db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
+
+	def := &plan.TableDef{
+		Name: "orders",
+		Cols: []*plan.ColDef{{
+			Name: "o_orderkey", Typ: plan.Type{Id: int32(types.T_int64)},
+			Default: &plan.Default{},
+		}},
+	}
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+	rel.EXPECT().GetTableName().Return("orders")
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+
+	object := newTableDumpTestObject(t, false)
+	reader.EXPECT().Read(gomock.Any(), nil, nil, gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
+			if len(bat.Vecs) == 2 {
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], object.Stats, false, mp))
+			}
+			return false, nil
+		},
+	).Times(2)
+	reader.EXPECT().Close().Return(nil)
+	readerStub := gostub.Stub(&newImmutableTableMetaReader, func(context.Context, engine.Relation, int) (engine.Reader, error) {
+		return reader, nil
+	})
+	defer readerStub.Reset()
+
+	sourceFS, err := fileservice.NewLocalETLFS("source", t.TempDir())
+	require.NoError(t, err)
+	content := []byte("immutable object fixture")
+	require.NoError(t, sourceFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: object.Name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
+	}))
+	fsStub := gostub.Stub(&GetObjectFSProvider, func(*Session) (fileservice.FileService, error) {
+		return sourceFS, nil
+	})
+	defer fsStub.Reset()
+
+	dumpRoot := t.TempDir()
+	stmt := &tree.DumpTable{Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: dumpRoot}
+	require.NoError(t, handleDumpTable(context.Background(), ses, stmt))
+	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
+	require.NoError(t, err)
+	manifest, err := readTableDumpManifest(context.Background(), dumpFS)
+	require.NoError(t, err)
+	require.Len(t, manifest.Relations, 1)
+	require.Len(t, manifest.Relations[0].Objects, 1)
+	require.Equal(t, object.Name, manifest.Relations[0].Objects[0].Name)
+	_, err = dumpFS.StatFile(context.Background(), tableDumpReadyName)
+	require.NoError(t, err)
+}
+
+func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
+	for _, def := range []*plan.TableDef{
+		{Name: "orders", Partition: &plan.Partition{}},
+		{Name: "orders", Cols: []*plan.ColDef{{Typ: plan.Type{AutoIncr: true}}}},
+	} {
+		t.Run(fmt.Sprintf("%p", def), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetDatabaseName("tpch")
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			ses.txnHandler.storage = eng
+			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(def)
+			err := handleDumpTable(context.Background(), ses, &tree.DumpTable{
+				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: t.TempDir(),
+			})
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		writeReady    bool
+		wrongHash     bool
+		emptyTopology bool
+	}{
+		{name: "missing-ready"},
+		{name: "schema-mismatch", writeReady: true, wrongHash: true},
+		{name: "topology-mismatch", writeReady: true, emptyTopology: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetDatabaseName("tpch")
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			ses.txnHandler.storage = eng
+			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil).AnyTimes()
+			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
+			def := &plan.TableDef{Name: "orders", Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}}}
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+			rel.EXPECT().GetTableName().Return("orders").AnyTimes()
+			hash, err := tableSchemaHash(def)
+			require.NoError(t, err)
+			manifest := &tableDumpManifest{Version: tableDumpFormatVersion, SchemaHash: hash}
+			if tc.wrongHash {
+				manifest.SchemaHash = "wrong"
+			} else if !tc.emptyTopology {
+				manifest.Relations = []tableDumpRelation{{Role: "main", SchemaHash: hash}}
+			}
+			root := t.TempDir()
+			fs, err := fileservice.NewLocalETLFS("fixture", root)
+			require.NoError(t, err)
+			require.NoError(t, writeTableDumpJSON(context.Background(), fs, tableDumpManifestName, manifest))
+			if tc.writeReady {
+				require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}))
+			}
+			err = handleLoadTable(context.Background(), ses, &tree.LoadTable{
+				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: root,
+			})
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestTableDumpManifestAndCopy(t *testing.T) {
@@ -201,6 +634,27 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestReadTableDumpManifestRejectsInvalidInput(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalETLFS("fixture", t.TempDir())
+	require.NoError(t, err)
+	_, err = readTableDumpManifest(ctx, fs)
+	require.Error(t, err)
+
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: tableDumpManifestName,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("{")}},
+	}))
+	_, err = readTableDumpManifest(ctx, fs)
+	require.Error(t, err)
+	require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
+
+	require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{Version: tableDumpFormatVersion + 1}))
+	_, err = readTableDumpManifest(ctx, fs)
+	require.Error(t, err)
+	require.Error(t, writeTableDumpJSON(ctx, fs, "bad.json", make(chan int)))
+}
+
 func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
 	ctx := context.Background()
 	src, err := fileservice.NewLocalETLFS("src", t.TempDir())
@@ -219,6 +673,20 @@ func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
 	require.Equal(t, int64(len(content)), size)
 	require.Empty(t, hash)
 	require.NoError(t, verifyTableDumpObject(ctx, copier, "objects/obj", size, hash))
+}
+
+func TestCopyTableDumpFileRejectsServerSideSizeMismatch(t *testing.T) {
+	ctx := context.Background()
+	src, err := fileservice.NewLocalETLFS("src", t.TempDir())
+	require.NoError(t, err)
+	dst, err := fileservice.NewLocalETLFS("dst", t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, src.Write(ctx, fileservice.IOVector{
+		FilePath: "obj", Entries: []fileservice.IOEntry{{Offset: 0, Size: 3, Data: []byte("src")}},
+	}))
+	copier := &testTableDumpObjectCopier{FileService: dst, data: []byte("different size")}
+	_, _, err = copyTableDumpFile(ctx, src, copier, "obj", "objects/obj")
+	require.Error(t, err)
 }
 
 func TestCopyTableDumpFileTracksAmbiguousWriteOwnership(t *testing.T) {
@@ -452,4 +920,31 @@ func TestTableSchemaHashExpandsCreateLike(t *testing.T) {
 	rightHash, err = tableSchemaHash(right)
 	require.NoError(t, err)
 	require.NotEqual(t, leftHash, rightHash)
+}
+
+func TestTableSchemaHashFallback(t *testing.T) {
+	def := &plan.TableDef{
+		TblId: 10, DbId: 20, DbName: "db", Name: "table", OriginalName: "old",
+		Cols: []*plan.ColDef{{Name: "a"}},
+	}
+	got, err := tableSchemaHash(def)
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+
+	clone := *def
+	clone.TblId = 99
+	clone.DbId = 88
+	clone.DbName = "other"
+	clone.Name = "renamed"
+	clone.OriginalName = "different"
+	want, err := tableSchemaHash(&clone)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	_, err = tableSchemaHash(nil)
+	require.Error(t, err)
+	_, err = tableSchemaHash(&plan.TableDef{Createsql: "select 1", Cols: []*plan.ColDef{{Name: "a"}}})
+	require.Error(t, err)
+	_, err = tableSchemaHash(&plan.TableDef{Createsql: "not valid sql", Cols: []*plan.ColDef{{Name: "a"}}})
+	require.Error(t, err)
 }

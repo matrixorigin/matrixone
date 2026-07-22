@@ -87,6 +87,8 @@ type tableDumpRelationRef struct {
 	relation engine.Relation
 }
 
+var newImmutableTableMetaReader = disttae.NewImmutableTableMetaReader
+
 func openLocalTableDump(path string) (fileservice.FileService, error) {
 	path = strings.TrimPrefix(path, "file://")
 	if strings.Contains(path, "://") || !filepath.IsAbs(path) {
@@ -470,7 +472,7 @@ func dumpTableRelationObjects(
 	mp *mpool.MPool,
 ) (tableDumpRelation, []string, error) {
 	result := ref.tableDumpRelation
-	reader, err := disttae.NewImmutableTableMetaReader(ctx, ref.relation, tableDumpMaxObjects)
+	reader, err := newImmutableTableMetaReader(ctx, ref.relation, tableDumpMaxObjects)
 	if err != nil {
 		return result, nil, err
 	}

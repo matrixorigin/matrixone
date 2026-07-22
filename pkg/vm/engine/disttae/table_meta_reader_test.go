@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +50,76 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, stats[0].ObjectName().String()))
 	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, stats[1].ObjectName().String()))
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, stats[1].ObjectName().String()))
+}
+
+func TestNewImmutableTableMetaReader(t *testing.T) {
+	tbl := newTxnTableForTest()
+	tbl.getTxn().proc = testutil.NewProcess(t)
+	tbl.getTxn().BindTxnOp(tbl.db.op)
+	tbl.getTxn().tableOps = newTableOps()
+	tbl.getTxn().tableOps.addCreatedInTxn(tbl.tableId, 0)
+	tbl.getTxn().engine.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	tbl.getTxn().engine.cloneTxnCache = newCloneTxnCache()
+	tbl.getTxn().SetCloneTxn(1)
+	stats := mockStatsList(t, 1)
+	statsBat := cloneObjectStatsBatchForTest(t, tbl.getTxn().proc.Mp(), stats...)
+	defer statsBat.Clean(tbl.getTxn().proc.Mp())
+	tbl.getTxn().writes = append(tbl.getTxn().writes, Entry{
+		typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
+		fileName: stats[0].ObjectName().String(), bat: statsBat,
+	})
+	reader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
+	require.NoError(t, err)
+	metaReader := reader.(*TableMetaReader)
+	require.True(t, metaReader.immutableOnly)
+	require.Equal(t, 7, metaReader.maxObjects)
+	tbl.tableDef = &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols:          []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+	mp := mpool.MustNewZero()
+	dataBat := colexec.AllocCNS3ResultBat(false, false)
+	defer dataBat.Clean(mp)
+	end, err := reader.Read(context.Background(), nil, nil, mp, dataBat)
+	require.NoError(t, err)
+	require.False(t, end)
+	require.Equal(t, 1, dataBat.RowCount())
+	tombstoneBat := colexec.AllocCNS3ResultBat(true, false)
+	defer tombstoneBat.Clean(mp)
+	end, err = reader.Read(context.Background(), nil, nil, mp, tombstoneBat)
+	require.NoError(t, err)
+	require.False(t, end)
+	require.Zero(t, tombstoneBat.RowCount())
+	end, err = reader.Read(context.Background(), nil, nil, mp, tombstoneBat)
+	require.NoError(t, err)
+	require.True(t, end)
+	require.NoError(t, reader.Close())
+
+	limited, err := NewImmutableTableMetaReader(context.Background(), tbl, 1)
+	require.NoError(t, err)
+	limited.(*TableMetaReader).objectCount = 1
+	limitedBat := colexec.AllocCNS3ResultBat(false, false)
+	defer limitedBat.Clean(mp)
+	_, err = limited.Read(context.Background(), nil, nil, mp, limitedBat)
+	require.Error(t, err)
+	require.NoError(t, limited.Close())
+
+	appendableStats := mockStatsList(t, 1)
+	objectio.WithAppendable()(&appendableStats[0])
+	appendableBat := cloneObjectStatsBatchForTest(t, tbl.getTxn().proc.Mp(), appendableStats...)
+	defer appendableBat.Clean(tbl.getTxn().proc.Mp())
+	tbl.getTxn().writes = append(tbl.getTxn().writes, Entry{
+		typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
+		fileName: appendableStats[0].ObjectName().String(), bat: appendableBat,
+	})
+	appendableReader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
+	require.NoError(t, err)
+	appendableOut := colexec.AllocCNS3ResultBat(false, false)
+	defer appendableOut.Clean(mp)
+	_, err = appendableReader.Read(context.Background(), nil, nil, mp, appendableOut)
+	require.Error(t, err)
+	require.NoError(t, appendableReader.Close())
 }
 
 func TestProtectCloneFilesDistinguishesExistingOwnership(t *testing.T) {
