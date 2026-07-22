@@ -36,6 +36,7 @@ const (
 
 type sampleMemoryStats struct {
 	retainedBytes int64
+	peakBytes     int64
 }
 
 func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpool.MPool) {
@@ -65,11 +66,28 @@ func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpoo
 	return bat, mp
 }
 
+func initializeOffHeapSampleResult(pool *sPool, input *batch.Batch) {
+	result := batch.NewWithSize(len(input.Vecs))
+	for i, vec := range input.Vecs {
+		result.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+	}
+
+	if len(input.Vecs) > 1 {
+		pool.growMulPool(1, len(input.Vecs))
+		pool.mPools[0].data.validBatch = result
+	} else {
+		pool.growSiPool(1)
+		pool.sPools[0].data.validBatch = result
+	}
+}
+
 func executeSampleMemoryCase(tb testing.TB, proc *process.Process, input *batch.Batch) sampleMemoryStats {
 	tb.Helper()
 
 	mp := proc.Mp()
 	pool := newSamplePoolByRows(proc, input.RowCount(), len(input.Vecs), false)
+	defer pool.Free()
+	initializeOffHeapSampleResult(pool, input)
 	if err := pool.Sample(1, input.Vecs, nil, input); err != nil {
 		tb.Fatal(err)
 	}
@@ -83,9 +101,9 @@ func executeSampleMemoryCase(tb testing.TB, proc *process.Process, input *batch.
 
 	stats := sampleMemoryStats{
 		retainedBytes: int64(result.Allocated()),
+		peakBytes:     mp.Stats().HighWaterMark.Load(),
 	}
 	result.Clean(mp)
-	pool.Free()
 	if curr := mp.CurrNB(); curr != 0 {
 		tb.Fatalf("sample execution leaked %d mpool bytes", curr)
 	}
@@ -111,7 +129,9 @@ func TestSamplePrunedWideVarlenMemory(t *testing.T) {
 	pruned := measureSampleMemoryCase(t, false)
 
 	require.Positive(t, pruned.retainedBytes)
+	require.Positive(t, pruned.peakBytes)
 	require.Greater(t, unpruned.retainedBytes, pruned.retainedBytes*100)
+	require.Greater(t, unpruned.peakBytes, pruned.peakBytes*100)
 }
 
 func BenchmarkSamplePrunedWideVarlenMemory(b *testing.B) {
@@ -140,6 +160,7 @@ func BenchmarkSamplePrunedWideVarlenMemory(b *testing.B) {
 				retainedBytes += stats.retainedBytes
 			}
 			b.ReportMetric(float64(retainedBytes)/float64(b.N), "vector-retained-B/op")
+			b.ReportMetric(float64(outputMP.Stats().HighWaterMark.Load()), "mpool-peak-B")
 		})
 	}
 }
