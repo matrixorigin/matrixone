@@ -88,7 +88,12 @@ type Service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	config *util.ConfigData
+	config      *util.ConfigData
+	walRecovery struct {
+		configured  bool
+		coordinator bool
+		pending     atomic.Bool
+	}
 
 	// dataSync is used to sync data to other modules.
 	dataSync DataSync
@@ -194,6 +199,14 @@ func NewService(
 	service.server = server
 	service.pool = pool
 	service.respPool = respPool
+	if cfg.BootstrapConfig.Restore.Enabled {
+		// Set this before the heartbeat worker starts. The status is carried in
+		// LogStore heartbeats, so whichever HAKeeper replica becomes leader can
+		// keep the cluster out of Running state until replay completes.
+		service.walRecovery.configured = true
+		service.walRecovery.coordinator = cfg.BootstrapConfig.Restore.WALDataPath != ""
+		service.walRecovery.pending.Store(true)
+	}
 
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all
