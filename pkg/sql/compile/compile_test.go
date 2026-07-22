@@ -144,10 +144,6 @@ func TestApplyExecutorLockWaitTimeout(t *testing.T) {
 		"an explicit zero must be distinguishable from an absent override")
 }
 
-func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
-	return nil
-}
-
 type Ws struct {
 	advanceSnapshot func(context.Context, timestamp.Timestamp) error
 }
