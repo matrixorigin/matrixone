@@ -29,6 +29,12 @@ type FmtCtx struct {
 	quoteString       bool
 	singleQuoteString bool
 	quoteIdentifier   bool
+	// noBackslashEscape mirrors the NO_BACKSLASH_ESCAPES sql_mode: when set, string
+	// literals are emitted without backslash escaping (backslash is a literal char),
+	// so a value deparsed here re-parses to the same string under that mode. Nodes that
+	// re-escape a stored (already-unescaped) literal — e.g. FullTextMatchExpr's pattern
+	// — must consult this to keep format->parse idempotent under NO_BACKSLASH_ESCAPES.
+	noBackslashEscape bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -65,6 +71,20 @@ func WithQuoteIdentifier() FmtCtxOption {
 		ctx.quoteIdentifier = true
 	})
 }
+
+// WithNoBackslashEscape makes string-literal formatting match the
+// NO_BACKSLASH_ESCAPES sql_mode: a deparse-then-reparse under that mode stays
+// idempotent (a backslash is emitted literally, not doubled). Pass this when the
+// output will be re-parsed with NO_BACKSLASH_ESCAPES active.
+func WithNoBackslashEscape() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.noBackslashEscape = true
+	})
+}
+
+// NoBackslashEscape reports whether string literals should be formatted for the
+// NO_BACKSLASH_ESCAPES sql_mode.
+func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
 
 // NodeFormatter for formatted output of the node.
 type NodeFormatter interface {
