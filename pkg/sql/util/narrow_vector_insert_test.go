@@ -77,6 +77,15 @@ func TestSetInsertValueStringNarrowVectors(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 
+		t.Run(tc.name+"/unparseable literal rejected", func(t *testing.T) {
+			// The element parse error must PROPAGATE, not be swallowed into a
+			// zero vector: silently inserting [0,0,0] for a typo'd literal is
+			// far worse than failing the statement.
+			numVal := tree.NewNumVal("[a,b,c]", "[a,b,c]", false, tree.P_char)
+			_, _, err := SetInsertValueString(proc, numVal, &tc.typ)
+			require.Error(t, err)
+		})
+
 		t.Run(tc.name+"/dimension mismatch rejected", func(t *testing.T) {
 			// Declared width is 3; a 2-element literal must error, not pad.
 			numVal := tree.NewNumVal("[1,2]", "[1,2]", false, tree.P_char)

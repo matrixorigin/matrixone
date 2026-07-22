@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -219,6 +220,30 @@ func TestNarrowVectorFunctionOverloads(t *testing.T) {
 		}
 	}
 
+	// A NULL narrow vector must serialise exactly as a NULL vecf32 does, rather
+	// than decoding whatever bytes happen to sit in the slot for a null row.
+	// Asserted against the vecf32 output because json_array returns ByteJson
+	// BINARY, so a hand-written "null" would be checking the wrong encoding.
+	{
+		nf := vector.NewVec(f32t)
+		require.NoError(t, vector.AppendArrayList[float32](nf, [][]float32{{0, 0, 0}}, []bool{true}, mp))
+		refOut := run(t, "json_array", []types.Type{f32t}, []*vector.Vector{nf})
+		wantNull := append([]byte(nil), refOut.GetBytesAt(0)...)
+		refOut.Free(mp)
+		nf.Free(mp)
+
+		for _, typ := range narrow {
+			t.Run("json_array/null/"+typ.String(), func(t *testing.T) {
+				v := vector.NewVec(typ.ToType())
+				defer v.Free(mp)
+				require.NoError(t, appendNullArrayRow(v, typ, mp))
+				out := run(t, "json_array", []types.Type{typ.ToType()}, []*vector.Vector{v})
+				defer out.Free(mp)
+				require.Equal(t, wantNull, out.GetBytesAt(0))
+			})
+		}
+	}
+
 	// json_object('k', v) — a separate constructor arm from json_array.
 	for _, typ := range narrow {
 		t.Run("json_object/"+typ.String(), func(t *testing.T) {
@@ -313,3 +338,17 @@ func TestNarrowVectorFunctionOverloads(t *testing.T) {
 }
 
 func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// appendNullArrayRow appends a single NULL row of the given narrow vector type.
+func appendNullArrayRow(v *vector.Vector, typ types.T, mp *mpool.MPool) error {
+	switch typ {
+	case types.T_array_bf16:
+		return vector.AppendArrayList[types.BF16](v, [][]types.BF16{{0, 0, 0}}, []bool{true}, mp)
+	case types.T_array_float16:
+		return vector.AppendArrayList[types.Float16](v, [][]types.Float16{{0, 0, 0}}, []bool{true}, mp)
+	case types.T_array_int8:
+		return vector.AppendArrayList[int8](v, [][]int8{{0, 0, 0}}, []bool{true}, mp)
+	default:
+		return vector.AppendArrayList[uint8](v, [][]uint8{{0, 0, 0}}, []bool{true}, mp)
+	}
+}
