@@ -134,8 +134,13 @@ func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {
 			joinType: plan.Node_SINGLE,
 		},
 		{
-			name:     "non-one limit fallback",
+			name:     "literal limit two",
 			subquery: "select n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey limit 2",
+			joinType: plan.Node_SINGLE,
+		},
+		{
+			name:     "order by limit two",
+			subquery: "select n.n_regionkey from tpch.region r where r.r_regionkey > n.n_regionkey order by r.r_regionkey limit 2",
 			joinType: plan.Node_SINGLE,
 		},
 		{
@@ -204,12 +209,33 @@ func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {
 			rightProject := query.Nodes[scalarJoin.Children[1]]
 			require.Equal(t, plan.Node_PROJECT, rightProject.NodeType)
 			require.NotEmpty(t, rightProject.ProjectList)
+			require.Nil(t, rightProject.Limit)
 			if tt.joinType == plan.Node_SINGLE {
 				marker := rightProject.ProjectList[0].GetLit()
 				require.NotNil(t, marker)
 				require.True(t, marker.GetBval())
 			}
 			require.True(t, hasCase)
+		})
+	}
+}
+
+func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	for _, tt := range []struct {
+		name string
+		typ  plan.Type
+		want bool
+	}{
+		{name: "integer", typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, want: true},
+		{name: "enum coerces to ordinal", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "small,large"}},
+		{name: "rowid unsupported", typ: plan.Type{Id: int32(types.T_Rowid)}},
+		{name: "vector unsupported", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+		{name: "bit width changes", typ: plan.Type{Id: int32(types.T_bit), Width: 8}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, builder.casePreservesType(&plan.Expr{Typ: tt.typ}))
 		})
 	}
 }
@@ -249,6 +275,16 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 			nodes:    []*plan.Node{validProject()},
 		},
 		{
+			name:     "top-level offset",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				validProject(),
+				{NodeType: plan.Node_SORT, Children: []int32{0}, Offset: makePlan2Uint64ConstExprWithType(1)},
+			},
+			subID: 1,
+		},
+		{
 			name:     "nested offset",
 			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
 			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
@@ -260,12 +296,30 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 			subID: 2,
 		},
 		{
-			name:     "non-one limit below rim",
+			name:     "dynamic limit below rim",
 			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
 			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
 			nodes: []*plan.Node{
-				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}, ProjectList: []*plan.Expr{newCorr(outerTag, 0, 1)}, Limit: makePlan2Uint64ConstExprWithType(2)},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}, ProjectList: []*plan.Expr{newCorr(outerTag, 0, 1)}, Limit: &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}},
 				{NodeType: plan.Node_SORT, Children: []int32{0}},
+			},
+			subID: 1,
+		},
+		{
+			name:     "limit zero",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{projectTag}, ProjectList: []*plan.Expr{newCorr(outerTag, 0, 1)}, Limit: makePlan2Uint64ConstExprWithType(0)},
+			},
+		},
+		{
+			name:     "rank option",
+			results:  []*plan.Expr{newFlattenSubqueryTestColExpr(projectTag)},
+			projects: []*plan.Expr{newCorr(outerTag, 0, 1)},
+			nodes: []*plan.Node{
+				validProject(),
+				{NodeType: plan.Node_SORT, Children: []int32{0}, RankOption: &plan.RankOption{Mode: "force"}},
 			},
 			subID: 1,
 		},
@@ -305,7 +359,8 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := &QueryBuilder{qry: &plan.Query{Nodes: tt.nodes}}
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder.qry.Nodes = tt.nodes
 			ctx := &BindContext{
 				projectTag: projectTag,
 				results:    tt.results,

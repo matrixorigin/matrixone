@@ -44,4 +44,9 @@ select t1.*, (select t1.a from t2 where t2.d > t1.a order by t2.d limit 1) as x 
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  x[4,32,0]  𝄀
 1  ¦  2  ¦  3  ¦  1  𝄀
 11  ¦  22  ¦  33  ¦  11
+select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 11;
+➤ x[4,32,0]  𝄀
+11
+select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
+Subquery returns more than 1 row
 drop database test_subq_corr_project;

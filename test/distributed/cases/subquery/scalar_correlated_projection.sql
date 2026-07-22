@@ -25,6 +25,8 @@ select t1.*, (select distinct t1.a from t2 where t2.d > t1.a) as x from t1 order
 delete from t2;
 insert into t2 values (5), (100);
 select t1.*, (select t1.a from t2 where t2.d > t1.a order by t2.d limit 1) as x from t1 order by t1.a;
+select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 11;
+select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
 
 -- @teardown
 drop database test_subq_corr_project;

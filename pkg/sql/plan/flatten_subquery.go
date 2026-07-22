@@ -365,9 +365,9 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 // normalizeDirectCorrelatedScalarProjection handles a scalar subquery whose
 // only result is a direct reference to the outer row. Rim projections, sorting,
-// DISTINCT, and LIMIT 1 do not change that value. Removing them before pulling
-// up predicates keeps join-key references on the real projection instead of
-// leaving correlated expressions in executable wrapper nodes.
+// DISTINCT, and literal positive LIMITs do not change that value. Removing them
+// before pulling up predicates keeps join-key references on the real projection
+// instead of leaving correlated expressions in executable wrapper nodes.
 func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 	subID int32,
 	ctx *BindContext,
@@ -380,23 +380,23 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 	if projectCorr == nil || projectCorr.Depth != 1 {
 		return subID, nil, nil, false
 	}
+	if !builder.casePreservesType(ctx.projects[0]) {
+		return subID, nil, nil, false
+	}
 
 	nodeID := subID
-	hasRim := false
 	existential := false
 	for {
 		node := builder.qry.Nodes[nodeID]
 		if node.Offset != nil || node.RankOption != nil {
-			if hasRim {
+			return subID, nil, nil, false
+		}
+		if node.Limit != nil {
+			limit, ok := getLiteralUint64(node.Limit)
+			if !ok || limit == 0 {
 				return subID, nil, nil, false
 			}
-		} else if node.Limit != nil {
-			limit, ok := getLiteralUint64(node.Limit)
-			if !ok || limit != 1 {
-				if hasRim {
-					return subID, nil, nil, false
-				}
-			} else {
+			if limit == 1 {
 				existential = true
 			}
 		}
@@ -414,9 +414,7 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 			marker := DeepCopyExpr(constTrue)
 			node.ProjectList = []*plan.Expr{marker}
 			ctx.projects = []*plan.Expr{marker}
-			if node.Limit != nil && existential {
-				node.Limit = nil
-			}
+			node.Limit = nil
 			return nodeID, GetColExpr(marker.Typ, ctx.projectTag, 0), outerResult, existential
 		}
 
@@ -425,15 +423,23 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 		}
 		switch node.NodeType {
 		case plan.Node_PROJECT, plan.Node_SORT:
-			hasRim = true
 		case plan.Node_DISTINCT:
-			hasRim = true
 			existential = true
 		default:
 			return subID, nil, nil, false
 		}
 		nodeID = node.Children[0]
 	}
+}
+
+func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
+	sourceType := makeTypeByPlan2Expr(expr)
+	caseFn, err := function.GetFunctionByName(builder.GetContext(), "case", []types.Type{
+		types.T_bool.ToType(),
+		sourceType,
+		types.T_any.ToType(),
+	})
+	return err == nil && caseFn.GetReturnType().Eq(sourceType)
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
