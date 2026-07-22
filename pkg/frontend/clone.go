@@ -86,7 +86,7 @@ func getBackExecutor(
 		bh.ClearExecResultSet()
 		return bh, func(err error) error {
 			bh.Close()
-			return nil
+			return err
 		}, nil
 	}
 
