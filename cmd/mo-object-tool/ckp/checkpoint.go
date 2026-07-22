@@ -720,7 +720,6 @@ Examples:
 			)
 			if outFile != nil {
 				dumpErr = finishDumpWrite(outFile, dumpErr)
-				outFile = nil
 			}
 			if dumpErr != nil {
 				return fmt.Errorf("dump table %d: %w", tableID, dumpErr)
