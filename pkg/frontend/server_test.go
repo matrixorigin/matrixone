@@ -67,7 +67,9 @@ func TestMOServerStopCompletesCleanupAfterListenerCloseError(t *testing.T) {
 	err = mo.Stop()
 	require.ErrorIs(t, err, listenerErr)
 	require.False(t, mo.IsRunning())
-	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(time.Second)))
+	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		return
+	}
 	_, err = clientConn.Read(make([]byte, 1))
 	require.Error(t, err)
 }
