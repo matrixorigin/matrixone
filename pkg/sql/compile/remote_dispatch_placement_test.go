@@ -101,5 +101,90 @@ func TestNormalizeRemoteDispatchReceiverAddresses(t *testing.T) {
 		require.Equal(t, placementTestCN2, receiver.RemoteReceivRegInfos[0].FromAddr)
 	})
 
+	t.Run("rejected remote dispatch root stays on target", func(t *testing.T) {
+		c := NewMockCompile(t)
+		c.proc.Base.TxnOperator = fakeTxnOperator{}
+		uid := uuid.Must(uuid.NewV7())
+
+		root := newPlacementTestScope(c.proc, Merge, placementTestCN1, 0)
+		t.Cleanup(root.release)
+		root.RootOp = merge.NewArgument()
+
+		producer := newPlacementTestScope(c.proc, Remote, placementTestCN2, 0)
+		producer.RootOp = newPlacementTestDispatch(uid, placementTestCN1)
+		blockingPreScope := newPlacementTestScope(c.proc, Normal, placementTestCN2, 0)
+		blockingConnector := connector.NewArgument()
+		blockingConnector.Reg = &process.WaitRegister{
+			Ch2: make(chan process.PipelineSignal, 1),
+		}
+		blockingPreScope.RootOp = blockingConnector
+		producer.PreScopes = []*Scope{blockingPreScope}
+
+		receiver := newPlacementTestReceiver(c.proc, uid, placementTestCN2)
+		root.PreScopes = []*Scope{producer, receiver}
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(producer))
+		normalizeRemoteDispatchReceiverAddresses(root, placementTestCN1)
+		require.Equal(t, placementTestCN2, receiver.RemoteReceivRegInfos[0].FromAddr)
+	})
+
+	t.Run("rejected remote nested dispatch stays on target", func(t *testing.T) {
+		c := NewMockCompile(t)
+		c.proc.Base.TxnOperator = fakeTxnOperator{}
+		uid := uuid.Must(uuid.NewV7())
+
+		root := newPlacementTestScope(c.proc, Merge, placementTestCN1, 0)
+		t.Cleanup(root.release)
+		root.RootOp = merge.NewArgument()
+
+		producer := newPlacementTestScope(c.proc, Remote, placementTestCN2, 0)
+		producerRoot := connector.NewArgument()
+		producerRoot.AppendChild(newPlacementTestDispatch(uid, placementTestCN1))
+		producer.RootOp = producerRoot
+		blockingPreScope := newPlacementTestScope(c.proc, Normal, placementTestCN2, 0)
+		blockingConnector := connector.NewArgument()
+		blockingConnector.Reg = &process.WaitRegister{
+			Ch2: make(chan process.PipelineSignal, 1),
+		}
+		blockingPreScope.RootOp = blockingConnector
+		producer.PreScopes = []*Scope{blockingPreScope}
+
+		receiver := newPlacementTestReceiver(c.proc, uid, placementTestCN2)
+		root.PreScopes = []*Scope{producer, receiver}
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(producer))
+		normalizeRemoteDispatchReceiverAddresses(root, placementTestCN1)
+		require.Equal(t, placementTestCN2, receiver.RemoteReceivRegInfos[0].FromAddr)
+	})
+
+	t.Run("rejected remote scope does not normalize descendants", func(t *testing.T) {
+		c := NewMockCompile(t)
+		c.proc.Base.TxnOperator = fakeTxnOperator{}
+		uid := uuid.Must(uuid.NewV7())
+
+		root := newPlacementTestScope(c.proc, Merge, placementTestCN1, 0)
+		t.Cleanup(root.release)
+		root.RootOp = merge.NewArgument()
+
+		producer := newPlacementTestScope(c.proc, Remote, placementTestCN2, 0)
+		producer.RootOp = merge.NewArgument()
+		descendant := newPlacementTestScope(c.proc, Remote, placementTestCN3, 0)
+		descendant.RootOp = newPlacementTestDispatch(uid, placementTestCN1)
+		blockingPreScope := newPlacementTestScope(c.proc, Normal, placementTestCN2, 0)
+		blockingConnector := connector.NewArgument()
+		blockingConnector.Reg = &process.WaitRegister{
+			Ch2: make(chan process.PipelineSignal, 1),
+		}
+		blockingPreScope.RootOp = blockingConnector
+		producer.PreScopes = []*Scope{descendant, blockingPreScope}
+
+		receiver := newPlacementTestReceiver(c.proc, uid, placementTestCN3)
+		root.PreScopes = []*Scope{producer, receiver}
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(producer))
+		normalizeRemoteDispatchReceiverAddresses(root, placementTestCN1)
+		require.Equal(t, placementTestCN3, receiver.RemoteReceivRegInfos[0].FromAddr)
+	})
+
 	normalizeRemoteDispatchReceiverAddresses(nil, placementTestCN1)
 }

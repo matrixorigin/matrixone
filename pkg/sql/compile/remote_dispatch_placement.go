@@ -61,11 +61,11 @@ func normalizeRemoteDispatchReceiverAddresses(root *Scope, localAddr string) {
 	updateReceivers(root)
 }
 
-// collectRetainedRemoteDispatchOwners follows only scopes that MergeRun will
-// execute on callerAddr. When it reaches a standalone remote scope with a root
-// Dispatch, getScopeForRemoteRunEncoding keeps that Dispatch on the caller and
-// sends its child tree away. Only that narrow placement transition can make the
-// compile-time FromAddr stale, so ordinary remote operator trees are skipped.
+// collectRetainedRemoteDispatchOwners follows only operators that RemoteRun
+// will execute on callerAddr. A standalone remote scope retains its root
+// Dispatch while sending the child tree away, which can make the compile-time
+// FromAddr stale. Non-standalone scopes are rejected before execution, and
+// ordinary remotely executed operator trees are skipped.
 func collectRetainedRemoteDispatchOwners(
 	s *Scope,
 	callerAddr string,
@@ -103,7 +103,6 @@ func collectRetainedRemoteDispatchOwners(
 			return
 		}
 		if !checkPipelineStandaloneExecutableAtRemote(s) {
-			collectRetainedRemoteDispatchOwnersInPreScopes(s.PreScopes, callerAddr, retainedUUIDs, visited)
 			return
 		}
 
