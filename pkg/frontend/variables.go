@@ -35,7 +35,7 @@ import (
 
 // defaultLockWaitTimeoutSeconds is the transitional frontend fallback. Long
 // internal jobs should supply a task-owned deadline instead of relying on it.
-const defaultLockWaitTimeoutSeconds int64 = 120
+const defaultLockWaitTimeoutSeconds int64 = defines.DefaultLockWaitTimeoutSeconds
 
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")

@@ -72,11 +72,13 @@ type compileTestCase struct {
 }
 
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	proc := process.NewTopProcess(
 		context.Background(),
 		mpool.MustNewZero(),
 		nil,
-		nil,
+		txnOp,
 		nil,
 		nil,
 		nil,
@@ -87,6 +89,14 @@ func TestApplyExecutorLockWaitTimeout(t *testing.T) {
 
 	applyExecutorLockWaitTimeout(proc, executor.Options{}.WithLockWaitTimeout(1500*time.Millisecond))
 	require.Equal(t, int64(2), proc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet)
+
+	clearOpts := executor.Options{}.WithTxn(txnOp).WithLockWaitTimeout(0)
+	require.True(t, clearOpts.HasExistsTxn())
+	applyExecutorLockWaitTimeout(proc, clearOpts)
+	require.Zero(t, proc.Base.SessionInfo.LockWaitTimeout)
+	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet,
+		"an explicit zero must be distinguishable from an absent override")
 }
 
 func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {

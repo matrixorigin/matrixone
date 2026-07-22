@@ -45,7 +45,7 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 	createAt := time.Unix(100, 0)
 	carriedDeadline := createAt.Add(250 * time.Millisecond)
 
-	deadline, err := getAsyncLockWaitDeadline(createAt, LockOptions{
+	deadline, err := getLockWaitDeadline(createAt, LockOptions{
 		LockOptions: pb.LockOptions{
 			LockWaitTimeout:  1,
 			LockWaitDeadline: carriedDeadline.UnixNano(),
@@ -55,7 +55,7 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 	require.Equal(t, carriedDeadline, deadline)
 	require.ErrorIs(t, err, ErrLockTimeout)
 
-	ownerDeadline, err := getAsyncLockWaitDeadline(createAt, LockOptions{
+	ownerDeadline, err := getLockWaitDeadline(createAt, LockOptions{
 		LockOptions: pb.LockOptions{
 			LockWaitTimeout:  1,
 			LockWaitDeadline: carriedDeadline.UnixNano(),
@@ -65,7 +65,6 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 	require.Equal(t, createAt.Add(100*time.Millisecond), ownerDeadline)
 	require.ErrorIs(t, err, ErrRemoteLockWaitTimeout)
 }
-
 func TestWaiterEventsTimeoutDoesNotSendToFullOwnEventChannel(t *testing.T) {
 	logger := getLogger("")
 	events := &waiterEvents{
