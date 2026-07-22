@@ -268,12 +268,9 @@ func jsonLengthCheckFn(overloads []overload, inputs []types.Type) checkResult {
 
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
-type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
+type computeExtractFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, bool, error)
 
-func computeJson(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(paths), nil
-}
+type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
 
 func computeString(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj, err := types.ParseSliceToByteJson(json)
@@ -294,6 +291,36 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
+}
+
+func computeJsonWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj := types.DecodeJson(json)
+	result, exists := bj.QueryWithExists(paths)
+	return result, exists, nil
+}
+
+func computeStringWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, false, err
+	}
+	result, exists := bj.QueryWithExists(paths)
+	return result, exists, nil
+}
+
+func computeJsonSimpleWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj := types.DecodeJson(json)
+	result, exists := bj.QuerySimpleWithExists(paths)
+	return result, exists, nil
+}
+
+func computeStringSimpleWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, false, err
+	}
+	result, exists := bj.QuerySimpleWithExists(paths)
+	return result, exists, nil
 }
 
 func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1081,7 +1108,7 @@ func (op *opBuiltInJsonExtract) buildOnePath(paramWrappers []vector.FunctionPara
 
 func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	var err error
-	var fn computeFn
+	var fn computeExtractFn
 
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
@@ -1103,15 +1130,15 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 
 	if op.simple {
 		if jsonVec.GetType().Oid == types.T_json {
-			fn = computeJsonSimple
+			fn = computeJsonSimpleWithExists
 		} else {
-			fn = computeStringSimple
+			fn = computeStringSimpleWithExists
 		}
 	} else {
 		if jsonVec.GetType().Oid == types.T_json {
-			fn = computeJson
+			fn = computeJsonWithExists
 		} else {
-			fn = computeString
+			fn = computeStringWithExists
 		}
 	}
 
@@ -1137,11 +1164,11 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 			}
 			continue
 		} else {
-			out, err := fn(jsonBytes, paths)
+			out, exists, err := fn(jsonBytes, paths)
 			if err != nil {
 				return err
 			}
-			if out.IsNull() {
+			if !exists {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -2048,6 +2075,46 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		out := make([]any, len(arr))
 		for i, x := range arr {
 			out[i] = x
+		}
+		return out, nil
+	case types.T_array_bf16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[types.BF16](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x.ToFloat32())
+		}
+		return out, nil
+	case types.T_array_float16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[types.Float16](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x.ToFloat32())
+		}
+		return out, nil
+	case types.T_array_int8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[int8](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
+		}
+		return out, nil
+	case types.T_array_uint8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[uint8](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
 		}
 		return out, nil
 	default:

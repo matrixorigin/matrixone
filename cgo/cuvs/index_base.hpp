@@ -407,17 +407,60 @@ public:
     // Released immediately after build_internal() completes to free host RAM.
     std::vector<T> flattened_host_dataset;
 
-    // ---- Deferred float buffer for quantizer training (1-byte types only) ----
-    // When T is int8_t or uint8_t the quantizer must be trained on a
-    // representative sample before any vectors can be quantized.
-    // Raw base-typed chunks are accumulated here until the staging bound is hit
-    // (or build()), which flushes them: the quantizer trains on the staged rows
-    // and the buffer is quantized into flattened_host_dataset as T.
-    // Staging stops at quantizer_train_limit_ rows: that is the training
-    // sample, and the buffer exists only to supply it. The rows arrive in
-    // RANDOM order from the builder, so a bounded prefix of the stream IS a
-    // random sample of the table — no need to retain the whole table to draw a
-    // representative one.
+    // ---- Staging arena for quantizer training (1-byte storage only) ----
+    //
+    // When T is int8_t/uint8_t the quantizer is an affine map q(x)=round(x*mul+add)
+    // derived from a [min,max] range, so NOTHING can be encoded until that range
+    // exists. Until then rows can only be held raw. Staging stops at
+    // quantizer_train_limit_ rows; the flush trains on them and quantizes them
+    // into flattened_host_dataset, and every row after that is mapped on arrival.
+    //
+    // WHY NOT TWO PASSES (sample+train, then re-read and encode)?
+    // Not available at this layer. Rows arrive ONE PER CALL across the cgo
+    // boundary, and chunk_data points into Go-owned memory valid only for that
+    // call — the index cannot retain it, let alone replay it. The source is a
+    // SQL scan driven by the table function; re-reading means re-executing that
+    // query, which is the caller's business and something this class has no
+    // handle on. So within this layer there are exactly two options: retain
+    // every row until training, or train on what has arrived so far.
+    //
+    // WHY NOT RETAIN EVERYTHING?
+    // That is O(N*sizeof(B)) host memory — 3.07 GB of raw f32 for a 1M x 768
+    // build, on top of the 768 MB quantized result. It is what OOM-killed
+    // mo-service at 20.2 GB RSS and is the reason this staging bound exists. It
+    // buys a strided sample over the whole table, which is only worth paying for
+    // if arrival order correlates with value.
+    //
+    // WHY A PREFIX IS SOUND.
+    // Two separate arguments, and they do different work:
+    //   * Contract. The build scan has no ORDER BY, so the engine owes no
+    //     ordering and nothing downstream may assume one. This is what makes
+    //     training on arrival order PERMISSIBLE — we are not breaking a promise,
+    //     because none was made. Note it is "unspecified", not "guaranteed
+    //     unsorted": an engine may legitimately return storage order.
+    //   * Practice. Bulk ingest and the build scan are both PARALLEL, so the
+    //     first N arrivals are interleaved across the table rather than being
+    //     the head of it. Measured directly: a 1M-row table loaded from a
+    //     STRICTLY value-ordered CSV (value == id, ascending) returns its first
+    //     200k arrivals spanning ids [49153, 983040] — 93% of the value range.
+    //     That is what makes the sample representative, and therefore what
+    //     protects RECALL. Note the effect is size-dependent: the same test at
+    //     20k rows stayed in file order ([1,1000] for the first 1000), because
+    //     parallelism does not engage on a small load. Small tables are also
+    //     where the whole table fits under the staging bound and the question
+    //     does not arise.
+    // Measured on wiki 1M, this design vs the old full-table strided sample:
+    // cagra f32+int8 0.9378 vs 0.9407, cagra f16+int8 0.9400 vs 0.9377, ivfpq
+    // f32+int8 0.8315 vs 0.8253 — within run-to-run noise in both directions,
+    // with host staging down from ~3 GB to ~0.31 GB. That dataset is not
+    // value-ordered, so it shows no regression here; it is not a proof for a
+    // magnitude-sorted source.
+    //
+    // The one shape this does NOT cover is a caller handing over a large
+    // value-ordered buffer in a SINGLE call — see the bulk shortcut in
+    // ingest_quantized_rows, which trains from the caller's own buffer instead
+    // and covers the whole chunk up to the VRAM cap.
+    //
     // Only ever accessed from submit_main() tasks (serialised), so no extra
     // locking is needed beyond what those tasks already take.
     // (Fields are in protected: — see below.)

@@ -2728,6 +2728,40 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
 	var paramTypes []int32
+	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
+		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
+		getParamRule := NewGetParamRule()
+		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule})
+		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+			return nil, nil, err
+		}
+
+		getParamRule.SetParamOrder()
+		args := getParamRule.params
+		querySchemas := getParamRule.schemas
+		for _, dependency := range getParamRule.indexDependencies {
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			if err != nil {
+				return nil, nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+			}
+			ref := DeepCopyObjectRef(objRef)
+			ref.Server = int64(tableDef.Version)
+			ref.Db = int64(tableDef.DbId)
+			ref.Schema = int64(tableDef.DbId)
+			ref.Obj = int64(tableDef.TblId)
+			querySchemas = append(querySchemas, ref)
+		}
+
+		resetParamRule := NewResetParamOrderRule(args)
+		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
+		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+			return nil, nil, err
+		}
+		return querySchemas, getParamRule.paramTypes, nil
+	}
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
@@ -2743,55 +2777,11 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			getParamRule := NewGetParamRule()
-			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-			err := VisitQuery.Visit(ctx.GetContext())
-			if err != nil {
-				return nil, nil, err
-			}
-			// TODO : need confirm
-			if len(getParamRule.params) > 0 {
-				return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
-			}
+			return resetQuery(pp.Ddl.Query)
 		}
 
 	case *plan.Plan_Query:
-		// collect args
-		getParamRule := NewGetParamRule()
-		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-		err := VisitQuery.Visit(ctx.GetContext())
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// sort arg
-		getParamRule.SetParamOrder()
-		args := getParamRule.params
-		schemas = getParamRule.schemas
-		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
-			if err != nil {
-				return nil, nil, err
-			}
-			if objRef == nil || tableDef == nil {
-				return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
-			}
-			ref := DeepCopyObjectRef(objRef)
-			ref.Server = int64(tableDef.Version)
-			ref.Db = int64(tableDef.DbId)
-			ref.Schema = int64(tableDef.DbId)
-			ref.Obj = int64(tableDef.TblId)
-			schemas = append(schemas, ref)
-		}
-		paramTypes = getParamRule.paramTypes
-
-		// reset arg order
-		resetParamRule := NewResetParamOrderRule(args)
-		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
-		err = VisitQuery.Visit(ctx.GetContext())
-		if err != nil {
-			return nil, nil, err
-		}
+		return resetQuery(pp.Query)
 	}
 	return schemas, paramTypes, nil
 }
@@ -3018,22 +3008,24 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
-	copied := preparePlan
-
-	switch pp := copied.Plan.(type) {
+	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	}
+
+	copied := DeepCopyPlan(preparePlan)
+	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, preparePlan, paramVals)
+			err := replaceParamVals(ctx, copied, paramVals)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, preparePlan, paramVals)
+		err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
 			return nil, err
 		}
@@ -3041,9 +3033,19 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
+type ParamValue struct {
+	Value any
+	IsBin bool
+}
+
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
+		isBin := false
+		if param, ok := val.(ParamValue); ok {
+			val = param.Value
+			isBin = param.IsBin
+		}
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -3055,7 +3057,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				},
 			}
 		} else {
-			pc := &plan.Literal{}
+			pc := &plan.Literal{IsBin: isBin}
 			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
 			params[i] = &plan.Expr{
 				Expr: &plan.Expr_Lit{

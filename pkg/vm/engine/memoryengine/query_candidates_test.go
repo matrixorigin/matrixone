@@ -54,22 +54,215 @@ func TestQueryCandidateProviders(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, candidates, 3)
 
-	nodes, err := e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+	pool, err := e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
 		Tenant:  "app",
 		CNLabel: map[string]string{"account": "app"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, engine.Nodes{
 		{Mcpu: 1, Id: "app-working", Addr: "app-working:6001", WorkState: metadata.WorkState_Working},
-		{Mcpu: 1, Id: "unlabeled", Addr: "unlabeled:6001", WorkState: metadata.WorkState_Working},
 		{Mcpu: 1, Id: "app-draining", Addr: "app-draining:6001", WorkState: metadata.WorkState_Draining},
-	}, nodes)
+	}, pool.Nodes)
+	require.Equal(t, engine.QueryPoolResolutionExactLabels, pool.Resolution)
 
-	nodes, err = e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+	pool, err = e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
 		IsInternal: true,
 	})
 	require.NoError(t, err)
-	require.Len(t, nodes, 3)
+	require.Len(t, pool.Nodes, 3)
+}
+
+func TestQueryCandidateCPUCapacityIsNormalized(t *testing.T) {
+	e := &Engine{cluster: queryCandidateTestCluster{candidates: []metadata.CNService{
+		{ServiceID: "missing", WorkState: metadata.WorkState_Working},
+		{ServiceID: "valid", CPUTotal: 7, WorkState: metadata.WorkState_Working},
+		{ServiceID: "overflow", CPUTotal: ^uint64(0), WorkState: metadata.WorkState_Working},
+	}}}
+
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 7, 1}, []int{
+		candidates[0].Mcpu, candidates[1].Mcpu, candidates[2].Mcpu,
+	})
+}
+
+func TestQueryCandidatePoolStrictModeRejectsSharedFallback(t *testing.T) {
+	e := &Engine{cluster: queryCandidateTestCluster{candidates: []metadata.CNService{{
+		ServiceID: "unlabeled", PipelineServiceAddress: "unlabeled:6001", WorkState: metadata.WorkState_Working,
+	}}}}
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	require.NoError(t, err)
+	request := engine.QueryCandidatePoolRequest{
+		Tenant: "app", CNLabel: map[string]string{"account": "app"}, RequestedPool: "tenant-label:account=app",
+	}
+
+	legacy, err := e.ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.True(t, legacy.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionSharedUnlabeled, legacy.Resolution)
+	require.Len(t, legacy.Nodes, 1)
+
+	request.FallbackPolicy = engine.QueryPoolFallbackStrict
+	strict, err := e.ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.False(t, strict.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, strict.Resolution)
+	require.Empty(t, strict.Nodes)
+}
+
+func TestQueryCandidatePoolStrictModeWithoutLabelSelectorFailsClosed(t *testing.T) {
+	tenantALabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"tenant-a"}},
+	}
+	tenantBLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"tenant-b"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "tenant-a", Labels: tenantALabel, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "tenant-b", Labels: tenantBLabel, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+	}
+	request := engine.QueryCandidatePoolRequest{
+		Tenant:         "tenant-a",
+		RequestedPool:  "tenant:tenant-a",
+		FallbackPolicy: engine.QueryPoolFallbackStrict,
+	}
+
+	strict, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Empty(t, strict.Nodes)
+	require.False(t, strict.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, strict.Resolution)
+	require.Equal(t, request.RequestedPool, strict.Identity)
+	require.Equal(t, "strict-missing-label-selector", strict.FallbackReason)
+
+	request.FallbackPolicy = engine.QueryPoolFallbackLegacyCompatible
+	legacy, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Equal(t, engine.QueryPoolResolutionAllCompatible, legacy.Resolution)
+	require.Len(t, legacy.Nodes, 2)
+}
+
+func TestQueryCandidatePoolStrictModeDoesNotWidenPrivilegedRequests(t *testing.T) {
+	requestedLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"sys"}},
+	}
+	otherLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"other"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "requested", Labels: requestedLabels, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "other", Labels: otherLabels, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "shared", WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+	}
+
+	for _, test := range []struct {
+		name       string
+		isInternal bool
+		tenant     string
+	}{
+		{name: "sys tenant", tenant: "sys"},
+		{name: "internal query", isInternal: true, tenant: "app"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := engine.QueryCandidatePoolRequest{
+				IsInternal:     test.isInternal,
+				Tenant:         test.tenant,
+				CNLabel:        map[string]string{"account": "sys"},
+				RequestedPool:  "tenant-label:account=sys",
+				FallbackPolicy: engine.QueryPoolFallbackLegacyCompatible,
+			}
+
+			legacy, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+			require.NoError(t, err)
+			require.Equal(t, engine.QueryPoolResolutionAllCompatible, legacy.Resolution)
+			require.Len(t, legacy.Nodes, 3)
+
+			request.FallbackPolicy = engine.QueryPoolFallbackStrict
+			strict, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+			require.NoError(t, err)
+			require.False(t, strict.Fallback)
+			require.Equal(t, engine.QueryPoolResolutionExactLabels, strict.Resolution)
+			require.Equal(t, request.RequestedPool, strict.Identity)
+			require.Equal(t, engine.Nodes{{
+				Mcpu: 4, Id: "requested", WorkState: metadata.WorkState_Working,
+			}}, strict.Nodes)
+
+			strictWithoutExact, err := new(Engine).ResolveQueryCandidatePool(
+				context.Background(), candidates[1:], request)
+			require.NoError(t, err)
+			require.False(t, strictWithoutExact.Fallback)
+			require.Equal(t, engine.QueryPoolResolutionNoMatch, strictWithoutExact.Resolution)
+			require.Equal(t, "strict-rejected-shared-unlabeled", strictWithoutExact.FallbackReason)
+			require.Empty(t, strictWithoutExact.Nodes)
+		})
+	}
+}
+
+func TestQueryCandidatePoolDoesNotReportMissingSharedFallback(t *testing.T) {
+	otherLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"other"}},
+	}
+	candidates := engine.QueryCandidates{{
+		Service: metadata.CNService{
+			ServiceID: "other", Labels: otherLabels, WorkState: metadata.WorkState_Working,
+		},
+		Mcpu: 4,
+	}}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), candidates, engine.QueryCandidatePoolRequest{
+			Tenant: "app", CNLabel: map[string]string{"account": "app"},
+			RequestedPool: "tenant:app",
+		})
+	require.NoError(t, err)
+	require.Empty(t, pool.Nodes)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, pool.Resolution)
+	require.False(t, pool.Fallback)
+	require.Equal(t, "tenant:app", pool.Identity)
+}
+
+func TestQueryCandidatePoolStrictModePreservesIneligibleExactMembers(t *testing.T) {
+	labels := map[string]metadata.LabelList{"account": {Labels: []string{"app"}}}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "exact-draining", Labels: labels, WorkState: metadata.WorkState_Draining,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "shared-working", WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+	}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), candidates, engine.QueryCandidatePoolRequest{
+			Tenant: "app", CNLabel: map[string]string{"account": "app"},
+			RequestedPool:  "tenant-label:account=app",
+			FallbackPolicy: engine.QueryPoolFallbackStrict,
+		})
+	require.NoError(t, err)
+	require.False(t, pool.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionExactLabels, pool.Resolution)
+	require.Equal(t, "strict-rejected-shared-unlabeled", pool.FallbackReason)
+	require.Equal(t, engine.Nodes{{
+		Mcpu: 4, Id: "exact-draining", WorkState: metadata.WorkState_Draining,
+	}}, pool.Nodes)
+}
+
+func TestQueryCandidatePoolRejectsInvalidFallbackPolicy(t *testing.T) {
+	_, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), nil, engine.QueryCandidatePoolRequest{
+			FallbackPolicy: engine.QueryPoolFallbackPolicy(99),
+		})
+	require.Error(t, err)
 }
 
 func TestQueryCandidateProvidersHonorCancellation(t *testing.T) {
