@@ -31,7 +31,24 @@ CROARING_TAR=$(CROARING_DIR).tar.gz
 CROARING_TMP=_croaring_build
 CROARING_CFLAGS=-O3 -fPIC -std=c11
 
-all: init usearch xxhash croaring
+# Prebuilt onnxruntime shared library (CPU-only) from the MatrixOne thirdparty
+# mirror. GPU (linux_x64_gpu_cuda12) is intentionally not fetched here.
+# ONNX_LIB is the local filename our loader resolves; ONNX_SRC is the source path
+# in the mirror (whose real files are versioned/symlinked).
+ONNX_VERSION=1.26.0
+ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/main/onnxrt/$(ONNX_VERSION)
+ifeq ($(UNAME_S),darwin)
+  ONNX_LIB=onnxruntime_arm64.dylib
+  ONNX_SRC=osx_arm64/lib/libonnxruntime.$(ONNX_VERSION).dylib
+else ifeq ($(UNAME_M),x86_64)
+  ONNX_LIB=onnxruntime.so
+  ONNX_SRC=linux_x64/lib/libonnxruntime.so.$(ONNX_VERSION)
+else
+  ONNX_LIB=onnxruntime_arm64.so
+  ONNX_SRC=linux_aarch64/lib/libonnxruntime.so.$(ONNX_VERSION)
+endif
+
+all: init usearch xxhash croaring onnxruntime
 
 init:
 	mkdir -p install
@@ -123,7 +140,17 @@ install/lib/libroaring.a:
 	cp $(CROARING_TMP)/roaring.h install/include/roaring.h
 	rm -rf $(CROARING_TMP)
 
+# Download the prebuilt onnxruntime $(ONNX_VERSION) shared library (CPU) for the
+# current platform, saved under the name our loader resolves:
+#   linux amd64  -> onnxruntime.so
+#   linux arm64  -> onnxruntime_arm64.so
+#   macOS arm64  -> onnxruntime_arm64.dylib
+onnxruntime: install/lib/$(ONNX_LIB)
+
+install/lib/$(ONNX_LIB): | init
+	curl -fSL -o $@ $(ONNX_BASE_URL)/$(ONNX_SRC)
+
 clean:
 	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring
+.PHONY: usearch stringzilla fp16 simsimd init croaring onnxruntime

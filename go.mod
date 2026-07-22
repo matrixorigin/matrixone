@@ -46,6 +46,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/geo v0.0.0-20260526120156-e21b7802b0ee
 	github.com/golang/mock v1.6.0
+	github.com/golang/snappy v1.0.0
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
@@ -60,6 +61,7 @@ require (
 	github.com/jhump/protoreflect v1.15.2
 	github.com/jonboulle/clockwork v0.4.0
 	github.com/json-iterator/go v1.1.12
+	github.com/klauspost/compress v1.18.2
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
@@ -96,6 +98,7 @@ require (
 	github.com/uber/h3-go/v4 v4.5.0
 	github.com/unum-cloud/usearch/golang v0.0.0-20260524141737-9fd6b0115dcd
 	github.com/xeipuuv/gojsonschema v1.2.0
+	github.com/yalue/onnxruntime_go v1.31.0
 	github.com/yanyiwu/gojieba v1.4.7
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
@@ -165,7 +168,6 @@ require (
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gopherjs/gopherjs v1.12.80 // indirect
@@ -190,7 +192,6 @@ require (
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect
-	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect

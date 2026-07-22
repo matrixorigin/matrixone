@@ -1939,6 +1939,40 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `onnx_run`
+	{
+		functionId: ONNX_RUN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				// model as raw varbinary bytes
+				overloadId: 0,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+					op := newOpOnnxRun()
+					return op.onnxRun, op.Reset, op.Close
+				},
+			},
+			{
+				// model as a datalink to a file in a stage
+				overloadId: 1,
+				args:       []types.T{types.T_datalink, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+					op := newOpOnnxRun()
+					return op.onnxRun, op.Reset, op.Close
+				},
+			},
+		},
+	},
+
 	// function `starlark`
 	{
 		functionId: STARLARK,
