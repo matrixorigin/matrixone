@@ -207,6 +207,16 @@ func TestIvfflatValidQuantization(t *testing.T) {
 		require.NoErrorf(t, h.ValidQuantization(q, metric.OpType_L2sqDistance), "quant=%s L2sq", q)
 	}
 
+	// An UNSPECIFIED op_type is allowed: ALTER ... REINDEX carries only the
+	// params being changed, so an empty op means "unchanged" and the real one
+	// was validated at CREATE. Rejecting it broke reindex-with-quantization
+	// (TestIvfflatValidateReindexParams_Quantization) — the denylist this
+	// replaced tolerated empty only by accident, since "" is neither IP nor
+	// cosine.
+	for _, q := range []string{"int8", "uint8"} {
+		require.NoErrorf(t, h.ValidQuantization(q, ""), "quant=%s empty op must be allowed", q)
+	}
+
 	// An op_type this gate has never seen must be REJECTED, not silently given
 	// the L2 rescale. This is what makes it an allowlist: adding a metric to
 	// pkg/vectorindex/metric without working out its inverse scale fails here

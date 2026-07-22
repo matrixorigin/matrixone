@@ -175,6 +175,13 @@ func (CatalogHooks) ValidQuantization(quant, op string) error {
 		// rejected until someone works out its inverse scale, rather than
 		// inheriting the L2 one by default.
 		switch strings.ToLower(strings.TrimSpace(op)) {
+		case "":
+			// op_type not specified. On CREATE the caller defaults it to L2; on
+			// ALTER ... REINDEX the params carry only what is being changed, so
+			// an empty op means "unchanged" and the existing one was already
+			// validated when the index was created. Rejecting it here broke
+			// `alter ... reindex` that only changes quantization
+			// (TestIvfflatValidateReindexParams_Quantization).
 		case metric.OpType_L2Distance, metric.OpType_L2sqDistance:
 		default:
 			return moerr.NewNotSupportedNoCtxf(
