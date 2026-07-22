@@ -279,14 +279,11 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 }
 
 func (e *TestEngine) AllCheckpointsFinished() bool {
-	if e.Wal.GetPenddingCnt() != 0 {
-		return false
-	}
-	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
-	if ckp == nil {
-		return true
-	}
-	return ckp.IsFinished()
+	return AllCheckpointsFinished(e.DB)
+}
+
+func (e *TestEngine) WaitAllCheckpointsFinished(timeoutMS ...int) {
+	WaitAllCheckpointsFinished(e.T, e.DB, timeoutMS...)
 }
 
 func (e *TestEngine) Truncate() {

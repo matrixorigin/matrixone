@@ -121,6 +121,33 @@ func GetCNServiceWithoutWorkingStateWithContext(
 	return ctx.Err()
 }
 
+// GetAllTNServicesWithContext returns a TN service snapshot without waiting
+// past ctx for the built-in cluster's initial HAKeeper refresh.
+func GetAllTNServicesWithContext(
+	ctx context.Context,
+	service MOCluster,
+) ([]metadata.TNService, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if service == nil {
+		return nil, moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	if builtIn, ok := service.(*cluster); ok {
+		if err := builtIn.waitReadyWithContext(ctx); err != nil {
+			return nil, err
+		}
+		services := builtIn.services.Load()
+		return append([]metadata.TNService(nil), services.tn...), ctx.Err()
+	}
+
+	services := service.GetAllTNServices()
+	return services, ctx.Err()
+}
+
 func lookupMOCluster(service string) (MOCluster, bool, error) {
 	rt := runtime.ServiceRuntime(service)
 	if rt == nil {
@@ -339,9 +366,14 @@ func (c *cluster) Refresh(ctx context.Context) error {
 }
 
 func (c *cluster) Close() {
-	c.waitReady()
 	c.stopper.Stop()
-	close(c.forceRefreshC)
+	// A failed initial refresh leaves readiness waiters blocked. Once the
+	// refresh task has stopped, release them so shutdown does not depend on
+	// HAKeeper becoming available.
+	c.readyOnce.Do(func() {
+		c.ready.Store(true)
+		close(c.readyC)
+	})
 }
 
 // DebugUpdateCNLabel implements the MOCluster interface.
