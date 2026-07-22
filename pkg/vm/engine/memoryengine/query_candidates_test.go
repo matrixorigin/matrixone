@@ -110,6 +110,42 @@ func TestQueryCandidatePoolStrictModeRejectsSharedFallback(t *testing.T) {
 	require.Empty(t, strict.Nodes)
 }
 
+func TestQueryCandidatePoolStrictModeWithoutLabelSelectorFailsClosed(t *testing.T) {
+	tenantALabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"tenant-a"}},
+	}
+	tenantBLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"tenant-b"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "tenant-a", Labels: tenantALabel, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "tenant-b", Labels: tenantBLabel, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+	}
+	request := engine.QueryCandidatePoolRequest{
+		Tenant:         "tenant-a",
+		RequestedPool:  "tenant:tenant-a",
+		FallbackPolicy: engine.QueryPoolFallbackStrict,
+	}
+
+	strict, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Empty(t, strict.Nodes)
+	require.False(t, strict.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, strict.Resolution)
+	require.Equal(t, request.RequestedPool, strict.Identity)
+	require.Equal(t, "strict-missing-label-selector", strict.FallbackReason)
+
+	request.FallbackPolicy = engine.QueryPoolFallbackLegacyCompatible
+	legacy, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Equal(t, engine.QueryPoolResolutionAllCompatible, legacy.Resolution)
+	require.Len(t, legacy.Nodes, 2)
+}
+
 func TestQueryCandidatePoolStrictModeDoesNotWidenPrivilegedRequests(t *testing.T) {
 	requestedLabels := map[string]metadata.LabelList{
 		"account": {Labels: []string{"sys"}},

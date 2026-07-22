@@ -901,6 +901,18 @@ func (e *Engine) ResolveQueryCandidatePool(
 		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
 	}
 	if len(request.CNLabel) == 0 {
+		if request.FallbackPolicy == engine.QueryPoolFallbackStrict {
+			identity := request.RequestedPool
+			if identity == "" {
+				identity = string(engine.QueryPoolResolutionNoMatch)
+			}
+			return engine.ResolvedQueryPool{
+				RequestedIdentity: request.RequestedPool,
+				Identity:          identity,
+				Resolution:        engine.QueryPoolResolutionNoMatch,
+				FallbackReason:    "strict-missing-label-selector",
+			}, nil
+		}
 		nodes, err := queryCandidateNodes(ctx, candidates)
 		return engine.ResolvedQueryPool{
 			Nodes:             nodes,
