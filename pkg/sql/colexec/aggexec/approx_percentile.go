@@ -1016,10 +1016,14 @@ func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32
 }
 
 func PercentileDecimal128(vs *Vectors[types.Decimal128], p float64, argScale int32) (types.Decimal128, error) {
-	return percentileDecimal128Vals(collectMedianValues(vs), p, argScale)
+	argWidth := approxPercentileDecimalWidth
+	if len(vs.vecs) > 0 {
+		argWidth = vs.vecs[0].GetType().Width
+	}
+	return percentileDecimal128Vals(collectMedianValues(vs), p, argWidth, argScale)
 }
 
-func percentileDecimal128Vals(values []types.Decimal128, p float64, argScale int32) (types.Decimal128, error) {
+func percentileDecimal128Vals(values []types.Decimal128, p float64, argWidth, argScale int32) (types.Decimal128, error) {
 	if len(values) == 0 || p < 0 || p > 1 {
 		return types.Decimal128{}, nil
 	}
@@ -1031,5 +1035,7 @@ func percentileDecimal128Vals(values []types.Decimal128, p float64, argScale int
 	compare := func(a, b types.Decimal128) int { return a.Compare(b) }
 	lo := selectKthFunc(values, int(loRank), compare)
 	hi := selectKthFunc(values, int(hiRank), compare)
-	return interpolateDecimal(lo, hi, frac, 1)
+	argType := types.New(types.T_decimal128, argWidth, argScale)
+	resultType := ApproxPercentileReturnType([]types.Type{argType})
+	return interpolateDecimal(lo, hi, frac, resultType.Scale-argScale)
 }

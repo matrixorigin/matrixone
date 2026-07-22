@@ -227,7 +227,7 @@ func TestPercentileDecimal128Vals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d128, err := percentileDecimal128Vals(vals, tt.p, 2)
+			d128, err := percentileDecimal128Vals(vals, tt.p, 20, 2)
 			require.NoError(t, err)
 			require.Equal(t, tt.want, d128.Format(3))
 		})
@@ -236,21 +236,102 @@ func TestPercentileDecimal128Vals(t *testing.T) {
 
 func TestPercentileDecimal128Vals_EdgeCases(t *testing.T) {
 	// Empty
-	d128, err := percentileDecimal128Vals(nil, 0.5, 2)
+	d128, err := percentileDecimal128Vals(nil, 0.5, 20, 2)
 	require.NoError(t, err)
 	require.Equal(t, types.Decimal128{}, d128)
 
 	// Single value
 	vals := mustDecimal128s(t, "99.99")
-	d128, err = percentileDecimal128Vals(vals, 0.5, 2)
+	d128, err = percentileDecimal128Vals(vals, 0.5, 20, 2)
 	require.NoError(t, err)
 	require.Equal(t, "99.990", d128.Format(3))
 
 	// Two values
 	vals2 := mustDecimal128s(t, "10.00", "20.00")
-	d128, err = percentileDecimal128Vals(vals2, 0.75, 2)
+	d128, err = percentileDecimal128Vals(vals2, 0.75, 20, 2)
 	require.NoError(t, err)
 	require.Equal(t, "17.500", d128.Format(3))
+}
+
+func TestPercentileDecimal128MaxPrecisionEndpoints(t *testing.T) {
+	mp := mpool.MustNewZero()
+	values := NewVectors[types.Decimal128](types.New(types.T_decimal128, 38, 0))
+	t.Cleanup(func() {
+		values.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	maxValue, err := types.ParseDecimal128("99999999999999999999999999999999999999", 38, 0)
+	require.NoError(t, err)
+	minValue, err := types.ParseDecimal128("-99999999999999999999999999999999999999", 38, 0)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(values.vecs[0], []types.Decimal128{minValue, maxValue}, nil, mp))
+
+	got, err := PercentileDecimal128(values, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "-99999999999999999999999999999999999999", got.Format(0))
+	got, err = PercentileDecimal128(values, 1, 0)
+	require.NoError(t, err)
+	require.Equal(t, "99999999999999999999999999999999999999", got.Format(0))
+}
+
+func TestPercentileDecimal128ScaleBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      types.Type
+		values   []string
+		p        float64
+		want     string
+		outScale int32
+	}{
+		{
+			name:     "width 37 adds one result scale digit",
+			typ:      types.New(types.T_decimal128, 37, 2),
+			values:   []string{"1.00", "2.00"},
+			p:        0.5,
+			want:     "1.500",
+			outScale: 3,
+		},
+		{
+			name:     "width 38 retains maximum scale",
+			typ:      types.New(types.T_decimal128, 38, 38),
+			values:   []string{"0.1", "0.2"},
+			p:        0.5,
+			want:     "0.15000000000000000000000000000000000000",
+			outScale: 38,
+		},
+		{
+			name:     "width 38 retained scale rounds midpoint",
+			typ:      types.New(types.T_decimal128, 38, 0),
+			values:   []string{"-1", "0"},
+			p:        0.5,
+			want:     "-1",
+			outScale: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := NewVectors[types.Decimal128](tt.typ)
+			t.Cleanup(func() {
+				values.Free(mp)
+				require.Equal(t, int64(0), mp.CurrNB())
+			})
+
+			parsed := make([]types.Decimal128, len(tt.values))
+			for i, value := range tt.values {
+				var err error
+				parsed[i], err = types.ParseDecimal128(value, tt.typ.Width, tt.typ.Scale)
+				require.NoError(t, err)
+			}
+			require.NoError(t, vector.AppendFixedList(values.vecs[0], parsed, nil, mp))
+
+			got, err := PercentileDecimal128(values, tt.p, tt.typ.Scale)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got.Format(tt.outScale))
+		})
+	}
 }
 
 // --- Executor tests ---
