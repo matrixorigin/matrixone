@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
@@ -26,13 +27,24 @@ func (s *service) forwardLock(
 	rows [][]byte,
 	txnID []byte,
 	opts pb.LockOptions) (pb.Result, error) {
-	l, err := s.getLockTableWithCreate(
+	bindCtx, cancelBind := newLockWaitContext(ctx, opts)
+	if cancelBind != nil {
+		defer cancelBind()
+	}
+	l, err := s.getLockTableWithCreateContext(
+		bindCtx,
 		opts.Group,
 		tableID,
 		rows,
 		opts.Sharding)
 	if err != nil {
 		return pb.Result{}, err
+	}
+	if err := bindCtx.Err(); err != nil {
+		return pb.Result{}, lockWaitContextError(bindCtx, err)
+	}
+	if lockWaitDeadlineExpired(opts, time.Now()) {
+		return pb.Result{}, ErrLockTimeout
 	}
 
 	req := acquireRequest()
@@ -45,7 +57,14 @@ func (s *service) forwardLock(
 	req.Lock.ServiceID = s.serviceID
 	req.Lock.Rows = rows
 
-	resp, err := s.remote.client.Send(ctx, req)
+	// ForwardTo is an RPC just like a regular remote-table lock. In particular,
+	// morpc requires a deadline and a background caller may not have one, so use
+	// the effective lock deadline injected at service entry.
+	rpcCtx, cancel := newLockRPCContext(ctx, opts)
+	if cancel != nil {
+		defer cancel()
+	}
+	resp, err := s.remote.client.Send(rpcCtx, req)
 	if err != nil {
 		return pb.Result{}, err
 	}

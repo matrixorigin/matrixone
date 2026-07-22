@@ -101,10 +101,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		defer cancel()
 
 		c := newTestClient(t)
+		handlerDone := make(chan error, 1)
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
+			// The peer may still accept a write briefly after the client closes;
+			// transport buffering does not guarantee an immediate write error.
 			err := cs.Write(ctx, request.Message)
-			assert.Error(t, err)
+			handlerDone <- err
 			return err
 		})
 
@@ -114,8 +117,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 		defer f.Close()
 		resp, err := f.Get()
-		assert.Error(t, ctx.Err(), err)
+		assert.ErrorIs(t, err, backendClosed)
 		assert.Nil(t, resp)
+		select {
+		case <-handlerDone:
+		case <-ctx.Done():
+			t.Fatal("server handler did not finish after client close")
+		}
 	})
 }
 

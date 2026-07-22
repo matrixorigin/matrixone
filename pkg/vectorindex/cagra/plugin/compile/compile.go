@@ -248,6 +248,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	return nil
 }
 
+func (Hooks) HiddenTableDropPriority(_ string) int {
+	return 0
+}
+
 // IdxcronMetadata pins CAGRA's build-time params into the cron task's
 // metadata blob so the periodic rebuild uses the values the user
 // picked at CREATE INDEX (not whatever the system vars happen to be

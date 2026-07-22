@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -431,6 +432,55 @@ func Test_PlusFn_Decimal128(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestPlusFnDecimal128RespectsSelectListNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 38, 2)
+	maskSecondRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "vector vector",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 500}, {B0_63: 900}}, nil),
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 200}, {B0_63: 300}}, nil),
+			},
+		},
+		{
+			name: "const vector",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(decimalType, []types.Decimal128{{B0_63: 500}}, nil),
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 200}, {B0_63: 300}}, nil),
+			},
+		},
+		{
+			name: "vector const",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimalType, []types.Decimal128{{B0_63: 500}, {B0_63: 900}}, nil),
+				NewFunctionTestConstInput(decimalType, []types.Decimal128{{B0_63: 200}}, nil),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, test.inputs,
+				NewFunctionTestResult(decimalType, false, nil, nil), plusFn)
+			require.NoError(t, tcc.result.PreExtendAndReset(2))
+			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskSecondRow))
+
+			result := tcc.GetResultVectorDirectly()
+			require.Equal(t, decimalType, *result.GetType())
+			require.Equal(t, types.Decimal128{B0_63: 700},
+				vector.MustFixedColNoTypeCheck[types.Decimal128](result)[0])
+			require.False(t, result.GetNulls().Contains(0))
+			require.True(t, result.GetNulls().Contains(1))
+		})
 	}
 }
 

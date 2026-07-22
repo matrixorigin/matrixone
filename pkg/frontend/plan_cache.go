@@ -62,6 +62,12 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 			return
 		}
 	}
+	if element, ok := pc.cachePool[sql]; ok {
+		freeStmts(element.Value.(*cachedPlan).stmts)
+		element.Value = &cachedPlan{sql: sql, stmts: stmts, plans: plans}
+		pc.lruList.MoveToFront(element)
+		return
+	}
 	element := pc.lruList.PushFront(&cachedPlan{sql: sql, stmts: stmts, plans: plans})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
