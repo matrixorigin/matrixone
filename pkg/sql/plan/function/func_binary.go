@@ -3597,6 +3597,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
+	null2 = null2 || len(fmt) == 0
 
 	var dateFmtOperator DateFormatFunc
 	switch string(fmt) {
@@ -3888,8 +3889,14 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string,
 			buf.WriteRune(b)
 		}
 	}
+	if inPatternMatch {
+		buf.WriteByte('%')
+	}
 	return false, nil
 }
+
+// MySQL's calc_week underflows a 32-bit uint for the zero-date sentinel.
+const mysqlZeroDateWeekNumber = int(math.MaxUint32/7 + 1)
 
 var (
 	// WeekdayNames lists names of weekdays, which are used in builtin function `date_format`.
@@ -4013,14 +4020,23 @@ func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buff
 		fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
 	case 'U':
 		w := t.Week(0)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'u':
 		w := t.Week(1)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'V':
 		w := t.Week(2)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'v':

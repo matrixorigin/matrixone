@@ -52,10 +52,10 @@ SELECT DATE_FORMAT('2004-04-03 13:11:10', '%Y/%m/%d %T') AS fast_slash_datetime_
 2004/04/03 13:11:10
 SELECT DATE_FORMAT('2004-04-03 13:11:10', '') AS empty_format;
 ➤ empty_format[12,-1,0]  𝄀
-
+null
 SELECT DATE_FORMAT('2004-04-03 13:11:10', '%') AS trailing_percent;
 ➤ trailing_percent[12,-1,0]  𝄀
-
+%
 select date_format(a_date,'%Y-%m-%d %H:%i:%s'),date_format(b_datetime,'%Y-%m-%d %H:%i:%s'),date_format(c_timestamp,'%Y-%m-%d %H:%i:%s') from t_dates;
 ➤ date_format(a_date, %Y-%m-%d %H:%i:%s)[12,-1,0]  ¦  date_format(b_datetime, %Y-%m-%d %H:%i:%s)[12,-1,0]  ¦  date_format(c_timestamp, %Y-%m-%d %H:%i:%s)[12,-1,0]  𝄀
 1999-04-05 00:00:00  ¦  1999-04-05 11:01:02  ¦  1999-04-05 11:01:02  𝄀

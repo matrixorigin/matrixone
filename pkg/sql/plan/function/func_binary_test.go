@@ -3098,6 +3098,27 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 			expectNull: []bool{false},
 		},
 		{
+			name:       "week numbers preserve mysql zero sentinel",
+			format:     "%U|%u|%V",
+			values:     []types.Datetime{types.ZeroDatetime},
+			expected:   []string{"613566757|613566757|613566757"},
+			expectNull: []bool{false},
+		},
+		{
+			name:       "empty format returns null",
+			format:     "",
+			values:     []types.Datetime{valid},
+			expected:   []string{""},
+			expectNull: []bool{true},
+		},
+		{
+			name:       "trailing percent is literal",
+			format:     "%",
+			values:     []types.Datetime{valid},
+			expected:   []string{"%"},
+			expectNull: []bool{false},
+		},
+		{
 			name:       "full month name requires a month",
 			format:     "%M",
 			values:     []types.Datetime{types.ZeroDatetime, valid},
