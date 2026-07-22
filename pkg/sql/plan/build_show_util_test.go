@@ -442,6 +442,38 @@ func TestConstructCreateTableSQLPreservesLegacyChecksWithoutCompilerContext(t *t
 	require.Contains(t, createSQL, "CHECK (a < 10) NOT ENFORCED")
 }
 
+func TestConstructCreateTableSQLPreservesLegacyColumnChecksWithoutCompilerContext(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "legacy_column_checks",
+		DbName:    "test",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_column_checks (a INT CHECK (a > 0), b INT CONSTRAINT chk_b CHECK (b < 10) NOT ENFORCED)",
+		Cols: []*plan.ColDef{
+			{
+				Name:       "a",
+				Typ:        plan.Type{Id: int32(types.T_int32)},
+				Default:    &plan.Default{NullAbility: true},
+				OriginName: "a",
+			},
+			{
+				Name:       "b",
+				Typ:        plan.Type{Id: int32(types.T_int32)},
+				Default:    &plan.Default{NullAbility: true},
+				OriginName: "b",
+			},
+		},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "CHECK (`a` > 0)")
+	require.Contains(t, createSQL, "CONSTRAINT `chk_b` CHECK (`b` < 10) NOT ENFORCED")
+
+	stmt, err := mysql.ParseOne(context.Background(), createSQL, 1)
+	require.NoError(t, err, "generated legacy CREATE TABLE must be executable: %s", createSQL)
+	stmt.Free()
+}
+
 func Test_SingleShowCreateTable(t *testing.T) {
 	tests := []struct {
 		name string

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -28,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -717,7 +720,61 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 			checks = append(checks, segment)
 		}
 	}
+	checks = append(checks, extractColumnCheckDefs(tableDef.Createsql)...)
 	return checks
+}
+
+func extractColumnCheckDefs(createSQL string) []string {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createSQL, 1)
+	if err != nil {
+		return nil
+	}
+	defer stmt.Free()
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return nil
+	}
+
+	checks := make([]string, 0)
+	for _, def := range createTable.Defs {
+		columnDef, ok := def.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		for _, attr := range columnDef.Attributes {
+			check, ok := attr.(*tree.AttributeCheckConstraint)
+			if !ok {
+				continue
+			}
+			checks = append(checks, formatLegacyCheckDef(
+				check.Name, check.Expr, check.Enforced, check.EnforcementSet,
+			))
+		}
+	}
+	return checks
+}
+
+func formatLegacyCheckDef(name string, expr tree.Expr, enforced bool, enforcementSet bool) string {
+	var builder strings.Builder
+	if name != "" {
+		builder.WriteString("CONSTRAINT `")
+		builder.WriteString(formatStr(name))
+		builder.WriteString("` ")
+	}
+	builder.WriteString("CHECK (")
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier())
+	expr.Format(fmtCtx)
+	builder.WriteString(fmtCtx.String())
+	builder.WriteByte(')')
+	if enforcementSet {
+		if enforced {
+			builder.WriteString(" ENFORCED")
+		} else {
+			builder.WriteString(" NOT ENFORCED")
+		}
+	}
+	return builder.String()
 }
 
 func extractCreateTableDefsSection(createSQL string) (string, bool) {
