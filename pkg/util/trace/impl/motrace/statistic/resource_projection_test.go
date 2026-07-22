@@ -15,6 +15,7 @@
 package statistic
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -84,11 +85,12 @@ func TestHistoricalStatsArrayLengths(t *testing.T) {
 		{NewStatsArrayV6(), StatsArrayLengthV6},
 	}
 	for _, test := range tests {
-		if got := len(test.stats.ToJsonString()); got == 0 {
-			t.Fatal("empty JSON")
+		var values []json.RawMessage
+		if err := json.Unmarshal(test.stats.ToJsonString(), &values); err != nil {
+			t.Fatalf("decode v%.0f JSON: %v", test.stats.GetVersion(), err)
 		}
-		if test.stats.GetVersion() == StatsArrayVersion6 && len(*test.stats) != test.want {
-			t.Fatalf("v6 backing length: got %d want %d", len(*test.stats), test.want)
+		if len(values) != test.want {
+			t.Fatalf("v%.0f JSON length: got %d want %d", test.stats.GetVersion(), len(values), test.want)
 		}
 	}
 }
