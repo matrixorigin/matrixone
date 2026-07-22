@@ -91,6 +91,7 @@ func TestDecodeBlockBatchCleansPartialBatchOnCorruptColumn(t *testing.T) {
 
 func TestValidateCommitTSVectorFreesWrongType(t *testing.T) {
 	mp := mpool.MustNewNoLock("object-reader-wrong-type")
+	defer mpool.DeleteMPool(mp)
 	vec := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
 	require.Positive(t, vec.Allocated())
@@ -100,6 +101,33 @@ func TestValidateCommitTSVectorFreesWrongType(t *testing.T) {
 	require.Nil(t, got)
 	require.Zero(t, vec.Allocated())
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestDecodeCommitTSVectorReturnsErrorForTruncatedHeader(t *testing.T) {
+	mp := mpool.MustNewNoLock("object-reader-corrupt-commit-ts")
+	defer mpool.DeleteMPool(mp)
+
+	vec, err := decodeCommitTSVector(context.Background(), []byte{1, 2, 3}, mp)
+	require.ErrorContains(t, err, "decode object column")
+	require.Nil(t, vec)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestObjectReaderCloseDeletesMPoolOnceAfterBlockRelease(t *testing.T) {
+	const tag = "object-reader-close-test"
+	mp := mpool.MustNewNoLock(tag)
+	reader := &ObjectReader{mp: mp}
+
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
+	require.NotEqual(t, "[]", mpool.ReportMemUsage(tag))
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+
+	require.NoError(t, reader.Close())
+	require.Equal(t, "[]", mpool.ReportMemUsage(tag))
+	require.NoError(t, reader.Close())
+	require.Equal(t, "[]", mpool.ReportMemUsage(tag))
 }
 
 func TestOpenWithKindRejectsInvalidOfflineKind(t *testing.T) {
@@ -117,9 +145,9 @@ func TestObjectReaderReadsLocalObject(t *testing.T) {
 
 	reader, err := Open(ctx, filepath.Join(dir, filename))
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		require.NoError(t, reader.Close())
-	}()
+	})
 
 	info := reader.Info()
 	require.Equal(t, filepath.Join(dir, filename), info.Path)
@@ -149,6 +177,9 @@ func TestObjectReaderReadsLocalObject(t *testing.T) {
 	require.NotNil(t, commitTS)
 	require.Equal(t, types.T_TS, commitTS.GetType().Oid)
 	releaseCommitTS()
+	require.Zero(t, reader.mp.CurrNB())
+	require.NoError(t, reader.Close())
+	require.NoError(t, reader.Close())
 }
 
 func writeObjectReaderTestFile(t *testing.T, dir string, filename string) {

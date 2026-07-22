@@ -17,6 +17,7 @@ package objecttool
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -61,6 +62,7 @@ type ObjectReader struct {
 	info      *ObjectInfo
 	cols      []ColInfo
 	mp        *mpool.MPool
+	closeOnce sync.Once
 }
 
 // Open opens an object file in the legacy local DISK (CRC-framed) format.
@@ -284,12 +286,7 @@ func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (
 		objectio.ReleaseIOVector(&ioVectors)
 	}
 
-	obj, err := objectio.Decode(ioVectors.Entries[0].CachedData.Bytes())
-	if err != nil {
-		releaseIOVector()
-		return nil, nil, err
-	}
-	vec, err := validateCommitTSVector(ctx, obj, r.mp)
+	vec, err := decodeCommitTSVector(ctx, ioVectors.Entries[0].CachedData.Bytes(), r.mp)
 	if err != nil {
 		releaseIOVector()
 		return nil, nil, err
@@ -304,6 +301,14 @@ func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (
 		releaseIOVector()
 	}
 	return vec, release, nil
+}
+
+func decodeCommitTSVector(ctx context.Context, data []byte, mp *mpool.MPool) (*vector.Vector, error) {
+	obj, err := decodeObjectColumn(data)
+	if err != nil {
+		return nil, err
+	}
+	return validateCommitTSVector(ctx, obj, mp)
 }
 
 func validateCommitTSVector(ctx context.Context, obj any, mp *mpool.MPool) (*vector.Vector, error) {
@@ -325,5 +330,8 @@ func (r *ObjectReader) BlockCount() uint32 {
 
 // Close closes the reader
 func (r *ObjectReader) Close() error {
+	r.closeOnce.Do(func() {
+		mpool.DeleteMPool(r.mp)
+	})
 	return nil
 }
