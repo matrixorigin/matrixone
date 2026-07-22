@@ -16,13 +16,11 @@ package mysql
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -144,11 +142,7 @@ func (s *Scanner) Scan() (int, string) {
 		var tBytes string
 		if s.cur() == '`' {
 			s.inc()
-			if tokenID == AT_ID {
-				tID, tBytes = s.scanQuotedUserVariable()
-			} else {
-				tID, tBytes = s.scanLiteralIdentifier()
-			}
+			tID, tBytes = s.scanLiteralIdentifier()
 		} else if s.cur() == eofChar {
 			return LEX_ERROR, ""
 		} else {
@@ -572,83 +566,29 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 }
 
 func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
-	return s.scanLiteralIdentifierWithValidator(delim, false)
-}
-
-func (s *Scanner) scanQuotedUserVariable() (int, string) {
-	return s.scanLiteralIdentifierWithValidator('`', true)
-}
-
-func (s *Scanner) scanLiteralIdentifierWithValidator(delim uint16, allowSupplementary bool) (int, string) {
 	start := s.Pos
-	valid := true
 	for {
-		// Skip ordinary ASCII in chunks; special bytes fall through to the
-		// existing delimiter, line tracking, and UTF-8 validation paths.
-		if s.Pos+8 <= len(s.buf) {
-			word := binary.LittleEndian.Uint64([]byte(s.buf[s.Pos : s.Pos+8]))
-			if quotedASCIIWordIsPlain(word, byte(delim)) {
-				s.Pos += 8
-				s.Col += 8
-				continue
-			}
-		}
-		ch := s.cur()
-		switch ch {
+		switch s.cur() {
 		case delim:
 			if s.peek(1) != delim {
 				if s.Pos == start {
 					return LEX_ERROR, ""
 				}
 				s.inc()
-				identifier := s.buf[start : s.Pos-1]
-				if !valid {
-					return LEX_ERROR, identifier
-				}
-				return QUOTE_ID, identifier
+				return QUOTE_ID, s.buf[start : s.Pos-1]
 			}
 
 			var buf strings.Builder
 			buf.WriteString(s.buf[start:s.Pos])
 			s.inc()
-			return s.scanLiteralIdentifierSlow(&buf, delim, allowSupplementary, valid)
+			return s.scanLiteralIdentifierSlow(&buf, delim)
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, s.buf[start:s.Pos]
-		case 0:
-			valid = false
-			s.inc()
 		default:
-			if ch < utf8.RuneSelf {
-				s.inc()
-				continue
-			}
-			r, size := utf8.DecodeRuneInString(s.buf[s.Pos:])
-			if (r == utf8.RuneError && size == 1) || (!allowSupplementary && r > '\uFFFF') {
-				valid = false
-			}
-			s.incNonASCII(size)
+			s.inc()
 		}
 	}
-}
-
-func quotedASCIIWordIsPlain(word uint64, delim byte) bool {
-	const laneHighBits = uint64(0x8080808080808080)
-	if word&laneHighBits != 0 {
-		return false
-	}
-	return !quotedASCIIWordHasByte(word, 0) &&
-		!quotedASCIIWordHasByte(word, delim) &&
-		!quotedASCIIWordHasByte(word, '\n')
-}
-
-func quotedASCIIWordHasByte(word uint64, value byte) bool {
-	const (
-		laneLowBits  = uint64(0x0101010101010101)
-		laneHighBits = uint64(0x8080808080808080)
-	)
-	word ^= uint64(value) * laneLowBits
-	return (word-laneLowBits)&^word&laneHighBits != 0
 }
 
 // scanLiteralIdentifierSlow scans an identifier surrounded by backticks which may
@@ -656,12 +596,7 @@ func quotedASCIIWordHasByte(word uint64, value byte) bool {
 // scanLiteralIdentifier once the first escape sequence is found in the identifier.
 // The provided `buf` contains the contents of the identifier that have been scanned
 // so far.
-func (s *Scanner) scanLiteralIdentifierSlow(
-	buf *strings.Builder,
-	delim uint16,
-	allowSupplementary bool,
-	valid bool,
-) (int, string) {
+func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) (int, string) {
 	delimSeen := true
 	for {
 		if delimSeen {
@@ -674,39 +609,19 @@ func (s *Scanner) scanLiteralIdentifierSlow(
 			continue
 		}
 		// The previous char was not the identifier delimiter.
-		ch := s.cur()
-		switch ch {
+		switch s.cur() {
 		case delim:
 			delimSeen = true
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, buf.String()
-		case 0:
-			valid = false
-			buf.WriteByte(0)
-			s.inc()
-			continue
 		default:
-			if ch < utf8.RuneSelf {
-				buf.WriteByte(byte(ch))
-				s.inc()
-				continue
-			}
-			r, size := utf8.DecodeRuneInString(s.buf[s.Pos:])
-			if (r == utf8.RuneError && size == 1) || (!allowSupplementary && r > '\uFFFF') {
-				valid = false
-			}
-			buf.WriteString(s.buf[s.Pos : s.Pos+size])
-			s.incNonASCII(size)
-			continue
+			buf.WriteByte(byte(s.cur()))
+			// keep scanning
 		}
 		s.inc()
 	}
-	identifier := buf.String()
-	if !valid {
-		return LEX_ERROR, identifier
-	}
-	return QUOTE_ID, identifier
+	return QUOTE_ID, buf.String()
 }
 
 // scanCommentTypeBlock scans a '/*' delimited comment;
@@ -1015,13 +930,6 @@ func (s *Scanner) incN(dist int) {
 	for i := 0; i < dist; i++ {
 		s.inc()
 	}
-}
-
-// incNonASCII preserves incN's byte-based position semantics without another
-// per-byte loop. A non-ASCII UTF-8 sequence cannot contain a newline byte.
-func (s *Scanner) incNonASCII(size int) {
-	s.Pos += size
-	s.Col += size
 }
 
 func (s *Scanner) peek(dist int) uint16 {

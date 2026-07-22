@@ -4056,50 +4056,14 @@ func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
 	for _, sql := range []string{
 		"SELECT 1 AS `الكمية`",
 		"SELECT 1 AS `数量`",
+		"SELECT 1 AS `\xe9`",
+		"SELECT 1 AS `\xe9``name`",
+		"SELECT 1 AS `\xf0\x9f\x98\x80`",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := ParseOne(context.Background(), sql, 1)
 			require.NoError(t, err)
 		})
-	}
-}
-
-func TestInvalidQuotedUnicodeIdentifiers(t *testing.T) {
-	for _, sql := range []string{
-		"SELECT 1 AS `😀`",
-		"SELECT 1 AS `a\x00b`",
-		"SELECT 1 AS `\xff`",
-	} {
-		t.Run(sql, func(t *testing.T) {
-			_, err := ParseOne(context.Background(), sql, 1)
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestQuotedUnicodeUserVariables(t *testing.T) {
-	for _, sql := range []string{
-		"SELECT @`😀`",
-		"SELECT @`😀``name`",
-	} {
-		t.Run(sql, func(t *testing.T) {
-			_, err := ParseOne(context.Background(), sql, 1)
-			require.NoError(t, err)
-		})
-	}
-}
-
-func BenchmarkParseQuotedIdentifiers(b *testing.B) {
-	ctx := context.Background()
-	const sql = "SELECT `column_name` FROM `database_name`.`table_name`"
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		stmt, err := ParseOne(ctx, sql, 1)
-		if err != nil {
-			b.Fatal(err)
-		}
-		stmt.Free()
 	}
 }
 
