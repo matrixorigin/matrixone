@@ -1472,6 +1472,23 @@ func TestDecimal128(t *testing.T) {
 	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)
 }
 
+func TestFetchRowsSkipsConstNull(t *testing.T) {
+	mp := mpool.MustNew("test")
+	vec := vector.NewConstNull(types.T_uint64.ToType(), 1, mp)
+	defer vec.Free(mp)
+
+	fetcher := GetFetchRowsFunc(types.T_uint64.ToType())
+	ok, rows, granularity := fetcher(vec, types.NewPacker(), types.T_uint64.ToType(), 1, false, nil, nil)
+	require.False(t, ok)
+	require.Empty(t, rows)
+	require.Equal(t, lock.Granularity_Row, granularity)
+
+	ok, rows, granularity = fetcher(vec, types.NewPacker(), types.T_uint64.ToType(), 1, true, nil, nil)
+	require.True(t, ok)
+	require.Len(t, rows, 2)
+	require.Equal(t, lock.Granularity_Range, granularity)
+}
+
 func TestDecimal256(t *testing.T) {
 	packer := types.NewPacker()
 	decimal256Fn := func(v types.Decimal256) []byte {

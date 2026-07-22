@@ -49,56 +49,71 @@ var (
 
 // GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
 func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
+	var fetcher FetchLockRowsFunc
 	switch t.Oid {
 	case types.T_bool:
-		return fetchBoolRows
+		fetcher = fetchBoolRows
 	case types.T_bit:
-		return fetchUint64Rows
+		fetcher = fetchUint64Rows
 	case types.T_int8:
-		return fetchInt8Rows
+		fetcher = fetchInt8Rows
 	case types.T_int16:
-		return fetchInt16Rows
+		fetcher = fetchInt16Rows
 	case types.T_int32:
-		return fetchInt32Rows
+		fetcher = fetchInt32Rows
 	case types.T_int64:
-		return fetchInt64Rows
+		fetcher = fetchInt64Rows
 	case types.T_uint8:
-		return fetchUint8Rows
+		fetcher = fetchUint8Rows
 	case types.T_uint16:
-		return fetchUint16Rows
+		fetcher = fetchUint16Rows
 	case types.T_uint32:
-		return fetchUint32Rows
+		fetcher = fetchUint32Rows
 	case types.T_uint64:
-		return fetchUint64Rows
+		fetcher = fetchUint64Rows
 	case types.T_float32:
-		return fetchFloat32Rows
+		fetcher = fetchFloat32Rows
 	case types.T_float64:
-		return fetchFloat64Rows
+		fetcher = fetchFloat64Rows
 	case types.T_date:
-		return fetchDateRows
+		fetcher = fetchDateRows
 	case types.T_year:
-		return fetchYearRows
+		fetcher = fetchYearRows
 	case types.T_time:
-		return fetchTimeRows
+		fetcher = fetchTimeRows
 	case types.T_datetime:
-		return fetchDateTimeRows
+		fetcher = fetchDateTimeRows
 	case types.T_timestamp:
-		return fetchTimestampRows
+		fetcher = fetchTimestampRows
 	case types.T_decimal64:
-		return fetchDecimal64Rows
+		fetcher = fetchDecimal64Rows
 	case types.T_decimal128:
-		return fetchDecimal128Rows
+		fetcher = fetchDecimal128Rows
 	case types.T_decimal256:
-		return fetchDecimal256Rows
+		fetcher = fetchDecimal256Rows
 	case types.T_uuid:
-		return fetchUUIDRows
+		fetcher = fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		return fetchVarlenaRows
+		fetcher = fetchVarlenaRows
 		// T_json, T_blob, T_array_float32 etc. cannot be PK.
 	case types.T_enum:
-		return fetchEnumRows
+		fetcher = fetchEnumRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
+	}
+	return func(
+		vec *vector.Vector,
+		packer *types.Packer,
+		tp types.Type,
+		max int,
+		lockTable bool,
+		filter RowsFilter,
+		filterCols []int32,
+	) (bool, [][]byte, lock.Granularity) {
+		if !lockTable && vec.IsConstNull() {
+			return false, nil, lock.Granularity_Row
+		}
+		return fetcher(vec, packer, tp, max, lockTable, filter, filterCols)
 	}
 }
 
