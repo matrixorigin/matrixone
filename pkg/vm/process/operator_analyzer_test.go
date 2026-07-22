@@ -462,6 +462,23 @@ func TestOperatorAnalyzerLegacyAndTerminalHarvestExactlyOnce(t *testing.T) {
 	assert.Equal(t, int64(7), opAlyzr.opStats.S3WriteSize)
 }
 
+func TestHarvestExternalCounterSetAndTerminalWait(t *testing.T) {
+	analyzer := NewAnalyzer(0, false, false, "external-writer")
+	counter := new(perfcounter.CounterSet)
+	counter.FileService.S3.Put.Add(2)
+	counter.FileService.S3WriteSize.Add(256)
+
+	HarvestExternalCounterSet(analyzer, counter)
+	MeasureTerminalFilesystemWait(analyzer, func() {})
+
+	delta := analyzer.GetOpStats().ResourceDelta()
+	assert.Equal(t, uint64(2), delta.Usage.S3Requests[resource.S3Put])
+	assert.Equal(t, uint64(256), delta.Usage.S3WriteBytes)
+	assert.Positive(t, delta.Usage.WaitNS[resource.WaitFilesystem])
+	assert.Zero(t, counter.FileService.S3.Put.Load())
+	assert.Zero(t, counter.FileService.S3WriteSize.Load())
+}
+
 func TestMeasureFilesystemWaitRecordsTerminalPaths(t *testing.T) {
 	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
 

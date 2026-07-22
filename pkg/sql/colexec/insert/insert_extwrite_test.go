@@ -23,21 +23,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 // mockExtWriter records ExternalWriter lifecycle calls.
 type mockExtWriter struct {
-	writes  int
-	closes  int
-	aborts  int
-	rows    uint64
-	failure error
+	writes     int
+	closes     int
+	aborts     int
+	rows       uint64
+	failure    error
+	writeBytes int64
+	closeBytes int64
 }
 
 func (m *mockExtWriter) WriteBatch(ctx context.Context, bat *batch.Batch) error {
 	m.writes++
+	if m.writeBytes > 0 {
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.S3.Put.Add(1)
+			counter.FileService.S3WriteSize.Add(m.writeBytes)
+		})
+	}
 	if m.failure != nil {
 		return m.failure
 	}
@@ -47,6 +59,12 @@ func (m *mockExtWriter) WriteBatch(ctx context.Context, bat *batch.Batch) error 
 
 func (m *mockExtWriter) Close(ctx context.Context) (uint64, error) {
 	m.closes++
+	if m.closeBytes > 0 {
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.S3.Put.Add(1)
+			counter.FileService.S3WriteSize.Add(m.closeBytes)
+		})
+	}
 	return m.rows, m.failure
 }
 
@@ -143,6 +161,10 @@ func TestExternalResetAborts(t *testing.T) {
 	ins := NewArgument()
 	ins.ToExternal = true
 	ins.InsertCtx = &InsertCtx{}
+	ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+	ins.ctr.extCounter = new(perfcounter.CounterSet)
+	ins.ctr.extCounter.FileService.S3.Put.Add(1)
+	ins.ctr.extCounter.FileService.S3WriteSize.Add(9)
 	mock := &mockExtWriter{}
 	ins.ctr.extWriter = mock
 
@@ -150,6 +172,11 @@ func TestExternalResetAborts(t *testing.T) {
 	require.Equal(t, 1, mock.aborts)
 	require.Equal(t, 0, mock.closes)
 	require.Nil(t, ins.ctr.extWriter)
+	require.Nil(t, ins.ctr.extCounter)
+	delta := ins.OpAnalyzer.GetOpStats().ResourceDelta()
+	require.Equal(t, uint64(1), delta.Usage.S3Requests[resource.S3Put])
+	require.Equal(t, uint64(9), delta.Usage.S3WriteBytes)
+	require.Positive(t, delta.Usage.WaitNS[resource.WaitFilesystem])
 
 	// Free with a live writer aborts too.
 	mock2 := &mockExtWriter{}
@@ -159,4 +186,34 @@ func TestExternalResetAborts(t *testing.T) {
 	require.Equal(t, 0, mock2.closes)
 
 	ins.Release()
+}
+
+func TestExternalWriterOwnsAsyncCountersAndWait(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(1)
+
+	ins := NewArgument()
+	defer ins.Release()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{AddAffectedRows: true}
+	ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+	ins.ctr.extCounter = new(perfcounter.CounterSet)
+	writer := &mockExtWriter{writeBytes: 10, closeBytes: 5}
+	ins.ctr.extWriter = writer
+	ins.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat, nil}))
+
+	for range 2 {
+		ins.OpAnalyzer.Start()
+		_, err := ins.Call(proc)
+		ins.OpAnalyzer.Stop()
+		require.NoError(t, err)
+	}
+
+	delta := ins.OpAnalyzer.GetOpStats().ResourceDelta()
+	require.Equal(t, uint64(2), delta.Usage.S3Requests[resource.S3Put])
+	require.Equal(t, uint64(15), delta.Usage.S3WriteBytes)
+	require.Positive(t, delta.Usage.WaitNS[resource.WaitFilesystem])
+	require.Nil(t, ins.ctr.extWriter)
+	require.Nil(t, ins.ctr.extCounter)
 }

@@ -130,7 +130,7 @@ func TestRetryBuildAndRemoteWaitBelongToRetryAttempt(t *testing.T) {
 	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3Put])
 }
 
-func TestAggregateWaitLargerThanCoordinatorWallIsNotInvalid(t *testing.T) {
+func TestAggregateWaitLargerThanCoordinatorWallIsPartial(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
 	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(context.Background(), root), true)
 	stats := statistic.NewStatsInfo()
@@ -147,7 +147,7 @@ func TestAggregateWaitLargerThanCoordinatorWallIsNotInvalid(t *testing.T) {
 	require.Zero(t, summary.Usage.ExclusiveActiveNS)
 	require.Equal(t, uint64(30), summary.Usage.WaitNS[resource.WaitLock])
 	require.Equal(t, uint64(20), summary.Usage.WaitNS[resource.WaitFilesystem])
-	require.Zero(t, summary.Quality)
+	require.Equal(t, resource.QualityPartial, summary.Quality)
 }
 
 func TestRetryScopePrepareRequestsAreGenerationLocal(t *testing.T) {

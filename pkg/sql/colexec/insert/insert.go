@@ -126,6 +126,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 	insert.ctr.state = vm.Build
 	if insert.ToExternal {
+		insert.ctr.extCounter = new(perfcounter.CounterSet)
 		cfg := insert.InsertCtx.ExternalConfig
 		cfg.Attrs = insert.InsertCtx.Attrs
 		// Prefer the per-execution statement start over the compile-time value:
@@ -262,7 +263,12 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 	if input.Batch == nil {
 		// End of input: flush and finalize the file.
 		if insert.ctr.extWriter != nil {
-			if _, cerr := insert.ctr.extWriter.Close(proc.Ctx); cerr != nil {
+			ctx := insert.externalWriterContext(proc.Ctx)
+			_, cerr := process.MeasureFilesystemWait(analyzer, func() (uint64, error) {
+				return insert.ctr.extWriter.Close(ctx)
+			})
+			insert.harvestExternalWriter(analyzer)
+			if cerr != nil {
 				return input, cerr
 			}
 			insert.ctr.extWriter = nil
@@ -278,7 +284,10 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 	if err = insert.checkExternalNotNull(proc, input.Batch); err != nil {
 		return input, err
 	}
-	if err = insert.ctr.extWriter.WriteBatch(proc.Ctx, input.Batch); err != nil {
+	ctx := insert.externalWriterContext(proc.Ctx)
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return insert.ctr.extWriter.WriteBatch(ctx, input.Batch)
+	}); err != nil {
 		return input, err
 	}
 
@@ -288,6 +297,30 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 		atomic.AddUint64(&insert.ctr.affectedRows, rows)
 	}
 	return input, nil
+}
+
+func (insert *Insert) externalWriterContext(ctx context.Context) context.Context {
+	if insert.ctr.extCounter == nil {
+		return ctx
+	}
+	return perfcounter.AttachS3RequestKey(ctx, insert.ctr.extCounter)
+}
+
+func (insert *Insert) harvestExternalWriter(analyzer process.Analyzer) {
+	if insert.ctr.extCounter == nil {
+		return
+	}
+	process.HarvestExternalCounterSet(analyzer, insert.ctr.extCounter)
+	insert.ctr.extCounter = nil
+}
+
+func (insert *Insert) abortExternalWriter(proc *process.Process) {
+	ctx := insert.externalWriterContext(proc.Ctx)
+	process.MeasureTerminalFilesystemWait(insert.OpAnalyzer, func() {
+		insert.ctr.extWriter.Abort(ctx)
+	})
+	insert.ctr.extWriter = nil
+	insert.harvestExternalWriter(insert.OpAnalyzer)
 }
 
 func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (result vm.CallResult, err error) {

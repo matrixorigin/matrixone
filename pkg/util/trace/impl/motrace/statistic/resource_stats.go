@@ -47,11 +47,15 @@ func (stats *StatsInfo) RootPhaseResource() resource.Delta {
 	recorder.AddActiveInterval(duration(stats.ParseStage.ParseDuration.Nanoseconds()), 0, 0)
 	planWall := duration(stats.PlanStage.PlanDuration.Nanoseconds())
 	planWait := duration(stats.PlanStage.BuildPlanStatsIOConsumption)
-	addMeasuredActive(&recorder, planWall, planWait)
+	if !addMeasuredActive(&recorder, planWall, planWait) {
+		quality |= resource.QualityPartial
+	}
 	recorder.AddWait(resource.WaitFilesystem, planWait)
 	compileWall := duration(stats.CompileStage.CompileDuration.Nanoseconds())
 	compileWait := duration(atomic.LoadInt64(&stats.CompileStage.CompileIOConsumption))
-	addMeasuredActive(&recorder, compileWall, compileWait)
+	if !addMeasuredActive(&recorder, compileWall, compileWait) {
+		quality |= resource.QualityPartial
+	}
 	recorder.AddWait(resource.WaitFilesystem, compileWait)
 
 	for _, requests := range [...]S3Request{
@@ -70,10 +74,12 @@ func (stats *StatsInfo) RootPhaseResource() resource.Delta {
 	return delta
 }
 
-func addMeasuredActive(recorder *resource.LocalRecorder, wallNS, waitNS uint64) {
+func addMeasuredActive(recorder *resource.LocalRecorder, wallNS, waitNS uint64) bool {
 	if waitNS <= wallNS {
 		recorder.AddActiveInterval(wallNS, waitNS, 0)
+		return true
 	}
+	return false
 }
 
 // ResetRetryAttemptResource starts fresh generation-specific build and prepare

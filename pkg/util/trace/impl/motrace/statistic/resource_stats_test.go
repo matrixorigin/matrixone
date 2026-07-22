@@ -56,7 +56,7 @@ func TestRootPhaseResourceKeepsAggregateWaitWithoutInvalidActive(t *testing.T) {
 	delta := stats.RootPhaseResource()
 	require.Zero(t, delta.Usage.ExclusiveActiveNS)
 	require.Equal(t, uint64(50), delta.Usage.WaitNS[resource.WaitFilesystem])
-	require.Zero(t, delta.Quality)
+	require.Equal(t, resource.QualityPartial, delta.Quality)
 }
 
 func TestResetRetryAttemptResource(t *testing.T) {

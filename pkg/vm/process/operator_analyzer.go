@@ -149,6 +149,56 @@ func MeasureOutputWaitErr(analyzer Analyzer, fn func() error) error {
 	return fn()
 }
 
+// MeasureTerminalFilesystemWait records cleanup I/O that runs after the
+// operator's final Call interval. It must not feed opAlyzr.wait because Stop has
+// already subtracted and published that interval.
+func MeasureTerminalFilesystemWait(analyzer Analyzer, fn func()) {
+	start := time.Now()
+	defer func() {
+		addTerminalWait(analyzer, time.Since(start), resource.WaitFilesystem)
+	}()
+	fn()
+}
+
+func addTerminalWait(analyzer Analyzer, duration time.Duration, kind resource.WaitKind) {
+	if analyzer == nil {
+		return
+	}
+	stats := analyzer.GetOpStats()
+	if stats == nil {
+		return
+	}
+	if duration < 0 || kind >= resource.WaitKindCount {
+		stats.ResourceQuality |= resource.QualityInvariantFailure
+		return
+	}
+	ns := uint64(duration.Nanoseconds())
+	stats.WaitTimeConsumed = addResourceInt64(stats.WaitTimeConsumed, ns, &stats.ResourceQuality)
+	stats.ResourceWaitNS[kind] = addResourceInt64(
+		stats.ResourceWaitNS[kind], ns, &stats.ResourceQuality)
+}
+
+// HarvestExternalCounterSet transfers one quiescent, producer-owned counter
+// interval into an operator. The caller must first join the asynchronous
+// producer and must call this exactly once.
+func HarvestExternalCounterSet(analyzer Analyzer, counter *perfcounter.CounterSet) {
+	if analyzer == nil || counter == nil {
+		return
+	}
+	analyzer.AddS3RequestCount(counter)
+	analyzer.AddFileServiceCacheInfo(counter)
+	analyzer.AddReadSizeInfo(counter)
+	stats := analyzer.GetOpStats()
+	writeBytes := counter.FileService.S3WriteSize.Load()
+	if writeBytes < 0 {
+		stats.ResourceQuality |= resource.QualityInvariantFailure
+	} else {
+		stats.S3WriteSize = addResourceInt64(
+			stats.S3WriteSize, uint64(writeBytes), &stats.ResourceQuality)
+	}
+	counter.Reset()
+}
+
 func (stats ParquetProfileStats) Empty() bool {
 	return stats == ParquetProfileStats{}
 }
