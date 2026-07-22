@@ -57,6 +57,27 @@ func collectParamPositions(expr *planpb.Expr, positions map[int32]struct{}) {
 	}
 }
 
+func collectColumnNames(expr *planpb.Expr, names *[]string) {
+	if expr == nil {
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		*names = append(*names, col.Name)
+		return
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			collectColumnNames(arg, names)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectColumnNames(item, names)
+		}
+	}
+}
+
 func preparedParamPositions(prepare *planpb.Prepare) []int32 {
 	positions := make(map[int32]struct{})
 	for _, node := range prepare.GetPlan().GetQuery().Nodes {
@@ -130,6 +151,28 @@ func TestPreparedNestedAggregateMarkersStayIndependent(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select min(abs(?)), min(abs(?)) from nation")
 	require.Len(t, prepare.ParamTypes, 2)
 	require.Equal(t, []int32{0, 1}, preparedParamPositions(prepare))
+}
+
+func TestPreparedParameterIdentityDoesNotLeakIntoPlanNames(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select min(?), min(?) from nation")
+
+	var names []string
+	for _, node := range prepare.Plan.GetQuery().Nodes {
+		for _, exprs := range [][]*planpb.Expr{
+			node.ProjectList,
+			node.AggList,
+			node.GroupBy,
+			node.FilterList,
+		} {
+			for _, expr := range exprs {
+				collectColumnNames(expr, &names)
+			}
+		}
+	}
+	for _, name := range names {
+		require.NotContains(t, name, "?0")
+		require.NotContains(t, name, "?1")
+	}
 }
 
 func TestWindowExpressionKeysRetainParameterOffsets(t *testing.T) {

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +52,19 @@ func windowExprAstKey(astExpr tree.Expr) string {
 }
 
 func semanticAstKey(astExpr tree.Expr) string {
-	return tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithParamExprOffset())
+	display := tree.String(astExpr, dialect.MYSQL)
+	identity := tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithParamExprOffset())
+	if identity == display {
+		return display
+	}
+	return identity + "\x00" + display
+}
+
+func semanticAstDisplayName(key string) string {
+	if separator := strings.LastIndexByte(key, 0); separator >= 0 {
+		return key[separator+1:]
+	}
+	return key
 }
 
 func windowFuncAstName(astExpr *tree.FuncExpr) string {
