@@ -543,12 +543,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		scanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{scanTag},
 			ScanSnapshot: bindCtx.snapshot,
 		}, bindCtx)
-
 		pkPos := tableDef.Name2ColIndex[pkName]
 		pkTyp := tableDef.Cols[pkPos].Typ
 		leftExpr := &plan.Expr{

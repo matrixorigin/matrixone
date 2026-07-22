@@ -796,6 +796,79 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				childScanProject = nil
 			}
 
+			// A child row matched by both CASCADE and SET NULL has a single owner:
+			// CASCADE deletes it, while SET NULL must not create a replacement row.
+			appendExcludeCascadeOwnedRows := func(inputNodeID, candidateTag int32) (int32, error) {
+				if !delCtx.skipTargetDelete || isUpdate {
+					return inputNodeID, nil
+				}
+				var cascadeMatch *Expr
+				parentTag := builder.genNewBindTag()
+				for _, candidateFK := range childTableDef.Fkeys {
+					selfRefer := candidateFK.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
+					if candidateFK.OnDelete != plan.ForeignKeyDef_CASCADE ||
+						(candidateFK.ForeignTbl != delCtx.tableDef.TblId && !selfRefer) {
+						continue
+					}
+					var fkMatch *Expr
+					for i, childColID := range candidateFK.Cols {
+						childName := childId2name[childColID]
+						parentName := idNameMap[candidateFK.ForeignCols[i]]
+						childExpr := &Expr{Typ: *childTypMap[childName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: candidateTag, ColPos: childPosMap[childName], Name: childName,
+						}}}
+						parentExpr := &Expr{Typ: *nameTypMap[parentName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: parentTag, ColPos: nameIdxMap[parentName], Name: parentName,
+						}}}
+						partMatch, bindErr := BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "=", []*Expr{childExpr, parentExpr})
+						if bindErr != nil {
+							return 0, bindErr
+						}
+						if fkMatch == nil {
+							fkMatch = partMatch
+						} else {
+							fkMatch, bindErr = BindFuncExprImplByPlanExpr(
+								builder.GetContext(), "and", []*Expr{fkMatch, partMatch})
+							if bindErr != nil {
+								return 0, bindErr
+							}
+						}
+					}
+					if cascadeMatch == nil {
+						cascadeMatch = fkMatch
+					} else {
+						var bindErr error
+						cascadeMatch, bindErr = BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "or", []*Expr{cascadeMatch, fkMatch})
+						if bindErr != nil {
+							return 0, bindErr
+						}
+					}
+				}
+				if cascadeMatch == nil {
+					return inputNodeID, nil
+				}
+				parentNodeID := appendDeleteSourceScan()
+				parentNodeID = builder.appendNode(&plan.Node{
+					NodeType: plan.Node_PROJECT, Children: []int32{parentNodeID},
+					ProjectList: DeepCopyExprList(builder.qry.Nodes[parentNodeID].ProjectList),
+					BindingTags: []int32{parentTag},
+				}, bindCtx)
+				inputProjection := builder.qry.Nodes[inputNodeID].ProjectList
+				candidateProjection := make([]*Expr, len(inputProjection))
+				for i, expr := range inputProjection {
+					candidateProjection[i] = &Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: candidateTag, ColPos: int32(i),
+					}}}
+				}
+				return builder.appendNode(&plan.Node{
+					NodeType: plan.Node_JOIN, Children: []int32{inputNodeID, parentNodeID},
+					JoinType: plan.Node_ANTI, OnList: []*Expr{cascadeMatch},
+					ProjectList: candidateProjection, BindingTags: []int32{candidateTag},
+				}, bindCtx), nil
+			}
+
 			combinedSetNull := make(map[*plan.ForeignKeyDef]struct{})
 			if !isUpdate {
 				setNullFks := make([]*plan.ForeignKeyDef, 0, len(childTableDef.Fkeys))
@@ -879,15 +952,43 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						})
 					}
 					joinProjection = append(joinProjection, DeepCopyExprList(fkMatches)...)
+					joinMatch := anyMatch
+					if childTableDef.TblId == delCtx.tableDef.TblId && delCtx.skipTargetDelete {
+						parentRowIDPos, ok := nameIdxMap[catalog.Row_ID]
+						if childRowIdPos < 0 || !ok {
+							return moerr.NewInternalErrorf(
+								builder.GetContext(), "self-referencing SET NULL rowid is unavailable")
+						}
+						childRowID := &Expr{Typ: childTableDef.Cols[childRowIdPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: childTag, ColPos: int32(childRowIdPos), Name: catalog.Row_ID,
+						}}}
+						parentRowID := &Expr{Typ: delCtx.tableDef.Cols[parentRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: parentTag, ColPos: parentRowIDPos, Name: catalog.Row_ID,
+						}}}
+						notOwnedByReplace, bindErr := BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "!=", []*Expr{childRowID, parentRowID})
+						if bindErr != nil {
+							return bindErr
+						}
+						joinMatch, err = BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "and", []*Expr{joinMatch, notOwnedByReplace})
+						if err != nil {
+							return err
+						}
+					}
 					combinedTag := builder.genNewBindTag()
 					combinedNodeID := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN, Children: []int32{childNodeID, parentNodeID},
-						JoinType: plan.Node_INNER, OnList: []*Expr{anyMatch},
+						JoinType: plan.Node_INNER, OnList: []*Expr{joinMatch},
 					}, bindCtx)
 					combinedNodeID = builder.appendNode(&plan.Node{
 						NodeType: plan.Node_PROJECT, Children: []int32{combinedNodeID},
 						ProjectList: joinProjection, BindingTags: []int32{combinedTag},
 					}, bindCtx)
+					combinedNodeID, err = appendExcludeCascadeOwnedRows(combinedNodeID, combinedTag)
+					if err != nil {
+						return err
+					}
 					groupTag := builder.genNewBindTag()
 					aggTag := builder.genNewBindTag()
 					groupBy := make([]*Expr, 0, 2)
@@ -1071,7 +1172,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					if delCtx.skipTargetDelete {
 						parentActionTag = builder.genNewBindTag()
 						projectionLen := len(fk.Cols)
-						if fkSelfReferCond && !isUpdate && fk.OnDelete == plan.ForeignKeyDef_CASCADE {
+						if fkSelfReferCond && !isUpdate &&
+							(fk.OnDelete == plan.ForeignKeyDef_CASCADE || fk.OnDelete == plan.ForeignKeyDef_SET_NULL) {
 							projectionLen++
 						}
 						parentActionProjection = make([]*Expr, projectionLen)
@@ -1164,9 +1266,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 					}
 					if len(parentActionProjection) > len(fk.Cols) {
-						rowIDPos, ok := nameIdxMap[catalog.Row_ID]
 						rowIDTyp, typOK := nameTypMap[catalog.Row_ID]
-						if !ok || !typOK {
+						if delCtx.rowIdPos < 0 || !typOK {
 							return moerr.NewInternalErrorf(
 								builder.GetContext(), "self-referencing cascade root rowid is unavailable")
 						}
@@ -1174,7 +1275,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							Typ: *rowIDTyp,
 							Expr: &plan.Expr_Col{Col: &plan.ColRef{
 								RelPos: 0,
-								ColPos: rowIDPos,
+								ColPos: int32(delCtx.rowIdPos),
 								Name:   catalog.Row_ID,
 							}},
 						}
@@ -1348,22 +1449,58 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 					case plan.ForeignKeyDef_SET_NULL:
 						builder.qry.HasForeignKeyAction = true
+						setNullChildScanProject := childScanProject
+						if fkSelfReferCond && delCtx.skipTargetDelete {
+							setNullChildScanProject = childProjectList
+							if childRowIdPos < 0 {
+								return moerr.NewInternalErrorf(
+									builder.GetContext(), "self-referencing SET NULL rowid is unavailable")
+							}
+							childRowID := &Expr{Typ: childTableDef.Cols[childRowIdPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: childRelPos, ColPos: int32(childRowIdPos), Name: catalog.Row_ID,
+							}}}
+							parentRowID := &Expr{Typ: parentActionProjection[len(fk.Cols)].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: parentActionTag, ColPos: int32(len(fk.Cols)), Name: catalog.Row_ID,
+							}}}
+							notOwnedByReplace, bindErr := BindFuncExprImplByPlanExpr(
+								builder.GetContext(), "!=", []*Expr{childRowID, parentRowID})
+							if bindErr != nil {
+								return bindErr
+							}
+							joinConds = append(joinConds, notOwnedByReplace)
+						}
 						// plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & null] -> project -> sink   then + updatePlans
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
 							TableDef:    CloneTableDefForPlan(childTableDef, true),
-							ProjectList: childScanProject,
+							ProjectList: setNullChildScanProject,
 							BindingTags: childBindingTags,
 						}, bindCtx)
+						if fkSelfReferCond && delCtx.skipTargetDelete {
+							if builder.preserveScanProjection == nil {
+								builder.preserveScanProjection = make(map[int32]struct{})
+							}
+							builder.preserveScanProjection[rightId] = struct{}{}
+						}
 						lastNodeId = builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_JOIN,
 							Children:    []int32{lastNodeId, rightId},
 							JoinType:    plan.Node_INNER,
 							OnList:      joinConds,
 							ProjectList: childForJoinProject,
+							BindingTags: func() []int32 {
+								if !fkSelfReferCond || !delCtx.skipTargetDelete {
+									return nil
+								}
+								return []int32{childScanTag}
+							}(),
 						}, bindCtx)
+						lastNodeId, err = appendExcludeCascadeOwnedRows(lastNodeId, childScanTag)
+						if err != nil {
+							return err
+						}
 						// inner join cannot dealwith null expr in projectList. so we append a project node
 						projectProjection := getProjectionByLastNode(builder, lastNodeId)
 						if delCtx.skipTargetDelete {

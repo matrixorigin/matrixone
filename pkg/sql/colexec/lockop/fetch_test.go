@@ -596,7 +596,7 @@ func TestFetchFloat32Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
+		[]float32{-math.MaxFloat32, math.MaxFloat32},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
 		},
@@ -616,7 +616,7 @@ func TestFetchFloat32RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
+		[]float32{-math.MaxFloat32, math.MaxFloat32},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
 		},
@@ -636,7 +636,7 @@ func TestFetchFloat32RowsWithFilterAll(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float32{math.SmallestNonzeroFloat32, math.MaxFloat32},
+		[]float32{-math.MaxFloat32, math.MaxFloat32},
 		func(packer *types.Packer, v float32) {
 			packer.EncodeFloat32(v)
 		},
@@ -656,7 +656,7 @@ func TestFetchFloat64Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
+		[]float64{-math.MaxFloat64, math.MaxFloat64},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
 		},
@@ -676,7 +676,7 @@ func TestFetchFloat64RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
+		[]float64{-math.MaxFloat64, math.MaxFloat64},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
 		},
@@ -696,7 +696,7 @@ func TestFetchFloat64RowsWithFilterAll(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]float64{math.SmallestNonzeroFloat64, math.MaxFloat64},
+		[]float64{-math.MaxFloat64, math.MaxFloat64},
 		func(packer *types.Packer, v float64) {
 			packer.EncodeFloat64(v)
 		},
@@ -1234,7 +1234,7 @@ func TestFetchCharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1257,7 +1257,7 @@ func TestFetchCharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1280,7 +1280,7 @@ func TestFetchVarcharRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()
@@ -1303,7 +1303,7 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[][]byte{{0}, nil},
+		[][]byte{{}, nil},
 		func(packer *types.Packer, v []byte) {
 			if v == nil {
 				packer.EncodeStringTypeMax()

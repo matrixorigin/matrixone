@@ -175,12 +175,48 @@ func callNonBlocking(
 }
 
 func mergeableLockTargets(left, right lockTarget) bool {
-	return left.tableID == right.tableID && left.mode == right.mode &&
+	return left.mode == lock.LockMode_Shared && right.mode == lock.LockMode_Shared &&
+		left.tableID == right.tableID &&
 		left.primaryColumnType == right.primaryColumnType && left.filter == nil && right.filter == nil &&
 		!left.lockTable && !right.lockTable && left.lockRows == nil && right.lockRows == nil &&
 		left.changeDef == right.changeDef &&
 		left.partitionColumnIndexInBatch == right.partitionColumnIndexInBatch &&
 		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
+}
+
+func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
+	return func(
+		proc *process.Process,
+		_ engine.Relation,
+		analyzer process.Analyzer,
+		tableID uint64,
+		eng engine.Engine,
+		bat *batch.Batch,
+		_ int32,
+		_ int32,
+		from timestamp.Timestamp,
+		to timestamp.Timestamp,
+	) (bool, error) {
+		for _, groupIdx := range group {
+			groupTarget := lockOp.targets[groupIdx]
+			changed, err := lockOp.ctr.hasNewVersionInRange(
+				proc,
+				lockOp.ctr.relations[groupIdx],
+				analyzer,
+				tableID,
+				eng,
+				bat,
+				groupTarget.primaryColumnIndexInBatch,
+				groupTarget.partitionColumnIndexInBatch,
+				from,
+				to,
+			)
+			if err != nil || changed {
+				return changed, err
+			}
+		}
+		return false, nil
+	}
 }
 
 // if input vec is not allnull and has null, return a copy vector without null value
@@ -233,6 +269,19 @@ func performLock(
 			}
 		}
 		primaryIdx := idx
+		if len(group) > 1 {
+			primaryIdx = -1
+			for _, groupIdx := range group {
+				vec := bat.GetVector(lockOp.targets[groupIdx].primaryColumnIndexInBatch)
+				if vec != nil && !vec.AllNull() {
+					primaryIdx = groupIdx
+					break
+				}
+			}
+			if primaryIdx == -1 {
+				continue
+			}
+		}
 		target = lockOp.targets[primaryIdx]
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			continue
@@ -268,6 +317,10 @@ func performLock(
 		// order. Use one full-domain range lock for the group. This keeps the
 		// operator streaming and bounds memory independently of input size.
 		lockTable := target.lockTable || len(group) > 1
+		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
+		if len(group) > 1 {
+			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
+		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
@@ -285,7 +338,7 @@ func performLock(
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(lockTable, target.changeDef).
-				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
+				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
@@ -335,13 +388,6 @@ func performLock(
 		lockOp.ctr.retryError = retryWithDefChangedError
 	}
 	return nil
-}
-
-func resultVector(bat *batch.Batch, idx int32) *vector.Vector {
-	if bat == nil {
-		return nil
-	}
-	return bat.GetVector(idx)
 }
 
 // LockTable lock table, all rows in the table will be locked, and wait current txn

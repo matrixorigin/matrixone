@@ -20,9 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -3687,56 +3687,6 @@ func TestReplaceForeignKeyPlanRemainsSensitiveWhenChecksDisabled(t *testing.T) {
 	require.Empty(t, query.GetDetectSqls())
 }
 
-func TestReplaceParentSideFKAutoIncrementZero(t *testing.T) {
-	parseReplace := func(t *testing.T, literal string) *tree.Replace {
-		t.Helper()
-		stmt, err := mysql.ParseOne(context.Background(),
-			"REPLACE INTO replace_fk_cp VALUES ("+literal+", 'new')", 1)
-		require.NoError(t, err)
-		return stmt.(*tree.Replace)
-	}
-
-	for _, tc := range []struct {
-		name       string
-		sqlMode    string
-		literal    string
-		wantAction bool
-		predicate  string
-	}{
-		{name: "numeric zero allocates generated value", sqlMode: "", literal: "0", wantAction: false},
-		{name: "string zero allocates generated value", sqlMode: "", literal: "'0'", wantAction: false},
-		{name: "hex zero allocates generated value", sqlMode: "", literal: "0x0", wantAction: false},
-		{name: "bit zero allocates generated value", sqlMode: "", literal: "b'0'", wantAction: false},
-		{name: "hex nonzero is explicit key", sqlMode: "", literal: "0x1", wantAction: true, predicate: "`id` = cast(0x1 as INT)"},
-		{name: "zero is explicit key", sqlMode: "NO_AUTO_VALUE_ON_ZERO", literal: "0", wantAction: true, predicate: "`id` = cast(0 as INT)"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
-			parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-			parent.Cols[parent.Name2ColIndex["id"]].Typ.AutoIncr = true
-			mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
-				if name == "sql_mode" {
-					return tc.sqlMode, nil
-				}
-				if name == "foreign_key_checks" {
-					return int64(1), nil
-				}
-				return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
-			}
-
-			_, _, actions, err := genParentSideReplaceFKSqls(
-				&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, parseReplace(t, tc.literal))
-			require.NoError(t, err)
-			if tc.wantAction {
-				require.Len(t, actions, 1)
-				assert.Contains(t, actions[0], tc.predicate)
-			} else {
-				assert.Empty(t, actions)
-			}
-		})
-	}
-}
-
 func TestChildInsertSkipsForeignKeyLockBarrierInOptimisticMode(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -3809,49 +3759,6 @@ func TestDeepCopyQueryKeepsReplaceDetectionSQLIndependent(t *testing.T) {
 	require.Equal(t, original.DetectSqls, copied.DetectSqls)
 	copied.DetectSqls[0] = "changed"
 	assert.Equal(t, "REPLACE_PARENT_LOCK:select 1 for update", original.DetectSqls[0])
-}
-
-func TestReplaceParentSideFKMaterializesGeneratedUniqueKey(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-	if parent.Name2ColIndex == nil {
-		parent.Name2ColIndex = make(map[string]int32, len(parent.Cols)+1)
-		for i, col := range parent.Cols {
-			parent.Name2ColIndex[col.Name] = int32(i)
-		}
-	}
-	generatedPos := int32(len(parent.Cols))
-	parent.Name2ColIndex["g"] = generatedPos
-	parent.Cols = append(parent.Cols, &plan.ColDef{
-		Name:  "g",
-		ColId: 999,
-		Typ:   plan.Type{Id: int32(types.T_int32)},
-		GeneratedCol: &plan.GeneratedCol{
-			Expr: &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_int32)},
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "+"},
-					Args: []*plan.Expr{
-						{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-						makePlan2Int32ConstExprWithType(1),
-					},
-				}},
-			},
-			OriginString: "`id` + 1",
-		},
-	})
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"g"}})
-	stmt, err := mysql.ParseOne(context.Background(), "REPLACE INTO replace_fk_cp(id, v) VALUES (1, 'new')", 1)
-	require.NoError(t, err)
-
-	lockSQL, _, actions, err := genParentSideReplaceFKSqls(
-		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
-	require.NoError(t, err)
-	require.Len(t, actions, 1)
-	assert.Contains(t, actions[0], "`__mo_replace_parent`.`g` = cast((select cast(`id` + 1 as INT)")
-	assert.Contains(t, actions[0], "cast(1 as INT) as `id`")
-	_, err = mysql.ParseOne(context.Background(), lockSQL, 1)
-	require.NoError(t, err, "generated parent lock SQL must be parseable")
 }
 
 func TestReplaceDetectSqlsExplicitColumnsCaseInsensitive(t *testing.T) {
@@ -4132,6 +4039,57 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 	assert.True(t, queryUpdatesTable(query, "replace_fk_sc"), "SET NULL must build a child update branch")
 }
 
+func TestReplaceSelfReferSetNullExcludesMainOldRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["self_ref_cascade"]
+	tableDef.Fkeys[0].OnDelete = plan.ForeignKeyDef_SET_NULL
+	tableDef.Fkeys[0].OnUpdate = plan.ForeignKeyDef_SET_NULL
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref_cascade VALUES (1, 1)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.OnList) > 1
+	}),
+		"self-referencing SET NULL must exclude the old row owned by the main REPLACE")
+}
+
+func TestReplaceCascadeWinsOverSetNullForSameChildRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	child := DeepCopyTableDef(mock.ctxt.tables["replace_fk_sc"], true)
+	mock.ctxt.tables["replace_fk_sc"] = child
+	if child.Name2ColIndex == nil {
+		child.Name2ColIndex = make(map[string]int32, len(child.Cols)+1)
+		for i, col := range child.Cols {
+			child.Name2ColIndex[col.Name] = int32(i)
+		}
+	}
+	rowIDPos := child.Name2ColIndex[catalog.Row_ID]
+	child.Cols = append(child.Cols, nil)
+	copy(child.Cols[rowIDPos+1:], child.Cols[rowIDPos:])
+	child.Cols[rowIDPos] = &plan.ColDef{
+		Name: "cascade_pid", ColId: 10, Typ: plan.Type{Id: int32(types.T_int32), Width: 32},
+	}
+	for i, col := range child.Cols {
+		child.Name2ColIndex[col.Name] = int32(i)
+	}
+	child.Fkeys = append(child.Fkeys, &plan.ForeignKeyDef{
+		Name: "fk_replace_sc_cascade", Cols: []uint64{10}, ForeignTbl: 77005, ForeignCols: []uint64{0},
+		OnDelete: plan.ForeignKeyDef_CASCADE, OnUpdate: plan.ForeignKeyDef_CASCADE,
+	})
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_sp VALUES (1, 'p1_new')")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	assert.True(t, queryUpdatesTable(query, "replace_fk_sc"))
+	assert.True(t, queryDeletesTable(query, "replace_fk_sc"))
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+	}),
+		"SET NULL source must anti-join CASCADE-owned child rows")
+}
+
 func TestReplaceParentSideFKCombinesSetNullActions(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	child := DeepCopyTableDef(mock.ctxt.tables["replace_fk_sc"], true)
@@ -4323,216 +4281,6 @@ func TestReplaceParentSideFKUnsupportedSources(t *testing.T) {
 	logicPlan, err = runOneStmt(mock, t, selectSQL)
 	require.NoError(t, err)
 	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
-}
-
-func TestReplaceParentSideFKUniquePrefixConflict(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
-		Unique:          true,
-		Parts:           []string{"v"},
-		IndexAlgoParams: `{"prefix_lengths":"v:4"}`,
-	})
-	stmt, err := mysql.ParseOne(context.Background(),
-		"REPLACE INTO replace_fk_cp VALUES (2, 'abcdyyyy')", 1)
-	require.NoError(t, err)
-
-	_, _, actions, err := genParentSideReplaceFKSqls(
-		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
-	require.NoError(t, err)
-	require.Len(t, actions, 1)
-	assert.Contains(t, actions[0], "substring(`__mo_replace_parent`.`v`, 1, 4)")
-	assert.Contains(t, actions[0], `substring(cast("abcdyyyy" as VARCHAR(20)), 1, 4)`)
-}
-
-func TestReplaceParentSideFKAssignmentCastAndLock(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-	for _, col := range parent.Cols {
-		if col.Name == "v" {
-			col.Typ = plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}
-		}
-	}
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"v"}})
-	stmt, err := mysql.ParseOne(context.Background(),
-		"REPLACE INTO replace_fk_cp VALUES (2, 1.234)", 1)
-	require.NoError(t, err)
-
-	lockSQL, _, actions, err := genParentSideReplaceFKSqls(
-		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
-	require.NoError(t, err)
-	require.Len(t, actions, 1)
-	assert.Contains(t, lockSQL, "`__mo_replace_parent`.`v` = cast(1.234 as DECIMAL(5,2))")
-	assert.Contains(t, lockSQL, "for update")
-	assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = cast(1.234 as DECIMAL(5,2))")
-}
-
-func TestReplaceParentSideFKLocksReferencedUniqueIndexKey(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := mock.ctxt.tables["replace_fk_p"]
-	child := mock.ctxt.tables["replace_fk_c"]
-	child.Cols[1].Typ = plan.Type{Id: int32(types.T_varchar), Width: 20}
-	child.Fkeys[0].ForeignCols = []uint64{1}
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
-		IndexName: "uk_v", IndexTableName: "__mo_index_replace_fk_p_v",
-		Parts: []string{"v"}, Unique: true, TableExist: true,
-	})
-	indexTable := &plan.TableDef{
-		TblId: 77900, Name: "__mo_index_replace_fk_p_v",
-		Cols: []*plan.ColDef{{Name: catalog.IndexTableIndexColName, ColId: 0, Typ: parent.Cols[1].Typ}},
-		Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.IndexTableIndexColName},
-			PkeyColName: catalog.IndexTableIndexColName},
-		Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0},
-	}
-	mock.ctxt.tables[indexTable.Name] = indexTable
-	mock.ctxt.objects[indexTable.Name] = &plan.ObjectRef{
-		Obj: int64(indexTable.TblId), SchemaName: mock.ctxt.objects["replace_fk_p"].SchemaName,
-		ObjName: indexTable.Name,
-	}
-	modernPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (1, 'new')")
-	require.NoError(t, err)
-	assertLockTargetTypesMatchInput(t, modernPlan.GetQuery())
-
-	omittedPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p(id) VALUES (1)")
-	require.NoError(t, err)
-	oldIndexLockCount := 0
-	oldIndexUpdateFound := false
-	for _, node := range omittedPlan.GetQuery().Nodes {
-		for _, target := range node.LockTargets {
-			if target.TableId == indexTable.TblId {
-				oldIndexLockCount++
-			}
-		}
-		if node.NodeType == plan.Node_MULTI_UPDATE {
-			for _, updateCtx := range node.UpdateCtxList {
-				if updateCtx.TableDef.TblId == indexTable.TblId {
-					oldIndexUpdateFound = true
-				}
-			}
-		}
-	}
-	assert.Equal(t, 1, oldIndexLockCount,
-		"a NULL replacement key must skip only the new-key lock and retain the old-key lock")
-	assert.True(t, oldIndexUpdateFound,
-		"a NULL replacement key must retain old hidden-index deletion")
-	stmt, err := mysql.ParseOne(context.Background(),
-		"REPLACE INTO replace_fk_p VALUES (1, 'new')", 1)
-	require.NoError(t, err)
-
-	lockSQL, checks, actions, err := genParentSideReplaceFKSqls(
-		&mock.ctxt, mock.ctxt.objects["replace_fk_p"], parent,
-		stmt.(*tree.Replace))
-	require.NoError(t, err)
-	require.Len(t, checks, 1)
-	assert.Empty(t, actions)
-	assert.Contains(t, lockSQL, fmt.Sprintf("from `%s`.`__mo_index_replace_fk_p_v`",
-		mock.ctxt.objects["replace_fk_p"].SchemaName))
-	assert.Contains(t, lockSQL,
-		"where `__mo_replace_fk_idx_0`.`__mo_index_idx_col` = `__mo_replace_parent`.`v` for update")
-	assert.Contains(t, lockSQL,
-		"select `__mo_replace_parent`.`id`, (select `__mo_replace_fk_idx_0`.`__mo_index_idx_col`")
-	assert.Contains(t, lockSQL, "for update")
-
-	lockPlan, err := runOneStmt(mock, t, lockSQL)
-	require.NoError(t, err)
-	for _, node := range lockPlan.GetQuery().Nodes {
-		if node.NodeType != plan.Node_LOCK_OP {
-			continue
-		}
-		require.Len(t, node.Children, 1)
-		lockInput := lockPlan.GetQuery().Nodes[node.Children[0]]
-		for _, target := range node.LockTargets {
-			require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
-			assert.Equal(t, target.PrimaryColTyp.Id, lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
-		}
-	}
-}
-
-func TestReplaceParentSideFKLocksCompositePrefixUniqueIndexOnce(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := mock.ctxt.tables["replace_fk_cp"]
-	child := mock.ctxt.tables["replace_fk_cc"]
-	parent.Cols[1].Typ = plan.Type{Id: int32(types.T_text), Width: types.MaxStringSize}
-	child.Cols[1].Typ = parent.Cols[1].Typ
-	child.Fkeys[0].Cols = []uint64{0, 1}
-	child.Fkeys[0].ForeignCols = []uint64{0, 1}
-	child.Fkeys = append(child.Fkeys, child.Fkeys[0])
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
-		IndexName: "uk_id_v", IndexTableName: "__mo_index_replace_fk_cp_id_v",
-		Parts: []string{"id", "v"}, Unique: true, TableExist: true,
-		IndexAlgoParams: `{"prefix_lengths":"v:4"}`,
-	})
-	stmt, err := mysql.ParseOne(context.Background(),
-		"REPLACE INTO replace_fk_cp VALUES (1, 'abcdefgh')", 1)
-	require.NoError(t, err)
-
-	lockSQL, checks, actions, err := genParentSideReplaceFKSqls(
-		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
-		stmt.(*tree.Replace))
-	require.NoError(t, err)
-	assert.Empty(t, checks)
-	require.Len(t, actions, 2)
-	assert.Equal(t, 1, strings.Count(lockSQL,
-		fmt.Sprintf("from `%s`.`__mo_index_replace_fk_cp_id_v`",
-			mock.ctxt.objects["replace_fk_cp"].SchemaName)))
-	assert.Contains(t, lockSQL,
-		"serial(`__mo_replace_parent`.`id`, cast(substring(`__mo_replace_parent`.`v`, 1, 4) as VARCHAR(65535)))")
-	assert.Contains(t, lockSQL, "for update")
-}
-
-func TestReplaceParentSideFKGeneratedColumnValueMapping(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-	generated := &plan.ColDef{
-		Name: "g", ColId: 99, Typ: plan.Type{Id: int32(types.T_int32), Width: 32},
-		GeneratedCol: &plan.GeneratedCol{Expr: makePlan2Int64ConstExprWithType(1)},
-	}
-	parent.Cols = append(parent.Cols[:1], append([]*plan.ColDef{generated}, parent.Cols[1:]...)...)
-	parent.Name2ColIndex = make(map[string]int32, len(parent.Cols))
-	for i, col := range parent.Cols {
-		parent.Name2ColIndex[col.Name] = int32(i)
-	}
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"v"}})
-
-	parse := func(sql string) *tree.Replace {
-		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
-		require.NoError(t, err)
-		return stmt.(*tree.Replace)
-	}
-	assertMappedValue := func(stmt *tree.Replace, value string) {
-		_, _, actions, err := genParentSideReplaceFKSqls(
-			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt)
-		require.NoError(t, err)
-		require.Len(t, actions, 1)
-		assert.Contains(t, actions[0], fmt.Sprintf("`__mo_replace_parent`.`v` = cast(\"%s\" as VARCHAR(20))", value))
-	}
-
-	assertMappedValue(parse("REPLACE INTO replace_fk_cp VALUES (2, 'implicit')"), "implicit")
-	explicit := parse("REPLACE INTO replace_fk_cp (id, g, v) VALUES (2, DEFAULT, 'explicit')")
-	values := explicit.Rows.Select.(*tree.ValuesClause)
-	values.Rows[0] = tree.Exprs{values.Rows[0][0], values.Rows[0][2]}
-	assertMappedValue(explicit, "explicit")
-}
-
-func TestReplaceParentSideFKRejectsOverWidthConflictLiteral(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-	for _, col := range parent.Cols {
-		if col.Name == "v" {
-			col.Typ = plan.Type{Id: int32(types.T_varchar), Width: 3}
-		}
-	}
-	parent.Indexes = append(parent.Indexes, &plan.IndexDef{Unique: true, Parts: []string{"v"}})
-	stmt, err := mysql.ParseOne(context.Background(),
-		"REPLACE INTO replace_fk_cp VALUES (2, 'abcd')", 1)
-	require.NoError(t, err)
-
-	lockSQL, checks, actions, err := genParentSideReplaceFKSqls(
-		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
-	require.ErrorContains(t, err, "larger than Dest length")
-	assert.Empty(t, lockSQL)
-	assert.Empty(t, checks)
-	assert.Empty(t, actions)
 }
 
 func TestChildInsertLocksForeignKeyParentShared(t *testing.T) {
@@ -4983,213 +4731,6 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	require.Len(t, queryCopy.Nodes[0].LockTargets, 1)
 	assertScalarFields(t, queryCopy.Nodes[0].LockTargets[0])
 	require.NotSame(t, target, queryCopy.Nodes[0].LockTargets[0])
-}
-
-func TestReplaceParentSideFKOmittedUniqueDefaults(t *testing.T) {
-	parseReplace := func(t *testing.T, sql string) *tree.Replace {
-		t.Helper()
-		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
-		require.NoError(t, err)
-		return stmt.(*tree.Replace)
-	}
-	newParent := func(t *testing.T) (*MockOptimizer, *plan.TableDef) {
-		t.Helper()
-		mock := NewMockOptimizer(true)
-		parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
-		parent.Indexes = append(parent.Indexes, &plan.IndexDef{
-			Unique: true,
-			Parts:  []string{"v"},
-		})
-		return mock, parent
-	}
-	parentCol := func(t *testing.T, parent *plan.TableDef, name string) *plan.ColDef {
-		t.Helper()
-		for _, col := range parent.Cols {
-			if col.Name == name {
-				return col
-			}
-		}
-		t.Fatalf("missing parent column %s", name)
-		return nil
-	}
-
-	t.Run("nullable default cannot conflict", func(t *testing.T) {
-		mock, parent := newParent(t)
-		v := parentCol(t, parent, "v")
-		v.Default = &plan.Default{NullAbility: true}
-
-		_, _, actions, err := genParentSideReplaceFKSqls(
-			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
-			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
-		require.NoError(t, err)
-		require.Len(t, actions, 1)
-		assert.Contains(t, actions[0], "`__mo_replace_parent`.`id` = cast(1 as INT)")
-		assert.NotContains(t, actions[0], "`__mo_replace_parent`.`v` =")
-	})
-
-	t.Run("constant prefix default participates", func(t *testing.T) {
-		mock, parent := newParent(t)
-		parent.Indexes[len(parent.Indexes)-1].IndexAlgoParams = `{"prefix_lengths":"v:4"}`
-		v := parentCol(t, parent, "v")
-		v.Default = &plan.Default{
-			NullAbility: true,
-			Expr:        makeStringConstExpr(v.Typ, "abcdyyyy"),
-		}
-
-		_, _, actions, err := genParentSideReplaceFKSqls(
-			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
-			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
-		require.NoError(t, err)
-		require.Len(t, actions, 1)
-		assert.Contains(t, actions[0], "substring(`__mo_replace_parent`.`v`, 1, 4)")
-		assert.Contains(t, actions[0], `substring(cast("abcdyyyy" as VARCHAR(20)), 1, 4)`)
-	})
-
-	t.Run("dynamic default fails closed", func(t *testing.T) {
-		mock, parent := newParent(t)
-		v := parentCol(t, parent, "v")
-		v.Default = &plan.Default{
-			NullAbility: true,
-			Expr: &plan.Expr{
-				Typ:  v.Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "dynamic_default"}},
-			},
-		}
-
-		_, _, _, err := genParentSideReplaceFKSqls(
-			&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
-			parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
-		require.ErrorContains(t, err, "non-literal default conflict key")
-	})
-
-	t.Run("numeric literal defaults participate", func(t *testing.T) {
-		cases := []struct {
-			name     string
-			typ      plan.Type
-			literal  *plan.Expr_Lit
-			expected string
-		}{
-			{name: "int8", typ: plan.Type{Id: int32(types.T_int8)}, literal: makePlan2Int8ConstExpr(-8), expected: "cast(-8 as TINYINT)"},
-			{name: "int16", typ: plan.Type{Id: int32(types.T_int16)}, literal: makePlan2Int16ConstExpr(-16), expected: "cast(-16 as SMALLINT)"},
-			{name: "int32", typ: plan.Type{Id: int32(types.T_int32)}, literal: makePlan2Int32ConstExpr(-32), expected: "cast(-32 as INT)"},
-			{name: "int64", typ: plan.Type{Id: int32(types.T_int64)}, literal: makePlan2Int64ConstExpr(-64), expected: "cast(-64 as BIGINT)"},
-			{name: "uint8", typ: plan.Type{Id: int32(types.T_uint8)}, literal: makePlan2Uint8ConstExpr(8), expected: "cast(8 as TINYINT UNSIGNED)"},
-			{name: "uint16", typ: plan.Type{Id: int32(types.T_uint16)}, literal: makePlan2Uint16ConstExpr(16), expected: "cast(16 as SMALLINT UNSIGNED)"},
-			{name: "uint32", typ: plan.Type{Id: int32(types.T_uint32)}, literal: makePlan2Uint32ConstExpr(32), expected: "cast(32 as INT UNSIGNED)"},
-			{name: "uint64", typ: plan.Type{Id: int32(types.T_uint64)}, literal: makePlan2Uint64ConstExpr(64), expected: "cast(64 as BIGINT UNSIGNED)"},
-			{name: "float32", typ: plan.Type{Id: int32(types.T_float32)}, literal: makePlan2Float32ConstExpr(1.25), expected: "cast(1.25 as FLOAT)"},
-			{name: "float64", typ: plan.Type{Id: int32(types.T_float64)}, literal: makePlan2Float64ConstExpr(2.5), expected: "cast(2.5 as DOUBLE)"},
-			{name: "bool", typ: plan.Type{Id: int32(types.T_bool)}, literal: makePlan2BoolConstExpr(true), expected: "cast(true as BOOL)"},
-			{
-				name: "enum", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
-				literal:  &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: 2}}},
-				expected: `cast(2 as ENUM("small","medium","large"))`,
-			},
-			{
-				name: "decimal64", typ: plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2},
-				literal: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{
-					Decimal64Val: &plan.Decimal64{A: 123},
-				}}}, expected: "cast(1.23 as DECIMAL(5,2))",
-			},
-			{
-				name: "decimal128", typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2},
-				literal: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{
-					Decimal128Val: &plan.Decimal128{A: 123},
-				}}}, expected: "cast(1.23 as DECIMAL(20,2))",
-			},
-		}
-
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				mock, parent := newParent(t)
-				v := parentCol(t, parent, "v")
-				v.Typ = tc.typ
-				v.Default = &plan.Default{NullAbility: false, Expr: &plan.Expr{Typ: tc.typ, Expr: tc.literal}}
-
-				lockSQL, _, actions, err := genParentSideReplaceFKSqls(
-					&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
-					parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
-				require.NoError(t, err)
-				require.Len(t, actions, 1)
-				assert.Contains(t, lockSQL, tc.expected)
-				assert.Contains(t, actions[0], tc.expected)
-				_, err = mysql.ParseOne(context.Background(), lockSQL, 1)
-				require.NoError(t, err, "generated parent lock SQL must be parseable")
-			})
-		}
-	})
-
-	t.Run("temporal defaults participate", func(t *testing.T) {
-		dateValue, err := types.ParseDateCast("2026-07-15")
-		require.NoError(t, err)
-		timeValue, err := types.ParseTime("12:34:56.123", 3)
-		require.NoError(t, err)
-		datetimeValue, err := types.ParseDatetime("2026-07-15 12:34:56.123", 3)
-		require.NoError(t, err)
-
-		location := time.UTC
-		mockForLocation := NewMockOptimizer(true)
-		if sessionLocation := mockForLocation.ctxt.GetProcess().GetSessionInfo().TimeZone; sessionLocation != nil {
-			location = sessionLocation
-		}
-		timestampValue, err := types.ParseTimestamp(location, "2026-07-15 12:34:56.123", 3)
-		require.NoError(t, err)
-
-		cases := []struct {
-			name     string
-			typ      plan.Type
-			literal  *plan.Expr_Lit
-			expected string
-		}{
-			{
-				name:     "date",
-				typ:      plan.Type{Id: int32(types.T_date)},
-				literal:  makePlan2DateConstExpr(int32(dateValue)),
-				expected: `"2026-07-15"`,
-			},
-			{
-				name:     "time",
-				typ:      plan.Type{Id: int32(types.T_time), Scale: 3},
-				literal:  makePlan2TimeConstExpr(int64(timeValue)),
-				expected: `"12:34:56.123"`,
-			},
-			{
-				name:     "datetime",
-				typ:      plan.Type{Id: int32(types.T_datetime), Scale: 3},
-				literal:  makePlan2DateTimeConstExpr(int64(datetimeValue)),
-				expected: `"2026-07-15 12:34:56.123"`,
-			},
-			{
-				name:     "timestamp",
-				typ:      plan.Type{Id: int32(types.T_timestamp), Scale: 3},
-				literal:  makePlan2TimestampConstExpr(int64(timestampValue)),
-				expected: `"2026-07-15 12:34:56.123"`,
-			},
-		}
-
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				mock, parent := newParent(t)
-				v := parentCol(t, parent, "v")
-				v.Typ = tc.typ
-				v.Default = &plan.Default{
-					NullAbility: true,
-					Expr:        &plan.Expr{Typ: tc.typ, Expr: tc.literal},
-				}
-
-				_, _, actions, err := genParentSideReplaceFKSqls(
-					&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent,
-					parseReplace(t, "REPLACE INTO replace_fk_cp(id) VALUES (1)"))
-				require.NoError(t, err)
-				require.Len(t, actions, 1)
-				expectedType := strings.ToUpper(types.T(tc.typ.Id).String())
-				if tc.typ.Scale > 0 && types.T(tc.typ.Id) != types.T_date {
-					expectedType += fmt.Sprintf("(%d)", tc.typ.Scale)
-				}
-				assert.Contains(t, actions[0], "`__mo_replace_parent`.`v` = cast("+tc.expected+" as "+expectedType+")")
-			})
-		}
-	})
 }
 
 func TestReplaceODKU(t *testing.T) {

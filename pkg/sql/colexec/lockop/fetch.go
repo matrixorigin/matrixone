@@ -29,22 +29,22 @@ import (
 var (
 	minUUID = [16]byte{}
 	maxUUID = [16]byte{
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8}
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8}
 )
 
 // GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
@@ -364,7 +364,7 @@ func fetchFloat32Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.SmallestNonzeroFloat32)
+		min := fn(-math.MaxFloat32)
 		max := fn(math.MaxFloat32)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
@@ -391,7 +391,7 @@ func fetchFloat64Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.SmallestNonzeroFloat64)
+		min := fn(-math.MaxFloat64)
 		max := fn(math.MaxFloat64)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
@@ -720,7 +720,7 @@ func fetchVarlenaRows(
 	}
 
 	if lockTable {
-		min := fn([]byte{0})
+		min := fn([]byte{})
 		max := fn(nil)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
