@@ -497,6 +497,77 @@ func TestClientCloseJoinsRetiredBackendCleanupOnce(t *testing.T) {
 	require.EqualValues(t, 1, backend.closeCalls.Load())
 }
 
+func TestBackendCleanupSaturationPreservesPoolBound(t *testing.T) {
+	rc, err := NewClient(
+		"retired-cleanup-bound",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(2),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	// Reduce the production bound to one so saturation is deterministic.
+	c.backendCleanupSlots = make(chan struct{}, 1)
+	first := &operationClosedBlockingCloseBackend{
+		testBackend: &testBackend{id: 1, activeTime: time.Now()},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	second := &operationClosedBlockingCloseBackend{
+		testBackend: &testBackend{id: 2, activeTime: time.Now()},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	var releaseFirst sync.Once
+	var releaseSecond sync.Once
+	defer func() {
+		releaseFirst.Do(func() { close(first.release) })
+		releaseSecond.Do(func() { close(second.release) })
+		require.NoError(t, c.Close())
+	}()
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{first, second}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	c.retireBackend("remote", first)
+	select {
+	case <-first.started:
+	case <-time.After(time.Second):
+		t.Fatal("first backend cleanup did not start")
+	}
+	c.retireBackend("remote", second)
+	select {
+	case <-second.started:
+		t.Fatal("cleanup admission exceeded its hard bound")
+	default:
+	}
+	c.mu.Lock()
+	backends := append([]Backend(nil), c.mu.backends["remote"]...)
+	c.mu.Unlock()
+	require.Equal(t, []Backend{second}, backends,
+		"cleanup-saturated backend must keep consuming pool capacity")
+
+	releaseFirst.Do(func() { close(first.release) })
+	c.backendCleanup.Wait()
+	c.retireBackend("remote", second)
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("backend cleanup was not admitted after capacity returned")
+	}
+	c.mu.Lock()
+	backends = append([]Backend(nil), c.mu.backends["remote"]...)
+	c.mu.Unlock()
+	require.Empty(t, backends)
+
+	releaseSecond.Do(func() { close(second.release) })
+	c.backendCleanup.Wait()
+	require.EqualValues(t, 1, first.closeCalls.Load())
+	require.EqualValues(t, 1, second.closeCalls.Load())
+}
+
 func TestRetireBackendPreservesHealthyPeer(t *testing.T) {
 	rc, err := NewClient(
 		"targeted-backend-retirement",

@@ -132,7 +132,10 @@ var (
 	ErrClientClosing = moerr.NewClientClosedNoCtx()
 )
 
-const defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
+const (
+	defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
+	maxConcurrentBackendCleanups = 64
+)
 
 // RetryPolicy defines retry behavior for morpc client operations.
 type RetryPolicy struct {
@@ -307,7 +310,8 @@ type client struct {
 	// backendCleanup owns asynchronous closes after a backend has been detached
 	// from pool admission. Add is serialized by mu and is forbidden after
 	// mu.closing becomes true, so Close can safely wait after sealing admission.
-	backendCleanup sync.WaitGroup
+	backendCleanup      sync.WaitGroup
+	backendCleanupSlots chan struct{}
 
 	mu struct {
 		sync.Mutex
@@ -355,6 +359,10 @@ func NewClient(
 		factory:     factory,
 		gcInactiveC: make(chan string),
 		closedC:     make(chan struct{}),
+		backendCleanupSlots: make(
+			chan struct{},
+			maxConcurrentBackendCleanups,
+		),
 	}
 	c.mu.backends = make(map[string][]Backend)
 	c.mu.ops = make(map[string]*op)
@@ -943,21 +951,19 @@ func (c *client) getBackendForOperation(
 	// after selection misses; doing a full slice rewrite before every Send/Ping
 	// would add avoidable work to the per-operation hot path.
 	b, err := c.getBackendLockedWithCreate(backend, lock, false)
-	var inactive []Backend
+	inactive := 0
 	if b == nil && (err == nil || isBackendClosedError(err)) {
-		inactive = c.detachInactiveLocked(backend)
-		if len(inactive) > 0 {
+		inactive = c.detachInactiveForCleanupLocked(backend)
+		if inactive > 0 {
 			// Re-evaluate selection and capacity in the same client-state snapshot
 			// after terminal entries have been removed.
 			b, err = c.getBackendLockedWithCreate(backend, lock, false)
 		}
 	}
-	// Transfer detached cleanup to the client before releasing c.mu. This keeps
-	// Add ordered before Close seals cleanup admission, while the cleanup itself
-	// never delays the foreground operation.
+	// Cleanup ownership was transferred before each backend was detached. The
+	// foreground operation only releases the state snapshot here; it never waits
+	// for backend shutdown.
 	unlock := func() {
-		c.startBackendCleanupLocked(inactive)
-		inactive = nil
 		c.mu.Unlock()
 	}
 	// Selection and create admission must use the same client-state snapshot.
@@ -1364,9 +1370,8 @@ func (c *client) retireBackend(remote string, backend Backend) {
 		// Close owns the pool snapshot once closing is published.
 		return
 	}
-	if c.detachBackendLocked(remote, backend) {
+	if c.detachBackendForCleanupLocked(remote, backend) {
 		c.updatePoolSizeMetricsLocked()
-		c.startBackendCleanupLocked([]Backend{backend})
 	}
 }
 
@@ -1385,34 +1390,42 @@ func (c *client) doRemoveInactive(remote string) {
 		return
 	}
 
-	inactive := c.detachInactiveLocked(remote)
+	c.detachInactiveForCleanupLocked(remote)
 
 	c.updatePoolSizeMetricsLocked()
-	c.startBackendCleanupLocked(inactive)
 	c.mu.Unlock()
 }
 
-// detachBackendLocked removes every pool slot that refers to backend. Backend
-// implementations have stable pointer identity; removing duplicates as one
-// ownership unit prevents a malformed pool from scheduling Close more than once.
-func (c *client) detachBackendLocked(remote string, backend Backend) bool {
+// detachBackendForCleanupLocked removes every pool slot that refers to backend
+// only after cleanup ownership is admitted. If cleanup is saturated, keeping
+// the backend in the pool preserves a hard resource bound by making it continue
+// to count against replacement capacity.
+func (c *client) detachBackendForCleanupLocked(remote string, backend Backend) bool {
 	backends, ok := c.mu.backends[remote]
 	if !ok {
 		return false
 	}
 
 	found := false
-	active := backends[:0]
 	for _, candidate := range backends {
 		if candidate == backend {
 			found = true
-			continue
+			break
 		}
-		active = append(active, candidate)
+	}
+	if !found || !c.tryStartBackendCleanupLocked(backend) {
+		return false
+	}
+
+	active := backends[:0]
+	for _, candidate := range backends {
+		if candidate != backend {
+			active = append(active, candidate)
+		}
 	}
 	clear(backends[len(active):])
 	c.mu.backends[remote] = active
-	return found
+	return true
 }
 
 func (c *client) detachAllBackendsLocked() []Backend {
@@ -1425,33 +1438,38 @@ func (c *client) detachAllBackendsLocked() []Backend {
 	return detached
 }
 
-// startBackendCleanupLocked transfers cleanup ownership to the client. The
-// caller holds c.mu and has already detached these backends, which guarantees
-// one Add per pool ownership unit and orders every Add before Close's Wait.
-func (c *client) startBackendCleanupLocked(backends []Backend) {
-	for _, backend := range backends {
+// tryStartBackendCleanupLocked transfers cleanup ownership to the client. The
+// fixed-size slot channel bounds stuck cleanup goroutines. The caller must keep
+// a backend in the pool when admission fails so it still consumes capacity.
+func (c *client) tryStartBackendCleanupLocked(backend Backend) bool {
+	select {
+	case c.backendCleanupSlots <- struct{}{}:
 		c.backendCleanup.Add(1)
-		go func(backend Backend) {
+		go func() {
 			defer c.backendCleanup.Done()
+			defer func() { <-c.backendCleanupSlots }()
 			backend.Close()
-		}(backend)
+		}()
+		return true
+	default:
+		return false
 	}
 }
 
-// detachInactiveLocked removes terminal backends from the pool's capacity
-// model. The caller owns c.mu and is responsible for closing the returned
-// backends after releasing it.
-func (c *client) detachInactiveLocked(remote string) []Backend {
+// detachInactiveForCleanupLocked removes terminal backends from the pool's
+// capacity model only when their bounded cleanup has been admitted.
+func (c *client) detachInactiveForCleanupLocked(remote string) int {
 	backends, ok := c.mu.backends[remote]
 	if !ok {
-		return nil
+		return 0
 	}
 
-	var inactive []Backend
+	detached := 0
 	active := backends[:0]
 	for _, backend := range backends {
-		if backend.LastActiveTime() == (time.Time{}) {
-			inactive = append(inactive, backend)
+		if backend.LastActiveTime() == (time.Time{}) &&
+			c.tryStartBackendCleanupLocked(backend) {
+			detached++
 			continue
 		}
 		active = append(active, backend)
@@ -1461,7 +1479,7 @@ func (c *client) detachInactiveLocked(remote string) []Backend {
 	// pools/connections) can be collected while this remote remains in the map.
 	clear(backends[len(active):])
 	c.mu.backends[remote] = active
-	return inactive
+	return detached
 }
 
 // doRemoveInactiveAll removes all explicitly closed (inactive) backends for every remote.
@@ -1475,12 +1493,10 @@ func (c *client) doRemoveInactiveAll() {
 		return
 	}
 
-	var inactive []Backend
 	for remote := range c.mu.backends {
-		inactive = append(inactive, c.detachInactiveLocked(remote)...)
+		c.detachInactiveForCleanupLocked(remote)
 	}
 	c.updatePoolSizeMetricsLocked()
-	c.startBackendCleanupLocked(inactive)
 	c.mu.Unlock()
 }
 
@@ -1492,23 +1508,24 @@ func (c *client) closeIdleBackends() int {
 		return 0
 	}
 
-	var idleBackends []Backend
+	closed := 0
 	for k, backends := range c.mu.backends {
-		var newBackends []Backend
+		newBackends := backends[:0]
 		for _, b := range backends {
 			if !b.Locked() &&
-				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
-				idleBackends = append(idleBackends, b)
+				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration &&
+				c.tryStartBackendCleanupLocked(b) {
+				closed++
 				continue
 			}
 			newBackends = append(newBackends, b)
 		}
+		clear(backends[len(newBackends):])
 		c.mu.backends[k] = newBackends
 	}
 	c.updatePoolSizeMetricsLocked()
-	c.startBackendCleanupLocked(idleBackends)
 	c.mu.Unlock()
-	return len(idleBackends)
+	return closed
 }
 
 func (c *client) createBackendLocked(backend string) (Backend, error) {
