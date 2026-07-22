@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,6 +72,35 @@ func (b *operationClosedBackend) Send(context.Context, Message) (*Future, error)
 
 func (b *operationClosedBackend) SendInternal(context.Context, Message) (*Future, error) {
 	return nil, backendClosed
+}
+
+type operationClosedBlockingCloseBackend struct {
+	*testBackend
+	started    chan struct{}
+	release    chan struct{}
+	closeOnce  sync.Once
+	closeCalls atomic.Int32
+}
+
+func (b *operationClosedBlockingCloseBackend) Send(context.Context, Message) (*Future, error) {
+	return nil, backendClosed
+}
+
+func (b *operationClosedBlockingCloseBackend) SendInternal(context.Context, Message) (*Future, error) {
+	return nil, backendClosed
+}
+
+func (b *operationClosedBlockingCloseBackend) NewStream(bool) (Stream, error) {
+	return nil, backendClosed
+}
+
+func (b *operationClosedBlockingCloseBackend) Close() {
+	b.closeCalls.Add(1)
+	b.closeOnce.Do(func() {
+		close(b.started)
+		<-b.release
+		b.testBackend.Close()
+	})
 }
 
 type blockingCloseBackend struct {
@@ -271,6 +301,7 @@ func TestNewStreamErrorReturnsBackendLockToClient(t *testing.T) {
 			c.mu.Unlock()
 			if tc.retired {
 				require.Empty(t, backends, "closed backend must not block replacement capacity")
+				c.backendCleanup.Wait()
 				base.RLock()
 				closed := base.closed
 				base.RUnlock()
@@ -331,6 +362,141 @@ func TestClosedOperationRetiresBackendBeforeReturn(t *testing.T) {
 	}
 }
 
+func TestClosedOperationDoesNotWaitForBackendCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(context.Context, RPCClient) error
+	}{
+		{
+			name: "send",
+			call: func(ctx context.Context, client RPCClient) error {
+				_, err := client.Send(ctx, "remote", newTestMessage(1))
+				return err
+			},
+		},
+		{
+			name: "ping",
+			call: func(ctx context.Context, client RPCClient) error {
+				return client.Ping(ctx, "remote")
+			},
+		},
+		{
+			name: "new stream",
+			call: func(ctx context.Context, client RPCClient) error {
+				_, err := client.NewStream(ctx, "remote", true)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rc, err := NewClient(
+				"closed-operation-cleanup",
+				newTestBackendFactory(),
+				WithClientMaxBackendPerHost(1),
+				WithClientDisableAutoCreateBackend(),
+				WithClientDisableCircuitBreaker(),
+				WithClientRetryPolicy(NoRetryPolicy),
+			)
+			require.NoError(t, err)
+			c := rc.(*client)
+
+			backend := &operationClosedBlockingCloseBackend{
+				testBackend: &testBackend{id: 1, activeTime: time.Now()},
+				started:     make(chan struct{}),
+				release:     make(chan struct{}),
+			}
+			var releaseOnce sync.Once
+			defer func() {
+				releaseOnce.Do(func() { close(backend.release) })
+				require.NoError(t, c.Close())
+			}()
+			c.mu.Lock()
+			c.mu.backends["remote"] = []Backend{backend}
+			c.mu.ops["remote"] = &op{}
+			c.mu.Unlock()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			resultC := make(chan error, 1)
+			go func() { resultC <- tc.call(ctx, rc) }()
+
+			select {
+			case <-backend.started:
+			case <-ctx.Done():
+				t.Fatal("backend cleanup did not start")
+			}
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, backendClosed)
+			case <-ctx.Done():
+				t.Fatal("operation waited for blocked backend cleanup")
+			}
+
+			c.mu.Lock()
+			backends := append([]Backend(nil), c.mu.backends["remote"]...)
+			c.mu.Unlock()
+			require.Empty(t, backends, "retired backend must release pool capacity before cleanup finishes")
+
+			releaseOnce.Do(func() { close(backend.release) })
+			c.backendCleanup.Wait()
+			require.EqualValues(t, 1, backend.closeCalls.Load())
+		})
+	}
+}
+
+func TestClientCloseJoinsRetiredBackendCleanupOnce(t *testing.T) {
+	rc, err := NewClient(
+		"retired-cleanup-join",
+		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	backend := &operationClosedBlockingCloseBackend{
+		testBackend: &testBackend{id: 1, activeTime: time.Now()},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	defer func() {
+		releaseOnce.Do(func() { close(backend.release) })
+		require.NoError(t, c.Close())
+	}()
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{backend}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	c.retireBackend("remote", backend)
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("retired backend cleanup did not start")
+	}
+
+	closeC := make(chan error, 2)
+	go func() { closeC <- c.Close() }()
+	go func() { closeC <- c.Close() }()
+	select {
+	case err := <-closeC:
+		require.NoError(t, err)
+		t.Fatal("client close returned before owned backend cleanup completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(backend.release) })
+	for range 2 {
+		select {
+		case err := <-closeC:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("client close did not finish after backend cleanup completed")
+		}
+	}
+	require.EqualValues(t, 1, backend.closeCalls.Load())
+}
+
 func TestRetireBackendPreservesHealthyPeer(t *testing.T) {
 	rc, err := NewClient(
 		"targeted-backend-retirement",
@@ -361,7 +527,7 @@ func TestRetireBackendPreservesHealthyPeer(t *testing.T) {
 	require.False(t, healthyClosed)
 }
 
-func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
+func TestBackendLookupDetachesInactiveWithoutWaitingForCleanup(t *testing.T) {
 	rc, err := NewClient(
 		"inactive-capacity",
 		newTestBackendFactory(),
@@ -408,8 +574,8 @@ func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
 		t.Fatal("inactive backend close did not start")
 	}
 
-	// Close is intentionally blocked. Capacity must already be detached and
-	// c.mu must be available, so other callers can admit a replacement without
+	// Close is intentionally blocked. Capacity must already be detached and the
+	// lookup itself must complete so callers can admit a replacement without
 	// waiting for backend shutdown.
 	locked := make(chan []Backend, 1)
 	go func() {
@@ -425,10 +591,16 @@ func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
 		t.Fatal("backend cleanup held the client lock")
 	}
 
+	select {
+	case result := <-resultC:
+		require.Nil(t, result.backend)
+		require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrNoAvailableBackend), result.err)
+	case <-time.After(time.Second):
+		t.Fatal("backend lookup waited for detached backend cleanup")
+	}
+
 	close(inactive.release)
-	result := <-resultC
-	require.Nil(t, result.backend)
-	require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrNoAvailableBackend), result.err)
+	c.backendCleanup.Wait()
 	base.RLock()
 	closed := base.closed
 	base.RUnlock()
