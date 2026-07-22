@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -136,6 +137,7 @@ func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt,
 		reqCtx: ctx,
 		ses:    ses,
 		proc:   proc,
+		resper: ses.GetResponser(),
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
@@ -188,6 +190,15 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
 	defer prepareStmt.Close()
 
+	oldColDefData := [][]byte{[]byte("old-int-column")}
+	newColDefData := [][]byte{[]byte("new-varchar-column")}
+	prepareStmt.ColDefData = oldColDefData
+	execCtx.prepareColDef = oldColDefData
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return newColDefData, nil
+	}
+
 	oldPlan := prepareStmt.PreparePlan
 	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
 
@@ -199,6 +210,30 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, retPlan)
 	require.NotNil(t, retStmt)
 	require.Equal(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
+	require.Equal(t, newColDefData, prepareStmt.ColDefData)
+	require.Equal(t, newColDefData, execCtx.prepareColDef)
+}
+
+func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 103)
+	defer prepareStmt.Close()
+
+	oldPlan := prepareStmt.PreparePlan
+	oldColDefData := [][]byte{[]byte("old-int-column")}
+	prepareStmt.ColDefData = oldColDefData
+	execCtx.prepareColDef = oldColDefData
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, errors.New("column metadata refresh failed")
+	}
+
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.EqualError(t, err, "column metadata refresh failed")
+	require.Same(t, oldPlan, prepareStmt.PreparePlan)
+	require.Equal(t, oldColDefData, prepareStmt.ColDefData)
+	require.Equal(t, oldColDefData, execCtx.prepareColDef)
+	require.NotEqual(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
 }
 
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {

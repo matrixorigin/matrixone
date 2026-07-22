@@ -556,8 +556,19 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if err != nil {
 			return nil, nil, nil, "", err
 		}
-		preparePlan = newPlan.GetDcl().GetPrepare()
+		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		columns := plan2.GetResultColumnsFromPlan(newPreparePlan.Plan)
+		newColDefData, err := execCtx.resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		if err != nil {
+			return nil, nil, nil, "", err
+		}
+
+		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.ColDefData = newColDefData
+		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			execCtx.prepareColDef = newColDefData
+		}
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 		prepareStmt.tempTableVersion = currentTempTableVersion
 	}
