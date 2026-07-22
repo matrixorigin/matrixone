@@ -587,7 +587,7 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		}
 		treeType, err := ivfPlanTypeToTreeType(targetType)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil
 		}
 		return tree.NewCastExpr(child, treeType), true, nil
 	case "case":
@@ -923,7 +923,7 @@ func ivfPlanTypeToTreeType(typ plan.Type) (*tree.T, error) {
 		treeType.InternalType.FamilyString = "double"
 		treeType.InternalType.Width = 64
 		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_DOUBLE)
-	case types.T_decimal64, types.T_decimal128:
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		treeType.InternalType.Family = tree.FloatFamily
 		treeType.InternalType.FamilyString = "decimal"
 		treeType.InternalType.DisplayWith = max(typ.Width, int32(0))
