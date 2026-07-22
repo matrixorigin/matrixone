@@ -1200,6 +1200,43 @@ func TestWaitCanServeTableSnapshotRefreshesAfterPendingApply(t *testing.T) {
 	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
 }
 
+func TestGetSubscribedSnapshotAndPendingRejectsInvalidSubscription(t *testing.T) {
+	ctx := context.Background()
+
+	for _, test := range []struct {
+		name  string
+		entry *subEntry
+	}{
+		{
+			name: "subscription reset",
+		},
+		{
+			name:  "database changed",
+			entry: &subEntry{dbID: 11, state: Subscribed},
+		},
+		{
+			name:  "unsubscribing",
+			entry: &subEntry{dbID: 10, state: Unsubscribing},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := &Engine{}
+			e.pClient.eng = e
+			e.pClient.subscribed = subscribedTable{
+				eng: e,
+				m:   map[uint64]*subEntry{},
+			}
+			if test.entry != nil {
+				e.pClient.subscribed.m[42] = test.entry
+			}
+
+			ps, pending := e.pClient.getSubscribedSnapshotAndPending(ctx, 0, 10, 42)
+			require.Nil(t, ps)
+			require.False(t, pending)
+		})
+	}
+}
+
 func TestPKCheckSnapshotRejectsResetSubscriptionGeneration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
