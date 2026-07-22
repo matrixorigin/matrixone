@@ -54,6 +54,11 @@ type backExec struct {
 	statsArray *statistic.StatsArray
 }
 
+type backgroundExecRowCount interface {
+	GetLastAffectedRows() int64
+	SetLastAffectedRows(int64)
+}
+
 func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) {
 	back.backSes = newBackSession(ses, txnOp, db, callBack)
 	if back.statsArray != nil {
@@ -65,6 +70,14 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 
 func (back *backExec) Service() string {
 	return back.backSes.GetService()
+}
+
+func (back *backExec) GetLastAffectedRows() int64 {
+	return back.backSes.lastAffectedRows
+}
+
+func (back *backExec) SetLastAffectedRows(rows int64) {
+	back.backSes.lastAffectedRows = rows
 }
 
 func (back *backExec) Close() {
@@ -108,6 +121,11 @@ func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode s
 func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
+	defer func() {
+		if retErr != nil {
+			back.SetLastAffectedRows(-1)
+		}
+	}()
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -378,6 +396,7 @@ func doComQueryInBack(
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
+	proc.SetAffectedRows(backSes.lastAffectedRows)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	// Frontend back-exec — session-bound resolver. backSession is a
@@ -509,9 +528,42 @@ func doComQueryInBack(
 		if err != nil {
 			return err
 		}
+		if _, ok := stmt.(*tree.CallStmt); ok {
+			if err = appendNestedCallResults(execCtx.reqCtx, backSes, execCtx.results); err != nil {
+				return err
+			}
+		}
+		backSes.lastAffectedRows = affectedRowsForStatement(execCtx)
 	} // end of for
 
 	return nil
+}
+
+func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
+	for _, result := range results {
+		mrs, ok := result.(*MysqlResultSet)
+		if !ok {
+			return moerr.NewInternalError(ctx, "nested CALL returned an unsupported result type")
+		}
+		backSes.allResultSet = append(backSes.allResultSet, mrs)
+	}
+	return nil
+}
+
+func affectedRowsForStatement(execCtx *ExecCtx) int64 {
+	switch execCtx.stmt.StmtKind().OutputType() {
+	case tree.OUTPUT_RESULT_ROW:
+		return -1
+	case tree.OUTPUT_STATUS:
+		if execCtx.runResult != nil {
+			return int64(execCtx.runResult.AffectRows)
+		}
+	case tree.OUTPUT_UNDEFINED:
+		if _, ok := execCtx.stmt.(*tree.CallStmt); ok && execCtx.runResult != nil {
+			return int64(execCtx.runResult.AffectRows)
+		}
+	}
+	return 0
 }
 
 func executeStmtInBack(backSes *backSession,
@@ -893,7 +945,9 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	//ep *ExportConfig
+	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
+	// the next process created by this background executor.
+	lastAffectedRows int64
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
