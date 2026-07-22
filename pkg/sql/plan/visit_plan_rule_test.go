@@ -137,9 +137,34 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 
 	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], clonePlan)
 	require.NoError(t, err)
-	require.Equal(t, []*planpb.ObjectRef{{
-		Server: 30, Db: 10, Schema: 10, Obj: 20, SchemaName: "tpch", ObjName: "src",
-	}}, schemas)
+	require.Equal(t, []*planpb.ObjectRef{
+		{Server: 30, Db: 10, Schema: 10, Obj: 20, SchemaName: "tpch", ObjName: "src"},
+		{SchemaName: "tpch"},
+	}, schemas)
+}
+
+func TestCollectPrepareDdlSchemasTracksCreateTargetDatabase(t *testing.T) {
+	testCases := []string{
+		"create sequence db1.seq as bigint",
+		"create source db1.src (i int) with (type='kafka')",
+	}
+	for _, sql := range testCases {
+		t.Run(sql, func(t *testing.T) {
+			statements, err := mysql.Parse(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+
+			mock := NewMockCompilerContext(false)
+			mock.DatabaseExistsFunc = func(name string, _ *Snapshot) bool { return name == "db1" }
+			schemas, err := collectPrepareDdlSchemas(mock, statements[0], &planpb.Plan{
+				Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
+			})
+			require.NoError(t, err)
+			require.Len(t, schemas, 1)
+			require.Equal(t, "db1", schemas[0].SchemaName)
+			require.Empty(t, schemas[0].ObjName)
+		})
+	}
 }
 
 func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {

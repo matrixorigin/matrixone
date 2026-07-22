@@ -574,6 +574,14 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 
 	var change bool
 	for _, obj := range preparePlan.GetSchemas() {
+		// A subscription can be rebound to another publication, or its table
+		// authorization can change without changing the publisher table version.
+		// Until subscription metadata has a catalog version, conservatively
+		// rebuild plans that resolved through a subscription on every EXECUTE.
+		if preparedSchemaNeedsCatalogRefresh(obj) {
+			change = true
+			break
+		}
 		accountId := prepareSchemaAccountID(ses.GetAccountId(), obj)
 		tblKey := &cache.TableChangeQuery{
 			AccountId:    accountId,
@@ -699,8 +707,14 @@ func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32
 	return currentAccountID
 }
 
+func preparedSchemaNeedsCatalogRefresh(obj *plan.ObjectRef) bool {
+	return obj.GetSubscriptionName() != ""
+}
+
 func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
-	switch stmt.(type) {
+	switch ddl := stmt.(type) {
+	case *tree.CreateDatabase:
+		return ddl.SubscriptionOption != nil
 	case *tree.CreatePitr, *tree.DropDatabase:
 		return true
 	default:

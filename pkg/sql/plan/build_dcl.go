@@ -164,6 +164,25 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		schemas = appendPrepareSchemas(schemas, querySchemas...)
 		return nil
 	}
+	addDatabaseSchema := func(databaseName string) error {
+		if databaseName == "" {
+			databaseName = ctx.DefaultDatabase()
+		}
+		var databaseID uint64
+		var err error
+		if ctx.DatabaseExists(databaseName, nil) {
+			databaseID, err = ctx.GetDatabaseId(databaseName, nil)
+			if err != nil {
+				return err
+			}
+		}
+		schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
+			Db:         int64(databaseID),
+			Schema:     int64(databaseID),
+			SchemaName: databaseName,
+		})
+		return nil
+	}
 
 	switch ddl := stmt.(type) {
 	case *tree.AlterTable:
@@ -221,6 +240,21 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 	case *tree.CloneTable:
 		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil && clone.GetScanSnapshot() == nil {
 			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(clone.GetSrcObjDef(), clone.GetSrcTableDef()))
+		}
+	}
+
+	switch ddl := stmt.(type) {
+	case *tree.CreateSequence:
+		if err := addDatabaseSchema(string(ddl.Name.SchemaName)); err != nil {
+			return nil, err
+		}
+	case *tree.CreateSource:
+		if err := addDatabaseSchema(string(ddl.SourceName.SchemaName)); err != nil {
+			return nil, err
+		}
+	case *tree.CloneTable:
+		if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
+			return nil, err
 		}
 	}
 

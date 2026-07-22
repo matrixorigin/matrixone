@@ -306,6 +306,8 @@ func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
 		expected bool
 	}{
 		{sql: "create pitr p for account range 1 'd'", expected: true},
+		{sql: "create database db", expected: false},
+		{sql: "create database sub from pub publication p", expected: true},
 		{sql: "drop database db", expected: true},
 		{sql: "truncate table t", expected: false},
 	}
@@ -326,6 +328,11 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 	require.Equal(t, uint32(sysAccountID), prepareSchemaAccountID(7, &plan.ObjectRef{
 		SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT,
 	}))
+}
+
+func TestPreparedSchemaNeedsCatalogRefresh(t *testing.T) {
+	require.False(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{}))
+	require.True(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{SubscriptionName: "sub"}))
 }
 
 func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
