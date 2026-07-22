@@ -85,6 +85,16 @@ func (b *blockingCloseBackend) Close() {
 	b.testBackend.Close()
 }
 
+type lastActiveCountingBackend struct {
+	*testBackend
+	loads atomic.Int32
+}
+
+func (b *lastActiveCountingBackend) LastActiveTime() time.Time {
+	b.loads.Add(1)
+	return b.testBackend.LastActiveTime()
+}
+
 func (f *failingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
 	f.attempts.Add(1)
 	return nil, fmt.Errorf("create failed")
@@ -376,8 +386,9 @@ func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
 			close(inactive.release)
 		}
 	}()
+	backing := []Backend{inactive}
 	c.mu.Lock()
-	c.mu.backends["remote"] = []Backend{inactive}
+	c.mu.backends["remote"] = backing
 	c.mu.ops["remote"] = &op{}
 	c.mu.Unlock()
 
@@ -409,6 +420,7 @@ func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
 	select {
 	case backends := <-locked:
 		require.Empty(t, backends)
+		require.Nil(t, backing[0], "detached backend must not remain in the slice tail")
 	case <-time.After(time.Second):
 		t.Fatal("backend cleanup held the client lock")
 	}
@@ -421,6 +433,31 @@ func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
 	closed := base.closed
 	base.RUnlock()
 	require.True(t, closed, "detached backend must be closed outside the client lock")
+}
+
+func TestBackendLookupDoesNotRescanHealthyPool(t *testing.T) {
+	rc, err := NewClient(
+		"healthy-fast-path",
+		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	backend := &lastActiveCountingBackend{
+		testBackend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{backend}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	selected, _, err := c.getBackendForOperation("remote", false)
+	require.NoError(t, err)
+	require.Same(t, backend, selected)
+	require.EqualValues(t, 1, backend.loads.Load(), "healthy lookup must keep the single-scan fast path")
 }
 
 func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {

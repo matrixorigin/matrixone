@@ -925,12 +925,21 @@ func (c *client) getBackendForOperation(
 	}
 
 	c.mu.Lock()
-	// Inactive backends are terminal capacity, not temporarily busy capacity.
-	// Detach them before selection and create admission so a closed backend at
-	// maxBackendsPerHost cannot force callers to wait for the asynchronous GC.
-	// Close them only after releasing c.mu because backend shutdown can wait for
-	// worker goroutines.
-	inactive := c.detachInactiveLocked(backend)
+	// Preserve the healthy-backend fast path. Only compact terminal capacity
+	// after selection misses; doing a full slice rewrite before every Send/Ping
+	// would add avoidable work to the per-operation hot path.
+	b, err := c.getBackendLockedWithCreate(backend, lock, false)
+	var inactive []Backend
+	if b == nil && (err == nil || isBackendClosedError(err)) {
+		inactive = c.detachInactiveLocked(backend)
+		if len(inactive) > 0 {
+			// Re-evaluate selection and capacity in the same client-state snapshot
+			// after terminal entries have been removed.
+			b, err = c.getBackendLockedWithCreate(backend, lock, false)
+		}
+	}
+	// Close detached backends only after releasing c.mu because backend
+	// shutdown can wait for worker goroutines.
 	unlock := func() {
 		c.mu.Unlock()
 		for _, backend := range inactive {
@@ -941,7 +950,6 @@ func (c *client) getBackendForOperation(
 	// Selection and create admission must use the same client-state snapshot.
 	// Otherwise a backend can be published after selection returns nil but
 	// before creation is queued, causing a stale lookup to overgrow the pool.
-	b, err := c.getBackendLockedWithCreate(backend, lock, false)
 	poolSize := len(c.mu.backends[backend])
 	if err != nil {
 		unlock()
@@ -1384,6 +1392,10 @@ func (c *client) detachInactiveLocked(remote string) []Backend {
 		}
 		active = append(active, backend)
 	}
+	// A shorter slice still keeps its entire pointer-containing backing array
+	// reachable. Clear the compacted tail so removed backends (and their stream
+	// pools/connections) can be collected while this remote remains in the map.
+	clear(backends[len(active):])
 	c.mu.backends[remote] = active
 	return inactive
 }
@@ -1400,16 +1412,8 @@ func (c *client) doRemoveInactiveAll() {
 	}
 
 	var inactive []Backend
-	for remote, backends := range c.mu.backends {
-		newBackends := backends[:0]
-		for _, backend := range backends {
-			if backend.LastActiveTime() == (time.Time{}) {
-				inactive = append(inactive, backend)
-				continue
-			}
-			newBackends = append(newBackends, backend)
-		}
-		c.mu.backends[remote] = newBackends
+	for remote := range c.mu.backends {
+		inactive = append(inactive, c.detachInactiveLocked(remote)...)
 	}
 	c.updatePoolSizeMetricsLocked()
 	c.mu.Unlock()

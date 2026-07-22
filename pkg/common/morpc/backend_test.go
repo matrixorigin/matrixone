@@ -1096,6 +1096,22 @@ func TestStoppedBackendCannotBeReactivated(t *testing.T) {
 	require.True(t, rb.LastActiveTime().IsZero())
 }
 
+func TestStoppingBackendDoesNotReuseStream(t *testing.T) {
+	replacement := &stream{}
+	rb := &remoteBackend{}
+	rb.stateMu.state = stateStopping
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.pool.streams = &sync.Pool{New: func() any { return replacement }}
+
+	s := &stream{id: 1, c: make(chan Message, 1)}
+	s.c <- nil
+	rb.mu.activeStreams[s.id] = s
+	rb.removeActiveStream(s)
+
+	require.Same(t, replacement, rb.pool.streams.Get())
+}
+
 func TestWaitingFutureMustGetClosedError(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {

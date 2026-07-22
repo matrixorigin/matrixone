@@ -856,6 +856,34 @@ func TestCloseStreamWithCloseConnNotifiesReceiver(t *testing.T) {
 	})
 }
 
+func TestCloseStreamUnregistersWithoutStreamLock(t *testing.T) {
+	c := make(chan Message, 1)
+	s := newStream(
+		nil,
+		c,
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(st *stream) {
+			// Backend cancellation enters stream from rb.mu. Requiring the stream
+			// lock here proves Close does not keep the inverse s.mu -> rb.mu order
+			// across unregister.
+			st.mu.RLock()
+			st.mu.RUnlock()
+		},
+		func() {},
+	)
+	s.init(1, false)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close(false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stream close held the stream lock while unregistering")
+	}
+}
+
 func TestPingError(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		c := newTestClient(t, WithClientMaxBackendPerHost(2))
