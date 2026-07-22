@@ -48,6 +48,10 @@ type retryableMockExecutor struct {
 	lastSQL       string
 }
 
+type failAddWatermarkExecutor struct {
+	insertErr error
+}
+
 func (m *retryableMockExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -65,6 +69,30 @@ func (m *retryableMockExecutor) Query(_ context.Context, _ string, _ ie.SessionO
 }
 
 func (m *retryableMockExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
+
+func (m *failAddWatermarkExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
+	if strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`") {
+		return m.insertErr
+	}
+	return nil
+}
+
+func (m *failAddWatermarkExecutor) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	if strings.HasPrefix(sql, "SELECT") {
+		return &InternalExecResultForTest{
+			resultSet: &MysqlResultSetForTest{
+				Data: [][]interface{}{},
+			},
+		}
+	}
+	return &InternalExecResultForTest{
+		resultSet: &MysqlResultSetForTest{
+			Data: [][]interface{}{},
+		},
+	}
+}
+
+func (m *failAddWatermarkExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
 
 func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
@@ -115,6 +143,31 @@ func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.Sessio
 }
 
 func (m *wmMockSQLExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
+
+func TestAuditAddWatermarkFailureIsReturnedAndNotCached(t *testing.T) {
+	insertErr := moerr.NewInternalErrorNoCtx("injected watermark insert failure")
+	updater := NewCDCWatermarkUpdater("add-failure", &failAddWatermarkExecutor{
+		insertErr: insertErr,
+	})
+	key := WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	watermark := types.BuildTS(10, 1)
+	job := NewGetOrAddCommittedWMJob(context.Background(), &key, &watermark)
+
+	updater.onJobs(job)
+
+	result := job.GetResult()
+	require.ErrorIs(t, result.Err, insertErr)
+
+	updater.RLock()
+	_, ok := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.False(t, ok)
+}
 
 func TestWatermarkUpdater_CommitRetrySuccess(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}

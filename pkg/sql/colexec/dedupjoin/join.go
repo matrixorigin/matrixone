@@ -363,7 +363,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 	if ctr.matched == nil {
 		return nil
 	}
-	if ap.NumCPU > 1 {
+	if ap.needsFinalizeMerge() {
 		if !ap.IsMerger {
 			msg := &WorkerJoinMsg{matched: ctr.matched}
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 {

@@ -37,6 +37,38 @@ func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 	return cellCnt * 4 / 5
 }
 
+// EstimateInt64HashMapSize returns the cell allocation required by an
+// Int64HashMap for the given number of distinct keys.  Keep this calculation
+// in the hashtable package so planner memory guards follow the same growth and
+// load-factor rules as the runtime implementation.
+func EstimateInt64HashMapSize(cardinality uint64) uint64 {
+	return estimateHashMapSize(cardinality, intCellSize)
+}
+
+// EstimateStringHashMapSize returns the cell allocation required by a
+// StringHashMap for the given number of distinct keys.
+func EstimateStringHashMapSize(cardinality uint64) uint64 {
+	return estimateHashMapSize(cardinality, strCellSize)
+}
+
+func estimateHashMapSize(cardinality, cellSize uint64) uint64 {
+	const maxUint64 = ^uint64(0)
+
+	cellCnt := uint64(kInitialCellCnt)
+	for {
+		if cellCnt > maxUint64/cellSize {
+			return maxUint64
+		}
+		if maxElemCnt(cellCnt, cellSize) >= cardinality {
+			return cellCnt * cellSize
+		}
+		if cellCnt > maxUint64/2 {
+			return maxUint64
+		}
+		cellCnt <<= 1
+	}
+}
+
 func toUnsafePointer[T any](p *T) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }
