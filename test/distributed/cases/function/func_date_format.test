@@ -33,6 +33,18 @@ SELECT DATE_FORMAT('0001-01-01 00:00:00.123456', '%b %M %m %c %D %d %e %j %k %h 
 #The format parameter contains all format matching characters mixed with other characters
 SELECT DATE_FORMAT('2012-12-21 23:12:34.123456', 'abc%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y!123 %%xyz %z');
 
+#Exact format strings handled by DATE_FORMAT fast paths
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%d/%m/%Y') AS fast_day_month_year;
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%Y%m%d') AS fast_compact_date;
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%Y-%m-%d %T') AS fast_dash_datetime_t;
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%Y/%m/%d') AS fast_slash_date;
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%Y/%m/%d %H:%i:%s') AS fast_slash_datetime;
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%Y/%m/%d %T') AS fast_slash_datetime_t;
+
+#Format-string boundaries
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '') AS empty_format;
+SELECT DATE_FORMAT('2004-04-03 13:11:10', '%') AS trailing_percent;
+
 #3.The first parameter of date_format function is table field batch test
 select date_format(a_date,'%Y-%m-%d %H:%i:%s'),date_format(b_datetime,'%Y-%m-%d %H:%i:%s'),date_format(c_timestamp,'%Y-%m-%d %H:%i:%s') from t_dates;
 

@@ -90,10 +90,45 @@ date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%m-%d') as zero_datetim
 date_format(cast('0000-00-00 00:00:00' as timestamp), '%Y-%m-%d') as zero_timestamp_numeric_format;
 ➤ zero_date_numeric_format[12,-1,0]  ¦  zero_datetime_numeric_format[12,-1,0]  ¦  zero_timestamp_numeric_format[12,-1,0]  𝄀
 0000-00-00  ¦  0000-00-00  ¦  0000-00-00
+select date_format(cast('0000-00-00 00:00:00' as datetime), '%d/%m/%Y') as zero_fast_day_month_year,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y%m%d') as zero_fast_compact_date,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y') as zero_fast_year;
+➤ zero_fast_day_month_year[12,-1,0]  ¦  zero_fast_compact_date[12,-1,0]  ¦  zero_fast_year[12,-1,0]  𝄀
+00/00/0000  ¦  00000000  ¦  0000
+select date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%m-%d') as zero_fast_dash_date,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%m-%d %H:%i:%s') as zero_fast_dash_datetime,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%m-%d %T') as zero_fast_dash_datetime_t;
+➤ zero_fast_dash_date[12,-1,0]  ¦  zero_fast_dash_datetime[12,-1,0]  ¦  zero_fast_dash_datetime_t[12,-1,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+select date_format(cast('0000-00-00 00:00:00' as datetime), '%Y/%m/%d') as zero_fast_slash_date,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y/%m/%d %H:%i:%s') as zero_fast_slash_datetime,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%Y/%m/%d %T') as zero_fast_slash_datetime_t;
+➤ zero_fast_slash_date[12,-1,0]  ¦  zero_fast_slash_datetime[12,-1,0]  ¦  zero_fast_slash_datetime_t[12,-1,0]  𝄀
+0000/00/00  ¦  0000/00/00 00:00:00  ¦  0000/00/00 00:00:00
+select date_format(cast('0000-00-00' as date), '%c|%D|%e|%j|%y') as zero_date_remaining_numeric_format;
+➤ zero_date_remaining_numeric_format[12,-1,0]  𝄀
+0|0th|0|000|00
+select date_format(cast('0000-00-00 00:00:00' as datetime),
+'%H|%k|%h|%I|%i|%l|%p|%r|%S|%s|%T|%f') as zero_datetime_time_format;
+➤ zero_datetime_time_format[12,-1,0]  𝄀
+00|0|12|12|00|12|AM|12:00:00 AM|00|00|00:00:00|000000
+select date_format(cast('0000-00-00' as date), '%U|%u|%V') as zero_date_week_number_format;
+➤ zero_date_week_number_format[12,-1,0]  𝄀
+00|00|00
+select date_format(cast('0000-00-00' as date), '%v|%X|%x') as zero_date_iso_week_year,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%v|%X|%x') as zero_datetime_iso_week_year,
+date_format(cast('0000-00-00 00:00:00' as timestamp), '%v|%X|%x') as zero_timestamp_iso_week_year;
+➤ zero_date_iso_week_year[12,-1,0]  ¦  zero_datetime_iso_week_year[12,-1,0]  ¦  zero_timestamp_iso_week_year[12,-1,0]  𝄀
+01|0000|0001  ¦  01|0000|0001  ¦  01|0000|0001
 select date_format(cast('0000-00-00' as date), '%M') as zero_date_month_name,
 date_format(cast('0000-00-00 00:00:00' as datetime), '%b') as zero_datetime_month_abbrev,
 date_format(cast('0000-00-00 00:00:00' as timestamp), '%W') as zero_timestamp_weekday;
 ➤ zero_date_month_name[12,-1,0]  ¦  zero_datetime_month_abbrev[12,-1,0]  ¦  zero_timestamp_weekday[12,-1,0]  𝄀
+null  ¦  null  ¦  null
+select date_format(cast('0000-00-00' as date), '%a') as zero_date_weekday_abbrev,
+date_format(cast('0000-00-00 00:00:00' as datetime), '%w') as zero_datetime_weekday_number,
+date_format(cast('0000-00-00 00:00:00' as timestamp), '%a') as zero_timestamp_weekday_abbrev;
+➤ zero_date_weekday_abbrev[12,-1,0]  ¦  zero_datetime_weekday_number[12,-1,0]  ¦  zero_timestamp_weekday_abbrev[12,-1,0]  𝄀
 null  ¦  null  ¦  null
 select date_format(cast('0000-00-00 00:00:00' as datetime), '%Y-%M') as zero_datetime_mixed_format,
 date_format(cast('0000-00-00 00:00:00' as datetime), '%%M') as zero_datetime_escaped_percent;

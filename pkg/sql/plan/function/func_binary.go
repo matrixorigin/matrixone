@@ -4052,6 +4052,10 @@ func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buff
 			//buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'x':
+		if t == types.ZeroDatetime {
+			buf.WriteString("0001")
+			break
+		}
 		year, _ := t.YearWeek(3)
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
