@@ -2511,7 +2511,6 @@ func (tbl *txnTable) getPartitionState(
 			uint64(tbl.accountId),
 			tbl.db.databaseId,
 			tbl.tableId,
-			ps,
 			tbl.db.op.SnapshotTS(),
 		)
 		if err != nil {

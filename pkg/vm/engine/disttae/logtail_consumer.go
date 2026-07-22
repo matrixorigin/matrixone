@@ -389,14 +389,14 @@ func (c *PushClient) canServeTableSnapshot(
 func (c *PushClient) waitCanServeTableSnapshot(
 	ctx context.Context,
 	accId, dbId, tblId uint64,
-	ps *logtailreplay.PartitionState,
 	snapshot timestamp.Timestamp,
 ) (*logtailreplay.PartitionState, bool, error) {
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		canServe, needWait := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+		ps, pending := c.getSubscribedSnapshotAndPending(ctx, accId, dbId, tblId)
+		canServe, needWait := canServeTableSnapshotWithPending(ps, snapshot, pending)
 		if canServe || !needWait {
 			return ps, canServe, nil
 		}
@@ -405,7 +405,6 @@ func (c *PushClient) waitCanServeTableSnapshot(
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		case <-ticker.C:
-			ps = c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tblId).Snapshot()
 		}
 	}
 }
@@ -1279,6 +1278,35 @@ type SubTableStatus struct {
 	DBID       uint64
 	SubState   SubscribeState
 	LatestTime time.Time
+}
+
+// getSubscribedSnapshotAndPending captures the pending marker before the immutable
+// partition snapshot while holding the subscription generation. If pending is
+// clear, the later snapshot includes every update whose marker was cleared.
+func (c *PushClient) getSubscribedSnapshotAndPending(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool) {
+	s := &c.subscribed
+	s.rw.RLock()
+	ent, exist := s.m[tId]
+	if !exist {
+		s.rw.RUnlock()
+		return nil, false
+	}
+	if ent.dbID != dbId || ent.state != Subscribed {
+		s.rw.RUnlock()
+		return nil, false
+	}
+
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
+	}
+	pending := ent.pendingTo.Load() != nil
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	s.rw.RUnlock()
+	return ps, pending
 }
 
 func (c *PushClient) isSubscribed(

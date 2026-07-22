@@ -1152,13 +1152,52 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 		done()
 	}()
 
-	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, part.Snapshot(), snapshot)
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, snapshot)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotNil(t, ps)
 	expectedApplied := types.TimestampToTS(snapshot.Prev())
 	applied := ps.GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+}
+
+func TestWaitCanServeTableSnapshotRefreshesAfterPendingApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, snapshot.Prev())
+	stale := part.Snapshot()
+
+	state, done = part.MutateState()
+	state.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+	done()
+	e.pClient.subscribed.clearTablePendingUpdate(10, 42, snapshot.Prev())
+
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, snapshot)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, ps)
+	expected := types.TimestampToTS(snapshot.Prev())
+	applied := ps.GetAppliedTo()
+	require.True(t, applied.GE(&expected),
+		"the readiness proof must refresh a snapshot captured before pending apply")
+	staleApplied := stale.GetAppliedTo()
+	require.False(t, staleApplied.GE(&expected), "the setup must retain the pre-apply snapshot")
 }
 
 func TestPKCheckSnapshotRejectsResetSubscriptionGeneration(t *testing.T) {
