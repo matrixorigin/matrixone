@@ -11,6 +11,8 @@
 *.o
 *.a
 *.so
+!thirdparties/onnxruntime/*.so
+!thirdparties/onnxruntime/*.dylib
 *.exe
 *.lib
 *.swp

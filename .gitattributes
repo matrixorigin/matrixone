@@ -1,0 +1,2 @@
+thirdparties/onnxruntime/*.so filter=lfs diff=lfs merge=lfs -text
+thirdparties/onnxruntime/*.dylib filter=lfs diff=lfs merge=lfs -text
