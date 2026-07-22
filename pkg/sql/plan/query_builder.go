@@ -4254,6 +4254,22 @@ func numericProjectionOutputNames(
 	}
 	visiting[source] = true
 	defer delete(visiting, source)
+	if values, ok := source.Select.(*tree.ValuesClause); ok {
+		if len(values.Rows) == 0 {
+			return nil
+		}
+		width := len(values.Rows[0])
+		for _, row := range values.Rows[1:] {
+			if len(row) != width {
+				return nil
+			}
+		}
+		names := make([]string, width)
+		for i := range names {
+			names[i] = fmt.Sprintf("column_%d", i)
+		}
+		return names
+	}
 
 	clause := firstNumericProjectionSelectClause(source.Select)
 	if clause == nil {
@@ -5884,7 +5900,8 @@ func (builder *QueryBuilder) bindValues(
 		Name:  "",
 		Cols:  make([]*plan.ColDef, colCnt),
 	}
-	ctx.binder = NewWhereBinder(builder, ctx)
+	valuesBinder := NewWhereBinder(builder, ctx)
+	ctx.binder = valuesBinder
 	for i := 0; i < colCnt; i++ {
 		rowSetData.Cols[i] = &plan.ColData{}
 
@@ -5901,7 +5918,14 @@ func (builder *QueryBuilder) bindValues(
 
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
-			if planExpr, err = ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true); err != nil {
+			if i < len(ctx.numericProjectionTypes) &&
+				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) {
+				target := ctx.numericProjectionTypes[i]
+				planExpr, err = valuesBinder.bindNumericExprWithContext(valuesClause.Rows[j][i], 0, &target)
+			} else {
+				planExpr, err = valuesBinder.BindExpr(valuesClause.Rows[j][i], 0, true)
+			}
+			if err != nil {
 				return
 			}
 

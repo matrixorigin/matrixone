@@ -330,6 +330,32 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "derived values alias passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.x from (values row(? + ?)) as d(x)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name:       "derived values default column passthrough",
+			sql:        "insert into constraint_test.emp (sal) select d.column_0 from (values row(? + ?)) as d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "derived values multiple rows passthrough",
+			sql: "insert into constraint_test.emp (sal) select d.x " +
+				"from (values row(? + ?), row(? + ?)) as d(x)",
+			want:       types.T_decimal64,
+			paramCount: 4,
+		},
+		{
+			name: "derived values target column only",
+			sql: "insert into constraint_test.emp (sal) select d.x " +
+				"from (values row(1, ? + ?)) as d(ignored, x)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name: "derived if root passthrough",
 			sql: "insert into constraint_test.emp (sal) select if(1 = 1, d.x, 0) " +
 				"from (select ? + ? as x) d",
@@ -452,6 +478,13 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "derived conflicting targets fall back",
 			sql: "insert into constraint_test.emp (sal, empno) " +
 				"select d.x, d.x from (select ? + ? as x) d",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "derived values conflicting targets fall back",
+			sql: "insert into constraint_test.emp (sal, empno) " +
+				"select d.x, d.x from (values row(? + ?)) as d(x)",
 			want:       types.T_float64,
 			paramCount: 2,
 		},
