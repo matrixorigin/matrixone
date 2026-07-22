@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"net"
 	"slices"
 	"strconv"
@@ -972,7 +973,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
+		err = suppressRemoteNotifyCancelError(s.Proc.Ctx, err)
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
@@ -1104,6 +1105,17 @@ func logRemoteNotifyCleanupSendFailure(
 }
 
 func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
+}
+
+func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
