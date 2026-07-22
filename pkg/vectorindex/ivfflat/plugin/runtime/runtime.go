@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -144,16 +145,30 @@ func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
 
 // ValidQuantization gates the quantization value for IVF-FLAT: it must name a
 // narrow vector type IVF-FLAT supports (float32/float16/bf16/int8/uint8, via
-// quantizer.ToVectorType). IVF-FLAT re-ranks on the CPU from the stored entries,
-// so unlike the cuvs backends it imposes no op_type restriction; op is unused.
-// One home for CREATE (plan/schema) and REINDEX (compile/ValidateReindexParams).
-func (CatalogHooks) ValidQuantization(quant, _ string) error {
+// quantizer.ToVectorType). IVF-FLAT re-ranks in the QUANTIZED domain from the
+// stored narrow entries (it has no source vectors to re-rank from), so the
+// stored geometry must be preserved by the quantizer. The affine int8/uint8
+// scalar quantizer q(x)=a*x+b preserves L2 ordering (up to the a^2 scale that
+// search.go rescales away) but NOT inner-product or cosine geometry — the
+// a*b*(sum x + sum y) cross term makes <q(x),q(y)> depend on each vector's sum.
+// So int8/uint8 are gated to L2 op_type only, matching CAGRA/IVF-PQ; f32/f16/bf16
+// (lossless-ordering casts) keep all op_types. One home for CREATE (plan/schema)
+// and REINDEX (compile/ValidateReindexParams).
+func (CatalogHooks) ValidQuantization(quant, op string) error {
 	if quant == "" {
 		return nil
 	}
-	if _, ok := quantizer.ToVectorType(quant); !ok {
+	vt, ok := quantizer.ToVectorType(quant)
+	if !ok {
 		return moerr.NewNotSupportedNoCtxf(
 			"ivfflat quantization %q (supported: float32, float16, bf16, int8, uint8)", quant)
+	}
+	if vt == types.T_array_int8 || vt == types.T_array_uint8 {
+		switch strings.ToLower(strings.TrimSpace(op)) {
+		case metric.OpType_InnerProduct, metric.OpType_CosineDistance:
+			return moerr.NewNotSupportedNoCtxf(
+				"ivfflat quantization %q is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry", quant)
+		}
 	}
 	return nil
 }

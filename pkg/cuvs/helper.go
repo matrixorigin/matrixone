@@ -85,6 +85,9 @@ type CagraBuildParams struct {
 	IntermediateGraphDegree uint64
 	GraphDegree             uint64
 	AttachDatasetOnBuild    bool
+	// QuantizerTrainLimit bounds the rows sampled to train the int8/uint8 scalar
+	// quantizer. 0 = C++ default (100000).
+	QuantizerTrainLimit uint64
 }
 
 func DefaultCagraBuildParams() CagraBuildParams {
@@ -141,6 +144,9 @@ type IvfPqBuildParams struct {
 	BitsPerCode            uint32
 	AddDataOnBuild         bool
 	KmeansTrainsetFraction float64
+	// QuantizerTrainLimit bounds the rows sampled to train the int8/uint8 scalar
+	// quantizer. 0 = C++ default (100000).
+	QuantizerTrainLimit uint64
 }
 
 func DefaultIvfPqBuildParams() IvfPqBuildParams {

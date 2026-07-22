@@ -941,6 +941,17 @@ message Node {
   int64 spill_mem = 70;
   repeated string origin_views = 71;
   string direct_view = 72;
+
+  // TIME_WINDOW only: the GROUP BY columns other than the window's own
+  // timestamp key. The operator restarts its window state whenever these
+  // change, so each group gets its own windows instead of one global stream.
+  repeated Expr time_window_partition_by = 73;
+
+  // FILL only: positions of the partition keys inside this node's input batch
+  // (the child TIME_WINDOW's projection). fill(prev/next/linear) must not
+  // carry values across a partition boundary, so the operator compares these
+  // columns to find where one group ends and the next begins.
+  repeated int32 time_window_partition_col_pos = 74;
 }
 
 message SnapshotExtraInfo {

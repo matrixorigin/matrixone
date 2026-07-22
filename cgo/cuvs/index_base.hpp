@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <limits>
 #include <numeric>
 #include <map>
 #include <mutex>
@@ -207,7 +208,7 @@ using ::distribution_mode_t;
 //
 // Training (on the ORIGINAL float/half source data only):
 //   - add_chunk_float() / add_chunk_quantize() buffer their raw B chunks in
-//     pending_float_chunks_; flush_pending_float_chunks_internal() — invoked at
+//     staging_data_/staging_spans_; flush_pending_float_chunks_internal() — invoked at
 //     build time via train_quantizer_if_needed() — trains the quantizer on ALL
 //     buffered rows at once, then quantizes them into storage. (No "first chunk"
 //     or 500-sample heuristic; the full buffered set is used.)
@@ -409,11 +410,14 @@ public:
     // ---- Deferred float buffer for quantizer training (1-byte types only) ----
     // When T is int8_t or uint8_t the quantizer must be trained on a
     // representative sample before any vectors can be quantized.
-    // Raw float chunks are accumulated here until kQuantizerTrainThreshold
-    // vectors are available, then the quantizer is trained on all of them at
-    // once and the buffer is flushed into flattened_host_dataset as T.
-    // If build() is called before the threshold is reached the buffer is
-    // force-flushed (trained on whatever is available).
+    // Raw base-typed chunks are accumulated here until the staging bound is hit
+    // (or build()), which flushes them: the quantizer trains on the staged rows
+    // and the buffer is quantized into flattened_host_dataset as T.
+    // Staging stops at quantizer_train_limit_ rows: that is the training
+    // sample, and the buffer exists only to supply it. The rows arrive in
+    // RANDOM order from the builder, so a bounded prefix of the stream IS a
+    // random sample of the table — no need to retain the whole table to draw a
+    // representative one.
     // Only ever accessed from submit_main() tasks (serialised), so no extra
     // locking is needed beyond what those tasks already take.
     // (Fields are in protected: — see below.)
@@ -925,6 +929,15 @@ public:
 
     // Common management methods
     virtual void destroy() {
+        // Drop any rows still staged by an index destroyed before build()
+        // (failed CREATE INDEX, DROP during ingest).
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            pending_total_count_ = 0;
+            std::vector<B>().swap(staging_data_);
+            std::vector<IdT>().swap(staging_ids_);
+            std::vector<staged_span_t>().swap(staging_spans_);
+        }
         if (worker) worker->stop();
     }
 
@@ -1099,58 +1112,235 @@ public:
         }
     }
 
-    // Flush all pending float chunks: train the quantizer on the combined data,
-    // then quantize each chunk and store into flattened_host_dataset.
-    // Must be called only from inside a submit_main() task (GPU work is legal there).
-    // GPU operations are performed without holding mutex_; shared state is updated
-    // under unique_lock after each chunk's GPU work completes.
+    // Cap a requested quantizer training-sample row count so its device copy fits
+    // in ~60% of FREE GPU memory. train() uploads the sample as ONE contiguous
+    // n_rows*dim*sizeof(B) block; a single block rarely fits 80% of free memory
+    // once the pool is fragmented, and cuVS needs scratch for the quantile
+    // reduction — so 60% with headroom. High dim => fewer rows (Google's rule to
+    // avoid OOM during the training call). Logs when it caps (no silent
+    // truncation); a no-op when cudaMemGetInfo fails or the sample already fits.
+    // Must run on the target device (called from the flush worker task).
+    // Rows to stage before training must run: the training sample we need
+    // (quantizer_train_limit_), bounded by what the device can actually train on
+    // in one shot.
+    //
+    // Both bounds are load-bearing. Without the limit, staging would retain far
+    // more than the sample needs. Without the GPU bound, quantizer_train_limit
+    // -- settable straight from SQL and deliberately unclamped -- would size the
+    // host buffer directly: `quantizer_train_limit 50000000` at dim 768 / f32
+    // stages 50M * 3072 B = 153 GB before anything trims it, since
+    // cap_train_rows_to_gpu_mem only trims the DEVICE copy, at flush, long after
+    // the host buffer has grown. Taking the min keeps the SQL knob expressive
+    // and harmless.
+    //
+    // Called under the staging lock inside a submit_main task, so a device is
+    // current; a cudaMemGetInfo failure throws rather than guessing (see
+    // cap_train_rows_to_gpu_mem).
+    // Measured ONCE per index and reused. The builders stage one row per call,
+    // so measuring per chunk would mean a cudaMemGetInfo driver call per row --
+    // and, on a device too small for the requested sample, one "train sample
+    // capped" log line per row. Once is also the right cadence: the figure is
+    // only a staging ceiling, and cap_train_rows_to_gpu_mem is applied again at
+    // flush (once per flush, not per row) against the free VRAM that actually
+    // matters -- the amount available when the training upload happens.
+    uint64_t staging_row_limit() {
+        uint64_t cached = staging_row_limit_.load(std::memory_order_relaxed);
+        if (cached != 0) return cached;
+        constexpr uint64_t kMaxRequestable =
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        uint64_t want;
+        {
+            // set_quantizer_train_limit writes this under unique_lock; read it
+            // under the shared lock rather than racing it. The GPU query below
+            // stays OUTSIDE the lock (CLAUDE.md rule 1).
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            want = std::min<uint64_t>(quantizer_train_limit_, kMaxRequestable);
+        }
+        int64_t rows = cap_train_rows_to_gpu_mem(static_cast<int64_t>(want));
+        uint64_t limit = static_cast<uint64_t>(rows < 1 ? 1 : rows);
+        staging_row_limit_.store(limit, std::memory_order_relaxed);
+        return limit;
+    }
+
+    int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
+        if (requested_rows < 1) requested_rows = 1;
+        size_t free_bytes = 0, total_bytes = 0;
+        cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+        if (err != cudaSuccess) {
+            // Do NOT fall back to the requested count. This runs inside a
+            // submit_main task, so a device is current by construction and a
+            // failure means the context is already broken (sticky launch error,
+            // device reset). Returning requested_rows would send an unchecked
+            // upload into a dead context and surface the real fault later as an
+            // opaque allocation failure inside train().
+            throw std::runtime_error(
+                std::string("cap_train_rows_to_gpu_mem: cudaMemGetInfo failed: ") +
+                cudaGetErrorString(err));
+        }
+        size_t per_row = static_cast<size_t>(dimension) * sizeof(B);
+        if (per_row == 0) {
+            throw std::runtime_error("cap_train_rows_to_gpu_mem: index dimension is 0");
+        }
+        int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row);
+        if (max_rows < 1) max_rows = 1;
+        if (requested_rows > max_rows) {
+            std::cerr << "[quantizer] train sample capped " << requested_rows
+                      << " -> " << max_rows << " rows to fit 60% of "
+                      << (free_bytes >> 20) << " MB free GPU mem (dim="
+                      << dimension << ")" << std::endl;
+            return max_rows;
+        }
+        return requested_rows;
+    }
+
+
+
+    // Append `count` rows to the staging arenas and record the span describing
+    // them. Caller holds mutex_ and has already clamped `count` to the room left
+    // under the staging bound.
+    //
+    // The merge below is what keeps staging_spans_ from becoming per-row
+    // metadata: two consecutive calls that both append (offset -1) and agree
+    // about ids are indistinguishable from one larger append, so the last span
+    // is extended rather than a new one pushed. Its four conditions are each
+    // load-bearing — offsets must both be "append", ids-ness must match (or the
+    // merged span would claim ids it does not have, or hide ids it does), and
+    // the rows must be physically adjacent in staging_data_.
+    // Upper bound on rows this index can ever stage: the staging bound, further
+    // capped by the index's capacity (staging beyond capacity is impossible).
+    uint64_t staging_bound_rows(uint64_t stage_limit) const {
+        uint64_t bound = stage_limit;
+        if (this->count > 0) bound = std::min<uint64_t>(bound, this->count);
+        return bound < 1 ? 1 : bound;
+    }
+
+    // NOTE: the row-count parameter is deliberately NOT named `count` — that is
+    // the member holding this index's constructor row count, and shadowing it
+    // here silently sized the arena to the incoming chunk (1 row in production)
+    // instead of the table, so the "single pre-allocation" grew geometrically.
+    void stage_rows_locked(const B* rows, uint64_t n_rows, int64_t offset,
+                           const IdT* ids, uint64_t stage_limit) {
+        // Grow the arenas geometrically toward the bound rather than jumping to
+        // it. Reserving the full bound up front allocated for a table we may not
+        // have: `count` is the index's CAPACITY (cap(): total allocated slots),
+        // not its row count, so a 1000-row table created with an explicit
+        // max_index_capacity — or simply a default 100k train limit — reserved
+        // ~307 MB at dim 768 to stage 3 MB. Doubling keeps the allocation count
+        // logarithmic (the thing the arena exists for: production stages one row
+        // per call) while never over-allocating more than 2x what is in use.
+        const uint64_t bound = staging_bound_rows(stage_limit);
+        const uint64_t need  = pending_total_count_ + n_rows;
+        if (staging_data_.capacity() < need * dimension) {
+            uint64_t grow = std::max<uint64_t>(need * 2, kStagingReserveFloorRows);
+            grow = std::min<uint64_t>(grow, bound);
+            grow = std::max<uint64_t>(grow, need);          // never below what we need
+            staging_data_.reserve(static_cast<size_t>(grow) * dimension);
+        }
+        if (ids && staging_ids_.capacity() < need) {
+            uint64_t grow = std::max<uint64_t>(need * 2, kStagingReserveFloorRows);
+            grow = std::min<uint64_t>(grow, bound);
+            grow = std::max<uint64_t>(grow, need);
+            staging_ids_.reserve(static_cast<size_t>(grow));
+        }
+        const uint64_t start_row = pending_total_count_;
+        const uint64_t ids_start = staging_ids_.size();
+        staging_data_.insert(staging_data_.end(), rows, rows + n_rows * dimension);
+        if (ids) staging_ids_.insert(staging_ids_.end(), ids, ids + n_rows);
+        pending_total_count_ += n_rows;
+
+        if (!staging_spans_.empty()) {
+            staged_span_t& last = staging_spans_.back();
+            if (last.offset == -1 && offset == -1 &&
+                last.has_ids == (ids != nullptr) &&
+                last.start_row + last.count == start_row) {
+                last.count += n_rows;   // merge consecutive appends
+                return;
+            }
+        }
+        staging_spans_.push_back(
+            staged_span_t{start_row, n_rows, offset, ids_start, ids != nullptr});
+    }
+
+    // Upload `n_rows` rows starting at `rows` and train the quantizer on them.
+    // No host-side copy: the caller's buffer is uploaded as-is, so this works
+    // equally for the staging arena and for a caller's own chunk.
+    // Must run inside a submit_main task; takes no lock across the GPU work.
+    void train_quantizer_from_host(raft_handle_wrapper_t& handle,
+                                   const B* rows, int64_t n_rows) {
+        auto res = handle.get_raft_resources();
+        {
+            // Scoped so the device matrix is released before the caller's
+            // quantize pass — handing the VRAM back before the index build asks
+            // for it (a 1M CAGRA build peaks at 7.65 of 8.15 GB).
+            auto host_view = raft::make_host_matrix_view<const B, int64_t>(
+                rows, n_rows, static_cast<int64_t>(dimension));
+            auto dev = raft::make_device_matrix<B, int64_t>(*res, n_rows, dimension);
+            raft::copy(*res, dev.view(), host_view);
+            quantizer_.train(*res, dev.view());
+            handle.sync();
+        }
+        // Brief unique_lock after sync publishes the trained state: the
+        // lock/unlock is a memory barrier, so any later shared_lock sees
+        // is_trained() == true.
+        { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
+    }
+
+    // Flush the staging arena: train the quantizer on the staged rows, then
+    // quantize every staged row into flattened_host_dataset and release the
+    // arena. Must be called only from inside a submit_main() task (GPU work is
+    // legal there). GPU operations run without holding mutex_; shared state is
+    // updated under unique_lock per span after the GPU work completes.
     void flush_pending_float_chunks_internal(raft_handle_wrapper_t& handle) {
-        std::vector<pending_float_chunk_t> chunks;
+        std::vector<B>             data;
+        std::vector<IdT>           sids;
+        std::vector<staged_span_t> spans;
         uint64_t total;
         {
             std::unique_lock<std::shared_mutex> lock(mutex_);
-            if (pending_float_chunks_.empty()) return;
-            chunks = std::move(pending_float_chunks_);
+            if (staging_spans_.empty()) return;
+            data  = std::move(staging_data_);
+            sids  = std::move(staging_ids_);
+            spans = std::move(staging_spans_);
             total = pending_total_count_;
             pending_total_count_ = 0;
-            pending_float_chunks_.clear();
+            staging_data_.clear();
+            staging_ids_.clear();
+            staging_spans_.clear();
         }
 
         auto res = handle.get_raft_resources();
 
-        // --- GPU work: train quantizer on ALL pending B-source data — NO LOCK ---
-        std::vector<B> all_floats;
-        all_floats.reserve(total * dimension);
-        for (auto& c : chunks) {
-            all_floats.insert(all_floats.end(), c.data.begin(), c.data.end());
-        }
-        auto train_host_view = raft::make_host_matrix_view<const B, int64_t>(
-            all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
-        auto train_device = raft::make_device_matrix<B, int64_t>(*res, total, dimension);
-        raft::copy(*res, train_device.view(), train_host_view);
-        // Train without holding the lock: GPU kernels run while lock is not held,
-        // so concurrent readers are not blocked for the duration of training.
-        quantizer_.train(*res, train_device.view());
-        handle.sync();
-        // Brief unique_lock after sync to publish the completed quantizer state.
-        // The lock/unlock acts as a memory barrier: any subsequent shared_lock
-        // acquisition by a reader is guaranteed to see is_trained() == true.
-        { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
+        // --- GPU work: train the quantizer on the staged rows — NO LOCK ---
+        //
+        // The quantizer is a scale + offset derived from the value range
+        // ([min,max] -> 8-bit codes), so it needs a representative sample of the
+        // element population, not every row.
+        //
+        // The arena is contiguous, so the first n_train rows upload directly —
+        // no intermediate copy. n_train == total except when free VRAM fell
+        // since the one-time staging measurement; the staged rows are the first
+        // stage_limit of the ARRIVAL stream either way (random for the
+        // one-row-per-call builders, and a bulk caller's rows past the bound
+        // were never staged, so there is nothing further to sample from).
+        int64_t n_train = cap_train_rows_to_gpu_mem(
+            std::min<int64_t>(static_cast<int64_t>(total),
+                              static_cast<int64_t>(quantizer_train_limit_)));
+        train_quantizer_from_host(handle, data.data(), n_train);
 
-        // --- Quantize each buffered chunk on the CPU and store. The quantizer
-        // is trained (above), so the B->T transform is a pure host affine map —
-        // no per-chunk GPU round-trip (this is what made a 1M-row f16-base /
-        // add_chunk_quantize build crawl). See transform_host(). ---
-        for (auto& c : chunks) {
+        // --- Quantize the staged rows on the CPU and store. The quantizer is
+        // trained (above), so B->T is a pure host affine map — no per-row GPU
+        // round-trip. One transform_host call per SPAN, and the production path
+        // merges into a single span. ---
+        for (const staged_span_t& sp : spans) {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             uint64_t target_offset;
-            if (c.offset == -1) {
+            if (sp.offset == -1) {
                 target_offset = current_offset_;
-                current_offset_ += c.count;
+                current_offset_ += sp.count;
             } else {
-                target_offset = static_cast<uint64_t>(c.offset);
-                if (target_offset + c.count > current_offset_) {
-                    current_offset_ = target_offset + c.count;
+                target_offset = static_cast<uint64_t>(sp.offset);
+                if (target_offset + sp.count > current_offset_) {
+                    current_offset_ = target_offset + sp.count;
                 }
             }
             if (current_offset_ > count) count = current_offset_;
@@ -1160,32 +1350,225 @@ public:
                 flattened_host_dataset.resize(required_elements);
             }
             quantizer_.template transform_host<T>(
-                c.data.data(),
+                data.data() + static_cast<size_t>(sp.start_row) * dimension,
                 flattened_host_dataset.data() + target_offset * dimension,
-                static_cast<size_t>(c.count) * dimension);
+                static_cast<size_t>(sp.count) * dimension);
 
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int num_shards = static_cast<int>(this->devices_.size());
                 if (this->shard_sizes_.size() != (size_t)num_shards) {
                     this->shard_sizes_.assign(num_shards, 0);
                 }
-                uint64_t total = this->current_offset_;
-                uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                uint64_t shard_total = this->current_offset_;
+                uint64_t rows_per_shard = (shard_total / num_shards) & ~static_cast<uint64_t>(31);
                 for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
-                this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+                this->shard_sizes_.back() = shard_total - rows_per_shard * (num_shards - 1);
             }
 
-            if (!c.ids.empty()) {
+            if (sp.has_ids) {
                 if (host_ids.size() < current_offset_) {
                     host_ids.resize(current_offset_);
                 }
-                std::copy(c.ids.begin(), c.ids.end(), host_ids.begin() + target_offset);
-                for (uint64_t i = 0; i < c.count; ++i) {
-                    id_to_index_[c.ids[i]] = target_offset + i;
+                const IdT* span_ids = sids.data() + sp.ids_start;
+                std::copy(span_ids, span_ids + sp.count, host_ids.begin() + target_offset);
+                for (uint64_t i = 0; i < sp.count; ++i) {
+                    id_to_index_[span_ids[i]] = target_offset + i;
                 }
             }
         }
+
+        // Release the arena now that every staged row has been quantized into
+        // flattened_host_dataset; it is never read again.
+        std::vector<B>().swap(data);
+        std::vector<IdT>().swap(sids);
     }
+
+    // Shared 1-byte (int8/uint8) ingest path for add_chunk_float and
+    // add_chunk_quantize.
+    //
+    // The two differ only in how the rows arrive: add_chunk_quantize is handed
+    // base-typed rows directly, add_chunk_float converts its f32 input to B
+    // first. Everything after that — the staging bound, the bulk-training
+    // shortcut, the split against the bound, the flush, and the trained
+    // fast-path quantize of the remainder — was identical, and keeping two
+    // verbatim copies in step by hand is exactly how the paths drift.
+    //
+    // Runs INSIDE a submit_main task (the caller owns the submit/wait), so GPU
+    // work is legal here and `rows` stays alive for the whole call.
+    void ingest_quantized_rows(raft_handle_wrapper_t& handle, const B* rows,
+                               uint64_t chunk_count, int64_t offset, const IdT* ids) {
+                {
+                    std::shared_lock<std::shared_mutex> lock(mutex_);
+                    if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+                }
+                bool trained;
+                uint64_t staged = 0;   // rows of this chunk taken by staging
+                {
+                    std::shared_lock<std::shared_mutex> lock(mutex_);
+                    trained = quantizer_.is_trained();
+                }
+                if (!trained) {
+                    // Measured with NO lock held: it issues cudaMemGetInfo and
+                    // may log when the device trims the sample, and CLAUDE.md
+                    // rule 1 forbids a GPU call under the mutex. Memoized, so
+                    // this costs one driver query per index.
+                    const uint64_t stage_limit = staging_row_limit();
+                    bool should_flush = false;
+                    // A caller that hands over at least a full training
+                    // sample in ONE contiguous buffer needs no staging at
+                    // all: train straight off their rows, then quantize the
+                    // whole chunk on the trained path below. Costs no host
+                    // allocation (the upload reads the caller's buffer
+                    // directly) and needs no strided sample. `staged` stays
+                    // 0, so the fast path stores every row exactly once.
+                    //
+                    // WHY KEEP THIS for a path production does not take (the
+                    // builders always pass chunk_count == 1): without it a bulk
+                    // caller stages the first stage_limit rows, copying them
+                    // into the arena for no reason — they are already contiguous
+                    // and alive in the caller's buffer for the whole call. The C
+                    // API, the .cu tests and benchmark_cuvs all take this path,
+                    // and it is the only one that trains on the whole of a bulk
+                    // chunk rather than on its first stage_limit rows.
+                    //
+                    // The upload is bounded by cap_train_rows_to_gpu_mem, so
+                    // it never exceeds 60% of free VRAM however large the
+                    // chunk is. Two cases follow:
+                    //   chunk <= that cap  training covers the ENTIRE chunk,
+                    //                      so a value-ordered bulk load
+                    //                      learns a range over all of it.
+                    //                      This is the common case: 1M rows
+                    //                      at dim 768 / f32 is 3 GB, inside
+                    //                      60% of an 8 GB card.
+                    //   chunk >  that cap  training covers the chunk's
+                    //                      LEADING rows only (e.g. ~1.4M of
+                    //                      a 10M-row call on an 8 GB card),
+                    //                      so a value-ordered load that big
+                    //                      still learns a prefix range and
+                    //                      clamps its tail. Accepted: it
+                    //                      needs a single call larger than
+                    //                      60% of VRAM from a caller whose
+                    //                      rows are value-ordered, and no
+                    //                      shipping path passes
+                    //                      chunk_count > 1 at all.
+                    bool arena_empty;
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        arena_empty = (pending_total_count_ == 0);
+                    }
+                    if (arena_empty && chunk_count >= stage_limit) {
+                        // Re-check under the exclusive lock before training:
+                        // set_quantizer() may have pinned an explicit range
+                        // between the shared_lock read above and here, and
+                        // training would silently overwrite it. The staging
+                        // branch does the same re-check.
+                        bool do_train;
+                        {
+                            std::unique_lock<std::shared_mutex> lock(mutex_);
+                            do_train = !quantizer_.is_trained();
+                        }
+                        if (do_train) {
+                            // Bounded by free VRAM ONLY, deliberately not by
+                            // quantizer_train_limit_: that limit sizes the
+                            // host STAGING arena, and this path stages
+                            // nothing — it uploads out of the caller's own
+                            // buffer. Applying it here would train on the
+                            // first train_limit rows of a value-ordered bulk
+                            // load and clamp the tail, for no memory saving.
+                            train_quantizer_from_host(
+                                handle, rows,
+                                cap_train_rows_to_gpu_mem(
+                                    static_cast<int64_t>(chunk_count)));
+                        }
+                        trained = true;
+                    } else {
+                    {
+                        std::unique_lock<std::shared_mutex> lock(mutex_);
+                        if (!quantizer_.is_trained()) {
+                            // Stage only what still fits under the bound. The
+                            // check used to run AFTER appending the whole chunk,
+                            // so a single add_chunk_quantize(base, 1'000'000, ...)
+                            // staged 1M rows against a 100k bound and the bound
+                            // guaranteed nothing (cgo/cuvs/test/benchmark_cuvs.cu
+                            // hands over a whole dataset in one call). Splitting
+                            // here is what makes the bound hold for ANY caller;
+                            // the rows past the split are quantized below, on the
+                            // trained fast path, and never staged.
+                            uint64_t room = (stage_limit > pending_total_count_)
+                                          ? (stage_limit - pending_total_count_) : 0;
+                            staged = std::min<uint64_t>(chunk_count, room);
+                            if (staged > 0) {
+                                stage_rows_locked(rows, staged, offset,
+                                                  ids, stage_limit);
+                            }
+                            if (pending_total_count_ >= stage_limit) {
+                                should_flush = true;
+                            }
+                        } else {
+                            trained = true; // trained on another thread while copying
+                        }
+                    }
+                    if (should_flush) {
+                        flush_pending_float_chunks_internal(handle);
+                    }
+                    }   // end of the non-bulk staging branch
+                    // Fully staged (and possibly flushed with the rest) — done.
+                    if (!trained && staged == chunk_count) return;
+                    // Otherwise the quantizer is trained now — either by the flush
+                    // above, or by a set_quantizer() that raced in — and the rows
+                    // from `staged` on are quantized directly below.
+                }
+
+                // Quantizer trained: CPU affine map straight into the dataset
+                // (pure host transform — no per-chunk GPU round-trip). Operates
+                // on the rows staging did NOT take (all of them in the steady
+                // state, where staged == 0).
+                const B*   q_data   = rows + staged * dimension;
+                const IdT* q_ids    = ids ? ids + staged : nullptr;
+                uint64_t   q_count  = chunk_count - staged;
+                int64_t    q_offset = (offset == -1)
+                                    ? -1 : offset + static_cast<int64_t>(staged);
+                if (q_count == 0) return;
+
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                uint64_t target_offset;
+                if (q_offset == -1) {
+                    target_offset = current_offset_;
+                    current_offset_ += q_count;
+                } else {
+                    target_offset = static_cast<uint64_t>(q_offset);
+                    if (target_offset + q_count > current_offset_) {
+                        current_offset_ = target_offset + q_count;
+                    }
+                }
+                if (current_offset_ > count) count = current_offset_;
+
+                size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
+                if (flattened_host_dataset.size() < required_elements) {
+                    flattened_host_dataset.resize(required_elements);
+                }
+                quantizer_.template transform_host<T>(
+                    q_data,
+                    flattened_host_dataset.data() + (target_offset * dimension),
+                    static_cast<size_t>(q_count) * dimension);
+
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    int num_shards = static_cast<int>(this->devices_.size());
+                    if (this->shard_sizes_.size() != (size_t)num_shards) {
+                        this->shard_sizes_.assign(num_shards, 0);
+                    }
+                    uint64_t total = this->current_offset_;
+                    uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                    for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+                    this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+                }
+
+                if (q_ids) {
+                    this->set_ids_internal(q_ids, q_count, target_offset);
+                }
+                return;
+    }
+
 
     void add_chunk_float(const float* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         uint64_t job_id = worker->submit_main(
@@ -1197,98 +1580,20 @@ public:
 
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
-                    // The deferred-quantize buffer and the quantizer both work on
-                    // the SOURCE type B. Convert the incoming f32 chunk to B once
-                    // (identical bytes when B==float; per-element float->half cast
-                    // when B==half).
+                    // The staging arena and the quantizer both work on the
+                    // SOURCE type B, so convert the incoming f32 chunk once
+                    // (identical bytes when B==float; per-element float->half
+                    // cast when B==half) and hand it to the shared 1-byte
+                    // ingest path — the same one add_chunk_quantize uses.
                     std::vector<B> chunk_b(chunk_count * dimension);
                     for (size_t i = 0; i < chunk_count * dimension; ++i) {
                         chunk_b[i] = static_cast<B>(chunk_data[i]);
                     }
-                    bool trained;
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        trained = quantizer_.is_trained();
-                    }
-
-                    if (!trained) {
-                        // Buffer this chunk for deferred training.
-                        pending_float_chunk_t c;
-                        c.data = chunk_b;
-                        c.count  = chunk_count;
-                        c.offset = offset;
-                        if (ids) c.ids.assign(ids, ids + chunk_count);
-                        
-                        bool should_flush = false;
-                        {
-                            std::unique_lock<std::shared_mutex> lock(mutex_);
-                            // Re-check trained under unique_lock to be absolutely safe
-                            if (!quantizer_.is_trained()) {
-                                pending_total_count_ += chunk_count;
-                                pending_float_chunks_.push_back(std::move(c));
-                                if (pending_total_count_ >= kQuantizerTrainThreshold) {
-                                    should_flush = true;
-                                }
-                            } else {
-                                trained = true; // Someone trained it while we were copying
-                            }
-                        }
-                        
-                        if (should_flush) {
-                            flush_pending_float_chunks_internal(handle);
-                        }
-                        
-                        if (!trained) return std::any();
-                        // trained=true here means set_quantizer() was called on another thread
-                        // between the first check (shared_lock) and the re-check (unique_lock).
-                        // c was NOT pushed to pending, so fall through to process chunk_data directly.
-                    }
-
-                    // Quantizer already trained: quantize on the CPU and write
-                    // directly into flattened_host_dataset. Scalar quantization
-                    // is a pure affine map from the trained [min,max], so no GPU
-                    // round-trip (malloc + H2D copy + kernel + D2H copy + sync)
-                    // is needed per chunk — this is the same host-only fast path
-                    // as float/half storage. transform_host() produces bytes
-                    // identical to the device transform(), so a CPU-quantized
-                    // base stays consistent with a GPU-quantized query at search.
-                    std::unique_lock<std::shared_mutex> lock(mutex_);
-                    uint64_t target_offset;
-                    if (offset == -1) {
-                        target_offset = current_offset_;
-                        current_offset_ += chunk_count;
-                    } else {
-                        target_offset = static_cast<uint64_t>(offset);
-                        if (target_offset + chunk_count > current_offset_) {
-                            current_offset_ = target_offset + chunk_count;
-                        }
-                    }
-                    if (current_offset_ > count) count = current_offset_;
-
-                    size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
-                    if (flattened_host_dataset.size() < required_elements) {
-                        flattened_host_dataset.resize(required_elements);
-                    }
-                    quantizer_.template transform_host<T>(
-                        chunk_b.data(),
-                        flattened_host_dataset.data() + (target_offset * dimension),
-                        static_cast<size_t>(chunk_count) * dimension);
-
-                    if (this->dist_mode == DistributionMode_SHARDED) {
-                        int num_shards = static_cast<int>(this->devices_.size());
-                        if (this->shard_sizes_.size() != (size_t)num_shards) {
-                            this->shard_sizes_.assign(num_shards, 0);
-                        }
-                        uint64_t total = this->current_offset_;
-                        uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
-                        for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
-                        this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
-                    }
-
-                    if (ids) {
-                        this->set_ids_internal(ids, chunk_count, target_offset);
-                    }                
+                    this->ingest_quantized_rows(handle, chunk_b.data(), chunk_count, offset, ids);
+                    return std::any();
 		} else {
+                    // Storage is float/half: no quantizer, no staging — copy
+                    // straight into the dataset.
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
                     if (offset == -1) {
@@ -1391,6 +1696,26 @@ public:
         *max = static_cast<float>(quantizer_.max());
     }
 
+    // Set the number of rows to stage and train the int8/uint8 quantizer on. 0 keeps the default (kDefaultQuantizerTrainLimit).
+    // Call before build/flush; it sizes the training SAMPLE only, never the
+    // staging buffer -- it IS the staging bound: rows are staged until this
+    // many are held, then the quantizer trains on them and the buffer is freed.
+    // Unclamped on purpose; cap_train_rows_to_gpu_mem() trims the device copy if
+    // the value is larger than free VRAM allows.
+    void set_quantizer_train_limit(uint64_t n) {
+        if (n == 0) return;
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            quantizer_train_limit_ = n;
+        }
+        // Drop the memoized staging bound: it was derived from the OLD limit, so
+        // leaving it would silently ignore this call. Normally a no-op — every
+        // production caller sets the limit in the constructor, before any row is
+        // staged — but a caller that changes it mid-build gets the value it
+        // asked for rather than the one measured first.
+        staging_row_limit_.store(0, std::memory_order_relaxed);
+    }
+
     // ---- Native B-source quantization (base element B -> 1-byte T) ----
     // Base-typed (B) add: converts the SOURCE-typed chunk to storage T, the add
     // counterpart of search_quantize (symmetric: same B->T conversion). Routes by
@@ -1404,18 +1729,28 @@ public:
             // B == T: no conversion — native storage add.
             this->add_chunk(chunk_data, chunk_count, offset, ids);
         } else if constexpr (sizeof(T) == 1) {
-            {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
-                if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
-            }
-            pending_float_chunk_t c;
-            c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
-            c.count  = chunk_count;
-            c.offset = offset;
-            if (ids) c.ids.assign(ids, ids + chunk_count);
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            pending_total_count_ += chunk_count;
-            pending_float_chunks_.push_back(std::move(c));
+            // int8/uint8 storage: quantize B -> T. Rows are staged raw until the
+            // quantizer is trained (nothing can be quantized before it exists),
+            // then every later chunk is mapped on the fly straight into
+            // flattened_host_dataset. Staging stops at quantizer_train_limit_
+            // rows — the training sample — or at build(), whichever comes first,
+            // so the raw buffer never exceeds the sample it exists to feed. Same
+            // stage/flush/
+            // stream shape as add_chunk_float, but the input is already base type
+            // B (no f32->B conversion). GPU training must run in a worker task,
+            // so submit_main.
+            uint64_t job_id = worker->submit_main(
+                [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+                    }
+                    this->ingest_quantized_rows(handle, chunk_data, chunk_count, offset, ids);
+                    return std::any();
+                }
+            );
+            auto res = worker->wait(job_id).get();
+            if (res.error) std::rethrow_exception(res.error);
         } else if constexpr (std::is_same_v<B, float>) {
             // B=float, T=half (sizeof(T)!=1): f32 -> T cast via add_chunk_float.
             this->add_chunk_float(chunk_data, chunk_count, offset, ids);
@@ -1905,15 +2240,69 @@ protected:
     // See class-level comment block above for full description. Holds the raw
     // SOURCE element type B (float or half); the quantizer trains on B and
     // transforms B->T at flush time.
-    struct pending_float_chunk_t {
-        std::vector<B>   data;   ///< count * dimension B elements
-        uint64_t         count;
-        int64_t          offset; ///< -1 = append; >= 0 = explicit position
-        std::vector<IdT> ids;    ///< empty if caller supplied no IDs
+    // Rows staged by ONE add_chunk_* call, described as a range inside the
+    // shared arenas (staging_data_ / staging_ids_) instead of owning its own
+    // buffers the way the old pending_float_chunk_t did.
+    //
+    // WHY THIS EXISTS AT ALL — the arenas are appended sequentially by a single
+    // worker thread, so row positions are implicit and a span looks redundant.
+    // It is not, because two properties are per-CALL, not per-cycle, and flush
+    // has to reproduce them exactly:
+    //
+    //   offset   Where the caller wants these rows placed. -1 (every caller
+    //            today) means "append at current_offset_", so consecutive calls
+    //            form one run. A caller passing an explicit position instead
+    //            starts a new, separately-placed group; without spans the flush
+    //            could only place everything sequentially and would silently put
+    //            those rows at the wrong index.
+    //   has_ids  Whether the caller supplied ids. The API allows nullptr, and a
+    //            span without ids must be skipped by the id/id_to_index_ update
+    //            rather than reading someone else's ids. ids_start is that
+    //            span's first index in staging_ids_, which is why a no-ids call
+    //            does not shift the ids of the calls around it.
+    //
+    // WHAT IT COSTS IN PRACTICE — nothing: consecutive appends that agree about
+    // ids merge (see stage_rows_locked), so the shipping path (one row per call,
+    // offset -1, ids always present) produces EXACTLY ONE span whether it stages
+    // 1 row or 100 000, and flush runs its loop once. Spans multiply only for a
+    // caller that interleaves explicit offsets or alternates ids, which no
+    // caller in this repo does — every C entry point hardcodes offset -1.
+    struct staged_span_t {
+        uint64_t start_row;  ///< first row of this span within staging_data_
+        uint64_t count;      ///< rows in this span
+        int64_t  offset;     ///< -1 = append at current_offset_; >= 0 = explicit
+        uint64_t ids_start;  ///< this span's first index in staging_ids_ (iff has_ids)
+        bool     has_ids;    ///< false => flush skips the id update for these rows
     };
-    static constexpr uint64_t kQuantizerTrainThreshold = 1000;
-    std::vector<pending_float_chunk_t> pending_float_chunks_;
+    // (kQuantizerTrainThreshold, a hard 1000-row early-train trigger, was
+    // removed: it trained every f32->int8/uint8 build on the first ~1000 rows
+    // and made set_quantizer_train_limit inert on that path. Both paths now
+    // stage exactly quantizer_train_limit_ rows.)
+    // Rows staged and trained on for the int8/uint8 scalar quantizer. Default
+    // 100000; settable per index via set_quantizer_train_limit, and capped to
+    // 60% of free GPU memory (cap_train_rows_to_gpu_mem / staging_row_limit).
+    // 100k rows give a fine 0.99-quantile estimate at a few hundred MB of f32
+    // even at high dim; 1M would be ~3-4 GB and get capped.
+    static constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
+    uint64_t quantizer_train_limit_ = kDefaultQuantizerTrainLimit;
+    // Contiguous staging arena: ONE allocation sized to the staging bound (which
+    // is known before the first row lands), appended into as rows arrive,
+    // uploaded to the device in place, then released at flush. Replaces a
+    // vector-of-vectors that cost two heap allocations plus a 64-byte record per
+    // staged ROW (the builders stage one row per call) and forced a second
+    // full-size copy at flush just to make the rows contiguous for raft::copy.
+    std::vector<B>             staging_data_;
+    std::vector<IdT>           staging_ids_;
+    std::vector<staged_span_t> staging_spans_;
     uint64_t pending_total_count_ = 0;
+    // First reservation step for the staging arenas — big enough that a
+    // one-row-per-call build does not thrash on the early doublings, small
+    // enough to be irrelevant for a tiny table.
+    static constexpr uint64_t kStagingReserveFloorRows = 4096;
+    // min(quantizer_train_limit_, GPU-trainable rows); measured once, then reused.
+    // Atomic because staging_row_limit() runs OUTSIDE mutex_ (it issues a CUDA
+    // driver query and may log, neither of which may happen under the lock).
+    std::atomic<uint64_t> staging_row_limit_{0};
 };
 
 } // namespace matrixone

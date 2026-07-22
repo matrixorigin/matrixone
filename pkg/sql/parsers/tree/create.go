@@ -2150,6 +2150,7 @@ type IndexOption struct {
 	MaxPostingsCapacity      int64 // fulltext2: max postings (term occurrences) per built segment
 	PositionFree             bool  // fulltext2: build a position-free (bag-of-words only) index
 	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
+	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -2165,7 +2166,8 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 || node.PositionFree ||
+		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
+		node.QuantizerTrainLimit != 0 || node.PositionFree ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2287,6 +2289,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.MaxPostingsCapacity != 0 {
 		ctx.WriteString("MAX_POSTINGS_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxPostingsCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.QuantizerTrainLimit != 0 {
+		ctx.WriteString("QUANTIZER_TRAIN_LIMIT ")
+		ctx.WriteString(strconv.FormatInt(node.QuantizerTrainLimit, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.PositionFree {

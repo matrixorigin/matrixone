@@ -129,9 +129,10 @@ const (
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
 	// explicitly specified, read back by the build path (table functions /
 	// sync), and rendered by IndexParamsToStringList for SHOW CREATE.
-	IndexAlgoParamKmeansTrainPercent = "kmeans_train_percent"
-	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
-	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
+	IndexAlgoParamKmeansTrainPercent  = "kmeans_train_percent"
+	IndexAlgoParamKmeansMaxIteration  = "kmeans_max_iteration"
+	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
+	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
 	// IndexAlgoParamMaxPostingsCapacity (fulltext2): max postings (term occurrences)
 	// per built segment. Bounds per-segment build memory regardless of doc size —
@@ -248,6 +249,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[IndexAlgoParamMaxPostingsCapacity]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
+	}
+
+	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
 	}
 
 	if val, ok := result[IndexAlgoParamVersion]; ok {

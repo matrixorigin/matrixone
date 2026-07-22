@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -84,4 +85,36 @@ func TestLoadQuantizeBounds(t *testing.T) {
 	// sql error propagates
 	runSql = mock_runSql_parser_error
 	require.Error(t, (&IvfflatSearchIndex[float32]{}).loadQuantizeBounds(sqlproc, tblcfg, types.T_array_int8))
+}
+
+// TestScoreFromQuantized verifies that the distance the entries query measures in
+// the quantized domain is rescaled back to source units. The regression: with
+// QUANTIZATION='int8' over [0,1] (mul=255), a source L2 of 0.5 was reported near
+// 128 (mul*0.5) and range predicates in source units were off by mul^2.
+func TestScoreFromQuantized(t *testing.T) {
+	const sourceL2 = 0.5
+	const sourceSq = sourceL2 * sourceL2 // 0.25
+
+	// Identity quantizer (f32/f64/bf16/f16): QuantMul==1 → pass through, with the
+	// squared->L2 conversion applied when the user asked for l2_distance.
+	id := &IvfflatSearchIndex[float32]{QuantMul: 1, QuantAdd: 0}
+	require.InDelta(t, sourceL2, id.scoreFromQuantized(sourceSq, metric.DistFn_L2Distance, metric.Metric_L2sqDistance), 1e-9)
+	require.InDelta(t, sourceSq, id.scoreFromQuantized(sourceSq, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance), 1e-9)
+
+	// int8 quantizer for [0,1] → mul=255 (the reviewer's example). The entries
+	// query returns the squared L2 in the quantized domain = mul^2 * sourceSq.
+	mul, _ := quantizer.Int8Params(0, 1)
+	require.Equal(t, 255.0, mul)
+	q := &IvfflatSearchIndex[float32]{QuantMul: mul, QuantAdd: -128}
+	quantizedSq := mul * mul * sourceSq
+
+	// Returned distance (user asked l2_distance) must be the SOURCE L2 (0.5),
+	// NOT ~mul*0.5 (~127.5) as before the rescale.
+	got := q.scoreFromQuantized(quantizedSq, metric.DistFn_L2Distance, metric.Metric_L2sqDistance)
+	require.InDelta(t, sourceL2, got, 1e-6)
+	require.Less(t, got, 1.0, "regression: quantized L2 must not be reported near mul*0.5")
+
+	// Range predicate in source SQUARED units (user asked l2_distance_sq).
+	gotSq := q.scoreFromQuantized(quantizedSq, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance)
+	require.InDelta(t, sourceSq, gotSq, 1e-6)
 }

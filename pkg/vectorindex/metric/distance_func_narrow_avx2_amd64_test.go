@@ -33,6 +33,12 @@ import (
 // TestAVX2NarrowMatchesScalar checks all four metrics of each AVX2 narrow kernel
 // against the scalar oracle across dims covering the 8-lane loop + every tail.
 func TestAVX2NarrowMatchesScalar(t *testing.T) {
+	// This test calls the AVX2 kernels directly over dims that hit the 8-lane
+	// loop, so it executes AVX2 instructions. Skip (don't SIGILL) on a CPU that
+	// lacks AVX2 — matches the guards on the AVX-512 tests in the sibling file.
+	if !hasAVX2 {
+		t.Skip("AVX2 not available")
+	}
 	r := rand.New(rand.NewSource(11))
 	chk := func(name string, dim int, got, want float64, exact bool) {
 		t.Helper()

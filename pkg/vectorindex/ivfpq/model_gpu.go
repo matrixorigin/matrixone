@@ -120,6 +120,9 @@ func (idx *IvfpqModel[B, Q]) ivfpqConfig() (cuvsMetric cuvs.DistanceType, bp cuv
 	if cfg.KmeansTrainsetFraction > 0 {
 		bp.KmeansTrainsetFraction = cfg.KmeansTrainsetFraction
 	}
+	if cfg.QuantizerTrainLimit > 0 {
+		bp.QuantizerTrainLimit = cfg.QuantizerTrainLimit
+	}
 	mode = cuvs.DistributionMode(cfg.DistributionMode)
 	return
 }

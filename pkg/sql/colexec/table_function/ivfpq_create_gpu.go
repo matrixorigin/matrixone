@@ -364,6 +364,17 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction = trainPct / 100.0
 		}
 
+		// quantizer training-sample buffer limit (rows) for int8/uint8 storage.
+		// Flat algo_params key set in CREATE INDEX; 0 => C++ default (1000).
+		qLimit, err := indexplugin.AlgoParamInt(u.param.QuantizerTrainLimit,
+			proc.GetResolveVariableFunc(), "quantizer_train_limit", 0)
+		if err != nil {
+			return err
+		}
+		if qLimit > 0 {
+			u.idxcfg.CuvsIvfpq.QuantizerTrainLimit = uint64(qLimit)
+		}
+
 		// ---- validate argument types ----
 		if len(tf.Args) < 3 || !catalogplugin.SupportsPrimaryKeyType(ivfpqCatalogHooks, types.T(tf.Args[1].Typ.Id)) {
 			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be an int64")

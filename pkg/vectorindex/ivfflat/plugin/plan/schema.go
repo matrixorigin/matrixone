@@ -246,6 +246,14 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Scale: colMap[colName].Typ.Scale,
 		}
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			// int8/uint8 quantization is L2-only (the affine quantizer breaks
+			// inner-product / cosine geometry). Gated by the per-algo catalog hook —
+			// the single home shared with REINDEX (compile/ValidateReindexParams) —
+			// so CREATE and REINDEX cannot drift.
+			if err := (ivfflatrt.CatalogHooks{}).ValidQuantization(
+				indexInfo.IndexOption.Quantization, indexInfo.IndexOption.AlgoParamVectorOpType); err != nil {
+				return nil, nil, err
+			}
 			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
 				// QUANTIZATION is downcast-only: the quantized entry element must be the
 				// same width or narrower than the base column. Upcasting (e.g. a bf16 or

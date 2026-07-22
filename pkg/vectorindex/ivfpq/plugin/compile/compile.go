@@ -291,6 +291,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
 		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IndexAlgoParamQuantizerTrainLimit,
 		catalog.HnswM,
 		catalog.BitsPerCode,
 		catalog.Quantization,

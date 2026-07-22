@@ -930,6 +930,7 @@ type AlterOptionAlterReIndex struct {
 	MaxPostingsCapacity      int64
 	PositionFree             bool
 	PositionFreeSet          bool
+	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -966,6 +967,7 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.MaxPostingsCapacity = option.MaxPostingsCapacity
 	a.PositionFree = option.PositionFree
 	a.PositionFreeSet = option.PositionFreeSet
+	a.QuantizerTrainLimit = option.QuantizerTrainLimit
 	a.IncludeColumns = option.IncludeColumns
 	return a
 }
@@ -1014,6 +1016,7 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
 	writeInt("max_index_capacity", node.MaxIndexCapacity)
 	writeInt("max_postings_capacity", node.MaxPostingsCapacity)
+	writeInt("quantizer_train_limit", node.QuantizerTrainLimit)
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString(" include (")
 		for i, c := range node.IncludeColumns {

@@ -75,4 +75,7 @@ select cast(v as vecf32(4)) + cast(v as vecf32(4)) from u8t order by a;
 select vecuint8_from_base64('ChQeKA==');
 select vecuint8_from_base64('AP+AAQ==');
 
+-- a vecuint8 column cannot be a primary key (inline declaration)
+create table pku8(a int, v vecuint8(4) primary key);
+
 drop database if exists vecu8db;

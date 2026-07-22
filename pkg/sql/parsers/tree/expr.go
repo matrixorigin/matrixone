@@ -1679,8 +1679,13 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte('@')
 		if node.System {
 			ctx.WriteByte('@')
+			if node.Global {
+				ctx.WriteString("global.")
+			}
+			ctx.WriteString(node.Name)
+		} else {
+			ctx.WriteIdentifier(Identifier(node.Name))
 		}
-		ctx.WriteString(node.Name)
 	}
 }
 

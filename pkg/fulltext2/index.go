@@ -136,21 +136,6 @@ func (idx *Index) isLive(si int, ord int64) bool {
 	return b == nil || b[ord]
 }
 
-// forEachLive calls fn for every live (segment index, doc ord), driven by the liveOrd
-// bitmap (nil => the whole segment is live). This replaces iterating the transient
-// liveLoc map — same set of locations, no resident pk->loc map.
-func (idx *Index) forEachLive(fn func(si int, ord int64)) {
-	for si, seg := range idx.segments {
-		b := idx.liveOrd[si]
-		nd := seg.numDocs()
-		for ord := 0; ord < nd; ord++ {
-			if b == nil || b[ord] {
-				fn(si, int64(ord))
-			}
-		}
-	}
-}
-
 // SearchPhrase runs an NL exact-phrase query across all segments and returns the
 // global top-k (score desc; equal scores are order-unspecified). A single term is the
 // degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the

@@ -102,6 +102,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 		bits_per_code:            C.uint32_t(bp.BitsPerCode),
 		add_data_on_build:        C.bool(bp.AddDataOnBuild),
 		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+		quantizer_train_limit:    C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	cIvfPq := C.gpu_ivf_pq_new(
@@ -162,6 +163,7 @@ func NewGpuIvfPqEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metr
 		bits_per_code:            C.uint32_t(bp.BitsPerCode),
 		add_data_on_build:        C.bool(bp.AddDataOnBuild),
 		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+		quantizer_train_limit:    C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	cIvfPq := C.gpu_ivf_pq_new_empty(
@@ -360,6 +362,7 @@ func NewGpuIvfPqFromFile[B, Q VectorType](filename string, dimension uint32, met
 		bits_per_code:            C.uint32_t(bp.BitsPerCode),
 		add_data_on_build:        C.bool(bp.AddDataOnBuild),
 		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+		quantizer_train_limit:    C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	cIvfPq := C.gpu_ivf_pq_load_file(
@@ -424,6 +427,7 @@ func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		bits_per_code:            C.uint32_t(bp.BitsPerCode),
 		add_data_on_build:        C.bool(bp.AddDataOnBuild),
 		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+		quantizer_train_limit:    C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	var errmsg *C.char

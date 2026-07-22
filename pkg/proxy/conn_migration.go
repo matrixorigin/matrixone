@@ -27,15 +27,25 @@ import (
 )
 
 func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
+	return c.migrateConnFromContext(c.ctx, sqlAddr)
+}
+
+func (c *clientConn) migrateConnFromContext(
+	parent context.Context,
+	sqlAddr string,
+) (*query.MigrateConnFromResponse, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: c.connID,
 	}
-	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnFrom)
+	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sqlAddr)
 	if addr == "" {
-		return nil, moerr.NewInternalError(c.ctx, "cannot get query service address")
+		return nil, moerr.NewInternalError(parent, "cannot get query service address")
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
@@ -57,11 +67,22 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 }
 
 func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromResponse) error {
+	return c.migrateConnToContext(c.ctx, sc, info)
+}
+
+func (c *clientConn) migrateConnToContext(
+	parent context.Context,
+	sc ServerConn,
+	info *query.MigrateConnFromResponse,
+) error {
+	if parent == nil {
+		parent = context.Background()
+	}
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
 	// Currently, the session variable transferred is not used anywhere else,
 	// and just used here.
-	if _, err := sc.ExecStmt(internalStmt{
+	if _, err := execStmtWithContext(parent, sc, internalStmt{
 		cmdType: cmdQuery,
 		s:       "/* cloud_nonuser */ set transferred=1;",
 	}, nil); err != nil {
@@ -70,7 +91,7 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 
 	// First, we re-run the set variables statements.
 	for _, stmt := range c.migration.setVarStmts {
-		if _, err := sc.ExecStmt(internalStmt{
+		if _, err := execStmtWithContext(parent, sc, internalStmt{
 			cmdType: cmdQuery,
 			s:       stmt,
 		}, nil); err != nil {
@@ -82,7 +103,7 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	// Then, migrate other info with RPC.
 	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
-		return moerr.NewInternalError(c.ctx, "cannot get query service address")
+		return moerr.NewInternalError(parent, "cannot get query service address")
 	}
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -97,7 +118,7 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 		PrepareStmts:     info.PrepareStmts,
 		LastAffectedRows: info.LastAffectedRows,
 	}
-	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnTo)
+	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnTo)
 	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
@@ -107,13 +128,20 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	return nil
 }
 
-func (c *clientConn) migrateConn(prevAddr string, sc ServerConn) error {
-	resp, err := c.migrateConnFrom(prevAddr)
+func (c *clientConn) migrateConnContext(
+	ctx context.Context,
+	prevAddr string,
+	sc ServerConn,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resp, err := c.migrateConnFromContext(ctx, prevAddr)
 	if err != nil {
 		return err
 	}
 	if resp == nil {
-		return moerr.NewInternalError(c.ctx, "bad response")
+		return moerr.NewInternalError(ctx, "bad response")
 	}
-	return c.migrateConnTo(sc, resp)
+	return c.migrateConnToContext(ctx, sc, resp)
 }

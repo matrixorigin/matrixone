@@ -90,5 +90,10 @@ select summation(f16) from nvec;
 -- arithmetic IS allowed after an explicit cast to vecf32
 select cast(bf as vecf32(3)) + cast(bf as vecf32(3)) from nvec order by a;
 
+-- narrow vector columns cannot be a primary key (inline declaration)
+create table pkbf(a int, v vecbf16(3) primary key);
+create table pkf16(a int, v vecf16(3) primary key);
+create table pki8(a int, v vecint8(3) primary key);
+
 -- post
 drop database if exists vecnarrowdb;

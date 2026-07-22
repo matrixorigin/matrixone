@@ -310,6 +310,7 @@ func init() {
 		"max_index_capacity":         MAX_INDEX_CAPACITY,
 		"max_postings_capacity":      MAX_POSTINGS_CAPACITY,
 		"position_free":              POSITION_FREE,
+		"quantizer_train_limit":      QUANTIZER_TRAIN_LIMIT,
 		"reindex":                    REINDEX,
 		"limit":                      LIMIT,
 		"linear":                     LINEAR,

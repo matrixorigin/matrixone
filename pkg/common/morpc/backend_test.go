@@ -392,6 +392,53 @@ func TestFutureGetCannotBlockIfCloseBackend(t *testing.T) {
 	)
 }
 
+func TestCloseBackendNotifiesWaitingFuture(t *testing.T) {
+	received := make(chan struct{})
+	var once sync.Once
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			once.Do(func() { close(received) })
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			defer f.Close()
+			select {
+			case <-received:
+			case <-time.After(time.Second):
+				t.Fatal("request was not written before backend close")
+			}
+
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := f.Get()
+				resultC <- err
+			}()
+
+			closeC := make(chan struct{})
+			go func() {
+				b.Close()
+				close(closeC)
+			}()
+			select {
+			case <-closeC:
+			case <-time.After(time.Second):
+				t.Fatal("backend close did not return")
+			}
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, backendClosed)
+			case <-time.After(time.Second):
+				t.Fatal("waiting future was not notified when backend closed")
+			}
+		},
+	)
+}
+
 func TestStream(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
@@ -600,6 +647,127 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
 	assert.NoError(t, s.Close(false))
 	s.done(context.TODO(), RPCMessage{}, false)
+}
+
+func TestCloseStreamUnblocksFullReceiveChannel(t *testing.T) {
+	c := make(chan Message, 1)
+	unregistered := 0
+	s := newStream(
+		nil,
+		c,
+		func() *Future { return newFuture(nil) },
+		func(m *Future) error { return nil },
+		func(s *stream) { unregistered++ },
+		func() {})
+	s.init(1, false)
+	c <- newTestMessage(1)
+
+	doneC := make(chan struct{})
+	go func() {
+		defer close(doneC)
+		s.done(context.Background(), RPCMessage{
+			Message:        newTestMessage(1),
+			stream:         true,
+			streamSequence: 1,
+		}, false)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for s.mu.TryLock() {
+		s.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("stream response did not block on the full receive channel")
+		}
+		runtime.Gosched()
+	}
+
+	closeC := make(chan error, 1)
+	go func() { closeC <- s.Close(false) }()
+	select {
+	case err := <-closeC:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stream close blocked behind a full receive channel")
+	}
+	select {
+	case <-doneC:
+	case <-time.After(time.Second):
+		t.Fatal("stream response delivery did not observe stream close")
+	}
+	require.Equal(t, 1, unregistered)
+	require.Empty(t, c)
+}
+
+func TestClosedStreamHandleAndChannelAreNotReused(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error { return nil },
+		func(b *remoteBackend) {
+			first, err := b.NewStream(false)
+			require.NoError(t, err)
+			firstC, err := first.Receive()
+			require.NoError(t, err)
+			require.NoError(t, first.Close(false))
+
+			second, err := b.NewStream(false)
+			require.NoError(t, err)
+			secondC, err := second.Receive()
+			require.NoError(t, err)
+			defer func() { require.NoError(t, second.Close(false)) }()
+
+			require.NotSame(t, first, second)
+			require.NotEqual(t, firstC, secondC)
+		},
+	)
+}
+
+func TestRemoveActiveStreamDoesNotHoldBackendMutexWhileUnlocking(t *testing.T) {
+	rb := &remoteBackend{}
+	rb.stateMu.state = stateStopped
+	rb.stateMu.locked = true
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	s := &stream{
+		rb:               rb,
+		c:                make(chan Message, 1),
+		id:               1,
+		unlockAfterClose: true,
+	}
+	rb.mu.activeStreams[s.id] = s
+
+	// Reproduce NewStream's stateMu -> rb.mu order while stream removal
+	// needs to release the backend lock via stateMu.
+	rb.mu.Lock()
+	rb.stateMu.RLock()
+	doneC := make(chan struct{})
+	go func() {
+		defer close(doneC)
+		rb.removeActiveStream(s)
+	}()
+	rb.mu.Unlock()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if rb.mu.TryLock() {
+			_, exists := rb.mu.activeStreams[s.id]
+			rb.mu.Unlock()
+			if !exists {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			rb.stateMu.RUnlock()
+			t.Fatal("stream removal held rb.mu while waiting for stateMu")
+		}
+		runtime.Gosched()
+	}
+
+	rb.stateMu.RUnlock()
+	select {
+	case <-doneC:
+	case <-time.After(time.Second):
+		t.Fatal("stream removal did not finish after stateMu was released")
+	}
+	require.False(t, rb.Locked())
 }
 
 func TestGCStream(t *testing.T) {
@@ -1211,10 +1379,12 @@ func (tm *testMessage) GetPayloadField() []byte {
 }
 
 func (tm *testMessage) SetPayloadField(data []byte) {
-	if len(data) > 0 {
-		tm.payload = make([]byte, len(data))
-		copy(tm.payload, data)
+	if len(data) == 0 {
+		tm.payload = nil
+		return
 	}
+	tm.payload = make([]byte, len(data))
+	copy(tm.payload, data)
 }
 
 func newTestCodec(options ...CodecOption) Codec {

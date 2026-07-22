@@ -100,6 +100,7 @@ func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 		intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
 		graph_degree:              C.size_t(bp.GraphDegree),
 		attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+		quantizer_train_limit:     C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	cCagra := C.gpu_cagra_new(
@@ -161,6 +162,7 @@ func NewGpuCagraFromFile[B, Q VectorType](filename string, dimension uint32, met
 		intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
 		graph_degree:              C.size_t(bp.GraphDegree),
 		attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+		quantizer_train_limit:     C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	cCagra := C.gpu_cagra_load_file(
@@ -223,6 +225,7 @@ func NewGpuCagraFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
 		graph_degree:              C.size_t(bp.GraphDegree),
 		attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+		quantizer_train_limit:     C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	var errmsg *C.char
@@ -356,6 +359,7 @@ func NewGpuCagraEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metr
 		intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
 		graph_degree:              C.size_t(bp.GraphDegree),
 		attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+		quantizer_train_limit:     C.uint64_t(bp.QuantizerTrainLimit),
 	}
 
 	cCagra := C.gpu_cagra_new_empty(

@@ -25,6 +25,9 @@
 #include <algorithm>
 #include <set>
 #include <vector>
+#include <random>
+#include <algorithm>
+#include <numeric>
 #include <utility>
 
 using namespace matrixone;
@@ -157,6 +160,56 @@ TEST(GpuIvfPqTest, HalfQuantizeToInt8Build) {
         ASSERT_GE(n, (int64_t)5000);
         ASSERT_LT(n, (int64_t)(5000 + count));
     }
+
+    index.destroy();
+}
+
+// BoundedQuantizerTrainSampleCoversRange: the builder feeds rows ONE AT A TIME
+// and in RANDOM order (pkg/vectorindex/{cagra,ivfpq}/build_gpu.go AddRow, driven
+// by parallel readers), so a bounded PREFIX of the arrival stream is itself a
+// random sample of the table. That is what lets the index stage only
+// quantizer_train_limit rows, train on them, free them, and quantize everything
+// after on the fly — instead of retaining the whole table to draw a sample from.
+//
+// This asserts the property that makes the bound safe: with random arrival, the
+// learned [min,max] spans the population even though training saw only 500 of
+// 5000 rows. Values are 0..4999 (row i has value i) but shuffled on the way in,
+// so a 500-row prefix reaches the high tail with probability ~1; a sample that
+// somehow tracked arrival order instead would learn a max near its own first
+// values and saturate everything above it to int8 127.
+TEST(GpuIvfPqTest, BoundedQuantizerTrainSampleCoversRange) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 5000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+        ids[i] = (int64_t)(i + 7000);
+    }
+    // Deterministic shuffle of the ARRIVAL order — the values stay 0..4999, only
+    // the order they are fed in changes. Fixed seed so the test is reproducible.
+    std::vector<size_t> order(count);
+    std::iota(order.begin(), order.end(), 0);
+    std::shuffle(order.begin(), order.end(), std::mt19937(12345));
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_pq_t<float, int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_quantizer_train_limit(500); // stage + train on 500 rows, then stream
+    for (uint64_t k = 0; k < count; ++k) {
+        size_t i = order[k];
+        index.add_chunk_quantize(&dataset[i * dimension], 1, -1, &ids[i]);
+    }
+    index.build();
+
+    // A random 500 of 5000 reaches the tail: P(max < 3000) = (3000/5000)^500 ~ 0.
+    float qmin = 0.0f, qmax = 0.0f;
+    index.get_quantizer(&qmin, &qmax);
+    ASSERT_GE(qmax, 3000.0f);
+    ASSERT_LE(qmin, 2000.0f);
 
     index.destroy();
 }

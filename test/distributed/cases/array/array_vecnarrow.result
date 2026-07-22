@@ -161,4 +161,10 @@ select cast(bf as vecf32(3)) + cast(bf as vecf32(3)) from nvec order by a;
 cast(bf as vecf32(3)) + cast(bf as vecf32(3))
 [2, 4, 6]
 [8, 10, 12]
+create table pkbf(a int, v vecbf16(3) primary key);
+not supported: VECTOR column 'v' cannot be in primary key
+create table pkf16(a int, v vecf16(3) primary key);
+not supported: VECTOR column 'v' cannot be in primary key
+create table pki8(a int, v vecint8(3) primary key);
+not supported: VECTOR column 'v' cannot be in primary key
 drop database if exists vecnarrowdb;

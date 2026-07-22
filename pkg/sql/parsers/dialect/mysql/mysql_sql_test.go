@@ -487,6 +487,16 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt.Limit)
 	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
 
+	// COLUMNS with OUTPUT AS preserves both the projection and qualified result table.
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (name, id) output as out_db.diff_out", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("name"), tree.Identifier("id")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, tree.Identifier("out_db"), diffStmt.OutputOpt.As.SchemaName)
+	require.Equal(t, tree.Identifier("diff_out"), diffStmt.OutputOpt.As.ObjectName)
+
 	// COLUMNS with snapshot and output file
 	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
 	require.NoError(t, err)
@@ -527,6 +537,57 @@ func TestQuoteIdentifer(t *testing.T) {
 	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
 	if partitionSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+func TestQuoteSelectAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "reserved table alias",
+			sql:  "select `order`.col from tbl as `order`",
+			want: "select `order`.`col` from `tbl` as `order`",
+		},
+		{
+			name: "cte name and column aliases",
+			sql:  "with `select` (`from`, `中文 列`) as (select col1, col2 from tbl) select `from` from `select`",
+			want: "with `select`(`from`, `中文 列`) as (select `col1`, `col2` from `tbl`) select `from` from `select`",
+		},
+		{
+			name: "derived alias columns and join using",
+			sql:  "select `left`.`a b` from (select col as `a b` from tbl) as `left` (`a b`) join other as `right` using (`a b`)",
+			want: "select `left`.`a b` from (select `col` as `a b` from `tbl`) as `left`(`a b`) inner join `other` as `right` using (`a b`)",
+		},
+		{
+			name: "embedded backticks",
+			sql:  "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+			want: "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+		},
+		{
+			name: "quoted index hints",
+			sql:  "select * from tbl force index (`select`, `a b`, `x``y`)",
+			want: "select * from `tbl` force index(`select`, `a b`, `x``y`)",
+		},
+		{
+			name: "quoted user variables",
+			sql:  "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@session.autocommit, @@autocommit",
+			want: "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@autocommit, @@autocommit",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.sql, 1)
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				test.want,
+				tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
+			)
+		})
 	}
 }
 
@@ -1384,10 +1445,10 @@ var (
 			output: "select @@tx_isolation",
 		}, {
 			input:  "select @@global.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "select @@GLOBAL.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 			output: "show variables",
@@ -2169,6 +2230,9 @@ var (
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
 		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",

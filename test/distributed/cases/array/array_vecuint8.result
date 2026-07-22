@@ -72,9 +72,9 @@ a    round(cosine_similarity(v, [0,1,2,3]), 4)
 3    0.9759
 select normalize_l2(v) from u8t order by a;
 normalize_l2(v)
-[0, 0, 1, 1]
-[1, 1, 0, 0]
-[0, 0, 1, 1]
+[0, 0.26726124, 0.5345225, 0.80178374]
+[0.667537, 0.6649192, 0, 0.33507738]
+[0.18257418, 0.36514837, 0.5477226, 0.73029673]
 select a, round(l2_distance(v, cast("[10,20,30,40]" as vecuint8(4))), 4) from u8t order by a;
 a    round(l2_distance(v, cast([10,20,30,40] as vecuint8(4))), 4)
 1    51.1273
@@ -122,4 +122,6 @@ vecuint8_from_base64(ChQeKA==)
 select vecuint8_from_base64('AP+AAQ==');
 vecuint8_from_base64(AP+AAQ==)
 [0, 255, 128, 1]
+create table pku8(a int, v vecuint8(4) primary key);
+not supported: VECTOR column 'v' cannot be in primary key
 drop database if exists vecu8db;
