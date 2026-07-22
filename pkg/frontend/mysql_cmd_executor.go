@@ -1731,9 +1731,13 @@ func createPrepareStmt(
 	}
 
 	schedulingSQLMode := sessionSQLModeForParser(ses)
+	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
+		ses, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok &&
-		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) {
+		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) &&
+		(!prepareSchedulingIntent.Explicit ||
+			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
 		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
 		if err != nil {

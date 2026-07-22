@@ -915,13 +915,16 @@ func (e *Engine) ResolveQueryCandidatePool(
 		return engine.ResolvedQueryPool{}, err
 	}
 	selector := clusterservice.NewSelector().SelectByLabel(labels, clusterservice.EQ_Globbing)
-	services, byID, err := queryCandidateRoutingInput(ctx, candidates)
+	services, byRoute, err := queryCandidateRoutingInput(ctx, candidates)
 	if err != nil {
 		return engine.ResolvedQueryPool{}, err
 	}
 	var nodes engine.Nodes
 	appendCandidate := func(service *metadata.CNService) {
-		candidate, ok := byID[service.ServiceID]
+		candidate, ok := byRoute[queryCandidateRouteKey{
+			serviceID: service.ServiceID,
+			address:   service.PipelineServiceAddress,
+		}]
 		if ok {
 			nodes = append(nodes, queryCandidateNode(candidate))
 		}
@@ -1035,23 +1038,31 @@ func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
 	}
 }
 
+type queryCandidateRouteKey struct {
+	serviceID string
+	address   string
+}
+
 func queryCandidateRoutingInput(
 	ctx context.Context,
 	candidates engine.QueryCandidates,
-) ([]metadata.CNService, map[string]engine.QueryCandidate, error) {
+) ([]metadata.CNService, map[queryCandidateRouteKey]engine.QueryCandidate, error) {
 	services := make([]metadata.CNService, 0, len(candidates))
-	byID := make(map[string]engine.QueryCandidate, len(candidates))
+	byRoute := make(map[queryCandidateRouteKey]engine.QueryCandidate, len(candidates))
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
 		services = append(services, candidate.Service)
-		byID[candidate.Service.ServiceID] = candidate
+		byRoute[queryCandidateRouteKey{
+			serviceID: candidate.Service.ServiceID,
+			address:   candidate.Service.PipelineServiceAddress,
+		}] = candidate
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	return services, byID, nil
+	return services, byRoute, nil
 }
 
 func appendRuntimeIneligibleQueryCandidates(
@@ -1060,13 +1071,13 @@ func appendRuntimeIneligibleQueryCandidates(
 	selector clusterservice.Selector,
 	nodes *engine.Nodes,
 ) error {
-	seen := make(map[string]struct{}, len(*nodes))
+	seen := make(map[queryCandidateRouteKey]struct{}, len(*nodes))
 	matcher := new(clusterservice.SelectorMatcher)
 	for _, node := range *nodes {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		seen[node.Id] = struct{}{}
+		seen[queryCandidateRouteKey{serviceID: node.Id, address: node.Addr}] = struct{}{}
 	}
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
@@ -1079,11 +1090,15 @@ func appendRuntimeIneligibleQueryCandidates(
 		if !matcher.MatchCN(selector, service) {
 			continue
 		}
-		if _, ok := seen[service.ServiceID]; ok {
+		key := queryCandidateRouteKey{
+			serviceID: service.ServiceID,
+			address:   service.PipelineServiceAddress,
+		}
+		if _, ok := seen[key]; ok {
 			continue
 		}
 		*nodes = append(*nodes, queryCandidateNode(candidate))
-		seen[service.ServiceID] = struct{}{}
+		seen[key] = struct{}{}
 	}
 	return ctx.Err()
 }

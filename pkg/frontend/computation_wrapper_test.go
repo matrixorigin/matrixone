@@ -179,7 +179,7 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.NotNil(t, retStmt)
 }
 
-func TestInitExecuteStmtParamInvalidatesCachedTopologyForExplicitSchedulingIntent(t *testing.T) {
+func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitSchedulingIntent(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
 	defer prepareStmt.Close()
 
@@ -193,7 +193,7 @@ func TestInitExecuteStmtParamInvalidatesCachedTopologyForExplicitSchedulingInten
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
-	require.Nil(t, prepareStmt.compile)
+	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
 }

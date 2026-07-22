@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"sort"
 	"strconv"
@@ -394,6 +396,9 @@ func (c *Compile) evaluateQueryPlacement(
 		CurrentCNPolicy: intent.CurrentCNPolicy,
 		Intent:          intent,
 	}
+	if schedule.ValidateSchedulingIntent(intent) != "" {
+		return schedule.DecideQueryPlacement(req), "", nil
+	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		req.CandidateResolution = schedule.CandidateResolution{
 			DiscoverySource: schedule.CandidateSourceNotRequired,
@@ -471,16 +476,27 @@ func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {
 }
 
 func (c *Compile) querySchedulingSelectionKey() string {
-	if c.proc == nil {
-		return ""
-	}
-	if profile := c.proc.GetStmtProfile(); profile != nil {
-		id := profile.GetStmtId().String()
-		if strings.Trim(id, "0-") != "" {
+	if c.proc != nil {
+		if profile := c.proc.GetStmtProfile(); profile != nil {
+			id := profile.GetStmtId().String()
+			if strings.Trim(id, "0-") != "" {
+				return id
+			}
+		}
+		if id := strings.TrimSpace(c.proc.QueryId()); id != "" {
 			return id
 		}
 	}
-	return strings.TrimSpace(c.proc.QueryId())
+	// Some internal/test callers have neither a statement profile nor a query
+	// ID. Hash stable statement-owned text once instead of making HRW hash an
+	// arbitrarily large SQL string for every candidate. Equal SQL can share a
+	// subset, which is preferable to either randomness or rejecting the query.
+	sqlText := c.originSQL
+	if sqlText == "" {
+		sqlText = c.sql
+	}
+	sum := sha256.Sum256([]byte(sqlText))
+	return "sql-sha256:" + hex.EncodeToString(sum[:16])
 }
 
 func canonicalQueryPoolIdentity(tenant string, labels map[string]string) string {

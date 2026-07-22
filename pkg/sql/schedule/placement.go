@@ -246,10 +246,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if !req.CurrentCNPolicy.Valid() {
 		return queryDecision(req, nil, nil, ReasonInvalidCurrentCNPolicy, false)
 	}
-	if !req.Intent.PoolFallback.Valid() || !req.Intent.EmptyWorkerPolicy.Valid() {
-		return queryDecision(req, nil, nil, ReasonInvalidSchedulingIntent, false)
-	}
-	if reason := validateWorkerSetPolicy(req.Intent.WorkerSet, false); reason != "" {
+	if reason := ValidateSchedulingIntent(req.Intent); reason != "" {
 		return queryDecision(req, nil, nil, reason, false)
 	}
 	if req.Intent.PoolFallback == PoolFallbackStrict && req.ResolvedPool.Fallback {
@@ -339,6 +336,19 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 		return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
 	}
 	return makeDecision(selected, reason, true)
+}
+
+// ValidateSchedulingIntent checks the pure policy fields that do not require
+// candidate discovery or pool resolution. Callers may use it to fail invalid
+// requests before touching the cluster control plane.
+func ValidateSchedulingIntent(intent SchedulingIntent) string {
+	if !intent.CurrentCNPolicy.Valid() {
+		return ReasonInvalidCurrentCNPolicy
+	}
+	if !intent.PoolFallback.Valid() || !intent.EmptyWorkerPolicy.Valid() {
+		return ReasonInvalidSchedulingIntent
+	}
+	return validateWorkerSetPolicy(intent.WorkerSet, false)
 }
 
 func resolvedWorkers(req QueryRequest) Workers {
@@ -561,8 +571,14 @@ func compareWorkerIdentity(a, b Worker) int {
 
 func resolvedPoolDecision(req QueryRequest) ResolvedPoolDecision {
 	pool := req.ResolvedPool
+	if pool.RequestedIdentity == "" {
+		pool.RequestedIdentity = req.Intent.RequestedPool
+	}
 	if pool.Resolution == "" {
 		pool.Resolution = req.CandidateResolution.PoolResolution
+		if pool.Resolution == "" {
+			pool.Resolution = PoolResolutionUnspecified
+		}
 	}
 	return ResolvedPoolDecision{
 		RequestedIdentity: pool.RequestedIdentity,

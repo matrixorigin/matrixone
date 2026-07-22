@@ -110,6 +110,29 @@ func TestQueryCandidatePoolStrictModeRejectsSharedFallback(t *testing.T) {
 	require.Empty(t, strict.Nodes)
 }
 
+func TestQueryCandidatePoolDoesNotReportMissingSharedFallback(t *testing.T) {
+	otherLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"other"}},
+	}
+	candidates := engine.QueryCandidates{{
+		Service: metadata.CNService{
+			ServiceID: "other", Labels: otherLabels, WorkState: metadata.WorkState_Working,
+		},
+		Mcpu: 4,
+	}}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), candidates, engine.QueryCandidatePoolRequest{
+			Tenant: "app", CNLabel: map[string]string{"account": "app"},
+			RequestedPool: "tenant:app",
+		})
+	require.NoError(t, err)
+	require.Empty(t, pool.Nodes)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, pool.Resolution)
+	require.False(t, pool.Fallback)
+	require.Equal(t, "tenant:app", pool.Identity)
+}
+
 func TestQueryCandidatePoolStrictModePreservesIneligibleExactMembers(t *testing.T) {
 	labels := map[string]metadata.LabelList{"account": {Labels: []string{"app"}}}
 	candidates := engine.QueryCandidates{

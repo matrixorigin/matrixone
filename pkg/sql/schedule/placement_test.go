@@ -300,8 +300,8 @@ func TestDecideQueryPlacementDoesNotWidenResolvedPoolForRequiredCurrentCN(t *tes
 }
 
 func TestDecideQueryPlacementOrdersRequiredCurrentCNFirstWhenRequested(t *testing.T) {
-	local := Worker{ID: "local", Addr: "z-local:6001", Mcpu: 8}
-	remote := Worker{ID: "remote", Addr: "a-remote:6001", Mcpu: 16}
+	local := Worker{ID: "z-local", Addr: "z-local:6001", Mcpu: 8}
+	remote := Worker{ID: "a-remote", Addr: "a-remote:6001", Mcpu: 16}
 
 	req := QueryRequest{
 		ExecKind:        QueryExecAPMultiCN,
@@ -309,7 +309,8 @@ func TestDecideQueryPlacementOrdersRequiredCurrentCNFirstWhenRequested(t *testin
 		Candidates:      Workers{remote, local},
 		CurrentCNPolicy: CurrentCNRequired,
 	}
-	require.Equal(t, Workers{local, remote}, DecideQueryPlacement(req).Workers)
+	// Required membership alone does not pin an execution ordinal.
+	require.Equal(t, Workers{remote, local}, DecideQueryPlacement(req).Workers)
 
 	req.CurrentCNOrdinalZero = true
 	decision := DecideQueryPlacement(req)
@@ -317,6 +318,23 @@ func TestDecideQueryPlacementOrdersRequiredCurrentCNFirstWhenRequested(t *testin
 	require.Equal(t, Workers{local, remote}, decision.Workers)
 	require.Equal(t, ReasonRequiredCurrentCN, decision.Reason)
 	require.True(t, decision.Satisfied)
+}
+
+func TestDecideLocalQueryPlacementPreservesRequestedPoolIdentity(t *testing.T) {
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:  QueryExecTP,
+		CurrentCN: Worker{ID: "local", Route: WorkerRouteLocal},
+		Intent: SchedulingIntent{
+			RequestedPool:     "tenant:app",
+			PoolFallback:      PoolFallbackStrict,
+			EmptyWorkerPolicy: EmptyWorkerFail,
+			WorkerSet:         WorkerSetPolicy{Mode: WorkerSetAll},
+		},
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, "tenant:app", decision.ResolvedPool.RequestedIdentity)
+	require.Equal(t, PoolResolutionUnspecified, decision.ResolvedPool.Resolution)
 }
 
 func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {

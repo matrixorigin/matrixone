@@ -1139,6 +1139,45 @@ func TestScheduleQueryWorkersSelectsStableStatementSubset(t *testing.T) {
 }
 
 func TestScheduleQueryWorkersStrictIntentUnhappyPaths(t *testing.T) {
+	t.Run("invalid intent fails before candidate discovery", func(t *testing.T) {
+		for _, tt := range []struct {
+			name   string
+			intent schedule.SchedulingIntent
+			reason string
+		}{
+			{
+				name: "pool policy",
+				intent: schedule.SchedulingIntent{
+					Explicit: true, PoolFallback: schedule.PoolFallbackPolicy(255),
+					EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+					WorkerSet:         schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll},
+				},
+				reason: schedule.ReasonInvalidSchedulingIntent,
+			},
+			{
+				name: "current CN policy",
+				intent: schedule.SchedulingIntent{
+					CurrentCNPolicy: schedule.CurrentCNPolicy(255),
+					WorkerSet:       schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll},
+				},
+				reason: schedule.ReasonInvalidCurrentCNPolicy,
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				provider := &schedulerProviderTestEngine{schedulerTestEngine: &schedulerTestEngine{}}
+				c := NewMockCompile(t)
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.e = provider
+				c.SetQuerySchedulingIntent(tt.intent)
+
+				_, err := c.scheduleQueryWorkers()
+				require.ErrorContains(t, err, tt.reason)
+				require.Zero(t, provider.discoveryCalls)
+				require.Zero(t, provider.resolutionCalls)
+			})
+		}
+	})
+
 	t.Run("legacy provider cannot prove strict pool", func(t *testing.T) {
 		c := NewMockCompile(t)
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -1181,6 +1220,15 @@ func TestScheduleQueryWorkersStrictIntentUnhappyPaths(t *testing.T) {
 		require.Len(t, workers, 1)
 		require.Equal(t, "local:6001", workers[0].Addr)
 	})
+}
+
+func TestQuerySchedulingSelectionKeyHasDeterministicSQLFallback(t *testing.T) {
+	c := &Compile{originSQL: "select 1"}
+	first := c.querySchedulingSelectionKey()
+	require.NotEmpty(t, first)
+	require.Equal(t, first, c.querySchedulingSelectionKey())
+	require.NotEqual(t, first, (&Compile{originSQL: "select 2"}).querySchedulingSelectionKey())
+	require.LessOrEqual(t, len(first), 64)
 }
 
 type fakeQueryClient struct{}

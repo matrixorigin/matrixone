@@ -181,6 +181,9 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.remapDb = nil
+	cwft.schedulingSQL = ""
+	cwft.preparedSchedulingSQLMode = ""
+	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.schedulingTrace.Reset()
 }
 
@@ -620,7 +623,10 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 
-		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok && shouldCachePrepareCompile(preparePlan.Plan) {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			ses, originSQL, prepareStmt.schedulingSQLMode)
+		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
+			shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 			// Prepare-time compiles are cached and must not retain a statement-owned trace.
 			// The execution path attaches the current wrapper trace after cache retrieval.
 			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
@@ -671,17 +677,18 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
-	// cannot reuse a topology compiled under the prepare-time defaults.
+	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
+	// default cached topology dormant, though: prepared compiles already coexist
+	// with other statement compiles on the session process, and it may become
+	// reusable if a session-level scheduling override is later cleared.
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
-	if prepareStmt.compile != nil && querySchedulingIntentForStatementWithSQLMode(
+	retComp := prepareStmt.compile
+	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
 		ses, originSQL, prepareStmt.schedulingSQLMode).Explicit {
-		prepareStmt.compile.FreeOperator()
-		prepareStmt.compile.SetIsPrepare(false)
-		prepareStmt.compile.Release()
-		prepareStmt.compile = nil
+		retComp = nil
 	}
-	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+	return retComp, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

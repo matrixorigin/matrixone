@@ -300,7 +300,8 @@ func (e *Engine) ResolveQueryCandidatePool(
 			}
 		}
 	}
-	useSharedFallback := !allCompatible && !hasExactWorking && request.FallbackPolicy == engine.QueryPoolFallbackLegacyCompatible
+	useSharedFallback := !allCompatible && !hasExactWorking && hasSharedWorking &&
+		request.FallbackPolicy == engine.QueryPoolFallbackLegacyCompatible
 	var nodes engine.Nodes
 	appendMatching := func(states ...metadata.WorkState) {
 		for _, candidate := range candidates {

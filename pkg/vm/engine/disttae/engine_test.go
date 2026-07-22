@@ -393,6 +393,38 @@ func TestEngineQueryPoolResolutionSeparatesStrictAndLegacyFallback(t *testing.T)
 	require.Equal(t, "strict-rejected-shared-unlabeled", strict.FallbackReason)
 }
 
+func TestEngineQueryPoolResolutionCorrelatesCandidatesWithoutServiceID(t *testing.T) {
+	appLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"app"}},
+	}
+	otherLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"other"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			PipelineServiceAddress: "app:6001", Labels: appLabels,
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			PipelineServiceAddress: "other:6001", Labels: otherLabels,
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 8},
+		{Service: metadata.CNService{
+			PipelineServiceAddress: "app-draining:6001", Labels: appLabels,
+			WorkState: metadata.WorkState_Draining,
+		}, Mcpu: 2},
+	}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), candidates, engine.QueryCandidatePoolRequest{
+			Tenant: "app", CNLabel: map[string]string{"account": "app"},
+		})
+	require.NoError(t, err)
+	require.Equal(t, []string{"app:6001", "app-draining:6001"}, nodeAddresses(pool.Nodes))
+	require.Equal(t, 4, pool.Nodes[0].Mcpu)
+	require.Equal(t, 2, pool.Nodes[1].Mcpu)
+}
+
 func TestEngineStrictPoolPreservesIneligibleExactMembersWithoutWidening(t *testing.T) {
 	candidates := engine.QueryCandidates{
 		{
