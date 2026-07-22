@@ -630,6 +630,26 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	prepared, err := runOneStmt(mock, t, "prepare stmt_ctas from 'create table ctas_p as select ? as a, ? as b'")
+	require.NoError(t, err)
+	prepare := prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 2)
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.Empty(t, GetResultColumnsFromPlan(prepare.GetPlan()))
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_where from 'create table ctas_where as select N_NAME from NATION where N_REGIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 1)
+	require.NotEmpty(t, prepare.GetSchemas())
+
+	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+}
+
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tests := []struct {

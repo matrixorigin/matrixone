@@ -74,6 +74,32 @@ func TestLiteralID(t *testing.T) {
 	}
 }
 
+func TestQuotedUnicodeIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		value string
+	}{
+		{name: "quoted Arabic", input: "`الكمية`", value: "الكمية"},
+		{name: "quoted Chinese", input: "`数量`", value: "数量"},
+		{name: "escaped delimiter with Unicode", input: "`数``量`", value: "数`量"},
+		{name: "latin1 client byte", input: "`\xe9`", value: "\xe9"},
+		{name: "latin1 client byte before escaped delimiter", input: "`\xe9``name`", value: "\xe9`name"},
+		{name: "latin1 bytes forming supplementary UTF-8", input: "`\xf0\x9f\x98\x80`", value: "\xf0\x9f\x98\x80"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			token, value := scanner.Scan()
+			if token != QUOTE_ID || value != test.value {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(QUOTE_ID), test.value)
+			}
+		})
+	}
+}
+
 func TestScannerSQLModePipeConcat(t *testing.T) {
 	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
 	id, _ := s.Scan()
