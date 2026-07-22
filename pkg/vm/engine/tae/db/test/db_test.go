@@ -6852,7 +6852,10 @@ func TestAppendAndGC2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutil.WaitAllCheckpointsFinished(t, db)
+	ckpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
 	tae.Restart(ctx)
