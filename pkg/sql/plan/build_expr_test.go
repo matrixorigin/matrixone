@@ -438,6 +438,15 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 		{name: "negative decimal hour at half", sql: "select cast(maketime(cast('-12.5' as decimal(3, 1)), 0, 0) as varchar)", want: "-13:00:00"},
 		{name: "decimal hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", want: "838:59:59"},
 		{name: "decimal hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", want: "-838:59:59"},
+		{name: "decimal256 hour below half", sql: "select cast(maketime(cast('12.499999999999999999999999999999' as decimal(65, 30)), 0, 0) as varchar)", want: "12:00:00"},
+		{name: "decimal256 hour at half", sql: "select cast(maketime(cast('12.500000000000000000000000000000' as decimal(65, 30)), 0, 0) as varchar)", want: "13:00:00"},
+		{name: "decimal256 minute below half", sql: "select cast(maketime(12, cast('58.499999999999999999999999999999' as decimal(65, 30)), 0) as varchar)", want: "12:58:00"},
+		{name: "decimal256 minute at half", sql: "select cast(maketime(12, cast('58.500000000000000000000000000000' as decimal(65, 30)), 0) as varchar)", want: "12:59:00"},
+		{name: "decimal256 hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65, 0)), 0, 0) as varchar)", want: "838:59:59"},
+		{name: "decimal256 hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65, 0)), 0, 0) as varchar)", want: "-838:59:59"},
+		{name: "safe exponent underflow", sql: "select cast(maketime(12, 34, '1e-5000') as varchar)", want: "12:34:00.000000"},
+		{name: "zero mantissa huge exponent", sql: "select cast(maketime(12, 34, '0e5000') as varchar)", want: "12:34:00.000000"},
+		{name: "wide zero mantissa", sql: "select cast(maketime(12, 34, '" + strings.Repeat("0", 4097) + "') as varchar)", want: "12:34:00.000000"},
 	}
 
 	for _, test := range tests {

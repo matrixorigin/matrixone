@@ -9440,7 +9440,7 @@ func initTimeFormatTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
-			info: "test time_format - empty format returns empty string",
+			info: "test time_format - empty format returns null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
 					[]types.Time{t1, t6},
@@ -9449,7 +9449,7 @@ func initTimeFormatTestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"", ""},
-				[]bool{false, false}),
+				[]bool{true, true}),
 		},
 		{
 			info: "test time_format - %h:%i:%s %p",
@@ -9743,6 +9743,28 @@ func TestMakeTimeExactStringSecondRounding(t *testing.T) {
 
 	_, _, null := makeTimeExactSecond("1e999999999")
 	require.True(t, null, "MAKETIME must reject an unbounded exponent without allocating it")
+
+	second, microsecond, null := makeTimeExactSecond("1e-5000")
+	require.False(t, null)
+	require.Zero(t, second)
+	require.Zero(t, microsecond)
+
+	second, microsecond, null = makeTimeExactSecond("0e5000")
+	require.False(t, null)
+	require.Zero(t, second)
+	require.Zero(t, microsecond)
+
+	second, microsecond, null = makeTimeExactSecond(strings.Repeat("0", 4097))
+	require.False(t, null)
+	require.Zero(t, second)
+	require.Zero(t, microsecond)
+
+	for _, value := range []string{"1e-4103", "1e-4104"} {
+		second, microsecond, null = makeTimeExactSecond(value)
+		require.False(t, null, value)
+		require.Zero(t, second, value)
+		require.Zero(t, microsecond, value)
+	}
 }
 
 func TestMakeTimeStringHourMinuteSemantics(t *testing.T) {

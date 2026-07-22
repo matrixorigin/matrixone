@@ -4019,11 +4019,12 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
+	emptyFormat := len(fmt) == 0
 
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		t, null1 := times.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || emptyFormat {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -7376,7 +7377,31 @@ func makeTimeFloatGetter[T constraints.Float](vec *vector.Vector) func(uint64) (
 	}
 }
 
-func makeTimeDecimalIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+func makeTimeExactInteger(value string) (int64, bool) {
+	exact, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return 0, true
+	}
+	negative := exact.Sign() < 0
+	numerator := new(big.Int).Abs(exact.Num())
+	rounded, remainder := new(big.Int), new(big.Int)
+	rounded.QuoRem(numerator, exact.Denom(), remainder)
+	if new(big.Int).Lsh(remainder, 1).Cmp(exact.Denom()) >= 0 {
+		rounded.Add(rounded, big.NewInt(1))
+	}
+	if negative {
+		rounded.Neg(rounded)
+	}
+	if rounded.IsInt64() {
+		return rounded.Int64(), false
+	}
+	if negative {
+		return math.MinInt64, false
+	}
+	return math.MaxInt64, false
+}
+
+func makeTimeDecimal128IntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
 	param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec)
 	scale := vec.GetType().Scale
 	return func(i uint64) (int64, bool) {
@@ -7384,27 +7409,19 @@ func makeTimeDecimalIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool)
 		if null {
 			return 0, true
 		}
-		exact, ok := new(big.Rat).SetString(value.Format(scale))
-		if !ok {
+		return makeTimeExactInteger(value.Format(scale))
+	}
+}
+
+func makeTimeDecimal256IntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vec)
+	scale := vec.GetType().Scale
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		if null {
 			return 0, true
 		}
-		negative := exact.Sign() < 0
-		numerator := new(big.Int).Abs(exact.Num())
-		rounded, remainder := new(big.Int), new(big.Int)
-		rounded.QuoRem(numerator, exact.Denom(), remainder)
-		if new(big.Int).Lsh(remainder, 1).Cmp(exact.Denom()) >= 0 {
-			rounded.Add(rounded, big.NewInt(1))
-		}
-		if negative {
-			rounded.Neg(rounded)
-		}
-		if rounded.IsInt64() {
-			return rounded.Int64(), false
-		}
-		if negative {
-			return math.MinInt64, false
-		}
-		return math.MaxInt64, false
+		return makeTimeExactInteger(value.Format(scale))
 	}
 }
 
@@ -7426,6 +7443,7 @@ func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) 
 
 func makeTimeExactSecond(value string) (int64, uint32, bool) {
 	const maxExactSecondDigits = 4096
+	const maxExactSecondExponent = maxExactSecondDigits + 7
 
 	value = strings.TrimSpace(value)
 	if len(value) == 0 {
@@ -7437,13 +7455,16 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		end++
 	}
 	digits := 0
+	nonzeroMantissa := false
 	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		nonzeroMantissa = nonzeroMantissa || value[end] != '0'
 		end++
 		digits++
 	}
 	if end < len(value) && value[end] == '.' {
 		end++
 		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			nonzeroMantissa = nonzeroMantissa || value[end] != '0'
 			end++
 			digits++
 		}
@@ -7451,24 +7472,34 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 	if digits == 0 {
 		return 0, 0, false
 	}
+	if !nonzeroMantissa {
+		return 0, 0, false
+	}
+	if digits > maxExactSecondDigits {
+		return 0, 0, true
+	}
 
 	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
 		exponentStart := end
 		end++
+		negativeExponent := false
 		if end < len(value) && (value[end] == '+' || value[end] == '-') {
+			negativeExponent = value[end] == '-'
 			end++
 		}
 		exponentDigits := end
 		exponentMagnitude := 0
 		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
-			if exponentMagnitude <= maxExactSecondDigits {
+			if exponentMagnitude <= maxExactSecondExponent {
 				exponentMagnitude = exponentMagnitude*10 + int(value[end]-'0')
 			}
 			end++
 		}
 		if end == exponentDigits {
 			end = exponentStart
-		} else if exponentMagnitude > maxExactSecondDigits {
+		} else if negativeExponent && exponentMagnitude > maxExactSecondExponent {
+			return 0, 0, false
+		} else if exponentMagnitude > maxExactSecondExponent {
 			return 0, 0, true
 		}
 	}
@@ -7522,7 +7553,9 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	if ivecs[0].GetType().Oid.IsMySQLString() {
 		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
 	} else if ivecs[0].GetType().Oid == types.T_decimal128 {
-		getHourValue = makeTimeDecimalIntegerGetter(ivecs[0])
+		getHourValue = makeTimeDecimal128IntegerGetter(ivecs[0])
+	} else if ivecs[0].GetType().Oid == types.T_decimal256 {
+		getHourValue = makeTimeDecimal256IntegerGetter(ivecs[0])
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[0]); ok {
 		getHourValue = getter
 	} else {
@@ -7554,7 +7587,9 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	if ivecs[1].GetType().Oid.IsMySQLString() {
 		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
 	} else if ivecs[1].GetType().Oid == types.T_decimal128 {
-		getMinuteValue = makeTimeDecimalIntegerGetter(ivecs[1])
+		getMinuteValue = makeTimeDecimal128IntegerGetter(ivecs[1])
+	} else if ivecs[1].GetType().Oid == types.T_decimal256 {
+		getMinuteValue = makeTimeDecimal256IntegerGetter(ivecs[1])
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[1]); ok {
 		getMinuteValue = getter
 	} else {

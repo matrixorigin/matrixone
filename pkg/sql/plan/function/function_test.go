@@ -388,6 +388,7 @@ func TestMakeTimeReturnScale(t *testing.T) {
 func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimalType := types.New(types.T_decimal128, 30, 20)
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
 
 	tests := []struct {
 		inputs []types.Type
@@ -403,6 +404,11 @@ func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_varchar}},
 		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_varchar}},
 		{[]types.Type{decimalType, decimalType, types.New(types.T_decimal128, 20, 6)}, []types.T{types.T_decimal128, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimal256Type, types.T_int64.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal256, types.T_float64, types.T_float64}},
+		{[]types.Type{types.T_int64.ToType(), decimal256Type, types.T_int64.ToType()}, []types.T{types.T_float64, types.T_decimal256, types.T_float64}},
+		{[]types.Type{decimal256Type, decimalType, types.T_varchar.ToType()}, []types.T{types.T_decimal256, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimalType, decimal256Type, types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_decimal256, types.T_varchar}},
+		{[]types.Type{decimal256Type, decimal256Type, types.T_varchar.ToType()}, []types.T{types.T_decimal256, types.T_decimal256, types.T_varchar}},
 	}
 
 	for _, test := range tests {
@@ -412,6 +418,41 @@ func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 		require.NoError(t, err)
 		require.Equal(t, test.args, selected.args)
+	}
+}
+
+func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal128Type := types.New(types.T_decimal128, 30, 20)
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
+	type typeChoice struct {
+		input  types.Type
+		target types.T
+	}
+	hourMinuteChoices := []typeChoice{
+		{types.T_int64.ToType(), types.T_float64},
+		{types.T_varchar.ToType(), types.T_varchar},
+		{decimal128Type, types.T_decimal128},
+		{decimal256Type, types.T_decimal256},
+	}
+	secondChoices := []typeChoice{
+		{types.T_int64.ToType(), types.T_float64},
+		{types.T_varchar.ToType(), types.T_varchar},
+	}
+
+	for _, hour := range hourMinuteChoices {
+		for _, minute := range hourMinuteChoices {
+			if hour.target != types.T_decimal256 && minute.target != types.T_decimal256 {
+				continue
+			}
+			for _, second := range secondChoices {
+				result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{hour.input, minute.input, second.input})
+				require.NoError(t, err)
+				selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+				require.NoError(t, err)
+				require.Equal(t, []types.T{hour.target, minute.target, second.target}, selected.args)
+			}
+		}
 	}
 }
 

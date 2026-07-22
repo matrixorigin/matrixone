@@ -10813,12 +10813,20 @@ func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
 	if isMakeTimeTextType(inputs[0].Oid) {
 		targetOids[0] = types.T_varchar
 	} else if exactHour {
-		targetOids[0] = types.T_decimal128
+		if inputs[0].Oid == types.T_decimal256 {
+			targetOids[0] = types.T_decimal256
+		} else {
+			targetOids[0] = types.T_decimal128
+		}
 	}
 	if isMakeTimeTextType(inputs[1].Oid) {
 		targetOids[1] = types.T_varchar
 	} else if exactMinute {
-		targetOids[1] = types.T_decimal128
+		if inputs[1].Oid == types.T_decimal256 {
+			targetOids[1] = types.T_decimal256
+		} else {
+			targetOids[1] = types.T_decimal128
+		}
 	}
 	if exactSecond {
 		targetOids[2] = types.T_varchar
@@ -11461,6 +11469,90 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 21,
 				args:       []types.T{types.T_varchar, types.T_decimal128, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 22,
+				args:       []types.T{types.T_decimal256, types.T_float64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 23,
+				args:       []types.T{types.T_decimal256, types.T_varchar, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_decimal256, types.T_decimal128, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 25,
+				args:       []types.T{types.T_decimal256, types.T_decimal256, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 26,
+				args:       []types.T{types.T_decimal256, types.T_float64, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 27,
+				args:       []types.T{types.T_decimal256, types.T_varchar, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 28,
+				args:       []types.T{types.T_decimal256, types.T_decimal128, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 29,
+				args:       []types.T{types.T_decimal256, types.T_decimal256, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 30,
+				args:       []types.T{types.T_float64, types.T_decimal256, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 31,
+				args:       []types.T{types.T_varchar, types.T_decimal256, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 32,
+				args:       []types.T{types.T_decimal128, types.T_decimal256, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 33,
+				args:       []types.T{types.T_float64, types.T_decimal256, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 34,
+				args:       []types.T{types.T_varchar, types.T_decimal256, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 35,
+				args:       []types.T{types.T_decimal128, types.T_decimal256, types.T_varchar},
 				retType:    makeTimeReturnType,
 				newOp:      func() executeLogicOfOverload { return MakeTime },
 			},
