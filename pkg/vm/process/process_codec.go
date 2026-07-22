@@ -80,6 +80,7 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
+			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
 		}
 	}
 	{ // session info
@@ -225,17 +226,23 @@ func (c *codecService) Decode(
 	proc.Base.SessionInfo.StorageEngine = c.engine
 	proc.SetAffectedRows(value.AffectedRows)
 	if value.PrepareParams.Length > 0 {
-		proc.Base.prepareParams = vector.NewVecWithData(
+		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
 			int(value.PrepareParams.Length),
 			value.PrepareParams.Data,
 			value.PrepareParams.Area,
+			proc.Mp(),
 		)
+		if err != nil {
+			proc.Free()
+			return nil, err
+		}
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
-				proc.Base.prepareParams.GetNulls().Add(uint64(i))
+				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
 	}
 	return proc, nil
 }
