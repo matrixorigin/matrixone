@@ -81,7 +81,9 @@ Since the returned batch must have accruate ts for each row, we need collect the
 
 Targets:
 1. CNCreated entries where start <= CreatedAt <= end
-2. Appendable entries where x <= CreatedAt <= end, where x is the first appendable entry with CreatedAt < start
+2. Appendable entries whose catalog lifetime can overlap the range. All live
+   appendable entries created before end remain candidates because their rows
+   can commit out of object creation order.
 */
 func TombstoneRangeScanByObject(
 	ctx context.Context,
@@ -94,28 +96,13 @@ func TombstoneRangeScanByObject(
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()
-	pendingActiveDrops := 0
-	stopAfterActiveDrops := false
+	// CreatedAt orders catalog publication, not the commit timestamps of rows
+	// appended later. Concurrent flushes can populate multiple appendable
+	// tombstone objects and commit them out of creation order, so an older
+	// object can still contain deletes in [start, end]. Do not stop the scan
+	// solely because an object's catalog lifetime precedes start.
 	for ok := it.Last(); ok; ok = it.Prev() {
-		// ObjectList is ordered by max(CreatedAt, DeletedAt). Once an entry is
-		// entirely older than start, the remaining history can only matter when
-		// an active D entry was skipped above its still-visible C counterpart.
-		if stopAfterActiveDrops && pendingActiveDrops == 0 {
-			break
-		}
 		tombstone := it.Item()
-		if tombstone.IsDEntry() && tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
-			if created := tombstone.GetPrevVersion(); created != nil && created.IsAppendable() {
-				pendingActiveDrops++
-				continue
-			}
-		}
-		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
-			tombstone.HasDCounterpart() &&
-			tombstone.GetNextVersion().DeletedAt.Equal(&txnif.UncommitTS) &&
-			pendingActiveDrops > 0 {
-			pendingActiveDrops--
-		}
 		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
 			// The dropped counterpart owns the persisted appendable tombstone data.
 			// Scanning both versions duplicates the same committed delete rows.
@@ -127,16 +114,15 @@ func TombstoneRangeScanByObject(
 				// committing create object is excluded here
 				continue
 			}
+			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
+				// Its C counterpart remains visible until the drop commits.
+				continue
+			}
 			if tombstone.HasDropCommitted() {
 				deleteAt := tombstone.GetDeleteAt()
-				if deleteAt.LT(&start) {
-					stopAfterActiveDrops = true
+				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
 					continue
 				}
-			} else if tombstone.CreatedAt.LT(&start) {
-				// Rows appended to this object can still commit in the range. Scan
-				// it, then stop after any active-drop C counterparts are visited.
-				stopAfterActiveDrops = true
 			}
 		} else {
 			// we only check the created version of the object.

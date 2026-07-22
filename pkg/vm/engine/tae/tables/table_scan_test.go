@@ -45,7 +45,7 @@ func (counter *tombstoneScanCounter) CollectObjectTombstoneInRange(
 	return nil
 }
 
-func TestTombstoneRangeScanStopsBeforeOldHistory(t *testing.T) {
+func TestTombstoneRangeScanKeepsOlderAppendableCandidates(t *testing.T) {
 	c := catalog.MockCatalog(nil)
 	defer c.Close()
 	db, err := c.CreateDBEntry("db", "", "", nil)
@@ -85,5 +85,8 @@ func TestTombstoneRangeScanStopsBeforeOldHistory(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, bat)
-	require.Zero(t, oldData.scans)
+	// Object creation order does not order later append commits. Even though
+	// the newer object's lifetime precedes start, the older appendable object
+	// can still contain rows committed in the requested range.
+	require.Equal(t, 1, oldData.scans)
 }
