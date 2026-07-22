@@ -96,6 +96,7 @@ type StatementOption struct {
 	ignorePublish            bool
 	ignoreCheckExperimental  bool
 	params                   []string
+	paramNulls               []bool
 	alterCopyOpt             *plan.AlterCopyOpt
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64

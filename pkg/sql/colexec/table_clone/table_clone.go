@@ -107,12 +107,11 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
-	//TODO implement me
-	panic("implement me")
+	buf.WriteString("TableClone")
 }
 
 func (tc *TableClone) OpType() vm.OpType {
-	return 0
+	return vm.TableClone
 }
 
 func initRelAndReader(
