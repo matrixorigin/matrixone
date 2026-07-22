@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,74 +34,139 @@ func (c *resolveErrorCompilerContext) Resolve(string, string, *Snapshot) (*Objec
 	return nil, nil, c.err
 }
 
-func TestResetPreparePlanCollectsDdlSchemas(t *testing.T) {
+func TestCollectPrepareDdlSchemas(t *testing.T) {
 	testCases := []struct {
-		name string
-		ddl  *planpb.DataDefinition
+		name     string
+		sql      string
+		expected []string
 	}{
-		{
-			name: "alter table",
-			ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_AlterTable{
-				AlterTable: &planpb.AlterTable{
-					Database: "db", TableDef: &planpb.TableDef{Name: "tbl"},
-				},
-			}},
-		},
-		{
-			name: "create index",
-			ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_CreateIndex{
-				CreateIndex: &planpb.CreateIndex{Database: "db", Table: "tbl"},
-			}},
-		},
-		{
-			name: "drop index",
-			ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropIndex{
-				DropIndex: &planpb.DropIndex{Database: "db", Table: "tbl"},
-			}},
-		},
+		{name: "alter table", sql: "alter table t1 add column c int", expected: []string{"t1"}},
+		{name: "create index", sql: "create index idx on t1(c)", expected: []string{"t1"}},
+		{name: "drop index", sql: "drop index idx on t1", expected: []string{"t1"}},
+		{name: "truncate table", sql: "truncate table t1", expected: []string{"t1"}},
+		{name: "drop tables", sql: "drop table t1, t2", expected: []string{"t1", "t2"}},
+		{name: "rename tables", sql: "rename table t1 to n1, t2 to n2", expected: []string{"t1", "t2"}},
+		{name: "create table like", sql: "create table n1 like t1", expected: []string{"t1"}},
+		{name: "drop view", sql: "drop view t1", expected: []string{"t1"}},
+		{name: "drop sequence", sql: "drop sequence t1, t2", expected: []string{"t1", "t2"}},
+		{name: "alter sequence", sql: "alter sequence t1 increment by 2", expected: []string{"t1"}},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			mock := NewMockCompilerContext(false)
-			mock.objects["tbl"] = &planpb.ObjectRef{ServerName: "server"}
-			mock.tables["tbl"] = &planpb.TableDef{Name: "tbl", DbId: 10, TblId: 20, Version: 30}
+			for i, name := range []string{"t1", "t2"} {
+				mock.objects[name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: name}
+				mock.tables[name] = &planpb.TableDef{Name: name, DbId: 10, TblId: uint64(20 + i), Version: 30}
+			}
+			statements, err := mysql.Parse(context.Background(), testCase.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer statements[0].Free()
 
-			schemas, _, err := ResetPreparePlan(mock, &planpb.Plan{
-				Plan: &planpb.Plan_Ddl{Ddl: testCase.ddl},
+			schemas, err := collectPrepareDdlSchemas(mock, statements[0], &planpb.Plan{
+				Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
 			})
 			require.NoError(t, err)
-			require.Equal(t, []*planpb.ObjectRef{{
-				Server:     30,
-				Db:         10,
-				Schema:     10,
-				Obj:        20,
-				ServerName: "server",
-				SchemaName: "db",
-				ObjName:    "tbl",
-			}}, schemas)
+			require.Len(t, schemas, len(testCase.expected))
+			for i, expected := range testCase.expected {
+				require.Equal(t, expected, schemas[i].ObjName)
+				require.Equal(t, int64(30), schemas[i].Server)
+			}
 		})
 	}
 }
 
-func TestGetPrepareDdlSchemasRejectsMissingTable(t *testing.T) {
-	ddl := &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropIndex{
-		DropIndex: &planpb.DropIndex{Database: "db", Table: "tbl"},
-	}}
+func TestCollectPrepareDdlSchemasSkipsMissingTable(t *testing.T) {
 	mock := NewMockCompilerContext(false)
-	_, err := getPrepareDdlSchemas(mock, ddl)
-	require.Error(t, err)
+	statements, err := mysql.Parse(context.Background(), "drop table if exists missing", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+
+	schemas, err := collectPrepareDdlSchemas(mock, statements[0], &planpb.Plan{
+		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
+	})
+	require.NoError(t, err)
+	require.Empty(t, schemas)
 }
 
-func TestGetPrepareDdlSchemasPropagatesResolveError(t *testing.T) {
+func TestCollectPrepareDdlSchemasPropagatesResolveError(t *testing.T) {
 	expected := errors.New("resolve failed")
 	ctx := &resolveErrorCompilerContext{MockCompilerContext: NewMockCompilerContext(false), err: expected}
-	ddl := &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropIndex{
-		DropIndex: &planpb.DropIndex{Database: "db", Table: "tbl"},
-	}}
+	statements, err := mysql.Parse(context.Background(), "truncate table t1", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
 
-	_, err := getPrepareDdlSchemas(ctx, ddl)
+	_, err = collectPrepareDdlSchemas(ctx, statements[0], &planpb.Plan{
+		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
+	})
 	require.ErrorIs(t, err, expected)
+}
+
+func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), "create table dst clone src", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	clonePlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Definition: &planpb.DataDefinition_CloneTable{CloneTable: &planpb.CloneTable{
+			SrcObjDef:   &planpb.ObjectRef{SchemaName: "tpch", ObjName: "src"},
+			SrcTableDef: &planpb.TableDef{Name: "src", DbName: "tpch", DbId: 10, TblId: 20, Version: 30},
+		}},
+	}}}
+
+	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], clonePlan)
+	require.NoError(t, err)
+	require.Equal(t, []*planpb.ObjectRef{{
+		Server: 30, Db: 10, Schema: 10, Obj: 20, SchemaName: "tpch", ObjName: "src",
+	}}, schemas)
+}
+
+func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), "create table child (id int)", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	mock := NewMockCompilerContext(false)
+	mock.objects["parent"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "parent"}
+	mock.tables["parent"] = &planpb.TableDef{Name: "parent", DbId: 10, TblId: 20, Version: 30}
+	createPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{
+			FkDbs: []string{"tpch"}, FkTables: []string{"parent"},
+		}},
+	}}}
+
+	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
+	require.NoError(t, err)
+	require.Len(t, schemas, 1)
+	require.Equal(t, "parent", schemas[0].ObjName)
+}
+
+func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {
+	schemas := appendPrepareSchemas(nil,
+		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
+		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
+	)
+	require.Len(t, schemas, 1)
+}
+
+func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
+	ddlPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Query: &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeType: planpb.Node_TABLE_SCAN,
+				ObjRef: &planpb.ObjectRef{
+					SchemaName: "db", ObjName: "src", Obj: 20,
+				},
+				TableDef: &planpb.TableDef{Name: "src", DbId: 10, TblId: 20, Version: 30},
+			}},
+		},
+	}}}
+
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), ddlPlan)
+	require.NoError(t, err)
+	require.Len(t, schemas, 1)
+	require.Equal(t, "src", schemas[0].ObjName)
+	require.Equal(t, int64(30), schemas[0].Server)
 }
 
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
