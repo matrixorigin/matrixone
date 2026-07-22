@@ -51,6 +51,50 @@ func (o *cteViewTrackingOptimizer) Optimize(stmt tree.Statement) (*Query, error)
 	return logicPlan.GetQuery(), nil
 }
 
+func collectGroupingFlags(query *Query, rootIDs ...int32) [][]bool {
+	seen := make(map[int32]bool)
+	groupingFlags := make([][]bool, 0)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if seen[nodeID] {
+			return
+		}
+		seen[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_AGG {
+			groupingFlags = append(groupingFlags, append([]bool(nil), node.GroupingFlag...))
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	for _, rootID := range rootIDs {
+		visit(rootID)
+	}
+	return groupingFlags
+}
+
+func requireRepeatedCTEGroupingFlags(t *testing.T, logicPlan *Plan, expected [][]bool) {
+	t.Helper()
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_JOIN || len(node.Children) != 2 {
+			continue
+		}
+		left := collectGroupingFlags(query, node.Children[0])
+		right := collectGroupingFlags(query, node.Children[1])
+		if len(left) == 0 || len(right) == 0 {
+			continue
+		}
+		require.ElementsMatch(t, expected, left, "left CTE consumer grouping variants")
+		require.ElementsMatch(t, expected, right, "right CTE consumer grouping variants")
+		return
+	}
+	t.Fatal("expected a join with grouping-set CTE consumers on both sides")
+}
+
 func TestCTELazyBindingDeclarationScope(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -100,28 +144,42 @@ func TestCTELazyBindingRollupSingleExpansion(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
+	require.ElementsMatch(t, [][]bool{{true}, {false}}, collectGroupingFlags(query, query.Steps...))
+}
 
-	seen := make(map[int32]bool)
-	groupingFlags := make([][]bool, 0, 2)
-	var visit func(int32)
-	visit = func(nodeID int32) {
-		if seen[nodeID] {
-			return
-		}
-		seen[nodeID] = true
-		node := query.Nodes[nodeID]
-		if node.NodeType == planpb.Node_AGG {
-			groupingFlags = append(groupingFlags, append([]bool(nil), node.GroupingFlag...))
-		}
-		for _, childID := range node.Children {
-			visit(childID)
-		}
-	}
-	for _, rootID := range query.Steps {
-		visit(rootID)
-	}
+func TestCTELazyBindingRepeatedGroupingSets(t *testing.T) {
+	mock := NewMockOptimizer(false)
 
-	require.ElementsMatch(t, [][]bool{{true}, {false}}, groupingFlags)
+	t.Run("rollup keeps both variants for each reference", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t, `
+			with totals as (
+				select n_regionkey, count(*) as n
+				from nation
+				group by n_regionkey with rollup
+			)
+			select *
+			from totals a join totals b on a.n_regionkey = b.n_regionkey`)
+		require.NoError(t, err)
+		requireRepeatedCTEGroupingFlags(t, logicPlan, [][]bool{{true}, {false}})
+	})
+
+	t.Run("cube keeps all variants for each reference", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t, `
+			with totals as (
+				select count(*) as n
+				from nation
+				group by cube(n_regionkey, n_nationkey)
+			)
+			select *
+			from totals a join totals b on a.n = b.n`)
+		require.NoError(t, err)
+		requireRepeatedCTEGroupingFlags(t, logicPlan, [][]bool{
+			{false, false},
+			{true, false},
+			{true, true},
+			{false, true},
+		})
+	})
 }
 
 func TestCTELazyBindingVisibilityGuards(t *testing.T) {

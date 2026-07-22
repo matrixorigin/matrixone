@@ -3581,6 +3581,20 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
+		if selectClause.GroupBy != nil && (selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube) {
+			// ROLLUP/CUBE expansion rewrites the clause below. CTE bodies may bind
+			// the same parsed SELECT once per reference, so keep the declaration
+			// AST as an immutable template and expand a per-bind shallow copy.
+			nextSelectClause := *selectClause
+			nextGroupBy := *selectClause.GroupBy
+			nextGroupBy.GroupByExprsList = append([]tree.Exprs(nil), selectClause.GroupBy.GroupByExprsList...)
+			nextSelectClause.GroupBy = &nextGroupBy
+			if selectClause.Having != nil {
+				nextHaving := *selectClause.Having
+				nextSelectClause.Having = &nextHaving
+			}
+			selectClause = &nextSelectClause
+		}
 		if selectClause.GroupBy != nil {
 			if selectClause.GroupBy.Rollup {
 				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
