@@ -3204,7 +3204,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	s *tree.Select,
 	cteRef *CTERef,
 	table string) (nodeID int32, err error) {
-	subCtx := NewBindContext(builder, ctx)
+	subCtx := NewBindContext(builder, cteRef.declarationCtx)
 	subCtx.cteName = table
 	subCtx.snapshot = cteRef.snapshot
 	subCtx.recordCteInBinding(table,
@@ -3254,7 +3254,6 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	table string,
 	left *tree.SelectStatement,
 	stmts []tree.SelectStatement,
-	checkOnly bool,
 ) (nodeID int32, err error) {
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
@@ -3268,7 +3267,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
-	initCtx := NewBindContext(builder, ctx)
+	initCtx := NewBindContext(builder, cteRef.declarationCtx)
 	initCtx.cteName = table
 	initCtx.recordCteInBinding(table,
 		CteBindState{
@@ -3295,7 +3294,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 
 	//3. bind recursive parts
 	for i, r := range stmts {
-		subCtx := NewBindContext(builder, ctx)
+		subCtx := NewBindContext(builder, cteRef.declarationCtx)
 		subCtx.cteName = table
 		subCtx.sinkTag = initCtx.sinkTag
 		//3.0 add initial statement as table binding into the subCtx of recursive part
@@ -3323,41 +3322,35 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		//3.2 add Sink Node on the top of single recursive part
 		recursiveLastNodeID = appendSinkNodeWithTag(builder, subCtx, recursiveLastNodeID, subCtx.sinkTag)
 		builder.qry.Nodes[recursiveLastNodeID].RecursiveCte = true
-		if !checkOnly {
-			// some check
-			n := builder.qry.Nodes[builder.qry.Nodes[recursiveLastNodeID].Children[0]]
-			if len(projects) != len(n.ProjectList) {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "recursive cte %s projection error", table)
-			}
-			for i := range n.ProjectList {
-				projTyp := projects[i].GetTyp()
-				n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
-				if err != nil {
-					return
-				}
-			}
-			if subCtx.hasSingleRow {
-				ctx.hasSingleRow = true
-			}
-
-			cols := cteRef.ast.Name.Cols
-
-			if len(cols) > len(subCtx.headings) {
-				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
-			}
-
-			for i, col := range cols {
-				subCtx.headings[i] = string(col)
+		// Coerce every recursive member to the initial projection types.
+		n := builder.qry.Nodes[builder.qry.Nodes[recursiveLastNodeID].Children[0]]
+		if len(projects) != len(n.ProjectList) {
+			return 0, moerr.NewParseErrorf(builder.GetContext(), "recursive cte %s projection error", table)
+		}
+		for i := range n.ProjectList {
+			projTyp := projects[i].GetTyp()
+			n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			if err != nil {
+				return
 			}
 		}
-	}
-	if checkOnly {
-		builder.qry.Steps = builder.qry.Steps[:0]
-		return
+		if subCtx.hasSingleRow {
+			ctx.hasSingleRow = true
+		}
+
+		cols := cteRef.ast.Name.Cols
+
+		if len(cols) > len(subCtx.headings) {
+			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+		}
+
+		for i, col := range cols {
+			subCtx.headings[i] = string(col)
+		}
 	}
 
 	// union all statement
-	offsetExpr, limitExpr, _, err := builder.bindLimit(ctx, s.Limit, nil)
+	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, s.Limit, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -3424,8 +3417,8 @@ func (builder *QueryBuilder) bindCte(
 	stmt tree.NodeFormatter,
 	cteRef *CTERef,
 	table string,
-	checkOnly bool,
 ) (nodeID int32, err error) {
+	viewCount := len(cteRef.declarationCtx.views)
 	var s *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
 	case *tree.Select:
@@ -3453,11 +3446,14 @@ func (builder *QueryBuilder) bindCte(
 			return 0, err
 		}
 	} else {
-		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, checkOnly)
+		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts)
 		if err != nil {
 			return 0, err
 		}
 	}
+	// The declaration context is detached from the use-site context for name
+	// resolution, so forward root-owned view dependencies explicitly.
+	ctx.recordViews(cteRef.declarationCtx.views[viewCount:])
 	return
 }
 
@@ -3486,35 +3482,13 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 
 			maskedNames[i] = name
 
-			ctx.cteByName[name] = &CTERef{
+			cteRef := &CTERef{
 				ast:         cte,
 				isRecursive: stmt.With.IsRecursive,
 				maskedCTEs:  maskedCTEs,
 			}
-		}
-
-		/*
-			Try to do binding for CTE at declaration.
-
-			CORNER CASE:
-
-				create table t2 (a int, b int);
-				create table t3 (a int);
-
-				//mo and postgrsql, oracle, sqlserver, mysql will report error about t3 not in FROM
-				//but duckdb will not report error. duckdb treat it as related subquery on t3.
-				with qn as (select * from t2 where t2.b=t3.a)
-				select * from t3 where exists (select * from qn);
-		*/
-		for _, cte := range stmt.With.CTEs {
-
-			table := string(cte.Name.Alias)
-			cteRef := ctx.cteByName[table]
-
-			_, err := builder.bindCte(ctx, stmt, cteRef, table, true)
-			if err != nil {
-				return err
-			}
+			ctx.cteByName[name] = cteRef
+			cteRef.declarationCtx = newCTEDeclarationContext(builder, ctx)
 		}
 	}
 	return nil
@@ -6310,7 +6284,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return
 				}
 
-				nodeID, err = builder.bindCte(ctx, stmt, cteRef, table, false)
+				nodeID, err = builder.bindCte(ctx, stmt, cteRef, table)
 				if err != nil {
 					return 0, err
 				}
