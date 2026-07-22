@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
@@ -158,6 +159,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		envStmt = redactStatementTextForLogging(statement, envStmt)
 
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
@@ -268,6 +270,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	switch statement.(type) {
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog:
+		return tree.String(statement, dialect.MYSQL)
+	default:
+		return text
+	}
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
@@ -1541,10 +1552,54 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
 }
 
+func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, error) {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
+	defer mysql.PutScanner(scanner)
+
+	if token, _ := scanner.Scan(); token != mysql.PREPARE {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement")
+	}
+	if token, _ := scanner.Scan(); token == mysql.EofChar() || token == mysql.LEX_ERROR {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement name")
+	}
+	if token, _ := scanner.Scan(); token != mysql.FROM {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement delimiter")
+	}
+
+	preparedStart := scanner.Pos
+	preparedSQL := sql[preparedStart:]
+	if scanner.CommentFlag {
+		scanner.TakeExecutableCommentEnd()
+		var commentEnd int
+		for commentEnd == 0 {
+			previousPos := scanner.Pos
+			token, _ := scanner.Scan()
+			commentEnd = scanner.TakeExecutableCommentEnd()
+			if commentEnd == 0 &&
+				(token == mysql.EofChar() || token == mysql.LEX_ERROR || scanner.Pos == previousPos) {
+				return "", moerr.NewInvalidInput(ctx, "invalid PREPARE executable comment")
+			}
+		}
+		insideComment := strings.TrimSpace(sql[preparedStart : commentEnd-2])
+		afterComment := strings.TrimLeftFunc(sql[commentEnd:], unicode.IsSpace)
+		switch {
+		case insideComment == "":
+			preparedSQL = afterComment
+		case afterComment == "":
+			preparedSQL = insideComment
+		default:
+			preparedSQL = insideComment + " " + afterComment
+		}
+	}
+
+	return strings.TrimLeftFunc(preparedSQL, unicode.IsSpace), nil
+}
+
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
-	originSql := strings.TrimLeft(sql[idx:], " ")
-	// fmt.Print(originSql)
+	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
+	if err != nil {
+		return nil, err
+	}
 	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
@@ -3722,18 +3777,6 @@ func executeStmt(ses *Session,
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
-
-	// record goroutine info when ddl stmt run timeout
-	switch execCtx.stmt.(type) {
-	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
-		_, span := trace.Start(execCtx.reqCtx, "executeStmtHung",
-			trace.WithHungThreshold(time.Minute), // be careful with this options
-			trace.WithProfileGoroutine(),
-			trace.WithProfileTraceSecs(10*time.Second),
-		)
-		defer span.End()
-	default:
-	}
 
 	var cmpBegin time.Time
 	var ret interface{}

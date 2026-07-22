@@ -487,7 +487,8 @@ from (select 11.1234 as a
 UNION select 11.1234
 UNION select 11.1234
 ) t;
-invalid input: 11.1234 beyond the range, can't be converted to Decimal64(3,2).
+➤ cast(a as decimal(3, 2))[3,3,2]  𝄀
+9.99
 drop table if exists t14;
 CREATE TABLE t14 (
 `pseudo` char(35) NOT NULL default '',

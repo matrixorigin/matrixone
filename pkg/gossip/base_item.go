@@ -112,3 +112,13 @@ func (s *BaseStore[K]) update(target string, ks []K) {
 		s.mu.keyTarget[k] = target
 	}
 }
+
+func (s *BaseStore[K]) removeByTarget(target string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, currentTarget := range s.mu.keyTarget {
+		if currentTarget == target {
+			delete(s.mu.keyTarget, key)
+		}
+	}
+}

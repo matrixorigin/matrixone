@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -312,6 +313,11 @@ type Compile struct {
 
 	filterExprExes []colexec.ExpressionExecutor
 
+	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
+	// visited by compilePlanScope. It is statement-local and remains empty for
+	// queries without right-SINGLE joins.
+	compiledRightSingleNodes []int32
+
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
@@ -328,6 +334,9 @@ type Compile struct {
 	ignorePublish            bool
 	ignoreCheckExperimental  bool
 	disableLock              bool
+
+	icebergScanPlanner icebergapi.ScanPlanner
+	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan
 }
 
 type RemoteReceivRegInfo struct {

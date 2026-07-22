@@ -272,6 +272,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
+	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
@@ -1118,16 +1119,9 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 		}
 
 		if len(node.RuntimeFilterBuildList) > 0 {
-			switch node.JoinType {
-			case plan.Node_RIGHT:
-				if !node.Stats.HashmapStats.Shuffle {
-					force = true
-				}
-			case plan.Node_SEMI, plan.Node_ANTI:
-				if node.IsRightJoin && !node.Stats.HashmapStats.Shuffle {
-					force = true
-				}
-			case plan.Node_INDEX:
+			policy := analyzeRuntimeFilterJoinPolicy(node)
+			if policy.requiresLocalDelivery &&
+				(node.JoinType == plan.Node_INDEX || !node.Stats.HashmapStats.Shuffle) {
 				force = true
 			}
 		}
@@ -1189,6 +1183,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.execType = value
 	case "disableRightJoin":
 		builder.optimizerHints.disableRightJoin = value
+	case "disableRightSingleRF":
+		builder.optimizerHints.disableRightSingleRF = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":

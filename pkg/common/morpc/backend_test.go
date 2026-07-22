@@ -68,6 +68,36 @@ func TestSend(t *testing.T) {
 	)
 }
 
+func TestSendContextErrorReleasesFuture(t *testing.T) {
+	rb := &remoteBackend{
+		codec:      newTestCodec(),
+		metrics:    newMetrics(""),
+		waitWriteC: make(chan struct{}, 1),
+		writeC:     make(chan *Future, 1),
+	}
+	rb.stateMu.state = stateRunning
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.pool.futures = &sync.Pool{
+		New: func() any {
+			return newFuture(rb.releaseFuture)
+		},
+	}
+	// Keep the write queue full so Send exits through the caller-context path
+	// before the future is handed to the write loop.
+	rb.writeC <- nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	cancel()
+	future, err := rb.Send(ctx, newTestMessage(1))
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, future)
+
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	require.Empty(t, rb.mu.futures,
+		"a future that was never enqueued must be removed on Send failure")
+}
+
 func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
@@ -1181,10 +1211,12 @@ func (tm *testMessage) GetPayloadField() []byte {
 }
 
 func (tm *testMessage) SetPayloadField(data []byte) {
-	if len(data) > 0 {
-		tm.payload = make([]byte, len(data))
-		copy(tm.payload, data)
+	if len(data) == 0 {
+		tm.payload = nil
+		return
 	}
+	tm.payload = make([]byte, len(data))
+	copy(tm.payload, data)
 }
 
 func newTestCodec(options ...CodecOption) Codec {
