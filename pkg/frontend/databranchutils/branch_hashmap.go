@@ -1817,9 +1817,9 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 	case types.T_enum:
 		switch val := v.(type) {
 		case types.Enum:
-			p.EncodeUint16(uint16(val))
+			p.EncodeEnum(val)
 		case uint16:
-			p.EncodeUint16(val)
+			p.EncodeEnum(types.Enum(val))
 		default:
 			return moerr.NewInvalidInputNoCtx("expected enum value")
 		}
@@ -1905,7 +1905,7 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 		p.EncodeBit(v)
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, row)
-		p.EncodeUint16(uint16(v))
+		p.EncodeEnum(v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:

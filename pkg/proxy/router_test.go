@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -767,6 +768,96 @@ func TestRouteWithCNHealthChecker(t *testing.T) {
 	// A successful connect on that probe restores the CN to healthy.
 	ru.health.reportSuccess(cn.uuid, cn.addr)
 	require.Equal(t, 2, ru.health.unhealthyCount())
+}
+
+func TestCanReuseCachedCNRequiresCurrentRouteEligibility(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx := context.Background()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+
+	hc := &mockHAKeeperClient{}
+	hc.updateCN("cn1", "cn1-addr", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+		"k1":           {Labels: []string{"v1"}},
+	})
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+
+	ru := newRouter(mc, testRebalancer(t, st, rt.Logger(), mc), newMockSQLWorker(), true).(*router)
+	cn := &CNServer{uuid: "cn1"}
+	commonClient := clientInfo{labelInfo: labelInfo{
+		Tenant: "t1",
+		Labels: map[string]string{"k1": "v1"},
+	}}
+	require.True(t, ru.CanReuseCachedCN(nil, commonClient))
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
+	ru.health = newCNHealthChecker(withCNHealthFailThreshold(1))
+	ru.health.reportFailure(cn.uuid, "cn1-addr")
+	require.False(t, ru.CanReuseCachedCN(cn, commonClient), "unhealthy CN must not receive cached sessions")
+	ru.health.reportSuccess(cn.uuid, "cn1-addr")
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
+
+	// The CN kept the same UUID, but its labels no longer match this login.
+	// A UUID-only lookup would incorrectly keep reusing the cached connection.
+	hc.updateCN("cn1", "cn1-addr", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+		"k2":           {Labels: []string{"v2"}},
+	})
+	mc.ForceRefresh(true)
+	require.False(t, ru.CanReuseCachedCN(cn, commonClient),
+		"cached reuse must reject a CN after its labels drift away from the current login")
+
+	// A sys root/dump login may use RouteForSuperTenant's final fallback, but
+	// an ordinary sys user with the same cache key may not.
+	hc.updateCN("cn1", "cn1-addr", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc.ForceRefresh(true)
+	sysClient := clientInfo{labelInfo: labelInfo{Tenant: "sys"}}
+	sysClient.username = "root"
+	require.True(t, ru.CanReuseCachedCN(cn, sysClient))
+	sysClient.username = "dump"
+	require.True(t, ru.CanReuseCachedCN(cn, sysClient))
+	sysClient.username = "ordinary"
+	require.False(t, ru.CanReuseCachedCN(cn, sysClient),
+		"cached reuse must not apply the root/dump fallback to another sys user")
+
+	// An empty-label CN is eligible only while it is the common tenant's
+	// fallback. Once a matching labeled CN appears, fresh routing promotes the
+	// labeled tier and cached reuse must stop admitting the old fallback.
+	hc.updateCN("cn1", "cn1-addr", nil)
+	mc.ForceRefresh(true)
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
+	matchingCN := &CNServer{uuid: "cn2"}
+	hc.updateCN("cn2", "cn2-addr", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+		"k1":           {Labels: []string{"v1"}},
+	})
+	mc.ForceRefresh(true)
+	freshCN, err := ru.Route(ctx, "", commonClient, nil)
+	require.NoError(t, err)
+	require.Equal(t, matchingCN.uuid, freshCN.uuid)
+	require.False(t, ru.CanReuseCachedCN(cn, commonClient),
+		"cached fallback must be rejected after a matching labeled CN appears")
+	require.True(t, ru.CanReuseCachedCN(matchingCN, commonClient))
+
+	require.NoError(t, hc.updateCNWorkState(ctx, logpb.CNWorkState{
+		UUID:  matchingCN.uuid,
+		State: metadata.WorkState_Draining,
+	}))
+	mc.ForceRefresh(true)
+	require.False(t, ru.CanReuseCachedCN(matchingCN, commonClient),
+		"draining CN must not receive cached sessions")
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient),
+		"empty-label fallback becomes eligible again after the matching CN starts draining")
+	require.False(t, ru.CanReuseCachedCN(&CNServer{uuid: "removed"}, commonClient),
+		"CN missing from the current cluster view must not receive cached sessions")
 }
 
 // TestRouteConnectTripsBreakerEndToEnd verifies the full chain: a real
