@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -1640,10 +1641,26 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
+	if uint64(current)+resets > math.MaxUint32 {
+		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
+	}
+	return nil
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
+	}
+	var autoIncrResetCount uint64
+	for _, req := range reqs {
+		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
+			autoIncrResetCount++
+		}
+	}
+	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
+		return err
 	}
 
 	var err error

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -205,6 +206,14 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
 	case apipb.AlterKind_UpdateAutoIncrement:
+		if s.Extra.AutoIncrEpoch == math.MaxUint32 ||
+			req.GetUpdateAutoIncrement().GetEpoch() != s.Extra.AutoIncrEpoch+1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid AUTO_INCREMENT epoch transition %d -> %d",
+				s.Extra.AutoIncrEpoch,
+				req.GetUpdateAutoIncrement().GetEpoch(),
+			)
+		}
 		s.Extra.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
 		s.Extra.AutoIncrEpoch = req.GetUpdateAutoIncrement().GetEpoch()
 	case apipb.AlterKind_RenameColumn:

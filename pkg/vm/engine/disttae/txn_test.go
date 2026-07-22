@@ -44,6 +44,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateAutoIncrEpochAdvance(t *testing.T) {
+	require.NoError(t, validateAutoIncrEpochAdvance(0, 0))
+	require.NoError(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 1))
+	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32, 1))
+	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 2))
+}
+
 func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newDeleteBatchForTest(t, proc, []int64{1})

@@ -81,11 +81,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 	}
 }
 
-func NewUpdateAutoIncrementReq(did, tid, offset uint64, epochs ...uint32) *AlterTableReq {
-	epoch := uint32(1)
-	if len(epochs) > 0 {
-		epoch = epochs[0]
-	}
+func NewUpdateAutoIncrementReq(did, tid, offset uint64, epoch uint32) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
 		TableId: tid,

@@ -61,7 +61,7 @@ func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
 			databaseID := createdRel.GetMeta().(*catalog.TableEntry).GetDB().ID
 
 			alterTxn, alterRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
-			require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, tableID, 10)))
+			require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, tableID, 10, 1)))
 			require.NoError(t, alterTxn.Commit(ctx))
 
 			insertBatch := catalog.MockBatch(schema, 1)

@@ -243,7 +243,7 @@ func TestAutoIncrEpochFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	assert.NoError(t, tbl.validateAutoIncrEpoch())
 }
 
-func TestAutoIncrEpochFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing.T) {
+func TestAutoIncrEpochFenceRejectsMultipleEpochsWithoutLocalAlter(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7
 	schema.Extra.AutoIncrEpoch = 7

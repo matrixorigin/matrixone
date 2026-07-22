@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -66,6 +68,21 @@ func TestReplayedPreparedDMLFenceLifecycle(t *testing.T) {
 	require.False(t, table.ShouldRetryAutoIncrementAlter(replayedCommit))
 	table.ResolveReplayedPreparedDML("missing", &replayedCommit)
 	require.False(t, table.ShouldRetryAutoIncrementAlter(types.BuildTS(22, 0)))
+}
+
+func TestAutoIncrementEpochTransition(t *testing.T) {
+	schema := MockSchemaAll(3, 1)
+	require.Error(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 10, 2)))
+	require.Equal(t, uint32(0), schema.Extra.AutoIncrEpoch)
+
+	require.NoError(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 10, 1)))
+	require.Equal(t, uint32(1), schema.Extra.AutoIncrEpoch)
+	require.NoError(t, schema.ApplyAlterTable(apipb.NewUpdateConstraintReq(0, 1, "constraint")))
+	require.Equal(t, uint32(1), schema.Extra.AutoIncrEpoch)
+
+	schema.Extra.AutoIncrEpoch = math.MaxUint32
+	require.Error(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 20, 0)))
+	require.Equal(t, uint32(math.MaxUint32), schema.Extra.AutoIncrEpoch)
 }
 
 func TestObjectList(t *testing.T) {
