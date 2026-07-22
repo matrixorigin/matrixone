@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1106,6 +1107,48 @@ func TestReaderBatchLeaseGrowsForLargerRecord(t *testing.T) {
 	require.Equal(t, afterFirst.ReserveCount+1, afterSecond.ReserveCount, "larger record should grow the existing lease once")
 	require.Greater(t, afterSecond.Used, afterFirst.Used)
 	require.Equal(t, afterFirst.ReconcileCount, afterSecond.ReconcileCount)
+
+	reuseBat.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+}
+
+func TestReaderBatchLeaseTrimsLargeDecodeEstimate(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	f, err := spillfs.CreateAndRemoveFile(context.Background(), "test_read_lease_trim")
+	require.NoError(t, err)
+	values := make([]string, 4_096)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1_024)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	bat.SetRowCount(len(values))
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_read_lease_trim", Fd: f}
+	require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+	bat.Clean(proc.Mp())
+
+	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForFd(w.HandOffFd())
+	reuseBat := batch.NewOffHeapWithSize(0)
+	before := generation.Snapshot()
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	actual, ok := batchRetainedBytes(got)
+	require.True(t, ok)
+	after := generation.Snapshot()
+	require.Equal(t, before.ReconcileCount+1, after.ReconcileCount)
+	require.GreaterOrEqual(t, after.Used, before.Used+actual)
+	require.LessOrEqual(t, after.Used, before.Used+actual+decodedBatchLeaseSlack)
 
 	reuseBat.Clean(proc.Mp())
 	reader.Close()

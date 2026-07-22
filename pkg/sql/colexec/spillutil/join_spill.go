@@ -47,6 +47,11 @@ const (
 	// Coalesce serialized records across source batches without retaining
 	// selected vectors. bytes.Buffer growth is charged at 2x this target.
 	spillWriteCoalesceSize = 64 << 10
+	// Keep enough decoded-batch headroom to reuse the reservation for ordinary
+	// spill records without retaining the conservative 4x unmarshal estimate
+	// for a large record until the reader closes. The additive bound makes the
+	// long-lived charge independent of the largest serialized payload seen.
+	decodedBatchLeaseSlack = 1 << 20
 )
 
 // SpillBucket holds file descriptors for one spilled bucket.
@@ -449,11 +454,23 @@ func (r *BucketReader) readBatchRecord(
 		if !ok || actual > charge {
 			return nil, token, charge, process.ErrHashBuildBudgetInvalid
 		}
-		if !retainLease {
-			if err := reconcileReadReservation(token, actual); err != nil {
+		target := actual
+		if retainLease {
+			withSlack, ok := addUint64(actual, decodedBatchLeaseSlack)
+			if !ok {
+				return nil, token, charge, process.ErrHashBuildBudgetInvalid
+			}
+			if withSlack < charge {
+				target = withSlack
+			} else {
+				target = charge
+			}
+		}
+		if target < charge {
+			if err := reconcileReadReservation(token, target); err != nil {
 				return nil, token, charge, err
 			}
-			charge = actual
+			charge = target
 		}
 	}
 	return reuseBat, token, charge, nil
