@@ -1829,7 +1829,11 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
-	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	var preparePlan *plan.Plan
+	err := execCtx.withRootSQL(originSQL, func() (err error) {
+		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
