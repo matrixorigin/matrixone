@@ -81,8 +81,8 @@ func TestRemoteNewBindRefreshHonorsContext(t *testing.T) {
 		pb.LockTable,
 		allocatorState,
 		allocatorState,
-	) error {
-		return nil
+	) (bool, error) {
+		return false, nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -570,6 +570,192 @@ func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
 	)
 }
 
+func TestRemoteBindRefreshFencesEqualLegacyBindOnAllocatorIdentity(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     100,
+				Valid:       true,
+			}
+			newBind := oldBind
+			newBind.AllocatorID = "upgraded-allocator"
+			require.False(t, newBind.Changed(oldBind))
+
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = newBind
+					resp.GetBind.AllocatorID = newBind.AllocatorID
+					resp.GetBind.AllocatorVersion = newBind.Version
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			fsp := newFixedSlicePool(2)
+			svc := &service{
+				serviceID: "s1",
+				fsp:       fsp,
+				logger:    logger,
+			}
+			svc.tableGroups = &lockTableHolders{
+				service: svc.serviceID,
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			svc.activeTxnHolder = newMapBasedTxnHandler(
+				svc.serviceID,
+				logger,
+				fsp,
+				func(string) (bool, error) { return true, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+				func(pb.WaitTxn) (bool, error) { return true, nil },
+			)
+			svc.tableGroups.set(
+				oldBind.Group,
+				oldBind.Table,
+				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+			)
+
+			txnID := []byte("txn-equal-legacy-remote")
+			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
+			txn.Lock()
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			txn.Unlock()
+
+			remote := newRemoteLockTable(
+				svc.serviceID,
+				time.Second,
+				oldBind,
+				c,
+				svc.handleBindChanged,
+				logger,
+			)
+			remote.allocatorStateProvider = svc.allocatorStateSnapshot
+			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
+
+			err := remote.handleError(moerr.NewBackendCannotConnectNoCtx(), true)
+			require.NoError(t, err)
+
+			txn.Lock()
+			require.True(t, txn.bindChanged)
+			txn.Unlock()
+			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
+			require.Equal(t, allocatorState{id: newBind.AllocatorID, version: newBind.Version}, svc.allocatorStateSnapshot())
+
+			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
+			txn.Lock()
+			err = txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return nil, nil
+			}, logger)
+			txn.Unlock()
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestRemoteNewBindRefreshFencesEqualLegacyBindOnAllocatorIdentity(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     100,
+				Valid:       true,
+			}
+			newBind := oldBind
+			newBind.AllocatorID = "upgraded-allocator"
+			require.False(t, newBind.Changed(oldBind))
+
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = newBind
+					resp.GetBind.AllocatorID = newBind.AllocatorID
+					resp.GetBind.AllocatorVersion = newBind.Version
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			fsp := newFixedSlicePool(2)
+			svc := &service{
+				serviceID: "s1",
+				fsp:       fsp,
+				logger:    logger,
+			}
+			svc.tableGroups = &lockTableHolders{
+				service: svc.serviceID,
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			svc.activeTxnHolder = newMapBasedTxnHandler(
+				svc.serviceID,
+				logger,
+				fsp,
+				func(string) (bool, error) { return true, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+				func(pb.WaitTxn) (bool, error) { return true, nil },
+			)
+			svc.tableGroups.set(
+				oldBind.Group,
+				oldBind.Table,
+				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+			)
+
+			txnID := []byte("txn-equal-legacy-remote-new-bind")
+			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
+			txn.Lock()
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			txn.Unlock()
+
+			remote := newRemoteLockTable(
+				svc.serviceID,
+				time.Second,
+				oldBind,
+				c,
+				svc.handleBindChanged,
+				logger,
+			)
+			remote.allocatorStateProvider = svc.allocatorStateSnapshot
+			remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
+
+			err := remote.maybeHandleBindChanged(context.Background(), &pb.Response{NewBind: &newBind})
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+
+			txn.Lock()
+			require.True(t, txn.bindChanged)
+			txn.Unlock()
+			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
+			require.Equal(t, allocatorState{id: newBind.AllocatorID, version: newBind.Version}, svc.allocatorStateSnapshot())
+
+			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
+			txn.Lock()
+			err = txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return nil, nil
+			}, logger)
+			txn.Unlock()
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
 	runRPCTests(
 		t,
@@ -622,9 +808,9 @@ func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
 				pb.LockTable,
 				allocatorState,
 				allocatorState,
-			) error {
+			) (bool, error) {
 				published++
-				return nil
+				return true, nil
 			}
 
 			err := remote.maybeHandleBindChanged(

@@ -233,16 +233,14 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 		}
 		return
 	}
-	if newBind.Changed(bind) {
-		if err := k.service.handleBindChangedFromAllocator(
-			"keep-remote-refresh",
-			bind,
-			newBind,
-			allocator,
-			requestAllocator); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
-				logGetRemoteBindFailed(k.service.logger, bind.Table, err)
-			}
+	if _, err := k.service.handleBindChangedFromAllocator(
+		"keep-remote-refresh",
+		bind,
+		newBind,
+		allocator,
+		requestAllocator); err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			logGetRemoteBindFailed(k.service.logger, bind.Table, err)
 		}
 	}
 }
@@ -259,7 +257,7 @@ func (k *lockTableKeeper) invalidateRemoteBind(
 		func(candidate pb.LockTable) bool {
 			return candidate.Group == bind.Group &&
 				candidate.Table == bind.Table &&
-				!candidate.Changed(bind)
+				lockTableBindIdentityEqual(candidate, bind)
 		},
 		allocator,
 	)

@@ -59,7 +59,7 @@ type remoteLockTable struct {
 	client                      Client
 	bindChangedHandler          func(pb.LockTable)
 	allocatorStateProvider      func() allocatorState
-	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
+	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) (bool, error)
 }
 
 func newRemoteLockTable(
@@ -467,15 +467,20 @@ func (l *remoteLockTable) handleError(
 		logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 		return oldError
 	}
-	if new.Changed(l.bind) {
-		if l.allocatorBindChangedHandler != nil {
-			return l.allocatorBindChangedHandler(
-				"remote-bind-refresh",
-				l.bind,
-				new,
-				allocator,
-				requestAllocator)
+	if l.allocatorBindChangedHandler != nil {
+		changed, err := l.allocatorBindChangedHandler(
+			"remote-bind-refresh",
+			l.bind,
+			new,
+			allocator,
+			requestAllocator)
+		if err != nil {
+			return err
 		}
+		if changed {
+			return nil
+		}
+	} else if new.Changed(l.bind) {
 		l.bindChangedHandler(new)
 		return nil
 	}
@@ -525,10 +530,7 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 			logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 			return ErrLockTableBindChanged
 		}
-		if !refreshedBind.Changed(l.bind) {
-			return ErrLockTableBindChanged
-		}
-		if err := l.allocatorBindChangedHandler(
+		if _, err := l.allocatorBindChangedHandler(
 			"remote-new-bind",
 			l.bind,
 			refreshedBind,

@@ -689,7 +689,7 @@ func (s *service) handleBindChangedFromAllocator(
 	newBind pb.LockTable,
 	allocator allocatorState,
 	requestAllocator allocatorState,
-) error {
+) (bool, error) {
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 
@@ -699,7 +699,7 @@ func (s *service) handleBindChangedFromAllocator(
 		requestAllocator,
 		true,
 		s.tableGroups); !accepted {
-		return ErrLockTableBindChanged
+		return false, ErrLockTableBindChanged
 	}
 
 	s.bindChangeMu.Lock()
@@ -708,18 +708,34 @@ func (s *service) handleBindChangedFromAllocator(
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil {
 		currentBind := current.getBind()
-		if !currentBind.Changed(newBind) {
-			return nil
+		if lockTableBindIdentityEqual(currentBind, newBind) {
+			return !lockTableBindIdentityEqual(oldBind, newBind), nil
 		}
-		if currentBind.Changed(oldBind) {
-			return ErrLockTableBindChanged
+		if !lockTableBindIdentityEqual(currentBind, oldBind) {
+			return true, ErrLockTableBindChanged
 		}
+	} else if lockTableBindIdentityEqual(oldBind, newBind) {
+		return true, nil
+	}
+
+	if lockTableBindIdentityEqual(oldBind, newBind) {
+		return false, nil
 	}
 
 	new := s.createLockTableByBind(newBind)
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
 	s.fenceByBindChanged(newBind)
-	return nil
+	return true, nil
+}
+
+func lockTableBindIdentityEqual(a, b pb.LockTable) bool {
+	return a.Group == b.Group &&
+		a.Table == b.Table &&
+		a.OriginTable == b.OriginTable &&
+		a.ServiceID == b.ServiceID &&
+		a.Version == b.Version &&
+		a.Sharding == b.Sharding &&
+		a.AllocatorID == b.AllocatorID
 }
 
 func (s *service) fenceByBindChanged(bind pb.LockTable) {
