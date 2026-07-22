@@ -48,12 +48,14 @@ type ShufflePool struct {
 	endingWaiter   chan struct{}
 	endingOnce     sync.Once
 
-	readyLimit   int
-	readyCount   int
-	readyLock    sync.Mutex
-	spaceWaiter  chan struct{}
-	readyBuckets chan int32
-	finalCursor  atomic.Uint32
+	readyLimit         int
+	readyCount         int
+	readyLock          sync.Mutex
+	spaceWaiter        chan struct{}
+	bucketReadyCounts  []int
+	bucketSpaceWaiters []chan struct{}
+	readyBuckets       chan int32
+	finalCursor        atomic.Uint32
 
 	memoryLock sync.Mutex
 	tracked    map[*batch.Batch]int64
@@ -65,19 +67,21 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 	allBuckets := drainAll
 	readyLimit := max(2, int(maxHolders)*2)
 	sp := &ShufflePool{
-		bucketNum:      bucketNum,
-		maxHolders:     maxHolders,
-		drainAll:       allBuckets,
-		batchSets:      make([]*batch.BatchSet, bucketNum),
-		batchLocks:     make([]sync.Mutex, bucketNum),
-		batchWaiters:   make([]chan bool, bucketNum),
-		endingWaiters:  make([]chan bool, bucketNum),
-		batchPool:      make([]*batch.Batch, 0, readyLimit),
-		anyBatchWaiter: make(chan struct{}, 1),
-		endingWaiter:   make(chan struct{}),
-		readyLimit:     readyLimit,
-		spaceWaiter:    make(chan struct{}),
-		tracked:        make(map[*batch.Batch]int64),
+		bucketNum:          bucketNum,
+		maxHolders:         maxHolders,
+		drainAll:           allBuckets,
+		batchSets:          make([]*batch.BatchSet, bucketNum),
+		batchLocks:         make([]sync.Mutex, bucketNum),
+		batchWaiters:       make([]chan bool, bucketNum),
+		endingWaiters:      make([]chan bool, bucketNum),
+		batchPool:          make([]*batch.Batch, 0, readyLimit),
+		anyBatchWaiter:     make(chan struct{}, 1),
+		endingWaiter:       make(chan struct{}),
+		readyLimit:         readyLimit,
+		spaceWaiter:        make(chan struct{}),
+		bucketReadyCounts:  make([]int, bucketNum),
+		bucketSpaceWaiters: make([]chan struct{}, bucketNum),
+		tracked:            make(map[*batch.Batch]int64),
 	}
 	if allBuckets {
 		sp.readyBuckets = make(chan int32, readyLimit)
@@ -86,6 +90,7 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		sp.batchSets[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		sp.batchWaiters[i] = make(chan bool, 1)
 		sp.endingWaiters[i] = make(chan bool, 1)
+		sp.bucketSpaceWaiters[i] = make(chan struct{})
 	}
 	return sp
 }
@@ -263,12 +268,24 @@ func (sp *ShufflePool) memoryPeak() int64 {
 	return sp.peak
 }
 
-func (sp *ShufflePool) reserveReady(count int) (<-chan struct{}, bool) {
+func (sp *ShufflePool) reserveReady(bucket int32, count int) (<-chan struct{}, bool) {
 	if count == 0 {
 		return nil, true
 	}
 	sp.readyLock.Lock()
 	defer sp.readyLock.Unlock()
+	if !sp.drainAll {
+		// A fixed-bucket holder can only release batches from its own bucket.
+		// Bound each bucket independently so a hot bucket cannot consume the
+		// credits needed to publish work for every other holder.
+		const fixedBucketReadyLimit = 2
+		if sp.bucketReadyCounts[bucket]+count > fixedBucketReadyLimit {
+			return sp.bucketSpaceWaiters[bucket], false
+		}
+		sp.bucketReadyCounts[bucket] += count
+		sp.readyCount += count
+		return nil, true
+	}
 	if sp.readyCount+count > sp.readyLimit {
 		return sp.spaceWaiter, false
 	}
@@ -276,7 +293,7 @@ func (sp *ShufflePool) reserveReady(count int) (<-chan struct{}, bool) {
 	return nil, true
 }
 
-func (sp *ShufflePool) releaseReady(count int) {
+func (sp *ShufflePool) releaseReady(bucket int32, count int) {
 	if count == 0 {
 		return
 	}
@@ -286,8 +303,18 @@ func (sp *ShufflePool) releaseReady(count int) {
 		sp.readyLock.Unlock()
 		panic("shuffle pool negative ready batch count")
 	}
-	close(sp.spaceWaiter)
-	sp.spaceWaiter = make(chan struct{})
+	if sp.drainAll {
+		close(sp.spaceWaiter)
+		sp.spaceWaiter = make(chan struct{})
+	} else {
+		sp.bucketReadyCounts[bucket] -= count
+		if sp.bucketReadyCounts[bucket] < 0 {
+			sp.readyLock.Unlock()
+			panic("shuffle pool negative bucket ready batch count")
+		}
+		close(sp.bucketSpaceWaiters[bucket])
+		sp.bucketSpaceWaiters[bucket] = make(chan struct{})
+	}
 	sp.readyLock.Unlock()
 }
 
@@ -317,7 +344,7 @@ func (sp *ShufflePool) getFullBatch(shuffleIDX int32) *batch.Batch {
 	}
 	sp.batchLocks[shuffleIDX].Unlock()
 	if bat != nil {
-		sp.releaseReady(1)
+		sp.releaseReady(shuffleIDX, 1)
 	}
 	return bat
 }
@@ -352,7 +379,7 @@ func (sp *ShufflePool) popReadyBatch(bucket int32) *batch.Batch {
 	if bat == nil {
 		panic("shuffle pool ready queue is inconsistent")
 	}
-	sp.releaseReady(1)
+	sp.releaseReady(bucket, 1)
 	return bat
 }
 
@@ -435,7 +462,7 @@ func (sp *ShufflePool) tryWrite(
 			chunk := current[offset:end]
 			sp.batchLocks[bucket].Lock()
 			readyDelta := sp.batchSets[bucket].ReadyDelta(len(chunk))
-			wait, ok := sp.reserveReady(readyDelta)
+			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 			if !ok {
 				sp.batchLocks[bucket].Unlock()
 				return bucket, offset, wait, false, nil
@@ -450,7 +477,7 @@ func (sp *ShufflePool) tryWrite(
 			sp.syncBatchSet(sp.batchSets[bucket])
 			actualDelta := sp.batchSets[bucket].ReadyCount() - oldReady
 			if actualDelta < readyDelta {
-				sp.releaseReady(readyDelta - actualDelta)
+				sp.releaseReady(int32(bucket), readyDelta-actualDelta)
 			}
 			sp.batchLocks[bucket].Unlock()
 			sp.publishReady(int32(bucket), actualDelta)

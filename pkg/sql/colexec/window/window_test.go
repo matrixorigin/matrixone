@@ -17,6 +17,7 @@ package window
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -139,6 +140,64 @@ func makeCurrentRowFrame() *plan.FrameClause {
 		Type:  plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func TestBuildRowsIntervalSaturatesLargeOffsets(t *testing.T) {
+	largeOffset := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: math.MaxInt64}}},
+	}
+	testCases := []struct {
+		name      string
+		frame     *plan.FrameClause
+		wantStart int
+		wantEnd   int
+	}{
+		{
+			name: "start preceding",
+			frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: largeOffset},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			},
+			wantStart: 10,
+			wantEnd:   13,
+		},
+		{
+			name: "start following",
+			frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: largeOffset},
+				End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+			},
+			wantStart: 15,
+			wantEnd:   15,
+		},
+		{
+			name: "end preceding",
+			frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+				End:   &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: largeOffset},
+			},
+			wantStart: 10,
+			wantEnd:   10,
+		},
+		{
+			name: "end following",
+			frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+				End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: largeOffset},
+			},
+			wantStart: 12,
+			wantEnd:   15,
+		},
+	}
+
+	ctr := &container{}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			start, end := ctr.buildRowsInterval(12, 10, 15, testCase.frame)
+			require.Equal(t, testCase.wantStart, start)
+			require.Equal(t, testCase.wantEnd, end)
+		})
 	}
 }
 
