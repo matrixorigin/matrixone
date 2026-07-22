@@ -8347,14 +8347,27 @@ func TestReleaseUserLevelLocksOnSessionCloseErrorTransfersCleanup(t *testing.T) 
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 		require.NotEmpty(t, UserLevelLocksForMigration(holder))
+		owner, connID := holder.GetUserLevelLockIdentity()
+		require.NotEmpty(t, owner)
+		cleanupTxnID := userLevelLockTxnID(owner, connID, "close_error_cleanup")
 
 		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, time.Second)
 		require.Empty(t, UserLevelLocksForMigration(holder))
-		require.Greater(t, detachedUserLevelLockCleanupCount(), 0)
 
 		require.Eventually(t, func() bool {
 			v, err := getUserLevelLock("close_error_cleanup", 0, contender)
 			return err == nil && v == 1
+		}, 2*time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool {
+			service.unlockMu.Lock()
+			defer service.unlockMu.Unlock()
+			var attempts int
+			for _, txnID := range service.unlockedTxnIDs {
+				if bytes.Equal(txnID, cleanupTxnID) {
+					attempts++
+				}
+			}
+			return attempts >= 2
 		}, 2*time.Second, 10*time.Millisecond)
 	})
 }
