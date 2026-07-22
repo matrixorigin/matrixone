@@ -17,6 +17,7 @@ package iceberg
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -63,20 +64,35 @@ func (i ClusterRemoteCacheInvalidator) InvalidateIcebergTable(ctx context.Contex
 		CommitID:             result.CommitID,
 	}
 	self := i.QueryClient.ServiceID()
+	peers := make([]metadata.CNService, 0)
 	_ = clusterservice.GetCNServiceWithoutWorkingStateWithContext(broadcastCtx, i.Cluster, clusterservice.NewSelector(), func(cn metadata.CNService) bool {
-		if cn.WorkState != metadata.WorkState_Working && cn.WorkState != metadata.WorkState_Unknown {
-			return true
-		}
 		if strings.TrimSpace(cn.QueryAddress) == "" || (self != "" && cn.ServiceID == self) {
 			return true
 		}
-		request := i.QueryClient.NewRequest(query.CmdMethod_IcebergCacheInvalidate)
-		request.IcebergCacheInvalidateRequest = payload
-		resp, err := i.QueryClient.SendMessage(broadcastCtx, cn.QueryAddress, request)
-		if err == nil && resp != nil {
-			i.QueryClient.Release(resp)
-		}
-		return broadcastCtx.Err() == nil
+		// A draining CN may still serve existing SQL sessions while the proxy
+		// transfers their tunnels. QueryAddress, rather than admission state, is
+		// therefore the eligibility signal for post-commit invalidation.
+		peers = append(peers, cn)
+		return true
 	})
+
+	// Sends must be independent: an unreachable peer cannot consume the shared
+	// deadline before healthy peers are attempted. One goroutine is started for
+	// each member of this immutable cluster snapshot, so fan-out is bounded by
+	// CN membership and every RPC remains bounded by the common broadcastCtx.
+	var wg sync.WaitGroup
+	wg.Add(len(peers))
+	for _, peer := range peers {
+		go func() {
+			defer wg.Done()
+			request := i.QueryClient.NewRequest(query.CmdMethod_IcebergCacheInvalidate)
+			request.IcebergCacheInvalidateRequest = payload
+			resp, err := i.QueryClient.SendMessage(broadcastCtx, peer.QueryAddress, request)
+			if err == nil && resp != nil {
+				i.QueryClient.Release(resp)
+			}
+		}()
+	}
+	wg.Wait()
 	return nil
 }

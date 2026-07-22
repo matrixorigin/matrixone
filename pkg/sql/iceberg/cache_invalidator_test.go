@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,9 +54,11 @@ func TestClusterRemoteCacheInvalidatorSendsBestEffortToOtherCNs(t *testing.T) {
 		Table:          "orders",
 	}, api.CommitResult{SnapshotID: 200, MetadataLocationHash: "hash-200", CommitID: "commit-200"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"remote-1-addr", "remote-2-addr"}, client.addresses)
-	require.Equal(t, query.CmdMethod_IcebergCacheInvalidate, client.requests[0].CmdMethod)
-	payload := client.requests[0].IcebergCacheInvalidateRequest
+	addresses, requests, released := client.snapshot()
+	require.ElementsMatch(t, []string{"remote-1-addr", "remote-2-addr"}, addresses)
+	require.NotEmpty(t, requests)
+	require.Equal(t, query.CmdMethod_IcebergCacheInvalidate, requests[0].CmdMethod)
+	payload := requests[0].IcebergCacheInvalidateRequest
 	require.Equal(t, uint32(7), payload.AccountID)
 	require.Equal(t, uint64(42), payload.CatalogID)
 	require.Equal(t, api.NamespaceCacheKey(api.Namespace{"sales"}), payload.Namespace)
@@ -63,10 +66,10 @@ func TestClusterRemoteCacheInvalidatorSendsBestEffortToOtherCNs(t *testing.T) {
 	require.Equal(t, int64(200), payload.SnapshotID)
 	require.Equal(t, "hash-200", payload.MetadataLocationHash)
 	require.Equal(t, "commit-200", payload.CommitID)
-	require.Equal(t, 1, client.released)
+	require.Equal(t, 1, released)
 }
 
-func TestClusterRemoteCacheInvalidatorBoundsWholeBroadcast(t *testing.T) {
+func TestClusterRemoteCacheInvalidatorBlockedPeerDoesNotSuppressHealthyPeer(t *testing.T) {
 	cluster := clusterservice.NewMOCluster(
 		"",
 		nil,
@@ -79,17 +82,45 @@ func TestClusterRemoteCacheInvalidatorBoundsWholeBroadcast(t *testing.T) {
 		}, nil),
 	)
 	defer cluster.Close()
-	client := &fakeQueryMessageClient{serviceID: "self", blockUntilCancel: true}
+	client := &fakeQueryMessageClient{serviceID: "self", blockAddress: "remote-1-addr"}
 
 	err := (ClusterRemoteCacheInvalidator{
 		Cluster:     cluster,
 		QueryClient: client,
-		Timeout:     20 * time.Millisecond,
+		Timeout:     100 * time.Millisecond,
 	}).InvalidateIcebergTable(context.Background(), api.AppendRequest{}, api.CommitResult{})
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"remote-1-addr"}, client.addresses,
-		"one broadcast timeout must stop sends to later CNs")
+	addresses, _, released := client.snapshot()
+	require.ElementsMatch(t, []string{"remote-1-addr", "remote-2-addr"}, addresses)
+	require.Equal(t, 1, released, "the healthy peer must complete before the shared deadline")
+}
+
+func TestClusterRemoteCacheInvalidatorIncludesDrainingCN(t *testing.T) {
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		time.Second,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{
+			{ServiceID: "self", QueryAddress: "self-addr", WorkState: metadata.WorkState_Working},
+			{ServiceID: "draining", QueryAddress: "draining-addr", WorkState: metadata.WorkState_Draining},
+			{ServiceID: "no-query-address", WorkState: metadata.WorkState_Draining},
+		}, nil),
+	)
+	defer cluster.Close()
+	client := &fakeQueryMessageClient{serviceID: "self"}
+
+	err := (ClusterRemoteCacheInvalidator{
+		Cluster:     cluster,
+		QueryClient: client,
+		Timeout:     time.Second,
+	}).InvalidateIcebergTable(context.Background(), api.AppendRequest{}, api.CommitResult{})
+
+	require.NoError(t, err)
+	addresses, _, released := client.snapshot()
+	require.Equal(t, []string{"draining-addr"}, addresses)
+	require.Equal(t, 1, released)
 }
 
 func TestClusterRemoteCacheInvalidatorOutlivesCommittedStatementContext(t *testing.T) {
@@ -115,17 +146,19 @@ func TestClusterRemoteCacheInvalidatorOutlivesCommittedStatementContext(t *testi
 	}).InvalidateIcebergTable(ctx, api.AppendRequest{}, api.CommitResult{})
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"remote-addr"}, client.addresses)
-	require.Equal(t, 1, client.released)
+	addresses, _, released := client.snapshot()
+	require.Equal(t, []string{"remote-addr"}, addresses)
+	require.Equal(t, 1, released)
 }
 
 type fakeQueryMessageClient struct {
-	serviceID        string
-	failAddress      string
-	addresses        []string
-	requests         []*query.Request
-	released         int
-	blockUntilCancel bool
+	mu           sync.Mutex
+	serviceID    string
+	failAddress  string
+	blockAddress string
+	addresses    []string
+	requests     []*query.Request
+	released     int
 }
 
 func (c *fakeQueryMessageClient) ServiceID() string {
@@ -137,10 +170,15 @@ func (c *fakeQueryMessageClient) NewRequest(method query.CmdMethod) *query.Reque
 }
 
 func (c *fakeQueryMessageClient) SendMessage(ctx context.Context, address string, req *query.Request) (*query.Response, error) {
+	c.mu.Lock()
 	c.addresses = append(c.addresses, address)
 	c.requests = append(c.requests, req)
-	if c.blockUntilCancel {
+	c.mu.Unlock()
+	if address == c.blockAddress {
 		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
 	if address == c.failAddress {
@@ -150,5 +188,13 @@ func (c *fakeQueryMessageClient) SendMessage(ctx context.Context, address string
 }
 
 func (c *fakeQueryMessageClient) Release(resp *query.Response) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.released++
+}
+
+func (c *fakeQueryMessageClient) snapshot() ([]string, []*query.Request, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.addresses...), append([]*query.Request(nil), c.requests...), c.released
 }
