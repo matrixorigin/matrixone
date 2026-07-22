@@ -34,12 +34,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const DefaultCheckpointWaitTimeoutMS = 10000
 
 func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *catalog.Schema)) {
 	var wg sync.WaitGroup
@@ -289,12 +292,36 @@ func AllCheckpointsFinished(e *db.DB) bool {
 	if e.Wal.GetPenddingCnt() != 0 {
 		return false
 	}
+	if e.Wal.GetCheckpointed() < e.Wal.GetLSNWatermark() {
+		return false
+	}
 	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
 	if ckp == nil {
 		return true
 	}
 	return ckp.IsFinished()
 }
+
+func WaitAllCheckpointsFinished(t *testing.T, e *db.DB, timeoutMS ...int) {
+	timeout := DefaultCheckpointWaitTimeoutMS
+	if len(timeoutMS) > 0 {
+		timeout = timeoutMS[0]
+	}
+	targetLSN := e.Wal.GetLSNWatermark()
+	testutils.WaitExpect(timeout, func() bool {
+		return e.Wal.GetCheckpointed() >= targetLSN && AllCheckpointsFinished(e)
+	})
+	require.True(
+		t,
+		e.Wal.GetCheckpointed() >= targetLSN && AllCheckpointsFinished(e),
+		"target LSN: %d, checkpointed LSN: %d, current LSN: %d, pending LSN count: %d",
+		targetLSN,
+		e.Wal.GetCheckpointed(),
+		e.Wal.GetLSNWatermark(),
+		e.Runtime.Scheduler.GetPenddingLSNCnt(),
+	)
+}
+
 func CreateRelationAndAppend(
 	t *testing.T,
 	tenantID uint32,
