@@ -476,6 +476,7 @@ func releaseRetryCompile(c *Compile) {
 	defer proc.RestorePrepareParams(prepareParams)
 	c.Release()
 }
+
 // rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
 // in the RankOption of vector search queries.
 // NOTE: RankOption is configured at the top-level SQL, so deep traversal here is defensive.
