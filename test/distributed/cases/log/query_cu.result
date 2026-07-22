@@ -27,10 +27,10 @@ val
 select CAST(JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[2]')) * 4.56e-24 * @duration / 1.002678e-06 AS DECIMAL(32,6)) - CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,6)) val;
 val
 0
-select mo_cu('[1,1,2,3,4,5,0,0]', 0) val;
+select mo_cu('[1,1,2,3,4]', 0) val;
 val
 44.0121
-select mo_cu('[3,1,2,3,4,5,0,0]', 0) val;
+select mo_cu('[3,1,2,3,4,5,0]', 0) val;
 val
 44.0161
 select mo_cu('[4,1,2,3,4,5,6,7,8]', 0, 'iodelete') val;
