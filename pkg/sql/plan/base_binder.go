@@ -156,7 +156,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		if useExplicitCastOverload(exprImpl.Type) {
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		} else {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -280,6 +284,24 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	}
 
 	return
+}
+
+func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
+	t, ok := typ.(*tree.T)
+	if !ok {
+		return false
+	}
+	internal := t.InternalType
+	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return true
+	case defines.MYSQL_TYPE_LONGLONG:
+		family := strings.ToLower(internal.FamilyString)
+		return family == "signed" || family == "integer" ||
+			(internal.Unsigned && (family == "" || family == "unsigned"))
+	default:
+		return false
+	}
 }
 
 func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
@@ -1521,7 +1543,18 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
 
 	mode := int64(astExpr.Mode)
-	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	pattern, err := b.impl.BindExpr(astExpr.Pattern, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if pattern.Typ.Id != int32(types.T_varchar) {
+		varcharTyp := types.T_varchar.ToType()
+		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
+		if err != nil {
+			return nil, err
+		}
+	}
+	args[0] = pattern
 	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
@@ -3007,12 +3040,22 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
+}
+
+func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+func appendCastBeforeExprWithOverload(
+	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
+) (*Expr, error) {
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByNameWithOverload(ctx, "cast", argsType, overloadID)
 	if err != nil {
 		return nil, err
 	}

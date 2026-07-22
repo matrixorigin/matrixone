@@ -73,10 +73,20 @@ func (r *ParquetReader) ReadBatch(
 	}
 
 	r.h.batchCnt = maxParquetBatchCnt
+	batchStartOrdinal := r.h.rowOrdinalBase + r.h.offset
 
 	err = r.h.getData(buf, r.param, proc)
 	if err != nil {
 		return false, err
+	}
+	if r.param.NeedRowOrdinal && buf.RowCount() > 0 {
+		r.param.IcebergBatchDataFile = r.param.Fileparam.Filepath
+		r.param.IcebergBatchStartRowOrdinal = batchStartOrdinal
+	}
+	if buf.RowCount() > 0 {
+		if err := r.h.fillIcebergDMLMetadataColumns(buf, r.param, proc, batchStartOrdinal); err != nil {
+			return false, err
+		}
 	}
 
 	// Virtual column fill is independent of rowCountOnly: both physical-col

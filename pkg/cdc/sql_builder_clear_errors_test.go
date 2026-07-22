@@ -87,3 +87,26 @@ func TestUpdateTaskStateAndErrMsgSQL_SQLInjectionProtection(t *testing.T) {
 	expected := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'failed', err_msg = 'CDC table db''.tbl has permanent error: read tcp \\\\n' WHERE 1=1 AND account_id = 3 AND task_id = 'task''; DROP TABLE task; --'"
 	assert.Equal(t, expected, sql)
 }
+
+func TestUpdateTaskStateAndErrMsgByStateSQL_SQLInjectionProtection(t *testing.T) {
+	sql := CDCSQLBuilder.UpdateTaskStateAndErrMsgByStateSQL(
+		3,
+		"task'; DROP TABLE task; --",
+		"failed",
+		"CDC table db'.tbl has permanent error: read tcp \\n",
+		"running",
+	)
+
+	expected := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'failed', err_msg = 'CDC table db''.tbl has permanent error: read tcp \\\\n' WHERE 1=1 AND account_id = 3 AND task_id = 'task''; DROP TABLE task; --' AND state = 'running'"
+	assert.Equal(t, expected, sql)
+}
+
+func TestGetTaskStateSQL_SQLInjectionProtection(t *testing.T) {
+	sql := CDCSQLBuilder.GetTaskStateSQL(
+		3,
+		"task'; DROP TABLE task; --",
+	)
+
+	expected := "SELECT state FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 3 AND task_id = 'task''; DROP TABLE task; --'"
+	assert.Equal(t, expected, sql)
+}
