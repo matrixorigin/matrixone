@@ -29,6 +29,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,6 +97,25 @@ func TestSendContextErrorReleasesFuture(t *testing.T) {
 	defer rb.mu.RUnlock()
 	require.Empty(t, rb.mu.futures,
 		"a future that was never enqueued must be removed on Send failure")
+}
+
+func TestWaitWriteWakesWhenBackendStops(t *testing.T) {
+	rb := &remoteBackend{
+		waitWriteC: make(chan struct{}),
+		stopWriteC: make(chan struct{}),
+	}
+	woke := make(chan struct{})
+	go func() {
+		rb.waitWrite(context.Background())
+		close(woke)
+	}()
+
+	close(rb.stopWriteC)
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("write waiter did not observe backend stop")
+	}
 }
 
 func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
@@ -695,6 +715,12 @@ func TestCloseStreamUnblocksFullReceiveChannel(t *testing.T) {
 		t.Fatal("stream response delivery did not observe stream close")
 	}
 	require.Equal(t, 1, unregistered)
+	select {
+	case message := <-c:
+		require.Nil(t, message)
+	default:
+		t.Fatal("stream close did not publish a terminal response")
+	}
 	require.Empty(t, c)
 }
 
@@ -1079,7 +1105,12 @@ func TestIsExpectedCloseError(t *testing.T) {
 }
 
 func TestStoppedBackendCannotBeReactivated(t *testing.T) {
-	rb := &remoteBackend{cancel: func() {}}
+	closeDone := make(chan struct{})
+	close(closeDone)
+	rb := &remoteBackend{
+		cancel:    func() {},
+		closeDone: closeDone,
+	}
 	rb.stateMu.state = stateStopped
 	rb.atomic.unavailable.Store(true)
 	rb.atomic.lastActiveTime.Store(time.Time{})
@@ -1094,6 +1125,168 @@ func TestStoppedBackendCannotBeReactivated(t *testing.T) {
 	rb.atomic.lastActiveTime.Store(time.Now())
 	rb.Close()
 	require.True(t, rb.LastActiveTime().IsZero())
+}
+
+func newBlockingCloseRemoteBackend(
+	t *testing.T,
+) (*remoteBackend, <-chan struct{}, func()) {
+	t.Helper()
+	rb := &remoteBackend{
+		stopper:    stopper.NewStopper("blocking-backend-close"),
+		stopWriteC: make(chan struct{}),
+		closeDone:  make(chan struct{}),
+		cancel:     func() {},
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	// This helper has no IOSession. Mark the connection-only destructor done so
+	// the test exercises the real Close state machine without a transport mock.
+	rb.closeOnce.Do(func() {})
+
+	teardownStarted := make(chan struct{})
+	releaseTeardown := make(chan struct{})
+	require.NoError(t, rb.stopper.RunTask(func(ctx context.Context) {
+		<-ctx.Done()
+		close(teardownStarted)
+		<-releaseTeardown
+	}))
+
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseTeardown) })
+	}
+	t.Cleanup(func() {
+		release()
+		rb.Close()
+	})
+	return rb, teardownStarted, release
+}
+
+func TestConcurrentRemoteBackendCloseJoinsTeardown(t *testing.T) {
+	rb, teardownStarted, release := newBlockingCloseRemoteBackend(t)
+	firstDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(firstDone)
+	}()
+
+	select {
+	case <-teardownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("backend teardown did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		t.Fatal("concurrent Close returned before the teardown owner")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	for _, done := range []<-chan struct{}{firstDone, secondDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Close did not finish after teardown was released")
+		}
+	}
+}
+
+func TestRemoteBackendCloseTerminatesActiveStream(t *testing.T) {
+	rb, teardownStarted, release := newBlockingCloseRemoteBackend(t)
+	s := newStream(
+		rb,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		rb.removeActiveStream,
+		func() {},
+	)
+	s.init(1, false)
+	rb.mu.activeStreams[s.ID()] = s
+	recv, err := s.Receive()
+	require.NoError(t, err)
+
+	closeDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-teardownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("backend teardown did not start")
+	}
+
+	// The receiver must terminate before the deliberately blocked transport
+	// teardown is released; client cleanup is not allowed to depend on it.
+	select {
+	case message := <-recv:
+		require.Nil(t, message)
+	case <-time.After(time.Second):
+		t.Fatal("backend close did not terminate the active stream receiver")
+	}
+	require.NoError(t, s.Close(false))
+
+	release()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("backend Close did not finish after teardown was released")
+	}
+}
+
+func TestStreamTerminationRejectsLateResponse(t *testing.T) {
+	s := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(*stream) {},
+		func() {},
+	)
+	s.init(1, false)
+	recv, err := s.Receive()
+	require.NoError(t, err)
+
+	s.terminate()
+	s.done(context.Background(), RPCMessage{
+		Message:        newTestMessage(s.ID()),
+		stream:         true,
+		streamSequence: 1,
+	}, false)
+
+	message := <-recv
+	require.Nil(t, message)
+	require.Empty(t, recv, "a response must not be published after terminal")
+	require.NoError(t, s.Close(false))
+}
+
+func TestStreamCloseWithoutConnectionCloseTerminatesReceiver(t *testing.T) {
+	s := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(*stream) {},
+		func() {},
+	)
+	s.init(1, false)
+	recv, err := s.Receive()
+	require.NoError(t, err)
+	require.NoError(t, s.Close(false))
+	select {
+	case message := <-recv:
+		require.Nil(t, message)
+	case <-time.After(time.Second):
+		t.Fatal("stream Close(false) did not terminate an existing receiver")
+	}
 }
 
 func TestWaitingFutureMustGetClosedError(t *testing.T) {

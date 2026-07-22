@@ -497,6 +497,174 @@ func TestClientCloseJoinsRetiredBackendCleanupOnce(t *testing.T) {
 	require.EqualValues(t, 1, backend.closeCalls.Load())
 }
 
+func TestClientCloseJoinsConcurrentRemoteBackendTeardown(t *testing.T) {
+	rb, teardownStarted, release := newBlockingCloseRemoteBackend(t)
+	rc, err := NewClient(
+		"concurrent-remote-cleanup-join",
+		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	t.Cleanup(func() {
+		release()
+		require.NoError(t, c.Close())
+	})
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{rb}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	backendCloseDone := make(chan struct{})
+	go func() {
+		rb.Close()
+		close(backendCloseDone)
+	}()
+	select {
+	case <-teardownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("backend teardown did not start")
+	}
+
+	// The retirement worker is now a concurrent (non-owner) Close caller. Client
+	// Close must join the owner's physical teardown through that worker.
+	c.retireBackend("remote", rb)
+	clientCloseDone := make(chan error, 1)
+	go func() { clientCloseDone <- c.Close() }()
+	select {
+	case err := <-clientCloseDone:
+		require.NoError(t, err)
+		t.Fatal("client Close returned before the backend teardown owner")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case <-backendCloseDone:
+	case <-time.After(time.Second):
+		t.Fatal("backend teardown did not finish after release")
+	}
+	select {
+	case err := <-clientCloseDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client Close did not finish after backend teardown")
+	}
+}
+
+func TestClientCloseJoinsConcurrentTargetedReset(t *testing.T) {
+	rc, err := NewClient(
+		"targeted-reset-cleanup-join",
+		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	backend := &operationClosedBlockingCloseBackend{
+		testBackend: &testBackend{id: 1, activeTime: time.Now()},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(backend.release) })
+		require.NoError(t, c.Close())
+	})
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{backend}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	resetDone := make(chan error, 1)
+	go func() { resetDone <- c.CloseBackendFor("remote") }()
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("targeted backend teardown did not start")
+	}
+
+	clientCloseDone := make(chan error, 1)
+	go func() { clientCloseDone <- c.Close() }()
+	select {
+	case err := <-clientCloseDone:
+		require.NoError(t, err)
+		t.Fatal("client Close returned before targeted backend teardown")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(backend.release) })
+	for _, done := range []<-chan error{resetDone, clientCloseDone} {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("close did not finish after targeted teardown was released")
+		}
+	}
+}
+
+func TestClientCloseJoinsInflightBackendCreate(t *testing.T) {
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	rc, err := NewClient(
+		"inflight-create-join",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(factory.release) })
+		require.NoError(t, c.Close())
+	})
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := c.createBackendWithBookkeeping("remote", false)
+		createDone <- err
+	}()
+	select {
+	case <-factory.entered:
+	case <-time.After(time.Second):
+		t.Fatal("backend create did not reach the factory")
+	}
+
+	clientCloseDone := make(chan error, 1)
+	go func() { clientCloseDone <- c.Close() }()
+	select {
+	case err := <-clientCloseDone:
+		require.NoError(t, err)
+		t.Fatal("client Close returned before in-flight factory I/O")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(factory.release) })
+	select {
+	case err := <-createDone:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed), err)
+	case <-time.After(time.Second):
+		t.Fatal("backend create did not finish after factory release")
+	}
+	select {
+	case err := <-clientCloseDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("client Close did not join in-flight backend create")
+	}
+	factory.backend.RLock()
+	closed := factory.backend.closed
+	factory.backend.RUnlock()
+	require.True(t, closed, "stale backend must be closed before client Close returns")
+}
+
 func TestBackendCleanupSaturationPreservesPoolBound(t *testing.T) {
 	rc, err := NewClient(
 		"retired-cleanup-bound",

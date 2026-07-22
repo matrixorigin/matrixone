@@ -307,11 +307,16 @@ type client struct {
 	gcInactiveC chan string
 	closedC     chan struct{}
 
-	// backendCleanup owns asynchronous closes after a backend has been detached
-	// from pool admission. Add is serialized by mu and is forbidden after
-	// mu.closing becomes true, so Close can safely wait after sealing admission.
+	// backendCleanup owns closes after a backend has been detached from pool
+	// admission, including asynchronous retirement and synchronous targeted
+	// reset. Add is serialized by mu and is forbidden after mu.closing becomes
+	// true, so Close can safely wait after sealing admission.
 	backendCleanup      sync.WaitGroup
 	backendCleanupSlots chan struct{}
+	// backendCreate covers factory I/O that passed the closing/generation gate.
+	// Add is performed under mu before the I/O starts, so Close can seal new
+	// admissions and then safely join every already-started create.
+	backendCreate sync.WaitGroup
 
 	mu struct {
 		sync.Mutex
@@ -874,6 +879,7 @@ func (c *client) Close() error {
 		backend.Close()
 	}
 	c.backendCleanup.Wait()
+	c.backendCreate.Wait()
 
 	// Unregister from global GC manager
 	globalClientGC.unregister(c)
@@ -908,6 +914,9 @@ func (c *client) CloseBackend() error {
 func (c *client) CloseBackendFor(remote string) error {
 	c.mu.Lock()
 	backends := c.mu.backends[remote]
+	// The reset remains synchronous for its caller, but register ownership before
+	// detaching so a concurrent client Close cannot miss this teardown.
+	c.backendCleanup.Add(len(backends))
 	delete(c.mu.backendGeneration, remote)
 	c.invalidateBackendCreateLocked(remote)
 	delete(c.mu.backends, remote)
@@ -922,7 +931,10 @@ func (c *client) CloseBackendFor(remote string) error {
 	// Close outside c.mu: backend shutdown can wait for worker goroutines, and
 	// no new caller should be blocked from creating the replacement meanwhile.
 	for _, backend := range backends {
-		backend.Close()
+		func() {
+			defer c.backendCleanup.Done()
+			backend.Close()
+		}()
 	}
 	return nil
 }
@@ -1193,7 +1205,9 @@ func (c *client) createBackendForClaimedGeneration(
 		c.mu.Unlock()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
+	c.backendCreate.Add(1)
 	c.mu.Unlock()
+	defer c.backendCreate.Done()
 
 	// Create backend using factory with metrics (same as doCreate) without holding the lock.
 	b, err := c.doCreate(backend)
