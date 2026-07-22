@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,19 @@ import (
 
 type blockingUnlockClient struct {
 	unlockStarted chan struct{}
+}
+
+// newUnpooledActiveTxnForTest avoids contaminating the global reuse pool in
+// focused tests that may run immediately before RunReuseTests enables its
+// checker. Call txn.reset() when the test is done.
+func newUnpooledActiveTxnForTest(txnID []byte) *activeTxn {
+	return &activeTxn{
+		RWMutex:     &sync.RWMutex{},
+		txnID:       txnID,
+		txnKey:      string(txnID),
+		fsp:         newFixedSlicePool(8),
+		lockHolders: make(map[uint32]*tableLockHolder),
+	}
 }
 
 func (c *blockingUnlockClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
@@ -84,6 +98,45 @@ func (c *blockingBindRefreshClient) Close() error { return nil }
 type terminalLockTimeoutClient struct {
 	bindRefreshStarted chan struct{}
 }
+
+type lockBindRecoveryClient struct {
+	bindRefreshStarted chan struct{}
+	newBind            *pb.LockTable
+}
+
+func (c *lockBindRecoveryClient) Send(
+	ctx context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Lock:
+		if c.newBind == nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+		resp := acquireResponse()
+		newBind := *c.newBind
+		resp.NewBind = &newBind
+		return resp, nil
+	case pb.Method_GetBind:
+		select {
+		case c.bindRefreshStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *lockBindRecoveryClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *lockBindRecoveryClient) Close() error { return nil }
 
 func (c *terminalLockTimeoutClient) Send(
 	_ context.Context,
@@ -167,6 +220,86 @@ func TestRemoteLockTimeoutSkipsBindRecovery(t *testing.T) {
 	case <-client.bindRefreshStarted:
 		require.Fail(t, "terminal lock timeout must not start allocator bind recovery")
 	default:
+	}
+}
+
+func TestRemoteLockBindRecoveryConsumesRemainingLockBudget(t *testing.T) {
+	testCases := []struct {
+		name    string
+		newBind bool
+	}{
+		{name: "transport-error"},
+		{name: "new-bind", newBind: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			defer leaktest.AfterTest(t)()
+
+			bind := pb.LockTable{
+				Group: 0, Table: 1, OriginTable: 1,
+				ServiceID: "s2", Version: 1, Valid: true,
+			}
+			client := &lockBindRecoveryClient{
+				bindRefreshStarted: make(chan struct{}, 1),
+			}
+			if testCase.newBind {
+				newBind := bind
+				newBind.ServiceID = "s3"
+				newBind.Version++
+				client.newBind = &newBind
+			}
+			remote := newRemoteLockTable(
+				"s1",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				getLogger(""),
+			)
+			if testCase.newBind {
+				remote.allocatorStateProvider = func() allocatorState { return allocatorState{} }
+				remote.allocatorBindChangedHandler = func(
+					string,
+					pb.LockTable,
+					pb.LockTable,
+					allocatorState,
+					allocatorState,
+				) error {
+					return nil
+				}
+			}
+
+			txnID := []byte("bounded-bind-recovery")
+			txn := newUnpooledActiveTxnForTest(txnID)
+			txn.Lock()
+			defer func() {
+				txn.Unlock()
+				txn.reset()
+			}()
+
+			var lockErr error
+			start := time.Now()
+			remote.lock(
+				context.Background(),
+				txn,
+				[][]byte{{1}},
+				LockOptions{LockOptions: pb.LockOptions{
+					Granularity:      pb.Granularity_Row,
+					Mode:             pb.LockMode_Exclusive,
+					Policy:           pb.WaitPolicy_Wait,
+					LockWaitTimeout:  60,
+					LockWaitDeadline: time.Now().Add(100 * time.Millisecond).UnixNano(),
+				}},
+				func(_ pb.Result, err error) { lockErr = err })
+			require.ErrorIs(t, lockErr, ErrLockTimeout)
+			require.Less(t, time.Since(start), time.Second)
+			select {
+			case <-client.bindRefreshStarted:
+			default:
+				require.Fail(t, "bind recovery was not exercised")
+			}
+		})
 	}
 }
 
