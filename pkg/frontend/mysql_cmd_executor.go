@@ -1626,7 +1626,13 @@ func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*Pre
 	if err != nil {
 		return nil, err
 	}
-	wrapper.Sql = p.Value.(string)
+	// MySQL converts numeric and NULL user variables to statement text so that
+	// the SQL parser reports the invalid statement consistently.
+	if p.Value == nil {
+		wrapper.Sql = "NULL"
+	} else {
+		wrapper.Sql = fmt.Sprint(p.Value)
+	}
 
 	return doPrepareString(ses, execCtx, wrapper)
 }
