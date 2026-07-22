@@ -5189,7 +5189,10 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
 		}
 		typId := types.T(col.Typ.Id)
-		if typId == types.T_array_float32 || typId == types.T_array_float64 {
+		if typId.IsArrayRelate() {
+			// IsArrayRelate covers all six vector types: a vector can never
+			// round-trip through a `col=value` path component, so the rejection
+			// applies to the narrow types exactly as it does to vecf32/vecf64.
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
 		}
 		canonical := strings.ToLower(col.Name)

@@ -467,6 +467,18 @@ func CompareValue(left, right any) int {
 		return compareFloatSlice(lVal, right.([]float32))
 	case []float64:
 		return compareFloatSlice(lVal, right.([]float64))
+	// Narrow vector element slices. ArrayElementCompare covers every element
+	// type; compareFloatSlice is float-only.
+	case []BF16:
+		return ArrayElementCompare(lVal, right.([]BF16))
+	case []Float16:
+		return ArrayElementCompare(lVal, right.([]Float16))
+	case []int8:
+		return ArrayElementCompare(lVal, right.([]int8))
+	// NOTE: no []uint8 arm — []uint8 IS []byte in Go, so a vecuint8 value is
+	// already caught by the []byte case above. That is correct: for equal-length
+	// arrays bytes.Compare is exactly element-wise unsigned comparison, which is
+	// what ArrayElementCompare[uint8] would do.
 	case Enum:
 		return cmp.Compare(lVal, right.(Enum))
 	case string:

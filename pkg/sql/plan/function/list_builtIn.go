@@ -40,7 +40,8 @@ func jsonConstructorSupportsType(oid types.T) bool {
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_year, types.T_bit, types.T_enum, types.T_geometry, types.T_uuid,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		return true
 	default:
 		return false

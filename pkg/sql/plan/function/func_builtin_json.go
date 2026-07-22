@@ -2050,6 +2050,46 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 			out[i] = x
 		}
 		return out, nil
+	case types.T_array_bf16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[types.BF16](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x.ToFloat32())
+		}
+		return out, nil
+	case types.T_array_float16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[types.Float16](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x.ToFloat32())
+		}
+		return out, nil
+	case types.T_array_int8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[int8](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
+		}
+		return out, nil
+	case types.T_array_uint8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[uint8](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
+		}
+		return out, nil
 	default:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
