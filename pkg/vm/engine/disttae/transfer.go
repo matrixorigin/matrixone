@@ -148,11 +148,12 @@ func transferTombstoneObjects(
 
 			if bat.RowCount() > 0 {
 				fileName := slist[0].ObjectName().String()
-				if err = txn.WriteFileLocked(
+				if err = txn.writeFileLockedWithAutoIncrEpoch(
 					DELETE,
 					tbl.accountId, tbl.db.databaseId, tbl.tableId,
 					tbl.db.databaseName, tbl.tableName, fileName,
 					bat, txn.tnStores[0],
+					tbl.extraInfo.AutoIncrEpoch,
 				); err != nil {
 					return err
 				}

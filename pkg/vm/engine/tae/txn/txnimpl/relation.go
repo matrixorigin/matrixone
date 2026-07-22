@@ -115,6 +115,11 @@ type txnRelation struct {
 	table *txnTable
 }
 
+// SetAutoIncrEpoch records the CN schema dependency for this relation.
+func (h *txnRelation) SetAutoIncrEpoch(version uint32) error {
+	return h.table.setExpectedAutoIncrEpoch(version)
+}
+
 func newRelation(table *txnTable) *txnRelation {
 	rel := &txnRelation{
 		TxnRelation: &txnbase.TxnRelation{
