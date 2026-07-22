@@ -1,10 +1,10 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorytable
+package cnservice
 
-// Iter represents a generic iterator
-type Iter[T any] interface {
-	First() bool
-	Next() bool
-	Read() (T, error)
-	Close() error
-}
+import (
+	"testing"
 
-// SeekIter represents a generic seekable iterator
-type SeekIter[T any] interface {
-	Iter[T]
-	Seek(T) bool
+	"github.com/stretchr/testify/require"
+)
+
+func TestValidateRejectsRemovedMemoryEngines(t *testing.T) {
+	for _, engineType := range []EngineType{"memory", "non-distributed-memory"} {
+		t.Run(string(engineType), func(t *testing.T) {
+			cfg := Config{UUID: "cn1"}
+			cfg.Engine.Type = engineType
+			require.ErrorContains(t, cfg.Validate(), "unsupported CN engine")
+		})
+	}
 }
