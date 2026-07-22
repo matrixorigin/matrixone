@@ -1773,6 +1773,63 @@ func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
 	})
 }
 
+func TestHandlePrepareVarWithNonStringValue(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareVarWithNonStringValue", t, func(ses *Session) error {
+		ec.resper = ses.respr
+		for _, testCase := range []struct {
+			name  string
+			value any
+		}{
+			{name: "integer_zero", value: int64(0)},
+			{name: "integer_one", value: int64(1)},
+			{name: "integer_min", value: int64(math.MinInt64)},
+			{name: "integer_max", value: int64(math.MaxInt64)},
+			{name: "unsigned_integer_max", value: uint64(math.MaxUint64)},
+			{name: "float", value: float64(1.5)},
+			{name: "boolean", value: true},
+			{name: "array", value: []float32{1}},
+			{name: "null", value: nil},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				var prepared *PrepareStmt
+				var err error
+				stmt := tree.NewPrepareVar(
+					tree.Identifier("stmt_"+testCase.name),
+					tree.NewVarExpr(testCase.name, false, false, nil),
+				)
+				defer stmt.Free()
+				require.NoError(t, ses.SetUserDefinedVar(testCase.name, testCase.value, ""))
+				require.NotPanics(t, func() {
+					prepared, err = handlePrepareVar(ses, ec, stmt)
+				})
+				require.Nil(t, prepared)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "syntax error")
+				require.NotContains(t, err.Error(), "panic")
+				_, err = ses.GetPrepareStmt(ctx, "stmt_"+testCase.name)
+				require.Error(t, err)
+			})
+		}
+
+		require.NoError(t, ses.SetUserDefinedVar("valid_after_error", "select 1", ""))
+		stmt := tree.NewPrepareVar(
+			"stmt_valid_after_error",
+			tree.NewVarExpr("valid_after_error", false, false, nil),
+		)
+		defer stmt.Free()
+		prepared, err := handlePrepareVar(ses, ec, stmt)
+		require.NoError(t, err)
+		defer prepared.Close()
+		return nil
+	})
+}
+
 func requirePreparedSelectConcat(t *testing.T, preStmt *PrepareStmt) {
 	t.Helper()
 	selectStmt, ok := preStmt.PrepareStmt.(*tree.Select)

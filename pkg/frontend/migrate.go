@@ -16,48 +16,63 @@ package frontend
 
 import "sync"
 
-// migrateController is created in Routine and used to:
-//  1. wait migration finished before close the routine.
-//  2. check routine if closed before do the migration.
+// migrateController is created in Routine and used to serialize lifecycle
+// operations with routine cleanup.
 type migrateController struct {
 	sync.Mutex
 	migrateOnce sync.Once
 	// closed indicates if the session has been closed.
 	closed bool
-	// inProgress indicates if the migration is in progress.
+	// inProgress indicates if a lifecycle operation is in progress.
 	inProgress bool
-	// c is the channel which is used to wait for the migration
-	// finished when close the routine.
-	c chan struct{}
+	// cond coordinates lifecycle operations and routine cleanup.
+	cond *sync.Cond
 	// the id of goroutine that executes the migration
 	goroutineID uint64
 }
 
 func newMigrateController() *migrateController {
-	return &migrateController{
-		closed:     false,
-		inProgress: false,
-		c:          make(chan struct{}, 1),
-	}
+	mc := &migrateController{}
+	mc.cond = sync.NewCond(&mc.Mutex)
+	return mc
 }
 
-// waitAndClose is called in the routine before the routine is cleaned up.
-// if the migration is in progress, wait for it finished and set the closed to true.
+// waitAndClose is called before the routine is cleaned up. If a lifecycle
+// operation is in progress, it waits for that operation to finish and marks
+// the routine closed.
 func (mc *migrateController) waitAndClose() {
 	mc.Lock()
 	defer mc.Unlock()
-	if mc.inProgress {
-		<-mc.c
-	}
 	mc.closed = true
+	for mc.inProgress {
+		mc.cond.Wait()
+	}
 }
 
-// beginMigrate is called before the migration started. It check if the routine
-// has been closed.
-func (mc *migrateController) beginMigrate() bool {
+// beginOperation starts a lifecycle operation unless the routine is closed or
+// another operation is already running.
+func (mc *migrateController) beginOperation() bool {
 	mc.Lock()
 	defer mc.Unlock()
+	for mc.inProgress && !mc.closed {
+		mc.cond.Wait()
+	}
+	return mc.startOperationLocked()
+}
+
+// tryBeginOperation starts a lifecycle operation only if it can proceed
+// immediately.
+func (mc *migrateController) tryBeginOperation() bool {
+	mc.Lock()
+	defer mc.Unlock()
+	return mc.startOperationLocked()
+}
+
+func (mc *migrateController) startOperationLocked() bool {
 	if mc.closed {
+		return false
+	}
+	if mc.inProgress {
 		return false
 	}
 	mc.goroutineID = GetRoutineId()
@@ -65,19 +80,18 @@ func (mc *migrateController) beginMigrate() bool {
 	return true
 }
 
-// endMigrate is called after the migration finished. It notifies the routine that
-// it could clean up and set in progress to false.
-func (mc *migrateController) endMigrate() {
-	select {
-	case mc.c <- struct{}{}:
-	default:
-	}
+// endOperation completes a lifecycle operation and wakes a routine waiting
+// to close.
+func (mc *migrateController) endOperation() {
 	mc.Lock()
 	defer mc.Unlock()
 	mc.inProgress = false
 	mc.goroutineID = 0
+	mc.cond.Broadcast()
 }
 
 func (mc *migrateController) getGoroutineId() uint64 {
+	mc.Lock()
+	defer mc.Unlock()
 	return mc.goroutineID
 }

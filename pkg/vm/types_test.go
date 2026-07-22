@@ -110,6 +110,19 @@ func TestOperatorTypeAndBaseAccessors(t *testing.T) {
 	require.Equal(t, int32(23), addr.ParallelID)
 }
 
+func TestOperatorToStrMapCompleteness(t *testing.T) {
+	const reservedShuffleV2 = Shuffle + 1
+
+	for op := Top; op < OpTypeEnd; op++ {
+		if op == reservedShuffleV2 {
+			continue
+		}
+		if op.String() == "Unknown" {
+			t.Errorf("missing operator name for %d", op)
+		}
+	}
+}
+
 func TestOperatorChildrenAndTraversal(t *testing.T) {
 	root := &testOperator{name: "root"}
 	left := &testOperator{name: "left"}
