@@ -512,6 +512,14 @@ insert into t_chk_addcol values (2, -5);
 select * from t_chk_addcol order by id;
 drop table t_chk_addcol;
 
+-- ALTER column-level CHECK may reference only the newly added column.
+drop table if exists t_chk_addcol_cross;
+create table t_chk_addcol_cross(id int primary key, a int);
+alter table t_chk_addcol_cross add column b int check (a < b);
+insert into t_chk_addcol_cross values (1, -1);
+select * from t_chk_addcol_cross;
+drop table t_chk_addcol_cross;
+
 -- ALTER ADD COLUMN with NOT ENFORCED must retain the constraint as schema
 -- metadata without rejecting rows that violate it.
 drop table if exists t_chk_addcol_notenforced;

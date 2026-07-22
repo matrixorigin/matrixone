@@ -642,6 +642,15 @@ select * from t_chk_addcol order by id;
 ➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  5
 drop table t_chk_addcol;
+drop table if exists t_chk_addcol_cross;
+create table t_chk_addcol_cross(id int primary key, a int);
+alter table t_chk_addcol_cross add column b int check (a < b);
+invalid input: column 'a' does not exist or cannot be referenced by a generated column
+insert into t_chk_addcol_cross values (1, -1);
+select * from t_chk_addcol_cross;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  -1
+drop table t_chk_addcol_cross;
 drop table if exists t_chk_addcol_notenforced;
 create table t_chk_addcol_notenforced(id int primary key);
 alter table t_chk_addcol_notenforced add column b int check (b > 0) not enforced;

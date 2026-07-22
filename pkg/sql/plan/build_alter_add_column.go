@@ -69,9 +69,14 @@ func AddColumn(
 	}
 
 	// Bind column-level CHECK constraints now that the new column is present in
-	// tableDef.Cols, so a check may reference the new column itself.
+	// tableDef.Cols. Validate each CHECK against only its defining column, then
+	// bind it against the full table so the persisted ColPos matches the final
+	// row layout.
 	for _, attr := range specNewColumn.Attributes {
 		if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
+			if _, err = bindCheckExpr(ctx, ca.Expr, []*ColDef{newCol}); err != nil {
+				return false, err
+			}
 			if err = appendCheckDef(ctx, tableDef, ca.Name, ca.Expr); err != nil {
 				return false, err
 			}

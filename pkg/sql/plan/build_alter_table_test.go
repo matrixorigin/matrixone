@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -60,13 +61,31 @@ func TestAlterTableAddColumnWithColumnCheck(t *testing.T) {
 	// column itself, which is only present in TableDef.Cols after positioning.
 	// Before the fix the check was bound before the column was inserted and
 	// failed with "column d not found".
-	if _, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0);"); err != nil {
-		t.Fatalf("column-level check referencing the new column should bind: %+v", err)
+	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0);")
+	require.NoError(t, err)
+	tableDef := logicPlan.GetDdl().GetAlterTable().GetCopyTableDef()
+	checks := tableDef.GetChecks()
+	require.Len(t, checks, 1)
+	checkArgs := checks[0].GetCheck().GetF().GetArgs()
+	require.NotEmpty(t, checkArgs)
+	newColPos := int32(-1)
+	var bindColPos int32
+	for _, col := range tableDef.GetCols() {
+		if col.GetName() == catalog.Row_ID {
+			continue
+		}
+		if col.GetName() == "d" {
+			newColPos = bindColPos
+			break
+		}
+		bindColPos++
 	}
-	// It may also reference existing columns of the same row.
-	if _, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN e INT CHECK (a > e);"); err != nil {
-		t.Fatalf("column-level check referencing an existing column should bind: %+v", err)
-	}
+	require.NotEqual(t, int32(-1), newColPos)
+	require.Equal(t, newColPos, checkArgs[0].GetCol().GetColPos())
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN e INT CHECK (a > e);")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column 'a'")
 }
 
 func TestAlterTableAddColumnPreservesNotEnforcedCheck(t *testing.T) {
