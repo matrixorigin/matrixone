@@ -625,6 +625,7 @@ message PrepareParamInfo {
   bytes data = 2;
   bytes area = 3;
   repeated bool nulls = 4;
+  repeated bool is_bin = 5;
 }
 
 message ProcessInfo {
@@ -652,6 +653,7 @@ message SessionInfo {
   repeated string query_id = 9;
   int64 lock_wait_timeout = 10;
   bool lock_wait_timeout_set = 11;
+  bool matrixone_native_mode = 12;
 }
 
 message SessionLoggerInfo {

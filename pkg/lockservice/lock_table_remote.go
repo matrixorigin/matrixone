@@ -36,6 +36,9 @@ import (
 var (
 	remoteRetryInitialBackoff = 100 * time.Millisecond
 	remoteRetryMaxBackoff     = 5 * time.Second
+	// Bound one remote wait-for lookup without limiting the number of lock keys
+	// or transactions that a deadlock check can traverse.
+	remoteLockSnapshotTimeout = 3*defaultRPCTimeout + remoteRetryMaxBackoff
 )
 
 const (
@@ -290,6 +293,9 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) error {
+	ctx, cancel := context.WithTimeout(ctx, remoteLockSnapshotTimeout)
+	defer cancel()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}

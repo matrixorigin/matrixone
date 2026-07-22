@@ -76,19 +76,20 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetQueryId("query-1")
 	proc.Base.UnixTime = 12345
 	proc.Base.SessionInfo = SessionInfo{
-		Account:            "acc",
-		User:               "user",
-		Host:               "host",
-		Role:               "role",
-		ConnectionID:       99,
-		Database:           "db1",
-		Version:            "v1",
-		TimeZone:           time.FixedZone("UTC+8", 8*3600),
-		LockWaitTimeout:    7,
-		LockWaitTimeoutSet: true,
-		QueryId:            []string{"stmt-qid"},
-		LogLevel:           zap.WarnLevel,
-		SessionId:          uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		Account:             "acc",
+		User:                "user",
+		Host:                "host",
+		Role:                "role",
+		ConnectionID:        99,
+		Database:            "db1",
+		Version:             "v1",
+		TimeZone:            time.FixedZone("UTC+8", 8*3600),
+		LockWaitTimeout:     7,
+		LockWaitTimeoutSet:  true,
+		QueryId:             []string{"stmt-qid"},
+		MatrixOneNativeMode: true,
+		LogLevel:            zap.WarnLevel,
+		SessionId:           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -98,7 +99,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	vec := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
-	proc.SetPrepareParams(vec)
+	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
+	proc.SetAffectedRows(42)
 	return proc, txnOp
 }
 
@@ -125,21 +127,23 @@ func TestProcessCodecHelpers(t *testing.T) {
 		timeBytes, err := time.Now().In(time.UTC).MarshalBinary()
 		require.NoError(t, err)
 		info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
-			User:               "u",
-			Host:               "h",
-			Role:               "r",
-			ConnectionId:       1,
-			Database:           "d",
-			Version:            "v",
-			Account:            "a",
-			QueryId:            []string{"q1"},
-			TimeZone:           timeBytes,
-			LockWaitTimeout:    9,
-			LockWaitTimeoutSet: true,
+			User:                "u",
+			Host:                "h",
+			Role:                "r",
+			ConnectionId:        1,
+			Database:            "d",
+			Version:             "v",
+			Account:             "a",
+			QueryId:             []string{"q1"},
+			TimeZone:            timeBytes,
+			LockWaitTimeout:     9,
+			LockWaitTimeoutSet:  true,
+			MatrixoneNativeMode: true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
+		require.True(t, info.MatrixOneNativeMode)
 		require.True(t, info.LockWaitTimeoutSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
@@ -196,8 +200,11 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint32(42), info.AccountId)
 	require.Equal(t, int64(2), info.PrepareParams.Length)
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
+	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
+	require.Equal(t, int64(42), info.AffectedRows)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
+	require.True(t, info.SessionInfo.MatrixoneNativeMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -244,16 +251,46 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
+	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
+	require.True(t, decodedProc.GetPrepareParamIsBin(0))
+	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
+	decodedParams := decodedProc.GetPrepareParams()
+	require.NotPanics(t, decodedProc.Free)
+	require.Nil(t, decodedParams.GetData())
+	require.Nil(t, decodedParams.GetArea())
 
 	rtSvc := "codec-test-svc"
 	runtime := rt.DefaultRuntime()
 	rt.SetupServiceBasedRuntime(rtSvc, runtime)
 	runtime.SetGlobalVariables(rt.ProcessCodecService, svc)
 	require.Same(t, svc, GetCodecService(rtSvc))
+}
+
+func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	info.PrepareParams.IsBin = nil
+
+	payload, err := info.Marshal()
+	require.NoError(t, err)
+	legacyInfo := pipeline.ProcessInfo{}
+	require.NoError(t, legacyInfo.Unmarshal(payload))
+	require.Empty(t, legacyInfo.PrepareParams.IsBin)
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decodedProc, err := svc.Decode(context.Background(), legacyInfo)
+	require.NoError(t, err)
+	require.NotNil(t, decodedProc.GetPrepareParams())
+	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
+	require.False(t, decodedProc.GetPrepareParamIsBin(0))
+	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	decodedProc.Free()
 }
 
 func TestGetCodecServicePanicsWhenMissing(t *testing.T) {

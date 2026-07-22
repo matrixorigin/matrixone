@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -108,14 +109,9 @@ func (mo *MOServer) Stop() error {
 	mo.running = false
 	mo.mu.Unlock()
 
-	var errors []error
+	var err error
 	for _, listener := range mo.listeners {
-		if err := listener.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-	if len(errors) > 0 {
-		return errors[0]
+		err = errors.Join(err, listener.Close())
 	}
 
 	logutil.Debug("application listener closed")
@@ -129,7 +125,7 @@ func (mo *MOServer) Stop() error {
 	mo.rm.killNetConns()
 
 	logutil.Debug("application stopped")
-	return nil
+	return err
 }
 
 func (mo *MOServer) IsRunning() bool {

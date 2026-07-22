@@ -241,10 +241,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
-func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
+func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {
 	var err error
 	var rootId int32
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 
 	getTblAndColName := func(relPos, colPos int32) (string, string) {
@@ -261,8 +261,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	rootNode := builder.qry.Nodes[rootId]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
@@ -298,7 +299,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 			},
 		}
 	}
-	return cols, nil
+	return cols, builder.qry, nil
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
@@ -813,6 +814,7 @@ func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
 	cloneStmt *tree.CloneTable,
+	isPrepareStmt bool,
 ) (*Plan, error) {
 
 	if stmt.IsAsLike {
@@ -876,7 +878,7 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
-			p, err := buildCreateTable(ctx, stmtLike, nil)
+			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -938,8 +940,9 @@ func buildCreateTable(
 	}
 
 	var asSelectCols []*ColDef
+	var asSelectQuery *Query
 	if stmt.IsAsSelect {
-		if asSelectCols, err = genAsSelectCols(ctx, stmt.AsSource); err != nil {
+		if asSelectCols, asSelectQuery, err = genAsSelectCols(ctx, stmt.AsSource, isPrepareStmt); err != nil {
 			return nil, err
 		}
 	}
@@ -1152,11 +1155,15 @@ func buildCreateTable(
 	if stmt.Temporary {
 		createTable.TableDef.TableType = catalog.SystemTemporaryTable
 	}
+	if !isPrepareStmt {
+		asSelectQuery = nil
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Query:   asSelectQuery,
 				Definition: &plan.DataDefinition_CreateTable{
 					CreateTable: createTable,
 				},
