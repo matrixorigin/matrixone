@@ -999,6 +999,7 @@ func (c *clientConn) connectToBackendContext(
 				c.connID,
 				c.mysqlProto.GetSalt(),
 				c.mysqlProto.GetAuthResponse(),
+				c.clientInfo,
 			)
 			cancel()
 		} else {
@@ -1007,6 +1008,7 @@ func (c *clientConn) connectToBackendContext(
 				c.connID,
 				c.mysqlProto.GetSalt(),
 				c.mysqlProto.GetAuthResponse(),
+				c.clientInfo,
 			)
 		}
 		if sc != nil {

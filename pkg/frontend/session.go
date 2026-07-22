@@ -2063,6 +2063,10 @@ type prepareStmtMigration struct {
 	commitFn   func(*Session, error) error
 }
 
+func quotePrepareStmtName(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
 func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
 	return &prepareStmtMigration{
 		name:       name,
@@ -2076,7 +2080,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	ses.EnterFPrint(FPMigratePrepareStmt)
 	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
-		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
 	}
 
 	tempExecCtx := &ExecCtx{
