@@ -137,6 +137,43 @@ func TestNumericValuesFunctionWithoutParamsKeepsOwnArgDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericReturningFunctionKeepsIndependentArgDomain(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (empno) values (field(?, ?, ?))", 1)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	found := false
+	check := func(expr *planpb.Expr) {
+		walkPlanExpr(expr, func(item *planpb.Expr) {
+			fn := item.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "field" {
+				return
+			}
+			found = true
+			require.Len(t, fn.Args, 3)
+			for _, arg := range fn.Args {
+				require.Equal(t, int32(types.T_text), arg.Typ.Id)
+			}
+		})
+	}
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			check(expr)
+		}
+		if node.RowsetData != nil {
+			for _, col := range node.RowsetData.Cols {
+				for _, data := range col.Data {
+					check(data.Expr)
+				}
+			}
+		}
+	}
+	require.True(t, found)
+}
+
 func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -274,6 +311,80 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 				"with c as (select ? + ? as x) select ? + power(c.x, ?) from c",
 			want:       types.T_float64,
 			paramCount: 4,
+		},
+		{
+			name:       "dynamic arithmetic inside abs keeps target",
+			sql:        "insert into constraint_test.emp (sal) select abs(? + ?)",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "derived arithmetic inside abs propagates target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"select abs(d.x + 0) from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "cte unary inside abs propagates target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"with c as (select ? + ? as x) select abs(-c.x) from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "schema qualified table does not shadow cte lineage",
+			sql: "insert into constraint_test.emp (empno, sal) " +
+				"with emp as (select ? + ? as x) " +
+				"select p.empno, q.x from constraint_test.emp p cross join emp q",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "long cte chain propagates target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"with c1 as (select ? + ? as x), " +
+				"c2 as (select x from c1), c3 as (select x from c2), " +
+				"c4 as (select x from c3), c5 as (select x from c4), " +
+				"c6 as (select x from c5), c7 as (select x from c6), " +
+				"c8 as (select x from c7) select x from c8",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "aggregate double result overrides target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"select ? + avg(cast(100000 as double)) from nation",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "window double result overrides target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"select ? + avg(cast(100000 as double)) over () from nation",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "union common double domain overrides target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"(select ? + ? union all select cast(0 as double))",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "intersect common double domain overrides target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"(select ? + ? intersect select cast(0 as double))",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "minus common double domain overrides target",
+			sql: "insert into constraint_test.emp (sal) " +
+				"(select ? + ? minus select cast(0 as double))",
+			want:       types.T_float64,
+			paramCount: 2,
 		},
 		{
 			name: "nested non numeric function exposes only final numeric result",
@@ -1529,4 +1640,21 @@ func exprContainsSubqueryRef(expr *planpb.Expr) bool {
 		}
 	}
 	return false
+}
+
+func walkPlanExpr(expr *planpb.Expr, visit func(*planpb.Expr)) {
+	if expr == nil {
+		return
+	}
+	visit(expr)
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			walkPlanExpr(arg, visit)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			walkPlanExpr(item, visit)
+		}
+	}
 }

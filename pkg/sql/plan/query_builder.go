@@ -2774,13 +2774,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	// build selects
 	var projectTypList [][]types.Type
 	selectStmtLength := len(selectStmts)
+	setProjectionTypes := builder.numericSetProjectionTypes(ctx, selectStmts)
 	nodes := make([]int32, selectStmtLength)
 	subCtxList := make([]*BindContext, selectStmtLength)
 	var projectLength int
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
-		subCtx.numericProjectionTypes = ctx.numericProjectionTypes
+		subCtx.numericProjectionTypes = setProjectionTypes
 		savedIsForUpdate := builder.isForUpdate
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
@@ -3065,6 +3066,51 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	return lastNodeID, nil
+}
+
+func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts []tree.Statement) []Type {
+	if len(ctx.numericProjectionTypes) == 0 || len(stmts) < 2 {
+		return ctx.numericProjectionTypes
+	}
+	binder := NewProjectionBinder(builder, ctx, nil)
+	var merged []numericAstTypeScan
+	for _, stmt := range stmts {
+		var owner *tree.Select
+		switch selectStmt := stmt.(type) {
+		case *tree.Select:
+			owner = selectStmt
+		case tree.SelectStatement:
+			owner = &tree.Select{Select: selectStmt}
+		default:
+			return ctx.numericProjectionTypes
+		}
+		_, scans, ok, err := binder.numericScalarStatementOutputs(
+			owner, owner.Select, 0, make(map[*tree.Select]bool), nil,
+		)
+		if err != nil || !ok {
+			return ctx.numericProjectionTypes
+		}
+		if merged == nil {
+			merged = append([]numericAstTypeScan(nil), scans...)
+			continue
+		}
+		if len(merged) != len(scans) {
+			return ctx.numericProjectionTypes
+		}
+		for i := range merged {
+			merged[i] = merged[i].merge(scans[i])
+		}
+	}
+	resolved := append([]Type(nil), ctx.numericProjectionTypes...)
+	for i := 0; i < len(resolved) && i < len(merged); i++ {
+		if resolved[i].Id == 0 || merged[i].incompatible {
+			continue
+		}
+		if typ, ok := numericTypeFromAstScan(merged[i], &resolved[i]); ok {
+			resolved[i] = typ
+		}
+	}
+	return resolved
 }
 
 const NameGroupConcat = "group_concat"
@@ -3779,13 +3825,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 // mapping is intentionally conservative: ambiguous names and expressions stay
 // on the existing default binding path, while stars advance across every source
 // whose output width can be established.
-func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, ctx *BindContext) {
+func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, ctx *BindContext) []string {
 	if len(ctx.numericProjectionTypes) == 0 {
-		return
+		return nil
 	}
 	clause, ok := getSelectTree(stmt).Select.(*tree.SelectClause)
 	if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
-		return
+		return nil
 	}
 	sources := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
 	resolveNumericProjectionSourceOutputs(builder, stmt, ctx, sources, make(map[*tree.Select]bool))
@@ -3804,7 +3850,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 			cursor := 0
 			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
 			if !ok || cursor != len(sources) {
-				return
+				return nil
 			}
 			for _, output := range outputs {
 				if targetPos >= len(ctx.numericProjectionTypes) {
@@ -3823,7 +3869,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 			if expr.Star {
 				sourceIdx := uniqueNumericStarSource(sources, expr.ColName())
 				if sourceIdx < 0 {
-					return
+					return nil
 				}
 				targetPos = seedNumericStarTargets(&sources[sourceIdx], ctx.numericProjectionTypes, targetPos)
 				continue
@@ -3845,6 +3891,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		}
 	}
 
+	var changed []string
 	for i := range sources {
 		if !hasNumericProjectionTarget(sources[i].targets) {
 			continue
@@ -3855,17 +3902,22 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		if ctx.numericTableProjectionAmbiguous == nil {
 			ctx.numericTableProjectionAmbiguous = make(map[string][]bool)
 		}
-		storeNumericTableProjectionTargets(
+		if storeNumericTableProjectionTargets(
 			ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
 			sources[i].alias, sources[i].targets,
-		)
-		if sources[i].sourceName != "" {
-			storeNumericTableProjectionTargets(
+		) {
+			changed = append(changed, strings.ToLower(sources[i].alias))
+		}
+		if sources[i].sourceName != "" && sources[i].sourceSchema == "" {
+			if storeNumericTableProjectionTargets(
 				ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
 				sources[i].sourceName, sources[i].targets,
-			)
+			) {
+				changed = append(changed, strings.ToLower(sources[i].sourceName))
+			}
 		}
 	}
+	return changed
 }
 
 func numericProjectionExprTarget(
@@ -4087,30 +4139,35 @@ func storeNumericTableProjectionTargets(
 	ambiguousByTable map[string][]bool,
 	table string,
 	targets []Type,
-) {
+) bool {
 	key := strings.ToLower(table)
 	existing, ok := targetsByTable[key]
 	if !ok {
 		targetsByTable[key] = append([]Type(nil), targets...)
 		ambiguousByTable[key] = make([]bool, len(targets))
-		return
+		return true
 	}
 	if len(existing) != len(targets) {
+		changed := existing != nil || ambiguousByTable[key] != nil
 		targetsByTable[key] = nil
 		ambiguousByTable[key] = nil
-		return
+		return changed
 	}
 	ambiguous := ambiguousByTable[key]
 	if len(ambiguous) != len(existing) {
 		ambiguous = make([]bool, len(existing))
 		ambiguousByTable[key] = ambiguous
 	}
+	changed := false
 	for i := range existing {
 		if ambiguous[i] {
 			continue
 		}
 		if existing[i].Id == 0 {
 			existing[i] = targets[i]
+			if targets[i].Id != 0 {
+				changed = true
+			}
 			continue
 		}
 		if targets[i].Id == 0 {
@@ -4119,8 +4176,10 @@ func storeNumericTableProjectionTargets(
 		if existing[i].Id != targets[i].Id || existing[i].Width != targets[i].Width || existing[i].Scale != targets[i].Scale {
 			existing[i] = Type{}
 			ambiguous[i] = true
+			changed = true
 		}
 	}
+	return changed
 }
 
 type numericProjectionSourceInfo struct {
@@ -4214,7 +4273,7 @@ func resolveNumericProjectionSourceOutputs(
 	visiting map[*tree.Select]bool,
 ) {
 	for i := range sources {
-		if sources[i].source == nil {
+		if sources[i].source == nil && sources[i].sourceSchema == "" {
 			sources[i].source, sources[i].aliasCols = numericProjectionCteSource(
 				owner, ctx, sources[i].sourceName, sources[i].aliasCols,
 			)
@@ -4393,31 +4452,44 @@ func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 	if len(ctx.numericCteByName) == 0 || len(ctx.numericTableProjectionTypes) == 0 {
 		return
 	}
-	// Each pass can move targets across one CTE edge. The number of definitions
-	// bounds the longest acyclic chain and also terminates recursive references.
-	for range ctx.numericCteByName {
-		for name, cte := range ctx.numericCteByName {
-			targets := ctx.numericTableProjectionTypes[name]
-			if len(targets) == 0 {
-				continue
+	queue := make([]string, 0, len(ctx.numericCteByName))
+	pending := make(map[string]bool, len(ctx.numericCteByName))
+	for name := range ctx.numericCteByName {
+		if len(ctx.numericTableProjectionTypes[name]) > 0 {
+			queue = append(queue, name)
+			pending[name] = true
+		}
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		pending[name] = false
+		cte := ctx.numericCteByName[name]
+		targets := ctx.numericTableProjectionTypes[name]
+		if cte == nil || len(targets) == 0 {
+			continue
+		}
+		var source *tree.Select
+		switch stmt := cte.Stmt.(type) {
+		case *tree.Select:
+			source = stmt
+		case *tree.ParenSelect:
+			source = stmt.Select
+		}
+		if source == nil {
+			continue
+		}
+		subCtx := &BindContext{
+			numericProjectionTypes:          targets,
+			numericTableProjectionTypes:     ctx.numericTableProjectionTypes,
+			numericTableProjectionAmbiguous: ctx.numericTableProjectionAmbiguous,
+			numericCteByName:                ctx.numericCteByName,
+		}
+		for _, changed := range seedNumericTableProjectionTypes(builder, source, subCtx) {
+			if ctx.numericCteByName[changed] != nil && !pending[changed] {
+				queue = append(queue, changed)
+				pending[changed] = true
 			}
-			var source *tree.Select
-			switch stmt := cte.Stmt.(type) {
-			case *tree.Select:
-				source = stmt
-			case *tree.ParenSelect:
-				source = stmt.Select
-			}
-			if source == nil {
-				continue
-			}
-			subCtx := &BindContext{
-				numericProjectionTypes:          targets,
-				numericTableProjectionTypes:     ctx.numericTableProjectionTypes,
-				numericTableProjectionAmbiguous: ctx.numericTableProjectionAmbiguous,
-				numericCteByName:                ctx.numericCteByName,
-			}
-			seedNumericTableProjectionTypes(builder, source, subCtx)
 		}
 	}
 }

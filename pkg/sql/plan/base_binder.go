@@ -871,6 +871,7 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	hasUnknown   bool
 	incompatible bool
 }
 
@@ -878,6 +879,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
 	return s
 }
@@ -1056,7 +1058,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				return scan, nil
 			}
 		}
-		return numericAstTypeScan{}, nil
+		return numericAstTypeScan{hasUnknown: true}, nil
 	default:
 		return numericAstTypeScan{}, nil
 	}
@@ -1099,7 +1101,8 @@ func (b *baseBinder) numericAstStaticType(
 			return Type{}, false, nil
 		}
 		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
-		if err != nil || scan.incompatible {
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
 			return Type{}, false, err
 		}
 		typ, ok := numericTypeFromAstScan(scan, nil)
@@ -1109,7 +1112,8 @@ func (b *baseBinder) numericAstStaticType(
 			return Type{}, false, nil
 		}
 		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
-		if err != nil || scan.incompatible {
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
 			return Type{}, false, err
 		}
 		typ, ok := numericTypeFromAstScan(scan, nil)
@@ -1134,7 +1138,7 @@ func (b *baseBinder) numericAstStaticType(
 		return scan.strong[0], true, nil
 	case *tree.FuncExpr:
 		name := numericAstFunctionName(expr)
-		if name == "" || function.GetFunctionIsAggregateByName(name) || function.GetFunctionIsWinFunByName(name) {
+		if name == "" {
 			return Type{}, false, nil
 		}
 		argTypes := make([]types.Type, len(expr.Exprs))
@@ -1266,7 +1270,7 @@ func (b *baseBinder) numericScalarSources(
 	for i := range infos {
 		sources[i].alias = strings.ToLower(infos[i].alias)
 		sources[i].name = strings.ToLower(infos[i].sourceName)
-		if infos[i].source == nil {
+		if infos[i].source == nil && infos[i].sourceSchema == "" {
 			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
 				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
 			} else {
@@ -1600,17 +1604,22 @@ func (b *baseBinder) resolveNumericFunctionArgs(
 
 func supportsGenericNumericFunctionContext(name string) bool {
 	switch name {
-	case "", "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus", "mod",
-		"case", "if", "coalesce", "ifnull", "nullif":
-		return false
-	default:
+	// These functions' value arguments are in the same numeric domain as their
+	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
+	// similar functions return numbers while their arguments belong to another
+	// domain.
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
 		return true
+	default:
+		return false
 	}
 }
 
 func isNumericContextFunction(name string) bool {
 	switch name {
-	case "mod", "if", "coalesce", "ifnull", "nullif":
+	case "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus",
+		"mod", "if", "coalesce", "ifnull", "nullif":
 		return true
 	default:
 		return false
@@ -2427,6 +2436,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					b.numericParamType = nil
 					b.numericSubqueryTarget = nil
 				}
+			} else if paramType != nil && !isNumericContextFunction(name) &&
+				!numericFunctionHasSelectiveContext(name) {
+				// A function outside the explicit domain-preserving metadata must
+				// resolve its arguments independently of the assignment target.
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
 			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
 			b.numericParamType = paramType
