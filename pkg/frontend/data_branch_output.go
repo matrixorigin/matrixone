@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
 )
@@ -318,6 +319,348 @@ func validateProjectedColumns(stmt *tree.DataBranchDiff, tblStuff tableStuff) er
 	return nil
 }
 
+const (
+	diffOutputSourceColumn   = "__mo_diff_source"
+	diffOutputFlagColumn     = "__mo_diff_flag"
+	diffOutputCleanupTimeout = 30 * time.Second
+)
+
+// diffOutputTable describes the ordinary table materialized by
+// DATA BRANCH DIFF ... OUTPUT AS. It deliberately contains no branch metadata:
+// the table is a durable snapshot of a diff, not a new branch node.
+type diffOutputTable struct {
+	databaseName   string
+	tableName      string
+	columnNames    []string
+	projectedIdxes []int
+}
+
+func newDiffOutputTable(
+	ctx context.Context,
+	ses *Session,
+	stmt *tree.DataBranchDiff,
+	tblStuff tableStuff,
+) (*diffOutputTable, error) {
+	if stmt == nil || stmt.OutputOpt == nil || stmt.OutputOpt.As.ObjectName == "" {
+		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS destination is empty")
+	}
+
+	databaseName, tableName, err := branchTableName(ctx, ses, stmt.OutputOpt.As)
+	if err != nil {
+		return nil, err
+	}
+
+	projectedIdxes, err := resolveProjectedIdxes(stmt.Columns, tblStuff)
+	if err != nil {
+		return nil, err
+	}
+	if projectedIdxes == nil {
+		projectedIdxes = append([]int(nil), tblStuff.def.visibleIdxes...)
+	}
+
+	columnNames := make([]string, 0, len(projectedIdxes)+2)
+	usedNames := make(map[string]struct{}, len(projectedIdxes)+2)
+	for _, idx := range projectedIdxes {
+		name := tblStuff.def.colNames[idx]
+		usedNames[strings.ToLower(name)] = struct{}{}
+	}
+	columnNames = append(columnNames,
+		nextAvailableDiffOutputColumnName(diffOutputSourceColumn, usedNames),
+		nextAvailableDiffOutputColumnName(diffOutputFlagColumn, usedNames),
+	)
+	for _, idx := range projectedIdxes {
+		columnNames = append(columnNames, tblStuff.def.colNames[idx])
+	}
+
+	return &diffOutputTable{
+		databaseName:   databaseName,
+		tableName:      tableName,
+		columnNames:    columnNames,
+		projectedIdxes: projectedIdxes,
+	}, nil
+}
+
+func nextAvailableDiffOutputColumnName(base string, used map[string]struct{}) string {
+	for suffix := 0; ; suffix++ {
+		name := base
+		if suffix > 0 {
+			name = fmt.Sprintf("%s_%d", base, suffix)
+		}
+		lowerName := strings.ToLower(name)
+		if _, exists := used[lowerName]; exists {
+			continue
+		}
+		used[lowerName] = struct{}{}
+		return name
+	}
+}
+
+func (output *diffOutputTable) qualifiedName() string {
+	return qualifiedTableName(output.databaseName, output.tableName)
+}
+
+func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuff) (string, error) {
+	baseTableDef := tblStuff.baseRel.GetTableDef(ctx)
+	if baseTableDef == nil {
+		return "", moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS base table definition is unavailable")
+	}
+	targetTableDef := tblStuff.tarRel.GetTableDef(ctx)
+	if targetTableDef == nil {
+		return "", moerr.NewInternalErrorNoCtx("DATA BRANCH DIFF OUTPUT AS target table definition is unavailable")
+	}
+
+	projectedNames := make([]string, len(output.projectedIdxes))
+	for i, idx := range output.projectedIdxes {
+		projectedNames[i] = tblStuff.def.colNames[idx]
+	}
+	baseColDefs, err := dataBranchColumnsByIdentity(targetTableDef, baseTableDef, projectedNames)
+	if err != nil {
+		return "", err
+	}
+
+	columnDefs := []string{
+		fmt.Sprintf("%s varchar(255) default null", quoteIdentifierForSQL(output.columnNames[0])),
+		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
+	}
+	for i, name := range projectedNames {
+		colDef := baseColDefs[i]
+
+		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
+		if colDef.Typ.NotNullable {
+			columnDef += " not null"
+		} else {
+			columnDef += " default null"
+		}
+		columnDefs = append(columnDefs, columnDef)
+	}
+
+	// Use the relation definition already resolved for the DIFF source. In
+	// particular, a named snapshot can refer to a table version whose name has
+	// since been dropped or recreated, so name-based time-travel SQL is not a
+	// reliable way to derive this schema.
+	return fmt.Sprintf("create table %s (%s)", output.qualifiedName(), strings.Join(columnDefs, ",")), nil
+}
+
+func dataBranchColumnDefByName(tableDef *plan2.TableDef, name string) *plan2.ColDef {
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil && strings.EqualFold(colDef.Name, name) {
+			return colDef
+		}
+	}
+	return nil
+}
+
+func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil &&
+			colDef.ColId == sourceColDef.ColId &&
+			colDef.Seqnum == sourceColDef.Seqnum {
+			return colDef
+		}
+	}
+	return nil
+}
+
+// dataBranchColumnsByIdentity maps each source column name to the column with
+// the same stable identity in the destination definition. Column names are
+// intentionally not part of schema equivalence: a branch may rename a column
+// without changing its identity, so physical reads from another branch or an
+// ancestor must resolve that branch's local name through ColId and Seqnum.
+func dataBranchColumnsByIdentity(
+	sourceTableDef *plan2.TableDef,
+	destinationTableDef *plan2.TableDef,
+	sourceColumnNames []string,
+) ([]*plan2.ColDef, error) {
+	if sourceTableDef == nil || destinationTableDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+	}
+
+	destinationColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	for i, sourceColumnName := range sourceColumnNames {
+		sourceColDef := dataBranchColumnDefByName(sourceTableDef, sourceColumnName)
+		if sourceColDef == nil {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH source column %q is unavailable", sourceColumnName,
+			)
+		}
+		destinationColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
+		if destinationColDefs[i] == nil {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
+			)
+		}
+	}
+	return destinationColDefs, nil
+}
+
+func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
+	return fmt.Sprintf(
+		"insert into %s (%s) values %s",
+		output.qualifiedName(), joinQuotedColumnNames(output.columnNames), values.String(),
+	)
+}
+
+func materializeDiffOutputAsTable(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.DataBranchDiff,
+	tblStuff tableStuff,
+	spool *dataBranchOutputSpool,
+) (err error) {
+	output, err := newDiffOutputTable(ctx, ses, stmt, tblStuff)
+	if err != nil {
+		cancel()
+		return err
+	}
+
+	created := false
+	defer func() {
+		if err == nil || !created {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			context.WithoutCancel(ctx), diffOutputCleanupTimeout,
+		)
+		defer cleanupCancel()
+		if cleanupErr := execDataBranchOutputSQL(
+			cleanupCtx, bh, fmt.Sprintf("drop table if exists %s", output.qualifiedName()),
+		); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+
+	var createSQL string
+	if createSQL, err = output.createSQL(ctx, tblStuff); err != nil {
+		cancel()
+		return err
+	}
+	if err = execDataBranchOutputSQL(ctx, bh, createSQL); err != nil {
+		cancel()
+		return err
+	}
+	created = true
+
+	values := acquireBuffer(tblStuff.bufPool)
+	defer releaseBuffer(tblStuff.bufPool, values)
+
+	flush := func() error {
+		if values.Len() == 0 {
+			return nil
+		}
+		if flushErr := execDataBranchOutputSQL(ctx, bh, output.insertSQL(values)); flushErr != nil {
+			return flushErr
+		}
+		values.Reset()
+		return nil
+	}
+
+	var (
+		firstErr error
+		rowCount int
+		row      = make([]any, len(tblStuff.def.colNames))
+	)
+	for {
+		wrapped, ok, nextErr := spool.next()
+		if nextErr != nil {
+			firstErr = nextErr
+			break
+		}
+		if !ok {
+			break
+		}
+		if ctx.Err() != nil {
+			firstErr = ctx.Err()
+		}
+
+		for rowIdx := range wrapped.batch.RowCount() {
+			if firstErr != nil {
+				break
+			}
+			rowValues := acquireBuffer(tblStuff.bufPool)
+			rowValues.Reset()
+			rowValues.WriteByte('(')
+			writeEscapedSQLString(rowValues, []byte(wrapped.name))
+			rowValues.WriteByte(',')
+			writeEscapedSQLString(rowValues, []byte(wrapped.kind))
+
+			for _, colIdx := range output.projectedIdxes {
+				vec := wrapped.batch.Vecs[colIdx]
+				if rowIdx >= vec.Length() {
+					firstErr = moerr.NewInternalErrorNoCtxf(
+						"data branch OUTPUT AS batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d type=%s",
+						rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(), vec.GetType().String(),
+					)
+					break
+				}
+				if extractErr := extractDataBranchSQLRowValue(ctx, ses, vec, colIdx, row, rowIdx); extractErr != nil {
+					firstErr = extractErr
+					break
+				}
+				rowValues.WriteByte(',')
+				if formatErr := formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], rowValues); formatErr != nil {
+					firstErr = formatErr
+					break
+				}
+			}
+			if firstErr == nil {
+				rowValues.WriteByte(')')
+				additionalBytes := rowValues.Len()
+				if values.Len() > 0 {
+					additionalBytes++
+				}
+				if values.Len()+additionalBytes >= maxSqlBatchSize || rowCount+1 >= maxSqlBatchCnt {
+					if flushErr := flush(); flushErr != nil {
+						firstErr = flushErr
+					}
+					rowCount = 0
+				}
+				if firstErr == nil {
+					if values.Len() > 0 {
+						values.WriteByte(',')
+					}
+					values.Write(rowValues.Bytes())
+					rowCount++
+				}
+			}
+			releaseBuffer(tblStuff.bufPool, rowValues)
+			if firstErr != nil {
+				cancel()
+				break
+			}
+		}
+		if firstErr != nil {
+			break
+		}
+	}
+
+	if firstErr != nil {
+		return firstErr
+	}
+	if err = flush(); err != nil {
+		return err
+	}
+	// The destination is complete. Subsequent response/query-result persistence
+	// failures must not remove a successfully materialized user table.
+	created = false
+
+	// DataBranchDiff is a result-row statement at the protocol layer. Returning
+	// a zero-column result set is not a valid MySQL response, so acknowledge the
+	// materialized table explicitly.
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddRow([]any{output.qualifiedName()})
+	return trySaveQueryResult(ctx, ses, mrs)
+}
+
+func execDataBranchOutputSQL(ctx context.Context, bh BackgroundExec, sql string) error {
+	if err := bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return nil
+}
+
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -533,6 +876,9 @@ func satisfyDiffOutputOpt(
 		mrs.AddRow([]any{"DELETED", targetDeleteCnt, baseDeleteCnt})
 		mrs.AddRow([]any{"UPDATED", targetUpdateCnt, baseUpdateCnt})
 
+	} else if stmt.OutputOpt.As.ObjectName != "" {
+		return moerr.NewInternalErrorNoCtx("DATA BRANCH OUTPUT AS requires the materialization phase")
+
 	} else if len(stmt.OutputOpt.DirPath) != 0 {
 		var (
 			insertCnt int
@@ -716,6 +1062,11 @@ func buildOutputSchema(
 		showCols[0].SetName("COUNT(*)")
 		showCols[0].SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
+	} else if stmt.OutputOpt.As.ObjectName != "" {
+		col := new(MysqlColumn)
+		col.SetName("TABLE CREATED")
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		showCols = append(showCols, col)
 	} else if len(stmt.OutputOpt.DirPath) != 0 {
 		// output as file
 		col1 := new(MysqlColumn)

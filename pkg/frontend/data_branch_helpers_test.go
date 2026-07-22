@@ -280,6 +280,7 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		wantErr := moerr.NewInternalErrorNoCtx("get relation failed")
@@ -313,6 +314,7 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
@@ -346,6 +348,7 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		rangeRel := mock_frontend.NewMockRelation(ctrl)
 		wantErr := moerr.NewInternalErrorNoCtx("ranges failed")
