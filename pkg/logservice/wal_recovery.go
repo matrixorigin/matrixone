@@ -431,6 +431,7 @@ func (s *Service) readWALDataFileWithLimit(
 		zap.String("file", filePath))
 
 	entries := make([]WALEntry, 0, walRecoveryPreallocEntries(count))
+	var skipReferenceCount uint64
 
 	// Read each entry
 	headerBuf := make([]byte, walDataFileEntryHeaderSize)
@@ -473,6 +474,18 @@ func (s *Service) readWALDataFileWithLimit(
 			return nil, err
 		}
 		if binary.LittleEndian.Uint16(data[logEntryCommandOffset:]) == logEntryCommandSkipDSN {
+			footerOffset := uint64(binary.LittleEndian.Uint32(data[logEntryFooterOffset:]))
+			referenceCount := (footerOffset - logEntryHeaderSize) / 16
+			// Each valid skip reference removes one previously active normal WAL
+			// record. Consequently, valid recovery input cannot contain more skip
+			// references than WAL entries. Enforce that invariant before retaining
+			// the decoded reference list.
+			if referenceCount > uint64(count)-skipReferenceCount {
+				return nil, moerr.NewInternalErrorf(ctx,
+					"WAL recovery skip reference count %d exceeds WAL entry count %d",
+					skipReferenceCount+referenceCount, count)
+			}
+			skipReferenceCount += referenceCount
 			references, err := parseWALRecoverySkipReferences(ctx, int(i), data)
 			if err != nil {
 				return nil, err

@@ -593,6 +593,18 @@ func TestReadWALDataFileRejectsMalformedFiles(t *testing.T) {
 			},
 			wantErrMsg: "DSN range overflows",
 		},
+		{
+			name: "skip references exceed WAL entry count",
+			writeFile: func(path string) error {
+				return writeTestWALDataFile(path, []WALEntry{{
+					RaftIndex:  10,
+					EntryCount: 1,
+					RawData: testRawSkipLogEntryWithPairs(
+						[]uint64{1, 2}, []uint64{1, 2}),
+				}})
+			},
+			wantErrMsg: "skip reference count 2 exceeds WAL entry count 1",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -610,6 +622,36 @@ func TestReadWALDataFileRejectsMalformedFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadWALDataFileAcceptsMultiReferenceSkip(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "wal_data.bin")
+	require.NoError(t, writeTestWALDataFile(path, []WALEntry{
+		{
+			DSN:        1,
+			RaftIndex:  1,
+			EntryCount: 1,
+			RawData:    testRawLogEntry(1, 0, 1),
+		},
+		{
+			DSN:        2,
+			RaftIndex:  2,
+			EntryCount: 1,
+			RawData:    testRawLogEntry(2, 0, 1),
+		},
+		{
+			RaftIndex:  3,
+			EntryCount: 1,
+			RawData: testRawSkipLogEntryWithPairs(
+				[]uint64{1, 2}, []uint64{1, 2}),
+		},
+	}))
+
+	s := &Service{runtime: runtime.DefaultRuntime()}
+	walData, err := s.readWALDataFile(ctx, path)
+	require.NoError(t, err)
+	require.Len(t, walData.Entries, 3)
 }
 
 func TestReadWALDataFileAcceptsMultiGiBInputLimit(t *testing.T) {

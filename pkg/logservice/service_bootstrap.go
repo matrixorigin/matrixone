@@ -374,12 +374,11 @@ func (s *Service) getBackupDataForBootstrap(
 	if err == nil {
 		return backup, nil
 	}
-	if cfg.BootstrapConfig.Restore.Enabled &&
-		cfg.BootstrapConfig.Restore.WALDataPath == "" &&
+	if cfg.BootstrapConfig.Restore.WALDataPath == "" &&
 		(errors.Is(err, os.ErrNotExist) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound)) {
-		// Only the WAL recovery coordinator owns the recovery artifacts. Other
-		// initial members still join the replicated recovery barrier and wait for
-		// the coordinator to publish the backup ID watermarks.
+		// Preserve the historical optional-backup behavior during normal startup.
+		// During WAL recovery, only the coordinator owns the recovery artifacts;
+		// other initial members join the replicated recovery barrier without them.
 		return nil, nil
 	}
 	return nil, err

@@ -338,11 +338,18 @@ func TestGetBackupDataForBootstrap(t *testing.T) {
 	_, err = s.getBackupDataForBootstrap(ctx, cfg)
 	require.Error(t, err)
 
-	// Outside LogService recovery, a custom missing backup remains an error.
+	// Outside LogService recovery, missing restore artifacts keep the historical
+	// optional behavior so normal startup is unchanged.
 	cfg.BootstrapConfig.Restore.Enabled = false
-	setPath(filepath.Join(root, "normal-restore-missing.data"))
-	_, err = s.getBackupDataForBootstrap(ctx, cfg)
-	require.Error(t, err)
+	for _, path := range []string{
+		"normal-restore-missing.data",
+		filepath.Join(root, "normal-restore-missing-absolute.data"),
+	} {
+		setPath(path)
+		backup, err := s.getBackupDataForBootstrap(ctx, cfg)
+		require.NoError(t, err)
+		require.Nil(t, backup)
+	}
 }
 
 func TestParseBackupDataRejectsInvalidWatermarks(t *testing.T) {
