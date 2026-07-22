@@ -590,7 +590,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		} else {
 			nodeID = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		}
-		if delCtx.skipTargetDelete {
+		if delCtx.skipTargetDelete || delCtx.isFkRecursionCall {
 			if builder.preserveScanProjection == nil {
 				builder.preserveScanProjection = make(map[int32]struct{})
 			}
@@ -620,10 +620,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		} else {
 			lockedSinkID = appendSinkNode(builder, bindCtx, lockedSourceID)
 		}
-		if builder.preserveSinkProjection == nil {
-			builder.preserveSinkProjection = make(map[int32]struct{})
-		}
-		builder.preserveSinkProjection[lockedSinkID] = struct{}{}
 		delCtx.sourceStep = builder.appendStep(lockedSinkID)
 	}
 	// When the same child table is reached multiple times (e.g. two FKs pointing to the

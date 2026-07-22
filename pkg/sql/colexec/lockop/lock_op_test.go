@@ -1703,35 +1703,7 @@ func TestDedupLockRows_Idempotent(t *testing.T) {
 	require.Equal(t, once, twice)
 }
 
-func TestFetchMergedLockRowsUsesAllTargetsForRange(t *testing.T) {
-	mp := mpool.MustNew("test")
-	pkType := types.T_int32.ToType()
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 100}, nil, mp)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{2, 200}, nil, mp)
-	bat.SetRowCount(2)
-	defer bat.Clean(mp)
-
-	arg := NewArgument()
-	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
-	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
-	arg.ctr.fetchers = []FetchLockRowsFunc{GetFetchRowsFunc(pkType), GetFetchRowsFunc(pkType)}
-	packer := types.NewPacker()
-	defer packer.Close()
-
-	ok, rows, granularity := arg.fetchMergedLockRows(bat, []int{0, 1}, packer, pkType, 2, false)
-	require.True(t, ok)
-	require.Equal(t, lock.Granularity_Range, granularity)
-	require.Len(t, rows, 2)
-	packer.Reset()
-	packer.EncodeInt32(1)
-	require.Equal(t, packer.Bytes(), rows[0])
-	packer.Reset()
-	packer.EncodeInt32(200)
-	require.Equal(t, packer.Bytes(), rows[1])
-}
-
-func TestLockOpMaterializesMergeableTargetsAcrossBatches(t *testing.T) {
+func TestLockOpMergeableTargetsRemainStreaming(t *testing.T) {
 	runLockOpTest(t, func(proc *process.Process) {
 		pkType := types.T_int32.ToType()
 		makeBatch := func(left, right int32) *batch.Batch {
@@ -1752,12 +1724,14 @@ func TestLockOpMaterializesMergeableTargetsAcrossBatches(t *testing.T) {
 		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
 		require.NoError(t, arg.Prepare(proc))
 		arg.ctr.hasNewVersionInRange = testFunc
-		require.True(t, arg.ctr.materializeInput)
 
 		result, err := vm.Exec(arg, proc)
 		require.NoError(t, err)
-		require.NotNil(t, result.Batch)
-		require.Equal(t, 2, result.Batch.RowCount())
+		require.Same(t, first, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, second, result.Batch)
 		result, err = vm.Exec(arg, proc)
 		require.NoError(t, err)
 		require.Nil(t, result.Batch)

@@ -141,7 +141,4 @@ type state struct {
 	relations            []engine.Relation
 	hasNewVersionInRange hasNewVersionInRangeFunc
 	lockCount            int64
-	materializeInput     bool
-	bufferedInput        *batch.Batch
-	bufferEmitted        bool
 }

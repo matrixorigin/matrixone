@@ -2171,9 +2171,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
-		if _, preserve := builder.preserveLockProjection[nodeID]; preserve && len(preNode.BindingTags) > 0 {
+		_, preserveProjection := builder.preserveLockProjection[nodeID]
+		if preserveProjection && len(preNode.BindingTags) > 0 {
 			for i := range preNode.ProjectList {
-				colRefCnt[[2]int32{preNode.BindingTags[0], int32(i)}] = 1
+				colRefCnt[[2]int32{preNode.BindingTags[0], int32(i)}]++
 			}
 		}
 
@@ -2232,7 +2233,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
+			if !preserveProjection && colRefCnt[globalRef] == 0 {
 				continue
 			}
 			remapping.addColRef(globalRef)

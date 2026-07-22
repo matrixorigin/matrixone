@@ -3616,6 +3616,26 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, cascadeLocks, 2,
 		"root and recursively cascaded rows must each lock a materialized source")
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_SINK_SCAN || len(node.SourceStep) == 0 {
+			continue
+		}
+		sourceSink := query.Nodes[query.Steps[node.SourceStep[0]]]
+		for _, expr := range node.ProjectList {
+			col, ok := expr.Expr.(*plan.Expr_Col)
+			if !ok {
+				continue
+			}
+			require.Less(t, int(col.Col.ColPos), len(sourceSink.ProjectList),
+				"sink scan column must be remapped to the materialized recursive source")
+		}
+	}
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP && len(node.Children) == 1 {
+			require.Len(t, node.ProjectList, len(query.Nodes[node.Children[0]].ProjectList),
+				"lock must preserve every physical column requested by the recursive sink")
+		}
+	}
 }
 
 func TestReplaceDetectSqls(t *testing.T) {
