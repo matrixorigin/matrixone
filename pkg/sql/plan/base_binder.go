@@ -1004,11 +1004,8 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			resolved, ok := b.resolveNumericFunctionContext(expr, depth, resolveColumn, hint)
 			if ok {
 				var scan numericAstTypeScan
-				for _, dynamic := range resolved.dynamic {
-					if !dynamic {
-						scan = numericAstTypedOperand(resolved.returnType)
-						break
-					}
+				if numericFunctionReturnIsStrong(resolved, hint) {
+					scan = numericAstTypedOperand(resolved.returnType)
 				}
 				for _, arg := range expr.Exprs {
 					argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
@@ -1063,6 +1060,21 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 	default:
 		return numericAstTypeScan{}, nil
 	}
+}
+
+func numericFunctionReturnIsStrong(resolved numericFunctionContext, hint *Type) bool {
+	for _, dynamic := range resolved.dynamic {
+		if !dynamic {
+			return true
+		}
+	}
+	if hint == nil {
+		return false
+	}
+	returnOid := types.T(resolved.returnType.Id)
+	hintOid := types.T(hint.Id)
+	return (returnOid == types.T_float32 || returnOid == types.T_float64) &&
+		hintOid != types.T_float32 && hintOid != types.T_float64
 }
 
 func (b *baseBinder) numericAstStaticType(

@@ -3120,16 +3120,38 @@ func (builder *QueryBuilder) buildValueScan(
 					valueBinder := binder
 					boundWithNumericContext := false
 					if isNumericAssignmentTarget(col.Typ) {
-						switch numericBinder := binder.(type) {
-						case *DefaultBinder:
-							defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
-						case *ReplaceValueBinder:
-							defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+						if builder.isPrepareStatement {
+							// Analyze prepared functions with the target-free binder. The
+							// explicit numeric context below supplies the assignment domain only
+							// to compatible numeric arguments.
+							var scan numericAstTypeScan
+							switch numericBinder := funcBinder.(type) {
+							case *DefaultBinder:
+								scan, err = numericBinder.numericAstTypesInternal(r[i], 0, numericBinder.numericAstColumnResolver())
+							case *ReplaceValueBinder:
+								scan, err = numericBinder.numericAstTypesInternal(r[i], 0, numericBinder.numericAstColumnResolver())
+							}
+							if err != nil {
+								return 0, err
+							}
+							if scan.hasParam {
+								switch numericBinder := funcBinder.(type) {
+								case *DefaultBinder:
+									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+								case *ReplaceValueBinder:
+									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+								}
+								if err != nil {
+									return 0, err
+								}
+								boundWithNumericContext = defExpr != nil
+							}
 						}
-						if err != nil {
-							return 0, err
+						// A function without dynamic parameters must retain its normal
+						// argument domain (for example LENGTH(100000.5)).
+						if !boundWithNumericContext && valuesExprIsFuncCall(r[i]) {
+							valueBinder = funcBinder
 						}
-						boundWithNumericContext = defExpr != nil
 					} else if valuesExprIsFuncCall(r[i]) {
 						// Geometry and other non-numeric functions need their
 						// arguments to bind independently of the destination type.

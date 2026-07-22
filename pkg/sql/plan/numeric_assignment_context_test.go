@@ -117,6 +117,26 @@ func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 	}
 }
 
+func TestNumericValuesFunctionWithoutParamsKeepsOwnArgDomain(t *testing.T) {
+	tests := []string{
+		"insert into constraint_test.emp (sal) values (length(100000.5))",
+		"insert into constraint_test.emp (sal) values (char_length(100000.5))",
+		"replace into constraint_test.emp (sal) values (length(100000.5))",
+		"insert into constraint_test.emp set sal = char_length(100000.5)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -228,6 +248,32 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 				"power(cast(-100000 as double), 1)",
 			want:       types.T_float64,
 			paramCount: 1,
+		},
+		{
+			name:       "dynamic sqrt fixes approximate domain",
+			sql:        "insert into constraint_test.emp (sal) select ? + sqrt(?)",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name:       "dynamic power fixes approximate domain",
+			sql:        "insert into constraint_test.emp (sal) select ? + power(?, ?)",
+			want:       types.T_float64,
+			paramCount: 3,
+		},
+		{
+			name: "derived dynamic sqrt propagates approximate domain",
+			sql: "insert into constraint_test.emp (sal) " +
+				"select ? + sqrt(d.x) from (select ? + ? as x) d",
+			want:       types.T_float64,
+			paramCount: 3,
+		},
+		{
+			name: "cte dynamic power propagates approximate domain",
+			sql: "insert into constraint_test.emp (sal) " +
+				"with c as (select ? + ? as x) select ? + power(c.x, ?) from c",
+			want:       types.T_float64,
+			paramCount: 4,
 		},
 		{
 			name: "nested non numeric function exposes only final numeric result",
