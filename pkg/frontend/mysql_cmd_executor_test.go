@@ -1101,6 +1101,28 @@ func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	require.NotContains(t, second, "query_max_workers")
 }
 
+func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	const sql = "/*!40101 use mysql_ddl_test_db_3; */"
+	execCtx.input = &UserInput{sql: sql}
+
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	defer cws[0].Free()
+
+	require.Equal(t, sql, cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL())
+	records, err := sqlForRecordByStatement(ctx, sql)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Contains(t, records[0], "use mysql_ddl_test_db_3")
+}
+
 func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
