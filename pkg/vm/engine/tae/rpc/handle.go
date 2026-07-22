@@ -315,6 +315,9 @@ func (h *Handle) handleRequests(
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
 				// Check if this is a soft delete object request
 				if wr.FileName != "" && isSoftDeleteEntry(wr.FileName) {
+					if err = h.registerWriteAutoIncrEpoch(txn, wr); err != nil {
+						return
+					}
 					// Handle soft delete object separately
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
 					if err != nil {
@@ -326,6 +329,9 @@ func (h *Handle) handleRequests(
 				wr = req.(*cmd_util.WriteReq)
 				// Check if this is a soft delete object request
 				if wr.Type == cmd_util.EntrySoftDeleteObject {
+					if err = h.registerWriteAutoIncrEpoch(txn, wr); err != nil {
+						return
+					}
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
 					if err != nil {
 						return
@@ -405,6 +411,33 @@ func (h *Handle) handleRequests(
 	return
 }
 
+type autoIncrEpochRecorder interface {
+	SetAutoIncrEpoch(uint32) error
+}
+
+func setAutoIncrEpochDependency(rel handle.Relation, epoch uint32, known bool) error {
+	if !known {
+		epoch = 0
+	}
+	recorder, ok := rel.(autoIncrEpochRecorder)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("relation %T cannot record AUTO_INCREMENT epoch", rel)
+	}
+	return recorder.SetAutoIncrEpoch(epoch)
+}
+
+func (h *Handle) registerWriteAutoIncrEpoch(txn txnif.AsyncTxn, req *cmd_util.WriteReq) error {
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return err
+	}
+	rel, err := dbase.GetRelationByID(req.TableID)
+	if err != nil {
+		return err
+	}
+	return setAutoIncrEpochDependency(rel, req.AutoIncrEpoch, req.AutoIncrEpochKnown)
+}
+
 //#endregion
 
 //#region Impl TxnStorage interface
@@ -423,14 +456,16 @@ func (h *Handle) apiEntryToWriteEntry(
 	}
 
 	req := &cmd_util.WriteReq{
-		Type:         cmd_util.EntryType(pe.EntryType),
-		DatabaseId:   pe.GetDatabaseId(),
-		TableID:      pe.GetTableId(),
-		DatabaseName: pe.GetDatabaseName(),
-		TableName:    pe.GetTableName(),
-		FileName:     pe.GetFileName(),
-		Batch:        moBat,
-		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+		Type:               cmd_util.EntryType(pe.EntryType),
+		DatabaseId:         pe.GetDatabaseId(),
+		TableID:            pe.GetTableId(),
+		DatabaseName:       pe.GetDatabaseName(),
+		TableName:          pe.GetTableName(),
+		AutoIncrEpoch:      pe.GetAutoIncrEpoch(),
+		AutoIncrEpochKnown: pe.GetAutoIncrEpochKnown(),
+		FileName:           pe.GetFileName(),
+		Batch:              moBat,
+		PkCheck:            cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
 	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
@@ -893,6 +928,9 @@ func (h *Handle) HandleWrite(
 		err = errors.Join(err, moerr.NewNoSuchTable(ctx,
 			fmt.Sprintf("%d-%s", req.DatabaseId, req.DatabaseName),
 			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
+		return
+	}
+	if err = setAutoIncrEpochDependency(tb, req.AutoIncrEpoch, req.AutoIncrEpochKnown); err != nil {
 		return
 	}
 
