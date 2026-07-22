@@ -1,5 +1,9 @@
 
 -- @label:bvt
+prepare fromx from select 1;
+execute fromx;
+deallocate prepare fromx;
+
 drop table if exists t1;
 create table t1 (a int, b int);
 prepare stmt1 from 'select * from t1 where a > ?';
