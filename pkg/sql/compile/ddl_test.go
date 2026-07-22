@@ -499,6 +499,38 @@ func TestScope_CreateTable(t *testing.T) {
 	})
 }
 
+func TestScopeCreateTemporaryTableRestoresCachedPlanOnError(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("stop after temporary names are rewritten")
+	})
+
+	indexTable := &plan2.TableDef{
+		Name: "idx_table", TableType: catalog.SystemOrdinaryRel, TblId: 42,
+	}
+	index := &plan2.IndexDef{IndexTableName: indexTable.Name}
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true,
+		TableDef:    &plan2.TableDef{Name: "temporary_table", Indexes: []*plan2.IndexDef{index}},
+		IndexTables: []*plan2.TableDef{indexTable},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	proc.Session = &testInternalExecutorSession{}
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", nil, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	require.Equal(t, "temporary_table", createTable.TableDef.Name)
+	require.Equal(t, "idx_table", indexTable.Name)
+	require.Equal(t, catalog.SystemOrdinaryRel, indexTable.TableType)
+	require.False(t, indexTable.IsTemporary)
+	require.Equal(t, uint64(42), indexTable.TblId)
+	require.Equal(t, "idx_table", index.IndexTableName)
+}
+
 func TestScope_CreateView(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name: "v1",

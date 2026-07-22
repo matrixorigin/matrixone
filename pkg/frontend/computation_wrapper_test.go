@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -321,6 +322,9 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 	require.Equal(t, uint32(7), prepareSchemaAccountID(7, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}))
 	require.Equal(t, uint32(11), prepareSchemaAccountID(7, &plan.ObjectRef{
 		SchemaName: "db", ObjName: "t", PubInfo: &plan.PubInfo{TenantId: 11},
+	}))
+	require.Equal(t, uint32(sysAccountID), prepareSchemaAccountID(7, &plan.ObjectRef{
+		SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT,
 	}))
 }
 
