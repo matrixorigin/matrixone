@@ -961,6 +961,9 @@ func TestJsonExtractPreservesSingleMatchMultiValuePathArray(t *testing.T) {
 		{name: "range", doc: `[null]`, path: `$[0 to 0]`, expected: `[null]`},
 		{name: "key wildcard", doc: `{"a":null}`, path: `$.*`, expected: `[null]`},
 		{name: "recursive descent", doc: `{"a":null}`, path: `$**.a`, expected: `[null]`},
+		{name: "empty object range", doc: `{}`, path: `$[0 to 0]`, expected: `[{}]`},
+		{name: "object last range", doc: `{"a":1,"b":2}`, path: `$[last to last]`, expected: `[{"a":1,"b":2}]`},
+		{name: "object last range then key", doc: `{"a":null,"b":2}`, path: `$[last to last].a`, expected: `[null]`},
 	}
 
 	for _, test := range tests {

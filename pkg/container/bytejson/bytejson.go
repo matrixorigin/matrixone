@@ -371,8 +371,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathRange:
-			se := sub.iRange.genRange(bj.GetElemCnt())
-			if se[0] == 0 {
+			if sub.iRange.matchesIndex(0, 1) {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathKey:

@@ -664,4 +664,13 @@ json_extract({"a":null}, $.*)
 select json_extract('{"a":null}', '$**.a');
 json_extract({"a":null}, $**.a)
 [null]
+select json_extract('{}', '$[0 to 0]');
+json_extract({}, $[0 to 0])
+[{}]
+select json_extract('{"a":1,"b":2}', '$[last to last]');
+json_extract({"a":1,"b":2}, $[last to last])
+[{"a": 1, "b": 2}]
+select json_extract('{"a":null,"b":2}', '$[last to last].a');
+json_extract({"a":null,"b":2}, $[last to last].a)
+[null]
 drop database test;
