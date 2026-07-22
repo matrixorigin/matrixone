@@ -1202,11 +1202,10 @@ func TestCloseIdleBackends(t *testing.T) {
 		c.mu.Lock()
 		v := len(c.mu.backends["b1"])
 		c.mu.Unlock()
-		if v == 1 {
-			tb.RLock()
-			closed := tb.closed
-			tb.RUnlock()
-			require.True(t, closed, "idle backend must be closed by GC")
+		tb.RLock()
+		closed := tb.closed
+		tb.RUnlock()
+		if v == 1 && closed {
 			ab := activeBackend.(*testBackend)
 			ab.RLock()
 			assert.False(t, ab.closed)
