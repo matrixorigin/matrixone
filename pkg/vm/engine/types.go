@@ -44,11 +44,10 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu           int
-	Id             string             `json:"id"`
-	Addr           string             `json:"address"`
-	WorkState      metadata.WorkState `json:"-"`
-	HasMixedCommit bool               `json:"-"`
+	Mcpu      int
+	Id        string             `json:"id"`
+	Addr      string             `json:"address"`
+	WorkState metadata.WorkState `json:"-"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
@@ -56,12 +55,11 @@ type Node struct {
 }
 
 // QueryCandidate is a CN discovered before tenant and label pool resolution.
-// Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
-// the legacy execution-capacity value until a real resource model replaces it.
+// Service keeps the control-plane metadata needed by pool policy; Mcpu is the
+// CN-advertised CPU capacity normalized to at least one.
 type QueryCandidate struct {
-	Service        metadata.CNService
-	Mcpu           int
-	HasMixedCommit bool
+	Service metadata.CNService
+	Mcpu    int
 }
 
 type QueryCandidates []QueryCandidate
@@ -70,10 +68,44 @@ type QueryCandidates []QueryCandidate
 // resolve the allowed CN pool. It deliberately contains no worker-selection
 // policy such as subset size or ranking.
 type QueryCandidatePoolRequest struct {
-	IsInternal bool
-	Tenant     string
-	Username   string
-	CNLabel    map[string]string
+	IsInternal     bool
+	Tenant         string
+	Username       string
+	CNLabel        map[string]string
+	RequestedPool  string
+	FallbackPolicy QueryPoolFallbackPolicy
+}
+
+type QueryPoolFallbackPolicy uint8
+
+const (
+	QueryPoolFallbackLegacyCompatible QueryPoolFallbackPolicy = iota
+	QueryPoolFallbackStrict
+)
+
+func (p QueryPoolFallbackPolicy) Valid() bool {
+	return p == QueryPoolFallbackLegacyCompatible || p == QueryPoolFallbackStrict
+}
+
+type QueryPoolResolution string
+
+const (
+	QueryPoolResolutionUnspecified      QueryPoolResolution = "unspecified"
+	QueryPoolResolutionAllCompatible    QueryPoolResolution = "all-compatible"
+	QueryPoolResolutionExactLabels      QueryPoolResolution = "exact-labels"
+	QueryPoolResolutionNonAccountLabels QueryPoolResolution = "non-account-labels"
+	QueryPoolResolutionSharedUnlabeled  QueryPoolResolution = "shared-unlabeled"
+	QueryPoolResolutionPrivilegedAny    QueryPoolResolution = "privileged-any"
+	QueryPoolResolutionNoMatch          QueryPoolResolution = "no-match"
+)
+
+type ResolvedQueryPool struct {
+	Nodes             Nodes
+	RequestedIdentity string
+	Identity          string
+	Resolution        QueryPoolResolution
+	Fallback          bool
+	FallbackReason    string
 }
 
 // QueryCandidateDiscoverer is an optional engine capability. Implementations
@@ -86,7 +118,7 @@ type QueryCandidateDiscoverer interface {
 // tenant and label policy to an already-discovered candidate snapshot.
 // Implementations must treat candidates and request.CNLabel as read-only.
 type QueryCandidatePoolResolver interface {
-	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (Nodes, error)
+	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (ResolvedQueryPool, error)
 }
 
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
@@ -152,7 +184,9 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag: tableDef.FeatureFlag,
+		FeatureFlag:    tableDef.FeatureFlag,
+		AutoIncrOffset: tableDef.AutoIncrOffset,
+		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
 	}
 	propDef.Properties = append(
 		propDef.Properties,

@@ -16,12 +16,13 @@ package schedule
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 const (
-	SchedulingTraceVersion = 1
+	SchedulingTraceVersion = 2
 
 	maxTraceAttempts           = 8
 	maxTraceWorkersPerDecision = 64
@@ -71,23 +72,36 @@ type AttemptTrace struct {
 }
 
 type QueryTrace struct {
-	ExecKind          string        `json:"execKind"`
-	CurrentCNPolicy   string        `json:"currentCNPolicy"`
-	CurrentCN         WorkerTrace   `json:"currentCN"`
-	Reason            string        `json:"reason"`
-	Satisfied         bool          `json:"satisfied"`
-	Fallback          bool          `json:"fallback,omitempty"`
-	CandidateSource   string        `json:"candidateSource"`
-	PoolResolution    string        `json:"poolResolution"`
-	DiscoveredCount   int           `json:"discoveredCount"`
-	ResolvedCount     int           `json:"resolvedCount"`
-	Selected          []WorkerTrace `json:"selected,omitempty"`
-	SelectedCount     int           `json:"selectedCount"`
-	SelectedOmitted   bool          `json:"selectedOmitted,omitempty"`
-	SelectedTruncated bool          `json:"selectedTruncated,omitempty"`
-	Dropped           []ReasonCount `json:"dropped,omitempty"`
-	DroppedCount      int           `json:"droppedCount,omitempty"`
-	DroppedTruncated  bool          `json:"droppedTruncated,omitempty"`
+	ExecKind               string        `json:"execKind"`
+	CurrentCNPolicy        string        `json:"currentCNPolicy"`
+	CurrentCN              WorkerTrace   `json:"currentCN"`
+	Reason                 string        `json:"reason"`
+	Satisfied              bool          `json:"satisfied"`
+	Fallback               bool          `json:"fallback,omitempty"`
+	IntentExplicit         bool          `json:"intentExplicit,omitempty"`
+	RequestedPool          string        `json:"requestedPool,omitempty"`
+	ResolvedPool           string        `json:"resolvedPool,omitempty"`
+	ResolvedPoolResolution string        `json:"resolvedPoolResolution,omitempty"`
+	PoolFallbackPolicy     string        `json:"poolFallbackPolicy"`
+	PoolFallback           bool          `json:"poolFallback,omitempty"`
+	PoolFallbackReason     string        `json:"poolFallbackReason,omitempty"`
+	EmptyWorkerPolicy      string        `json:"emptyWorkerPolicy"`
+	WorkerSetMode          string        `json:"workerSetMode"`
+	MaxWorkers             int           `json:"maxWorkers,omitempty"`
+	SelectionAlgorithm     string        `json:"selectionAlgorithm,omitempty"`
+	SelectionKeyHash       string        `json:"selectionKeyHash,omitempty"`
+	CandidateSource        string        `json:"candidateSource"`
+	PoolResolution         string        `json:"poolResolution"`
+	DiscoveredCount        int           `json:"discoveredCount"`
+	ResolvedCount          int           `json:"resolvedCount"`
+	EligibleCount          int           `json:"eligibleCount"`
+	Selected               []WorkerTrace `json:"selected,omitempty"`
+	SelectedCount          int           `json:"selectedCount"`
+	SelectedOmitted        bool          `json:"selectedOmitted,omitempty"`
+	SelectedTruncated      bool          `json:"selectedTruncated,omitempty"`
+	Dropped                []ReasonCount `json:"dropped,omitempty"`
+	DroppedCount           int           `json:"droppedCount,omitempty"`
+	DroppedTruncated       bool          `json:"droppedTruncated,omitempty"`
 }
 
 type ScanTrace struct {
@@ -122,6 +136,7 @@ type FailureTrace struct {
 type WorkerTrace struct {
 	ID       string `json:"id,omitempty"`
 	Routable bool   `json:"routable"`
+	Route    string `json:"route,omitempty"`
 	Mcpu     int    `json:"mcpu,omitempty"`
 	State    string `json:"state,omitempty"`
 }
@@ -166,6 +181,7 @@ type pendingWorkerTrace struct {
 	routable bool
 	mcpu     int
 	state    WorkerState
+	route    WorkerRoute
 }
 
 func (r *TraceRecorder) StartAttempt() TraceAttemptID {
@@ -211,9 +227,10 @@ func (r *TraceRecorder) RecordQuery(
 				currentCNPolicy: decision.CurrentCNPolicy,
 				currentCN: pendingWorkerTrace{
 					id:       decision.CurrentCN.ID,
-					routable: decision.CurrentCN.Addr != "",
+					routable: hasWorkerRoute(decision.CurrentCN),
 					mcpu:     decision.CurrentCN.Mcpu,
 					state:    decision.CurrentCN.State,
+					route:    decision.CurrentCN.Route,
 				},
 				reason:                 decision.Reason,
 				candidateResolution:    decision.CandidateResolution,
@@ -239,23 +256,36 @@ func (r *TraceRecorder) RecordQuery(
 	}
 	dropped, droppedTruncated := traceDroppedReasons(decision.Dropped)
 	target.Query = &QueryTrace{
-		ExecKind:          decision.ExecKind.String(),
-		CurrentCNPolicy:   decision.CurrentCNPolicy.String(),
-		CurrentCN:         traceWorker(decision.CurrentCN),
-		Reason:            decision.Reason,
-		Satisfied:         decision.Satisfied,
-		Fallback:          decision.Reason == ReasonNoCandidateCN,
-		CandidateSource:   string(decision.CandidateResolution.DiscoverySource),
-		PoolResolution:    string(decision.CandidateResolution.PoolResolution),
-		DiscoveredCount:   max(decision.CandidateResolution.DiscoveredCount, 0),
-		ResolvedCount:     max(decision.ResolvedCandidateCount, 0),
-		Selected:          selected,
-		SelectedCount:     len(decision.Workers),
-		SelectedOmitted:   decision.ExecKind != QueryExecAPMultiCN && len(decision.Workers) > 0,
-		SelectedTruncated: selectedTruncated,
-		Dropped:           dropped,
-		DroppedCount:      len(decision.Dropped),
-		DroppedTruncated:  droppedTruncated,
+		ExecKind:               decision.ExecKind.String(),
+		CurrentCNPolicy:        decision.CurrentCNPolicy.String(),
+		CurrentCN:              traceWorker(decision.CurrentCN),
+		Reason:                 decision.Reason,
+		Satisfied:              decision.Satisfied,
+		Fallback:               decision.Reason == ReasonNoCandidateCN,
+		IntentExplicit:         decision.Intent.Explicit,
+		RequestedPool:          boundedTraceWorkerValue(decision.ResolvedPool.RequestedIdentity),
+		ResolvedPool:           boundedTraceWorkerValue(decision.ResolvedPool.Identity),
+		ResolvedPoolResolution: boundedTraceWorkerValue(string(decision.ResolvedPool.Resolution)),
+		PoolFallbackPolicy:     decision.Intent.PoolFallback.String(),
+		PoolFallback:           decision.ResolvedPool.Fallback,
+		PoolFallbackReason:     boundedTraceWorkerValue(decision.ResolvedPool.FallbackReason),
+		EmptyWorkerPolicy:      decision.Intent.EmptyWorkerPolicy.String(),
+		WorkerSetMode:          decision.Intent.WorkerSet.Mode.String(),
+		MaxWorkers:             decision.Intent.WorkerSet.MaxWorkers,
+		SelectionAlgorithm:     decision.Intent.WorkerSet.AlgorithmVersion,
+		SelectionKeyHash:       selectionKeyTraceHash(decision.Intent.WorkerSet.SelectionKey),
+		CandidateSource:        string(decision.CandidateResolution.DiscoverySource),
+		PoolResolution:         string(decision.CandidateResolution.PoolResolution),
+		DiscoveredCount:        max(decision.CandidateResolution.DiscoveredCount, 0),
+		ResolvedCount:          max(decision.ResolvedCandidateCount, 0),
+		EligibleCount:          max(decision.EligibleCount, 0),
+		Selected:               selected,
+		SelectedCount:          len(decision.Workers),
+		SelectedOmitted:        decision.ExecKind != QueryExecAPMultiCN && len(decision.Workers) > 0,
+		SelectedTruncated:      selectedTruncated,
+		Dropped:                dropped,
+		DroppedCount:           len(decision.Dropped),
+		DroppedTruncated:       droppedTruncated,
 	}
 	if selectedTruncated || droppedTruncated {
 		target.Truncated = true
@@ -543,6 +573,7 @@ func (r *TraceRecorder) attemptLocked(id TraceAttemptID) *AttemptTrace {
 
 func canDeferLocalQuery(decision QueryDecision) bool {
 	return (decision.ExecKind == QueryExecTP || decision.ExecKind == QueryExecAPOneCN) &&
+		!decision.Intent.Explicit && decision.Intent.WorkerSet.Mode == WorkerSetAll &&
 		decision.Satisfied &&
 		decision.Reason != ReasonNoCandidateCN &&
 		len(decision.Dropped) == 0
@@ -575,15 +606,19 @@ func (r *TraceRecorder) materializePendingLocalLocked() {
 				Routable: query.currentCN.routable,
 				Mcpu:     query.currentCN.mcpu,
 				State:    query.currentCN.state.String(),
+				Route:    query.currentCN.route.String(),
 			},
-			Reason:          query.reason,
-			Satisfied:       true,
-			CandidateSource: string(query.candidateResolution.DiscoverySource),
-			PoolResolution:  string(query.candidateResolution.PoolResolution),
-			DiscoveredCount: max(query.candidateResolution.DiscoveredCount, 0),
-			ResolvedCount:   query.resolvedCandidateCount,
-			SelectedCount:   query.selectedCount,
-			SelectedOmitted: query.selectedCount > 0,
+			Reason:             query.reason,
+			Satisfied:          true,
+			PoolFallbackPolicy: PoolFallbackLegacyCompatible.String(),
+			EmptyWorkerPolicy:  EmptyWorkerLocalFallback.String(),
+			WorkerSetMode:      WorkerSetAll.String(),
+			CandidateSource:    string(query.candidateResolution.DiscoverySource),
+			PoolResolution:     string(query.candidateResolution.PoolResolution),
+			DiscoveredCount:    max(query.candidateResolution.DiscoveredCount, 0),
+			ResolvedCount:      query.resolvedCandidateCount,
+			SelectedCount:      query.selectedCount,
+			SelectedOmitted:    query.selectedCount > 0,
 		}
 	}
 	r.trace.Attempts = append(r.trace.Attempts, attempt)
@@ -597,10 +632,18 @@ func omitLocalPlacementDetails(attempt *AttemptTrace) bool {
 func traceWorker(worker Worker) WorkerTrace {
 	return WorkerTrace{
 		ID:       boundedTraceWorkerValue(worker.ID),
-		Routable: worker.Addr != "",
+		Routable: hasWorkerRoute(worker),
+		Route:    worker.Route.String(),
 		Mcpu:     worker.Mcpu,
 		State:    worker.State.String(),
 	}
+}
+
+func selectionKeyTraceHash(key string) string {
+	if key == "" {
+		return ""
+	}
+	return strconv.FormatUint(stableHRWScore("trace", key), 16)
 }
 
 func boundedTraceWorkerValue(value string) string {
