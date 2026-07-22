@@ -72,6 +72,10 @@ func TestServiceBootstrapRestoresHAKeeperAndWAL(t *testing.T) {
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	cfg.DisableWorkers = false
+	// Bootstrap commands are returned in a Log heartbeat. The general test
+	// config deliberately uses a small RPC limit, which is smaller than this
+	// command batch after MORPC validates decoded message sizes.
+	cfg.RPC.MaxMessageSize = defaultMaxMessageSize
 	cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
 	cfg.BootstrapConfig.Restore.FilePath = backupPath
 	cfg.BootstrapConfig.Restore.WALDataPath = walPath
@@ -186,6 +190,9 @@ func TestWALRecoveryRejectsDirtyDestinationAndKeepsFence(t *testing.T) {
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	cfg.DisableWorkers = false
+	// See TestServiceBootstrapRestoresHAKeeperAndWAL. This test needs the
+	// bootstrap heartbeat command batch to reach the local LogService.
+	cfg.RPC.MaxMessageSize = defaultMaxMessageSize
 	cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
 	s, err := NewService(
