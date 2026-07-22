@@ -174,6 +174,8 @@ type cluster struct {
 	// Reading from a closed channel still requires runtime mutex acquisition,
 	// which causes significant contention under high concurrency (observed 241s/5.79%
 	// mutex contention in production). Using atomic.Bool eliminates this overhead.
+	// Close also sets ready to release callers that are waiting for the first
+	// refresh while the cluster is shutting down.
 	//
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
@@ -339,7 +341,10 @@ func (c *cluster) Refresh(ctx context.Context) error {
 }
 
 func (c *cluster) Close() {
-	c.waitReady()
+	c.readyOnce.Do(func() {
+		c.ready.Store(true)
+		close(c.readyC)
+	})
 	c.stopper.Stop()
 	close(c.forceRefreshC)
 }
@@ -406,8 +411,10 @@ func (c *cluster) UpdateCN(s metadata.CNService) {
 	c.services.Store(new)
 }
 
-// waitReady blocks until the cluster has completed its first refresh from HAKeeper.
-// This ensures that service discovery calls don't return empty results during startup.
+// waitReady blocks until the cluster has completed its first refresh from HAKeeper
+// or is closing. This ensures that service discovery calls don't return empty
+// results during startup, while allowing shutdown to finish if HAKeeper never
+// supplied an initial snapshot.
 //
 // Performance optimization: We use atomic.Bool as a fast-path to avoid the overhead
 // of channel receive operations. Even reading from a closed channel requires acquiring
@@ -423,7 +430,8 @@ func (c *cluster) waitReady() {
 	if c.ready.Load() {
 		return
 	}
-	// Slow path: block until first refresh completes. Only happens during startup.
+	// Slow path: block until first refresh completes or shutdown releases waiters.
+	// Only happens during startup.
 	<-c.readyC
 }
 

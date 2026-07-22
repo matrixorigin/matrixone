@@ -34,12 +34,15 @@ import (
 var _ logservice.CNHAKeeperClient = new(testHAKClient)
 
 type testHAKClient struct {
-	cfg *Config
+	cfg        *Config
+	closeErr   error
+	clusterErr error
+	closed     int
 }
 
 func (client *testHAKClient) Close() error {
-	//TODO implement me
-	panic("implement me")
+	client.closed++
+	return client.closeErr
 }
 
 func (client *testHAKClient) AllocateID(ctx context.Context) (uint64, error) {
@@ -58,8 +61,7 @@ func (client *testHAKClient) AllocateIDByKeyWithBatch(ctx context.Context, key s
 }
 
 func (client *testHAKClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
-	//TODO implement me
-	panic("implement me")
+	return pb.ClusterDetails{}, client.clusterErr
 }
 
 func (client *testHAKClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {

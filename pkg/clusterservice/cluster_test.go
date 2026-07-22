@@ -70,6 +70,54 @@ func TestCNServiceSnapshotHonorsCancellationWhileClusterStarts(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestClusterCloseReleasesPreReadyWaiters(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			hc := &testHAKeeperClient{err: errors.New("hakeeper refresh failed")}
+			c := NewMOCluster("", hc, time.Hour).(*cluster)
+
+			waiterDone := make(chan struct{})
+			go func() {
+				c.GetCNService(NewSelector(), nil)
+				close(waiterDone)
+			}()
+
+			require.Never(t, func() bool {
+				select {
+				case <-waiterDone:
+					return true
+				default:
+					return false
+				}
+			}, 20*time.Millisecond, time.Millisecond)
+
+			closeDone := make(chan struct{})
+			go func() {
+				c.Close()
+				close(closeDone)
+			}()
+
+			require.Eventually(t, func() bool {
+				select {
+				case <-closeDone:
+					return true
+				default:
+					return false
+				}
+			}, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool {
+				select {
+				case <-waiterDone:
+					return true
+				default:
+					return false
+				}
+			}, time.Second, time.Millisecond)
+		},
+	)
+}
+
 func TestClusterForceRefresh(t *testing.T) {
 	runClusterTest(
 		time.Hour,
