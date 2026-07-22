@@ -1489,6 +1489,45 @@ func TestFetchRowsSkipsConstNull(t *testing.T) {
 	require.Equal(t, lock.Granularity_Range, granularity)
 }
 
+func TestFetchRowsSkipsPartialNull(t *testing.T) {
+	mp := mpool.MustNew("test")
+
+	fixed := vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(fixed, uint64(0), true, mp))
+	require.NoError(t, vector.AppendFixed(fixed, uint64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(fixed, uint64(1), false, mp))
+	defer fixed.Free(mp)
+	fetcher := GetFetchRowsFunc(types.T_uint64.ToType())
+	packer := types.NewPacker()
+	ok, rows, granularity := fetcher(fixed, packer, types.T_uint64.ToType(), 10, false, nil, nil)
+	require.True(t, ok)
+	require.Equal(t, lock.Granularity_Row, granularity)
+	require.Len(t, rows, 2)
+	packer.Reset()
+	packer.EncodeUint64(0)
+	require.Equal(t, packer.Bytes(), rows[0])
+	packer.Reset()
+	packer.EncodeUint64(1)
+	require.Equal(t, packer.Bytes(), rows[1])
+
+	text := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(text, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(text, []byte{}, false, mp))
+	require.NoError(t, vector.AppendBytes(text, []byte("x"), false, mp))
+	defer text.Free(mp)
+	fetcher = GetFetchRowsFunc(types.T_varchar.ToType())
+	ok, rows, granularity = fetcher(text, packer, types.T_varchar.ToType(), 10, false, nil, nil)
+	require.True(t, ok)
+	require.Equal(t, lock.Granularity_Row, granularity)
+	require.Len(t, rows, 2)
+	packer.Reset()
+	packer.EncodeStringType([]byte{})
+	require.Equal(t, packer.Bytes(), rows[0])
+	packer.Reset()
+	packer.EncodeStringType([]byte("x"))
+	require.Equal(t, packer.Bytes(), rows[1])
+}
+
 func TestDecimal256(t *testing.T) {
 	packer := types.NewPacker()
 	decimal256Fn := func(v types.Decimal256) []byte {

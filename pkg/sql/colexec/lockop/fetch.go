@@ -729,7 +729,7 @@ func fetchVarlenaRows(
 	n := vec.Length()
 	data, area := vector.MustVarlenaRawData(vec)
 	if n == 1 {
-		if filter != nil &&
+		if vec.GetNulls().Contains(0) || filter != nil &&
 			!filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row
 		}
@@ -742,7 +742,7 @@ func fetchVarlenaRows(
 		initialized := false
 		applied := 0
 		for i := 0; i < n; i++ {
-			if filter != nil &&
+			if vec.GetNulls().Contains(uint64(i)) || filter != nil &&
 				!filter(i, filterCols) {
 				continue
 			}
@@ -772,7 +772,7 @@ func fetchVarlenaRows(
 	}
 	rows := make([][]byte, 0, n)
 	for idx := range data {
-		if filter != nil &&
+		if vec.GetNulls().Contains(uint64(idx)) || filter != nil &&
 			!filter(idx, filterCols) {
 			continue
 		}
@@ -814,7 +814,7 @@ func fetchFixedRowsWithCompare[T any](
 	n := vec.Length()
 	values := vector.MustFixedColWithTypeCheck[T](vec)
 	if n == 1 {
-		if filter != nil && !filter(0, filterCols) {
+		if vec.GetNulls().Contains(0) || filter != nil && !filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row
 		}
 		return true, [][]byte{fn(values[0])}, lock.Granularity_Row
@@ -824,7 +824,7 @@ func fetchFixedRowsWithCompare[T any](
 		initialized := false
 		applied := 0
 		for row, v := range values {
-			if filter != nil &&
+			if vec.GetNulls().Contains(uint64(row)) || filter != nil &&
 				!filter(row, filterCols) {
 				continue
 			}
@@ -853,7 +853,7 @@ func fetchFixedRowsWithCompare[T any](
 	}
 	rows := make([][]byte, 0, n)
 	for row, v := range values {
-		if filter != nil &&
+		if vec.GetNulls().Contains(uint64(row)) || filter != nil &&
 			!filter(row, filterCols) {
 			continue
 		}

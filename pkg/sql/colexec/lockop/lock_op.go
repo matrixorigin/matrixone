@@ -122,6 +122,8 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	} else {
 		lockOp.ctr.parker.Reset()
 	}
+	lockOp.ctr.materializeInput = lockOp.hasMergeableTargetGroup()
+	lockOp.ctr.bufferEmitted = false
 	return nil
 }
 
@@ -147,6 +149,9 @@ func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
 	analyzer := lockOp.OpAnalyzer
+	if lockOp.ctr.materializeInput {
+		return callWithMaterializedInput(proc, lockOp, analyzer)
+	}
 
 	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -172,6 +177,72 @@ func callNonBlocking(
 	}
 
 	return result, nil
+}
+
+func callWithMaterializedInput(
+	proc *process.Process,
+	lockOp *LockOp,
+	analyzer process.Analyzer,
+) (vm.CallResult, error) {
+	// A mergeable group represents several key columns in one physical lock
+	// namespace. Consume the complete input before taking its first lock so every
+	// transaction derives the same global key order regardless of batch boundaries.
+	if lockOp.ctr.bufferEmitted {
+		return vm.CallResult{}, lockOp.ctr.retryError
+	}
+	for {
+		result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return result, err
+		}
+		if result.Batch == nil {
+			if lockOp.ctr.bufferedInput == nil {
+				lockOp.ctr.bufferEmitted = true
+				if lockOp.ctr.retryError == nil {
+					err = lockTalbeIfLockCountIsZero(proc, lockOp)
+				}
+				return result, err
+			}
+			lockOp.ctr.lockCount += int64(lockOp.ctr.bufferedInput.RowCount())
+			if err = performLock(lockOp.ctr.bufferedInput, proc, lockOp, analyzer, -1); err != nil {
+				return result, err
+			}
+			lockOp.ctr.bufferEmitted = true
+			result.Batch = lockOp.ctr.bufferedInput
+			return result, nil
+		}
+		if result.Batch.IsEmpty() {
+			continue
+		}
+		lockOp.ctr.bufferedInput, err = lockOp.ctr.bufferedInput.AppendWithCopy(
+			proc.Ctx, proc.Mp(), result.Batch)
+		if err != nil {
+			return result, err
+		}
+	}
+}
+
+func (lockOp *LockOp) hasMergeableTargetGroup() bool {
+	for idx := 0; idx < len(lockOp.targets); {
+		end := idx + 1
+		for end < len(lockOp.targets) && mergeableLockTargets(lockOp.targets[idx], lockOp.targets[end]) {
+			end++
+		}
+		if end-idx > 1 {
+			return true
+		}
+		idx = end
+	}
+	return false
+}
+
+func mergeableLockTargets(left, right lockTarget) bool {
+	return left.tableID == right.tableID && left.mode == right.mode &&
+		left.primaryColumnType == right.primaryColumnType && left.filter == nil && right.filter == nil &&
+		!left.lockTable && !right.lockTable && left.lockRows == nil && right.lockRows == nil &&
+		left.changeDef == right.changeDef &&
+		left.partitionColumnIndexInBatch == right.partitionColumnIndexInBatch &&
+		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
 }
 
 // if input vec is not allnull and has null, return a copy vector without null value
@@ -216,11 +287,7 @@ func performLock(
 		if targetIdx == -1 && target.filter == nil && !target.lockTable && target.lockRows == nil {
 			for next := idx + 1; next < len(lockOp.targets); next++ {
 				candidate := lockOp.targets[next]
-				if candidate.tableID != target.tableID || candidate.mode != target.mode ||
-					candidate.primaryColumnType != target.primaryColumnType || candidate.filter != nil ||
-					candidate.lockTable || candidate.lockRows != nil || candidate.changeDef != target.changeDef ||
-					candidate.partitionColumnIndexInBatch != target.partitionColumnIndexInBatch ||
-					candidate.refreshTimestampIndexInBatch != target.refreshTimestampIndexInBatch {
+				if !mergeableLockTargets(target, candidate) {
 					break
 				}
 				group = append(group, next)
@@ -275,23 +342,8 @@ func performLock(
 				_ RowsFilter,
 				_ []int32,
 			) (bool, [][]byte, lock.Granularity) {
-				var rows [][]byte
-				for _, groupIdx := range group {
-					groupTarget := lockOp.targets[groupIdx]
-					has, targetRows, granularity := lockOp.ctr.fetchers[groupIdx](
-						resultVector(bat, groupTarget.primaryColumnIndexInBatch),
-						packer, pkType, maxCountPerLock, lockTable, nil, nil)
-					if granularity != lock.Granularity_Row {
-						return has, targetRows, granularity
-					}
-					if has {
-						rows = append(rows, targetRows...)
-					}
-				}
-				if len(rows) == 0 {
-					return false, nil, lock.Granularity_Row
-				}
-				return true, dedupLockRows(rows), lock.Granularity_Row
+				return lockOp.fetchMergedLockRows(
+					bat, group, packer, pkType, maxCountPerLock, lockTable)
 			}
 		}
 		locked, defChanged, refreshTS, err := doLock(
@@ -361,6 +413,37 @@ func performLock(
 		lockOp.ctr.retryError = retryWithDefChangedError
 	}
 	return nil
+}
+
+func (lockOp *LockOp) fetchMergedLockRows(
+	bat *batch.Batch,
+	group []int,
+	packer *types.Packer,
+	pkType types.Type,
+	maxCountPerLock int,
+	lockTable bool,
+) (bool, [][]byte, lock.Granularity) {
+	// Disable per-target range conversion. A range chosen from only the first
+	// target can omit keys from later targets; convert only after the complete
+	// group has been sorted and deduplicated.
+	var rows [][]byte
+	for _, groupIdx := range group {
+		groupTarget := lockOp.targets[groupIdx]
+		has, targetRows, _ := lockOp.ctr.fetchers[groupIdx](
+			resultVector(bat, groupTarget.primaryColumnIndexInBatch),
+			packer, pkType, math.MaxInt, lockTable, nil, nil)
+		if has {
+			rows = append(rows, targetRows...)
+		}
+	}
+	if len(rows) == 0 {
+		return false, nil, lock.Granularity_Row
+	}
+	rows = dedupLockRows(rows)
+	if len(rows) > maxCountPerLock {
+		return true, [][]byte{rows[0], rows[len(rows)-1]}, lock.Granularity_Range
+	}
+	return true, rows, lock.Granularity_Row
 }
 
 func resultVector(bat *batch.Batch, idx int32) *vector.Vector {
@@ -1488,6 +1571,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.cleanBufferedInput(proc)
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
@@ -1496,8 +1580,17 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.cleanBufferedInput(proc)
 	lockOp.cleanParker()
 	lockOp.ctr.relations = nil
+}
+
+func (lockOp *LockOp) cleanBufferedInput(proc *process.Process) {
+	if lockOp.ctr.bufferedInput != nil && proc != nil {
+		lockOp.ctr.bufferedInput.Clean(proc.Mp())
+	}
+	lockOp.ctr.bufferedInput = nil
+	lockOp.ctr.bufferEmitted = false
 }
 
 func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
