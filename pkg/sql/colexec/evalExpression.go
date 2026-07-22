@@ -258,6 +258,7 @@ type FunctionExpressionExecutor struct {
 	// parameters related
 	parameterResults  []*vector.Vector
 	parameterExecutor []ExpressionExecutor
+	iffNullResults    [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -590,12 +591,12 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+
 	trueBranch := expr.selectList1[:rowCount]
 	falseBranch := expr.selectList2[:rowCount]
+	mode := function.CompatibilityModeFromProcess(proc)
 
-	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
 			trueBranch[i] = selectList[i]
 			falseBranch[i] = selectList[i]
@@ -603,18 +604,58 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 			trueBranch[i] = true
 			falseBranch[i] = true
 		}
-		if !null && b {
+		if !trueBranch[i] {
+			continue
+		}
+		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), mode)
+		if err != nil {
+			return err
+		}
+		if truth {
 			falseBranch[i] = false
 		} else {
 			trueBranch[i] = false
 		}
 	}
-	expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
-	if err != nil {
+
+	if hasSelectedRows(trueBranch) {
+		expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
+		if err != nil {
+			return err
+		}
+	} else {
+		expr.parameterResults[1] = expr.iffNullResult(0, rowCount)
+	}
+	if hasSelectedRows(falseBranch) {
+		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
 		return err
 	}
-	expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
-	return err
+	expr.parameterResults[2] = expr.iffNullResult(1, rowCount)
+	return nil
+}
+
+func hasSelectedRows(selectList []bool) bool {
+	for _, selected := range selectList {
+		if selected {
+			return true
+		}
+	}
+	return false
+}
+
+func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) *vector.Vector {
+	typ := expr.resultType
+	result := expr.iffNullResults[index]
+	if result == nil || *result.GetType() != typ {
+		if result != nil {
+			result.Free(expr.m)
+		}
+		result = vector.NewConstNull(typ, length, expr.m)
+		expr.iffNullResults[index] = result
+	} else {
+		result.SetLength(length)
+	}
+	return result
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
@@ -916,6 +957,7 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
+	expr.freeIffNullResults()
 	if expr.selectedResult != nil {
 		expr.selectedResult.Free()
 		expr.selectedResult = nil
