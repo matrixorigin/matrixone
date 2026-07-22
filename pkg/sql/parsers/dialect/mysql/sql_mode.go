@@ -18,6 +18,8 @@ import "strings"
 
 type SQLModeFlag uint8
 
+const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
+
 const (
 	SQLModeANSIQuotes SQLModeFlag = 1 << iota
 	SQLModePipesAsConcat
@@ -48,6 +50,22 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 
 func SessionSQLModeForParser(mode string) string {
 	return mode
+}
+
+func HasSQLMode(mode string, token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, part := range strings.Split(mode, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
+}
+
+func HasMatrixOneNativeSQLMode(mode string) bool {
+	return HasSQLMode(mode, SQLModeMatrixOneNative)
 }
 
 func (flags SQLModeFlags) Has(flag SQLModeFlag) bool {

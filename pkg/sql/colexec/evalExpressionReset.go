@@ -89,6 +89,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	expr.folded.reset(expr.m)
 	// reset the function information.
 	expr.functionInformationForEval.reset()
+	expr.freeIffNullResults()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -98,6 +99,15 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 
 		expr.parameterResults[i] = nil
 		param.ResetForNextQuery()
+	}
+}
+
+func (expr *FunctionExpressionExecutor) freeIffNullResults() {
+	for i, result := range expr.iffNullResults {
+		if result != nil {
+			result.Free(expr.m)
+			expr.iffNullResults[i] = nil
+		}
 	}
 }
 
@@ -155,10 +165,13 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 		if err != nil || !folded {
 			return folded, err
 		}
-		condition := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
-		value, isNull := condition.GetValue(0)
+		value, err := function.IffConditionTruthyAt(
+			expr.parameterResults[0], 0, function.CompatibilityModeFromProcess(proc))
+		if err != nil {
+			return false, err
+		}
 		selected := 2
-		if !isNull && value {
+		if value {
 			selected = 1
 		}
 		return expr.tryFoldParameter(proc, atRuntime, selected)
