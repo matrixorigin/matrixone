@@ -6672,6 +6672,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var defaultVals []string
 	var binding *Binding
+	var bindingToReplace *Binding
 	var table string
 
 	scanNodes := []plan.Node_NodeType{
@@ -6685,6 +6686,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SOURCE_SCAN,
 	}
 	lower := builder.compCtx.GetLowerCaseTableNames()
+	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
+		candidate := ctx.bindingByTag[node.BindingTags[0]]
+		if ctx.bindings[0] == candidate {
+			bindingToReplace = candidate
+		}
+	}
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
@@ -6709,7 +6716,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			table = tree.NewCStr(table, lower).Compare()
 		}
 
-		if _, ok := ctx.bindingByTable[table]; ok {
+		if existing, ok := ctx.bindingByTable[table]; ok && existing != bindingToReplace {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table name %q specified more than once", table)
 		}
 
@@ -6790,11 +6797,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.originCols = originCols
 	}
 
-	ctx.bindings = append(ctx.bindings, binding)
-	ctx.bindingByTag[binding.tag] = binding
-	ctx.bindingByTable[binding.table] = binding
+	if bindingToReplace != nil {
+		ctx.replaceBinding(bindingToReplace, binding)
+	} else {
+		ctx.bindings = append(ctx.bindings, binding)
+		ctx.bindingByTag[binding.tag] = binding
+		ctx.bindingByTable[binding.table] = binding
+	}
 
-	if node.NodeType != plan.Node_RECURSIVE_SCAN && node.NodeType != plan.Node_SINK_SCAN {
+	if bindingToReplace == nil && node.NodeType != plan.Node_RECURSIVE_SCAN && node.NodeType != plan.Node_SINK_SCAN {
 		for _, col := range binding.cols {
 			if _, ok := ctx.bindingByCol[col]; ok {
 				ctx.bindingByCol[col] = nil
@@ -6804,9 +6815,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		}
 	}
 
-	ctx.bindingTree = &BindingTreeNode{
-		binding: binding,
-	}
+	ctx.bindingTree = &BindingTreeNode{binding: binding}
 
 	return nil
 }

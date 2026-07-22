@@ -390,13 +390,14 @@ func (c *PushClient) waitCanServeTableSnapshot(
 	ctx context.Context,
 	accId, dbId, tblId uint64,
 	ps *logtailreplay.PartitionState,
+	pending bool,
 	snapshot timestamp.Timestamp,
 ) (*logtailreplay.PartitionState, bool, error) {
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		canServe, needWait := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+		canServe, needWait := canServeTableSnapshotWithPending(ps, snapshot, pending)
 		if canServe || !needWait {
 			return ps, canServe, nil
 		}
@@ -405,7 +406,7 @@ func (c *PushClient) waitCanServeTableSnapshot(
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		case <-ticker.C:
-			ps = c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tblId).Snapshot()
+			ps, pending = c.getSubscribedSnapshotAndPending(ctx, accId, dbId, tblId)
 		}
 	}
 }
@@ -457,13 +458,13 @@ func (c *PushClient) skipSubIfSubscribed(
 	acctId uint64,
 	tableID uint64,
 	dbID uint64,
-) (bool, *logtailreplay.PartitionState) {
+) (bool, *logtailreplay.PartitionState, bool) {
 
 	//if table has been subscribed, return quickly.
-	if ps, ok, _ := c.isSubscribed(ctx, acctId, dbID, tableID); ok {
-		return true, ps
+	if ps, ok, _, pending := c.isSubscribedWithPending(ctx, acctId, dbID, tableID); ok {
+		return true, ps, pending
 	}
-	return false, nil
+	return false, nil, false
 }
 
 func (c *PushClient) toSubscribeTable(
@@ -473,12 +474,18 @@ func (c *PushClient) toSubscribeTable(
 	tableName string,
 	dbID uint64,
 	dbName string,
+	pendingOut ...*bool,
 ) (ps *logtailreplay.PartitionState, err error) {
+	var pending *bool
+	if len(pendingOut) > 0 {
+		pending = pendingOut[0]
+	}
 
 	var (
-		skip     bool
-		state    SubscribeState
-		injected bool
+		skip           bool
+		state          SubscribeState
+		injected       bool
+		initialPending bool
 	)
 
 	if injected, _ = objectio.LogCNSubscribeTableFailInjected(
@@ -488,7 +495,10 @@ func (c *PushClient) toSubscribeTable(
 			moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
-	if skip, ps = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
+	if skip, ps, initialPending = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
+		if pending != nil {
+			*pending = initialPending
+		}
 		return ps, nil
 	}
 
@@ -527,8 +537,11 @@ func (c *PushClient) toSubscribeTable(
 
 		case Subscribed:
 			//if table has been subscribed, return the ps.
-			ps, _, state = c.isSubscribed(ctx, accId, dbID, tableID)
+			ps, _, state, initialPending = c.isSubscribedWithPending(ctx, accId, dbID, tableID)
 			if ps != nil {
+				if pending != nil {
+					*pending = initialPending
+				}
 				logutil.Info(
 					fmt.Sprintf("%s-subscribe-ok", logTag),
 					zap.Uint64("table-id", tableID),
@@ -1281,10 +1294,47 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
+// getSubscribedSnapshotAndPending captures the pending marker before the immutable
+// partition snapshot while holding the subscription generation. If pending is
+// clear, the later snapshot includes every update whose marker was cleared.
+func (c *PushClient) getSubscribedSnapshotAndPending(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool) {
+	s := &c.subscribed
+	s.rw.RLock()
+	ent, exist := s.m[tId]
+	if !exist {
+		s.rw.RUnlock()
+		return nil, false
+	}
+	if ent.dbID != dbId || ent.state != Subscribed {
+		s.rw.RUnlock()
+		return nil, false
+	}
+
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
+	}
+	pending := ent.pendingTo.Load() != nil
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	s.rw.RUnlock()
+	return ps, pending
+}
+
 func (c *PushClient) isSubscribed(
 	ctx context.Context,
 	accId, dbId, tId uint64,
 ) (*logtailreplay.PartitionState, bool, SubscribeState) {
+	ps, ok, state, _ := c.isSubscribedWithPending(ctx, accId, dbId, tId)
+	return ps, ok, state
+}
+
+func (c *PushClient) isSubscribedWithPending(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
 
 	s := &c.subscribed
 
@@ -1294,12 +1344,12 @@ func (c *PushClient) isSubscribed(
 	ent, exist := s.m[tId]
 	if !exist {
 		s.rw.RUnlock()
-		return nil, false, Unsubscribed
+		return nil, false, Unsubscribed, false
 	}
 	if ent.state != Subscribed {
 		st := ent.state
 		s.rw.RUnlock()
-		return nil, false, st
+		return nil, false, st, false
 	}
 	// Update timestamp (with sampling) while holding the read lock to keep
 	// state consistent with the partition creation below.
@@ -1307,10 +1357,11 @@ func (c *PushClient) isSubscribed(
 	if now-ent.lastTs.Load() > int64(time.Minute) {
 		ent.lastTs.Store(now)
 	}
+	pending := ent.pendingTo.Load() != nil
 	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
 	s.rw.RUnlock()
 
-	return ps, true, Subscribed
+	return ps, true, Subscribed, pending
 }
 
 // getSubscribedSnapshotForPKCheck requires an open push-client admission gate
