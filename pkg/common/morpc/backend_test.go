@@ -1078,6 +1078,24 @@ func TestIsExpectedCloseError(t *testing.T) {
 	assert.False(t, rb.isExpectedCloseError(nil), "should return false for nil error")
 }
 
+func TestStoppedBackendCannotBeReactivated(t *testing.T) {
+	rb := &remoteBackend{cancel: func() {}}
+	rb.stateMu.state = stateStopped
+	rb.atomic.unavailable.Store(true)
+	rb.atomic.lastActiveTime.Store(time.Time{})
+
+	// Simulate an activity completion racing after the terminal state was
+	// published. It must not make the backend selectable again.
+	rb.active()
+	require.True(t, rb.LastActiveTime().IsZero())
+
+	// Repeated Close must also repair a stale activity timestamp left by an
+	// older racing caller, while remaining idempotent.
+	rb.atomic.lastActiveTime.Store(time.Now())
+	rb.Close()
+	require.True(t, rb.LastActiveTime().IsZero())
+}
+
 func TestWaitingFutureMustGetClosedError(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
@@ -1297,6 +1315,7 @@ func (b *testBackend) Close() {
 	b.RWMutex.Lock()
 	defer b.RWMutex.Unlock()
 	b.closed = true
+	b.activeTime = time.Time{}
 }
 func (b *testBackend) Busy() bool { return b.busy }
 func (b *testBackend) LastActiveTime() time.Time {

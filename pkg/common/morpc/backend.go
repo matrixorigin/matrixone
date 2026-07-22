@@ -195,6 +195,7 @@ type remoteBackend struct {
 	atomic struct {
 		id             uint64
 		lastActiveTime atomic.Value //time.Time
+		unavailable    atomic.Bool
 	}
 
 	pool struct {
@@ -350,7 +351,10 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	st := rb.acquireStream()
 	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
-	rb.active()
+	// stateMu is already read-locked here. Keep the activity update in the
+	// same state snapshot so Close cannot publish stateStopped between the
+	// state check and the timestamp write.
+	rb.activeLocked()
 	return st, nil
 }
 
@@ -404,10 +408,20 @@ func (rb *remoteBackend) Close() {
 	})
 	rb.stateMu.Lock()
 	if rb.stateMu.state == stateStopped {
+		// A send/read accepted before the first Close may finish its activity
+		// update afterwards. Keep repeated Close effective so a stopped backend
+		// can never remain selectable in the client pool.
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
 		rb.stateMu.Unlock()
 		return
 	}
 	rb.stateMu.state = stateStopped
+	// Publish the terminal flag before clearing activity. active() rechecks the
+	// flag after its timestamp store, so every interleaving ends at zero without
+	// adding a state mutex to the per-message hot path.
+	rb.atomic.unavailable.Store(true)
+	rb.inactive()
 	rb.stopWriteLoop()
 	rb.stateMu.Unlock()
 
@@ -451,8 +465,25 @@ func (rb *remoteBackend) Locked() bool {
 }
 
 func (rb *remoteBackend) active() {
-	now := time.Now()
-	rb.atomic.lastActiveTime.Store(now)
+	if rb.atomic.unavailable.Load() {
+		return
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
+	// Close may publish unavailable between the first check and the timestamp
+	// store. Repair that ordering here; if Close happens after this check, its
+	// own inactive store wins instead.
+	if rb.atomic.unavailable.Load() {
+		rb.inactive()
+	}
+}
+
+// activeLocked records activity only for the running generation. The caller
+// must hold stateMu for reading or writing.
+func (rb *remoteBackend) activeLocked() {
+	if rb.stateMu.state != stateRunning {
+		return
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
 }
 
 func (rb *remoteBackend) inactive() {
@@ -464,6 +495,8 @@ func (rb *remoteBackend) changeToStopping() {
 	defer rb.stateMu.Unlock()
 	if rb.stateMu.state == stateRunning {
 		rb.stateMu.state = stateStopping
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
 	}
 }
 
@@ -1330,6 +1363,17 @@ func (s *stream) Close(closeConn bool) error {
 	s.mu.closed = true
 	s.mu.Unlock()
 	s.unregisterFunc(s)
+	if closeConn {
+		// cancel makes every in-flight done stop independently, and unregister
+		// observes an empty channel. Publish one terminal response afterwards so
+		// a receiver that obtained the channel before Close is always released.
+		// Stream handles/channels are generation-private and are never pooled.
+		select {
+		case s.c <- nil:
+		default:
+			panic("BUG: stream close notification channel is full")
+		}
+	}
 	return nil
 }
 

@@ -52,6 +52,39 @@ type failingCreateFactory struct {
 	attempts atomic.Int32
 }
 
+type newStreamErrorBackend struct {
+	*testBackend
+	err error
+}
+
+func (b *newStreamErrorBackend) NewStream(bool) (Stream, error) {
+	return nil, b.err
+}
+
+type operationClosedBackend struct {
+	*testBackend
+}
+
+func (b *operationClosedBackend) Send(context.Context, Message) (*Future, error) {
+	return nil, backendClosed
+}
+
+func (b *operationClosedBackend) SendInternal(context.Context, Message) (*Future, error) {
+	return nil, backendClosed
+}
+
+type blockingCloseBackend struct {
+	*testBackend
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingCloseBackend) Close() {
+	close(b.started)
+	<-b.release
+	b.testBackend.Close()
+}
+
 func (f *failingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
 	f.attempts.Add(1)
 	return nil, fmt.Errorf("create failed")
@@ -187,6 +220,207 @@ func TestNewStreamRetainsBackoffAfterBackendCreateFailure(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Equal(t, int32(1), factory.attempts.Load(),
 		"a failed factory call must not trigger an immediate retry loop")
+}
+
+func TestNewStreamErrorReturnsBackendLockToClient(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		retired bool
+	}{
+		{name: "closed backend is retired", err: backendClosed, retired: true},
+		{name: "other error remains selectable", err: fmt.Errorf("new stream failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rc, err := NewClient(
+				"new-stream-lock-ownership",
+				newTestBackendFactory(),
+				WithClientMaxBackendPerHost(1),
+				WithClientDisableAutoCreateBackend(),
+				WithClientDisableCircuitBreaker(),
+				WithClientRetryPolicy(NoRetryPolicy),
+			)
+			require.NoError(t, err)
+			c := rc.(*client)
+			defer func() { require.NoError(t, c.Close()) }()
+
+			base := &testBackend{id: 1, activeTime: time.Now()}
+			backend := &newStreamErrorBackend{testBackend: base, err: tc.err}
+			c.mu.Lock()
+			c.mu.backends["remote"] = []Backend{backend}
+			c.mu.ops["remote"] = &op{}
+			c.mu.Unlock()
+
+			stream, err := c.NewStream(t.Context(), "remote", true)
+			require.ErrorIs(t, err, tc.err)
+			require.Nil(t, stream)
+			require.False(t, base.Locked(), "failed stream creation must not retain the pool lock")
+
+			c.mu.Lock()
+			backends := append([]Backend(nil), c.mu.backends["remote"]...)
+			c.mu.Unlock()
+			if tc.retired {
+				require.Empty(t, backends, "closed backend must not block replacement capacity")
+				base.RLock()
+				closed := base.closed
+				base.RUnlock()
+				require.True(t, closed)
+			} else {
+				require.Equal(t, []Backend{backend}, backends)
+			}
+		})
+	}
+}
+
+func TestClosedOperationRetiresBackendBeforeReturn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(context.Context, RPCClient) error
+	}{
+		{
+			name: "send",
+			call: func(ctx context.Context, client RPCClient) error {
+				_, err := client.Send(ctx, "remote", newTestMessage(1))
+				return err
+			},
+		},
+		{
+			name: "ping",
+			call: func(ctx context.Context, client RPCClient) error {
+				return client.Ping(ctx, "remote")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rc, err := NewClient(
+				"closed-operation-retirement",
+				newTestBackendFactory(),
+				WithClientMaxBackendPerHost(1),
+				WithClientDisableAutoCreateBackend(),
+				WithClientDisableCircuitBreaker(),
+				WithClientRetryPolicy(NoRetryPolicy),
+			)
+			require.NoError(t, err)
+			c := rc.(*client)
+			defer func() { require.NoError(t, c.Close()) }()
+
+			base := &testBackend{id: 1, activeTime: time.Now()}
+			backend := &operationClosedBackend{testBackend: base}
+			c.mu.Lock()
+			c.mu.backends["remote"] = []Backend{backend}
+			c.mu.ops["remote"] = &op{}
+			c.mu.Unlock()
+
+			err = tc.call(t.Context(), rc)
+			require.ErrorIs(t, err, backendClosed)
+			c.mu.Lock()
+			backends := append([]Backend(nil), c.mu.backends["remote"]...)
+			c.mu.Unlock()
+			require.Empty(t, backends)
+		})
+	}
+}
+
+func TestRetireBackendPreservesHealthyPeer(t *testing.T) {
+	rc, err := NewClient(
+		"targeted-backend-retirement",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(2),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	healthy := &testBackend{id: 1, activeTime: time.Now()}
+	closed := &testBackend{id: 2, activeTime: time.Now()}
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{healthy, closed}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	c.retireBackend("remote", closed)
+
+	c.mu.Lock()
+	backends := append([]Backend(nil), c.mu.backends["remote"]...)
+	c.mu.Unlock()
+	require.Equal(t, []Backend{healthy}, backends)
+	healthy.RLock()
+	healthyClosed := healthy.closed
+	healthy.RUnlock()
+	require.False(t, healthyClosed)
+}
+
+func TestBackendLookupSynchronouslyDetachesInactiveCapacity(t *testing.T) {
+	rc, err := NewClient(
+		"inactive-capacity",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	base := &testBackend{id: 1}
+	inactive := &blockingCloseBackend{
+		testBackend: base,
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	defer func() {
+		select {
+		case <-inactive.release:
+		default:
+			close(inactive.release)
+		}
+	}()
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{inactive}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	type lookupResult struct {
+		backend Backend
+		err     error
+	}
+	resultC := make(chan lookupResult, 1)
+	go func() {
+		backend, _, err := c.getBackendForOperation("remote", false)
+		resultC <- lookupResult{backend: backend, err: err}
+	}()
+
+	select {
+	case <-inactive.started:
+	case <-time.After(time.Second):
+		t.Fatal("inactive backend close did not start")
+	}
+
+	// Close is intentionally blocked. Capacity must already be detached and
+	// c.mu must be available, so other callers can admit a replacement without
+	// waiting for backend shutdown.
+	locked := make(chan []Backend, 1)
+	go func() {
+		c.mu.Lock()
+		locked <- append([]Backend(nil), c.mu.backends["remote"]...)
+		c.mu.Unlock()
+	}()
+	select {
+	case backends := <-locked:
+		require.Empty(t, backends)
+	case <-time.After(time.Second):
+		t.Fatal("backend cleanup held the client lock")
+	}
+
+	close(inactive.release)
+	result := <-resultC
+	require.Nil(t, result.backend)
+	require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrNoAvailableBackend), result.err)
+	base.RLock()
+	closed := base.closed
+	base.RUnlock()
+	require.True(t, closed, "detached backend must be closed outside the client lock")
 }
 
 func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {

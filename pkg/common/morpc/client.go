@@ -519,7 +519,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 		}
 
 		f, err := b.Send(ctx, request)
-		if err != nil && err == backendClosed {
+		if isBackendClosedError(err) {
+			c.retireBackend(backend, b)
 			breaker.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded (0 means unlimited)
@@ -652,7 +653,14 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		}
 
 		st, err := b.NewStream(lock)
-		if err != nil && err == backendClosed {
+		if err != nil && lock {
+			// getBackendForOperation acquired this lock on behalf of the stream.
+			// Ownership transfers only after NewStream succeeds; on every error the
+			// client remains the owner and must release it.
+			b.Unlock()
+		}
+		if isBackendClosedError(err) {
+			c.retireBackend(backend, b)
 			breaker.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded
@@ -773,7 +781,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
-			if err == backendClosed {
+			if isBackendClosedError(err) {
+				c.retireBackend(backend, b)
 				breaker.RecordFailure()
 				retryCount++
 				// Check if max retries exceeded
@@ -916,17 +925,30 @@ func (c *client) getBackendForOperation(
 	}
 
 	c.mu.Lock()
+	// Inactive backends are terminal capacity, not temporarily busy capacity.
+	// Detach them before selection and create admission so a closed backend at
+	// maxBackendsPerHost cannot force callers to wait for the asynchronous GC.
+	// Close them only after releasing c.mu because backend shutdown can wait for
+	// worker goroutines.
+	inactive := c.detachInactiveLocked(backend)
+	unlock := func() {
+		c.mu.Unlock()
+		for _, backend := range inactive {
+			backend.Close()
+		}
+		inactive = nil
+	}
 	// Selection and create admission must use the same client-state snapshot.
 	// Otherwise a backend can be published after selection returns nil but
 	// before creation is queued, causing a stale lookup to overgrow the pool.
 	b, err := c.getBackendLockedWithCreate(backend, lock, false)
 	poolSize := len(c.mu.backends[backend])
 	if err != nil {
-		c.mu.Unlock()
+		unlock()
 		return nil, nil, err
 	}
 	if b != nil {
-		c.mu.Unlock()
+		unlock()
 		return b, nil, nil
 	}
 
@@ -943,14 +965,14 @@ func (c *client) getBackendForOperation(
 	// This applies regardless of enableAutoCreate setting
 	if hasBackends && !canCreate {
 		c.metrics.backendUnavailableCounter.Inc()
-		c.mu.Unlock()
+		unlock()
 		return nil, nil, ErrBackendCreating // Triggers wait/retry logic
 	}
 
 	// Strictly gate creation on enableAutoCreate flag
 	if !enableAutoCreate {
 		// No backends exist and auto-create is disabled - fail fast
-		c.mu.Unlock()
+		unlock()
 		return nil, nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
@@ -964,7 +986,7 @@ func (c *client) getBackendForOperation(
 			generation,
 		)
 		if queued {
-			c.mu.Unlock()
+			unlock()
 			return nil, backendCreate, ErrBackendCreating
 		}
 
@@ -973,13 +995,13 @@ func (c *client) getBackendForOperation(
 		// No successful publication can slip between observation and claim.
 		backendCreate = newBackendCreateState(generation)
 		c.mu.creating[backend] = backendCreate
-		c.mu.Unlock()
+		unlock()
 		b, err = c.createBackendForClaimedGeneration(backend, lock, generation)
 		return b, nil, err
 	}
 
 	// Pool is empty and cannot create - return ErrNoAvailableBackend to trigger wait logic
-	c.mu.Unlock()
+	unlock()
 	return nil, nil, moerr.NewNoAvailableBackendNoCtx()
 }
 
@@ -1306,31 +1328,64 @@ func (c *client) triggerGCInactive(remote string) {
 		zap.String("remote", remote))
 }
 
+func isBackendClosedError(err error) bool {
+	return err != nil &&
+		(errors.Is(err, backendClosed) || moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+}
+
+// retireBackend makes an operation-level closed result visible to pool
+// selection immediately. Background inactive GC remains a safety net, not a
+// prerequisite for foreground recovery.
+func (c *client) retireBackend(remote string, backend Backend) {
+	backend.Close()
+	c.doRemoveInactive(remote)
+}
+
 func (c *client) doRemoveInactive(remote string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Check if client is closed
 	if c.mu.closed {
+		c.mu.Unlock()
 		return
 	}
 
-	backends, ok := c.mu.backends[remote]
+	_, ok := c.mu.backends[remote]
 	if !ok {
+		c.mu.Unlock()
 		return
 	}
 
-	newBackends := backends[:0]
-	for _, backend := range backends {
-		if backend.LastActiveTime() == (time.Time{}) {
-			backend.Close()
-			continue
-		}
-		newBackends = append(newBackends, backend)
-	}
-	c.mu.backends[remote] = newBackends
+	inactive := c.detachInactiveLocked(remote)
 
 	c.updatePoolSizeMetricsLocked()
+	c.mu.Unlock()
+
+	for _, backend := range inactive {
+		backend.Close()
+	}
+}
+
+// detachInactiveLocked removes terminal backends from the pool's capacity
+// model. The caller owns c.mu and is responsible for closing the returned
+// backends after releasing it.
+func (c *client) detachInactiveLocked(remote string) []Backend {
+	backends, ok := c.mu.backends[remote]
+	if !ok {
+		return nil
+	}
+
+	var inactive []Backend
+	active := backends[:0]
+	for _, backend := range backends {
+		if backend.LastActiveTime() == (time.Time{}) {
+			inactive = append(inactive, backend)
+			continue
+		}
+		active = append(active, backend)
+	}
+	c.mu.backends[remote] = active
+	return inactive
 }
 
 // doRemoveInactiveAll removes all explicitly closed (inactive) backends for every remote.
@@ -1338,17 +1393,18 @@ func (c *client) doRemoveInactive(remote string) {
 // the idle timeout (e.g. 1 minute). Safe to call on closed client (no-op).
 func (c *client) doRemoveInactiveAll() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.mu.closed {
+		c.mu.Unlock()
 		return
 	}
 
+	var inactive []Backend
 	for remote, backends := range c.mu.backends {
 		newBackends := backends[:0]
 		for _, backend := range backends {
 			if backend.LastActiveTime() == (time.Time{}) {
-				backend.Close()
+				inactive = append(inactive, backend)
 				continue
 			}
 			newBackends = append(newBackends, backend)
@@ -1356,6 +1412,11 @@ func (c *client) doRemoveInactiveAll() {
 		c.mu.backends[remote] = newBackends
 	}
 	c.updatePoolSizeMetricsLocked()
+	c.mu.Unlock()
+
+	for _, backend := range inactive {
+		backend.Close()
+	}
 }
 
 func (c *client) closeIdleBackends() int {
