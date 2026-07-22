@@ -4311,14 +4311,6 @@ func applyCatalogHeadersBySeqNums(view *LogicalTableView, headers []string) {
 	view.Headers = fixedHeaders
 }
 
-func (r *CheckpointReader) findCatalogTableID(
-	ctx context.Context,
-	snapshotTS types.TS,
-	tableName string,
-) (uint64, bool, error) {
-	return r.findCatalogTableIDForAccount(ctx, snapshotTS, tableName, 0)
-}
-
 func (r *CheckpointReader) findCatalogTableIDForAccount(
 	ctx context.Context,
 	snapshotTS types.TS,
