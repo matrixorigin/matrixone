@@ -7513,6 +7513,7 @@ func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey)
 		} else {
 			_ = enqueueDetachedUserLevelLockEntryLocked(entry)
 		}
+		queueDetachedUserLevelLockCleanupLocked()
 		detachedUserLevelLockCleanups.Unlock()
 		return
 	}

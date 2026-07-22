@@ -8462,6 +8462,82 @@ func TestDetachedUserLevelLockCleanupPreservesConcurrentTxnIDs(t *testing.T) {
 	})
 }
 
+func TestDetachedUserLevelLockCleanupReschedulesAfterSuccessfulDrain(t *testing.T) {
+	resetUserLevelLocksForTest(t)
+	service := &userLevelLockTestService{
+		id:    "user-level-lock-saturated-queue",
+		state: &userLevelLockTestState{locks: make(map[string]string)},
+	}
+
+	detachedUserLevelLockCleanups.Lock()
+	oldEntries := detachedUserLevelLockCleanups.entries
+	oldQueue := detachedUserLevelLockCleanups.queue
+	oldStarted := detachedUserLevelLockCleanups.started
+	detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+	detachedUserLevelLockCleanups.queue = make(chan detachedUserLevelLockCleanupKey, userLevelLockDetachedCleanupMaxEntries)
+	detachedUserLevelLockCleanups.started = true
+	detachedUserLevelLockCleanups.Unlock()
+	t.Cleanup(func() {
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.entries = oldEntries
+		detachedUserLevelLockCleanups.queue = oldQueue
+		detachedUserLevelLockCleanups.started = oldStarted
+		detachedUserLevelLockCleanups.Unlock()
+		resetUserLevelLocksForTest(t)
+	})
+
+	scheduledKey := detachedUserLevelLockCleanupKey{
+		serviceID: service.GetServiceID(),
+		owner:     "owner-scheduled",
+		name:      "lock-scheduled",
+		connID:    1001,
+		kind:      "lock",
+	}
+	blockedKey := detachedUserLevelLockCleanupKey{
+		serviceID: service.GetServiceID(),
+		owner:     "owner-blocked",
+		name:      "lock-blocked",
+		connID:    1002,
+		kind:      "lock",
+	}
+
+	detachedUserLevelLockCleanups.Lock()
+	detachedUserLevelLockCleanups.entries[scheduledKey] = &detachedUserLevelLockCleanupEntry{
+		key:     scheduledKey,
+		ls:      service,
+		txnIDs:  [][]byte{[]byte("txn-scheduled")},
+		queued:  true,
+		backoff: userLevelLockDetachedCleanupInitialBackoff,
+	}
+	detachedUserLevelLockCleanups.queue <- scheduledKey
+	for i := 1; i < userLevelLockDetachedCleanupMaxEntries; i++ {
+		detachedUserLevelLockCleanups.queue <- detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     fmt.Sprintf("dummy-owner-%d", i),
+			name:      fmt.Sprintf("dummy-lock-%d", i),
+			connID:    uint64(i),
+			kind:      "dummy",
+		}
+	}
+	detachedUserLevelLockCleanups.Unlock()
+
+	require.True(t, enqueueDetachedUserLevelLockTxnCleanup(service, blockedKey, [][]byte{[]byte("txn-blocked")}))
+	detachedUserLevelLockCleanups.Lock()
+	require.NotNil(t, detachedUserLevelLockCleanups.entries[blockedKey])
+	require.False(t, detachedUserLevelLockCleanups.entries[blockedKey].queued)
+	require.Len(t, detachedUserLevelLockCleanups.queue, userLevelLockDetachedCleanupMaxEntries)
+	detachedUserLevelLockCleanups.Unlock()
+
+	require.Equal(t, scheduledKey, <-detachedUserLevelLockCleanups.queue)
+	runDetachedUserLevelLockCleanupAttempt(scheduledKey)
+
+	detachedUserLevelLockCleanups.Lock()
+	entry := detachedUserLevelLockCleanups.entries[blockedKey]
+	require.NotNil(t, entry)
+	require.True(t, entry.queued)
+	detachedUserLevelLockCleanups.Unlock()
+}
+
 func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
