@@ -404,8 +404,11 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.getArrayElem(idx).query(cur, &nPath)
 			}
 		case subPathRange:
+			if cnt == 0 {
+				return cur
+			}
 			se := sub.iRange.genRange(cnt)
-			if se[0] == subPathIdxErr {
+			if se[0] < 0 || se[1] < 0 {
 				return cur
 			}
 			for i := se[0]; i <= se[1]; i++ {

@@ -359,4 +359,8 @@ select json_extract('{"a":null}', '$**.a');
 select json_extract('{}', '$[0 to 0]');
 select json_extract('{"a":1,"b":2}', '$[last to last]');
 select json_extract('{"a":null,"b":2}', '$[last to last].a');
+select json_extract('[]', '$[0 to 0]') is null,
+       json_extract('[]', '$[last to last]') is null,
+       json_extract('{"a":[]}', '$.a[0 to 0]') is null,
+       json_extract('{"a":[]}', '$.a[last to last]') is null;
 drop database test;

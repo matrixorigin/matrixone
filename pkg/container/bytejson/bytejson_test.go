@@ -304,6 +304,31 @@ func TestQueryWithExistsAutowrapsScalarIndexZero(t *testing.T) {
 	}
 }
 
+func TestQueryWithExistsEmptyArrayRangeDoesNotMatch(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		path string
+	}{
+		{name: "root numeric range", json: `[]`, path: `$[0 to 0]`},
+		{name: "root last range", json: `[]`, path: `$[last to last]`},
+		{name: "nested numeric range", json: `{"a":[]}`, path: `$.a[0 to 0]`},
+		{name: "nested last range", json: `{"a":[]}`, path: `$.a[last to last]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			_, exists := bj.QueryWithExists([]*Path{&path})
+			require.False(t, exists)
+		})
+	}
+}
+
 func TestQuerySimpleContainPath(t *testing.T) {
 	kases := []struct {
 		name    string
