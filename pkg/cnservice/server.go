@@ -349,7 +349,7 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 			tableCache, _ = value.(icebergwritecore.TableCache)
 		}
 	}
-	cacheInvalidator := icebergwritecore.MetadataCacheInvalidator{Cache: tableCache}
+	cacheInvalidator := s.newIcebergMetadataCacheInvalidator(tableCache)
 	dmlFactory := sqliceberg.NewDMLDeleteRuntimeCoordinatorFactoryFromInternalSQLExecutor(
 		s.sqlExecutor,
 		sqliceberg.DMLDeleteRuntimeCoordinatorFactoryOptions{
@@ -380,6 +380,20 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 		frontend.IcebergMaintenanceProcedureExecutor{Executor: executor},
 	)
 	return nil
+}
+
+func (s *service) newIcebergMetadataCacheInvalidator(tableCache icebergwritecore.TableCache) icebergwritecore.MetadataCacheInvalidator {
+	// Local invalidation is synchronous, while the cluster sender deliberately
+	// remains best-effort. A remote CN outage must not turn an already committed
+	// Iceberg transaction into an apparent failure, but healthy peers must stop
+	// serving their cached pre-commit snapshot immediately.
+	return icebergwritecore.MetadataCacheInvalidator{
+		Cache: tableCache,
+		Remote: sqliceberg.ClusterRemoteCacheInvalidator{
+			Cluster:     s.moCluster,
+			QueryClient: s.queryClient,
+		},
+	}
 }
 
 func (s *service) Start() error {

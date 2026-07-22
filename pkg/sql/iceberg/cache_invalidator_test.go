@@ -66,12 +66,66 @@ func TestClusterRemoteCacheInvalidatorSendsBestEffortToOtherCNs(t *testing.T) {
 	require.Equal(t, 1, client.released)
 }
 
+func TestClusterRemoteCacheInvalidatorBoundsWholeBroadcast(t *testing.T) {
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		time.Second,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{
+			{ServiceID: "self", QueryAddress: "self-addr"},
+			{ServiceID: "remote-1", QueryAddress: "remote-1-addr"},
+			{ServiceID: "remote-2", QueryAddress: "remote-2-addr"},
+		}, nil),
+	)
+	defer cluster.Close()
+	client := &fakeQueryMessageClient{serviceID: "self", blockUntilCancel: true}
+
+	err := (ClusterRemoteCacheInvalidator{
+		Cluster:     cluster,
+		QueryClient: client,
+		Timeout:     20 * time.Millisecond,
+	}).InvalidateIcebergTable(context.Background(), api.AppendRequest{}, api.CommitResult{})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"remote-1-addr"}, client.addresses,
+		"one broadcast timeout must stop sends to later CNs")
+}
+
+func TestClusterRemoteCacheInvalidatorOutlivesCommittedStatementContext(t *testing.T) {
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		time.Second,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{
+			{ServiceID: "self", QueryAddress: "self-addr"},
+			{ServiceID: "remote", QueryAddress: "remote-addr"},
+		}, nil),
+	)
+	defer cluster.Close()
+	client := &fakeQueryMessageClient{serviceID: "self"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := (ClusterRemoteCacheInvalidator{
+		Cluster:     cluster,
+		QueryClient: client,
+		Timeout:     time.Second,
+	}).InvalidateIcebergTable(ctx, api.AppendRequest{}, api.CommitResult{})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"remote-addr"}, client.addresses)
+	require.Equal(t, 1, client.released)
+}
+
 type fakeQueryMessageClient struct {
-	serviceID   string
-	failAddress string
-	addresses   []string
-	requests    []*query.Request
-	released    int
+	serviceID        string
+	failAddress      string
+	addresses        []string
+	requests         []*query.Request
+	released         int
+	blockUntilCancel bool
 }
 
 func (c *fakeQueryMessageClient) ServiceID() string {
@@ -85,6 +139,10 @@ func (c *fakeQueryMessageClient) NewRequest(method query.CmdMethod) *query.Reque
 func (c *fakeQueryMessageClient) SendMessage(ctx context.Context, address string, req *query.Request) (*query.Response, error) {
 	c.addresses = append(c.addresses, address)
 	c.requests = append(c.requests, req)
+	if c.blockUntilCancel {
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	}
 	if address == c.failAddress {
 		return nil, api.NewError(api.ErrCatalogUnavailable, "remote unavailable", nil)
 	}

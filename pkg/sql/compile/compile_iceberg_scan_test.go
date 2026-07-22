@@ -30,11 +30,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompilePoolClearsIcebergScanPlans(t *testing.T) {
+	compiled := allocateNewCompile(testutil.NewProcess(t))
+	compiled.recordIcebergScanPlan(7, &api.IcebergScanPlan{
+		DataTasks: []api.DataFileTask{{
+			DataFile: api.DataFile{FilePath: "warehouse/orders/part-00001.parquet"},
+		}},
+	})
+	require.NotNil(t, compiled.icebergScanPlanForNode(7))
+
+	doCompileRelease(compiled)
+	require.Nil(t, compiled.icebergScanPlans,
+		"the pool reset callback must release the plan before accepting the Compile")
+	reused := allocateNewCompile(testutil.NewProcess(t))
+	defer doCompileRelease(reused)
+
+	require.Nil(t, reused.icebergScanPlans)
+	require.Nil(t, reused.icebergScanPlanForNode(7))
+}
 
 func TestCompileIcebergScanWithInjectedPlanner(t *testing.T) {
 	testCompile := NewMockCompile(t)

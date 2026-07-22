@@ -47,6 +47,12 @@ func (i ClusterRemoteCacheInvalidator) InvalidateIcebergTable(ctx context.Contex
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
+	// Invalidation runs after the catalog commit has succeeded. Preserve values
+	// from the statement context, but do not let a simultaneous caller cancel
+	// suppress the post-commit notification; the independent timeout still
+	// bounds the complete cluster broadcast.
+	broadcastCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), timeout, moerr.CauseIcebergInternal)
+	defer cancel()
 	payload := query.IcebergCacheInvalidateRequest{
 		AccountID:            req.Catalog.AccountID,
 		CatalogID:            req.Catalog.CatalogID,
@@ -57,19 +63,20 @@ func (i ClusterRemoteCacheInvalidator) InvalidateIcebergTable(ctx context.Contex
 		CommitID:             result.CommitID,
 	}
 	self := i.QueryClient.ServiceID()
-	i.Cluster.GetCNService(clusterservice.NewSelector(), func(cn metadata.CNService) bool {
+	_ = clusterservice.GetCNServiceWithoutWorkingStateWithContext(broadcastCtx, i.Cluster, clusterservice.NewSelector(), func(cn metadata.CNService) bool {
+		if cn.WorkState != metadata.WorkState_Working && cn.WorkState != metadata.WorkState_Unknown {
+			return true
+		}
 		if strings.TrimSpace(cn.QueryAddress) == "" || (self != "" && cn.ServiceID == self) {
 			return true
 		}
-		sendCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseIcebergInternal)
-		defer cancel()
 		request := i.QueryClient.NewRequest(query.CmdMethod_IcebergCacheInvalidate)
 		request.IcebergCacheInvalidateRequest = payload
-		resp, err := i.QueryClient.SendMessage(sendCtx, cn.QueryAddress, request)
+		resp, err := i.QueryClient.SendMessage(broadcastCtx, cn.QueryAddress, request)
 		if err == nil && resp != nil {
 			i.QueryClient.Release(resp)
 		}
-		return true
+		return broadcastCtx.Err() == nil
 	})
 	return nil
 }

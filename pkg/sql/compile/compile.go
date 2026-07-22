@@ -310,6 +310,7 @@ func (c *Compile) clear() {
 	c.keepAutoIncrement = 0
 	c.disableLock = false
 	c.icebergScanPlanner = nil
+	c.icebergScanPlans = nil
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
