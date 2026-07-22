@@ -104,3 +104,170 @@ create table d1(id int primary key, v int, index idx_v(v));
 create table d2(id int);
 drop database row_count_drop_db;
 select row_count();
+
+-- stored procedures retain affected rows between statements
+create database row_count_procedure_db;
+use row_count_procedure_db;
+create table proc_t(id int primary key, v int);
+
+create procedure proc_inner_counts() '
+begin
+    insert into proc_t values (1, 10), (2, 20), (3, 30);
+    select row_count();
+    update proc_t set v = v + 1 where id in (1, 2);
+    select row_count();
+    delete from proc_t where id = 3;
+    select row_count();
+end';
+call proc_inner_counts();
+select row_count();
+
+create procedure proc_update_count() '
+begin
+    update proc_t set v = v + 1 where id in (1, 2);
+    select row_count();
+end';
+call proc_update_count();
+
+create procedure proc_delete_count() '
+begin
+    delete from proc_t where id = 2;
+    select row_count();
+end';
+call proc_delete_count();
+
+create procedure proc_final_dml() '
+begin
+    insert into proc_t values (4, 40), (5, 50);
+end';
+call proc_final_dml();
+select row_count();
+
+create procedure proc_final_result() '
+begin
+    select v from proc_t where id = 1;
+end';
+call proc_final_result();
+select row_count();
+
+create procedure proc_inner_dml() '
+begin
+    insert into proc_t values (6, 60);
+end';
+create procedure proc_outer_call() '
+begin
+    call proc_inner_dml();
+    select row_count();
+end';
+call proc_outer_call();
+select row_count();
+
+create procedure proc_ddl_count() '
+begin
+    create table proc_ddl_t(id int);
+    select row_count();
+end';
+call proc_ddl_count();
+
+create procedure proc_if_count() '
+begin
+    insert into proc_t values (7, 70), (8, 80);
+    if 1 = 1 then
+        select row_count();
+    end if;
+end';
+call proc_if_count();
+
+create procedure proc_elseif_count() '
+begin
+    insert into proc_t values (9, 90), (10, 100), (11, 110);
+    if 1 = 0 then
+        select 0;
+    elseif 1 = 1 then
+        select row_count();
+    end if;
+end';
+call proc_elseif_count();
+
+create procedure proc_while_count() '
+begin
+    declare keep_going int default 1;
+    insert into proc_t values (12, 120), (13, 130), (14, 140), (15, 150);
+    while keep_going = 1 do
+        select row_count();
+        set keep_going = 0;
+    end while;
+end';
+call proc_while_count();
+
+create procedure proc_repeat_count() '
+begin
+    repeat
+        insert into proc_t values (16, 160), (17, 170), (18, 180), (19, 190), (20, 200);
+    until 1 = 1
+    end repeat;
+    select row_count();
+end';
+call proc_repeat_count();
+
+create procedure proc_case_count() '
+begin
+    insert into proc_t values (21, 210), (22, 220), (23, 230), (24, 240), (25, 250), (26, 260);
+    case 1
+        when 1 then select row_count();
+        else select 0;
+    end case;
+end';
+call proc_case_count();
+
+create procedure proc_declare_preserves_count() '
+begin
+    insert into proc_t values (27, 270), (28, 280);
+    begin
+        declare local_value int default 1;
+        select row_count();
+    end;
+end';
+call proc_declare_preserves_count();
+
+create procedure proc_local_set_preserves_count() '
+begin
+    declare local_value int default 0;
+    insert into proc_t values (29, 290), (30, 300), (31, 310);
+    set local_value = 1;
+end';
+call proc_local_set_preserves_count();
+select row_count();
+
+create procedure proc_entry_count() '
+begin
+    select row_count();
+end';
+insert into proc_t values (32, 320), (33, 330), (34, 340), (35, 350);
+call proc_entry_count();
+
+create procedure proc_nested_entry_inner() '
+begin
+    select row_count();
+end';
+create procedure proc_nested_entry_outer() '
+begin
+    insert into proc_t values (36, 360), (37, 370), (38, 380), (39, 390), (40, 400);
+    call proc_nested_entry_inner();
+end';
+call proc_nested_entry_outer();
+
+create procedure proc_nested_results_inner() '
+begin
+    select 20;
+    select 21;
+end';
+create procedure proc_nested_results_outer() '
+begin
+    select 10;
+    call proc_nested_results_inner();
+    select 30;
+end';
+call proc_nested_results_outer();
+
+drop database row_count_procedure_db;

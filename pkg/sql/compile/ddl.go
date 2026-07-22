@@ -1959,6 +1959,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
 		// so internal SQL stays on one CN and can see uncommitted table metadata.
 		c.setHaveDDL(true)
+		statementOption := executor.StatementOption{}.WithDisableLog()
+		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
+			values := make([]string, params.Length())
+			nulls := make([]bool, params.Length())
+			for i := range values {
+				nulls[i] = params.IsNull(uint64(i))
+				if !nulls[i] {
+					values[i] = string(params.GetRawBytesAt(i))
+				}
+			}
+			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
@@ -1972,7 +1984,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return c.runSqlWithResultAndOptions(
 				createAsSelectSql,
 				NoAccountId,
-				executor.StatementOption{}.WithDisableLog(),
+				statementOption,
 			)
 		}()
 		if err != nil {
