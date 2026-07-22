@@ -105,6 +105,11 @@ func dataBranchMergePickTxnErrorInfo() string {
 	return "DATA BRANCH MERGE/PICK is not supported in transactions"
 }
 
+func dataBranchMergePickTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().InMultiStmtTransactionMode() ||
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }

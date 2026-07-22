@@ -212,7 +212,6 @@ select * from t1 order by a;
 
 -- implicit transaction (autocommit=0) is also rejected
 set autocommit = 0;
-insert into t1 values (3,3);
 data branch pick t2 into t1 keys(2) when conflict accept;
 rollback;
 set autocommit = 1;

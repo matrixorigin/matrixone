@@ -2307,39 +2307,56 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 	}
 }
 
-func TestHandleDataBranchMergePickRejectExplicitTransactionFallback(t *testing.T) {
+func TestHandleDataBranchMergePickRejectTransactionFallback(t *testing.T) {
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	ses := newTestSession(t, ctrl)
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).AnyTimes()
-	ses.proc.Base.TxnOperator = txnOperator
-
-	ec := newTestExecCtx(ctx, ctrl)
-
-	for _, tc := range []struct {
-		name string
-		run  func() error
+	for _, txnCase := range []struct {
+		name       string
+		optionBits uint32
+		byBegin    bool
 	}{
 		{
-			name: "merge",
-			run: func() error {
-				return handleBranchMerge(ec, ses, &tree.DataBranchMerge{})
-			},
+			name:    "explicit begin",
+			byBegin: true,
 		},
 		{
-			name: "pick",
-			run: func() error {
-				return handleBranchPick(ec, ses, &tree.DataBranchPick{})
-			},
+			name:       "autocommit off before active txn",
+			optionBits: OPTION_NOT_AUTOCOMMIT,
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.run()
-			require.Error(t, err)
-			require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
+		t.Run(txnCase.name, func(t *testing.T) {
+			ses := newTestSession(t, ctrl)
+			ses.GetTxnHandler().SetOptionBits(txnCase.optionBits)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: txnCase.byBegin}).AnyTimes()
+			ses.proc.Base.TxnOperator = txnOperator
+			ec := newTestExecCtx(ctx, ctrl)
+
+			for _, stmtCase := range []struct {
+				name string
+				run  func() error
+			}{
+				{
+					name: "merge",
+					run: func() error {
+						return handleBranchMerge(ec, ses, &tree.DataBranchMerge{})
+					},
+				},
+				{
+					name: "pick",
+					run: func() error {
+						return handleBranchPick(ec, ses, &tree.DataBranchPick{})
+					},
+				},
+			} {
+				t.Run(stmtCase.name, func(t *testing.T) {
+					err := stmtCase.run()
+					require.Error(t, err)
+					require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
+				})
+			}
 		})
 	}
 }

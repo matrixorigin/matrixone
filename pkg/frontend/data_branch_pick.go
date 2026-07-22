@@ -80,9 +80,6 @@ func handleBranchPick(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) (err error) {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(execCtx.reqCtx, dataBranchMergePickTxnErrorInfo())
-	}
 	if err = validateDataBranchPickOptions(execCtx.reqCtx, ses, stmt); err != nil {
 		return err
 	}
@@ -100,8 +97,8 @@ func validateDataBranchPickOptions(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) error {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(ctx, "DATA BRANCH PICK is not supported in explicit transactions")
+	if dataBranchMergePickTxnNotAllowed(ses) {
+		return moerr.NewInternalError(ctx, dataBranchMergePickTxnErrorInfo())
 	}
 
 	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""

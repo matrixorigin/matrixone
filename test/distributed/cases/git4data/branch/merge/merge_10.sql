@@ -14,7 +14,6 @@ rollback;
 select * from t1 order by a;
 
 set autocommit = 0;
-insert into t1 values (3,3);
 data branch merge t2 into t1 when conflict accept;
 rollback;
 set autocommit = 1;
