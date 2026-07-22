@@ -43,4 +43,34 @@ select a from q64 order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- an unsupported quantization name still errors
 create table qbad(a int primary key, v vecf32(4));
 create index qb using ivfflat on qbad(v) lists=1 op_type 'vector_l2_ops' quantization 'int16';
+
+-- ============================================================
+-- REINDEX over a quantized index.
+--
+-- CREATE INDEX and REINDEX share runCreateOrReindex, but only REINDEX takes the
+-- rebuild branch: it deletes the old entries (ivfIndexDeleteOldEntries), bumps
+-- the meta version, and repopulates. For int8/uint8 the entries build reads the
+-- trained [min,max] back out of the meta table (readQuantizeBound) to rebuild
+-- the same affine map — a path CREATE INDEX on an empty meta table never takes.
+--
+-- Rows are added between build and reindex so the rebuild has new data to place,
+-- and the searches assert the index still returns cluster A after each step.
+-- ============================================================
+create table rq(a int primary key, v vecf32(4));
+insert into rq values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
+create index rqi8 using ivfflat on rq(v) lists=2 op_type 'vector_l2_ops' quantization 'int8';
+select a from rq order by l2_distance(v,'[1,1,1,1]') limit 3;
+
+insert into rq values (7,'[2,2,2,2]'),(8,'[56,56,56,56]');
+alter table rq alter reindex rqi8 ivfflat lists=2;
+select a from rq order by l2_distance(v,'[1,1,1,1]') limit 3;
+
+-- uint8 takes the other arm of the same quantize branch
+create table rqu(a int primary key, v vecf32(4));
+insert into rqu values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
+create index rqu8 using ivfflat on rqu(v) lists=2 op_type 'vector_l2_ops' quantization 'uint8';
+insert into rqu values (7,'[2,2,2,2]');
+alter table rqu alter reindex rqu8 ivfflat lists=2;
+select a from rqu order by l2_distance(v,'[1,1,1,1]') limit 3;
+
 drop database ivfq;

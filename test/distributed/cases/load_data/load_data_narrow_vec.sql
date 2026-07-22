@@ -26,6 +26,23 @@ select * from nvec order by id;
 -- round to 4 digits: l2_distance (sqrt, float64) low-order bits vary across SIMD kernels
 select id, round(l2_distance(c, '[0,0,0]'), 4) as dist from nvec order by id;
 
+-- ORDER BY the vector column itself. pkg/sort/sort.go dispatches on the column
+-- type and had arms for vecf32/vecf64 only, so a narrow vector sort key fell
+-- through. ASC and DESC are SEPARATE branches there (arrayElementLess vs
+-- arrayElementGreater), so both directions are exercised per type.
+select id from nvec order by a, id;
+select id from nvec order by a desc, id;
+select id from nvec order by b, id;
+select id from nvec order by b desc, id;
+-- int8 must order by SIGN: row 2 holds [10,-10,5], row 1 holds [-128,0,127],
+-- so row 1 sorts first. A raw-byte comparison would put -128 (0x80) last.
+select id from nvec order by c, id;
+select id from nvec order by c desc, id;
+-- uint8 must order UNSIGNED: row 1 holds [0,128,255], row 2 holds [1,2,3],
+-- so row 1 sorts first only if 0 < 1 is compared unsigned.
+select id from nvec order by d, id;
+select id from nvec order by d desc, id;
+
 -- ============================================================
 -- 2. Strict int8 parse: out-of-range value (200) is rejected.
 -- ============================================================
