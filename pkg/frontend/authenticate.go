@@ -11431,7 +11431,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		}
 		defer freeStatements(stmt)
 
-		err = interpreter.ExecuteSp(stmt[0], dbName)
+		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
 			return nil, err
 		}

@@ -223,7 +223,7 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	return 0, nil
 }
 
-func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (err error) {
+func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg bool) (err error) {
 	curScope := make(map[string]interface{})
 	interpreter.bh.ClearExecResultSet()
 
@@ -233,13 +233,16 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (e
 		return err
 	}
 
-	// make sure the entire sp is in a single transaction
-	err = interpreter.bh.Exec(interpreter.ctx, "begin;")
-	defer func() {
-		err = finishTxn(interpreter.ctx, interpreter.bh, err)
-	}()
-	if err != nil {
-		return err
+	// A top-level procedure owns its transaction. A nested CALL already runs
+	// through a shared-transaction background executor and must reuse it.
+	if !bg {
+		err = interpreter.bh.Exec(interpreter.ctx, "begin;")
+		defer func() {
+			err = finishTxn(interpreter.ctx, interpreter.bh, err)
+		}()
+		if err != nil {
+			return err
+		}
 	}
 
 	// save parameters as local variables

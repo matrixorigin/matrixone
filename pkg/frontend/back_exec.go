@@ -378,6 +378,7 @@ func doComQueryInBack(
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
+	bindBackExecSession(proc, backSes)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	// Frontend back-exec — session-bound resolver. backSession is a
@@ -512,6 +513,18 @@ func doComQueryInBack(
 	} // end of for
 
 	return nil
+}
+
+// bindBackExecSession preserves the caller's session scope for SQL executed by
+// a frontend background executor. The back session forwards temporary-table
+// aliases to its upstream session, while the upstream ID keeps physical table
+// names visible to the temporary-table GC as belonging to the active client.
+func bindBackExecSession(proc *process.Process, backSes *backSession) {
+	if backSes.upstream == nil {
+		return
+	}
+	proc.Session = backSes
+	proc.Base.SessionInfo.SessionId = backSes.upstream.GetSessId()
 }
 
 func executeStmtInBack(backSes *backSession,
@@ -937,6 +950,7 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 	if txnOp != nil {
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
+		be.backSes.upstream = backSes.upstream
 		return be
 	} else if backSes.upstream != nil {
 		// XXXSP
