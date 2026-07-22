@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -870,6 +871,12 @@ func TestShowPipelineTree(t *testing.T) {
 		require.Contains(t, buf.String(), "├── unknown")
 	}
 
+}
+
+func TestShowPipelineTreeTableClone(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	ShowPipelineTree(&table_clone.TableClone{}, "", true, true, nil, NormalLevel, buf)
+	require.Contains(t, buf.String(), "Pipeline: └── table clone")
 }
 
 func TestApplyOpStatsToNode_ReadSize(t *testing.T) {

@@ -105,6 +105,10 @@ const (
 	Apply
 	PostDml
 	IcebergWrite
+	TableClone
+	// OpTypeEnd is the exclusive upper bound for executable operator types.
+	// New operator types must be added before it.
+	OpTypeEnd
 )
 
 var OperatorToStrMap map[OpType]string
@@ -132,6 +136,8 @@ func init() {
 		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
 		IndexJoin:               "IndexJoin",
+		DedupJoin:               "DedupJoin",
+		RightDedupJoin:          "RightDedupJoin",
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
 		MergeTop:                "MergeTop",
@@ -146,6 +152,10 @@ func init() {
 		Insert:                  "Insert",
 		External:                "External",
 		Source:                  "Source",
+		MultiUpdate:             "MultiUpdate",
+		PartitionInsert:         "PartitionInsert",
+		PartitionDelete:         "PartitionDelete",
+		PartitionMultiUpdate:    "PartitionMultiUpdate",
 		Minus:                   "Minus",
 		Intersect:               "Intersect",
 		IntersectAll:            "IntersectAll",
@@ -169,6 +179,7 @@ func init() {
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
 		IcebergWrite:            "IcebergWrite",
+		TableClone:              "TableClone",
 	}
 
 	// Initialize StrToOperatorMap
