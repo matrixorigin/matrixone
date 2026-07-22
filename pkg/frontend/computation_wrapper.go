@@ -544,6 +544,15 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 
+	// These DDL plans cache catalog state that is not represented by a table
+	// schema version. CREATE PITR stores account/database/table IDs, while DROP
+	// DATABASE validates publication rows. Refresh them on every EXECUTE so a
+	// catalog change between PREPARE and EXECUTE cannot bypass validation or
+	// persist a stale object ID.
+	if preparedDDLNeedsCatalogRefresh(prepareStmt.PrepareStmt) {
+		change = true
+	}
+
 	// rebuild plan when schema changed
 	if change {
 		originPrepareStmt := &tree.PrepareStmt{
@@ -624,6 +633,15 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.CreatePitr, *tree.DropDatabase:
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

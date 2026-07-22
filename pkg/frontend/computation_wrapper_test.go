@@ -144,6 +144,24 @@ func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt,
 // compile (e.g. AP query hitting ErrCantCompileForPrepare). Execute must not
 // retry that doomed compile on every run; the cache stays nil and the regular
 // compile path (isPrepare=false) takes over.
+func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
+	testCases := []struct {
+		sql      string
+		expected bool
+	}{
+		{sql: "create pitr p for account range 1 'd'", expected: true},
+		{sql: "drop database db", expected: true},
+		{sql: "truncate table t", expected: false},
+	}
+	for _, testCase := range testCases {
+		statements, err := mysql.Parse(context.Background(), testCase.sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		require.Equal(t, testCase.expected, preparedDDLNeedsCatalogRefresh(statements[0]))
+		statements[0].Free()
+	}
+}
+
 func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
 	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()

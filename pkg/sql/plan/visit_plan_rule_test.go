@@ -46,7 +46,12 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 		{name: "truncate table", sql: "truncate table t1", expected: []string{"t1"}},
 		{name: "drop tables", sql: "drop table t1, t2", expected: []string{"t1", "t2"}},
 		{name: "rename tables", sql: "rename table t1 to n1, t2 to n2", expected: []string{"t1", "t2"}},
-		{name: "create table like", sql: "create table n1 like t1", expected: []string{"t1"}},
+		{name: "create table like", sql: "create table n1 like t1", expected: []string{"n1", "t1"}},
+		{
+			name:     "alter table foreign key",
+			sql:      "alter table t1 add foreign key (c) references t2(c)",
+			expected: []string{"t1", "t2"},
+		},
 		{name: "drop view", sql: "drop view t1", expected: []string{"t1"}},
 		{name: "drop sequence", sql: "drop sequence t1, t2", expected: []string{"t1", "t2"}},
 		{name: "alter sequence", sql: "alter sequence t1 increment by 2", expected: []string{"t1"}},
@@ -71,13 +76,15 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 			require.Len(t, schemas, len(testCase.expected))
 			for i, expected := range testCase.expected {
 				require.Equal(t, expected, schemas[i].ObjName)
-				require.Equal(t, int64(30), schemas[i].Server)
+				if schemas[i].Obj != 0 {
+					require.Equal(t, int64(30), schemas[i].Server)
+				}
 			}
 		})
 	}
 }
 
-func TestCollectPrepareDdlSchemasSkipsMissingTable(t *testing.T) {
+func TestCollectPrepareDdlSchemasRecordsMissingTable(t *testing.T) {
 	mock := NewMockCompilerContext(false)
 	statements, err := mysql.Parse(context.Background(), "drop table if exists missing", 1)
 	require.NoError(t, err)
@@ -87,7 +94,7 @@ func TestCollectPrepareDdlSchemasSkipsMissingTable(t *testing.T) {
 		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
 	})
 	require.NoError(t, err)
-	require.Empty(t, schemas)
+	require.Equal(t, []*planpb.ObjectRef{{SchemaName: "tpch", ObjName: "missing"}}, schemas)
 }
 
 func TestCollectPrepareDdlSchemasPropagatesResolveError(t *testing.T) {
@@ -122,7 +129,11 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 }
 
 func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {
-	statements, err := mysql.Parse(context.Background(), "create table child (id int)", 1)
+	statements, err := mysql.Parse(
+		context.Background(),
+		"create table child (id int, foreign key (id) references parent(id))",
+		1,
+	)
 	require.NoError(t, err)
 	defer statements[0].Free()
 	mock := NewMockCompilerContext(false)
@@ -136,8 +147,60 @@ func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {
 
 	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
 	require.NoError(t, err)
-	require.Len(t, schemas, 1)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "child", schemas[0].ObjName)
+	require.Equal(t, "parent", schemas[1].ObjName)
+}
+
+func TestCollectPrepareDdlSchemasCollectsForwardReferenceChildren(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), "create table parent (id int primary key)", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	mock := NewMockCompilerContext(false)
+	mock.objects["child"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "child"}
+	mock.tables["child"] = &planpb.TableDef{Name: "child", DbId: 10, TblId: 20, Version: 30}
+	createPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{
+			FksReferToMe: []*planpb.ForeignKeyInfo{{Db: "tpch", Table: "child"}},
+		}},
+	}}}
+
+	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
 	require.Equal(t, "parent", schemas[0].ObjName)
+	require.Equal(t, "child", schemas[1].ObjName)
+}
+
+func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), "create view v as select n_name from nation", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+
+	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
+		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "nation", schemas[0].ObjName)
+	require.Equal(t, "v", schemas[1].ObjName)
+}
+
+func TestCollectPrepareDdlSchemasCollectsDynamicTableQuery(t *testing.T) {
+	statements, err := mysql.Parse(
+		context.Background(),
+		"create dynamic table dt as select n_name from nation with (\"type\"='kafka')",
+		1,
+	)
+	require.NoError(t, err)
+
+	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
+		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "nation", schemas[0].ObjName)
+	require.Equal(t, "dt", schemas[1].ObjName)
 }
 
 func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {

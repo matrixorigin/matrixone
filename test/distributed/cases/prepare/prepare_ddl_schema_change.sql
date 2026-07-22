@@ -101,4 +101,80 @@ execute clone_stmt;
 select * from clone_dst order by a;
 deallocate prepare clone_stmt;
 
+create table fk_parent (id int primary key);
+create table fk_child (pid int);
+prepare alter_fk_stmt from
+    'alter table fk_child add constraint fk_parent_ref foreign key (pid) references fk_parent(id)';
+alter table fk_parent drop primary key;
+execute alter_fk_stmt;
+select count(*)
+from information_schema.referential_constraints
+where constraint_schema = 'prepare_ddl_schema_change' and constraint_name = 'fk_parent_ref';
+deallocate prepare alter_fk_stmt;
+
+set foreign_key_checks = 0;
+prepare forward_fk_stmt from
+    'create table forward_child (pid int, foreign key (pid) references forward_parent(id))';
+create table forward_parent (id int primary key);
+execute forward_fk_stmt;
+select count(*)
+from information_schema.referential_constraints
+where constraint_schema = 'prepare_ddl_schema_change' and table_name = 'forward_child';
+deallocate prepare forward_fk_stmt;
+
+create table stale_forward_child (
+    pid int,
+    foreign key (pid) references stale_forward_parent(id)
+);
+prepare forward_parent_stmt from 'create table stale_forward_parent (id int primary key)';
+drop table stale_forward_child;
+create table stale_forward_child (new_pid bigint);
+execute forward_parent_stmt;
+select count(*)
+from information_schema.referential_constraints
+where constraint_schema = 'prepare_ddl_schema_change' and table_name = 'stale_forward_child';
+deallocate prepare forward_parent_stmt;
+set foreign_key_checks = 1;
+
+create table view_src (a int, b int);
+prepare view_stmt from 'create view prepared_view as select a from view_src';
+alter table view_src drop column a;
+execute view_stmt;
+select count(*)
+from information_schema.views
+where table_schema = 'prepare_ddl_schema_change' and table_name = 'prepared_view';
+deallocate prepare view_stmt;
+
+prepare missing_drop_stmt from 'drop table if exists appears_later';
+create table appears_later (a int);
+execute missing_drop_stmt;
+select count(*)
+from information_schema.tables
+where table_schema = 'prepare_ddl_schema_change' and table_name = 'appears_later';
+deallocate prepare missing_drop_stmt;
+
+create table pitr_target (a int);
+prepare pitr_stmt from
+    'create pitr prepared_pitr for table prepare_ddl_schema_change pitr_target range 1 ''d''';
+drop table pitr_target;
+create table pitr_target (b bigint);
+execute pitr_stmt;
+select count(*)
+from mo_catalog.mo_pitr p
+join mo_catalog.mo_tables t on p.obj_id = t.rel_id
+where p.pitr_name = 'prepared_pitr'
+  and t.reldatabase = 'prepare_ddl_schema_change'
+  and t.relname = 'pitr_target';
+deallocate prepare pitr_stmt;
+drop pitr prepared_pitr;
+
+create database prepared_drop_database;
+prepare drop_database_stmt from 'drop database prepared_drop_database';
+create publication prepared_publication database prepared_drop_database account all;
+execute drop_database_stmt;
+show databases like 'prepared_drop_database';
+deallocate prepare drop_database_stmt;
+drop publication prepared_publication;
+drop database prepared_drop_database;
+
 drop database prepare_ddl_schema_change;

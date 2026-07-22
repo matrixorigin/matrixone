@@ -144,10 +144,37 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, name)
 		}
 	}
+	addForeignKey := func(fk *tree.ForeignKey) {
+		if fk != nil && fk.Refer != nil {
+			tableNames = append(tableNames, fk.Refer.TableName)
+		}
+	}
+	addQuerySchemas := func(selectStmt *tree.Select) error {
+		if selectStmt == nil {
+			return nil
+		}
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, selectStmt, false, true)
+		if err != nil {
+			return err
+		}
+		querySchemas, _, err := ResetPreparePlan(ctx, queryPlan)
+		if err != nil {
+			return err
+		}
+		schemas = appendPrepareSchemas(schemas, querySchemas...)
+		return nil
+	}
 
 	switch ddl := stmt.(type) {
 	case *tree.AlterTable:
 		tableNames = append(tableNames, ddl.Table)
+		for _, option := range ddl.Options {
+			if add, ok := option.(*tree.AlterOptionAdd); ok {
+				if fk, ok := add.Def.(*tree.ForeignKey); ok {
+					addForeignKey(fk)
+				}
+			}
+		}
 	case *tree.RenameTable:
 		for _, alterTable := range ddl.AlterTables {
 			tableNames = append(tableNames, alterTable.Table)
@@ -168,9 +195,28 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		tableNames = append(tableNames, ddl.Name)
 	case *tree.AlterView:
 		tableNames = append(tableNames, ddl.Name)
+		if err := addQuerySchemas(ddl.AsSource); err != nil {
+			return nil, err
+		}
+	case *tree.CreateView:
+		tableNames = append(tableNames, ddl.Name)
+		if err := addQuerySchemas(ddl.AsSource); err != nil {
+			return nil, err
+		}
 	case *tree.CreateTable:
+		tableNames = append(tableNames, &ddl.Table)
 		if ddl.IsAsLike {
 			tableNames = append(tableNames, &ddl.LikeTableName)
+		}
+		for _, def := range ddl.Defs {
+			if fk, ok := def.(*tree.ForeignKey); ok {
+				addForeignKey(fk)
+			}
+		}
+		if ddl.IsDynamicTable {
+			if err := addQuerySchemas(ddl.AsSource); err != nil {
+				return nil, err
+			}
 		}
 	case *tree.CloneTable:
 		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil && clone.GetScanSnapshot() == nil {
@@ -192,6 +238,19 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			return nil, err
 		}
 		if objRef == nil || tableDef == nil {
+			if !ctx.DatabaseExists(databaseName, nil) {
+				continue
+			}
+			databaseID, err := ctx.GetDatabaseId(databaseName, nil)
+			if err != nil {
+				return nil, err
+			}
+			schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
+				Db:         int64(databaseID),
+				Schema:     int64(databaseID),
+				SchemaName: databaseName,
+				ObjName:    name,
+			})
 			continue
 		}
 		schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
@@ -202,18 +261,15 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		createTable = clone.GetCreateTable().GetDdl().GetCreateTable()
 	}
 	if createTable != nil {
-		for i, tableName := range createTable.GetFkTables() {
-			if i >= len(createTable.GetFkDbs()) {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key table is missing its database")
-			}
-			databaseName := createTable.GetFkDbs()[i]
-			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+		for _, fk := range createTable.GetFksReferToMe() {
+			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil)
 			if err != nil {
 				return nil, err
 			}
-			if objRef != nil && tableDef != nil {
-				schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+			if objRef == nil || tableDef == nil {
+				return nil, moerr.NewNoSuchTable(ctx.GetContext(), fk.GetDb(), fk.GetTable())
 			}
+			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
 		}
 	}
 
