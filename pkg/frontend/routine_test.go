@@ -167,6 +167,70 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	require.Same(t, newSession, registered[0])
 }
 
+func TestRoutineResetSessionRejectsLifecycleConflict(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	resp := &query.ResetSessionResponse{}
+
+	require.True(t, routine.mc.beginOperation())
+	require.Error(t, routine.resetSession("", resp))
+	routine.mc.endOperation()
+
+	routine.mc.waitAndClose()
+	require.Error(t, routine.resetSession("", resp))
+}
+
+func TestRoutineManagerClosedRemovesResetReplacement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	t.Cleanup(func() {
+		oldSession.Close()
+		rm.cancel()
+	})
+
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := &Conn{}
+	rm.setRoutine(conn, 0, routine)
+
+	// Model a reset that already owns lifecycle admission when the connection
+	// close starts. Closed must wait, then unregister the replacement session.
+	require.True(t, routine.mc.beginOperation())
+	closed := make(chan struct{})
+	go func() {
+		rm.Closed(conn)
+		close(closed)
+	}()
+	require.Eventually(t, func() bool {
+		routine.mc.Lock()
+		defer routine.mc.Unlock()
+		return routine.mc.closed
+	}, time.Second, time.Millisecond)
+
+	newSession := newTestSession(t, ctrl)
+	newSession.uuid = oldSession.uuid
+	newSession.setRoutineManager(rm)
+	newSession.setRoutine(routine)
+	routine.setSession(newSession)
+	rm.sessionManager.AddSession(newSession)
+	routine.mc.endOperation()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("routine close did not finish after reset completed")
+	}
+
+	require.Empty(t, rm.sessionManager.GetAllSessions())
+	require.Empty(t, rm.sessionManager.GetSessionsByTenant(oldSession.GetTenantName()))
+}
+
 const (
 	contextCancel int32 = -2
 	timeout       int32 = -1
