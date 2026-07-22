@@ -253,4 +253,31 @@ where constraint_schema = 'prepare_ddl_schema_change' and table_name = 'expanded
 0
 deallocate prepare expanded_like_stmt;
 set foreign_key_checks = 1;
+prepare missing_database_stmt from 'drop table if exists prepared_future_db.t';
+create database prepared_future_db;
+create table prepared_future_db.t (a int);
+execute missing_database_stmt;
+select count(*)
+from information_schema.tables
+where table_schema = 'prepared_future_db' and table_name = 't';
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare missing_database_stmt;
+drop database prepared_future_db;
+set foreign_key_checks = 0;
+prepare late_reverse_fk_stmt from 'create table late_reverse_parent (id int primary key)';
+create database late_reverse_db;
+create table late_reverse_db.late_reverse_child (
+pid int,
+foreign key (pid) references prepare_ddl_schema_change.late_reverse_parent(id)
+);
+execute late_reverse_fk_stmt;
+select count(*)
+from information_schema.referential_constraints
+where constraint_schema = 'late_reverse_db' and table_name = 'late_reverse_child';
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare late_reverse_fk_stmt;
+drop database late_reverse_db;
+set foreign_key_checks = 1;
 drop database prepare_ddl_schema_change;

@@ -238,12 +238,12 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			return nil, err
 		}
 		if objRef == nil || tableDef == nil {
-			if !ctx.DatabaseExists(databaseName, nil) {
-				continue
-			}
-			databaseID, err := ctx.GetDatabaseId(databaseName, nil)
-			if err != nil {
-				return nil, err
+			var databaseID uint64
+			if ctx.DatabaseExists(databaseName, nil) {
+				databaseID, err = ctx.GetDatabaseId(databaseName, nil)
+				if err != nil {
+					return nil, err
+				}
 			}
 			schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
 				Db:         int64(databaseID),
@@ -261,6 +261,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		createTable = clone.GetCreateTable().GetDdl().GetCreateTable()
 	}
 	if createTable != nil {
+		// A child table that forward-references this table can be created in any
+		// database of the account after PREPARE. Track account-wide table changes
+		// so FksReferToMe is rebuilt before CREATE TABLE executes.
+		schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{})
 		for i, tableName := range createTable.GetFkTables() {
 			if i >= len(createTable.GetFkDbs()) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key table is missing its database")

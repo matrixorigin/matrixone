@@ -531,6 +531,62 @@ func TestScopeCreateTemporaryTableRestoresCachedPlanOnError(t *testing.T) {
 	require.Equal(t, "idx_table", index.IndexTableName)
 }
 
+type trackingTempTableSession struct {
+	tables map[string]string
+}
+
+func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
+	realName, ok := s.tables[dbName+"."+alias]
+	return realName, ok
+}
+
+func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
+	s.tables[dbName+"."+alias] = realName
+}
+
+func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
+	delete(s.tables, dbName+"."+alias)
+}
+
+func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
+
+func (s *trackingTempTableSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	return false, false
+}
+
+func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, &api.SchemaExtra{}, nil
+	})
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	stubs.Stub(&checkIndexInitializable, func(string, string) bool { return false })
+	stubs.Stub(&maybeCreateAutoIncrement, func(
+		context.Context, string, engine.Database, *plan2.TableDef, client.TxnOperator, func() string,
+	) error {
+		return moerr.NewInternalErrorNoCtx("late failure")
+	})
+
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true, TableDef: &plan2.TableDef{Name: "temporary_table"},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	session := &trackingTempTableSession{tables: make(map[string]string)}
+	proc.Session = session
+	eng := newStubEngine()
+	eng.dbs["test"] = newStubDatabase("test")
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	_, exists := session.GetTempTable("test", "temporary_table")
+	require.False(t, exists)
+}
+
 func TestScope_CreateView(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name: "v1",

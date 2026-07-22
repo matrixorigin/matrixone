@@ -405,6 +405,26 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 			return true
 		}
 	}
+	if qry.Name == "" {
+		key := &TableItem{
+			AccountId: qry.AccountId, DatabaseId: qry.DatabaseId,
+			Ts: types.MaxTs().ToTimestamp(),
+		}
+		cc.tables.data.Ascend(key, func(item *TableItem) bool {
+			if item.AccountId != qry.AccountId {
+				return false
+			}
+			if qry.DatabaseId != 0 && item.DatabaseId != qry.DatabaseId {
+				return false
+			}
+			if item.Ts.Greater(qry.Ts) {
+				find = true
+				return false
+			}
+			return true
+		})
+		return find
+	}
 
 	key := &TableItem{
 		AccountId:  qry.AccountId,

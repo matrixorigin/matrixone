@@ -1468,8 +1468,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	rollbackTempAlias := false
 	if isTemp && session != nil {
 		session.AddTempTable(dbName, aliasName, tblName)
+		rollbackTempAlias = true
+		defer func() {
+			if rollbackTempAlias {
+				session.RemoveTempTable(dbName, aliasName)
+			}
+		}()
 	}
 
 	//update mo_foreign_keys
@@ -2026,6 +2033,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		res.Close()
 	}
 
+	if isTemp && session != nil {
+		// The temporary table and all follow-up metadata/index/CTAS work have
+		// completed. Keep the alias registered in the session.
+		rollbackTempAlias = false
+	}
 	return nil
 }
 

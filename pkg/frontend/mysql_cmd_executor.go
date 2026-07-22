@@ -1777,6 +1777,7 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
+	prepareTs, _ := runtime.ServiceRuntime(ses.GetService()).Clock().Now()
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
@@ -1827,7 +1828,7 @@ func createPrepareStmt(
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
 	}
-	prepareStmt.Ts, _ = runtime.ServiceRuntime(ses.GetService()).Clock().Now()
+	prepareStmt.Ts = prepareTs
 	return prepareStmt, nil
 }
 

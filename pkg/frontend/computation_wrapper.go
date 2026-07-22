@@ -602,6 +602,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 
 	// rebuild plan when schema changed
 	if change {
+		prepareTs, _ := runtime.ServiceRuntime(ses.GetService()).Clock().Now()
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
@@ -612,7 +613,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 		preparePlan = newPlan.GetDcl().GetPrepare()
 		prepareStmt.PreparePlan = newPlan
-		prepareStmt.Ts, _ = runtime.ServiceRuntime(ses.GetService()).Clock().Now()
+		prepareStmt.Ts = prepareTs
 	}
 
 	// Recreate the cached compile only when the schema changed. Without a

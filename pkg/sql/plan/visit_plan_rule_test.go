@@ -97,6 +97,20 @@ func TestCollectPrepareDdlSchemasRecordsMissingTable(t *testing.T) {
 	require.Equal(t, []*planpb.ObjectRef{{SchemaName: "tpch", ObjName: "missing"}}, schemas)
 }
 
+func TestCollectPrepareDdlSchemasRecordsMissingDatabase(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	mock.DatabaseExistsFunc = func(string, *Snapshot) bool { return false }
+	statements, err := mysql.Parse(context.Background(), "drop table if exists future_db.missing", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+
+	schemas, err := collectPrepareDdlSchemas(mock, statements[0], &planpb.Plan{
+		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []*planpb.ObjectRef{{SchemaName: "future_db", ObjName: "missing"}}, schemas)
+}
+
 func TestCollectPrepareDdlSchemasPropagatesResolveError(t *testing.T) {
 	expected := errors.New("resolve failed")
 	ctx := &resolveErrorCompilerContext{MockCompilerContext: NewMockCompilerContext(false), err: expected}
@@ -147,9 +161,10 @@ func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {
 
 	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
 	require.NoError(t, err)
-	require.Len(t, schemas, 2)
+	require.Len(t, schemas, 3)
 	require.Equal(t, "child", schemas[0].ObjName)
 	require.Equal(t, "parent", schemas[1].ObjName)
+	require.Empty(t, schemas[2].ObjName)
 }
 
 func TestCollectPrepareDdlSchemasCollectsExpandedForeignKeyParents(t *testing.T) {
@@ -169,10 +184,11 @@ func TestCollectPrepareDdlSchemasCollectsExpandedForeignKeyParents(t *testing.T)
 
 	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
 	require.NoError(t, err)
-	require.Len(t, schemas, 3)
+	require.Len(t, schemas, 4)
 	require.Equal(t, "child", schemas[0].ObjName)
 	require.Equal(t, "src", schemas[1].ObjName)
-	require.Equal(t, "parent", schemas[2].ObjName)
+	require.Empty(t, schemas[2].ObjName)
+	require.Equal(t, "parent", schemas[3].ObjName)
 }
 
 func TestCollectPrepareDdlSchemasCollectsForwardReferenceChildren(t *testing.T) {
@@ -190,9 +206,10 @@ func TestCollectPrepareDdlSchemasCollectsForwardReferenceChildren(t *testing.T) 
 
 	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
 	require.NoError(t, err)
-	require.Len(t, schemas, 2)
+	require.Len(t, schemas, 3)
 	require.Equal(t, "parent", schemas[0].ObjName)
-	require.Equal(t, "child", schemas[1].ObjName)
+	require.Empty(t, schemas[1].ObjName)
+	require.Equal(t, "child", schemas[2].ObjName)
 }
 
 func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
@@ -265,6 +282,28 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	require.Len(t, schemas, 1)
 	require.Equal(t, "src", schemas[0].ObjName)
 	require.Equal(t, int64(30), schemas[0].Server)
+}
+
+func TestResetPreparePlanPreservesSubscriptionIdentity(t *testing.T) {
+	ddlPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Query: &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeType: planpb.Node_TABLE_SCAN,
+				ObjRef: &planpb.ObjectRef{
+					SchemaName: "publisher_db", ObjName: "src", Obj: 20,
+					SubscriptionName: "subscriber_db", PubInfo: &planpb.PubInfo{TenantId: 11},
+				},
+				TableDef: &planpb.TableDef{Name: "src", DbId: 10, TblId: 20, Version: 30},
+			}},
+		},
+	}}}
+
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), ddlPlan)
+	require.NoError(t, err)
+	require.Len(t, schemas, 1)
+	require.Equal(t, "subscriber_db", schemas[0].SubscriptionName)
+	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
 }
 
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {

@@ -59,15 +59,17 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		return nil
 	}
 	return &plan.ObjectRef{
-		Server:     ref.Server,
-		Db:         ref.Db,
-		Schema:     ref.Schema,
-		Obj:        ref.Obj,
-		ServerName: ref.ServerName,
-		DbName:     ref.DbName,
-		SchemaName: ref.SchemaName,
-		ObjName:    ref.ObjName,
-		PubInfo:    ref.PubInfo,
+		Server:           ref.Server,
+		Db:               ref.Db,
+		Schema:           ref.Schema,
+		Obj:              ref.Obj,
+		ServerName:       ref.ServerName,
+		DbName:           ref.DbName,
+		SchemaName:       ref.SchemaName,
+		ObjName:          ref.ObjName,
+		SubscriptionName: ref.SubscriptionName,
+		PubInfo:          ref.PubInfo,
+		NotLockMeta:      ref.NotLockMeta,
 	}
 }
 
