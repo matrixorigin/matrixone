@@ -260,7 +260,11 @@ func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	extra := g.OpAnalyzer.GetOpStats().ExtraStats
 	require.Positive(t, extra["GroupSpillWriteCalls"])
 	require.Positive(t, extra["GroupSpillWriteNanos"])
+	require.Positive(t, extra["GroupSpillSerializedBytes"])
+	require.Positive(t, extra["GroupSpillAggChunkHeadersOmitted"])
 	require.Positive(t, extra["GroupSpillReloadBuckets"])
+	require.Positive(t, extra["GroupSpillReloadRecords"])
+	require.Positive(t, extra["GroupSpillAggExecReuseRecords"])
 	require.Equal(t, int64(rows), extra["GroupSpillReloadRows"])
 	require.Equal(t, int64(rows), extra["GroupSpillMaxGroups"])
 	require.Greater(t, extra["GroupSpillPreallocRows"], int64(aggHtPreAllocSize))
