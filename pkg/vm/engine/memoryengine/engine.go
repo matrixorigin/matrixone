@@ -281,7 +281,12 @@ func (e *Engine) ResolveQueryCandidatePool(
 		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
 	}
 
-	allCompatible := request.IsInternal || strings.ToLower(request.Tenant) == "sys" || len(request.CNLabel) == 0
+	privilegedCompatibility := request.IsInternal || strings.EqualFold(request.Tenant, "sys")
+	// Nodes historically treated privileged requests as compatible with every
+	// CN. Preserve that behavior for legacy callers, but an explicit strict
+	// request must still be confined to its requested labels.
+	allCompatible := len(request.CNLabel) == 0 ||
+		(privilegedCompatibility && request.FallbackPolicy == engine.QueryPoolFallbackLegacyCompatible)
 	selector := clusterservice.NewSelector().SelectByLabel(request.CNLabel, clusterservice.EQ)
 	hasExactWorking := false
 	hasSharedWorking := false

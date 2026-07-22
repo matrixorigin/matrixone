@@ -110,6 +110,68 @@ func TestQueryCandidatePoolStrictModeRejectsSharedFallback(t *testing.T) {
 	require.Empty(t, strict.Nodes)
 }
 
+func TestQueryCandidatePoolStrictModeDoesNotWidenPrivilegedRequests(t *testing.T) {
+	requestedLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"sys"}},
+	}
+	otherLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"other"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "requested", Labels: requestedLabels, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "other", Labels: otherLabels, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "shared", WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+	}
+
+	for _, test := range []struct {
+		name       string
+		isInternal bool
+		tenant     string
+	}{
+		{name: "sys tenant", tenant: "sys"},
+		{name: "internal query", isInternal: true, tenant: "app"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := engine.QueryCandidatePoolRequest{
+				IsInternal:     test.isInternal,
+				Tenant:         test.tenant,
+				CNLabel:        map[string]string{"account": "sys"},
+				RequestedPool:  "tenant-label:account=sys",
+				FallbackPolicy: engine.QueryPoolFallbackLegacyCompatible,
+			}
+
+			legacy, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+			require.NoError(t, err)
+			require.Equal(t, engine.QueryPoolResolutionAllCompatible, legacy.Resolution)
+			require.Len(t, legacy.Nodes, 3)
+
+			request.FallbackPolicy = engine.QueryPoolFallbackStrict
+			strict, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+			require.NoError(t, err)
+			require.False(t, strict.Fallback)
+			require.Equal(t, engine.QueryPoolResolutionExactLabels, strict.Resolution)
+			require.Equal(t, request.RequestedPool, strict.Identity)
+			require.Equal(t, engine.Nodes{{
+				Mcpu: 4, Id: "requested", WorkState: metadata.WorkState_Working,
+			}}, strict.Nodes)
+
+			strictWithoutExact, err := new(Engine).ResolveQueryCandidatePool(
+				context.Background(), candidates[1:], request)
+			require.NoError(t, err)
+			require.False(t, strictWithoutExact.Fallback)
+			require.Equal(t, engine.QueryPoolResolutionNoMatch, strictWithoutExact.Resolution)
+			require.Equal(t, "strict-rejected-shared-unlabeled", strictWithoutExact.FallbackReason)
+			require.Empty(t, strictWithoutExact.Nodes)
+		})
+	}
+}
+
 func TestQueryCandidatePoolDoesNotReportMissingSharedFallback(t *testing.T) {
 	otherLabels := map[string]metadata.LabelList{
 		"account": {Labels: []string{"other"}},
