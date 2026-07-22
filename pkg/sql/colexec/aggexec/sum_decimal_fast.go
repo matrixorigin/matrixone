@@ -147,6 +147,9 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	for i := range slotOf {
 		slotOf[i] = 0xFF
 	}
+	fallbackLastX := -1
+	var fallbackSums *[AggBatchSize]types.Decimal128
+	var fallbackCnts []int64
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -159,18 +162,25 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 		g := grp - 1
 		raw := vals[idx&constMask]
 		val := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+		// Once the local table is full, probing it can scan nearly all 256
+		// slots per row. Direct updates still compose with the deferred scatter
+		// below, including when the group already has a local entry.
+		if nSlots >= maxSlots {
+			x := int(g >> aggBatchSizeShift)
+			y := g & aggBatchSizeMask
+			if x != fallbackLastX {
+				fallbackLastX = x
+				fallbackSums = chunkArr[types.Decimal128](exec.state[x].vecs[0])
+				fallbackCnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+			}
+			fallbackSums[y] = fallbackSums[y].Add128Unchecked(val)
+			fallbackCnts[y]++
+			continue
+		}
 
 		for h := uint8(g) ^ uint8(g>>8); ; h++ {
 			s := slotOf[h]
 			if s == 0xFF {
-				if nSlots >= maxSlots {
-					x := int(g >> aggBatchSizeShift)
-					y := g & aggBatchSizeMask
-					sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
-					sums[y] = sums[y].Add128Unchecked(val)
-					vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
-					break
-				}
 				slotOf[h] = uint8(nSlots)
 				localGrps[nSlots] = g
 				localSums[nSlots] = val

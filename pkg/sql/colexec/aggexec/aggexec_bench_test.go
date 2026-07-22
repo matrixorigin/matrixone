@@ -338,6 +338,42 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	})
 }
 
+func BenchmarkSumDecimal64FastHighCardinality(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	const rows = 4096
+	groups := make([]uint64, rows)
+	values := make([]types.Decimal64, rows)
+	for i := range groups {
+		groups[i] = uint64(i + 1)
+		values[i] = types.Decimal64(i + 1)
+	}
+	vec := testutil.NewDecimal64Vector(
+		rows, types.New(types.T_decimal64, 15, 2), mp, false, nil, values)
+	defer vec.Free(mp)
+
+	exec := newSumDecimal64FastExec(
+		mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+	if err := exec.GroupGrow(rows); err != nil {
+		b.Fatal(err)
+	}
+	defer exec.Free()
+	vectors := []*vector.Vector{vec}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := exec.BatchFill(0, groups, vectors); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestLocalAccumulatorOverflow exercises the direct-scatter fallback path
 // that triggers when a single BatchFill has more than 255 distinct groups.
 func TestLocalAccumulatorOverflow(t *testing.T) {
