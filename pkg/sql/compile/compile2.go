@@ -292,7 +292,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		retryTimes++
 		if runC != c {
-			runC.Release()
+			releaseRetryCompile(runC)
 		}
 		c.retryTimes = retryTimes
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
@@ -349,6 +349,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	//}
 
 	return queryResult, err
+}
+
+func releaseRetryCompile(c *Compile) {
+	proc := c.proc
+	prepareParams := proc.DetachPrepareParams()
+	defer proc.RestorePrepareParams(prepareParams)
+	c.Release()
 }
 
 // rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
