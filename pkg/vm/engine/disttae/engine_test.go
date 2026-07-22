@@ -565,20 +565,20 @@ func TestPreparedBinarySchedulingExcludesMixedVersionCN(t *testing.T) {
 			require.Len(t, candidates, 1)
 			require.Equal(t, "compatible-cn", candidates[0].Service.ServiceID)
 			require.Equal(t, version.CommitID, candidates[0].Service.CommitID)
-			require.True(t, candidates[0].HasMixedCommit)
 
-			nodes, err := e.ResolveQueryCandidatePool(
+			pool, err := e.ResolveQueryCandidatePool(
 				context.Background(), candidates, engine.QueryCandidatePoolRequest{})
 			require.NoError(t, err)
-			require.Equal(t, []string{"compatible:6001"}, nodeAddresses(nodes))
-			require.True(t, nodes[0].HasMixedCommit)
+			require.Equal(t, engine.QueryPoolResolutionAllCompatible, pool.Resolution)
+			require.False(t, pool.Fallback)
+			require.Equal(t, []string{"compatible:6001"}, nodeAddresses(pool.Nodes))
 
 			// Remote ProcessInfo is built only for the workers that survived
 			// discovery and pool resolution. This models the coordinator send
 			// boundary and proves that an incompatible worker never receives an
 			// is_bin field it might silently ignore.
-			deliveries := make(map[string]pipeline.ProcessInfo, len(nodes))
-			for _, node := range nodes {
+			deliveries := make(map[string]pipeline.ProcessInfo, len(pool.Nodes))
+			for _, node := range pool.Nodes {
 				info, buildErr := proc.BuildProcessInfo("select ?")
 				require.NoError(t, buildErr)
 				payload, marshalErr := info.Marshal()
