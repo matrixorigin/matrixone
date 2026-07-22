@@ -922,6 +922,32 @@ func TestJsonExtractWildcardPreservesJSONNull(t *testing.T) {
 	}
 }
 
+func TestJsonExtractAutowrapsJSONNullIndexZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		doc  string
+		path string
+	}{
+		{name: "root null", doc: `null`, path: `$[0]`},
+		{name: "nested null", doc: `{"a":null}`, path: `$.a[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.Equal(t, "null", jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
 func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInJsonExtract()

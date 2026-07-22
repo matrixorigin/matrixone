@@ -265,6 +265,38 @@ func TestQueryWithExistsPreservesJSONNull(t *testing.T) {
 	}
 }
 
+func TestQueryWithExistsAutowrapsScalarIndexZero(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		expects string
+	}{
+		{name: "root null", json: `null`, path: `$[0]`, expects: `null`},
+		{name: "nested null", json: `{"a":null}`, path: `$.a[0]`, expects: `null`},
+		{name: "root scalar range", json: `1`, path: `$[0 to 0]`, expects: `1`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			result, exists := bj.QueryWithExists([]*Path{&path})
+			require.True(t, exists)
+			require.JSONEq(t, test.expects, result.String())
+
+			if path.IsSimple() {
+				simpleResult, simpleExists := bj.QuerySimpleWithExists([]*Path{&path})
+				require.True(t, simpleExists)
+				require.JSONEq(t, test.expects, simpleResult.String())
+			}
+		})
+	}
+}
+
 func TestQuerySimpleContainPath(t *testing.T) {
 	kases := []struct {
 		name    string

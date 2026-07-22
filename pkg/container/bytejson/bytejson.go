@@ -413,6 +413,16 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
+		return cur
+	}
+	if sub.tp == subPathIdx {
+		idx, _, _ := sub.idx.genIndex(1)
+		if idx == 0 {
+			return bj.query(cur, &nPath)
+		}
+	}
+	if sub.tp == subPathRange && sub.iRange.matchesIndex(0, 1) {
+		return bj.query(cur, &nPath)
 	}
 	return cur
 }
@@ -611,12 +621,12 @@ func (bj ByteJson) QuerySimpleWithExists(paths []*Path) (ByteJson, bool) {
 		return Null, false
 	} else if len(paths) == 1 {
 		// only retrieve one path
-		return bj.querySimpleExist(paths[0], false)
+		return bj.querySimpleExist(paths[0], true)
 	} else {
 		// retrieve multiple paths, merge them into an array
 		out := make([]ByteJson, 0, len(paths))
 		for _, path := range paths {
-			tmp, exists := bj.querySimpleExist(path, false)
+			tmp, exists := bj.querySimpleExist(path, true)
 			if exists {
 				out = append(out, tmp)
 			}

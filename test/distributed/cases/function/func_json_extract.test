@@ -347,4 +347,8 @@ select json_extract(doc, '$.missing') is null,
        json_extract(doc, '$.a', '$.fallback')
 from json_null_test;
 select json_extract('{"items":[null,1]}', '$.items[*]');
+select json_extract('{"a":null}', '$.a[0]'),
+       json_extract('{"a":null}', '$.a[0]') is null;
+select json_extract('null', '$[0]'),
+       json_extract('null', '$[0]') is null;
 drop database test;
