@@ -274,7 +274,11 @@ func TestQueryWithExistsAutowrapsScalarIndexZero(t *testing.T) {
 	}{
 		{name: "root null", json: `null`, path: `$[0]`, expects: `null`},
 		{name: "nested null", json: `{"a":null}`, path: `$.a[0]`, expects: `null`},
-		{name: "root scalar range", json: `1`, path: `$[0 to 0]`, expects: `1`},
+		{name: "root scalar range", json: `1`, path: `$[0 to 0]`, expects: `[1]`},
+		{name: "array wildcard", json: `[null]`, path: `$[*]`, expects: `[null]`},
+		{name: "array range", json: `[null]`, path: `$[0 to 0]`, expects: `[null]`},
+		{name: "object wildcard", json: `{"a":null}`, path: `$.*`, expects: `[null]`},
+		{name: "recursive descent", json: `{"a":null}`, path: `$**.a`, expects: `[null]`},
 	}
 
 	for _, test := range tests {

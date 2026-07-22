@@ -351,4 +351,9 @@ select json_extract('{"a":null}', '$.a[0]'),
        json_extract('{"a":null}', '$.a[0]') is null;
 select json_extract('null', '$[0]'),
        json_extract('null', '$[0]') is null;
+select json_extract('1', '$[0 to 0]');
+select json_extract('[null]', '$[*]');
+select json_extract('[null]', '$[0 to 0]');
+select json_extract('{"a":null}', '$.*');
+select json_extract('{"a":null}', '$**.a');
 drop database test;

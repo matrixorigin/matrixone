@@ -948,6 +948,36 @@ func TestJsonExtractAutowrapsJSONNullIndexZero(t *testing.T) {
 	}
 }
 
+func TestJsonExtractPreservesSingleMatchMultiValuePathArray(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name     string
+		doc      string
+		path     string
+		expected string
+	}{
+		{name: "scalar range", doc: `1`, path: `$[0 to 0]`, expected: `[1]`},
+		{name: "index wildcard", doc: `[null]`, path: `$[*]`, expected: `[null]`},
+		{name: "range", doc: `[null]`, path: `$[0 to 0]`, expected: `[null]`},
+		{name: "key wildcard", doc: `{"a":null}`, path: `$.*`, expected: `[null]`},
+		{name: "recursive descent", doc: `{"a":null}`, path: `$**.a`, expected: `[null]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.JSONEq(t, test.expected, jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
 func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInJsonExtract()

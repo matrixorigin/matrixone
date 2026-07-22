@@ -68,6 +68,16 @@ func (p *Path) IsSimple() bool {
 	return true
 }
 
+func (p *Path) mayReturnMultiple() bool {
+	for _, sub := range p.paths {
+		if sub.tp == subPathDoubleStar || sub.tp == subPathKeyWildcard || sub.tp == subPathRange ||
+			(sub.tp == subPathIdx && sub.idx.num == subPathIdxALL) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Path) popOneSubPath() (Path, subPath) {
 	lastPathIdx := len(p.paths) - 1
 	return Path{paths: p.paths[:lastPathIdx]}, p.paths[lastPathIdx]

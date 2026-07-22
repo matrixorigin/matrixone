@@ -33,7 +33,7 @@ json_extract({"a":[1,2,3,{"a":4}]}, $**.a)
 [[1, 2, 3, {"a": 4}], 4]
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 json_extract({"a":[1,2,3,{"a":4}]}, $.a[*].a)
-4
+[4]
 select json_extract('{"a":1}','$[0]');
 json_extract({"a":1}, $[0])
 {"a": 1}
@@ -106,7 +106,7 @@ json_extract(t1.a, $**.a)
 [[1, 2, 3, {"a": 4}], 4]
 select json_extract(t1.a,'$.a[*].a') from t1 where t1.b=9;
 json_extract(t1.a, $.a[*].a)
-4
+[4]
 drop table t1;
 create table t1 (a json);
 insert into t1(a) values ('{"a":1}'),('[1,2]'),('{"xa":1}');
@@ -195,7 +195,7 @@ select json_extract('[1,2,3]','$[last-1 to last-2]');
 invalid input: invalid json path '$[last-1 to last-2]'
 select json_extract('[1,2,3]','$[last-8 to last-2]');
 json_extract([1,2,3], $[last-8 to last-2])
-1
+[1]
 select json_extract('[1,2,3]','$[last-2 to last-8]');
 invalid input: invalid json path '$[last-2 to last-8]'
 select json_extract('[1,2,3]','$[0 to last-8]');
@@ -649,4 +649,19 @@ select json_extract('null', '$[0]'),
 json_extract('null', '$[0]') is null;
 json_extract(null, $[0])    json_extract(null, $[0]) is null
 null    0
+select json_extract('1', '$[0 to 0]');
+json_extract(1, $[0 to 0])
+[1]
+select json_extract('[null]', '$[*]');
+json_extract([null], $[*])
+[null]
+select json_extract('[null]', '$[0 to 0]');
+json_extract([null], $[0 to 0])
+[null]
+select json_extract('{"a":null}', '$.*');
+json_extract({"a":null}, $.*)
+[null]
+select json_extract('{"a":null}', '$**.a');
+json_extract({"a":null}, $**.a)
+[null]
 drop database test;

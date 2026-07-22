@@ -445,7 +445,7 @@ func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 	if len(out) == 0 {
 		return Null, false
 	}
-	if len(out) == 1 && len(paths) == 1 {
+	if len(out) == 1 && len(paths) == 1 && !paths[0].mayReturnMultiple() {
 		return out[0], true
 	}
 	return mergeToArray(out), true
