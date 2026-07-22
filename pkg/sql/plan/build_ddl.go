@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -964,10 +963,6 @@ func buildCreateTable(
 		case *tree.TableOptionProperties:
 			properties := make([]*plan.Property, len(opt.Preperties))
 			for idx, property := range opt.Preperties {
-				if strings.EqualFold(property.Key, engine.CheckConstraintsConfigKey) {
-					return nil, moerr.NewInvalidInputf(ctx.GetContext(),
-						"table property key %q is reserved for internal use", property.Key)
-				}
 				properties[idx] = &plan.Property{
 					Key:   property.Key,
 					Value: property.Value,
@@ -1869,6 +1864,9 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	if err := checkExprForVolatileFuncWithScope(ctx.GetContext(), checkExpr, "check constraint"); err != nil {
 		return err
 	}
+	if err := checkCheckExprReferences(ctx.GetContext(), checkExpr, tableDef.Cols); err != nil {
+		return err
+	}
 
 	// Format the original SQL expression text for SHOW CREATE TABLE output
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier())
@@ -1902,6 +1900,35 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 		OriginSql:       originSql,
 		IsGeneratedName: isGeneratedName,
 	})
+	return nil
+}
+
+func checkCheckExprReferences(ctx context.Context, expr *plan.Expr, cols []*ColDef) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.ColPos >= 0 && int(e.Col.ColPos) < len(cols) && cols[e.Col.ColPos].Typ.AutoIncr {
+			return moerr.NewInvalidInputf(ctx, "check constraint cannot refer to auto-increment column '%s'", cols[e.Col.ColPos].Name)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInputf(ctx, "check constraint cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInputf(ctx, "check constraint cannot contain parameter marker")
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := checkCheckExprReferences(ctx, arg, cols); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkCheckExprReferences(ctx, item, cols); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -4220,7 +4247,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// lock already validated by resolveAndValidateLock
 			alterTable.Actions[i] = nil
 
-		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
+		case *tree.AlterOptionAlterCheck:
+			return nil, moerr.NewNotSupported(ctx.GetContext(),
+				"ALTER TABLE ALTER CHECK enforcement is not supported")
+
+		case *tree.TableOptionCharset:
 			continue
 
 		case *tree.AlterTableModifyColumnClause:

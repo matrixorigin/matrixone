@@ -785,14 +785,9 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
-				if err != nil {
-					logutil.Errorf("catalog-cache error: unmarshal table check constraint information: %v-%v-%v, err: %v",
-						tblItem.AccountId, tblItem.Id, tblItem.Name, err)
-					return nil, nil
-				}
-				properties = append(properties, visibleConfigs...)
-				checks = append(checks, checkDefs...)
+				properties = append(properties, k.Configs...)
+			case *engine.CheckConstraintsDef:
+				checks = append(checks, k.Checks...)
 			}
 		}
 	}

@@ -17,11 +17,10 @@ package engine
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
+	"io"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -55,11 +54,6 @@ type Node struct {
 	CNCNT int32 // number of all cns
 	CNIDX int32 // cn index , starts from 0
 }
-
-const (
-	CheckConstraintsConfigKey   = "__mo_check_constraints"
-	checkConstraintsValuePrefix = "mo_check_constraints_v1:"
-)
 
 // QueryCandidate is a CN discovered before tenant and label pool resolution.
 // Service keeps the control-plane metadata needed by pool policy; Mcpu is the
@@ -165,72 +159,12 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) (*ConstraintDef, error) {
 	}
 
 	if len(tableDef.Checks) > 0 {
-		value, err := MarshalCheckConstraints(tableDef.Checks)
-		if err != nil {
-			return nil, err
-		}
-		c.Cts = append(c.Cts, &StreamConfigsDef{
-			Configs: []*plan.Property{
-				{
-					Key:   CheckConstraintsConfigKey,
-					Value: value,
-				},
-			},
+		c.Cts = append(c.Cts, &CheckConstraintsDef{
+			Checks: tableDef.Checks,
 		})
 	}
 
 	return c, nil
-}
-
-func MarshalCheckConstraints(checks []*plan.CheckDef) (string, error) {
-	data, err := (&plan.TableDef{Checks: checks}).Marshal()
-	if err != nil {
-		return "", err
-	}
-	return checkConstraintsValuePrefix + base64.StdEncoding.EncodeToString(data), nil
-}
-
-func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
-	var ok bool
-	value, ok = strings.CutPrefix(value, checkConstraintsValuePrefix)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("check constraint metadata is missing its version prefix")
-	}
-	data, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return nil, err
-	}
-	tableDef := &plan.TableDef{}
-	if err := tableDef.Unmarshal(data); err != nil {
-		return nil, err
-	}
-	return tableDef.Checks, nil
-}
-
-func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Property, []*plan.CheckDef, error) {
-	visibleConfigs := make([]*plan.Property, 0, len(configs))
-	var checks []*plan.CheckDef
-	for _, config := range configs {
-		if config.Key != CheckConstraintsConfigKey {
-			visibleConfigs = append(visibleConfigs, config)
-			continue
-		}
-		if !strings.HasPrefix(config.Value, checkConstraintsValuePrefix) {
-			// Before CHECK metadata used this key, PROPERTIES accepted it as an
-			// arbitrary user key. Untagged values are always legacy user data;
-			// old CHECK tables are recovered from Createsql instead.
-			visibleConfigs = append(visibleConfigs, config)
-			continue
-		}
-		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
-		if err != nil {
-			// A tagged value is internal metadata. Drop only the damaged CHECK
-			// payload so the rest of the table definition remains usable.
-			continue
-		}
-		checks = append(checks, decodedChecks...)
-	}
-	return visibleConfigs, checks, nil
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
@@ -460,6 +394,10 @@ type StreamConfigsDef struct {
 	Configs []*plan.Property
 }
 
+type CheckConstraintsDef struct {
+	Checks []*plan.CheckDef
+}
+
 type TableDef interface {
 	tableDef()
 
@@ -596,6 +534,7 @@ const (
 	ForeignKey
 	PrimaryKey
 	StreamConfig
+	CheckConstraint
 )
 
 type EngineType int8
@@ -688,6 +627,23 @@ func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
 				}
 				buf.Write(bytes)
 			}
+		case *CheckConstraintsDef:
+			if err := binary.Write(buf, binary.BigEndian, CheckConstraint); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Checks))); err != nil {
+				return nil, err
+			}
+			for _, check := range def.Checks {
+				data, err := check.Marshal()
+				if err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.BigEndian, uint64(len(data))); err != nil {
+					return nil, err
+				}
+				buf.Write(data)
+			}
 		}
 	}
 	return buf.Bytes(), nil
@@ -773,6 +729,33 @@ func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
 				configs[i] = config
 			}
 			def.Cts = append(def.Cts, &StreamConfigsDef{configs})
+		case CheckConstraint:
+			if len(data)-l < 8 {
+				return io.ErrUnexpectedEOF
+			}
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			if length > uint64((len(data)-l)/8) {
+				return io.ErrUnexpectedEOF
+			}
+			checks := make([]*plan.CheckDef, length)
+			for i := 0; i < int(length); i++ {
+				if len(data)-l < 8 {
+					return io.ErrUnexpectedEOF
+				}
+				dataLength := binary.BigEndian.Uint64(data[l : l+8])
+				l += 8
+				if dataLength > uint64(len(data)-l) {
+					return io.ErrUnexpectedEOF
+				}
+				check := &plan.CheckDef{}
+				if err := check.Unmarshal(data[l : l+int(dataLength)]); err != nil {
+					return err
+				}
+				l += int(dataLength)
+				checks[i] = check
+			}
+			def.Cts = append(def.Cts, &CheckConstraintsDef{Checks: checks})
 		}
 	}
 	return nil
@@ -804,6 +787,9 @@ func (def *ConstraintPB) FromPBVersion() Constraint {
 	if r := def.GetStreamConfigsDef(); r != nil {
 		return r
 	}
+	if r := def.GetCheckConstraintsDef(); r != nil {
+		return r
+	}
 	panic("no corresponding type")
 }
 
@@ -825,11 +811,12 @@ type Constraint interface {
 }
 
 // TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
-func (*ForeignKeyDef) constraint()    {}
-func (*PrimaryKeyDef) constraint()    {}
-func (*RefChildTableDef) constraint() {}
-func (*IndexDef) constraint()         {}
-func (*StreamConfigsDef) constraint() {}
+func (*ForeignKeyDef) constraint()       {}
+func (*PrimaryKeyDef) constraint()       {}
+func (*RefChildTableDef) constraint()    {}
+func (*IndexDef) constraint()            {}
+func (*StreamConfigsDef) constraint()    {}
+func (*CheckConstraintsDef) constraint() {}
 
 func (def *ForeignKeyDef) ToPBVersion() ConstraintPB {
 	return ConstraintPB{
@@ -864,6 +851,14 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 	return ConstraintPB{
 		Ct: &ConstraintPB_StreamConfigsDef{
 			StreamConfigsDef: def,
+		},
+	}
+}
+
+func (def *CheckConstraintsDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_CheckConstraintsDef{
+			CheckConstraintsDef: def,
 		},
 	}
 }

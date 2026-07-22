@@ -2825,6 +2825,37 @@ func exprContainsFuncName(expr *plan.Expr, name string) bool {
 	return false
 }
 
+func TestLoadDataIgnoreFiltersCheckViolationsPerRow(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["nation"]
+	require.NotNil(t, tableDef)
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*plan.Expr{
+		{
+			Typ:  tableDef.Cols[0].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: tableDef.Cols[0].Name, ColPos: 0}},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	tableDef.Checks = []*plan.CheckDef{{Name: "chk_nation_key", Check: checkExpr}}
+
+	p, err := runOneStmt(mock, t,
+		"LOAD DATA INLINE FORMAT='csv', DATA='-1,x,1,y\\n1,x,1,y\\n' IGNORE INTO TABLE tpch.nation FIELDS TERMINATED BY ','")
+	require.NoError(t, err)
+
+	foundCheckFilter := false
+	for _, node := range p.GetQuery().GetNodes() {
+		for _, expr := range node.FilterList {
+			require.False(t, exprContainsFuncName(expr, "check_constraint_assert"),
+				"LOAD DATA IGNORE must not abort on a CHECK violation")
+			if exprContainsFuncName(expr, "coalesce") {
+				foundCheckFilter = true
+			}
+		}
+	}
+	require.True(t, foundCheckFilter, "LOAD DATA IGNORE must filter CHECK-violating rows")
+}
+
 func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Lit:

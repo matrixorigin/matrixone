@@ -98,6 +98,17 @@ func TestAlterTableAddColumnPreservesNotEnforcedCheck(t *testing.T) {
 	require.Contains(t, alter.CreateTmpTableSql, "CHECK (`d` > 0) NOT ENFORCED")
 }
 
+func TestAlterTableAlterCheckEnforcementIsExplicitlyUnsupported(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, sql := range []string{
+		"ALTER TABLE t1 ALTER CHECK chk_a ENFORCED",
+		"ALTER TABLE t1 ALTER CHECK chk_a NOT ENFORCED",
+	} {
+		_, err := buildSingleStmt(mock, t, sql)
+		require.ErrorContains(t, err, "ALTER TABLE ALTER CHECK enforcement is not supported")
+	}
+}
+
 func TestAlterTableRenameRejectsCheckDependentColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// Give single_idx_t a CHECK (val > 0) whose column ref points at val by

@@ -707,6 +707,10 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		return nil
 	}
 
+	if checks, ok := extractCheckDefsInCreateOrder(tableDef.Createsql); ok {
+		return checks
+	}
+
 	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
 	if !ok {
 		return nil
@@ -720,39 +724,41 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 			checks = append(checks, segment)
 		}
 	}
-	checks = append(checks, extractColumnCheckDefs(tableDef.Createsql)...)
 	return checks
 }
 
-func extractColumnCheckDefs(createSQL string) []string {
+func extractCheckDefsInCreateOrder(createSQL string) ([]string, bool) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createSQL, 1)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer stmt.Free()
 
 	createTable, ok := stmt.(*tree.CreateTable)
 	if !ok {
-		return nil
+		return nil, false
 	}
 
 	checks := make([]string, 0)
 	for _, def := range createTable.Defs {
-		columnDef, ok := def.(*tree.ColumnTableDef)
-		if !ok {
-			continue
-		}
-		for _, attr := range columnDef.Attributes {
-			check, ok := attr.(*tree.AttributeCheckConstraint)
-			if !ok {
-				continue
+		switch typedDef := def.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range typedDef.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				checks = append(checks, formatLegacyCheckDef(
+					check.Name, check.Expr, check.Enforced, check.EnforcementSet,
+				))
 			}
+		case *tree.CheckIndex:
 			checks = append(checks, formatLegacyCheckDef(
-				check.Name, check.Expr, check.Enforced, check.EnforcementSet,
+				typedDef.ConstraintSymbol, typedDef.Expr, typedDef.Enforced, typedDef.EnforcementSet,
 			))
 		}
 	}
-	return checks
+	return checks, true
 }
 
 func formatLegacyCheckDef(name string, expr tree.Expr, enforced bool, enforcementSet bool) string {

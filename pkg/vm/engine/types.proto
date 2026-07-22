@@ -80,6 +80,11 @@ message StreamConfigsDef {
     repeated plan.Property Configs = 1;
 }
 
+message CheckConstraintsDef {
+    option (gogoproto.typedecl)       = false;
+    repeated plan.CheckDef Checks     = 1;
+}
+
 message PrimaryKeyDef {
     option (gogoproto.typedecl) = false;
     plan.PrimaryKeyDef Pkey     = 1;
@@ -110,6 +115,7 @@ message ConstraintPB {
         RefChildTableDef RefChildTableDef = 3;
         IndexDef IndexDef                 = 4;
         StreamConfigsDef StreamConfigsDef   = 5;
+        CheckConstraintsDef CheckConstraintsDef = 6;
     }
 }
 

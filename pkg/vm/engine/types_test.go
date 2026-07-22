@@ -15,7 +15,9 @@
 package engine
 
 import (
-	"strings"
+	"encoding/binary"
+	"errors"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,103 +25,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPlanDefToCstrDefPersistsCheckConstraints(t *testing.T) {
+func TestPlanDefToCstrDefPersistsCheckConstraintsOutsideUserProperties(t *testing.T) {
 	check := &plan.CheckDef{
 		Name:            "__mo_chk_1",
 		IsGeneratedName: true,
 		NotEnforced:     true,
 		Check: &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_bool)},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Bval{Bval: true},
-				},
-			},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Bval{Bval: true},
+			}},
 		},
 	}
-
-	cstr, err := PlanDefToCstrDef(&plan.TableDef{Checks: []*plan.CheckDef{check}})
-	require.NoError(t, err)
-	require.Len(t, cstr.Cts, 1)
-
-	configs := cstr.Cts[0].(*StreamConfigsDef).Configs
-	require.True(t, strings.HasPrefix(configs[0].Value, checkConstraintsValuePrefix))
-	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs(configs)
-	require.NoError(t, err)
-	require.Empty(t, visibleConfigs)
-	require.Len(t, checks, 1)
-	require.Equal(t, check.Name, checks[0].Name)
-	require.True(t, checks[0].IsGeneratedName)
-	require.True(t, checks[0].NotEnforced)
-	require.NotNil(t, checks[0].Check)
-}
-
-func TestSplitCheckConstraintsFromConfigsKeepsVisibleConfigsOnDecodeError(t *testing.T) {
-	check := &plan.CheckDef{
-		Name: "chk_v_positive",
-		Check: &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_bool)},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Bval{Bval: true},
-				},
-			},
-		},
+	userProperty := &plan.Property{
+		Key:   "__mo_check_constraints",
+		Value: "mo_check_constraints_v1:<user-value>",
 	}
-	cstr, err := PlanDefToCstrDef(&plan.TableDef{Checks: []*plan.CheckDef{check}})
-	require.NoError(t, err)
-	checkConfigs := cstr.Cts[0].(*StreamConfigsDef).Configs
+	tableDef := &plan.TableDef{
+		Checks: []*plan.CheckDef{check},
+		Defs: []*plan.TableDef_DefType{{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: []*plan.Property{userProperty}},
+			},
+		}},
+	}
 
-	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{
-		{
-			Key:   "visible-before",
-			Value: "before",
-		},
-		checkConfigs[0],
-		{
-			Key:   CheckConstraintsConfigKey,
-			Value: "not-base64",
-		},
-		{
-			Key:   "visible-after",
-			Value: "after",
-		},
-	})
+	cstr, err := PlanDefToCstrDef(tableDef)
 	require.NoError(t, err)
-	require.Len(t, visibleConfigs, 3)
-	require.Equal(t, "visible-before", visibleConfigs[0].Key)
-	require.Equal(t, CheckConstraintsConfigKey, visibleConfigs[1].Key)
-	require.Equal(t, "not-base64", visibleConfigs[1].Value)
-	require.Equal(t, "visible-after", visibleConfigs[2].Key)
-	require.Len(t, checks, 1)
-	require.Equal(t, check.Name, checks[0].Name)
+	require.Len(t, cstr.Cts, 2)
+	require.Equal(t, userProperty, cstr.Cts[0].(*StreamConfigsDef).Configs[0])
+	require.Equal(t, check, cstr.Cts[1].(*CheckConstraintsDef).Checks[0])
+
+	data, err := cstr.MarshalBinary()
+	require.NoError(t, err)
+	decoded := &ConstraintDef{}
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Len(t, decoded.Cts, 2)
+	require.Equal(t, userProperty, decoded.Cts[0].(*StreamConfigsDef).Configs[0])
+	decodedCheck := decoded.Cts[1].(*CheckConstraintsDef).Checks[0]
+	require.Equal(t, check.Name, decodedCheck.Name)
+	require.True(t, decodedCheck.IsGeneratedName)
+	require.True(t, decodedCheck.NotEnforced)
+	require.NotNil(t, decodedCheck.Check)
 }
 
-func TestSplitCheckConstraintsFromConfigsKeepsDecodableUntaggedUserProperty(t *testing.T) {
-	value, err := MarshalCheckConstraints([]*plan.CheckDef{{Name: "must_stay_user_data"}})
-	require.NoError(t, err)
-	userValue := strings.TrimPrefix(value, checkConstraintsValuePrefix)
-
-	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{{
-		Key:   CheckConstraintsConfigKey,
-		Value: userValue,
-	}})
-	require.NoError(t, err)
-	require.Len(t, visibleConfigs, 1)
-	require.Equal(t, userValue, visibleConfigs[0].Value)
-	require.Empty(t, checks)
-
-	_, err = UnmarshalCheckConstraints(userValue)
-	require.ErrorContains(t, err, "missing its version prefix")
+func TestCheckConstraintsDefPBConversion(t *testing.T) {
+	def := &CheckConstraintsDef{Checks: []*plan.CheckDef{{Name: "chk"}}}
+	pbDef := def.ToPBVersion()
+	require.Equal(t, def, pbDef.FromPBVersion())
 }
 
-func TestSplitCheckConstraintsFromConfigsDropsDamagedTaggedPayload(t *testing.T) {
-	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{
-		{Key: "visible", Value: "value"},
-		{Key: CheckConstraintsConfigKey, Value: checkConstraintsValuePrefix + "not-base64"},
-	})
-	require.NoError(t, err)
-	require.Len(t, visibleConfigs, 1)
-	require.Equal(t, "visible", visibleConfigs[0].Key)
-	require.Empty(t, checks)
+func TestCheckConstraintsDefCorruptionFailsClosed(t *testing.T) {
+	data := []byte{byte(CheckConstraint)}
+	data = binary.BigEndian.AppendUint64(data, 1)
+	data = binary.BigEndian.AppendUint64(data, 10)
+	data = append(data, 0xff)
+
+	err := (&ConstraintDef{}).UnmarshalBinary(data)
+	require.True(t, errors.Is(err, io.ErrUnexpectedEOF))
+
+	hugeCount := []byte{byte(CheckConstraint)}
+	hugeCount = binary.BigEndian.AppendUint64(hugeCount, ^uint64(0))
+	err = (&ConstraintDef{}).UnmarshalBinary(hugeCount)
+	require.True(t, errors.Is(err, io.ErrUnexpectedEOF))
 }

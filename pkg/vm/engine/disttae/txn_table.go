@@ -1534,14 +1534,9 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
-					if err != nil {
-						logutil.Errorf("txn-table error: unmarshal table check constraint information: %s-%s, err: %v",
-							tbl.db.databaseName, tbl.tableName, err)
-						return nil
-					}
-					properties = append(properties, visibleConfigs...)
-					checks = append(checks, checkDefs...)
+					properties = append(properties, k.Configs...)
+				case *engine.CheckConstraintsDef:
+					checks = append(checks, k.Checks...)
 				}
 			}
 		}

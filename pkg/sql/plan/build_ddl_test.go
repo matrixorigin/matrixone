@@ -675,6 +675,36 @@ func TestBuildCreateTableCheckConstraintBindingScope(t *testing.T) {
 	})
 }
 
+func TestBuildCreateTableCheckConstraintRejectsUnstableReferences(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, tt := range []struct {
+		name    string
+		sql     string
+		errText string
+	}{
+		{
+			name:    "user variable",
+			sql:     "CREATE TABLE t_check_user_var (a INT, CHECK (a > @limit))",
+			errText: "cannot refer to a variable",
+		},
+		{
+			name:    "session variable",
+			sql:     "CREATE TABLE t_check_session_var (a INT, CHECK (a > @@session.auto_increment_offset))",
+			errText: "cannot refer to a variable",
+		},
+		{
+			name:    "auto increment column",
+			sql:     "CREATE TABLE t_check_auto_incr (id INT AUTO_INCREMENT PRIMARY KEY, CHECK (id > 0))",
+			errText: "cannot refer to auto-increment column 'id'",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, tt.sql)
+			require.ErrorContains(t, err, tt.errText)
+		})
+	}
+}
+
 func TestBuildCreateTableKeepsNamedTableCheckConstraint(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -1423,15 +1453,19 @@ func TestConstructAddedPartitionDefsErrors(t *testing.T) {
 	})
 }
 
-func TestBuildCreateTableRejectsReservedCheckConstraintProperty(t *testing.T) {
+func TestBuildCreateTablePreservesLegacyCheckConstraintProperty(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"CREATE TABLE reserved_check_property (a INT) PROPERTIES('__mo_check_constraints' = 'user-value')", 1)
+		"CREATE TABLE legacy_check_property (a INT) PROPERTIES('__mo_check_constraints' = 'mo_check_constraints_v1:<user-value>')", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(&mock.ctxt, stmt, false)
-	require.ErrorContains(t, err, "table property key \"__mo_check_constraints\" is reserved for internal use")
+	p, err := BuildPlan(&mock.ctxt, stmt, false)
+	require.NoError(t, err)
+	properties := p.GetDdl().GetCreateTable().GetTableDef().GetDefs()[0].GetProperties().GetProperties()
+	require.Len(t, properties, 1)
+	require.Equal(t, "__mo_check_constraints", properties[0].Key)
+	require.Equal(t, "mo_check_constraints_v1:<user-value>", properties[0].Value)
 }
 
 func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {

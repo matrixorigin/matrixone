@@ -415,10 +415,10 @@ func Test_extractTopLevelCheckDefs(t *testing.T) {
 	if len(checks) != 2 {
 		t.Fatalf("expected 2 top-level check defs, got %d: %#v", len(checks), checks)
 	}
-	if checks[0] != "CONSTRAINT chk_id CHECK(id > 0)" {
+	if checks[0] != "CONSTRAINT `chk_id` CHECK (`id` > 0)" {
 		t.Fatalf("unexpected first check def: %s", checks[0])
 	}
-	if checks[1] != "CHECK(score>0)" {
+	if checks[1] != "CHECK (`score` > 0)" {
 		t.Fatalf("unexpected second check def: %s", checks[1])
 	}
 }
@@ -426,6 +426,7 @@ func Test_extractTopLevelCheckDefs(t *testing.T) {
 func TestConstructCreateTableSQLPreservesLegacyChecksWithoutCompilerContext(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:      "legacy_checks",
+		DbName:    "test",
 		TableType: catalog.SystemOrdinaryRel,
 		Createsql: "CREATE TABLE legacy_checks (a INT, CONSTRAINT chk_a CHECK (a > 0), CHECK (a < 10) NOT ENFORCED)",
 		Cols: []*plan.ColDef{{
@@ -438,8 +439,8 @@ func TestConstructCreateTableSQLPreservesLegacyChecksWithoutCompilerContext(t *t
 
 	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
 	require.NoError(t, err)
-	require.Contains(t, createSQL, "CONSTRAINT chk_a CHECK (a > 0)")
-	require.Contains(t, createSQL, "CHECK (a < 10) NOT ENFORCED")
+	require.Contains(t, createSQL, "CONSTRAINT `chk_a` CHECK (`a` > 0)")
+	require.Contains(t, createSQL, "CHECK (`a` < 10) NOT ENFORCED")
 }
 
 func TestConstructCreateTableSQLPreservesLegacyColumnChecksWithoutCompilerContext(t *testing.T) {
@@ -472,6 +473,34 @@ func TestConstructCreateTableSQLPreservesLegacyColumnChecksWithoutCompilerContex
 	stmt, err := mysql.ParseOne(context.Background(), createSQL, 1)
 	require.NoError(t, err, "generated legacy CREATE TABLE must be executable: %s", createSQL)
 	stmt.Free()
+}
+
+func TestConstructCreateTableSQLPreservesLegacyCheckDefinitionOrder(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "legacy_check_order",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_check_order (a INT CONSTRAINT __mo_chk_1 CHECK (a > 0), b INT, CHECK (b > 0))",
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}, OriginName: "a"},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}, OriginName: "b"},
+		},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	namedPos := strings.Index(createSQL, "CONSTRAINT `__mo_chk_1` CHECK (`a` > 0)")
+	anonymousPos := strings.Index(createSQL, "CHECK (`b` > 0)")
+	require.NotEqual(t, -1, namedPos)
+	require.NotEqual(t, -1, anonymousPos)
+	require.Less(t, namedPos, anonymousPos)
+
+	stmt, err := mysql.ParseOne(context.Background(), createSQL, 1)
+	require.NoError(t, err, "generated legacy CREATE TABLE must preserve replayable constraint order: %s", createSQL)
+	stmt.Free()
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, createSQL)
+	require.NoError(t, err, "replaying legacy CREATE TABLE must not create duplicate generated CHECK names: %s", createSQL)
 }
 
 func Test_SingleShowCreateTable(t *testing.T) {

@@ -1193,6 +1193,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.StreamConfigsDef:
 			newCt.Cts = append(newCt.Cts, t)
+		case *engine.CheckConstraintsDef:
+			newCt.Cts = append(newCt.Cts, t)
 		}
 	}
 	if !originHasFkDef {

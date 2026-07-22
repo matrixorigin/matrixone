@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -332,14 +331,9 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
-					if err != nil {
-						logutil.Errorf("memory-engine error: unmarshal table check constraint information: %s-%s, err: %v",
-							t.databaseName, t.tableName, err)
-						return nil
-					}
-					properties = append(properties, visibleConfigs...)
-					checks = append(checks, checkDefs...)
+					properties = append(properties, k.Configs...)
+				case *engine.CheckConstraintsDef:
+					checks = append(checks, k.Checks...)
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
