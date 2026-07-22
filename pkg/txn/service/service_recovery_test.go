@@ -275,6 +275,39 @@ func TestRecoveryRefreshesStaleParticipantRoutes(t *testing.T) {
 	}
 }
 
+func TestRecoveryReusesAuthoritativeSnapshotAcrossTransactions(t *testing.T) {
+	sender := newRecoveryRouteSender()
+	s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+	defer s.stopper.Stop()
+	cluster := &staleRecoveryCluster{
+		current: []metadata.TNService{{
+			TxnServiceAddress: "current-tn-2",
+			Shards: []metadata.TNShard{{
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+				ReplicaID:     200,
+			}},
+		}},
+	}
+	runtime.ServiceRuntime(s.sid).SetGlobalVariables(runtime.ClusterService, cluster)
+
+	require.NoError(t, s.stopper.RunTask(s.doRecovery))
+	for txnID := byte(1); txnID <= 2; txnID++ {
+		meta := NewTestTxn(txnID, 1, 1)
+		meta.Status = txn.TxnStatus_Prepared
+		meta.PreparedTS = NewTestTimestamp(2)
+		meta.TNShards = append(meta.TNShards, metadata.TNShard{
+			TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+		})
+		s.txnC <- meta
+	}
+	close(s.txnC)
+	s.waitRecoveryCompleted()
+
+	cluster.mu.Lock()
+	assert.Equal(t, 1, cluster.refreshCalls)
+	cluster.mu.Unlock()
+}
+
 func TestRecoveryRestoresRoutesBeforeCommitTNShard(t *testing.T) {
 	sender := newRecoveryRouteSender()
 	sender.block = true

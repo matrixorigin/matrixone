@@ -52,47 +52,69 @@ func (s *service) doRecovery(ctx context.Context) {
 	}
 }
 
-func (s *service) resolveRecoveryTNShards(
+type recoveryRouteResolver struct {
+	cluster     clusterservice.MOCluster
+	services    []metadata.TNService
+	initialized bool
+}
+
+func (r *recoveryRouteResolver) refresh(
 	ctx context.Context,
-	txnMeta txn.TxnMeta,
-) (txn.TxnMeta, bool) {
+	s *service,
+) bool {
 	const retryInterval = 100 * time.Millisecond
-	var cluster clusterservice.MOCluster
-	for cluster == nil {
+	for r.cluster == nil {
 		var err error
-		cluster, err = clusterservice.GetMOClusterWithContext(ctx, s.sid)
+		r.cluster, err = clusterservice.GetMOClusterWithContext(ctx, s.sid)
 		if err == nil {
 			break
 		}
 		if !waitRecoveryRouteRetry(ctx, retryInterval) {
-			return txnMeta, false
+			return false
 		}
 	}
 
 	for {
 		// A complete cached route can still name a replaced replica. Establish
 		// freshness before accepting ReplicaID and Address for recovery RPCs.
-		if refresher, ok := cluster.(clusterservice.AuthoritativeRefresher); ok {
+		if refresher, ok := r.cluster.(clusterservice.AuthoritativeRefresher); ok {
 			if err := refresher.Refresh(ctx); err != nil {
 				if ctx.Err() != nil || !waitRecoveryRouteRetry(ctx, retryInterval) {
-					return txnMeta, false
+					return false
 				}
 				continue
 			}
 		}
-		services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+		services, err := clusterservice.GetAllTNServicesWithContext(ctx, r.cluster)
 		if err != nil {
 			if !waitRecoveryRouteRetry(ctx, retryInterval) {
-				return txnMeta, false
+				return false
 			}
 			continue
 		}
-		if shards, ok := s.resolveRecoveryTNShardsFromSnapshot(txnMeta.TNShards, services); ok {
+		r.services = services
+		r.initialized = true
+		return true
+	}
+}
+
+func (s *service) resolveRecoveryTNShards(
+	ctx context.Context,
+	txnMeta txn.TxnMeta,
+	resolver *recoveryRouteResolver,
+) (txn.TxnMeta, bool) {
+	const retryInterval = 100 * time.Millisecond
+	if !resolver.initialized && !resolver.refresh(ctx, s) {
+		return txnMeta, false
+	}
+
+	for {
+		if shards, ok := s.resolveRecoveryTNShardsFromSnapshot(txnMeta.TNShards, resolver.services); ok {
 			txnMeta.TNShards = shards
 			return txnMeta, true
 		}
 
-		if !waitRecoveryRouteRetry(ctx, retryInterval) {
+		if !waitRecoveryRouteRetry(ctx, retryInterval) || !resolver.refresh(ctx, s) {
 			return txnMeta, false
 		}
 	}
@@ -199,6 +221,7 @@ func (s *service) addLog(txnMeta txn.TxnMeta) {
 
 func (s *service) end() {
 	defer s.finishRecovery()
+	resolver := new(recoveryRouteResolver)
 	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
@@ -209,7 +232,7 @@ func (s *service) end() {
 		// Fold the complete log stream before waiting for live routes. A later
 		// terminal record may remove an obsolete prepared transaction entirely.
 		var resolved bool
-		txnMeta, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txnMeta)
+		txnMeta, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txnMeta, resolver)
 		if !resolved {
 			return false
 		}
