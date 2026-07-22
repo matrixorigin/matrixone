@@ -552,7 +552,13 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
 		}
-		newPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), originPrepareStmt)
+		compilerCtx := ses.GetTxnCompileCtx()
+		newPlan, err := func() (*plan.Plan, error) {
+			currentDatabase := compilerCtx.GetDatabase()
+			compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
+			defer compilerCtx.SetDatabase(currentDatabase)
+			return buildPlan(reqCtx, ses, compilerCtx, originPrepareStmt)
+		}()
 		if err != nil {
 			return nil, nil, nil, "", err
 		}

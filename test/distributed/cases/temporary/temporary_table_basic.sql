@@ -386,3 +386,35 @@ execute prepared_shadow_stmt;
 deallocate prepare prepared_shadow_stmt;
 drop table prepared_shadow;
 drop database temp_db;
+
+-- ============================================================================
+-- 测试分类 11: 重建时保留 PREPARE 阶段的默认数据库
+-- ============================================================================
+
+drop database if exists prepared_db1;
+drop database if exists prepared_db2;
+create database prepared_db1;
+create database prepared_db2;
+
+use prepared_db1;
+create table t(v int);
+insert into t values (1);
+prepare prepared_db_stmt from 'select v from t';
+
+use prepared_db2;
+create table t(v int);
+insert into t values (2);
+create temporary table unrelated_temp(v int);
+execute prepared_db_stmt;
+drop table unrelated_temp;
+
+create temporary table prepared_db1.t(v int);
+insert into prepared_db1.t values (3);
+execute prepared_db_stmt;
+
+drop table prepared_db1.t;
+execute prepared_db_stmt;
+
+deallocate prepare prepared_db_stmt;
+drop database prepared_db1;
+drop database prepared_db2;

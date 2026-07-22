@@ -1765,6 +1765,7 @@ func createPrepareStmt(
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
 		remapDb:             maps.Clone(execCtx.remapDb),
+		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
 		getFromSendLongData: make(map[int]struct{}),
 	}
