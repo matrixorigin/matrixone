@@ -180,7 +180,7 @@ create snapshot `SELECT` for database sp_test02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 select    2025-07-19 05:52:26.022949    database    sys    sp_test02
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
 sname    level    account_name    database_name    table_name
 select    database    sys    sp_test02
 drop snapshot `SELECT`;
@@ -194,7 +194,7 @@ create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 auto_increment    2025-07-19 05:52:26.069177    database    sys    sp_test03
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
 sname    level    account_name    database_name    table_name
 auto_increment    database    sys    sp_test03
 drop snapshot AUTO_INCREMENT;
@@ -251,10 +251,10 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 spsp03    2025-07-19 05:52:26.26781    table    sys    db02    table01
 spsp02    2025-07-19 05:52:26.260618    database    sys    db02
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'database';
 sname    level    account_name    database_name    table_name
 spsp02    database    sys    db02
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'table';
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'table';
 sname    level    account_name    database_name    table_name
 spsp03    table    sys    db02    table01
 drop snapshot spsp02;

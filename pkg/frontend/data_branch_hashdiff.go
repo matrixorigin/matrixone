@@ -121,7 +121,7 @@ func lcaProbeColumnLayout(
 				"DATA BRANCH target column %q is unavailable", name,
 			)
 		}
-		lcaCol := dataBranchColumnDefByIdentity(lcaDef, targetCol)
+		lcaCol := dataBranchColumnDefByLogicalName(lcaDef, targetCol)
 		candidate := dataBranchColumnDefByName(lcaDef, targetCol.Name)
 		if candidate != nil &&
 			isDataBranchDerivedCompositePKColumn(lcaDef, targetDef, candidate, targetCol) {
@@ -2707,10 +2707,6 @@ func dataBranchSourceColToTargetIdx(
 			}
 		}
 	}
-	targetCols := make(map[string]*plan2.ColDef, len(targetDef.Cols))
-	for _, col := range targetDef.Cols {
-		targetCols[strings.ToLower(col.Name)] = col
-	}
 	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
 	for _, idx := range targetOnlyIdxes {
 		targetOnly[idx] = struct{}{}
@@ -2720,18 +2716,20 @@ func dataBranchSourceColToTargetIdx(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		targetIdx := dataBranchColumnIndexByName(targetColNames, col.Name)
+		targetCol := dataBranchColumnDefByLogicalName(targetDef, col)
+		targetIdx := -1
+		if targetCol != nil {
+			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
+		}
 		mapping = append(mapping, targetIdx)
 		if targetIdx < 0 {
 			continue
 		}
-		targetCol, ok := targetCols[strings.ToLower(col.Name)]
-		derivedCompositePK := ok &&
+		derivedCompositePK :=
 			isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, col, targetCol)
-		sameIdentity := ok && (col.Seqnum == targetCol.Seqnum || derivedCompositePK)
-		sameType := ok && col.Typ.Id == targetCol.Typ.Id &&
+		sameType := col.Typ.Id == targetCol.Typ.Id &&
 			(dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) || derivedCompositePK)
-		if !sameIdentity || !sameType {
+		if !sameType {
 			if _, isTargetOnly := targetOnly[targetIdx]; isTargetOnly {
 				// This column does not exist on the base endpoint and is excluded
 				// from comparison and MERGE apply. Its old physical representation
@@ -2739,12 +2737,6 @@ func dataBranchSourceColToTargetIdx(
 				// and let endpoint hydration restore a current value when needed.
 				mapping[len(mapping)-1] = -1
 				continue
-			}
-			if ok && !sameIdentity {
-				return nil, moerr.NewNotSupportedNoCtxf(
-					"historical data branch column %s has a different identity from the endpoint schema",
-					col.Name,
-				)
 			}
 			return nil, moerr.NewNotSupportedNoCtxf(
 				"historical data branch column %s has a different type from the endpoint schema",
@@ -2781,7 +2773,6 @@ func isDataBranchDerivedCompositePKColumn(
 		sourcePart := dataBranchColumnDefByName(sourceDef, sourceName)
 		targetPart := dataBranchColumnDefByName(targetDef, targetName)
 		if sourcePart == nil || targetPart == nil ||
-			sourcePart.Seqnum != targetPart.Seqnum ||
 			sourcePart.Typ.Id != targetPart.Typ.Id ||
 			!dataBranchColumnTypeAttributesEqual(sourcePart.Typ, targetPart.Typ) ||
 			sourcePart.NotNull != targetPart.NotNull {
@@ -2903,6 +2894,22 @@ func overlayDataBranchProbeResult(
 	return err
 }
 
+func dataBranchHistoricalProbeStuff(
+	ctx context.Context,
+	tblStuff tableStuff,
+	endpointRel engine.Relation,
+) tableStuff {
+	probeStuff := tblStuff
+	probeStuff.lcaRel = endpointRel
+	if endpointRel.GetTableID(ctx) == tblStuff.tarRel.GetTableID(ctx) {
+		// Target-side hydration restores the current values of columns that
+		// were absent or incompatible in an older physical generation.
+		probeStuff.tarRel = endpointRel
+		probeStuff.def.tarOnlyIdxes = nil
+	}
+	return probeStuff
+}
+
 func hydrateHistoricalDataBranchBatch(
 	ctx context.Context,
 	ses *Session,
@@ -2930,8 +2937,7 @@ func hydrateHistoricalDataBranchBatch(
 	}
 	tBat.SetRowCount(projected.RowCount())
 
-	probeStuff := tblStuff
-	probeStuff.lcaRel = endpointRel
+	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
 	probe, err := runLCAProbeWithReaderFallback(
 		ctx, ses, tBat, probeStuff, endpointSnapshot,
 	)

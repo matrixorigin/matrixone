@@ -151,6 +151,34 @@ drop snapshot history_drop_current_s;
 select count(*) as dropped_current_lineage_after_owner_drop from mo_catalog.mo_branch_metadata where table_id in (@history_drop_current_t2, @history_drop_current_t3) and level = 'alter';
 select count(*) as dropped_current_snapshots_after_owner_drop from mo_catalog.mo_snapshots where sname in (concat('__mo_branch_', cast(@history_drop_current_t2 as char)), concat('__mo_branch_', cast(@history_drop_current_t3 as char))) and kind = 'branch';
 
+-- Account- and database-level owners must retain the same scope evidence
+-- after current-table-first DROP, not only table-level owners.
+drop snapshot if exists history_account_s;
+create table history_account(a int primary key, b int);
+create snapshot history_account_s for account sys;
+alter table history_account add column c int default 0;
+set @history_account_tid = (select rel_id from mo_catalog.mo_tables where reldatabase = 'br_schema_drift' and relname = 'history_account');
+drop table history_account;
+select count(*) as account_lineage_before_owner_drop from mo_catalog.mo_branch_metadata where table_id = @history_account_tid and level = 'alter';
+select count(*) as account_snapshots_before_owner_drop from mo_catalog.mo_snapshots where sname = concat('__mo_branch_', cast(@history_account_tid as char)) and kind = 'branch';
+drop snapshot history_account_s;
+select count(*) as account_lineage_after_owner_drop from mo_catalog.mo_branch_metadata where table_id = @history_account_tid and level = 'alter';
+select count(*) as account_snapshots_after_owner_drop from mo_catalog.mo_snapshots where sname = concat('__mo_branch_', cast(@history_account_tid as char)) and kind = 'branch';
+
+drop snapshot if exists history_database_s;
+create table history_database_base(a int primary key, b int);
+data branch create table history_database from history_database_base;
+create snapshot history_database_s for database br_schema_drift;
+alter table history_database add column c int default 0;
+set @history_database_tid = (select rel_id from mo_catalog.mo_tables where reldatabase = 'br_schema_drift' and relname = 'history_database');
+data branch delete table history_database;
+select count(*) as database_lineage_before_owner_drop from mo_catalog.mo_branch_metadata where table_id = @history_database_tid and level like 'alter%';
+select count(*) as database_snapshots_before_owner_drop from mo_catalog.mo_snapshots where sname = concat('__mo_branch_', cast(@history_database_tid as char)) and kind = 'branch';
+drop snapshot history_database_s;
+select count(*) as database_lineage_after_owner_drop from mo_catalog.mo_branch_metadata where table_id = @history_database_tid and level = 'alter';
+select count(*) as database_snapshots_after_owner_drop from mo_catalog.mo_snapshots where sname = concat('__mo_branch_', cast(@history_database_tid as char)) and kind = 'branch';
+drop table history_database_base;
+
 -- A live logical branch owns the connected ALTER component. Deleting the
 -- final branch releases both its protect snapshot and the ALTER-only edge.
 create table history_live_base(a int primary key, b int);

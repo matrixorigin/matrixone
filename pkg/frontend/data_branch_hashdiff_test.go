@@ -1083,19 +1083,26 @@ func newTestBranchTableDef(tableName, dataColumnName string) *plan.TableDef {
 
 func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
 	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
-		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
-		{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "old_name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar)}},
 		{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}},
 	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "name", OriginName: "old_name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: "added", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
 
-	layout := lcaProbeColumnLayout(
+	layout, err := lcaProbeColumnLayout(
 		lcaDef,
+		targetDef,
 		[]string{"id", "name", "added"},
 		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
 		[]int{2},
 	)
 
-	require.Equal(t, []string{"id", "name"}, layout.attrs)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "old_name"}, layout.attrs)
 	require.Equal(t, []int{0, 1}, layout.targetIdxes)
 	require.Equal(t, []types.T{types.T_int64, types.T_varchar}, []types.T{layout.types[0].Oid, layout.types[1].Oid})
 }
@@ -1182,6 +1189,29 @@ func TestLCAProbeColumnLayoutIgnoresTargetOnlyRowIDCollision(t *testing.T) {
 	require.Equal(t, []int{0}, layout.targetIdxes)
 }
 
+func TestLCAProbeColumnLayoutIgnoresUnrelatedIdentityCollision(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "c", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	layout, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"a", "c"},
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, layout.attrs)
+	require.Equal(t, []int{0}, layout.targetIdxes)
+}
+
 func TestLCAProbeResultTargetIndexes(t *testing.T) {
 	layout := lcaProbeLayout{targetIdxes: []int{1, 2}}
 
@@ -1197,6 +1227,27 @@ func TestLCAProbeResultTargetIndexes(t *testing.T) {
 	require.ErrorContains(t, err, "unexpected LCA probe result width")
 }
 
+func TestDataBranchHistoricalProbeStuff(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	targetRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	targetRel.EXPECT().GetTableID(ctx).Return(uint64(10)).AnyTimes()
+	baseRel.EXPECT().GetTableID(ctx).Return(uint64(20)).AnyTimes()
+	tblStuff := tableStuff{tarRel: targetRel, baseRel: baseRel}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	targetProbe := dataBranchHistoricalProbeStuff(ctx, tblStuff, targetRel)
+	require.Same(t, targetRel, targetProbe.lcaRel)
+	require.Same(t, targetRel, targetProbe.tarRel)
+	require.Nil(t, targetProbe.def.tarOnlyIdxes)
+
+	baseProbe := dataBranchHistoricalProbeStuff(ctx, tblStuff, baseRel)
+	require.Same(t, baseRel, baseProbe.lcaRel)
+	require.Same(t, targetRel, baseProbe.tarRel)
+	require.Equal(t, []int{2}, baseProbe.def.tarOnlyIdxes)
+}
 func makeTestBranchTableStuffFakePK(tblStuff *tableStuff) {
 	tblStuff.def.pkKind = fakeKind
 	tblStuff.def.pkColIdxes = []int{0, 1}
@@ -1355,6 +1406,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		targetTblDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetTblDef.Cols[1].OriginName = "b"
 		targetTblDef.Cols[1].Name = "bb"
 		tblStuff.def.colNames[1] = "bb"
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
@@ -2646,7 +2698,7 @@ func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *tes
 	require.Equal(t, baseline, mp.CurrNB())
 }
 
-func TestDataBranchSourceColToTargetIdxRejectsHistoricalIdentityDrift(t *testing.T) {
+func TestDataBranchSourceColToTargetIdxAllowsCopyAlterIdentityReassignment(t *testing.T) {
 	sourceDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
 			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -2662,13 +2714,9 @@ func TestDataBranchSourceColToTargetIdxRejectsHistoricalIdentityDrift(t *testing
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
 	}
 
-	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
-	require.ErrorContains(t, err, "column b has a different identity")
-
-	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, []int{1})
+	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
 	require.NoError(t, err)
-	require.Equal(t, []int{0, -1}, mapping,
-		"target-only historical identity drift must be projected as NULL")
+	require.Equal(t, []int{0, 1}, mapping)
 }
 
 func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *testing.T) {
@@ -2737,13 +2785,14 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 
 	targetDef.Pkey.Names = []string{"select", "line item"}
 	targetDef.Cols[1].Seqnum = 4
-	require.False(t, isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, sourceCPK, targetCPK))
-	_, err = dataBranchSourceColToTargetIdx(
+	require.True(t, isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, sourceCPK, targetCPK))
+	mapping, err = dataBranchSourceColToTargetIdx(
 		sourceDef, targetDef,
 		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
 		[]int{2},
 	)
-	require.ErrorContains(t, err, "column line item has a different identity")
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 3}, mapping)
 
 	targetDef.Cols[1].Seqnum = 1
 	targetDef.Cols[1].Typ.Id = int32(types.T_varchar)

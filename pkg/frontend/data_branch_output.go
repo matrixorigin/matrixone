@@ -465,6 +465,27 @@ func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2
 	return nil
 }
 
+func dataBranchColumnDefByLogicalName(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if tableDef == nil || sourceColDef == nil {
+		return nil
+	}
+	if colDef := dataBranchColumnDefByName(tableDef, sourceColDef.Name); colDef != nil {
+		return colDef
+	}
+	if originName := sourceColDef.GetOriginCaseName(); !strings.EqualFold(originName, sourceColDef.Name) {
+		if colDef := dataBranchColumnDefByName(tableDef, originName); colDef != nil {
+			return colDef
+		}
+	}
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil && !strings.EqualFold(colDef.GetOriginCaseName(), colDef.Name) &&
+			strings.EqualFold(colDef.GetOriginCaseName(), sourceColDef.Name) {
+			return colDef
+		}
+	}
+	return nil
+}
+
 // dataBranchColumnsByIdentity maps each source column name to the column with
 // the same stable identity in the destination definition. Column names are
 // intentionally not part of schema equivalence: a branch may rename a column

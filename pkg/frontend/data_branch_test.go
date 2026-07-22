@@ -1208,6 +1208,122 @@ func TestCheckSchemaCompatibility_TypeMismatch(t *testing.T) {
 	require.Contains(t, err.Error(), "has different types")
 }
 
+func TestCheckSchemaCompatibility_AllowsCopyAlterIdentityReassignment(t *testing.T) {
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	targetDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(targetDef, baseDef)
+	require.NoError(t, err)
+
+	// Physical reordering preserves Seqnum and remains compatible.
+	targetDef.Cols[1].Seqnum = 1
+	targetDef.Cols[0], targetDef.Cols[1] = targetDef.Cols[1], targetDef.Cols[0]
+	_, _, _, err = checkSchemaCompatibility(targetDef, baseDef)
+	require.NoError(t, err)
+}
+
+func TestValidateDataBranchColumnLineage(t *testing.T) {
+	tableDef := func(cols ...*plan.ColDef) *plan.TableDef {
+		return &plan.TableDef{Cols: cols}
+	}
+	col := func(name string, id uint64, seq uint32) *plan.ColDef {
+		return &plan.ColDef{
+			Name: name, ColId: id, Seqnum: seq,
+			Typ: plan.Type{Id: int32(types.T_int64)},
+		}
+	}
+
+	t.Run("copy alter preserves same-name columns", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 1), col("c", 11, 0), col("b", 12, 2)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 20, 0), col("b", 21, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, false},
+		))
+	})
+
+	t.Run("drop and add same name is discontinuous", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 0)),
+			tableDef(col("a", 20, 0), col("b", 21, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 30, 0), col("b", 31, 1)),
+		}
+		err := validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true, true}, baseDefs, []bool{false, false},
+		)
+		require.ErrorContains(t, err, "column 'b' has different identity")
+	})
+
+	t.Run("independent additions are compatible", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 10, 0), col("c", 11, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 20, 0), col("c", 21, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, true},
+		))
+	})
+
+	t.Run("added column cannot be dropped and recreated", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 10, 0), col("c", 11, 1)),
+			tableDef(col("a", 20, 0)),
+			tableDef(col("a", 30, 0), col("c", 31, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 40, 0), col("c", 41, 1)),
+		}
+		err := validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true, true, true}, baseDefs, []bool{false, true},
+		)
+		require.ErrorContains(t, err, "column 'c' has different identity")
+	})
+
+	t.Run("rename across a clone edge preserves identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), &plan.ColDef{
+				Name: "bb", OriginName: "b", ColId: 2, Seqnum: 1,
+				Typ: plan.Type{Id: int32(types.T_int64)},
+			}),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, false}, baseDefs, []bool{false, false},
+		))
+	})
+}
+
 func TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes(t *testing.T) {
 	tarDef := &plan.TableDef{
 		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
