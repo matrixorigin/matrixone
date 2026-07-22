@@ -1547,6 +1547,100 @@ func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
 	)
 }
 
+func TestRemoteLockWaitTimeoutDoesNotRestartLateAbsoluteDeadline(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			owner := services[0]
+			origin := services[1]
+			const tableID = uint64(10)
+			row := []byte{1}
+			holderTxn := []byte("holder")
+			waiterTxn := []byte("late-waiter")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			mustAddTestLock(t, ctx, owner, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			ownerEntered := make(chan struct{})
+			releaseOwner := make(chan struct{})
+			var once sync.Once
+			var releaseOnce sync.Once
+			releaseOwnerRequest := func() {
+				releaseOnce.Do(func() { close(releaseOwner) })
+			}
+			owner.option.beforeRemoteLockBindCheck = func() {
+				once.Do(func() { close(ownerEntered) })
+				<-releaseOwner
+			}
+			resultC := make(chan error, 1)
+			waiterDone := false
+			defer func() {
+				owner.option.beforeRemoteLockBindCheck = nil
+				releaseOwnerRequest()
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cleanupCancel()
+				if err := owner.unlockWithContext(cleanupCtx, holderTxn, timestamp.Timestamp{}); err != nil {
+					t.Errorf("release holder during cleanup: %v", err)
+				}
+				if !waiterDone {
+					select {
+					case <-resultC:
+					case <-cleanupCtx.Done():
+						t.Errorf("remote waiter did not exit during cleanup: %v", cleanupCtx.Err())
+					}
+				}
+				if err := origin.unlockWithContext(cleanupCtx, waiterTxn, timestamp.Timestamp{}); err != nil {
+					t.Errorf("release waiter during cleanup: %v", err)
+				}
+			}()
+
+			deadline := time.Now().Add(time.Second)
+			go func() {
+				_, err := origin.Lock(ctx, tableID, [][]byte{row}, waiterTxn, pb.LockOptions{
+					Granularity:      pb.Granularity_Row,
+					Mode:             pb.LockMode_Exclusive,
+					Policy:           pb.WaitPolicy_Wait,
+					LockWaitTimeout:  1,
+					LockWaitDeadline: deadline.UnixNano(),
+				})
+				resultC <- err
+			}()
+
+			select {
+			case <-ownerEntered:
+			case <-ctx.Done():
+				t.Fatalf("remote request did not reach owner: %v", ctx.Err())
+			}
+			// Admission at the owner has already preserved the caller's absolute
+			// deadline. Release only after that budget expires; the async waiter
+			// must not turn the rounded one-second field into a fresh budget.
+			if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					t.Fatalf("test context expired before releasing owner: %v", ctx.Err())
+				}
+			}
+			releaseOwnerRequest()
+			releasedAt := time.Now()
+
+			var err error
+			select {
+			case err = <-resultC:
+				waiterDone = true
+			case <-time.After(750 * time.Millisecond):
+				t.Fatalf("remote async waiter restarted an expired absolute deadline")
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout), "unexpected error: %v", err)
+			require.Less(t, time.Since(releasedAt), 750*time.Millisecond)
+		},
+	)
+}
+
 func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
 	txn1 := []byte("txn1")
 	txn2 := []byte("txn2")
