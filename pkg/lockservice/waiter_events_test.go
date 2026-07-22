@@ -45,7 +45,7 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 	createAt := time.Unix(100, 0)
 	carriedDeadline := createAt.Add(250 * time.Millisecond)
 
-	deadline, err := getLockWaitDeadline(createAt, LockOptions{
+	deadline, err := getLockWaitDeadline(createAt, context.Background(), LockOptions{
 		LockOptions: pb.LockOptions{
 			LockWaitTimeout:  1,
 			LockWaitDeadline: carriedDeadline.UnixNano(),
@@ -55,7 +55,7 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 	require.Equal(t, carriedDeadline, deadline)
 	require.ErrorIs(t, err, ErrLockTimeout)
 
-	ownerDeadline, err := getLockWaitDeadline(createAt, LockOptions{
+	ownerDeadline, err := getLockWaitDeadline(createAt, context.Background(), LockOptions{
 		LockOptions: pb.LockOptions{
 			LockWaitTimeout:  1,
 			LockWaitDeadline: carriedDeadline.UnixNano(),
@@ -64,6 +64,26 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 	})
 	require.Equal(t, createAt.Add(100*time.Millisecond), ownerDeadline)
 	require.ErrorIs(t, err, ErrRemoteLockWaitTimeout)
+}
+
+func TestAsyncLockWaitDeadlineUsesEarlierRequestContext(t *testing.T) {
+	createAt := time.Now()
+	requestCtx, cancel := context.WithDeadline(
+		context.Background(),
+		createAt.Add(100*time.Millisecond))
+	defer cancel()
+	requestDeadline, ok := requestCtx.Deadline()
+	require.True(t, ok)
+
+	deadline, err := getLockWaitDeadline(createAt, requestCtx, LockOptions{
+		LockOptions: pb.LockOptions{
+			LockWaitTimeout:  1,
+			LockWaitDeadline: createAt.Add(500 * time.Millisecond).UnixNano(),
+		},
+		remoteLockOwnerWaitTimeout: time.Second,
+	})
+	require.Equal(t, requestDeadline, deadline)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 func TestWaiterEventsTimeoutDoesNotSendToFullOwnEventChannel(t *testing.T) {
 	logger := getLogger("")

@@ -55,6 +55,7 @@ type localLockTable struct {
 
 	options struct {
 		beforeCloseFirstWaiter func(c *lockContext)
+		beforeAcquire          func(c *lockContext)
 		beforeWait             func(c *lockContext) func()
 		afterWait              func(c *lockContext) func()
 	}
@@ -229,25 +230,32 @@ func (l *localLockTable) doLock(
 			}
 
 			ck := *c.w.conflictKey.Load()
-			if len(ck) > 0 &&
-				c.opts.Granularity == pb.Granularity_Row {
-
-				if l.options.beforeCloseFirstWaiter != nil {
+			if len(ck) > 0 {
+				// The hook deliberately runs outside l.mu. Some tests use it to
+				// acquire another lock and exercise concurrent waiter cleanup.
+				if c.opts.Granularity == pb.Granularity_Row &&
+					l.options.beforeCloseFirstWaiter != nil {
 					l.options.beforeCloseFirstWaiter(c)
 				}
-
 				l.mu.Lock()
-				// we must reload conflict lock, because the lock may be deleted
-				// by other txn and readd into store. So c.w.conflictWith is
-				// invalid.
-				conflictWith, ok := l.mu.store.Get(ck)
-				if ok {
-					l.removeOwnerLocalWaitEdgeLocked(c.w)
-					if conflictWith.closeWaiter(c.w, l.logger) {
-						l.mu.store.Delete(ck)
-					} else {
-						l.removeInactiveOwnerLocalWaitEdgesLocked(conflictWith)
+				switch c.opts.Granularity {
+				case pb.Granularity_Row:
+					// We must reload the conflict lock because it may have been
+					// deleted and recreated while this request was waiting.
+					conflictWith, ok := l.mu.store.Get(ck)
+					if ok {
+						removed, empty := conflictWith.removeWaiter(c.w, l.logger)
+						if removed {
+							l.removeOwnerLocalWaitEdgeLocked(c.w)
+						}
+						if empty {
+							l.mu.store.Delete(ck)
+						} else {
+							l.removeInactiveOwnerLocalWaitEdgesLocked(conflictWith)
+						}
 					}
+				case pb.Granularity_Range:
+					l.closeRangeLastWaiterLocked(c)
 				}
 				l.mu.Unlock()
 			}
@@ -455,9 +463,18 @@ func (l *localLockTable) close(reason closeReason) {
 }
 
 func (l *localLockTable) doAcquireLock(c *lockContext) error {
+	if l.options.beforeAcquire != nil {
+		l.options.beforeAcquire(c)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// This is the final admission point after service readiness, binding,
+	// bindChangeMu, txn mutex, and the local-table mutex. An uncontended lock
+	// must not be created after the absolute budget has expired.
+	if err := c.checkLockWaitDeadline(); err != nil {
+		return err
+	}
 	if l.mu.closed {
 		return moerr.NewInvalidStateNoCtx("local lock table closed")
 	}
@@ -479,6 +496,9 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 	n := len(c.rows)
 	for idx := c.offset; idx < n; idx++ {
+		if err := c.checkLockWaitDeadline(); err != nil {
+			return err
+		}
 		row := c.rows[idx]
 
 		key, lock, ok := l.mu.store.Seek(row)
@@ -537,6 +557,9 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 	n := len(c.rows)
 	for i := c.offset; i < n; i += 2 {
+		if err := c.checkLockWaitDeadline(); err != nil {
+			return err
+		}
 		start := c.rows[i]
 		end := c.rows[i+1]
 		if bytes.Compare(start, end) >= 0 {
@@ -593,8 +616,8 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
-	if !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
-		return c.getLockWaitTimeoutErr()
+	if err := c.checkLockWaitDeadline(); err != nil {
+		return err
 	}
 	if l.detectOwnerLocalDeadlockLocked(c, conflictWith) {
 		return ErrDeadLockDetected

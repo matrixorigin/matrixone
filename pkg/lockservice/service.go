@@ -40,8 +40,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// WithWait setup wait func to wait some condition ready
-func WithWait(wait func()) Option {
+// WithWait sets the readiness gate used before lockservice operations. The
+// callback must honor ctx so a lock wait deadline can terminate independently
+// of a prolonged readiness outage.
+func WithWait(wait func(context.Context) error) Option {
 	return func(s *service) {
 		s.option.wait = wait
 	}
@@ -89,7 +91,7 @@ type service struct {
 	}
 
 	option struct {
-		wait                      func()
+		wait                      func(context.Context) error
 		beforeRemoteLockBindCheck func()
 		serverOpts                []ServerOption
 	}
@@ -165,6 +167,10 @@ func (s *service) Lock(
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
+	lockCtx, cancelLockCtx := newLockWaitContext(ctx, options)
+	if cancelLockCtx != nil {
+		defer cancelLockCtx()
+	}
 
 	if !s.canLockOnServiceStatus(txnID, options, tableID, rows) {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
@@ -178,7 +184,9 @@ func (s *service) Lock(
 		v2.TxnAcquireLockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	s.wait()
+	if err := s.wait(lockCtx); err != nil {
+		return pb.Result{}, lockWaitContextError(lockCtx, err)
+	}
 	// Service admission/bind work may consume the remaining budget after the
 	// entry check. Recheck before dispatch so a delayed hop cannot restart or
 	// transmit an already exhausted absolute deadline.
@@ -195,12 +203,8 @@ func (s *service) Lock(
 	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
-	bindCtx, cancel := newLockWaitContext(ctx, options)
-	if cancel != nil {
-		defer cancel()
-	}
 	l, err := s.getLockTableWithCreateContext(
-		bindCtx,
+		lockCtx,
 		options.Group,
 		tableID,
 		rows,
@@ -208,8 +212,8 @@ func (s *service) Lock(
 	if err != nil {
 		return pb.Result{}, err
 	}
-	if err := bindCtx.Err(); err != nil {
-		return pb.Result{}, lockWaitContextError(bindCtx, err)
+	if err := lockCtx.Err(); err != nil {
+		return pb.Result{}, lockWaitContextError(lockCtx, err)
 	}
 	// Binding can finish concurrently with the deadline. Recheck after it
 	// returns so an uncontended local table cannot admit an expired request.
@@ -415,7 +419,9 @@ func (s *service) unlockUnknownCommit(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.wait()
+	if err := s.wait(ctx); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -475,7 +481,9 @@ func (s *service) unlockWithContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.wait()
+	if err := s.wait(ctx); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1297,11 +1305,11 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	}
 }
 
-func (s *service) wait() {
+func (s *service) wait(ctx context.Context) error {
 	if s.option.wait == nil {
-		return
+		return nil
 	}
-	s.option.wait()
+	return s.option.wait(ctx)
 }
 
 type activeTxnHolder interface {

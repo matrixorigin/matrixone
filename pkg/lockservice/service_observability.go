@@ -55,7 +55,9 @@ func (s *service) GetLockHolder(
 	tableID uint64,
 	row []byte,
 	options pb.LockOptions) (pb.WaitTxn, bool, error) {
-	s.wait()
+	if err := s.wait(ctx); err != nil {
+		return pb.WaitTxn{}, false, err
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return pb.WaitTxn{}, false, err

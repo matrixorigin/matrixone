@@ -81,6 +81,95 @@ func (c *blockingBindRefreshClient) AsyncSend(context.Context, *pb.Request) (*mo
 
 func (c *blockingBindRefreshClient) Close() error { return nil }
 
+type terminalLockTimeoutClient struct {
+	bindRefreshStarted chan struct{}
+}
+
+func (c *terminalLockTimeoutClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Lock:
+		return nil, ErrLockTimeout
+	case pb.Method_GetBind:
+		select {
+		case c.bindRefreshStarted <- struct{}{}:
+		default:
+		}
+		return nil, io.ErrUnexpectedEOF
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *terminalLockTimeoutClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *terminalLockTimeoutClient) Close() error { return nil }
+
+func TestCarryEarlierContextDeadlineKeepsBoundedLegacyFallback(t *testing.T) {
+	deadline := time.Now().Add(-time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	opts := carryEarlierContextDeadline(ctx, pb.LockOptions{
+		LockWaitTimeout:  60,
+		LockWaitDeadline: time.Now().Add(time.Minute).UnixNano(),
+	})
+	require.Equal(t, deadline.UnixNano(), opts.LockWaitDeadline)
+	require.Equal(t, int64(1), opts.LockWaitTimeout)
+}
+
+func TestRemoteLockTimeoutSkipsBindRecovery(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	client := &terminalLockTimeoutClient{bindRefreshStarted: make(chan struct{}, 1)}
+	bind := pb.LockTable{
+		Group: 0, Table: 1, OriginTable: 1,
+		ServiceID: "s2", Version: 1, Valid: true,
+	}
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		bind,
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	txnID := []byte("terminal-lock-timeout")
+	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+	txn.Lock()
+	defer func() {
+		txn.Unlock()
+		reuse.Free(txn, nil)
+	}()
+
+	var lockErr error
+	remote.lock(
+		context.Background(),
+		txn,
+		[][]byte{{1}},
+		LockOptions{LockOptions: pb.LockOptions{
+			Granularity:      pb.Granularity_Row,
+			Mode:             pb.LockMode_Exclusive,
+			Policy:           pb.WaitPolicy_Wait,
+			LockWaitTimeout:  1,
+			LockWaitDeadline: time.Now().Add(time.Second).UnixNano(),
+		}},
+		func(_ pb.Result, err error) { lockErr = err })
+	require.ErrorIs(t, lockErr, ErrLockTimeout)
+	select {
+	case <-client.bindRefreshStarted:
+		require.Fail(t, "terminal lock timeout must not start allocator bind recovery")
+	default:
+	}
+}
+
 func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 

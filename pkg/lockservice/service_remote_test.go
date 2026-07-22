@@ -1813,6 +1813,70 @@ func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
 	)
 }
 
+func TestRemoteAsyncWaiterStopsAtEarlierRequestDeadline(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner := services[0]
+			origin := services[1]
+			const tableID = uint64(24919)
+			row := []byte{1}
+			holderTxn := []byte("request-deadline-holder")
+			waiterTxn := []byte("request-deadline-waiter")
+
+			setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelSetup()
+			mustAddTestLock(t, setupCtx, owner, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			requestCtx, cancelRequest := context.WithTimeout(context.Background(), time.Second)
+			defer cancelRequest()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := origin.Lock(
+					requestCtx,
+					tableID,
+					[][]byte{row},
+					waiterTxn,
+					pb.LockOptions{
+						Granularity:     pb.Granularity_Row,
+						Mode:            pb.LockMode_Exclusive,
+						Policy:          pb.WaitPolicy_Wait,
+						LockWaitTimeout: 5,
+					})
+				resultC <- err
+			}()
+
+			require.NoError(t, WaitWaiters(owner, 0, tableID, row, 1))
+			select {
+			case err := <-resultC:
+				require.Error(t, err)
+			case <-time.After(2 * time.Second):
+				require.FailNow(t, "origin request deadline was not enforced")
+			}
+			require.Eventually(t, func() bool {
+				l, err := owner.getLockTable(0, tableID)
+				if err != nil {
+					return false
+				}
+				local := l.(*localLockTable)
+				local.mu.RLock()
+				defer local.mu.RUnlock()
+				lock, ok := local.mu.store.Get(row)
+				return ok && lock.waiters.size() == 0
+			}, time.Second, 10*time.Millisecond,
+				"owner retained an async waiter after the earlier request deadline")
+
+			require.NoError(t, owner.Unlock(setupCtx, holderTxn, timestamp.Timestamp{}))
+			require.NoError(t, origin.Unlock(setupCtx, waiterTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockWaitDuration.Duration = 5 * time.Second
+		},
+	)
+}
+
 // TestRemoteLockWaitTimeout_ReturnsLockTimeout ensures that in a multi-CN
 // deployment, when txn2 on a remote CN waits on a lock held by txn1 on the
 // lock-table owner CN, txn2 receives ErrLockTimeout (lock timeout) after

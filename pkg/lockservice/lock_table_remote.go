@@ -63,6 +63,35 @@ func newLockRPCContext(ctx context.Context, opts pb.LockOptions) (context.Contex
 	return ctx, nil
 }
 
+// carryEarlierContextDeadline copies an earlier caller deadline into the lock
+// request itself. MORPC bounds the origin-side Future with ctx, but the owner
+// handler is not guaranteed to observe that exact context deadline on every
+// transport/lifecycle path. The absolute option is therefore the durable
+// cross-CN budget; the relative seconds field remains only a compatibility
+// fallback for peers that do not consume LockWaitDeadline.
+func carryEarlierContextDeadline(ctx context.Context, opts pb.LockOptions) pb.LockOptions {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return opts
+	}
+	if opts.LockWaitDeadline == 0 || deadline.Before(time.Unix(0, opts.LockWaitDeadline)) {
+		opts.LockWaitDeadline = deadline.UnixNano()
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			// New peers reject the expired absolute deadline immediately. Keep a
+			// one-second relative fallback so an older peer that ignores the
+			// deadline cannot turn this race into an unbounded wait.
+			opts.LockWaitTimeout = 1
+		} else {
+			opts.LockWaitTimeout = int64(remaining / time.Second)
+			if remaining%time.Second != 0 {
+				opts.LockWaitTimeout++
+			}
+		}
+	}
+	return opts
+}
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
@@ -116,7 +145,7 @@ func (l *remoteLockTable) lock(
 
 	req.LockTable = l.bind
 	req.Method = pb.Method_Lock
-	req.Lock.Options = opts.LockOptions
+	req.Lock.Options = carryEarlierContextDeadline(ctx, opts.LockOptions)
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
@@ -191,7 +220,25 @@ func (l *remoteLockTable) lock(
 	// bookkeeping so normal transaction close can send the remote unlock.
 	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
-	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
+	// Both owner-cap and caller lock-budget timeouts are terminal. Bind recovery
+	// uses an independent allocator RPC and must not extend an exhausted lock
+	// budget by another defaultRPCTimeout.
+	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) {
+		cb(pb.Result{}, err)
+		return
+	}
+	if lockWaitDeadlineExpired(opts.LockOptions, time.Now()) {
+		cb(pb.Result{}, ErrLockTimeout)
+		return
+	}
+	if ctx.Err() != nil {
+		// Preserve the historical transport error while still skipping bind
+		// recovery. The failed RPC may have acquired remotely, so the transaction
+		// bookkeeping above remains necessary for compensating Unlock.
+		if retryRemoteLockError(err) {
+			err = moerr.NewBackendCannotConnectNoCtx(err.Error())
+		}
 		cb(pb.Result{}, err)
 		return
 	}
