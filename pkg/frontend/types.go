@@ -311,6 +311,9 @@ type PrepareStmt struct {
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+	// tempTableVersion is the session temporary-table mapping version used to
+	// build PreparePlan and compile.
+	tempTableVersion uint64
 }
 
 /*

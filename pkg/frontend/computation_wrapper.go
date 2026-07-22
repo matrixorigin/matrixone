@@ -523,7 +523,8 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	eng := ses.proc.Base.SessionInfo.StorageEngine
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
-	var change bool
+	currentTempTableVersion := ses.GetTempTableVersion()
+	change := prepareStmt.tempTableVersion != currentTempTableVersion
 	for _, obj := range preparePlan.GetSchemas() {
 		accountId := ses.GetAccountId()
 		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
@@ -538,13 +539,14 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			Ts:         prepareStmt.Ts,
 		}
 
-		change = CheckTableDefChange(catalogCache, tblKey)
-		if change {
+		if CheckTableDefChange(catalogCache, tblKey) {
+			change = true
 			break
 		}
 	}
 
-	// rebuild plan when schema changed
+	// Rebuild the plan when catalog schema or session temporary-table name
+	// resolution changed.
 	if change {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
@@ -557,10 +559,11 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		preparePlan = newPlan.GetDcl().GetPrepare()
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+		prepareStmt.tempTableVersion = currentTempTableVersion
 	}
 
-	// Recreate the cached compile only when the schema changed. Without a
-	// schema change the cached compile is reused as-is: Compile.Reset clears
+	// Recreate the cached compile only when a plan dependency changed. Without
+	// such a change the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
 	// per-execution recompilation overhead that regressed TPCC. A nil cache

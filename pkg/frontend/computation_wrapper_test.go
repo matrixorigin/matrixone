@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -105,6 +106,7 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 // can drive cw.Compile through initExecuteStmtParam.
 func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
@@ -132,11 +134,14 @@ func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt,
 	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
 	execCtx := &ExecCtx{
 		reqCtx: ctx,
+		ses:    ses,
+		proc:   proc,
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
 		},
 	}
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	return ses, prepareStmt, cw, execCtx
 }
 
@@ -177,6 +182,23 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
+	defer prepareStmt.Close()
+
+	oldPlan := prepareStmt.PreparePlan
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, retPlan)
+	require.NotNil(t, retStmt)
+	require.Equal(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
 }
 
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {

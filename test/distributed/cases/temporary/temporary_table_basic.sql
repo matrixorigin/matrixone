@@ -361,4 +361,28 @@ show tables;  -- 应该只显示 permanent_table
 
 drop table temp_invisible;
 drop table permanent_table;
+
+-- ============================================================================
+-- 测试分类 10: 预处理语句重新解析同名临时表
+-- ============================================================================
+
+create table prepared_shadow (id int primary key, value varchar(20));
+insert into prepared_shadow values (1, 'permanent');
+
+prepare prepared_shadow_stmt from
+    'select id, value from prepared_shadow order by id';
+execute prepared_shadow_stmt;
+
+create temporary table prepared_shadow (
+    id int primary key,
+    value varchar(20)
+);
+insert into prepared_shadow values (2, 'temporary');
+execute prepared_shadow_stmt;
+
+drop table prepared_shadow;
+execute prepared_shadow_stmt;
+
+deallocate prepare prepared_shadow_stmt;
+drop table prepared_shadow;
 drop database temp_db;
