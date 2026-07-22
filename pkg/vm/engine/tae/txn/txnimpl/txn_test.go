@@ -141,6 +141,36 @@ func TestReplayPreparedRollbackReleasesAutoIncrementFence(t *testing.T) {
 	assert.True(t, watermark.IsEmpty())
 }
 
+func TestReplayPreparedDMLSkipsCheckpointPrunedTables(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_pruned", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	replayTxn := newPreparingEpochTestTxn(t, "replay-pruned", startTS, types.BuildTS(11, 0))
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID+1)
+	replayTxn.GetMemo().AddTable(dbEntry.ID+1, tableEntry.ID+2)
+	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.Len(t, store.preparedTables, 1)
+	assert.Same(t, tableEntry, store.preparedTables[tableEntry.ID])
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
+	assert.NoError(t, store.applyRollback(replayTxn))
+	assert.False(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
+}
+
 type waitingSchemaTxn struct {
 	txnif.TxnReader
 	prepareTS types.TS

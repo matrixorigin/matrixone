@@ -109,10 +109,21 @@ func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
 	for _, record := range dirty.Tables {
 		db, err := store.catalog.GetDatabaseByID(record.DbID)
 		if err != nil {
+			// The checkpoint catalog is an end-of-checkpoint view. A WAL txn
+			// can therefore still refer to a database that was dropped before
+			// the checkpoint ended. There is no live table to fence in that case.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
 			panic(err)
 		}
 		table, err := db.GetTableEntryByID(record.ID)
 		if err != nil {
+			// As with databases, checkpoint pruning can legitimately remove a
+			// dropped table while its transaction is still present in the WAL.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
 			panic(err)
 		}
 		table.RegisterReplayedPreparedDML(store.preparedTxnID)
