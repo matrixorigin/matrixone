@@ -16,13 +16,18 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/prashantv/gostub"
 )
 
 var _ IcebergMaintenanceCallExecutor = IcebergMaintenanceProcedureExecutor{}
@@ -89,6 +94,133 @@ func TestIcebergAccessPolicyStateValidation(t *testing.T) {
 	}
 }
 
+func TestExecuteIcebergRegisterAccessRollsBackWhenPolicyWriteFails(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	base := &backgroundExecTest{}
+	base.init()
+	catalogResult := &MysqlResultSet{}
+	catalogResult.AddColumn(&MysqlColumn{})
+	catalogResult.AddColumn(&MysqlColumn{})
+	catalogResult.AddRow([]interface{}{uint64(0), uint64(42)})
+	base.sql2result[sqliceberg.GetCatalogByNameSQL(0, "tiera")] = catalogResult
+
+	policyWriteErr := errors.New("residency region exceeds varchar(128)")
+	bh := &icebergAccessFailingExec{
+		backgroundExecTest: base,
+		failContains:       "insert into mo_catalog." + sqliceberg.TableResidencyPolicy,
+		failErr:            policyWriteErr,
+	}
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	results, err := executeIcebergRegisterAccessCall(ctx, ses, IcebergBuiltinProcedureCall{
+		Name:   icebergRegisterAccessProcedure,
+		Target: "tiera",
+		Options: fmt.Sprintf(
+			"scope=cluster,account_id=0,external_principal=local,endpoint=https://s3.example.com,region=%s,bucket=warehouse,policy_state=enabled,catalog_uri=https://catalog.example.com/iceberg",
+			strings.Repeat("r", 129),
+		),
+	})
+	if !errors.Is(err, policyWriteErr) {
+		t.Fatalf("expected residency write error, got %v", err)
+	}
+	if results != nil {
+		t.Fatalf("failed registration must not return a success result: %+v", results)
+	}
+	if len(base.executedSQLs) < 5 || base.executedSQLs[0] != "begin;" {
+		t.Fatalf("registration must begin one explicit transaction: %v", base.executedSQLs)
+	}
+	if !strings.Contains(base.executedSQLs[len(base.executedSQLs)-1], "rollback") {
+		t.Fatalf("second write failure must roll back the principal write: %v", base.executedSQLs)
+	}
+	for _, sql := range base.executedSQLs {
+		if strings.Contains(sql, "commit") {
+			t.Fatalf("failed registration must not commit: %v", base.executedSQLs)
+		}
+	}
+}
+
+func TestExecuteIcebergRegisterAccessCommitsBothWrites(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	catalogResult := &MysqlResultSet{}
+	catalogResult.AddColumn(&MysqlColumn{})
+	catalogResult.AddColumn(&MysqlColumn{})
+	catalogResult.AddRow([]interface{}{uint64(0), uint64(42)})
+	bh.sql2result[sqliceberg.GetCatalogByNameSQL(0, "tiera")] = catalogResult
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	results, err := executeIcebergRegisterAccessCall(ctx, ses, IcebergBuiltinProcedureCall{
+		Name:    icebergRegisterAccessProcedure,
+		Target:  "tiera",
+		Options: "scope=cluster,account_id=0,external_principal=local,endpoint=https://s3.example.com,region=us-east-1,bucket=warehouse,policy_state=enabled,catalog_uri=https://catalog.example.com/iceberg",
+	})
+	if err != nil {
+		t.Fatalf("register Iceberg access: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one registration result, got %d", len(results))
+	}
+	if len(bh.executedSQLs) < 5 || bh.executedSQLs[0] != "begin;" || bh.executedSQLs[len(bh.executedSQLs)-1] != "commit;" {
+		t.Fatalf("successful registration must commit both writes in one transaction: %v", bh.executedSQLs)
+	}
+	for _, sql := range bh.executedSQLs {
+		if strings.Contains(sql, "rollback") {
+			t.Fatalf("successful registration must not roll back: %v", bh.executedSQLs)
+		}
+	}
+}
+
+func TestExecuteIcebergRegisterAccessRollsBackOnPanic(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	base := &backgroundExecTest{}
+	base.init()
+	catalogResult := &MysqlResultSet{}
+	catalogResult.AddColumn(&MysqlColumn{})
+	catalogResult.AddColumn(&MysqlColumn{})
+	catalogResult.AddRow([]interface{}{uint64(0), uint64(42)})
+	base.sql2result[sqliceberg.GetCatalogByNameSQL(0, "tiera")] = catalogResult
+
+	bh := &icebergAccessFailingExec{
+		backgroundExecTest: base,
+		panicContains:      "insert into mo_catalog." + sqliceberg.TableResidencyPolicy,
+	}
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	var recovered any
+	func() {
+		defer func() {
+			recovered = recover()
+		}()
+		_, _ = executeIcebergRegisterAccessCall(ctx, ses, IcebergBuiltinProcedureCall{
+			Name:    icebergRegisterAccessProcedure,
+			Target:  "tiera",
+			Options: "scope=cluster,account_id=0,external_principal=local,endpoint=https://s3.example.com,region=us-east-1,bucket=warehouse,policy_state=enabled,catalog_uri=https://catalog.example.com/iceberg",
+		})
+	}()
+	if recovered == nil {
+		t.Fatal("expected injected residency write panic")
+	}
+	if len(base.executedSQLs) == 0 || base.executedSQLs[len(base.executedSQLs)-1] != "rollback;" {
+		t.Fatalf("panic must roll back the unfinished authorization registration: %v", base.executedSQLs)
+	}
+}
+
 func TestParseIcebergBuiltinCallRejectsInvalidArgsBeforeStoredProcedureLookup(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "call iceberg_rewrite_manifests(42)", 1)
 	if err != nil {
@@ -116,6 +248,21 @@ func TestQualifiedIcebergCallFallsBackToStoredProcedurePath(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("qualified procedure names should remain stored procedure calls")
+	}
+}
+
+func TestUnrelatedIcebergPrefixedCallFallsBackToStoredProcedurePath(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "call iceberg_backup('nightly')", 1)
+	if err != nil {
+		t.Fatalf("parse stored procedure CALL: %v", err)
+	}
+	call := stmt.(*tree.CallStmt)
+	_, ok, err := parseIcebergBuiltinCall(context.Background(), call)
+	if err != nil {
+		t.Fatalf("unrelated stored procedure should not be parsed as an Iceberg builtin: %v", err)
+	}
+	if ok {
+		t.Fatal("unrelated iceberg_ procedure must remain on the stored procedure path")
 	}
 }
 
@@ -250,6 +397,27 @@ func TestIcebergMaintenanceProcedureExecutorRunsDispatcher(t *testing.T) {
 type frontendFakeMaintenanceResolver struct {
 	resolution maintenance.ProcedureCatalogResolution
 	err        error
+}
+
+type icebergAccessFailingExec struct {
+	*backgroundExecTest
+	failContains  string
+	failErr       error
+	panicContains string
+}
+
+func (e *icebergAccessFailingExec) Exec(ctx context.Context, sql string) error {
+	if e.panicContains != "" && strings.Contains(sql, e.panicContains) {
+		e.currentSql = sql
+		e.executedSQLs = append(e.executedSQLs, sql)
+		panic("injected Iceberg access write panic")
+	}
+	if strings.Contains(sql, e.failContains) {
+		e.currentSql = sql
+		e.executedSQLs = append(e.executedSQLs, sql)
+		return e.failErr
+	}
+	return e.backgroundExecTest.Exec(ctx, sql)
 }
 
 func (r frontendFakeMaintenanceResolver) ResolveMaintenanceCatalog(ctx context.Context, accountID uint32, catalogName string) (maintenance.ProcedureCatalogResolution, error) {

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const icebergBuiltinProcedurePrefix = "iceberg_"
 const icebergRegisterAccessProcedure = "iceberg_register_access"
 const IcebergMaintenanceCallExecutorRuntimeKey = "iceberg.maintenance.call.executor"
 
@@ -141,7 +141,7 @@ func executeIcebergBuiltinCall(ctx context.Context, ses FeSession, call IcebergB
 	return nil, moerr.NewNotSupportedf(ctx, "Iceberg builtin procedure %s for %s is recognized but not implemented in this phase", call.Name, call.Parsed.Target)
 }
 
-func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) ([]ExecResult, error) {
+func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) (results []ExecResult, err error) {
 	if ses == nil || ses.GetTenantInfo() == nil {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires a session")
 	}
@@ -202,6 +202,23 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return nil, err
+	}
+	txnFinished := false
+	defer func() {
+		if txnFinished {
+			return
+		}
+		// Do not derive the transaction outcome from the named error alone: a
+		// panic does not assign it. An unfinished registration must always roll
+		// back, otherwise the principal row could survive without its residency
+		// policy and widen authorization after an exceptional exit.
+		if rollbackErr := bh.Exec(ctx, "rollback;"); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+		}
+		results = nil
+	}()
 	catalogID, err := queryIcebergCatalogID(ctx, bh, targetAccountID, call.Target)
 	if err != nil {
 		return nil, err
@@ -278,7 +295,12 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	)); err != nil {
 		return nil, err
 	}
-	return []ExecResult{icebergRegisterAccessResultSet(targetAccountID, catalogID, externalPrincipal, scopeType)}, nil
+	results = []ExecResult{icebergRegisterAccessResultSet(targetAccountID, catalogID, externalPrincipal, scopeType)}
+	if err = bh.Exec(ctx, "commit;"); err != nil {
+		return nil, err
+	}
+	txnFinished = true
+	return results, nil
 }
 
 func queryIcebergCatalogURI(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (string, error) {
@@ -397,7 +419,15 @@ func isIcebergBuiltinProcedure(call *tree.CallStmt) bool {
 		return false
 	}
 	name := strings.ToLower(strings.TrimSpace(tree.String(call.Name, dialect.MYSQL)))
-	return strings.HasPrefix(name, icebergBuiltinProcedurePrefix)
+	switch name {
+	case icebergRegisterAccessProcedure,
+		maintenance.ProcedureRewriteDataFiles,
+		maintenance.ProcedureRewriteManifests,
+		maintenance.ProcedureExpireSnapshots:
+		return true
+	default:
+		return false
+	}
 }
 
 func icebergBuiltinProcedureStringArg(ctx context.Context, procedure, argName string, expr tree.Expr) (string, error) {
