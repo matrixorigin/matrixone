@@ -7422,27 +7422,42 @@ func enqueueDetachedUserLevelLockCleanups(ls lockservice.LockService, owner stri
 	if ls == nil || owner == "" || len(states) == 0 {
 		return false
 	}
-	txnIDs := make([][]byte, 0, len(states)*2)
+	var chunks [][][]byte
+	txnIDs := make([][]byte, 0, min(len(states)*2, userLevelLockDetachedCleanupMaxTxnIDsPerEntry))
 	for _, state := range states {
 		if state.Name == "" || state.Count == 0 {
 			continue
 		}
-		txnIDs = append(txnIDs, userLevelLockTxnIDs(owner, connID, state.Name)...)
+		for _, txnID := range userLevelLockTxnIDs(owner, connID, state.Name) {
+			if len(txnIDs) == userLevelLockDetachedCleanupMaxTxnIDsPerEntry {
+				chunks = append(chunks, txnIDs)
+				txnIDs = make([][]byte, 0, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
+			}
+			txnIDs = append(txnIDs, txnID)
+		}
 	}
-	if len(txnIDs) == 0 {
+	if len(txnIDs) > 0 {
+		chunks = append(chunks, txnIDs)
+	}
+	if len(chunks) == 0 {
 		return false
 	}
-	return enqueueDetachedUserLevelLockTxnCleanup(
-		ls,
-		detachedUserLevelLockCleanupKey{
-			serviceID: ls.GetServiceID(),
-			owner:     owner,
-			name:      owner,
-			connID:    connID,
-			kind:      "session_close",
-		},
-		txnIDs,
-	)
+	for i, chunk := range chunks {
+		if !enqueueDetachedUserLevelLockTxnCleanup(
+			ls,
+			detachedUserLevelLockCleanupKey{
+				serviceID: ls.GetServiceID(),
+				owner:     owner,
+				name:      fmt.Sprintf("%s:%d", owner, i),
+				connID:    connID,
+				kind:      "session_close",
+			},
+			chunk,
+		) {
+			return false
+		}
+	}
+	return true
 }
 
 func startDetachedUserLevelLockCleanupWorkers() {

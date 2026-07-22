@@ -7198,6 +7198,21 @@ func detachedUserLevelLockCleanupCountForKind(kind string) int {
 	return count
 }
 
+func detachedUserLevelLockCleanupMaxTxnIDCountForKind(kind string) int {
+	detachedUserLevelLockCleanups.Lock()
+	defer detachedUserLevelLockCleanups.Unlock()
+	maxCount := 0
+	for key, entry := range detachedUserLevelLockCleanups.entries {
+		if key.kind != kind {
+			continue
+		}
+		if len(entry.txnIDs) > maxCount {
+			maxCount = len(entry.txnIDs)
+		}
+	}
+	return maxCount
+}
+
 func resetDetachedUserLevelLockCleanupsForTest() {
 	detachedUserLevelLockCleanups.Lock()
 	defer detachedUserLevelLockCleanups.Unlock()
@@ -8403,6 +8418,27 @@ func TestReleaseUserLevelLocksOnSessionCloseFencesReusedConnectionGeneration(t *
 		v, err = getUserLevelLock(lockName, 0, reusedConnProc)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseUserLevelLocksOnSessionCloseSplitsOversizedCleanupBatch(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+		service.unlockStarted = make(chan struct{}, 1)
+
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		for i := 0; i < userLevelLockDetachedCleanupMaxEntries+1; i++ {
+			v, err := getUserLevelLock(fmt.Sprintf("close_oversized_batch_%d", i), 0, holder)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), v)
+		}
+		require.Len(t, UserLevelLocksForMigration(holder), userLevelLockDetachedCleanupMaxEntries+1)
+
+		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
+		require.Empty(t, UserLevelLocksForMigration(holder))
+		require.Equal(t, 2, detachedUserLevelLockCleanupCountForKind("session_close"))
+		require.LessOrEqual(t, detachedUserLevelLockCleanupMaxTxnIDCountForKind("session_close"), userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
 	})
 }
 
