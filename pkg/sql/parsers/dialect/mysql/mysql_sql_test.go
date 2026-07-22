@@ -4150,6 +4150,21 @@ func TestValid(t *testing.T) {
 	}
 }
 
+func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS `الكمية`",
+		"SELECT 1 AS `数量`",
+		"SELECT 1 AS `\xe9`",
+		"SELECT 1 AS `\xe9``name`",
+		"SELECT 1 AS `\xf0\x9f\x98\x80`",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)

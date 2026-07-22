@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -2669,6 +2670,50 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	require.Nil(t, execCtx.results)
 }
 
+func TestCallSituationResponseSendsFinalAffectedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		isLastStmt       bool
+		wantFinalMoreBit bool
+	}{
+		{name: "last statement", isLastStmt: true},
+		{name: "followed by another statement", wantFinalMoreBit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses := newTestSession(t, ctrl)
+			writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+			resper := NewMysqlResp(writer)
+			execCtx := &ExecCtx{
+				reqCtx:     context.Background(),
+				ses:        ses,
+				stmt:       &tree.CallStmt{},
+				isLastStmt: tc.isLastStmt,
+				results: []ExecResult{
+					makeAnalyzeCountResult("first", 1),
+					makeAnalyzeCountResult("second", 2),
+				},
+				runResult: &util.RunResult{AffectRows: 7},
+			}
+
+			require.NoError(t, resper.respBySituation(ses, execCtx))
+			require.Len(t, writer.responses, 3)
+			require.Equal(t, ResultResponse, writer.responses[0].category)
+			require.Equal(t, ResultResponse, writer.responses[1].category)
+			require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			require.NotZero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			require.Equal(t, OkResponse, writer.responses[2].category)
+			require.Equal(t, uint64(7), writer.responses[2].affectedRows)
+			if tc.wantFinalMoreBit {
+				require.NotZero(t, writer.responses[2].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			} else {
+				require.Zero(t, writer.responses[2].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			}
+		})
+	}
+}
+
 func TestAnalyzeSituationResponsePreservesOuterMoreResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2689,6 +2734,36 @@ func TestAnalyzeSituationResponsePreservesOuterMoreResults(t *testing.T) {
 	require.Len(t, writer.responses, 2)
 	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.NotZero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+}
+
+func TestSituationResponsePropagatesAffectedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		runResult:  &util.RunResult{AffectRows: 7},
+	}
+
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint64(7), writer.responses[0].affectedRows)
+}
+
+func TestNormalizeProcedureAffectedRows(t *testing.T) {
+	require.Equal(t, uint64(0), normalizeProcedureAffectedRows(-1))
+	require.Equal(t, uint64(7), normalizeProcedureAffectedRows(7))
+}
+
+func TestProcedureCallerAffectedRows(t *testing.T) {
+	require.Equal(t, int64(0), procedureCallerAffectedRows(&ExecCtx{}))
+	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
+	proc.SetAffectedRows(7)
+	require.Equal(t, int64(7), procedureCallerAffectedRows(&ExecCtx{proc: proc}))
 }
 
 func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
