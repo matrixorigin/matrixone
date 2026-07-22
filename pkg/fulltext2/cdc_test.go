@@ -97,7 +97,7 @@ func TestTailBuilderLiveness(t *testing.T) {
 	c.Delete(int64(0))
 	c.Upsert(int64(1), "blueberry")
 
-	tb, err := NewTailBuilder(int32(types.T_int64), 1000, 0, wsTokenize)
+	tb, err := NewTailBuilder(int32(types.T_int64), 1000, 0, "", wsTokenize)
 	require.NoError(t, err)
 	defer tb.Cleanup()
 	require.NoError(t, tb.AddBatch(c))
@@ -163,7 +163,7 @@ func TestTailBuilderDeleteSpill(t *testing.T) {
 	base.Recency = 0
 
 	// capacity 2 => 6 deletes (10,11,12,13,14,0) seal into >=3 delete frames.
-	tb, err := NewTailBuilder(int32(types.T_int64), 2, 0, wsTokenize)
+	tb, err := NewTailBuilder(int32(types.T_int64), 2, 0, "", wsTokenize)
 	require.NoError(t, err)
 	defer tb.Cleanup()
 	require.NoError(t, tb.AddBatch(c))

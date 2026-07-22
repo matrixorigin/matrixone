@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -68,12 +69,14 @@ func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) 
 // maxInsertTuples bounds the (index_id, chunk_id, data, tag) rows per INSERT.
 const maxInsertTuples = 100
 
-// ToInsertSqls serializes the segment, spills it to a temp file, and emits the
+// ToInsertSqls serializes the segment, spills it to a temp file under the LOCAL
+// fileservice's __fulltext2 dir (load_file reads it back by path), and emits the
 // SQL to persist it: one metadata row + the bytes split into <= MaxChunkSize
 // (index_id, chunk_id, data, tag) rows read via load_file. tag=0 is a compacted
-// base (sync CREATE/REINDEX build); tag=1 is a CDC delta. The returned cleanup
-// MUST run after the SQLs execute (they read the temp file at execution).
-func (s *Segment) ToInsertSqls(cfg TableConfig, ts int64, tag int) (sqls []string, cleanup func(), err error) {
+// base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
+// SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
+// run after the SQLs execute (they read the temp file at execution).
+func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int) (sqls []string, cleanup func(), err error) {
 	buf, err := s.Serialize()
 	if err != nil {
 		return nil, nil, err
@@ -81,7 +84,7 @@ func (s *Segment) ToInsertSqls(cfg TableConfig, ts int64, tag int) (sqls []strin
 	checksum := vectorindex.CheckSumFromBuffer(buf)
 	filesize := int64(len(buf))
 
-	fp, err := os.CreateTemp("", "ft2build")
+	fp, err := createLocalSpillFile(sqlproc, "ft2build")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -297,7 +300,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	// come off the 2 GB/s mount, not /tmp (128 MB/s on AWS). path=="" means an
 	// anonymous SSD file (unlinked; munmap frees the inode) — the same
 	// CreateAndRemoveFile the JOIN/mergeorder spill uses.
-	fp, path, err := createLocalTempFile(sqlproc)
+	fp, path, err := createLocalTempFile(sqlproc, "ft2idx")
 	if err != nil {
 		return nil, err
 	}
@@ -345,8 +348,49 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 }
 
 // ft2LocalDir is fulltext2's own subdir under the LOCAL fileservice (on the SSD
-// data-dir) for mmap segment files — sibling to the JOIN spill's "__spill".
+// data-dir) for segment spill / mmap files — sibling to the JOIN spill's "__spill".
+// EVERY fulltext2 temp file (the build-side load_file spill, the CDC tail spill, and
+// the query-side mmap materialization) lives here so it lands on the fast SSD mount,
+// not /tmp (128 MB/s on AWS).
 const ft2LocalDir = "__fulltext2"
+
+// localSpillDir returns the on-disk __fulltext2 scratch directory under the LOCAL
+// (SSD) fileservice, creating it if absent. Returns "" when no LOCAL fileservice is
+// attached (tests / one-shot tools) so callers fall back to the OS temp dir via
+// os.CreateTemp("", …)/os.MkdirTemp("", …). Used by the build-side spill (load_file
+// needs a real path) — the query mmap path uses the anonymous createLocalTempFile.
+func localSpillDir(sqlproc *sqlexec.SqlProcess) string {
+	if sqlproc == nil || sqlproc.Proc == nil {
+		return ""
+	}
+	return LocalSpillDir(sqlproc.GetContext(), sqlproc.Proc.Base.FileService)
+}
+
+// LocalSpillDir resolves the __fulltext2 dir under the LOCAL fileservice of rootFS
+// (the CN's root FileService), creating it. Engine-agnostic so the ISCP CDC tail can
+// resolve it from the engine's FileService without a sqlproc. Returns "" when rootFS
+// has no LOCAL fileservice.
+func LocalSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
+	if rootFS == nil {
+		return ""
+	}
+	local, err := fileservice.Get[*fileservice.LocalFS](rootFS, defines.LocalFileServiceName)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(local.RootPath(), ft2LocalDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// createLocalSpillFile creates a NAMED temp file (prefix) under the LOCAL fileservice's
+// __fulltext2 dir — its absolute on-disk path is what load_file reads back. Falls back
+// to the OS temp dir when no LOCAL fileservice is attached (localSpillDir=="").
+func createLocalSpillFile(sqlproc *sqlexec.SqlProcess, prefix string) (*os.File, error) {
+	return os.CreateTemp(localSpillDir(sqlproc), prefix)
+}
 
 // createLocalTempFile returns a temp file for the segment's mmap. It prefers the
 // LOCAL fileservice's __fulltext2 subdir (on the SSD data-dir) via the same
@@ -354,8 +398,8 @@ const ft2LocalDir = "__fulltext2"
 // mapping keep the inode alive, Free just munmaps, no os.Remove). Falls back to
 // os.CreateTemp (/tmp, linked → Free deletes by path) when no process/fileservice
 // is attached (tests / one-shot tools). Returns (file, path, err); path=="" for the
-// anonymous SSD file.
-func createLocalTempFile(sqlproc *sqlexec.SqlProcess) (*os.File, string, error) {
+// anonymous SSD file. name is the caller-chosen file-name prefix.
+func createLocalTempFile(sqlproc *sqlexec.SqlProcess, name string) (*os.File, string, error) {
 	if sqlproc != nil && sqlproc.Proc != nil {
 		ctx := sqlproc.GetContext()
 		// LOCAL fileservice (SSD data-dir) -> ensure our __fulltext2 subdir -> a
@@ -364,14 +408,14 @@ func createLocalTempFile(sqlproc *sqlexec.SqlProcess) (*os.File, string, error) 
 			sqlproc.Proc.Base.FileService, defines.LocalFileServiceName); e == nil {
 			if e2 := local.EnsureDir(ctx, ft2LocalDir); e2 == nil {
 				if sub, ok := fileservice.SubPath(local, ft2LocalDir).(fileservice.MutableFileService); ok {
-					if f, e3 := sub.CreateAndRemoveFile(ctx, "ft2idx_"+uuid.NewString()); e3 == nil {
+					if f, e3 := sub.CreateAndRemoveFile(ctx, name+"_"+uuid.NewString()); e3 == nil {
 						return f, "", nil
 					}
 				}
 			}
 		}
 	}
-	f, err := os.CreateTemp("", "ft2idx")
+	f, err := os.CreateTemp("", name)
 	if err != nil {
 		return nil, "", err
 	}

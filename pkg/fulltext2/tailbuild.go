@@ -54,18 +54,19 @@ type TailBuilder struct {
 	opts       []BuildOpt // carried into each per-segment Builder (e.g. WithPositionFree)
 }
 
-// NewTailBuilder creates a streaming tail builder backed by a private temp dir. Pass
-// WithPositionFree() so a position-free index's CDC tail stays position-free.
-// capacity is max_index_capacity (docs), postingCap is max_postings_capacity
-// (postings); each non-positive value falls back to its default.
-func NewTailBuilder(pkType int32, capacity, postingCap int64, tokenize func(string) []WordPos, opts ...BuildOpt) (*TailBuilder, error) {
+// NewTailBuilder creates a streaming tail builder backed by a private temp dir under
+// spillDir (the LOCAL fileservice's __fulltext2 dir; "" ⇒ the OS temp dir, for tests /
+// no-fileservice callers). Pass WithPositionFree() so a position-free index's CDC tail
+// stays position-free. capacity is max_index_capacity (docs), postingCap is
+// max_postings_capacity (postings); each non-positive value falls back to its default.
+func NewTailBuilder(pkType int32, capacity, postingCap int64, spillDir string, tokenize func(string) []WordPos, opts ...BuildOpt) (*TailBuilder, error) {
 	if capacity < 1 {
 		capacity = defaultTailCapacity
 	}
 	if postingCap < 1 {
 		postingCap = DefaultPostingCapacity
 	}
-	dir, err := os.MkdirTemp("", "ftv2tail")
+	dir, err := os.MkdirTemp(spillDir, "ftv2tail")
 	if err != nil {
 		return nil, err
 	}
