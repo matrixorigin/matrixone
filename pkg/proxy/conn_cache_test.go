@@ -301,17 +301,19 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.NotNil(t, sc)
 			assert.Equal(t, 0, cc.Count())
 		})
 	})
 
-	t.Run("pop - skip unhealthy cn before reuse", func(t *testing.T) {
+	t.Run("pop - skip route-ineligible cn before reuse", func(t *testing.T) {
 		runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 			ccc := cc.(*connCache)
-			ccc.canReuseCN = func(cn *CNServer) bool {
-				return cn == nil || cn.uuid != "bad-cn"
+			var checkedClient clientInfo
+			ccc.canReuseCN = func(cn *CNServer, client clientInfo) bool {
+				checkedClient = client
+				return cn == nil || cn.uuid != "bad-cn" || client.username == "root"
 			}
 
 			c1, _ := net.Pipe()
@@ -320,9 +322,11 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			login := clientInfo{username: "ordinary"}
+			sc := cc.Pop("k100", 1, nil, nil, login)
 			assert.Nil(t, sc)
 			assert.Equal(t, 0, cc.Count())
+			assert.Equal(t, login.username, checkedClient.username)
 		})
 	})
 
@@ -335,7 +339,7 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.Nil(t, sc)
 			assert.Equal(t, 0, cc.Count())
 		})
@@ -348,7 +352,7 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.Nil(t, sc)
 			assert.Equal(t, 1, cc.Count())
 		})
@@ -361,7 +365,7 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			// cannot get conn as timeout.
 			assert.Nil(t, sc)
 			// count is 0 because the connection has been removed.
@@ -379,7 +383,7 @@ func TestConnCache(t *testing.T) {
 			assert.NoError(t, cc.Close())
 			assert.Equal(t, 0, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.Nil(t, sc)
 
 			c2, _ := net.Pipe()
@@ -404,7 +408,7 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 
 	popDone := make(chan ServerConn, 1)
 	go func() {
-		popDone <- cache.Pop("tenant-a", 1, nil, nil)
+		popDone <- cache.Pop("tenant-a", 1, nil, nil, clientInfo{})
 	}()
 	select {
 	case <-blocked.entered:
@@ -457,7 +461,7 @@ func TestConnCachePopContextCancelsBackendValidation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	popDone := make(chan ServerConn, 1)
 	go func() {
-		popDone <- cache.(*connCache).PopContext(ctx, "tenant-a", 1, nil, nil)
+		popDone <- cache.(*connCache).PopContext(ctx, "tenant-a", 1, nil, nil, clientInfo{})
 	}()
 	select {
 	case <-blocked.entered:
@@ -540,7 +544,7 @@ func TestConnCachePopWaitsForOriginGenerationCleanup(t *testing.T) {
 	result := make(chan ServerConn, 1)
 	go func() {
 		result <- cache.(*connCache).PopContext(
-			context.Background(), "tenant-a", 1, nil, nil,
+			context.Background(), "tenant-a", 1, nil, nil, clientInfo{},
 		)
 	}()
 	select {
@@ -570,7 +574,7 @@ func TestConnCachePopWaitsForOriginGenerationCleanup(t *testing.T) {
 	canceledResult := make(chan ServerConn, 1)
 	go func() {
 		canceledResult <- cache.(*connCache).PopContext(
-			cancelCtx, "tenant-b", 2, nil, nil,
+			cancelCtx, "tenant-b", 2, nil, nil, clientInfo{},
 		)
 	}()
 	select {
