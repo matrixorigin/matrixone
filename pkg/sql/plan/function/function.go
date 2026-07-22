@@ -183,6 +183,26 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	return r, err
 }
 
+// GetFunctionByNameWithOverload validates the arguments using the function's
+// normal type checker, then selects a specific overload. It is intended for
+// planner-only variants that must keep the same SQL function name and layout.
+func GetFunctionByNameWithOverload(
+	ctx context.Context, name string, args []types.Type, overloadID int32,
+) (r FuncGetResult, err error) {
+	r, err = GetFunctionByName(ctx, name, args)
+	if err != nil {
+		return r, err
+	}
+	f := allSupportedFunctions[r.fid]
+	if overloadID < 0 || int(overloadID) >= len(f.Overloads) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d not found", name, overloadID)
+	}
+	r.overloadId = overloadID
+	r.retType = f.Overloads[overloadID].retType(args)
+	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
+	return r, nil
+}
+
 // RunFunctionDirectly runs a function directly without any protections.
 // It is dangerous and should be used only when you are sure that the overloadID is correct and the inputs are valid.
 func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vector.Vector, length int) (*vector.Vector, error) {

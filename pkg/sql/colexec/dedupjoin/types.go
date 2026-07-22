@@ -184,9 +184,17 @@ func (dedupJoin *DedupJoin) Release() {
 	}
 }
 
+// needsFinalizeMerge reports whether parallel workers share one build map and
+// therefore must merge their matched state before a single worker emits the
+// build rows. Shuffle workers own disjoint build partitions, so each worker
+// must finalize and emit its partition independently.
+func (dedupJoin *DedupJoin) needsFinalizeMerge() bool {
+	return dedupJoin.NumCPU > 1 && !dedupJoin.IsShuffle
+}
+
 func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
-	if !ctr.handledLast && dedupJoin.NumCPU > 1 && !dedupJoin.IsMerger {
+	if !ctr.handledLast && dedupJoin.needsFinalizeMerge() && !dedupJoin.IsMerger {
 		dedupJoin.Channel <- nil
 	}
 	if dedupJoin.OpAnalyzer != nil {
