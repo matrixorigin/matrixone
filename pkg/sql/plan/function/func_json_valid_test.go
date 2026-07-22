@@ -1008,6 +1008,39 @@ func TestJsonExtractEmptyArrayRangeReturnsSQLNull(t *testing.T) {
 	}
 }
 
+func TestJsonExtractArrayRangeOverlap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name     string
+		doc      string
+		path     string
+		expected string
+		sqlNull  bool
+	}{
+		{name: "json null right of array", doc: `[null]`, path: `$[1 to 1]`, sqlNull: true},
+		{name: "right of array", doc: `[0,1,2]`, path: `$[5 to 6]`, sqlNull: true},
+		{name: "left of array", doc: `[0,1,2]`, path: `$[last-8 to last-7]`, sqlNull: true},
+		{name: "overlap right edge", doc: `[0,1,2]`, path: `$[2 to 6]`, expected: `[2]`},
+		{name: "overlap left edge", doc: `[0,1,2]`, path: `$[last-8 to last-2]`, expected: `[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.Equal(t, test.sqlNull, vec.IsNull(0))
+			if !test.sqlNull {
+				require.JSONEq(t, test.expected, jsonVectorRowString(t, vec, 0))
+			}
+		})
+	}
+}
+
 func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInJsonExtract()

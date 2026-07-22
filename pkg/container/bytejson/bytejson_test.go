@@ -329,6 +329,37 @@ func TestQueryWithExistsEmptyArrayRangeDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestQueryWithExistsArrayRangeOverlap(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		exists  bool
+		expects string
+	}{
+		{name: "json null right of array", json: `[null]`, path: `$[1 to 1]`},
+		{name: "right of array", json: `[0,1,2]`, path: `$[5 to 6]`},
+		{name: "left of array", json: `[0,1,2]`, path: `$[last-8 to last-7]`},
+		{name: "overlap right edge", json: `[0,1,2]`, path: `$[2 to 6]`, exists: true, expects: `[2]`},
+		{name: "overlap left edge", json: `[0,1,2]`, path: `$[last-8 to last-2]`, exists: true, expects: `[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			result, exists := bj.QueryWithExists([]*Path{&path})
+			require.Equal(t, test.exists, exists)
+			if test.exists {
+				require.JSONEq(t, test.expects, result.String())
+			}
+		})
+	}
+}
+
 func TestQuerySimpleContainPath(t *testing.T) {
 	kases := []struct {
 		name    string

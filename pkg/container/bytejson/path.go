@@ -389,7 +389,7 @@ func (pi subPathIndices) genIndex(cnt int) (int, int, bool) {
 func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
 	orig1, mdf1, _ := pe.start.genIndex(cnt)
 	orig2, mdf2, _ := pe.end.genIndex(cnt)
-	if orig1 > orig2 {
+	if orig1 > orig2 || orig2 < 0 || orig1 >= cnt {
 		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
 		return
 	}

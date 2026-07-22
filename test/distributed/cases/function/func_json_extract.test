@@ -363,4 +363,9 @@ select json_extract('[]', '$[0 to 0]') is null,
        json_extract('[]', '$[last to last]') is null,
        json_extract('{"a":[]}', '$.a[0 to 0]') is null,
        json_extract('{"a":[]}', '$.a[last to last]') is null;
+select json_extract('[null]', '$[1 to 1]') is null,
+       json_extract('[0,1,2]', '$[5 to 6]') is null,
+       json_extract('[0,1,2]', '$[last-8 to last-7]') is null;
+select json_extract('[0,1,2]', '$[2 to 6]'),
+       json_extract('[0,1,2]', '$[last-8 to last-2]');
 drop database test;
