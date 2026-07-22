@@ -9399,6 +9399,8 @@ func initTimeFormatTestCase() []tcTemp {
 	t2, _ := types.ParseTime("00:00:00", 6)
 	t3, _ := types.ParseTime("23:59:59.123456", 6)
 	t4, _ := types.ParseTime("12:34:56.789012", 6)
+	t5, _ := types.ParseTime("123:45:06", 6)
+	t6, _ := types.ParseTime("-123:45:06", 6)
 
 	return []tcTemp{
 		{
@@ -9417,12 +9419,24 @@ func initTimeFormatTestCase() []tcTemp {
 			info: "test time_format - %T",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1},
-					[]bool{false}),
+					[]types.Time{t1, t5, t6},
+					[]bool{false, false, false}),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%T"}, []bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45"},
+				[]string{"15:30:45", "123:45:06", "-123:45:06"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test time_format - negative time prefixes complete result",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t6},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"elapsed=%H:%i:%s"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"-elapsed=123:45:06"},
 				[]bool{false}),
 		},
 		{
@@ -9485,6 +9499,268 @@ func TestTimeFormat(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestMakeTimeFractionAndSign(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(floatWithMicrosecondScale,
+				[]float64{12, -12, 12, 838, -838, 839, -839, 12, 12, 12, math.MaxFloat64, -math.MaxFloat64, 838.9, -838.9, math.NaN(), math.Inf(1), math.Inf(-1), 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true}),
+			NewFunctionTestInput(floatWithMicrosecondScale,
+				[]float64{34, 34, 59, 59, 59, 0, 0, 60, 34, 34, 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestInput(floatWithMicrosecondScale,
+				[]float64{56.789012, 56.789012, 59.9999996, 59.9999996, 59.9999996, 0, 0, 0, math.NaN(), math.Inf(1), 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+			[]types.Time{
+				types.TimeFromClock(false, 12, 34, 56, 789012),
+				types.TimeFromClock(true, 12, 34, 56, 789012),
+				types.TimeFromClock(false, 13, 0, 0, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+				0,
+				0,
+				0,
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+				0,
+				0,
+				0,
+				0,
+			},
+			[]bool{false, false, false, false, false, false, false, true, true, true, false, false, false, false, true, true, true, true}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME fractional/sign case failed: %s", info)
+}
+
+func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{838, math.MaxUint64},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{34, 34},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{56, 56},
+				[]bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 838, 34, 56, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+			},
+			[]bool{false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME unsigned hour overflow case failed: %s", info)
+}
+
+func TestMakeTimeSignedHourOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{math.MaxInt64, math.MinInt64},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0},
+				[]bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 838, 59, 59, 0),
+				types.TimeFromClock(true, 838, 59, 59, 0),
+			},
+			[]bool{false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME signed hour overflow case failed: %s", info)
+}
+
+func TestMakeTimeUint32Overload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{12}, []bool{false}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{34}, []bool{false}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{56}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.TimeFromClock(false, 12, 34, 56, 0)},
+			[]bool{false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME uint32 overload failed: %s", info)
+}
+
+func TestMakeTimeFloatHourRounding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{12.7, 12.5, 13.5, -12.5, -13.5, 838.9},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 13, 0, 0, 0),
+				types.TimeFromClock(false, 12, 0, 0, 0),
+				types.TimeFromClock(false, 14, 0, 0, 0),
+				types.TimeFromClock(true, 12, 0, 0, 0),
+				types.TimeFromClock(true, 14, 0, 0, 0),
+				types.TimeFromClock(false, 838, 59, 59, 0),
+			},
+			[]bool{false, false, false, false, false, false}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME float hour rounding failed: %s", info)
+}
+
+func TestMakeTimeFloatMinuteRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{12, 12, 12, 12, 12, 12, 12, 12, 12},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{15.8, 58.5, 59.5, 59.9, -0.5, -0.9, math.NaN(), math.Inf(1), math.Inf(-1)},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{0, 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{
+				types.TimeFromClock(false, 12, 16, 0, 0),
+				types.TimeFromClock(false, 12, 58, 0, 0),
+				0,
+				0,
+				types.TimeFromClock(false, 12, 0, 0, 0),
+				0,
+				0,
+				0,
+				0,
+			},
+			[]bool{false, false, true, true, false, true, true, true, true}),
+		MakeTime)
+
+	s, info := fcTC.Run()
+	require.True(t, s, "MAKETIME float minute range failed: %s", info)
+}
+
+func TestMakeTimeStringHourMinuteSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "string hour and minute truncate while fractional second is preserved",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12.7"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"15.8"}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToTypeWithScale(6), []float64{56.789012}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+				[]types.Time{types.TimeFromClock(false, 12, 15, 56, 789012)}, []bool{false}),
+		},
+		{
+			name: "only string hour truncates",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12.7"}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToTypeWithScale(1), []float64{15.8}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToTypeWithScale(1), []float64{30.9}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToTypeWithScale(1), false,
+				[]types.Time{types.TimeFromClock(false, 12, 16, 30, 900000)}, []bool{false}),
+		},
+		{
+			name: "only string minute truncates",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToTypeWithScale(1), []float64{12.7}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"15.8"}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToTypeWithScale(1), []float64{30.9}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToTypeWithScale(1), false,
+				[]types.Time{types.TimeFromClock(false, 13, 15, 30, 900000)}, []bool{false}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, test.inputs, test.expect, MakeTime)
+			s, info := fcTC.Run()
+			require.True(t, s, "MAKETIME string source semantics failed: %s", info)
+		})
+	}
+}
+
+func TestMakeTimeIntegerSecondRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expected := NewFunctionTestResult(types.T_time.ToType(), false,
+		[]types.Time{
+			types.TimeFromClock(false, 12, 34, 59, 0),
+			0,
+		},
+		[]bool{false, true})
+
+	t.Run("signed", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{12, 12}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{34, 34}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{59, 60}, []bool{false, false}),
+			},
+			expected,
+			MakeTime)
+
+		s, info := fcTC.Run()
+		require.True(t, s, "MAKETIME signed integer second range failed: %s", info)
+	})
+
+	t.Run("unsigned", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{12, 12}, []bool{false, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{34, 34}, []bool{false, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{59, 60}, []bool{false, false}),
+			},
+			expected,
+			MakeTime)
+
+		s, info := fcTC.Run()
+		require.True(t, s, "MAKETIME unsigned integer second range failed: %s", info)
+	})
 }
 
 // TestTimestampDiffDateString tests TIMESTAMPDIFF with DATE and string arguments

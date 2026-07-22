@@ -25,17 +25,20 @@ time7
 SELECT MAKETIME(100, 0, 0) AS time8;
 time8
 100:00:00
-SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
-invalid_hour
-null
+SELECT MAKETIME(839, 0, 0) AS oversized_positive_hour;
+oversized_positive_hour
+838:59:59
+SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
+oversized_negative_hour
+-838:59:59
+SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;
+negative_hour
+-01:15:30
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 invalid_minute
 null
 SELECT MAKETIME(12, 15, 60) AS invalid_second;
 invalid_second
-null
-SELECT MAKETIME(839, 0, 0) AS invalid_hour_too_large;
-invalid_hour_too_large
 null
 SELECT MAKETIME(NULL, 15, 30) AS null_hour;
 null_hour
@@ -49,9 +52,54 @@ null
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 null_all
 null
-SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
+SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 float_values
-12:15:30
+13:16:30.9
+SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
+fractional_seconds
+12:34:56.789012
+SELECT CAST(MAKETIME(12, 34, '56.789012') AS VARCHAR) AS string_fractional_seconds;
+string_fractional_seconds
+12:34:56.789012
+SELECT CAST(MAKETIME('12.7', '15.8', '30.9') AS VARCHAR) AS all_string_values;
+all_string_values
+12:15:30.900000
+SELECT CAST(MAKETIME('12.7', 15.8, 30.9) AS VARCHAR) AS string_hour_float_minute;
+string_hour_float_minute
+12:16:30.9
+SELECT CAST(MAKETIME(12.7, '15.8', 30.9) AS VARCHAR) AS float_hour_string_minute;
+float_hour_string_minute
+13:15:30.9
+SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
+negative_fractional
+-12:34:56.789012
+SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
+fractional_carry
+13:00:00.000000
+SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
+positive_rounded_endpoint
+838:59:59.000000
+SELECT CAST(MAKETIME(-838, 59, 59.9999996) AS VARCHAR) AS negative_rounded_endpoint;
+negative_rounded_endpoint
+-838:59:59.000000
+CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
+INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM maketime_double_seconds;
+double_column_microseconds
+12:34:56.789012
+DROP TABLE maketime_double_seconds;
+CREATE TABLE maketime_varchar_seconds(h INT, m INT, s VARCHAR(20));
+INSERT INTO maketime_varchar_seconds VALUES (12, 34, '56.789012');
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_column_microseconds FROM maketime_varchar_seconds;
+varchar_column_microseconds
+12:34:56.789012
+DROP TABLE maketime_varchar_seconds;
+CREATE TABLE maketime_varchar_parts_double_second(h VARCHAR(20), m VARCHAR(20), s DOUBLE);
+INSERT INTO maketime_varchar_parts_double_second VALUES ('12', '34', 56.789012);
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_parts_double_second FROM maketime_varchar_parts_double_second;
+varchar_parts_double_second
+12:34:56.789012
+DROP TABLE maketime_varchar_parts_double_second;
 CREATE TABLE t1(h INT, m INT, s INT);
 INSERT INTO t1 VALUES (12, 15, 30), (0, 0, 0), (23, 59, 59);
 SELECT MAKETIME(h, m, s) AS time_value FROM t1;
@@ -67,9 +115,9 @@ h    m    s
 12    15    30
 20    0    0
 DROP TABLE t1;
-SELECT MAKETIME(12.0, 15.0, 30.0) AS float_input;
+SELECT CAST(MAKETIME(12.0, 15.0, 30.0) AS VARCHAR) AS float_input;
 float_input
-12:15:30
+12:15:30.0
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
 unsigned_input
 12:15:30

@@ -354,6 +354,120 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
+func TestMakeTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	fractionalResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.New(types.T_decimal128, 20, 6),
+	})
+	require.NoError(t, err)
+	require.True(t, fractionalResult.needCast)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), fractionalResult.retType)
+
+	defaultFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		{Oid: types.T_float64, Size: 8, Scale: -1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+}
+
+func TestMakeTimeStringSecondUsesFloatOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, result.needCast)
+	require.Len(t, result.targetTypes, 3)
+	for _, target := range result.targetTypes {
+		require.Equal(t, types.T_float64, target.Oid)
+	}
+	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+}
+
+func TestMakeTimeStringArgumentTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defaultFloat := types.T_float64.ToType()
+	defaultFloat.Scale = -1
+	scaledFloat := types.T_float64.ToTypeWithScale(1)
+
+	tests := []struct {
+		name         string
+		inputs       []types.Type
+		overloadArgs []types.T
+		needCast     bool
+		targets      []types.Type
+		returnType   types.Type
+	}{
+		{
+			name: "varchar hour and minute with double second",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), defaultFloat,
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(6),
+		},
+		{
+			name: "all varchar",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+			needCast:     true,
+			targets: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), defaultFloat,
+			},
+			returnType: types.T_time.ToTypeWithScale(6),
+		},
+		{
+			name: "only hour is varchar",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), scaledFloat, scaledFloat,
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_float64, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(1),
+		},
+		{
+			name: "only minute is varchar",
+			inputs: []types.Type{
+				scaledFloat, types.T_varchar.ToType(), scaledFloat,
+			},
+			overloadArgs: []types.T{types.T_float64, types.T_varchar, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(1),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.needCast, result.needCast)
+			require.Equal(t, test.targets, result.targetTypes)
+			require.Equal(t, test.returnType, result.retType)
+
+			selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+			require.NoError(t, err)
+			require.Equal(t, test.overloadArgs, selected.args)
+		})
+	}
+}
+
 func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

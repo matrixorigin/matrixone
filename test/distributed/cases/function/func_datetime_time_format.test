@@ -5,6 +5,8 @@ SELECT TIME_FORMAT('15:30:45', '%H:%i:%s') AS result1;
 # Basic time formats
 SELECT TIME_FORMAT('15:30:45', '%H:%i:%s') AS basic_format;
 SELECT TIME_FORMAT('15:30:45', '%T') AS t_format;
+SELECT TIME_FORMAT('123:45:06', '%T') AS extended_t_format;
+SELECT TIME_FORMAT('-123:45:06', 'elapsed=%H:%i:%s') AS negative_with_text;
 SELECT TIME_FORMAT('00:00:00', '%H:%i:%s') AS zero_time;
 SELECT TIME_FORMAT('23:59:59', '%H:%i:%s') AS max_time;
 

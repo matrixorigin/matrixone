@@ -9194,7 +9194,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_uint32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeToHour
@@ -10817,6 +10817,50 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	},
 }
 
+func makeTimeReturnType(parameters []types.Type) types.Type {
+	scale := parameters[2].Scale
+	if scale < 0 {
+		scale = 6
+	} else if scale > 6 {
+		scale = 6
+	}
+	return types.T_time.ToTypeWithScale(scale)
+}
+
+func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 3 || (!inputs[0].Oid.IsMySQLString() && !inputs[1].Oid.IsMySQLString() && !inputs[2].Oid.IsMySQLString()) {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
+	if inputs[0].Oid.IsMySQLString() {
+		targetOids[0] = types.T_varchar
+	}
+	if inputs[1].Oid.IsMySQLString() {
+		targetOids[1] = types.T_varchar
+	}
+	status, _ := tryToMatch(inputs, targetOids)
+	if status == matchFailed {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	for i, ov := range overloads {
+		if len(ov.args) != len(targetOids) || ov.args[0] != targetOids[0] || ov.args[1] != targetOids[1] || ov.args[2] != targetOids[2] {
+			continue
+		}
+		if status == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		}
+		targets := make([]types.Type, len(inputs))
+		for j := range targets {
+			targets[j] = targetOids[j].ToType()
+			SetTargetScaleFromSource(&inputs[j], &targets[j])
+		}
+		return newCheckResultWithCast(i, targets)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 var supportedControlBuiltIns = []FuncNew{
 	// function `add_fault_point`
 	{
@@ -11267,14 +11311,12 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: MAKETIME,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    makeTimeCheck,
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_int64, types.T_int64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
-				},
+				retType:    makeTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
 				},
@@ -11282,9 +11324,7 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_uint64, types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
-				},
+				retType:    makeTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
 				},
@@ -11292,9 +11332,7 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_float64, types.T_float64, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
-				},
+				retType:    makeTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
 				},
@@ -11302,9 +11340,7 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_int32, types.T_int32, types.T_int32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
-				},
+				retType:    makeTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
 				},
@@ -11312,9 +11348,31 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_uint32, types.T_uint32, types.T_uint32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+				retType:    makeTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
 				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varchar, types.T_float64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_float64, types.T_varchar, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return MakeTime
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+				retType:    makeTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
 				},

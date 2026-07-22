@@ -12,15 +12,16 @@ SELECT MAKETIME(0, 30, 45) AS time4;
 SELECT MAKETIME(12, 0, 0) AS time5;
 SELECT MAKETIME(12, 15, 0) AS time6;
 
-# Large hour values (MySQL TIME allows up to 838 hours)
+# Large hour values clamp to the MySQL TIME endpoint
 SELECT MAKETIME(838, 59, 59) AS time7;
 SELECT MAKETIME(100, 0, 0) AS time8;
+SELECT MAKETIME(839, 0, 0) AS oversized_positive_hour;
+SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
 
-# Invalid values (should return NULL)
-SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
+# Negative hours are valid; other invalid values return NULL
+SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 SELECT MAKETIME(12, 15, 60) AS invalid_second;
-SELECT MAKETIME(839, 0, 0) AS invalid_hour_too_large;
 
 # NULL handling
 SELECT MAKETIME(NULL, 15, 30) AS null_hour;
@@ -28,8 +29,35 @@ SELECT MAKETIME(12, NULL, 30) AS null_minute;
 SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
-# Float values (should truncate)
-SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
+# Float hour and minute values round to nearest-even; fractional seconds are preserved
+SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
+SELECT CAST(MAKETIME(12, 34, 56.789012) AS VARCHAR) AS fractional_seconds;
+SELECT CAST(MAKETIME(12, 34, '56.789012') AS VARCHAR) AS string_fractional_seconds;
+SELECT CAST(MAKETIME('12.7', '15.8', '30.9') AS VARCHAR) AS all_string_values;
+SELECT CAST(MAKETIME('12.7', 15.8, 30.9) AS VARCHAR) AS string_hour_float_minute;
+SELECT CAST(MAKETIME(12.7, '15.8', 30.9) AS VARCHAR) AS float_hour_string_minute;
+SELECT CAST(MAKETIME(-12, 34, 56.789012) AS VARCHAR) AS negative_fractional;
+SELECT CAST(MAKETIME(12, 59, 59.9999996) AS VARCHAR) AS fractional_carry;
+SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
+SELECT CAST(MAKETIME(-838, 59, 59.9999996) AS VARCHAR) AS negative_rounded_endpoint;
+
+# Default DOUBLE column retains microseconds
+CREATE TABLE maketime_double_seconds(h INT, m INT, s DOUBLE);
+INSERT INTO maketime_double_seconds VALUES (12, 34, 56.789012);
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS double_column_microseconds FROM maketime_double_seconds;
+DROP TABLE maketime_double_seconds;
+
+# VARCHAR second values retain fractional microseconds
+CREATE TABLE maketime_varchar_seconds(h INT, m INT, s VARCHAR(20));
+INSERT INTO maketime_varchar_seconds VALUES (12, 34, '56.789012');
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_column_microseconds FROM maketime_varchar_seconds;
+DROP TABLE maketime_varchar_seconds;
+
+# VARCHAR hour/minute retain val_int semantics with a DOUBLE second
+CREATE TABLE maketime_varchar_parts_double_second(h VARCHAR(20), m VARCHAR(20), s DOUBLE);
+INSERT INTO maketime_varchar_parts_double_second VALUES ('12', '34', 56.789012);
+SELECT CAST(MAKETIME(h, m, s) AS VARCHAR) AS varchar_parts_double_second FROM maketime_varchar_parts_double_second;
+DROP TABLE maketime_varchar_parts_double_second;
 
 # Table usage
 CREATE TABLE t1(h INT, m INT, s INT);
@@ -44,6 +72,5 @@ SELECT * FROM t1 WHERE MAKETIME(h, m, s) > '12:00:00';
 DROP TABLE t1;
 
 # Different numeric types
-SELECT MAKETIME(12.0, 15.0, 30.0) AS float_input;
+SELECT CAST(MAKETIME(12.0, 15.0, 30.0) AS VARCHAR) AS float_input;
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
-
