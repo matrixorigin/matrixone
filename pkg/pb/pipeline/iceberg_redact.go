@@ -23,12 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
-// pipeline.pb.go intentionally routes the String methods for Message,
-// IcebergDataFileTask, IcebergDeleteFileTask, ExternalScan, Instruction, and
-// Pipeline through the helpers below. protoc regeneration restores
-// proto.CompactTextString and must be followed by restoring those routes until
-// the generator supports per-message redacting stringers. GoString and JSON
-// methods alone are insufficient because logging commonly calls String.
+// String methods for Message, IcebergDataFileTask, IcebergDeleteFileTask,
+// ExternalScan, Instruction, and Pipeline live here because their proto
+// declarations disable generated stringers. This keeps credentials and Iceberg
+// paths redacted after protobuf regeneration.
 
 func messageString(m *Message) string {
 	if m == nil {
@@ -48,6 +46,10 @@ func messageString(m *Message) string {
 		)
 	}
 	return proto.CompactTextString(m)
+}
+
+func (m *Message) String() string {
+	return messageString(m)
 }
 
 func (m *Message) GoString() string {
@@ -95,6 +97,10 @@ func icebergDataFileTaskString(m *IcebergDataFileTask) string {
 	return proto.CompactTextString(&cp)
 }
 
+func (m *IcebergDataFileTask) String() string {
+	return icebergDataFileTaskString(m)
+}
+
 func (m *IcebergDataFileTask) GoString() string {
 	return icebergDataFileTaskString(m)
 }
@@ -121,6 +127,10 @@ func icebergDeleteFileTaskString(m *IcebergDeleteFileTask) string {
 	return proto.CompactTextString(&cp)
 }
 
+func (m *IcebergDeleteFileTask) String() string {
+	return icebergDeleteFileTaskString(m)
+}
+
 func (m *IcebergDeleteFileTask) GoString() string {
 	return icebergDeleteFileTaskString(m)
 }
@@ -142,6 +152,10 @@ func externalScanString(m *ExternalScan) string {
 		return "<nil>"
 	}
 	return proto.CompactTextString(redactedExternalScanCopy(m))
+}
+
+func (m *ExternalScan) String() string {
+	return externalScanString(m)
 }
 
 func (m *ExternalScan) GoString() string {
@@ -166,6 +180,10 @@ func instructionString(m *Instruction) string {
 		cp.ExternalScan = redactedExternalScanCopy(m.ExternalScan)
 	}
 	return proto.CompactTextString(&cp)
+}
+
+func (m *Instruction) String() string {
+	return instructionString(m)
 }
 
 func (m *Instruction) GoString() string {
@@ -199,6 +217,10 @@ func pipelineString(m *Pipeline) string {
 		}
 	}
 	return proto.CompactTextString(&cp)
+}
+
+func (m *Pipeline) String() string {
+	return pipelineString(m)
 }
 
 func (m *Pipeline) GoString() string {
