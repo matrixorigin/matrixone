@@ -138,6 +138,41 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name: "abs double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"abs(cast(-100000 as double))",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "abs nested arithmetic double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"abs(? + cast(-100000 as double))",
+			want:       types.T_float64,
+			paramCount: 2,
+		},
+		{
+			name: "floor double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"floor(cast(-100000 as double))",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "power double result overrides target",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"power(cast(-100000 as double), 1)",
+			want:       types.T_float64,
+			paramCount: 1,
+		},
+		{
+			name: "nested non numeric function exposes only final numeric result",
+			sql: "insert into constraint_test.emp (sal) select ? + " +
+				"length(concat(cast(1 as decimal(30, 2)), ''))",
+			want:       types.T_decimal64,
+			paramCount: 1,
+		},
+		{
 			name: "case result arithmetic keeps target",
 			sql: "insert into constraint_test.emp (sal) select " +
 				"case when 1 = 1 then ? + ? else 0 end",
@@ -271,6 +306,20 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name: "derived if root passthrough",
+			sql: "insert into constraint_test.emp (sal) select if(1 = 1, d.x, 0) " +
+				"from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "derived case root passthrough",
+			sql: "insert into constraint_test.emp (sal) select " +
+				"case when 1 = 1 then d.x else 0 end from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name: "derived arithmetic double sibling overrides target",
 			sql: "insert into constraint_test.emp (sal) select d.x + cast(0 as double) " +
 				"from (select ? + ? as x) d",
@@ -319,6 +368,13 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "cte arithmetic passthrough",
 			sql: "insert into constraint_test.emp (sal) with c as (select ? + ? as x) " +
 				"select x + 0 from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "cte coalesce root passthrough",
+			sql: "insert into constraint_test.emp (sal) with c as (select ? + ? as x) " +
+				"select coalesce(c.x, 0) from c",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -1179,6 +1235,12 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 		{
 			name: "update from derived source",
 			sql: "update constraint_test.emp set sal = d.x " +
+				"from (select ? + ? as x) d where emp.empno = 1",
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+		},
+		{
+			name: "update from derived conditional root",
+			sql: "update constraint_test.emp set sal = if(1 = 1, d.x, 0) " +
 				"from (select ? + ? as x) d where emp.empno = 1",
 			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},

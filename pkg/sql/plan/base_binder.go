@@ -787,25 +787,10 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
-	for i := range scan.strong {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
-	}
-	var outerType *types.Type
-	if outer != nil {
-		typ := makeTypeByPlan2Type(*outer)
-		outerType = &typ
-	}
-	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
-		for i := range scan.weakDecimals {
-			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
-		}
-	}
-	paramType, ok := function.InferNumericParameterType(typesKnown, outerType)
+	planType, ok := numericTypeFromAstScan(scan, outer)
 	if !ok {
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
-	planType := makePlan2Type(&paramType)
 	b.numericParamType = &planType
 	defer func() { b.numericParamType = nil }()
 	previousSubqueryTarget := b.numericSubqueryTarget
@@ -933,18 +918,25 @@ func (b *baseBinder) numericAstTypesInternal(
 	case *tree.FuncExpr:
 		name := numericAstFunctionName(expr)
 		indexes, ok := numericFunctionResultArgs(name, len(expr.Exprs))
-		if !ok {
+		if ok {
+			var scan numericAstTypeScan
+			for _, idx := range indexes {
+				value, err := b.numericAstTypesInternal(expr.Exprs[idx], depth, resolveColumn)
+				if err != nil {
+					return numericAstTypeScan{}, err
+				}
+				scan = scan.merge(value)
+			}
+			return scan, nil
+		}
+		typ, known, err := b.numericAstStaticType(expr, depth, resolveColumn)
+		if err != nil || !known {
+			return numericAstTypeScan{}, err
+		}
+		if !makeTypeByPlan2Type(typ).IsNumeric() {
 			return numericAstTypeScan{}, nil
 		}
-		var scan numericAstTypeScan
-		for _, idx := range indexes {
-			value, err := b.numericAstTypesInternal(expr.Exprs[idx], depth, resolveColumn)
-			if err != nil {
-				return numericAstTypeScan{}, err
-			}
-			scan = scan.merge(value)
-		}
-		return scan, nil
+		return numericAstTypedOperand(typ), nil
 	case *tree.CaseExpr:
 		var scan numericAstTypeScan
 		for _, when := range expr.Whens {
@@ -975,6 +967,107 @@ func (b *baseBinder) numericAstTypesInternal(
 	default:
 		return numericAstTypeScan{}, nil
 	}
+}
+
+func (b *baseBinder) numericAstStaticType(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (Type, bool, error) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return b.numericAstStaticType(expr.Expr, depth, resolveColumn)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		return typ, err == nil, err
+	case *tree.NumVal:
+		bound, err := b.bindNumVal(expr, Type{})
+		if err != nil {
+			return Type{}, false, err
+		}
+		return bound.Typ, true, nil
+	case *tree.BinaryExpr:
+		if !isNumericBinaryOp(expr.Op) {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnresolvedName:
+		if resolveColumn == nil {
+			return Type{}, false, nil
+		}
+		scan, ok := resolveColumn(expr)
+		if !ok || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, nil
+		}
+		return scan.strong[0], true, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		if err != nil || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, err
+		}
+		return scan.strong[0], true, nil
+	case *tree.FuncExpr:
+		name := numericAstFunctionName(expr)
+		if name == "" || function.GetFunctionIsAggregateByName(name) || function.GetFunctionIsWinFunByName(name) {
+			return Type{}, false, nil
+		}
+		argTypes := make([]types.Type, len(expr.Exprs))
+		for i, arg := range expr.Exprs {
+			typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+			if err != nil || !known {
+				return Type{}, false, err
+			}
+			argTypes[i] = makeTypeByPlan2Type(typ)
+		}
+		resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+		if err != nil {
+			return Type{}, false, nil
+		}
+		ret := resolved.GetReturnType()
+		return makePlan2Type(&ret), true, nil
+	default:
+		return Type{}, false, nil
+	}
+}
+
+func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	}
+	var outerType *types.Type
+	if outer != nil {
+		typ := makeTypeByPlan2Type(*outer)
+		outerType = &typ
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
+	}
+	resolved, ok := function.InferNumericParameterType(typesKnown, outerType)
+	if !ok {
+		return Type{}, false
+	}
+	return makePlan2Type(&resolved), true
 }
 
 func (b *baseBinder) numericScalarSubqueryAstTypes(

@@ -3873,7 +3873,7 @@ func numericProjectionExprTarget(
 	expr tree.Expr,
 	outer Type,
 ) (Type, bool) {
-	if outer.Id == 0 || !isNumericArithmeticRoot(expr) {
+	if outer.Id == 0 || !isNumericProjectionContextRoot(expr) {
 		return Type{}, false
 	}
 	binder := NewProjectionBinder(builder, ctx, nil)
@@ -3881,21 +3881,21 @@ func numericProjectionExprTarget(
 	if err != nil || scan.incompatible {
 		return Type{}, false
 	}
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
-	for i := range scan.strong {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	return numericTypeFromAstScan(scan, &outer)
+}
+
+func isNumericProjectionContextRoot(expr tree.Expr) bool {
+	switch item := expr.(type) {
+	case *tree.ParenExpr:
+		return isNumericProjectionContextRoot(item.Expr)
+	case *tree.CaseExpr:
+		return true
+	case *tree.FuncExpr:
+		_, ok := numericFunctionResultArgs(numericAstFunctionName(item), len(item.Exprs))
+		return ok
+	default:
+		return isNumericArithmeticRoot(expr)
 	}
-	outerType := makeTypeByPlan2Type(outer)
-	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, &outerType) {
-		for i := range scan.weakDecimals {
-			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
-		}
-	}
-	target, ok := function.InferNumericParameterType(typesKnown, &outerType)
-	if !ok {
-		return Type{}, false
-	}
-	return makePlan2Type(&target), true
 }
 
 func seedNumericExprColumnTargets(sources []numericProjectionSourceInfo, expr tree.Expr, target Type) {
