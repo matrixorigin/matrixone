@@ -94,6 +94,39 @@ func TestS3FSCopyObject(t *testing.T) {
 	require.Equal(t, "fixture/objects/b", dstStorage.dstKey)
 }
 
+func TestObjectCopyCapabilityFallbacks(t *testing.T) {
+	ctx := context.Background()
+	plain := dummyFileService{name: "plain"}
+	services, err := NewFileServices("plain", plain)
+	require.NoError(t, err)
+
+	// A FileServices destination without the optional copy capability must let
+	// callers fall back to streaming instead of treating it as an error.
+	copied, err := services.CopyObject(ctx, plain, "source", "destination")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	_, err = services.CopyObject(ctx, plain, "source", "~~")
+	require.Error(t, err)
+	_, err = services.CopyObject(ctx, plain, "source", "missing:destination")
+	require.Error(t, err)
+
+	sub := SubPath(plain, "prefix").(ObjectCopier)
+	copied, err = sub.CopyObject(ctx, plain, "source", "destination")
+	require.NoError(t, err)
+	require.False(t, copied)
+	_, err = sub.CopyObject(ctx, plain, "source", "~~")
+	require.Error(t, err)
+
+	source, _, err := resolveS3CopySource(plain, "source")
+	require.NoError(t, err)
+	require.Nil(t, source)
+	_, _, err = resolveS3CopySource(SubPath(plain, "prefix"), "~~")
+	require.Error(t, err)
+	_, _, err = resolveS3CopySource(services, "missing:source")
+	require.Error(t, err)
+}
+
 func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
 	copied, err := (&AwsSDKv2{endpoint: "https://s3-b.example.com"}).CopyObject(
 		context.Background(), &AwsSDKv2{endpoint: "https://s3-a.example.com"}, "src", "dst",
