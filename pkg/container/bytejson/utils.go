@@ -267,17 +267,6 @@ func (r UnnestResult) String() string {
 	return buf.String()
 }
 
-func checkAllNull(vals []ByteJson) bool {
-	allNull := true
-	for _, val := range vals {
-		if !val.IsNull() {
-			allNull = false
-			break
-		}
-	}
-	return allNull
-}
-
 // NumberParts is the result of parsing out a valid JSON number. It contains
 // the parts of a number. The parts are used for integer conversion.
 type NumberParts struct {

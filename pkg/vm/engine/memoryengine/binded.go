@@ -95,7 +95,7 @@ func (b *BindedEngine) ResolveQueryCandidatePool(
 	ctx context.Context,
 	candidates engine.QueryCandidates,
 	request engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
+) (engine.ResolvedQueryPool, error) {
 	return b.engine.ResolveQueryCandidatePool(ctx, candidates, request)
 }
 

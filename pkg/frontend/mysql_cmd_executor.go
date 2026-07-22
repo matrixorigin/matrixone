@@ -1417,7 +1417,7 @@ func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfi
 	return moerr.NewNotSupported(execCtx.reqCtx, msg)
 }
 
-func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {
+func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, statementSQL ...string) error {
 
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
@@ -1470,7 +1470,22 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 		return err
 	}
 	if explainSchedulingEnabled(ses) {
-		schedulingPreview := previewQueryScheduling(reqCtx, ses, exPlan.GetQuery(), txnHaveDDL)
+		rawSQL := ses.GetSql()
+		var schedulingSQLMode *string
+		if len(statementSQL) > 0 {
+			rawSQL = statementSQL[0]
+		}
+		// EXPLAIN EXECUTE replaces the outer EXECUTE plan with the prepared
+		// query above. Its scheduling intent belongs to that same inner SQL,
+		// not to the outer EXPLAIN fragment.
+		if execute, ok := stmt.Statement.(*tree.Execute); ok {
+			if prepared, getErr := ses.GetPrepareStmt(reqCtx, string(execute.Name)); getErr == nil {
+				rawSQL = prepared.Sql
+				schedulingSQLMode = &prepared.schedulingSQLMode
+			}
+		}
+		schedulingPreview := previewQuerySchedulingWithSQLMode(
+			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, schedulingSQLMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
 	if err = reqCtx.Err(); err != nil {
@@ -1498,6 +1513,25 @@ func previewQueryScheduling(
 	ses *Session,
 	query *plan.Query,
 	txnHaveDDL bool,
+	statementSQL ...string,
+) schedule.Trace {
+	rawSQL := ""
+	if ses != nil {
+		rawSQL = ses.GetSql()
+	}
+	if len(statementSQL) > 0 {
+		rawSQL = statementSQL[0]
+	}
+	return previewQuerySchedulingWithSQLMode(ctx, ses, query, txnHaveDDL, rawSQL, nil)
+}
+
+func previewQuerySchedulingWithSQLMode(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+	rawSQL string,
+	sqlMode *string,
 ) schedule.Trace {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1514,6 +1548,10 @@ func previewQueryScheduling(
 	if info := ses.GetTenantInfo(); info != nil {
 		tenant = info.GetTenant()
 	}
+	intent := querySchedulingIntentForStatement(ses, rawSQL)
+	if sqlMode != nil {
+		intent = querySchedulingIntentForStatementWithSQLMode(ses, rawSQL, *sqlMode)
+	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
 		Context:    previewCtx,
 		Query:      query,
@@ -1524,6 +1562,7 @@ func previewQueryScheduling(
 		Tenant:     tenant,
 		Username:   ses.GetUserName(),
 		CNLabel:    ses.getCNLabels(),
+		Intent:     intent,
 		TxnHasDDL:  txnHaveDDL,
 	})
 }
@@ -1551,7 +1590,11 @@ func explainSchedulingEnabled(ses *Session) bool {
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
 func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) error {
-	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
+	rawSQL := execCtx.sqlOfStmt
+	if carrier, ok := execCtx.cw.(interface{ SchedulingSQL() string }); ok && carrier.SchedulingSQL() != "" {
+		rawSQL = carrier.SchedulingSQL()
+	}
+	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt, rawSQL)
 }
 
 func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, error) {
@@ -1740,11 +1783,16 @@ func createPrepareStmt(
 		return nil, err
 	}
 
+	schedulingSQLMode := sessionSQLModeForParser(ses)
+	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
+		ses, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok &&
-		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) {
+		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) &&
+		(!prepareSchedulingIntent.Explicit ||
+			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -1768,6 +1816,7 @@ func createPrepareStmt(
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
 		getFromSendLongData: make(map[int]struct{}),
+		schedulingSQLMode:   schedulingSQLMode,
 	}
 
 	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
@@ -2841,6 +2890,14 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		return cws, nil
 	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		var remapErr error
+		statementSchedulingSQL, schedulingErr := schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		if schedulingErr != nil {
+			return nil, schedulingErr
+		}
+		if len(statementSchedulingSQL) != len(cached.stmts) {
+			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to cached statements")
+		}
 		statementRemaps, remapErr = extractRemapDbByStatementWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
 		if remapErr != nil {
 			return nil, remapErr
@@ -2852,6 +2909,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
 			tcw.SetRemapDb(statementRemaps[i])
+			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 			cws = append(cws, tcw)
 		}
 
@@ -2964,8 +3022,22 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 	}
 
+	var statementSchedulingSQL []string
+	if execCtx.input.getStmt() != nil {
+		statementSchedulingSQL = []string{execCtx.input.getSql()}
+	} else {
+		statementSchedulingSQL, err = schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(statementSchedulingSQL) != len(stmts) {
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to statements")
+	}
 	for i, stmt := range stmts {
 		tcw := InitTxnComputationWrapper(ses, stmt, proc)
+		tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 		if len(statementRemaps) == len(stmts) {
 			tcw.SetRemapDb(statementRemaps[i])
 		}
@@ -4380,6 +4452,32 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 	}
 	if len(byStatement) == 0 {
 		return []string{""}, nil
+	}
+	return byStatement, nil
+}
+
+// schedulingSQLByStatementWithSQLMode keeps raw statement text (including
+// optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
+// this text is control-plane input and must never be sanitized first.
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
+		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
+		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
+		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
+		return []string{sql}, nil
+	}
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	byStatement := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		if parsers.FragmentHasStatement(fragment) {
+			byStatement = append(byStatement, fragment)
+		}
+	}
+	if len(byStatement) == 0 {
+		return []string{sql}, nil
 	}
 	return byStatement, nil
 }

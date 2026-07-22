@@ -315,6 +315,11 @@ type PrepareStmt struct {
 	// tempTableVersion is the session temporary-table mapping version used to
 	// build PreparePlan and compile.
 	tempTableVersion uint64
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*
