@@ -626,7 +626,8 @@ func TestTupleEnumRoundTrip(t *testing.T) {
 	tt, err := Unpack(buf)
 	require.NoError(t, err)
 	require.Equal(t, []byte("n1"), tt[0])
-	require.EqualValues(t, 2, tt[1])
+	require.IsType(t, Enum(0), tt[1])
+	require.Equal(t, Enum(2), tt[1])
 
 	// StringifyTuple renders duplicate-key errors; it must not panic and must print
 	// the ENUM index value.

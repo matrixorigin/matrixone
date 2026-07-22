@@ -118,6 +118,16 @@ func TestClusterCloseReleasesPreReadyWaiters(t *testing.T) {
 	)
 }
 
+func TestTNServiceSnapshotHonorsCancellationWhileClusterStarts(t *testing.T) {
+	c := &cluster{readyC: make(chan struct{})}
+	c.services.Store(&services{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := GetAllTNServicesWithContext(ctx, c)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestClusterForceRefresh(t *testing.T) {
 	runClusterTest(
 		time.Hour,
