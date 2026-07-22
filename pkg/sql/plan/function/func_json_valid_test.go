@@ -819,6 +819,109 @@ func TestJsonExtractConstNullPath(t *testing.T) {
 	})
 }
 
+func TestJsonExtractPreservesJSONNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name string
+		typ  types.Type
+		docs []string
+	}{
+		{
+			name: "varchar input",
+			typ:  types.T_varchar.ToType(),
+			docs: []string{`{"a":null}`, `{}`, ``},
+		},
+		{
+			name: "json input",
+			typ:  types.T_json.ToType(),
+			docs: []string{
+				mustJsonBinaryString(t, `{"a":null}`),
+				mustJsonBinaryString(t, `{}`),
+				``,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, test.docs, []bool{false, false, true}),
+					NewFunctionTestInput(types.T_varchar.ToType(),
+						[]string{"$.a", "$.a", "$.a"}, []bool{false, false, false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.Equal(t, "null", jsonVectorRowString(t, vec, 0))
+			require.True(t, vec.IsNull(1))
+			require.True(t, vec.IsNull(2))
+		})
+	}
+}
+
+func TestJsonExtractIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `also bad path`}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract,
+		&FunctionSelectList{AllNull: true})
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonExtractMultiplePathsPreserveJSONNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"a":null,"b":1}`, `{"a":null}`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"$.a", "$.a"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"$.b", "$.missing"}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+	require.False(t, vec.IsNull(0))
+	require.Equal(t, "[null, 1]", jsonVectorRowString(t, vec, 0))
+	require.False(t, vec.IsNull(1))
+	require.Equal(t, "[null]", jsonVectorRowString(t, vec, 1))
+}
+
+func TestJsonExtractWildcardPreservesJSONNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		typ  types.Type
+		doc  string
+	}{
+		{name: "varchar input", typ: types.T_varchar.ToType(), doc: `{"items":[null,1]}`},
+		{name: "json input", typ: types.T_json.ToType(), doc: mustJsonBinaryString(t, `{"items":[null,1]}`)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.items[*]"}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.Equal(t, "[null, 1]", jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
 func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInJsonExtract()

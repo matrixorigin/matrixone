@@ -217,6 +217,54 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestQueryWithExistsPreservesJSONNull(t *testing.T) {
+	bj, err := ParseFromString(`{"a":null,"b":1,"items":[null,2]}`)
+	require.NoError(t, err)
+
+	parsePaths := func(pathStrings ...string) []*Path {
+		paths := make([]*Path, len(pathStrings))
+		for i, pathString := range pathStrings {
+			path, parseErr := ParseJsonPath(pathString)
+			require.NoError(t, parseErr)
+			paths[i] = &path
+		}
+		return paths
+	}
+
+	tests := []struct {
+		name   string
+		paths  []string
+		result string
+		exists bool
+	}{
+		{name: "existing null", paths: []string{"$.a"}, result: "null", exists: true},
+		{name: "missing", paths: []string{"$.missing"}, result: "null", exists: false},
+		{name: "null and value", paths: []string{"$.a", "$.b"}, result: "[null,1]", exists: true},
+		{name: "all null", paths: []string{"$.a", "$.a"}, result: "[null,null]", exists: true},
+		{name: "null and missing", paths: []string{"$.a", "$.missing"}, result: "[null]", exists: true},
+		{name: "wildcard", paths: []string{"$.items[*]"}, result: "[null,2]", exists: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths := parsePaths(test.paths...)
+			result, exists := bj.QueryWithExists(paths)
+			require.Equal(t, test.exists, exists)
+			require.JSONEq(t, test.result, result.String())
+
+			allSimple := true
+			for _, path := range paths {
+				allSimple = allSimple && path.IsSimple()
+			}
+			if allSimple {
+				simpleResult, simpleExists := bj.QuerySimpleWithExists(paths)
+				require.Equal(t, test.exists, simpleExists)
+				require.JSONEq(t, test.result, simpleResult.String())
+			}
+		})
+	}
+}
+
 func TestQuerySimpleContainPath(t *testing.T) {
 	kases := []struct {
 		name    string

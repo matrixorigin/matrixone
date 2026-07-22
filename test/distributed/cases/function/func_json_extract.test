@@ -325,3 +325,26 @@ select * from example_table where json_extract(data, '$.CODE') = 'CODE-3';
 select * from example_table where json_extract(data, '$.LINE') = 'LINE-4';
 select * from example_table where json_extract(data, '$.PANEL') = 'PANEL-17';
 drop database test;
+
+# JSON null is a JSON value, distinct from SQL NULL
+create database test;
+use test;
+create table json_null_test(id int primary key, doc json);
+insert into json_null_test values (1, '{"a":null,"fallback":[]}');
+select json_extract(doc, '$.a'),
+       json_extract(doc, '$.a') is null,
+       coalesce(json_extract(doc, '$.a'), json_extract(doc, '$.fallback'))
+from json_null_test;
+with x as (
+    select doc from json_null_test where id = 1
+)
+select json_extract(doc, '$.a'),
+       json_extract(doc, '$.a') is null,
+       coalesce(json_extract(doc, '$.a'), json_extract(doc, '$.fallback'))
+from x;
+select json_extract(doc, '$.missing') is null,
+       json_extract(doc, '$.a', '$.missing'),
+       json_extract(doc, '$.a', '$.fallback')
+from json_null_test;
+select json_extract('{"items":[null,1]}', '$.items[*]');
+drop database test;
