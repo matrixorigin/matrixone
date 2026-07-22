@@ -197,4 +197,35 @@ select * from t0 order by a;
 drop table t1;
 drop table t0;
 
+-- =====================================================
+-- Case 10: DROP/ADD with the same name cannot replay stale values
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1);
+data branch create table t1 from t0;
+update t1 set b=5 where a=1;
+alter table t1 drop column b;
+alter table t1 add column b int default 0;
+-- @regex("schema compatibility check: column 'b' has different identity", true)
+data branch merge t1 into t0;
+select * from t0;
+drop table t1;
+drop table t0;
+
+-- =====================================================
+-- Case 11: incompatible target-only LCA columns are not probed
+-- =====================================================
+create table t0(a int primary key, b int, c int);
+insert into t0 values(1,1,1);
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+alter table t1 modify column c varchar(20);
+alter table t2 drop column c;
+update t1 set b=11, c='x' where a=1;
+data branch merge t1 into t2;
+select * from t2;
+drop table t2;
+drop table t1;
+drop table t0;
+
 drop database test;

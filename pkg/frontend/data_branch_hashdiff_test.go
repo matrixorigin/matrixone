@@ -1092,11 +1092,94 @@ func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
 		lcaDef,
 		[]string{"id", "name", "added"},
 		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
+		[]int{2},
 	)
 
 	require.Equal(t, []string{"id", "name"}, layout.attrs)
 	require.Equal(t, []int{0, 1}, layout.targetIdxes)
 	require.Equal(t, []types.T{types.T_int64, types.T_varchar}, []types.T{layout.types[0].Oid, layout.types[1].Oid})
+}
+
+func TestLCAProbeColumnLayoutExcludesTargetOnlyColumnsWithoutLCAMetadata(t *testing.T) {
+	layout, err := lcaProbeColumnLayout(
+		&plan.TableDef{},
+		&plan.TableDef{},
+		[]string{"a", "c"},
+		[]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
+		[]int{1},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, layout.attrs)
+	require.Equal(t, []int{0}, layout.targetIdxes)
+}
+
+func TestLCAProbeColumnLayoutExcludesIncompatibleTargetOnlyColumn(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "c", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: catalog.Row_ID, ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "c", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+	}}
+
+	layout, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"a", "c"},
+		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 20, 0)},
+		[]int{1},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, layout.attrs)
+	require.Equal(t, []int{0}, layout.targetIdxes)
+}
+
+func TestLCAProbeColumnLayoutRejectsIncompatibleCommonColumn(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+	}}
+
+	_, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"a", "b"},
+		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 20, 0)},
+		nil,
+	)
+
+	require.ErrorContains(t, err, "column b has a different type")
+}
+
+func TestLCAProbeColumnLayoutIgnoresTargetOnlyRowIDCollision(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: catalog.Row_ID, ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "c", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+	}}
+
+	layout, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"a", "c"},
+		[]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
+		[]int{1},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, layout.attrs)
+	require.Equal(t, []int{0}, layout.targetIdxes)
 }
 
 func TestLCAProbeResultTargetIndexes(t *testing.T) {
@@ -1797,7 +1880,7 @@ func TestHashDiff_HasLCAUpdateIgnoresTargetOnlyColumns(t *testing.T) {
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
 	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	bh.EXPECT().GetExecResultSet().Return([]interface{}{
-		buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "before", nil}),
+		buildLCAProbeResultSetWithColumnCount(3, []interface{}{int64(0), int64(1), "before"}),
 	}).Times(1)
 	bh.EXPECT().ClearExecResultSet().Times(1)
 
@@ -2039,8 +2122,12 @@ func buildLCAProbeResultSet() *MysqlResultSet {
 }
 
 func buildLCAProbeResultSetWithRows(rows ...[]interface{}) *MysqlResultSet {
+	return buildLCAProbeResultSetWithColumnCount(4, rows...)
+}
+
+func buildLCAProbeResultSetWithColumnCount(columnCount int, rows ...[]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
-	for _, col := range []struct {
+	cols := []struct {
 		name string
 		typ  defines.MysqlType
 	}{
@@ -2048,7 +2135,8 @@ func buildLCAProbeResultSetWithRows(rows ...[]interface{}) *MysqlResultSet {
 		{name: "id", typ: defines.MYSQL_TYPE_LONGLONG},
 		{name: "name", typ: defines.MYSQL_TYPE_VARCHAR},
 		{name: "hidden", typ: defines.MYSQL_TYPE_VARCHAR},
-	} {
+	}
+	for _, col := range cols[:columnCount] {
 		mysqlCol := &MysqlColumn{}
 		mysqlCol.SetName(col.name)
 		mysqlCol.SetColumnType(col.typ)

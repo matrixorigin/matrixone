@@ -78,39 +78,66 @@ func lcaProbeResultTargetIndexes(
 	return append([]int(nil), layout.targetIdxes...), nil
 }
 
-// lcaProbeColumnLayout selects only columns that exist in both the LCA and
-// target layouts. The caller reconstructs omitted target-only columns as NULL,
-// because they cannot exist in an ancestor snapshot.
-func lcaProbeColumnLayout(lcaDef *plan2.TableDef, targetColNames []string, targetColTypes []types.Type) lcaProbeLayout {
-	if len(lcaDef.Cols) == 0 {
-		layout := lcaProbeLayout{
-			attrs: append([]string(nil), targetColNames...),
-			types: append([]types.Type(nil), targetColTypes...),
-		}
-		for i := range targetColNames {
-			layout.targetIdxes = append(layout.targetIdxes, i)
-		}
-		return layout
+// lcaProbeColumnLayout selects compatible common columns from the LCA and
+// target layouts. The caller reconstructs target-only columns as NULL because
+// they are excluded from endpoint comparison and MERGE apply even when an
+// ancestor generation still contains an older representation of the column.
+func lcaProbeColumnLayout(
+	lcaDef *plan2.TableDef,
+	targetDef *plan2.TableDef,
+	targetColNames []string,
+	targetColTypes []types.Type,
+	targetOnlyIdxes []int,
+) (lcaProbeLayout, error) {
+	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
+	for _, idx := range targetOnlyIdxes {
+		targetOnly[idx] = struct{}{}
 	}
-	targetByName := make(map[string]int, len(targetColNames))
-	for idx, name := range targetColNames {
-		targetByName[strings.ToLower(name)] = idx
+	if len(lcaDef.Cols) == 0 {
+		layout := lcaProbeLayout{}
+		for i, name := range targetColNames {
+			if _, ok := targetOnly[i]; ok {
+				continue
+			}
+			layout.attrs = append(layout.attrs, name)
+			layout.types = append(layout.types, targetColTypes[i])
+			layout.targetIdxes = append(layout.targetIdxes, i)
+			layout.enumValues = append(layout.enumValues, "")
+		}
+		return layout, nil
+	}
+	if targetDef == nil {
+		return lcaProbeLayout{}, moerr.NewInternalErrorNoCtx("DATA BRANCH target table definition is unavailable")
 	}
 
 	layout := lcaProbeLayout{}
-	for _, col := range lcaDef.Cols {
-		if col.Name == catalog.Row_ID {
+	for targetIdx, name := range targetColNames {
+		if _, ok := targetOnly[targetIdx]; ok {
 			continue
 		}
-		targetIdx, ok := targetByName[strings.ToLower(col.Name)]
-		if !ok {
+		targetCol := dataBranchColumnDefByName(targetDef, name)
+		if targetCol == nil {
+			return lcaProbeLayout{}, moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH target column %q is unavailable", name,
+			)
+		}
+		lcaCol := dataBranchColumnDefByIdentity(lcaDef, targetCol)
+		if lcaCol == nil {
 			continue
 		}
-		layout.attrs = append(layout.attrs, col.Name)
-		layout.types = append(layout.types, types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+		if lcaCol.Name == catalog.Row_ID ||
+			!isDataBranchLogicalTypeEquivalent(lcaCol.Typ, targetCol.Typ) {
+			return lcaProbeLayout{}, moerr.NewNotSupportedNoCtxf(
+				"LCA data branch column %s has a different type from the endpoint schema",
+				targetCol.Name,
+			)
+		}
+		layout.attrs = append(layout.attrs, lcaCol.Name)
+		layout.types = append(layout.types, types.New(types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
+		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
 	}
-	return layout
+	return layout, nil
 }
 
 // should read the LCA table to get all column values.
@@ -139,7 +166,13 @@ func handleDelsOnLCA(
 		expandedPKColIdxes = tblStuff.def.pkColIdxes
 		snapshotTS         = types.TimestampToTS(snapshot)
 	)
-	lcaLayout := lcaProbeColumnLayout(lcaTblDef, tblStuff.def.colNames, tblStuff.def.colTypes)
+	lcaLayout, err := lcaProbeColumnLayout(
+		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
+		tblStuff.def.tarOnlyIdxes,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
 	if forceReaderProbe {
@@ -369,7 +402,14 @@ func handleDelsOnLCA(
 
 			for j := 1; j < len(cols); j++ {
 				targetIdx := resultTargetIdxes[j-1]
-				if err = dBat.Vecs[targetIdx].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
+				enumValues := ""
+				if layoutIdx := slices.Index(lcaLayout.targetIdxes, targetIdx); layoutIdx >= 0 {
+					enumValues = lcaLayout.enumValues[layoutIdx]
+				}
+				if err = appendLCAProbeValue(
+					dBat.Vecs[targetIdx], cols[j], i,
+					enumValues, ses.proc.Mp(),
+				); err != nil {
 					return false
 				}
 			}
@@ -546,7 +586,14 @@ func runLCAProbeWithReaderFallback(
 		inputKeys[string(pkVec.GetRawBytesAt(i))] = struct{}{}
 	}
 	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
-	lcaLayout := lcaProbeColumnLayout(lcaTblDef, tblStuff.def.colNames, tblStuff.def.colTypes)
+	targetTblDef := tblStuff.tarRel.GetTableDef(ctx)
+	lcaLayout, err := lcaProbeColumnLayout(
+		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
+		tblStuff.def.tarOnlyIdxes,
+	)
+	if err != nil {
+		return executor.Result{}, err
+	}
 	lcaPKIdx := slices.IndexFunc(lcaLayout.attrs, func(name string) bool {
 		return strings.EqualFold(name, lcaTblDef.Pkey.PkeyColName)
 	})
