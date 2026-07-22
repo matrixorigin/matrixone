@@ -80,10 +80,10 @@ TombstoneRangeScanByObject scans the an object's tombstones committed in the ran
 Since the returned batch must have accruate ts for each row, we need collect the data from appendable objects.
 
 Targets:
-1. CNCreated entries where start <= CreatedAt <= end
-2. Appendable entries whose catalog lifetime can overlap the range. All live
-   appendable entries created before end remain candidates because their rows
-   can commit out of object creation order.
+ 1. CNCreated entries where start <= CreatedAt <= end
+ 2. Appendable entries whose catalog lifetime can overlap the range. All live
+    appendable entries created before end remain candidates because their rows
+    can commit out of object creation order.
 */
 func TombstoneRangeScanByObject(
 	ctx context.Context,
