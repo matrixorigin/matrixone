@@ -551,6 +551,7 @@ message MigrateConnFromResponse {
   repeated PrepareStmt PrepareStmts = 2;
   int64 LastAffectedRows = 3;
   repeated UserLevelLock UserLevelLocks = 4;
+  bool UserLevelLockReleaseSupported = 5;
 }
 
 message MigrateConnToRequest {
@@ -565,6 +566,7 @@ message MigrateConnToRequest {
 message UserLevelLock {
   string Name = 1;
   uint64 Count = 2;
+  repeated bytes TxnIDs = 3;
 }
 
 message MigrateConnToResponse {

@@ -441,6 +441,7 @@ func TestRoutineMigrateConnectionFromRejectsUserLevelLocks(t *testing.T) {
 	resp := &query.MigrateConnFromResponse{}
 	require.ErrorContains(t, rt.migrateConnectionFrom(resp), "cannot migrate connection while user-level locks are held")
 	require.Empty(t, resp.UserLevelLocks)
+	require.False(t, resp.UserLevelLockReleaseSupported)
 }
 
 func TestRoutineMigrateConnectionToClosedRoutine(t *testing.T) {

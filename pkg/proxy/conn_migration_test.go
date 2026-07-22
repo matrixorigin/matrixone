@@ -73,8 +73,9 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 					return moerr.NewInternalError(ctx, "bad request")
 				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
-					DB:               "d1",
-					LastAffectedRows: 7,
+					DB:                            "d1",
+					LastAffectedRows:              7,
+					UserLevelLockReleaseSupported: true,
 				}
 				return nil
 			}, false)
@@ -174,7 +175,8 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 }
 
 type migrationUserLockQueryClient struct {
-	userLevelLocks []*pb.UserLevelLock
+	userLevelLocks                []*pb.UserLevelLock
+	userLevelLockReleaseSupported bool
 }
 
 func (c *migrationUserLockQueryClient) ServiceID() string {
@@ -185,8 +187,9 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 	switch req.CmdMethod {
 	case pb.CmdMethod_MigrateConnFrom:
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
-			DB:             "d1",
-			UserLevelLocks: c.userLevelLocks,
+			DB:                            "d1",
+			UserLevelLocks:                c.userLevelLocks,
+			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
 		}}, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
@@ -217,10 +220,31 @@ func TestMigrateConnContextRejectsUserLevelLocks(t *testing.T) {
 	defer closeFn()
 	ccc := cc.(*clientConn)
 	ccc.queryClient = &migrationUserLockQueryClient{
-		userLevelLocks: []*pb.UserLevelLock{{Name: "migration_lock", Count: 1}},
+		userLevelLocks:                []*pb.UserLevelLock{{Name: "migration_lock", Count: 1}},
+		userLevelLockReleaseSupported: true,
 	}
 	ccc.moCluster = cluster
 
 	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
 	assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+}
+
+func TestMigrateConnContextRejectsOldUserLevelLockProtocol(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.queryClient = &migrationUserLockQueryClient{}
+	ccc.moCluster = cluster
+
+	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	assert.ErrorContains(t, err, "cannot migrate connection from CN without user-level lock release support")
 }

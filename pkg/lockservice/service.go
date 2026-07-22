@@ -396,7 +396,41 @@ func (s *service) Unlock(
 	mutations ...pb.ExtraMutation) error {
 	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
 	// completion even when the caller's request context has ended.
-	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+	ctx = context.Background()
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	if err := s.wait(ctx); err != nil {
+		return err
+	}
+
+	s.beginTxnClosure()
+	defer s.endTxnClosure()
+
+	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
+	if txn == nil {
+		return nil
+	}
+
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
+	defer logUnlockTxn(s.logger, txn)()
+	binds := txn.lockTableBindsLocked()
+	if err := txn.closeWithContext(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
+		return s.getLockTable(ctx, group, table)
+	}, s.logger, mutations...); err != nil {
+		return err
+	}
+	s.reduceCanMoveGroupTables(binds)
+	s.tryCompleteDrain()
+	s.deadlockDetector.txnClosed(txnID)
+	return nil
 }
 
 func (s *service) UnlockWithContext(

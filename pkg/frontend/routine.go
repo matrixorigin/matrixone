@@ -472,6 +472,7 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 	}
+	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	for _, st := range ses.GetPrepareStmts() {
