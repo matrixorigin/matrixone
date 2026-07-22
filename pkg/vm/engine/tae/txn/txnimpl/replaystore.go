@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -32,10 +33,12 @@ var ErrDebugReplay = moerr.NewInternalErrorNoCtx("debug")
 
 type replayTxnStore struct {
 	txnbase.NoopTxnStore
-	Cmd      *txnbase.TxnCmd
-	Observer wal.ReplayObserver
-	catalog  *catalog.Catalog
-	ctx      context.Context
+	Cmd            *txnbase.TxnCmd
+	Observer       wal.ReplayObserver
+	catalog        *catalog.Catalog
+	ctx            context.Context
+	preparedTables map[uint64]*catalog.TableEntry
+	preparedTxnID  string
 }
 
 func MakeReplayTxn(
@@ -79,17 +82,49 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 		command.SetReplayTxn(txn)
 		store.prepareCmd(command)
 	}
+	store.registerPreparedDMLTables(txn)
 	return
 }
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
+	visibilityTS := txn.GetCommitTS()
+	store.resolvePreparedDMLTables(&visibilityTS)
 	return
 }
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyRollback()
+	store.resolvePreparedDMLTables(nil)
 	return
+}
+
+func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
+	dirty := txn.GetMemo().GetDirty()
+	if dirty == nil || dirty.IsEmpty() {
+		return
+	}
+	store.preparedTxnID = txn.GetID()
+	store.preparedTables = make(map[uint64]*catalog.TableEntry, dirty.TableCount())
+	for _, record := range dirty.Tables {
+		db, err := store.catalog.GetDatabaseByID(record.DbID)
+		if err != nil {
+			panic(err)
+		}
+		table, err := db.GetTableEntryByID(record.ID)
+		if err != nil {
+			panic(err)
+		}
+		table.RegisterReplayedPreparedDML(store.preparedTxnID)
+		store.preparedTables[record.ID] = table
+	}
+}
+
+func (store *replayTxnStore) resolvePreparedDMLTables(visibilityTS *types.TS) {
+	for _, table := range store.preparedTables {
+		table.ResolveReplayedPreparedDML(store.preparedTxnID, visibilityTS)
+	}
+	store.preparedTables = nil
 }
 
 func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {

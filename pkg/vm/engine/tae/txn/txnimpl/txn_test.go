@@ -45,6 +45,72 @@ const (
 	ModuleName = "TAETXN"
 )
 
+type noopReplayObserver struct{}
+
+func (noopReplayObserver) OnTimeStamp(types.TS) {}
+
+func newPreparingEpochTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {
+	t.Helper()
+	txn := txnbase.NewTxn(nil, nil, []byte(id), start, types.TS{})
+	txn.Lock()
+	assert.NoError(t, txn.ToPreparingLocked(prepare))
+	txn.Unlock()
+	return txn
+}
+
+func TestAutoIncrementAlterDetectsAcceptedDMLAfterSnapshot(t *testing.T) {
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	var wg sync.WaitGroup
+	for _, ts := range []types.TS{types.BuildTS(5, 0), types.BuildTS(3, 0), types.BuildTS(7, 0)} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			entry.RecordKnownDMLPrepare(ts)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, types.BuildTS(7, 0), entry.GetLatestKnownDMLPrepare())
+
+	unsafeTxn := newPreparingEpochTestTxn(t, "alter-retry", types.BuildTS(6, 0), types.BuildTS(8, 0))
+	unsafe := &txnTable{store: &txnStore{txn: unsafeTxn}, entry: entry, autoIncrementAlter: true}
+	err := unsafe.validateAutoIncrementDMLOrder()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+	safeTxn := newPreparingEpochTestTxn(t, "alter-safe", types.BuildTS(7, 0), types.BuildTS(8, 0))
+	safe := &txnTable{store: &txnStore{txn: safeTxn}, entry: entry, autoIncrementAlter: true}
+	assert.NoError(t, safe.validateAutoIncrementDMLOrder())
+}
+
+func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_1pc", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	prepareTS := types.BuildTS(11, 0)
+	commitTS := types.BuildTS(12, 0)
+	replayTxn := newPreparingEpochTestTxn(t, "replay-1pc", startTS, prepareTS)
+	assert.False(t, replayTxn.Is2PC())
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
+	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS.Prev()))
+	assert.NoError(t, store.applyCommit(replayTxn))
+	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
+}
+
 type waitingSchemaTxn struct {
 	txnif.TxnReader
 	prepareTS types.TS
@@ -64,7 +130,7 @@ func (txn *waitingSchemaTxn) GetTxnState(wait bool) txnif.TxnState {
 	return txnif.TxnStateCommitted
 }
 
-func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
+func TestAutoIncrEpochFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		rollback bool
@@ -75,6 +141,7 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			schema := catalog.MockSchemaAll(3, 1)
 			schema.Version = 7
+			schema.Extra.AutoIncrEpoch = 7
 			entry := catalog.MockTableEntryWithDB(nil, 42)
 			entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 				Schema:          schema,
@@ -89,7 +156,7 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 				release:   make(chan struct{}),
 			}
 			_, _, err := entry.AlterTable(context.Background(), alterTxn,
-				apipb.NewUpdateAutoIncrementReq(0, 42, 20))
+				apipb.NewUpdateAutoIncrementReq(0, 42, 20, 8))
 			assert.NoError(t, err)
 
 			dmlTxn := txnbase.NewTxn(nil, nil, []byte("dml"), types.BuildTS(2, 1), types.TS{})
@@ -97,13 +164,13 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 			assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
 			dmlTxn.Unlock()
 			tbl := &txnTable{
-				store:                    &txnStore{txn: dmlTxn},
-				entry:                    entry,
-				expectedTableDefVersions: map[uint32]struct{}{7: {}},
+				store:                  &txnStore{txn: dmlTxn},
+				entry:                  entry,
+				expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
 			}
 
 			result := make(chan error, 1)
-			go func() { result <- tbl.validateTableDefVersion() }()
+			go func() { result <- tbl.validateAutoIncrEpoch() }()
 			select {
 			case <-alterTxn.waited:
 			case <-time.After(5 * time.Second):
@@ -133,18 +200,19 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 	}
 }
 
-func TestTableDefVersionDependencyRecordsMultipleExpectations(t *testing.T) {
+func TestAutoIncrEpochDependencyRecordsMultipleExpectations(t *testing.T) {
 	tbl := new(txnTable)
-	assert.NoError(t, tbl.setExpectedTableDefVersion(0))
-	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
-	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
-	assert.NoError(t, tbl.setExpectedTableDefVersion(8))
-	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedTableDefVersions)
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(0))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(7))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(7))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(8))
+	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedAutoIncrEpochs)
 }
 
-func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
+func TestAutoIncrEpochFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
 	entry := catalog.MockTableEntryWithDB(nil, 42)
 	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
@@ -158,7 +226,7 @@ func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 		release:   make(chan struct{}),
 	}
 	_, _, err := entry.AlterTable(context.Background(), alterTxn,
-		apipb.NewUpdateAutoIncrementReq(0, 42, 20))
+		apipb.NewUpdateAutoIncrementReq(0, 42, 20, 8))
 	assert.NoError(t, err)
 	assert.NoError(t, entry.BaseEntryImpl.PrepareCommit())
 	assert.NoError(t, entry.BaseEntryImpl.ApplyCommit(alterTxn.GetID()))
@@ -168,16 +236,17 @@ func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
 	dmlTxn.Unlock()
 	tbl := &txnTable{
-		store:                    &txnStore{txn: dmlTxn},
-		entry:                    entry,
-		expectedTableDefVersions: map[uint32]struct{}{7: {}},
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
 	}
-	assert.NoError(t, tbl.validateTableDefVersion())
+	assert.NoError(t, tbl.validateAutoIncrEpoch())
 }
 
-func TestTableDefVersionFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing.T) {
+func TestAutoIncrEpochFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
 	entry := catalog.MockTableEntryWithDB(nil, 42)
 	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
 		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
@@ -188,11 +257,11 @@ func TestTableDefVersionFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing
 	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(3, 0)))
 	dmlTxn.Unlock()
 	tbl := &txnTable{
-		store:                    &txnStore{txn: dmlTxn},
-		entry:                    entry,
-		expectedTableDefVersions: map[uint32]struct{}{7: {}, 8: {}},
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}, 8: {}},
 	}
-	err := tbl.validateTableDefVersion()
+	err := tbl.validateAutoIncrEpoch()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 }
 

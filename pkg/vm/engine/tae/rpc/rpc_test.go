@@ -46,7 +46,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTableDefVersionFenceIsModeIndependent(t *testing.T) {
+func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
 		t.Run(mode.String(), func(t *testing.T) {
@@ -69,8 +69,8 @@ func TestTableDefVersionFenceIsModeIndependent(t *testing.T) {
 			entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
 				schema.Name, "", containers.ToCNBatch(insertBatch))
 			require.NoError(t, err)
-			entry.TableDefVersion = 0
-			entry.TableDefVersionKnown = true
+			entry.AutoIncrEpoch = 0
+			entry.AutoIncrEpochKnown = true
 			payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
 			require.NoError(t, err)
 			commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
@@ -82,16 +82,16 @@ func TestTableDefVersionFenceIsModeIndependent(t *testing.T) {
 			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 
-			// The same raw V0 from an old CN has no presence bit and therefore
-			// remains wire-compatible after the ALTER.
-			entry.TableDefVersionKnown = false
+			// Legacy writers are accepted while the table is at epoch zero, but
+			// fail closed after the first allocator reset.
+			entry.AutoIncrEpochKnown = false
 			payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
 			require.NoError(t, err)
 			commitReq.Payload[0].CNRequest.Payload = payload
 			meta = mock1PCTxn(h.db)
 			meta.Mode = mode
 			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
-			require.NoError(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 		})
 	}
 }

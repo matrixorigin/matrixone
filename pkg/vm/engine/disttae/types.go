@@ -497,12 +497,12 @@ func (txn *Transaction) GetSyncProtectionJobID() string {
 }
 
 type Summary struct {
-	objBat               *batch.Batch
-	accountId            uint32
-	tbName               string
-	dbName               string
-	tableDefVersion      uint32
-	tableDefVersionKnown bool
+	objBat             *batch.Batch
+	accountId          uint32
+	tbName             string
+	dbName             string
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -1137,11 +1137,11 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
-	// tableDefVersion is the schema version used to plan this user-table write.
-	// tableDefVersionKnown distinguishes a valid initial zero version from an
+	// autoIncrEpoch is the allocator epoch used to plan this user-table write.
+	// autoIncrEpochKnown distinguishes a valid initial zero epoch from an
 	// old CN that did not send the dependency.
-	tableDefVersion      uint32
-	tableDefVersionKnown bool
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 
 	// skipTransfer indicates this entry should skip transfer processing
 	// Used by CCPR to avoid transfer errors for cross-cluster tombstones
@@ -1204,8 +1204,8 @@ type tableKey struct {
 // from being coalesced when the CN workspace is flushed to S3.
 type workspaceTableKey struct {
 	tableKey
-	tableDefVersion      uint32
-	tableDefVersionKnown bool
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 func (k tableKey) String() string {

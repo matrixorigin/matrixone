@@ -204,6 +204,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
+	case apipb.AlterKind_UpdateAutoIncrement:
+		s.Extra.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+		s.Extra.AutoIncrEpoch = req.GetUpdateAutoIncrement().GetEpoch()
 	case apipb.AlterKind_RenameColumn:
 		rename := req.GetRenameCol()
 		var targetCol *ColDef

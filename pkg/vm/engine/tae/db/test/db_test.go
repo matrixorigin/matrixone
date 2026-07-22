@@ -6571,7 +6571,7 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 123)))
+	require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 123, 2)))
 	uncommitted := rel.Schema(false).(*catalog.Schema)
 	require.Equal(t, committedVersion+1, uncommitted.Version)
 	require.Equal(t, uint64(123), uncommitted.Extra.AutoIncrOffset)
@@ -6584,8 +6584,8 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 }
 
-type tableDefVersionSetter interface {
-	SetTableDefVersion(uint32) error
+type autoIncrEpochSetter interface {
+	SetAutoIncrEpoch(uint32) error
 }
 
 func waitTableVersionBarrier(t *testing.T, ch <-chan struct{}, name string) {
@@ -6597,7 +6597,7 @@ func waitTableVersionBarrier(t *testing.T, ch <-chan struct{}, name string) {
 	}
 }
 
-func TestTableDefVersionCommitFence(t *testing.T) {
+func TestAutoIncrEpochCommitFence(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -6613,7 +6613,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 
 		txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-		version := rel.Schema(false).(*catalog.Schema).Version
+		version := rel.Schema(false).(*catalog.Schema).Extra.AutoIncrEpoch
 		require.NotZero(t, version)
 		require.NoError(t, txn.Commit(ctx))
 		return tae, schema, version
@@ -6622,7 +6622,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 	appendWithVersion := func(t *testing.T, tae *db.DB, schema *catalog.Schema, version uint32) txnif.AsyncTxn {
 		t.Helper()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(version))
 		bat := catalog.MockBatch(schema, 1)
 		t.Cleanup(bat.Close)
 		require.NoError(t, rel.Append(ctx, bat))
@@ -6643,18 +6643,20 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 	})
 
-	t.Run("unknown initial zero remains compatible", func(t *testing.T) {
+	t.Run("unknown initial zero fails closed after first alter", func(t *testing.T) {
 		tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
 		defer tae.Close()
 		schema := catalog.MockSchemaAll(3, 1)
 		testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
-		unknownTxn, _ := testutil.GetDefaultRelation(t, tae, schema.Name)
+		unknownTxn, unknownRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, unknownRel.(autoIncrEpochSetter).SetAutoIncrEpoch(0))
 		require.NoError(t, unknownTxn.MockIncWriteCnt())
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 10)))
 		require.NoError(t, alterTxn.Commit(ctx))
-		require.NoError(t, unknownTxn.Commit(ctx))
+		err := unknownTxn.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 	})
 
 	t.Run("matching version", func(t *testing.T) {
@@ -6667,13 +6669,13 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		tae, schema, version := newVersionedTable(t)
 		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(version))
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer bat.Close()
 		require.NoError(t, rel.Append(ctx, bat))
 		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
 		require.NoError(t, err)
-		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20, version+1)))
 		require.NoError(t, txn.Commit(ctx))
 	})
 
@@ -6681,10 +6683,10 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		tae, schema, version := newVersionedTable(t)
 		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
-		localVersion := rel.Schema(false).(*catalog.Schema).Version
-		require.Equal(t, version+1, localVersion)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(localVersion))
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20, version+1)))
+		localEpoch := rel.Schema(false).(*catalog.Schema).Extra.AutoIncrEpoch
+		require.Equal(t, version+1, localEpoch)
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(localEpoch))
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer bat.Close()
 		require.NoError(t, rel.Append(ctx, bat))
@@ -6697,14 +6699,14 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		tae, schema, version := newVersionedTable(t)
 		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(version))
 		before := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer before.Close()
 		require.NoError(t, rel.Append(ctx, before))
-		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
-		localVersion := rel.Schema(false).(*catalog.Schema).Version
-		require.Equal(t, version+1, localVersion)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(localVersion))
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20, version+1)))
+		localEpoch := rel.Schema(false).(*catalog.Schema).Extra.AutoIncrEpoch
+		require.Equal(t, version+1, localEpoch)
+		require.NoError(t, rel.(autoIncrEpochSetter).SetAutoIncrEpoch(localEpoch))
 		after := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 10)
 		defer after.Close()
 		require.NoError(t, rel.Append(ctx, after))
@@ -6721,7 +6723,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		dmlTxn := appendWithVersion(t, tae, schema, version)
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20, version+1)))
 		require.NoError(t, alterTxn.Commit(ctx))
 
 		err := dmlTxn.Commit(ctx)
@@ -6734,7 +6736,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		dmlTxn := appendWithVersion(t, tae, schema, version)
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20, version+1)))
 		alterPrepared, releaseAlter := make(chan struct{}), make(chan struct{})
 		alterTxn.SetPrepareCommitFn(func(txn txnif.AsyncTxn) error {
 			close(alterPrepared)
@@ -6759,7 +6761,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 	})
 
-	t.Run("dml prepared first may commit before alter", func(t *testing.T) {
+	t.Run("dml prepared first forces alter retry", func(t *testing.T) {
 		tae, schema, version := newVersionedTable(t)
 		defer tae.Close()
 		dmlTxn := appendWithVersion(t, tae, schema, version)
@@ -6775,7 +6777,7 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		waitTableVersionBarrier(t, dmlPrepared, "DML prepare")
 
 		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20, version+1)))
 		alterStarted := make(chan struct{})
 		alterResult := make(chan error, 1)
 		go func() {
@@ -6786,7 +6788,8 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 
 		close(releaseDML)
 		require.NoError(t, <-dmlResult)
-		require.NoError(t, <-alterResult)
+		err := <-alterResult
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 	})
 }
 

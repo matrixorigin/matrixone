@@ -243,7 +243,7 @@ type Message struct {
 }
 
 func (m *Message) Reset()         { *m = Message{} }
-func (m *Message) String() string { return messageString(m) }
+func (m *Message) String() string { return proto.CompactTextString(m) }
 func (*Message) ProtoMessage()    {}
 func (*Message) Descriptor() ([]byte, []int) {
 	return fileDescriptor_7ac67a7adf3df9c7, []int{0}
@@ -3226,7 +3226,7 @@ type IcebergDataFileTask struct {
 }
 
 func (m *IcebergDataFileTask) Reset()         { *m = IcebergDataFileTask{} }
-func (m *IcebergDataFileTask) String() string { return icebergDataFileTaskString(m) }
+func (m *IcebergDataFileTask) String() string { return proto.CompactTextString(m) }
 func (*IcebergDataFileTask) ProtoMessage()    {}
 func (*IcebergDataFileTask) Descriptor() ([]byte, []int) {
 	return fileDescriptor_7ac67a7adf3df9c7, []int{32}
@@ -3371,7 +3371,7 @@ type IcebergDeleteFileTask struct {
 }
 
 func (m *IcebergDeleteFileTask) Reset()         { *m = IcebergDeleteFileTask{} }
-func (m *IcebergDeleteFileTask) String() string { return icebergDeleteFileTaskString(m) }
+func (m *IcebergDeleteFileTask) String() string { return proto.CompactTextString(m) }
 func (*IcebergDeleteFileTask) ProtoMessage()    {}
 func (*IcebergDeleteFileTask) Descriptor() ([]byte, []int) {
 	return fileDescriptor_7ac67a7adf3df9c7, []int{33}
@@ -3822,7 +3822,7 @@ type ExternalScan struct {
 }
 
 func (m *ExternalScan) Reset()         { *m = ExternalScan{} }
-func (m *ExternalScan) String() string { return externalScanString(m) }
+func (m *ExternalScan) String() string { return proto.CompactTextString(m) }
 func (*ExternalScan) ProtoMessage()    {}
 func (*ExternalScan) Descriptor() ([]byte, []int) {
 	return fileDescriptor_7ac67a7adf3df9c7, []int{37}
@@ -4586,7 +4586,7 @@ type Instruction struct {
 }
 
 func (m *Instruction) Reset()         { *m = Instruction{} }
-func (m *Instruction) String() string { return instructionString(m) }
+func (m *Instruction) String() string { return proto.CompactTextString(m) }
 func (*Instruction) ProtoMessage()    {}
 func (*Instruction) Descriptor() ([]byte, []int) {
 	return fileDescriptor_7ac67a7adf3df9c7, []int{45}
@@ -5720,7 +5720,7 @@ type Pipeline struct {
 }
 
 func (m *Pipeline) Reset()         { *m = Pipeline{} }
-func (m *Pipeline) String() string { return pipelineString(m) }
+func (m *Pipeline) String() string { return proto.CompactTextString(m) }
 func (*Pipeline) ProtoMessage()    {}
 func (*Pipeline) Descriptor() ([]byte, []int) {
 	return fileDescriptor_7ac67a7adf3df9c7, []int{54}

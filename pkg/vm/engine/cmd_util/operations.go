@@ -162,13 +162,13 @@ type WriteReq struct {
 	TableID      uint64
 	DatabaseName string
 	TableName    string
-	// TableDefVersion is the schema version used by CN to plan the write.
-	// TableDefVersionKnown distinguishes a valid initial zero version from an
+	// AutoIncrEpoch is the allocator epoch used by CN to plan the write.
+	// AutoIncrEpochKnown distinguishes a valid initial zero epoch from an
 	// old CN that did not send the dependency.
-	TableDefVersion      uint32
-	TableDefVersionKnown bool
-	Schema               *catalog2.Schema
-	Batch                *batch.Batch
+	AutoIncrEpoch      uint32
+	AutoIncrEpochKnown bool
+	Schema             *catalog2.Schema
+	Batch              *batch.Batch
 	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
 	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.

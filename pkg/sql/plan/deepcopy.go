@@ -507,6 +507,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
+		AutoIncrEpoch:  table.AutoIncrEpoch,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
 		FeatureFlag:    table.FeatureFlag,

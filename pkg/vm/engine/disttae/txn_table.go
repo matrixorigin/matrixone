@@ -1595,6 +1595,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
+			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
+			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 		}
 	}
 	return tbl.tableDef
@@ -1652,6 +1654,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldPartInfo := tbl.partition
 	oldComment := tbl.comment
 	oldConstraint := tbl.constraint
+	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
+	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1674,6 +1678,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				// Rollback for ReplaceDef is handled by restoring defs
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
+			case api.AlterKind_UpdateAutoIncrement:
+				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
+				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
 			}
 		}
 		tbl.defs = olddefs
@@ -1711,6 +1718,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			hasReplaceDef = true
 			re := req.GetRenameCol()
 			renameColMap[re.OldName] = re.NewName
+		case api.AlterKind_UpdateAutoIncrement:
+			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+			tbl.extraInfo.AutoIncrEpoch++
+			req.GetUpdateAutoIncrement().Epoch = tbl.extraInfo.AutoIncrEpoch
 		default:
 			panic("not supported")
 		}
@@ -1867,7 +1878,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.getTxn().hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-		return tbl.getTxn().writeFileWithVersion(
+		return tbl.getTxn().writeFileWithAutoIncrEpoch(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1876,13 +1887,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tbl.getTxn().tnStores[0], tbl.version)
+			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithVersion(
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
 		INSERT,
 		"",
 		tbl.accountId,
@@ -1892,7 +1903,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.tableName,
 		ibat,
 		tbl.getTxn().tnStores[0],
-		tbl.version,
+		tbl.extraInfo.AutoIncrEpoch,
 	); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
@@ -2058,14 +2069,14 @@ func (tbl *txnTable) Delete(
 		skipTransfer := ctx.Value(defines.SkipTransferKey{}) != nil
 		if skipTransfer {
 			tbl.getTxn().Lock()
-			err := tbl.getTxn().writeFileLockedSkipTransferWithVersion(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.version)
+			err := tbl.getTxn().writeFileLockedSkipTransferWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 			tbl.getTxn().Unlock()
 			return err
 		}
 
-		if err := tbl.getTxn().writeFileWithVersion(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.version); err != nil {
+		if err := tbl.getTxn().writeFileWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 			return err
 		}
 
@@ -2099,17 +2110,17 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 
 	// Create entry with EntrySoftDeleteObject type
 	entry := Entry{
-		typ:                  SOFT_DELETE_OBJECT,
-		bat:                  bat,
-		tnStore:              tbl.getTxn().tnStores[0],
-		tableId:              tbl.tableId,
-		databaseId:           tbl.db.databaseId,
-		tableName:            tbl.tableName,
-		databaseName:         tbl.db.databaseName,
-		accountId:            tbl.accountId,
-		fileName:             makeSoftDeleteFileName(isTombstone),
-		tableDefVersion:      tbl.version,
-		tableDefVersionKnown: true,
+		typ:                SOFT_DELETE_OBJECT,
+		bat:                bat,
+		tnStore:            tbl.getTxn().tnStores[0],
+		tableId:            tbl.tableId,
+		databaseId:         tbl.db.databaseId,
+		tableName:          tbl.tableName,
+		databaseName:       tbl.db.databaseName,
+		accountId:          tbl.accountId,
+		fileName:           makeSoftDeleteFileName(isTombstone),
+		autoIncrEpoch:      tbl.extraInfo.AutoIncrEpoch,
+		autoIncrEpochKnown: true,
 	}
 
 	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
@@ -2121,8 +2132,8 @@ func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithVersion(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.version); err != nil {
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
