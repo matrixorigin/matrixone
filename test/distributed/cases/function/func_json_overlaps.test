@@ -5,6 +5,19 @@ select json_overlaps('{"a":1,"d":10}', '{"d":10,"x":1}');
 select json_overlaps('{"a":{"x":1,"y":2}}', '{"a":{"x":1}}');
 select json_overlaps('[4,5,6,7]', '6');
 select json_overlaps('[4,5,"6",7]', '6');
+-- Cases mirrored from MySQL's array_index.test JSON_OVERLAPS matrix.
+select json_overlaps('[1,2,3]', '[4,4,5]');
+select json_overlaps('[1,2]', '[2,4,5]');
+select json_overlaps('[1,1,2]', '[2,2]');
+select json_overlaps('[1,1]', '[2,2]');
+select json_overlaps('[{}]', '{}');
+select json_overlaps('{}', '[{}]');
+select json_overlaps('[{}]', '{"a":1,"b":2}');
+select json_overlaps('[{}]', '1');
+select json_overlaps('{"a":1,"b":null}', '{"a":2,"c":3}');
+select json_overlaps('{"a":1,"b":2}', '{"a":null,"c":3}');
+select json_overlaps('true', 'false');
+select json_overlaps('123', '{"value":123}');
 select json_overlaps('1', '1.0');
 select json_overlaps('1', '1.000000009');
 -- Scientific notation equality, inequality, and JSON string distinction.
@@ -20,7 +33,22 @@ select json_overlaps('{}x', '{}');
 select json_overlaps('{}', '[]x');
 select json_overlaps(null, 'null');
 select json_overlaps('null', 'null');
+select json_overlaps('1234', null);
+select json_overlaps('null', null);
+select json_overlaps('invalid', null);
 select json_overlaps(cast('[1,{"a":2}]' as json), '{"a":2}');
+select json_overlaps('{"a":2}', cast('[1,{"a":2}]' as json));
+select json_overlaps(cast('[1,2]' as json), cast('[2,3]' as json));
+
+-- MySQL binary string families containing valid JSON text are accepted.
+drop table if exists t_json_overlaps_binary;
+create table t_json_overlaps_binary (fixed binary(5), varying varbinary(5), large blob);
+insert into t_json_overlaps_binary values ('[1,2]', '[2,3]', '[3,4]');
+select json_overlaps(fixed, '[2]'),
+       json_overlaps('[2]', varying),
+       json_overlaps(large, varying)
+from t_json_overlaps_binary;
+drop table t_json_overlaps_binary;
 
 drop table if exists t_json_overlaps;
 create table t_json_overlaps (id int, doc json, other_doc varchar(100));

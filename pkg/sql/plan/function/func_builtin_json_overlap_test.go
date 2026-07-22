@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -43,13 +44,24 @@ func TestJSONOverlapKernel(t *testing.T) {
 		want  bool
 	}{
 		{name: "arrays match top-level element", left: `[1,3,5,7]`, right: `[2,5,7]`, want: true},
+		{name: "different length arrays do not overlap", left: `[1,2,3]`, right: `[4,5]`, want: false},
+		{name: "different length arrays overlap", left: `[1,2]`, right: `[2,4,5]`, want: true},
+		{name: "duplicate array elements preserve overlap", left: `[1,1,2]`, right: `[2,2]`, want: true},
+		{name: "duplicate array elements preserve miss", left: `[1,1]`, right: `[2,2]`, want: false},
 		{name: "nested arrays are complete values", left: `[[1,2],[3,4],5]`, right: `[1,[2,3],[4,5]]`, want: false},
 		{name: "objects share key and equal value", left: `{"a":1,"d":10}`, right: `{"d":10,"x":1}`, want: true},
+		{name: "object json null does not equal missing key", left: `{"a":1,"b":null}`, right: `{"a":2,"c":3}`, want: false},
+		{name: "object json null does not equal non-null value", left: `{"a":1,"b":2}`, right: `{"a":null,"c":3}`, want: false},
 		{name: "object values use equality not containment", left: `{"a":{"x":1,"y":2}}`, right: `{"a":{"x":1}}`, want: false},
 		{name: "array autowraps object", left: `[{"a":1}]`, right: `{"a":1}`, want: true},
+		{name: "array autowraps empty object", left: `[{}]`, right: `{}`, want: true},
+		{name: "empty object differs from non-empty object", left: `[{}]`, right: `{"a":1,"b":2}`, want: false},
+		{name: "array object and scalar do not overlap", left: `[{}]`, right: `1`, want: false},
 		{name: "object and scalar do not overlap", left: `{"a":1}`, right: `1`, want: false},
 		{name: "empty arrays", left: `[]`, right: `[]`, want: false},
 		{name: "empty objects", left: `{}`, right: `{}`, want: false},
+		{name: "boolean scalars differ", left: `true`, right: `false`, want: false},
+		{name: "numeric scalar and object do not overlap", left: `123`, right: `{"value":123}`, want: false},
 		{name: "json null", left: `null`, right: `null`, want: true},
 		{name: "array and json null", left: `[null]`, right: `null`, want: true},
 	}
@@ -297,6 +309,116 @@ func TestJSONOverlapPreparedConstArrayStaysLinearForOneEffectiveScalarRow(t *tes
 		1,
 	))
 	require.False(t, prepared.ready)
+}
+
+func TestJSONOverlapPreparedConstArraySurvivesArrayLengthSwap(t *testing.T) {
+	largeArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 512))
+	probeArray := mustParseJSONOverlap(t, `[1000]`)
+
+	for _, tt := range []struct {
+		name      string
+		constLeft bool
+	}{
+		{name: "const left", constLeft: true},
+		{name: "const right", constLeft: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			prepared := jsonOverlapPreparedArray{}
+			constView := jsonOverlapValueView{document: largeArray, prepared: &prepared}
+			probeView := jsonOverlapValueView{document: probeArray}
+			left, right := constView, probeView
+			if !tt.constLeft {
+				left, right = right, left
+			}
+			var workspace jsonOverlapWorkspace
+
+			require.False(t, workspace.overlapsViews(left, right, 8192))
+			require.True(t, prepared.ready)
+			require.Len(t, prepared.indexes, 512)
+			firstIndexAddress := &prepared.indexes[0]
+
+			require.False(t, workspace.overlapsViews(left, right, 8192))
+			require.Same(t, firstIndexAddress, &prepared.indexes[0])
+		})
+	}
+}
+
+func TestJSONOverlapPreparedConstArraySkipsPreparationForOneEvaluableArrayRow(t *testing.T) {
+	constArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 40))
+	probeArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(100, 40))
+	prepared := jsonOverlapPreparedArray{}
+	var workspace jsonOverlapWorkspace
+
+	require.False(t, workspace.overlapsViews(
+		jsonOverlapValueView{document: constArray, prepared: &prepared},
+		jsonOverlapValueView{document: probeArray},
+		1,
+	))
+	require.False(t, prepared.ready)
+}
+
+func TestJSONOverlapPreparedConstArraySelectsLowestCostCandidate(t *testing.T) {
+	largeArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 512))
+	smallArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(1000, 2))
+	largePrepared := jsonOverlapPreparedArray{}
+	smallPrepared := jsonOverlapPreparedArray{}
+	var workspace jsonOverlapWorkspace
+
+	require.False(t, workspace.overlapsViews(
+		jsonOverlapValueView{document: largeArray, prepared: &largePrepared},
+		jsonOverlapValueView{document: smallArray, prepared: &smallPrepared},
+		8192,
+	))
+	require.True(t, largePrepared.ready)
+	require.False(t, smallPrepared.ready)
+}
+
+func TestJSONOverlapPreparedConstArrayCostTieUsesSmallerConst(t *testing.T) {
+	smallArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 3))
+	largeArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(100, 78))
+	smallPrepared := jsonOverlapPreparedArray{}
+	largePrepared := jsonOverlapPreparedArray{}
+	var workspace jsonOverlapWorkspace
+
+	require.False(t, workspace.overlapsViews(
+		jsonOverlapValueView{document: smallArray, prepared: &smallPrepared},
+		jsonOverlapValueView{document: largeArray, prepared: &largePrepared},
+		4,
+	))
+	require.True(t, smallPrepared.ready)
+	require.False(t, largePrepared.ready)
+}
+
+func TestJSONOverlapArrayBatchCostsSaturate(t *testing.T) {
+	require.Equal(t, int64(936), jsonOverlapGenericArrayBatchCost(3, 78, 4))
+	require.Equal(t, int64(630), jsonOverlapPreparedArrayBatchCost(3, 78, 4))
+	require.Equal(t, int64(630), jsonOverlapPreparedArrayBatchCost(78, 3, 4))
+
+	require.Equal(t, int64(math.MaxInt64), jsonOverlapSaturatingMul(math.MaxInt64, 2))
+	require.Equal(t, int64(math.MaxInt64), jsonOverlapSaturatingAdd(math.MaxInt64-1, 2))
+	require.Equal(t, int64(math.MaxInt64),
+		jsonOverlapGenericArrayBatchCost(math.MaxInt, math.MaxInt, math.MaxInt))
+	require.Equal(t, int64(math.MaxInt64),
+		jsonOverlapPreparedArrayBatchCost(math.MaxInt, math.MaxInt, math.MaxInt))
+}
+
+func TestJSONOverlapPreparedConstArrayHandlesMultiElementProbe(t *testing.T) {
+	constArray := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 512))
+	prepared := jsonOverlapPreparedArray{}
+	constView := jsonOverlapValueView{document: constArray, prepared: &prepared}
+	var workspace jsonOverlapWorkspace
+
+	require.False(t, workspace.overlapsViews(
+		constView,
+		jsonOverlapValueView{document: mustParseJSONOverlap(t, `[700,700]`)},
+		8192,
+	))
+	require.True(t, workspace.overlapsViews(
+		constView,
+		jsonOverlapValueView{document: mustParseJSONOverlap(t, `[700,511,511]`)},
+		8192,
+	))
+	require.True(t, prepared.ready)
 }
 
 func TestJSONOverlapPreparedConstArrayCachesFallbackNumericKeys(t *testing.T) {
@@ -563,6 +685,15 @@ func TestJSONOverlapsCheckFn(t *testing.T) {
 	for _, inputs := range [][]types.Type{
 		{types.T_json.ToType(), types.T_varchar.ToType()},
 		{types.T_char.ToType(), types.T_text.ToType()},
+		{types.T_binary.ToType(), types.T_varchar.ToType()},
+		{types.T_varchar.ToType(), types.T_binary.ToType()},
+		{types.T_binary.ToType(), types.T_binary.ToType()},
+		{types.T_varbinary.ToType(), types.T_varchar.ToType()},
+		{types.T_varchar.ToType(), types.T_varbinary.ToType()},
+		{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		{types.T_blob.ToType(), types.T_varchar.ToType()},
+		{types.T_varchar.ToType(), types.T_blob.ToType()},
+		{types.T_blob.ToType(), types.T_blob.ToType()},
 		{types.T_any.ToType(), types.T_varchar.ToType()},
 	} {
 		_, err := GetFunctionByName(ctx, "json_overlaps", inputs)
@@ -572,11 +703,31 @@ func TestJSONOverlapsCheckFn(t *testing.T) {
 	for _, inputs := range [][]types.Type{
 		{types.T_varchar.ToType()},
 		{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
-		{types.T_binary.ToType(), types.T_varchar.ToType()},
 		{types.T_int64.ToType(), types.T_varchar.ToType()},
 	} {
 		_, err := GetFunctionByName(ctx, "json_overlaps", inputs)
 		require.Error(t, err)
+	}
+}
+
+func TestJSONOverlapsMySQLBinaryStringTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(oid.ToType(), []string{`[1,2]`, `{"a":1}`, `null`, `invalid`},
+						[]bool{false, false, false, true}),
+					NewFunctionTestInput(oid.ToType(), []string{`[2,3]`, `{"a":2}`, `null`, `[1]`}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false,
+					[]int64{1, 0, 1, 0}, []bool{false, false, false, true}),
+				jsonOverlaps,
+			)
+			succeed, message := testCase.Run()
+			require.True(t, succeed, message)
+		})
 	}
 }
 
@@ -595,6 +746,49 @@ func TestJSONOverlapsIgnoreAllRowsDoesNotParse(t *testing.T) {
 	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, &FunctionSelectList{AllNull: true})
 	require.NoError(t, err)
 	require.True(t, testCase.result.GetResultVector().IsNull(0))
+}
+
+func TestJSONOverlapEvaluableRowsExcludesSelectedAndNullRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1]`, `[2]`, `[3]`, `[4]`},
+				[]bool{false, false, true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1]`, `[2]`, `[3]`, `[4]`},
+				[]bool{false, true, false, false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		jsonOverlaps,
+	)
+	left := jsonOverlapOperand{wrapper: vector.GenerateFunctionStrParameter(testCase.parameters[0])}
+	right := jsonOverlapOperand{wrapper: vector.GenerateFunctionStrParameter(testCase.parameters[1])}
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}
+
+	require.Equal(t, 1, jsonOverlapEvaluableRows(&left, &right, 4, selectList))
+}
+
+func TestJSONOverlapsPartialSelectListSkipsParsingAndPreservesNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`invalid`, `invalid`, `[1,2]`, `also invalid`},
+				[]bool{false, true, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`invalid`, `[1]`, `[2,3]`, `also invalid`}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		jsonOverlaps,
+	)
+	require.NoError(t, testCase.result.PreExtendAndReset(4))
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, false}}
+
+	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, 4, selectList))
+	result := testCase.result.GetResultVector()
+	require.True(t, result.IsNull(0))
+	require.True(t, result.IsNull(1))
+	require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](result)[2])
+	require.True(t, result.IsNull(3))
 }
 
 func TestJSONOverlapsAccessorAllocationsDoNotScaleWithRows(t *testing.T) {
@@ -659,21 +853,34 @@ func BenchmarkJSONOverlapPreparedConstArrayVectorBatch(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	probe, err := types.ParseSliceToByteJson([]byte(`16384`))
+	probe, err := types.ParseSliceToByteJson([]byte(`[16384]`))
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		prepared := jsonOverlapPreparedArray{}
-		constView := jsonOverlapValueView{document: array, prepared: &prepared}
-		probeView := jsonOverlapValueView{document: probe}
-		var workspace jsonOverlapWorkspace
-		for range 8192 {
-			if workspace.overlapsViews(constView, probeView, 8192) {
-				b.Fatal("unexpected overlap")
+	for _, tt := range []struct {
+		name      string
+		constLeft bool
+	}{
+		{name: "const_left", constLeft: true},
+		{name: "const_right", constLeft: false},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				prepared := jsonOverlapPreparedArray{}
+				constView := jsonOverlapValueView{document: array, prepared: &prepared}
+				probeView := jsonOverlapValueView{document: probe}
+				left, right := constView, probeView
+				if !tt.constLeft {
+					left, right = right, left
+				}
+				var workspace jsonOverlapWorkspace
+				for range 8192 {
+					if workspace.overlapsViews(left, right, 8192) {
+						b.Fatal("unexpected overlap")
+					}
+				}
 			}
-		}
+		})
 	}
 }

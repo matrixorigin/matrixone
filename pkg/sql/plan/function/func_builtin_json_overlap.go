@@ -85,10 +85,10 @@ func jsonOverlapsCheckFn(_ []overload, inputs []types.Type) checkResult {
 	finalTypes := make([]types.Type, 2)
 	needsCast := false
 	for i, input := range inputs {
-		switch input.Oid {
-		case types.T_json, types.T_char, types.T_varchar, types.T_text:
+		switch {
+		case input.Oid == types.T_json || input.Oid.IsMySQLString():
 			finalTypes[i] = input
-		case types.T_any:
+		case input.Oid == types.T_any:
 			finalTypes[i] = types.T_varchar.ToType()
 			needsCast = true
 		default:
@@ -314,7 +314,7 @@ func (w *jsonOverlapWorkspace) overlapsViews(left, right jsonOverlapValueView, e
 	switch left.document.Type {
 	case bytejson.TpCodeArray:
 		if right.document.Type == bytejson.TpCodeArray {
-			return w.arraysOverlapViews(left, right)
+			return w.arraysOverlapViews(left, right, evaluableRows)
 		}
 		if left.prepared != nil && jsonOverlapShouldPrepareScalar(left.document.GetElemCnt(), evaluableRows) {
 			left.prepared.ensure(left.document)
@@ -328,21 +328,101 @@ func (w *jsonOverlapWorkspace) overlapsViews(left, right jsonOverlapValueView, e
 	}
 }
 
-func (w *jsonOverlapWorkspace) arraysOverlapViews(left, right jsonOverlapValueView) bool {
-	if left.document.GetElemCnt() > right.document.GetElemCnt() {
-		left, right = right, left
-	}
-	if left.document.GetElemCnt() == 0 || right.document.GetElemCnt() == 0 {
+type jsonOverlapPreparedArrayCandidate struct {
+	array    bytejson.ByteJson
+	prepared *jsonOverlapPreparedArray
+	probe    bytejson.ByteJson
+	cost     int64
+	count    int
+}
+
+func (w *jsonOverlapWorkspace) arraysOverlapViews(
+	left, right jsonOverlapValueView,
+	evaluableRows int,
+) bool {
+	leftCount := left.document.GetElemCnt()
+	rightCount := right.document.GetElemCnt()
+	if leftCount == 0 || rightCount == 0 {
 		return false
 	}
-	if left.document.GetElemCnt() <= jsonOverlapLinearCompareBudget/right.document.GetElemCnt() {
-		return w.arraysOverlap(left.document, right.document)
-	}
-	if left.prepared != nil {
-		left.prepared.ensure(left.document)
-		return jsonOverlapPreparedArrayOverlaps(left.document, left.prepared, right.document)
+	if evaluableRows > 1 {
+		genericCost := jsonOverlapGenericArrayBatchCost(leftCount, rightCount, evaluableRows)
+		candidate, found := jsonOverlapPreparedCandidate(left, right, evaluableRows, genericCost)
+		if other, ok := jsonOverlapPreparedCandidate(right, left, evaluableRows, genericCost); ok &&
+			(!found || other.cost < candidate.cost || other.cost == candidate.cost && other.count < candidate.count) {
+			candidate, found = other, true
+		}
+		if found {
+			candidate.prepared.ensure(candidate.array)
+			return jsonOverlapPreparedArrayOverlaps(candidate.array, candidate.prepared, candidate.probe)
+		}
 	}
 	return w.arraysOverlap(left.document, right.document)
+}
+
+func jsonOverlapPreparedCandidate(
+	constant, probe jsonOverlapValueView,
+	evaluableRows int,
+	genericCost int64,
+) (jsonOverlapPreparedArrayCandidate, bool) {
+	if constant.prepared == nil {
+		return jsonOverlapPreparedArrayCandidate{}, false
+	}
+	count := constant.document.GetElemCnt()
+	cost := jsonOverlapPreparedArrayBatchCost(count, probe.document.GetElemCnt(), evaluableRows)
+	if jsonOverlapSaturatingAdd(cost, jsonOverlapLinearCompareBudget) >= genericCost {
+		return jsonOverlapPreparedArrayCandidate{}, false
+	}
+	return jsonOverlapPreparedArrayCandidate{
+		array:    constant.document,
+		prepared: constant.prepared,
+		probe:    probe.document,
+		cost:     cost,
+		count:    count,
+	}, true
+}
+
+func jsonOverlapGenericArrayBatchCost(leftCount, rightCount, evaluableRows int) int64 {
+	if leftCount > rightCount {
+		leftCount, rightCount = rightCount, leftCount
+	}
+	linearCost := jsonOverlapSaturatingMul(int64(leftCount), int64(rightCount))
+	rowCost := linearCost
+	if linearCost > jsonOverlapLinearCompareBudget {
+		logCount := int64(bits.Len(uint(leftCount)))
+		rowCost = jsonOverlapSaturatingAdd(
+			jsonOverlapSaturatingMul(int64(leftCount), logCount),
+			jsonOverlapSaturatingMul(int64(rightCount), logCount),
+		)
+	}
+	return jsonOverlapSaturatingMul(int64(evaluableRows), rowCost)
+}
+
+func jsonOverlapPreparedArrayBatchCost(count, probeCount, evaluableRows int) int64 {
+	logCount := int64(bits.Len(uint(count)))
+	prepareCost := jsonOverlapSaturatingMul(int64(count), logCount)
+	probeCost := jsonOverlapSaturatingMul(
+		jsonOverlapSaturatingMul(int64(evaluableRows), int64(probeCount)),
+		logCount,
+	)
+	return jsonOverlapSaturatingAdd(prepareCost, probeCost)
+}
+
+func jsonOverlapSaturatingMul(left, right int64) int64 {
+	if left == 0 || right == 0 {
+		return 0
+	}
+	if left > math.MaxInt64/right {
+		return math.MaxInt64
+	}
+	return left * right
+}
+
+func jsonOverlapSaturatingAdd(left, right int64) int64 {
+	if left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func jsonOverlapShouldPrepareScalar(count, evaluableRows int) bool {

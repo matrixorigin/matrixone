@@ -16,6 +16,42 @@ select json_overlaps('[4,5,6,7]', '6');
 select json_overlaps('[4,5,"6",7]', '6');
 ➤ json_overlaps([4,5,"6",7], 6)[-5,64,0]  𝄀
 0
+select json_overlaps('[1,2,3]', '[4,4,5]');
+➤ json_overlaps([1,2,3], [4,4,5])[-5,64,0]  𝄀
+0
+select json_overlaps('[1,2]', '[2,4,5]');
+➤ json_overlaps([1,2], [2,4,5])[-5,64,0]  𝄀
+1
+select json_overlaps('[1,1,2]', '[2,2]');
+➤ json_overlaps([1,1,2], [2,2])[-5,64,0]  𝄀
+1
+select json_overlaps('[1,1]', '[2,2]');
+➤ json_overlaps([1,1], [2,2])[-5,64,0]  𝄀
+0
+select json_overlaps('[{}]', '{}');
+➤ json_overlaps([{}], {})[-5,64,0]  𝄀
+1
+select json_overlaps('{}', '[{}]');
+➤ json_overlaps({}, [{}])[-5,64,0]  𝄀
+1
+select json_overlaps('[{}]', '{"a":1,"b":2}');
+➤ json_overlaps([{}], {"a":1,"b":2})[-5,64,0]  𝄀
+0
+select json_overlaps('[{}]', '1');
+➤ json_overlaps([{}], 1)[-5,64,0]  𝄀
+0
+select json_overlaps('{"a":1,"b":null}', '{"a":2,"c":3}');
+➤ json_overlaps({"a":1,"b":null}, {"a":2,"c":3})[-5,64,0]  𝄀
+0
+select json_overlaps('{"a":1,"b":2}', '{"a":null,"c":3}');
+➤ json_overlaps({"a":1,"b":2}, {"a":null,"c":3})[-5,64,0]  𝄀
+0
+select json_overlaps('true', 'false');
+➤ json_overlaps(true, false)[-5,64,0]  𝄀
+0
+select json_overlaps('123', '{"value":123}');
+➤ json_overlaps(123, {"value":123})[-5,64,0]  𝄀
+0
 select json_overlaps('1', '1.0');
 ➤ json_overlaps(1, 1.0)[-5,64,0]  𝄀
 1
@@ -50,9 +86,33 @@ null
 select json_overlaps('null', 'null');
 ➤ json_overlaps(null, null)[-5,64,0]  𝄀
 1
+select json_overlaps('1234', null);
+➤ json_overlaps(1234, null)[-5,64,0]  𝄀
+null
+select json_overlaps('null', null);
+➤ json_overlaps(null, null)[-5,64,0]  𝄀
+null
+select json_overlaps('invalid', null);
+invalid argument json_overlaps, bad value invalid JSON document
 select json_overlaps(cast('[1,{"a":2}]' as json), '{"a":2}');
 ➤ json_overlaps(cast([1,{"a":2}] as json), {"a":2})[-5,64,0]  𝄀
 1
+select json_overlaps('{"a":2}', cast('[1,{"a":2}]' as json));
+➤ json_overlaps({"a":2}, cast([1,{"a":2}] as json))[-5,64,0]  𝄀
+1
+select json_overlaps(cast('[1,2]' as json), cast('[2,3]' as json));
+➤ json_overlaps(cast([1,2] as json), cast([2,3] as json))[-5,64,0]  𝄀
+1
+drop table if exists t_json_overlaps_binary;
+create table t_json_overlaps_binary (fixed binary(5), varying varbinary(5), large blob);
+insert into t_json_overlaps_binary values ('[1,2]', '[2,3]', '[3,4]');
+select json_overlaps(fixed, '[2]'),
+json_overlaps('[2]', varying),
+json_overlaps(large, varying)
+from t_json_overlaps_binary;
+➤ json_overlaps(fixed, [2])[-5,64,0]  ¦  json_overlaps([2], varying)[-5,64,0]  ¦  json_overlaps(large, varying)[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+drop table t_json_overlaps_binary;
 drop table if exists t_json_overlaps;
 create table t_json_overlaps (id int, doc json, other_doc varchar(100));
 insert into t_json_overlaps values
