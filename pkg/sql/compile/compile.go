@@ -3605,6 +3605,24 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, leftscopes, r
 	return c.compileDistributedShuffleJoin(node, left, right, leftscopes, rightscopes)
 }
 
+// canReuseDistributedShuffleJoin reports whether probeScopes already use the
+// physical layout required by distributed shuffle: one Mcpu=1 scope per
+// global bucket, ordered by stage node and then by that node's bucket index.
+// A packed scope (one scope with Mcpu=dop) is reusable only by the local
+// shared-pool implementation and must be reshuffled before distributed use.
+func canReuseDistributedShuffleJoin(probeScopes []*Scope, stageNodes engine.Nodes, dop int) bool {
+	if dop <= 0 || len(stageNodes) == 0 || len(probeScopes) != len(stageNodes)*dop {
+		return false
+	}
+	for i, scope := range probeScopes {
+		if scope == nil || scope.NodeInfo.Mcpu != 1 ||
+			!sameExecutionNode(scope.NodeInfo, stageNodes[i/dop]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Compile) shuffleStageNodes(scopes []*Scope) engine.Nodes {
 	stageNodes := c.queryWorkerStageNodes()
 	if len(stageNodes) > 0 {
@@ -5424,7 +5442,15 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	dop := int(node.Stats.Dop)
+	bucketNum := len(cnlist) * dop
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
+		canReuseDistributedShuffleJoin(probeScopes, cnlist, dop)
+	// Multi-CN DEDUP normalizes the probe scopes below by merging them, so the
+	// per-bucket layout cannot be reused by the distributed join.
+	if node.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+		reuse = false
+	}
 	if !reuse {
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
@@ -5439,8 +5465,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		}
 	}
 
-	dop := int(node.Stats.Dop)
-	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
 
