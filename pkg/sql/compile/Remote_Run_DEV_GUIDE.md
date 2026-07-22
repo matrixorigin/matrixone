@@ -49,7 +49,8 @@ func (s *Scope) RemoteRun(c *Compile) error {
     
     // Check if pipeline can be executed standalone at remote
     if !checkPipelineStandaloneExecutableAtRemote(s) {
-        return s.MergeRun(c)  // Fallback to local execution
+        return s.failRemoteRunBeforeStart(c,
+            moerr.NewInternalErrorNoCtx("remote pipeline is not standalone executable"))
     }
     
     // Create pipeline and send to remote node
@@ -76,7 +77,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 - Check if same address (execute locally via `MergeRun`)
 - Check if any operator cannot be executed remotely via `holdAnyCannotRemoteOperator()`
 - Check if pipeline can be executed standalone at remote via `checkPipelineStandaloneExecutableAtRemote`
-- If not standalone executable, fallback to local execution (`MergeRun`)
+- If not standalone executable, fail before start, cancel sibling pipelines, and clean up
+- Never silently execute a remote-selected tree on the coordinator: dispatch/connector
+  receiver locality is part of the compiled topology, and changing it can hang the query
 - Create pipeline and call `remoteRun` to send
 - Use `CleanRootOperator` for cleanup (not general cleanup)
 

@@ -231,7 +231,9 @@ func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
 	return true
 }
 
-func (m *mockConnCache) Pop(key cacheKey, connID uint32, salt, authResp []byte) ServerConn {
+func (m *mockConnCache) Pop(
+	key cacheKey, connID uint32, salt, authResp []byte, _ clientInfo,
+) ServerConn {
 	if m.popFn != nil {
 		return m.popFn(key, connID, salt, authResp)
 	}
@@ -2412,6 +2414,63 @@ func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, sConn)
 	require.Equal(t, 0, cache.popCount)
+}
+
+func Test_connectToBackend_PassesClientInfoToCache(t *testing.T) {
+	cache := &popCountConnCache{}
+	client := clientInfo{labelInfo: labelInfo{
+		Tenant: "tenant1",
+		Labels: map[string]string{"region": "cn"},
+	}}
+	cConn := &clientConn{
+		ctx:        context.Background(),
+		router:     &routeErrRouter{},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  cache,
+		clientInfo: client,
+		log:        runtime.DefaultRuntime().Logger(),
+	}
+
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Equal(t, 1, cache.popCount)
+	require.Equal(t, client, cache.lastClient)
+}
+
+type contextPopCountConnCache struct {
+	popCountConnCache
+	popContextCount int
+}
+
+func (c *contextPopCountConnCache) PopContext(
+	_ context.Context, _ cacheKey, _ uint32, _ []byte, _ []byte, client clientInfo,
+) ServerConn {
+	c.popContextCount++
+	c.lastClient = client
+	return nil
+}
+
+func Test_connectToBackend_PassesClientInfoToContextCache(t *testing.T) {
+	cache := &contextPopCountConnCache{}
+	client := clientInfo{labelInfo: labelInfo{
+		Tenant: "tenant1",
+		Labels: map[string]string{"region": "cn"},
+	}}
+	cConn := &clientConn{
+		ctx:        context.Background(),
+		router:     &routeErrRouter{},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  cache,
+		clientInfo: client,
+		log:        runtime.DefaultRuntime().Logger(),
+	}
+
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Equal(t, 1, cache.popContextCount)
+	require.Equal(t, client, cache.lastClient)
 }
 
 func Test_connectToBackend_SkipCacheWhenPluginRouterEnabled(t *testing.T) {
