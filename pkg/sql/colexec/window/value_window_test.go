@@ -15,6 +15,7 @@
 package window
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -525,6 +526,113 @@ func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 
 	result.Free(mp)
 	offsetVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30})
+	spec := makeLeadWindowSpec()
+
+	ctr := &container{bat: bat}
+	offsetVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(math.MaxInt64), 1, mp)
+	require.NoError(t, err)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.Length())
+	for row := 0; row < result.Length(); row++ {
+		require.True(t, result.IsNull(uint64(row)), "row %d", row)
+	}
+
+	result.Free(mp)
+	offsetVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeNthValueWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val: &plan.Expr{
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}},
+			},
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	ctr := &container{bat: bat}
+	nVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(math.MaxInt64), 1, mp)
+	require.NoError(t, err)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+	for row := 0; row < result.Length(); row++ {
+		require.True(t, result.IsNull(uint64(row)), "row %d", row)
+	}
+
+	result.Free(mp)
+	nVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestProcessValueFunc_NthValueWithOverflowingRowsFrame(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30})
+	spec := makeNthValueWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val: &plan.Expr{
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: math.MaxInt64}}},
+			},
+		},
+		End: &plan.FrameBound{
+			Type:      plan.FrameBound_FOLLOWING,
+			UnBounded: true,
+		},
+	}
+
+	ctr := &container{bat: bat}
+	nVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, mp)
+	require.NoError(t, err)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.Length())
+	for row := 0; row < result.Length(); row++ {
+		require.True(t, result.IsNull(uint64(row)), "row %d", row)
+	}
+
+	result.Free(mp)
+	nVec.Free(mp)
 	bat.Clean(mp)
 	proc.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
